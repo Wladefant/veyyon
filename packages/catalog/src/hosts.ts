@@ -49,7 +49,7 @@ export const KNOWN_HOSTS = {
 	alibabaDashscope: { providers: ["alibaba-coding-plan"], urlMarkers: ["dashscope"] },
 	umans: { providers: ["umans"], urlMarkers: ["api.code.umans.ai"] },
 	xiaomi: { providers: ["xiaomi"], providerPrefixes: ["xiaomi-token-plan-"], urlMarkers: ["xiaomimimo.com"] },
-	xai: { providers: ["xai"], urlMarkers: ["api.x.ai"] },
+	xai: { providers: ["xai", "xai-oauth"], urlMarkers: ["api.x.ai"] },
 	mistral: { providers: ["mistral"], urlMarkers: ["mistral.ai"] },
 	together: { providers: ["together"], urlMarkers: ["api.together.xyz"] },
 	baseten: { providers: ["baseten"], urlMarkers: ["baseten.co"] },

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
 import { PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models/descriptors";
 import {
+	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,
 } from "@veyyon/catalog/provider-models/openai-compat";
@@ -69,6 +70,20 @@ describe("OpenCode provider discovery", () => {
 		}
 		expect(opencodeGoModelManagerOptions().dynamicModelsAuthoritative).toBe(true);
 		expect(opencodeZenModelManagerOptions().dynamicModelsAuthoritative).toBe(true);
+	});
+	test("routes opencode-go muse-spark-1.2 to the responses API (#8957)", () => {
+		const descriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(item => item.providerId === "opencode-go");
+		// The Go /zen/go/v1/models discovery drops the provider.npm hint for the
+		// muse-spark ids, so without an override they fall through to
+		// openai-completions even though the gateway only serves them at
+		// /zen/go/v1/responses. Sending completions requests closes the stream
+		// with no finish_reason on every tool-call turn.
+		for (const id of ["muse-spark-1.2", "muse-spark-1.2-contributor"]) {
+			expect(descriptor?.resolveApi?.(id, { tool_call: true })).toEqual({
+				api: "openai-responses",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+			});
+		}
 	});
 
 	test("replaces stale bundled Zen models with each credential's live endpoint list", async () => {

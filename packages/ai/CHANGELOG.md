@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- Cloud Code Assist Gemini 3.6/3.7 Flash requests at `minimal` now send `thinkingLevel: LOW` on the aliased `-low` SKU instead of `MINIMAL`, which the API rejects with HTTP 400.
+- Amazon Bedrock GPT models served over Mantle Responses now send `AWS_BEARER_TOKEN_BEDROCK` as their bearer token instead of the `<authenticated>` sentinel, and fail with a missing-key error when neither an explicit key nor that variable is set.
 - Fixed Bedrock Converse rejecting error tool results containing images on Claude models by hoisting images to sibling user blocks.
 - Fixed Anthropic-compatible endpoints backed by Amazon Bedrock permanently rejecting a session once an unsigned thinking block entered its history by recognizing Bedrock's `ValidationException` missing-signature error and retrying with demoted thinking.
 - Fixed Bedrock Converse resending unsigned reasoning content on the request path for non-Claude reasoning models (Amazon Nova and any model addressed via an opaque application-inference-profile ARN) by demoting unsigned thinking blocks to plain text.

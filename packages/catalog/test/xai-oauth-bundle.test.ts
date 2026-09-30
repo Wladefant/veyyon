@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import MODELS_JSON from "@veyyon/catalog/models.json" with { type: "json" };
+import { CATALOG_PROVIDERS, DEFAULT_MODEL_PER_PROVIDER } from "@veyyon/catalog/provider-models/descriptors";
 import { buildXaiOAuthStaticSeed } from "@veyyon/catalog/provider-models/openai-compat";
 import type { ModelSpec } from "@veyyon/catalog/types";
 
@@ -17,6 +18,12 @@ describe("xai-oauth bundled catalog (regression)", () => {
 		(MODELS_JSON as unknown as Record<string, Record<string, ModelSpec<"openai-responses">>>)["xai-oauth"] ?? {};
 	const seed = buildXaiOAuthStaticSeed();
 
+	it("defaults SuperGrok selection to grok-4.5", () => {
+		const entry = CATALOG_PROVIDERS.find(provider => provider.id === "xai-oauth");
+		expect(entry?.defaultModel).toBe("grok-4.5");
+		expect(DEFAULT_MODEL_PER_PROVIDER["xai-oauth"]).toBe("grok-4.5");
+		expect(bundled["grok-4.5"], "xai-oauth/grok-4.5 must be bundled for the default").toBeDefined();
+	});
 	it("bundles every curated id", () => {
 		const seededIds = seed.map(model => model.id).sort();
 		const bundledIds = Object.keys(bundled).sort();

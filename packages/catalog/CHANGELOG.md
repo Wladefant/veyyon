@@ -8,6 +8,13 @@
 
 ### Fixed
 
+- Fixed LiteLLM discovery leaking a colliding bundled model's provider-specific transport onto custom endpoints: a discovered alias matching a bundled model no longer inherits that model's wire-id transform or tool-schema flavor.
+- Fixed `opencode-go/muse-spark-1.2` (and `muse-spark-1.2-contributor`) failing every tool-call turn with `OpenAI completions stream closed before a finish_reason was received` by routing them to the Responses API.
+- Fixed GitHub Copilot `grok-4.6` to route through the Responses API (`/responses`) instead of `/chat/completions`, which returned 400 unsupported_api_for_model.
+- Cloud Code Assist Gemini 3.6/3.7 Flash no longer maps user `minimal` to wire `thinkingLevel: MINIMAL` when that effort is aliased onto the `-low` SKU. The request now sends `LOW`, which those SKUs accept.
+- Fixed Amazon Bedrock catalog generation omitting AWS GovCloud `us-gov.*` Claude inference-profile IDs, so selectors like `amazon-bedrock/us-gov.anthropic.claude-sonnet-4-5-…` resolve.
+- Fixed Amazon Bedrock GPT models to route through Responses.
+- Fixed GitHub Copilot `mai-code-1-flash-picker` (and other `mai-*` models) to route through the `/responses` endpoint instead of `/chat/completions`, which returned 400 unsupported_api_for_model.
 - ChatGPT Codex discovery identifies as Codex CLI 0.159.2, so a subscription lists `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol`, which the backend omits below 0.155.1 and 0.159.0, and the bundled catalog carries them with their prices ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `gen:models` reads the first enabled, unexpired login of a provider from the shared auth store instead of the first row, so an expired earliest login no longer makes Codex discovery fall back to the previous models.
 - Loading the provider catalog no longer evaluates arktype: `chatgpt-web` discovery checks its daemon's JSON with `isRecord` instead of four all-`unknown` schemas.
@@ -20,6 +27,7 @@
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.
 ### Changed
 
+- Switched the paid 'xai' provider (using 'XAI_API_KEY') from Chat Completions to the Responses API ('/v1/responses'), and defaulted both 'xai' and 'xai-oauth' to 'grok-4.5'.
 - `@veyyon/catalog/models` imports `models.json` by path and reads it when the registry is built, so a process no longer holds the 2.2 MB catalog text on its heap for its whole life.
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
 - The models.dev overlay drops its parsed `api.json` 30 seconds after the last provider reads it and reads `models-dev.json` again on the next use, which cut the idle heap after a model refresh from 68.7 MiB to 59.7 MiB and its live objects from 752,441 to 595,112 (median of 3 runs).
