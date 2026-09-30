@@ -750,17 +750,6 @@ function handleContentBlockStop(
 }
 
 /**
- * Check if the model supports thinking signatures in reasoningContent.
- * Only Anthropic Claude models support the signature field.
- * Other models (Nova, Titan, Mistral, Llama, etc.) reject it with:
- * "This model doesn't support the reasoningContent.reasoningText.signature field"
- */
-function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boolean {
-	const id = model.id.toLowerCase();
-	return id.includes("anthropic.claude") || id.includes("anthropic/claude");
-}
-
-/**
  * Serialize the system blocks, anchoring the stable prefix separately from the
  * volatile tail.
  *
@@ -818,6 +807,45 @@ function buildSystemPrompt(
 	}
 	blocks.push(cachePoint());
 	return blocks;
+}
+
+function buildToolResultBlock(
+	message: ToolResultMessage,
+	model: Model<"bedrock-converse-stream">,
+	hoistedImages: ImageBlockWire[],
+): ToolResultBlockWire {
+	const content: Array<TextBlockWire | ImageBlockWire> = [];
+	// Bedrock's Anthropic Claude models reject an error toolResult that carries a
+	// non-text block ("all content must be type `text` if `is_error` is true"),
+	// so images inside an error result must always be hoisted out regardless of
+	// the model's requiresToolResultImageHoisting flag (no `class "anthropic"`
+	// rule sets it). Mirrors anthropic.ts buildToolResultBlock. Re-serializing a
+	// previously-persisted poisoned result on a later turn repairs it in place.
+	const hoistImages =
+		message.isError ||
+		Boolean((model as { requiresToolResultImageHoisting?: boolean }).requiresToolResultImageHoisting);
+	for (const block of message.content) {
+		if (block.type === "image") {
+			const image: ImageBlockWire = { image: createImageBlock(block.mimeType, block.data) };
+			if (hoistImages) {
+				content.push({ text: "(see attached image)" });
+				hoistedImages.push(image);
+			} else {
+				content.push(image);
+			}
+		} else if (block.type === "video") {
+			content.push({ text: NON_VIDEO_MODEL_PLACEHOLDER });
+		} else {
+			content.push({ text: block.text.toWellFormed() });
+		}
+	}
+	return {
+		toolResult: {
+			toolUseId: normalizeToolCallId(message.toolCallId),
+			content,
+			status: message.isError ? "error" : "success",
+		},
+	};
 }
 
 function convertMessages(
@@ -887,22 +915,25 @@ function convertMessages(
 						case "thinking":
 							// Skip empty thinking blocks
 							if (c.thinking.trim().length === 0) continue;
-							// Thinking blocks require a valid signature when sent as reasoningContent.
-							// If the signature is missing (e.g., from an aborted stream), or the model
-							// doesn't support signatures, convert to plain text instead.
-							if (supportsThinkingSignature(model) && c.thinkingSignature) {
+							// A captured signature is authoritative even when the model id is an opaque ARN:
+							// only a model that itself streamed a signature (Claude) can have one, so replay
+							// it as signed reasoningContent regardless of how the id is spelled.
+							if (c.thinkingSignature) {
 								contentBlocks.push({
 									reasoningContent: {
 										reasoningText: { text: c.thinking.toWellFormed(), signature: c.thinkingSignature },
 									},
 								});
-							} else if (!supportsThinkingSignature(model)) {
-								// Model doesn't support signatures at all — send as unsigned reasoning
-								contentBlocks.push({
-									reasoningContent: { reasoningText: { text: c.thinking.toWellFormed() } },
-								});
 							} else {
-								// Model requires signature but we don't have one — demote to text
+								// No signature was captured. Do NOT fall back to unsigned reasoningContent here:
+								// a model streaming reasoningContent does not imply it accepts reasoningContent
+								// echoed back in a request. Amazon Nova streams unsigned reasoning just fine but
+								// rejects it on replay with HTTP 400 "User messages cannot contain reasoning
+								// content. Please remove the reasoning content and try again.", which wedges the
+								// agent loop on every turn after the first. Demote to plain text instead — the
+								// content survives, just no longer typed as a reasoning block. This matches how
+								// every other provider (Anthropic, Google, OpenAI-completions) handles thinking
+								// blocks it can't safely replay.
 								contentBlocks.push({ text: renderDemotedThinking(model.id, c.thinking) });
 							}
 							break;
@@ -918,42 +949,20 @@ function convertMessages(
 			case "toolResult": {
 				// Collect all consecutive toolResult messages into a single user message —
 				// Bedrock requires all tool results to be in one message.
-				const toolResults: ToolResultBlockWire[] = [];
-				toolResults.push({
-					toolResult: {
-						toolUseId: normalizeToolCallId(m.toolCallId),
-						content: m.content.map(c =>
-							c.type === "image"
-								? { image: createImageBlock(c.mimeType, c.data) }
-								: c.type === "video"
-									? { text: NON_VIDEO_MODEL_PLACEHOLDER }
-									: { text: c.text.toWellFormed() },
-						),
-						status: m.isError ? "error" : "success",
-					},
-				});
+				const contentBlocks: UserContent[] = [];
+				const hoistedImages: ImageBlockWire[] = [];
+				contentBlocks.push(buildToolResultBlock(m, model, hoistedImages));
 
 				let j = i + 1;
 				while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 					const nextMsg = transformedMessages[j] as ToolResultMessage;
-					toolResults.push({
-						toolResult: {
-							toolUseId: normalizeToolCallId(nextMsg.toolCallId),
-							content: nextMsg.content.map(c =>
-								c.type === "image"
-									? { image: createImageBlock(c.mimeType, c.data) }
-									: c.type === "video"
-										? { text: NON_VIDEO_MODEL_PLACEHOLDER }
-										: { text: c.text.toWellFormed() },
-							),
-							status: nextMsg.isError ? "error" : "success",
-						},
-					});
+					contentBlocks.push(buildToolResultBlock(nextMsg, model, hoistedImages));
 					j++;
 				}
 				i = j - 1;
 
-				result.push({ role: "user", content: toolResults });
+				contentBlocks.push(...hoistedImages);
+				result.push({ role: "user", content: contentBlocks });
 				break;
 			}
 			default:

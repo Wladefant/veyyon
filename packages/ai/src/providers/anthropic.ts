@@ -402,12 +402,11 @@ type AnthropicProviderSessionState = ProviderSessionState & {
 	strictToolsDisabled: boolean;
 	fastModeDisabled: boolean;
 	/**
-	 * Runtime-learned: this endpoint returned `400 Invalid signature in
-	 * thinking block` for a replayed unsigned thinking block, so it must be
-	 * treated as a signing proxy from now on. All subsequent requests demote
-	 * unsigned thinking to text for this (baseUrl, modelId), same behavior as
-	 * an explicit `compat.replayUnsignedThinking: false`. Cleared on session
-	 * close.
+	 * Runtime-learned: this endpoint rejected a replayed unsigned thinking
+	 * block, so it must be treated as a signing proxy from now on. All
+	 * subsequent requests demote unsigned thinking to text for this (baseUrl,
+	 * modelId), same behavior as an explicit
+	 * `compat.replayUnsignedThinking: false`. Cleared on session close.
 	 */
 	replayUnsignedThinkingDisabled: boolean;
 	/**
@@ -1299,7 +1298,14 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 		}
 	}
 	if (wire.directEndpoint) {
-		return normalizeAnthropicBaseUrl(model.baseUrl) ?? ANTHROPIC_API_ENDPOINT;
+		const configured = normalizeAnthropicBaseUrl(model.baseUrl);
+		// An explicitly configured non-official baseUrl (e.g. a models.yml provider
+		// override) is more specific than the generic env fallback and wins.
+		if (configured && !isOfficialAnthropicApiUrl(configured)) return configured;
+		// Otherwise ANTHROPIC_BASE_URL routes chat through an enterprise gateway
+		// (docs/environment-variables.md), ahead of the official default. The
+		// Foundry redirect is already handled above.
+		return normalizeAnthropicBaseUrl($env.ANTHROPIC_BASE_URL) ?? configured ?? ANTHROPIC_API_ENDPOINT;
 	}
 	return normalizeAnthropicBaseUrl(model.baseUrl);
 }
@@ -1340,9 +1346,12 @@ export function resolveAnthropicCustomHeadersForBaseUrl(
 	return parseAnthropicCustomHeaders($env.ANTHROPIC_CUSTOM_HEADERS);
 }
 
-function resolveAnthropicCustomHeaders(model: Model<"anthropic-messages">): Record<string, string> | undefined {
+function resolveAnthropicCustomHeaders(
+	model: Model<"anthropic-messages">,
+	baseUrl: string | undefined,
+): Record<string, string> | undefined {
 	if (!anthropicWire(model).directEndpoint) return undefined;
-	return resolveAnthropicCustomHeadersForBaseUrl(model.baseUrl);
+	return resolveAnthropicCustomHeadersForBaseUrl(baseUrl);
 }
 
 function resolvePemValue(value: string | undefined, name: string): string | undefined {
@@ -1859,19 +1868,28 @@ function calculateFallbackTurnCost(
 }
 
 /**
- * Detects the Anthropic `400 Invalid `signature` in `thinking` block` failure
- * a signing proxy returns when a stripped/unsigned prior thinking block is
- * replayed as `signature: ""`. Exported for the compat tests.
+ * Detects the two shapes a signature-enforcing endpoint uses to reject a
+ * replayed unsigned thinking block (sent as `signature: ""`):
+ *
+ * - Anthropic and Anthropic-fronting proxies: `400 Invalid `signature` in
+ *   `thinking` block`.
+ * - Bedrock-backed proxies: the empty string fails schema validation before
+ *   signature checking, so it comes back as `ValidationException: The model
+ *   returned the following errors: messages.N.content.M.thinking.signature:
+ *   Field required`.
+ *
+ * Exported for the compat tests.
  */
 const INVALID_THINKING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?(?:\s+block)?/i;
+const MISSING_THINKING_SIGNATURE_PATTERN = /thinking\.signature\b[^"\n]{0,32}\brequired\b/i;
+
 export function isInvalidThinkingSignatureError(message: string): boolean {
-	return INVALID_THINKING_SIGNATURE_PATTERN.test(message);
+	return INVALID_THINKING_SIGNATURE_PATTERN.test(message) || MISSING_THINKING_SIGNATURE_PATTERN.test(message);
 }
 
 /**
- * Prepend a pointed remediation to Anthropic's `Invalid signature in thinking
- * block` 400 when the model looks like an unmarked custom signing proxy
- * (opaque baseUrl, `spec.reasoning: true`, no explicit
+ * Prepend a pointed remediation to a thinking-signature rejection 400 when the
+ * model looks like an unmarked custom signing proxy
  * `compat.replayUnsignedThinking` override). The default is native replay for
  * the 3p reasoning majority (#2005); this hint turns the misconfigured-proxy
  * case into a one-line fix instead of a silent retry loop (#4297).
@@ -2415,7 +2433,7 @@ async function handleAnthropicFeatureFallbackError(
 		isInvalidThinkingSignatureError(errorMessage(streamFailure))
 	) {
 		logger.warn(
-			"anthropic: signing proxy detected (Invalid signature in thinking block), demoting unsigned thinking and retrying",
+			"anthropic: signing proxy detected (thinking signature rejected), demoting unsigned thinking and retrying",
 			{
 				provider: model.provider,
 				model: model.id,
@@ -3009,6 +3027,10 @@ const streamAnthropicOnce = (
 							isOAuthToken,
 							serverSideFallback,
 						);
+						if (streamState.sawMessageStop) {
+							// The protocol is complete even if a broken keep-alive leaves the HTTP body open.
+							break;
+						}
 					}
 					firstTokenTime = streamState.firstTokenTime;
 
@@ -3231,7 +3253,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
-	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
+	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model, baseUrl);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	// Disable Bun's native ~300s pre-response fetch timeout (issue #2422).
 	// `AnthropicMessagesClient` already arms its own DEFAULT_TIMEOUT_MS timer
@@ -3386,13 +3408,30 @@ function createClient(
 	return { client, isOAuthToken: oauthToken };
 }
 
-function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
+function disableThinkingIfToolChoiceForced(
+	params: MessageCreateParamsStreaming,
+	model: Model<"anthropic-messages">,
+): void {
 	const toolChoice = params.tool_choice;
 	if (!toolChoice) return;
 	if (toolChoice.type !== "any" && toolChoice.type !== "tool") return;
 
 	delete params.thinking;
 	delete params.context_management;
+
+	// Adaptive-only models can't be switched off by omitting `thinking` — a bare
+	// omission defaults to adaptive thinking ON, so a forced-tool turn would still
+	// reason instead of calling the tool (#6589). Pin the lowest adaptive effort
+	// instead of dropping it, mirroring the disable branch in buildParams. Vertex
+	// rawPredict can't carry the effort beta as an HTTP header, so it keeps the
+	// delete behavior (the field is stripped there anyway; see buildParams).
+	if (isAdaptiveOnlyThinking(model) && model.provider !== "google-vertex") {
+		const outputConfig = (params.output_config as AnthropicOutputConfig | undefined) ?? {};
+		outputConfig.effort = "low";
+		params.output_config = outputConfig;
+		return;
+	}
+
 	const outputConfig = params.output_config as AnthropicOutputConfig | undefined;
 	if (!outputConfig) return;
 
@@ -3675,6 +3714,22 @@ function usesAdaptiveThinkingTagOnly(model: Model<"anthropic-messages">): boolea
 	return thinking.efforts.length > 0;
 }
 
+/**
+ * True for adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5)
+ * that reject `thinking.type: "disabled"`. Turning thinking off on these models
+ * means omitting the `thinking` field entirely and pinning the lowest adaptive
+ * effort — a bare omission defaults to adaptive thinking ON. Excludes MiniMax,
+ * which drives adaptive thinking through the `thinking.type: "adaptive"` tag
+ * itself rather than `output_config.effort`.
+ */
+function isAdaptiveOnlyThinking(model: Model<"anthropic-messages">): boolean {
+	return (
+		model.thinking?.mode === "anthropic-adaptive" &&
+		!model.compat.disableAdaptiveThinking &&
+		!usesAdaptiveThinkingTagOnly(model)
+	);
+}
+
 function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
@@ -3760,12 +3815,7 @@ function buildAnthropicThinkingParams(
 		};
 	}
 	if (options?.thinkingEnabled === false) {
-		const compat = model.compat;
-		if (
-			model.thinking?.mode === "anthropic-adaptive" &&
-			!compat.disableAdaptiveThinking &&
-			!usesAdaptiveThinkingTagOnly(model)
-		) {
+		if (isAdaptiveOnlyThinking(model)) {
 			// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
 			// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
 			// Omit the thinking field (the API defaults to adaptive) and pin the
@@ -3967,7 +4017,7 @@ function buildParams(
 		params.tool_choice = toolChoice;
 	}
 
-	disableThinkingIfToolChoiceForced(params);
+	disableThinkingIfToolChoiceForced(params, model);
 	ensureMaxTokensForThinking(params, maxOutputTokens);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);

@@ -14,6 +14,13 @@
 
 ### Fixed
 
+- Fixed Bedrock Converse rejecting error tool results containing images on Claude models by hoisting images to sibling user blocks.
+- Fixed Anthropic-compatible endpoints backed by Amazon Bedrock permanently rejecting a session once an unsigned thinking block entered its history by recognizing Bedrock's `ValidationException` missing-signature error and retrying with demoted thinking.
+- Fixed Bedrock Converse resending unsigned reasoning content on the request path for non-Claude reasoning models (Amazon Nova and any model addressed via an opaque application-inference-profile ARN) by demoting unsigned thinking blocks to plain text.
+- Fixed Anthropic stream hangs when broken keep-alive leaves the HTTP connection open after the terminal `message_stop` envelope.
+- Fixed `ANTHROPIC_BASE_URL` being ignored for Anthropic chat requests and forwarded `ANTHROPIC_CUSTOM_HEADERS` to non-official gateways.
+- Added `isStreamEnvelopeErrorText` to error flags so loop-level salvage can recognize Anthropic stream-envelope truncation errors and recover completed tool calls.
+- Fixed native Anthropic adaptive-only models keeping thinking on when reasoning was disabled or tool choice was forced by pinning the lowest adaptive effort instead of dropping output configuration effort.
 - Fixed the leaked-thinking wrapper merging consecutive signed thinking blocks, dropping text that arrives only at `thinking_end`, and appending recovered signed blocks after the tool call they precede.
 - Fixed custom Anthropic base URLs losing native thinking signatures in the leaked-thinking recovery wrapper by capturing signatures delivered at thinking_end ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recovered unstreamed signature-bearing thinking blocks in the leaked-thinking wrapper so thought signatures delivered without prior deltas survive for replay ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
