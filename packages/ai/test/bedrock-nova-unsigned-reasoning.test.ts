@@ -140,4 +140,24 @@ describe("Bedrock Nova unsigned reasoning replay", () => {
 			expect(block).not.toHaveProperty("reasoningContent");
 		}
 	});
+
+	test("never replays Claude-signed reasoning to Nova after a mid-session model switch", async () => {
+		const claudeId = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+		const context = contextWithUnsignedThinking(claudeId);
+		const assistant = context.messages[1];
+		if (assistant.role !== "assistant") throw new Error("fixture must hold an assistant message");
+		assistant.content[0] = {
+			type: "thinking",
+			thinking: "Inspect the implementation",
+			thinkingSignature: "CLAUDE_SIG",
+		};
+
+		const payload = await captureReplayPayload(novaModel, context);
+
+		const replayed = payload.messages[1];
+		expect(replayed.role).toBe("assistant");
+		for (const block of replayed.content) {
+			expect(block).not.toHaveProperty("reasoningContent");
+		}
+	});
 });
