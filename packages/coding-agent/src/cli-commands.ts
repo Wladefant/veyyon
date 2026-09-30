@@ -226,6 +226,11 @@ export const commands: CommandEntry[] = [
 			devTool: true,
 		},
 	},
+	{
+		name: "supervisor",
+		load: () => import("./commands/supervisor").then(m => m.default),
+		summary: { description: "Manage process supervisor and Windows crash dump diagnostics" },
+	},
 ];
 
 // Documented-looking plugin-management verbs that are NOT registered top-level

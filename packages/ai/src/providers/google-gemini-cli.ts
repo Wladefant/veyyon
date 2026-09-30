@@ -469,9 +469,7 @@ interface CloudCodeAssistRequest {
 			temperature?: number;
 			topP?: number;
 			topK?: number;
-			minP?: number;
 			presencePenalty?: number;
-			repetitionPenalty?: number;
 			thinkingConfig?: ThinkingConfig;
 		};
 		tools?: { functionDeclarations: Record<string, unknown>[] }[] | undefined;
@@ -832,8 +830,17 @@ class GeminiCliStreamRun {
 			try {
 				if (await this.#streamFromEndpoint(plan, endpoints[i], isLastEndpoint)) return;
 			} catch (error) {
-				const transient = AIError.isTransientStatus(extractHttpStatusFromError(error));
-				if (transient && !isLastEndpoint && !this.#started) continue;
+				const status = extractHttpStatusFromError(error);
+				if (
+					!isLastEndpoint &&
+					!this.#started &&
+					(AIError.isTransientStatus(status) ||
+						(status === undefined &&
+							!(error instanceof AIError.ProviderResponseError && error.kind === "output") &&
+							AIError.retriable(AIError.classify(error))))
+				) {
+					continue;
+				}
 				throw error;
 			}
 		}

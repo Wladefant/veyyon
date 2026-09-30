@@ -10,6 +10,7 @@
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - Sessions preserve concurrent in-flight tool calls independently and commit abandoned-call reports to the normal dated log before removing crash evidence ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- Interactive launches now run under a direct parent supervisor that records retained heartbeat context and the real child exit status immediately after a silent death; `veyyon supervisor dumps` provides reversible, opt-in Windows LocalDumps configuration for `veyyon.exe` and `bun.exe` ([#100](https://github.com/Wladefant/veyyon/issues/100)).
 
 ### Changed
 
@@ -105,6 +106,7 @@
 - Removed the `tools.refusals` setting, path- and command-scoped extension refusals, and the per-tool `effectScope` declaration that only they read; a stale `tools.refusals` key in config is ignored.
 ### Fixed
 
+- Fixed `read` dropping the unit from its column-truncation metadata after the read module split, so `limits.columnTruncated.unit` is `chars` again for a clipped line (oh-my-pi 9d8b40b0750fc2550afbf70cf212c198f32c993a, [Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
