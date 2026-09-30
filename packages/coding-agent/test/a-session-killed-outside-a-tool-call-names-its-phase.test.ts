@@ -41,6 +41,11 @@ interface LogEntry {
 	lanes?: number;
 	rssBytes?: number;
 	freeMemBytes?: number;
+	heapTotal?: number;
+	heapUsed?: number;
+	external?: number;
+	smol?: boolean;
+	forceRAMSize?: string;
 }
 
 interface Arena {
@@ -187,6 +192,9 @@ describe("a session that died below JavaScript", () => {
 		// The memory reading a process killed for want of memory leaves behind.
 		expect(beat.rssBytes).toBeGreaterThan(0);
 		expect(beat.freeMemBytes).toBeGreaterThan(0);
+		expect(beat.heapTotal).toBeGreaterThan(0);
+		expect(beat.heapUsed).toBeGreaterThan(0);
+		expect(beat.external).toBeGreaterThanOrEqual(0);
 
 		await runFixture(arena, "report");
 
@@ -201,6 +209,9 @@ describe("a session that died below JavaScript", () => {
 		expect(reported[0].activeLanes).toBe(1);
 		expect(reported[0].rssBytes).toBe(beat.rssBytes);
 		expect(reported[0].freeMemBytes).toBe(beat.freeMemBytes);
+		expect(reported[0].heapTotal).toBe(beat.heapTotal);
+		expect(reported[0].heapUsed).toBe(beat.heapUsed);
+		expect(reported[0].external).toBe(beat.external);
 		expect(Date.parse(reported[0].startedAt ?? "")).toBeGreaterThan(0);
 		expect(Date.parse(reported[0].heartbeatAt ?? "")).toBeGreaterThanOrEqual(Date.parse(reported[0].startedAt ?? ""));
 		// Swept, so the same death is not re-reported on every later launch.
