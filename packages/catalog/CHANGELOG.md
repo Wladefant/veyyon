@@ -10,6 +10,7 @@
 - Model id classification no longer keeps a process-lifetime table from each id to its answer, which cut the idle heap of an interactive session from 66.8 MiB to 63.6 MiB (median of 3 runs) and stops each newly seen model id from growing the heap.
 - Models whose resolved compat records are equal share one frozen record, which cut the retained heap of a full catalog build from 4.41 MiB to 2.69 MiB and the idle heap of an interactive session from 43.8 MiB to 41.5 MiB (median of 3 runs).
 - GitLab Duo workflow discovery parses the available-models answer without Zod, and `@veyyon/catalog` no longer depends on `zod`; every answer resolves to the same models.
+- The parsed bundled catalog and the reference index built from it are released 30 seconds after the last read and parsed again on the next one, and the provider list is kept apart so listing providers never parses the catalog, which cut the settled idle heap of an interactive session from 39.96 MiB to 38.88 MiB and its live objects from 485,605 to 471,040 (median of 5 runs).
 
 ### Fixed
 

@@ -44,6 +44,16 @@ const ENRICHED_REGISTRY_FORMAT_VERSION = 4;
 let fullRegistry: Map<string, Map<string, Model<Api>>> | undefined;
 const lazyProviderModels: Map<string, Map<string, Model<Api>>> = new Map();
 let parsedModels: BundledModelsJson | undefined;
+let bundledProviderNames: readonly GeneratedProvider[] | undefined;
+let releaseTimer: NodeJS.Timeout | undefined;
+const releaseListeners: Array<() => void> = [];
+
+/**
+ * How long the parsed catalog stays in memory past its last read. A launch or a registry build reads
+ * it in one burst; past the burst it is about 3 MiB of objects that only a provider not yet built
+ * reads again, and `models.json` holds the same bytes for that read.
+ */
+const PARSED_CATALOG_HOLD_MS = 30_000;
 let catalogDigest: string | undefined;
 
 /**
@@ -79,8 +89,29 @@ export function enrichedRegistryFingerprint(): string {
 	return `v${ENRICHED_REGISTRY_FORMAT_VERSION}:${bundledCatalogDigest()}`;
 }
 
+/**
+ * Run `listener` each time the parsed catalog is released. Data derived from the catalog's specs
+ * registers here so that it is released with them.
+ */
+export function onBundledCatalogRelease(listener: () => void): void {
+	releaseListeners.push(listener);
+}
+
+function releaseParsedModels(): void {
+	releaseTimer = undefined;
+	parsedModels = undefined;
+	for (const listener of releaseListeners) listener();
+}
+
+/** The parsed catalog, held for {@link PARSED_CATALOG_HOLD_MS} past this read. */
 function getParsedModels(): BundledModelsJson {
-	parsedModels ??= JSON.parse(readFileSync(modelsPath, "utf8")) as BundledModelsJson;
+	if (!parsedModels) {
+		parsedModels = JSON.parse(readFileSync(modelsPath, "utf8")) as BundledModelsJson;
+		bundledProviderNames ??= Object.keys(parsedModels);
+	}
+	clearTimeout(releaseTimer);
+	releaseTimer = setTimeout(releaseParsedModels, PARSED_CATALOG_HOLD_MS);
+	releaseTimer.unref();
 	return parsedModels;
 }
 
@@ -152,7 +183,8 @@ export function getBundledProviders(): GeneratedProvider[] {
 			return Array.from(full.keys()) as GeneratedProvider[];
 		}
 	}
-	return Object.keys(getParsedModels()) as GeneratedProvider[];
+	// The provider list outlives the parsed catalog, so listing providers never parses it again.
+	return (bundledProviderNames ?? Object.keys(getParsedModels())).slice();
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
