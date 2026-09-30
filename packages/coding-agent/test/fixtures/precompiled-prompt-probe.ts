@@ -8,6 +8,7 @@
  */
 import * as fs from "node:fs";
 import * as prompt from "@veyyon/utils/prompt";
+import { precompiledTemplate } from "@veyyon/utils/prompt-precompiled";
 import Handlebars from "handlebars";
 
 /** What the suite asks of each arm, read from a JSON file so both arms receive the same bytes. */
@@ -24,6 +25,8 @@ export interface RenderOutcome {
 }
 
 export interface TemplateReport {
+	/** Whether the build registered the template under the text its import yields. */
+	readonly registered: boolean;
 	readonly parses: number;
 	readonly analysis: prompt.TemplateVariables;
 	readonly outcomes: RenderOutcome[];
@@ -56,11 +59,12 @@ export function runProbe(templates: Record<string, string>, inputPath: string): 
 	const input = JSON.parse(fs.readFileSync(inputPath, "utf8")) as ProbeInput;
 	const reports: Record<string, TemplateReport> = {};
 	for (const [key, template] of Object.entries(templates)) {
+		const registered = precompiledTemplate(template) !== undefined;
 		const before = parses;
 		const analysis = prompt.analyzePromptTemplate(template);
 		const outcomes = [outcome(() => prompt.render(template, {}, { allowMissing: true }))];
 		for (const context of input.contexts[key] ?? []) outcomes.push(outcome(() => prompt.render(template, context)));
-		reports[key] = { parses: parses - before, analysis, outcomes };
+		reports[key] = { registered, parses: parses - before, analysis, outcomes };
 	}
 	const late = input.lateHelper;
 	prompt.registerHelper(late.name, () => "LATE-HELPER");

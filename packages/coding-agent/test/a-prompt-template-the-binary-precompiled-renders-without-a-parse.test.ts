@@ -26,7 +26,7 @@
  * so a divergence reachable only through a block body those contexts leave unrendered would pass.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { type ExecFileSyncOptionsWithStringEncoding, execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { prompt, TempDir } from "@veyyon/utils";
@@ -100,16 +100,9 @@ let compiled: ProbeReport;
 let source: ProbeReport;
 let lateHelper: ProbeInput["lateHelper"];
 
-function run(command: string, args: string[]): ProbeReport {
-	// Stderr is captured, not shown: the string context makes Handlebars warn about every
-	// `name.property` it reads off a string, and a failed run reports it through the thrown error.
-	const stdout = execFileSync(command, args, {
-		encoding: "utf8",
-		maxBuffer: 512 * 1024 * 1024,
-		cwd: tempDir.path(),
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-	return JSON.parse(stdout) as ProbeReport;
+/** Options for a probe run. Stderr is captured, not shown: the string context makes Handlebars warn about every `name.property` it reads off a string, and a failed run reports it through the thrown error. */
+function probeOptions(): ExecFileSyncOptionsWithStringEncoding {
+	return { encoding: "utf8", maxBuffer: 512 * 1024 * 1024, cwd: tempDir.path(), stdio: ["ignore", "pipe", "pipe"] };
 }
 
 beforeAll(async () => {
@@ -156,8 +149,10 @@ beforeAll(async () => {
 	});
 	if (!output.success) throw new Error(output.logs.map(log => log.message).join("\n"));
 
-	compiled = run(binary, [inputPath]);
-	source = run(process.execPath, [entry, inputPath]);
+	compiled = JSON.parse(
+		execFileSync(path.join(tempDir.path(), "precompiled-prompt-probe"), [inputPath], probeOptions()),
+	) as ProbeReport;
+	source = JSON.parse(execFileSync(process.execPath, [entry, inputPath], probeOptions())) as ProbeReport;
 }, 180_000);
 
 afterAll(() => {
@@ -169,6 +164,13 @@ describe("a prompt template the binary build precompiled", () => {
 		expect(workspace.size).toBeGreaterThan(0);
 		expect(Object.keys(compiled.templates)).toEqual([...templates.keys()]);
 		expect(Object.keys(source.templates)).toEqual([...templates.keys()]);
+	});
+
+	test("is registered in the binary under the text its import yields, and nowhere in a run from source", () => {
+		const unregistered = Object.entries(compiled.templates).filter(([, report]) => !report.registered);
+		expect(unregistered.map(([key]) => key)).toEqual([]);
+		const registered = Object.entries(source.templates).filter(([, report]) => report.registered);
+		expect(registered.map(([key]) => key)).toEqual([]);
 	});
 
 	test("is analyzed, rendered and rendered again in the binary without one parse", () => {
