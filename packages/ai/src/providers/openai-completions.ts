@@ -724,7 +724,10 @@ function createOpenAICompletionsStreamError(chunk: unknown, provider: string): E
 	if (status === undefined) {
 		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
 	}
-	const code = type || (typeof codeValue === "string" ? codeValue : undefined);
+	// A nonnumeric string `code` is the machine code (insufficient_quota, usage_limit_reached) that
+	// quota classification reads; `type` is the generic class and only the fallback.
+	const machineCode = typeof codeValue === "string" && !/^\d+$/.test(codeValue.trim()) ? codeValue.trim() : undefined;
+	const code = machineCode || type;
 	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code });
 }
 

@@ -166,6 +166,22 @@ describe("in-band SSE error envelope", () => {
 		expect(result.errorMessage).toContain("The request queue is full.");
 	}, 10_000);
 
+	it("keeps a string machine code over the generic type so quota classification sees it", async () => {
+		const fetchMock = createSseFetch([
+			{ error: { message: "Request rejected.", type: "TOO_MANY_REQUESTS", code: "insufficient_quota" } },
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorStatus).toBe(429);
+		expect((result.errorId ?? 0) & Flag.UsageLimit).not.toBe(0);
+	}, 10_000);
+
 	it("does not replay after content precedes an in-band error", async () => {
 		let attempts = 0;
 		const baseFetch = createSseFetch([
