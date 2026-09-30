@@ -637,7 +637,6 @@ describe("Perplexity anonymous fallback", () => {
 				query: "test search",
 				authStorage: anonymousAuthStorage,
 				fetch: fetchMock,
-				explicit: true,
 			}),
 		).rejects.toThrow(/anonymous quota is exhausted/);
 	});
