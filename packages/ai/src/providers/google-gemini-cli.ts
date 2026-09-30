@@ -465,9 +465,7 @@ interface CloudCodeAssistRequest {
 			temperature?: number;
 			topP?: number;
 			topK?: number;
-			minP?: number;
 			presencePenalty?: number;
-			repetitionPenalty?: number;
 			thinkingConfig?: ThinkingConfig;
 		};
 		tools?: { functionDeclarations: Record<string, unknown>[] }[] | undefined;
