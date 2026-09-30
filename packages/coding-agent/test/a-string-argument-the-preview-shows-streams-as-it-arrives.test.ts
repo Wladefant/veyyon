@@ -30,7 +30,6 @@ import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core/types";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import {
-	decodeStreamedToolArgs,
 	STREAMING_STRING_KEYS_BY_TOOL,
 	streamingStringKeysForTool,
 	ToolArgsRevealController,
@@ -38,8 +37,10 @@ import {
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createVibeModeTools } from "@veyyon/coding-agent/tools/agent/manifest";
+import { decodeStreamedToolArgs } from "@veyyon/coding-agent/tools/core/streamed-tool-args";
 import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "@veyyon/coding-agent/tools/index";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
+import * as git from "@veyyon/coding-agent/utils/git";
 import type { TUI } from "@veyyon/tui";
 import { STREAMING_JSON_PARSE_MIN_GROWTH, stripAnsi, TempDir } from "@veyyon/utils";
 import { ArgotSession } from "argot";
@@ -224,7 +225,8 @@ describe("a string argument the preview shows streams as it arrives", () => {
 
 	it("builds every tool the registry declares", () => {
 		expect(sweep.unconstructable).toEqual([]);
-		expect(sweep.notRegistered).toEqual([]);
+		const expectedNotRegistered = git.github.available() ? [] : ["github"];
+		expect(sweep.notRegistered).toEqual(expectedNotRegistered);
 	});
 
 	/** Non-vacuity: the four arguments the defect was reported against are among the ones the sweep drives. */

@@ -76,7 +76,7 @@ describe("closing the host finishes disconnected session teardown", () => {
 			sessionManager: manager,
 			settings: Settings.isolated(),
 			modelRegistry: new ModelRegistry(auth),
-			disconnectOwnedMcpManager: async () => {
+			releaseMcpManager: async () => {
 				entered.resolve();
 				await blocked.promise;
 				const closed = Promise.withResolvers<void>();

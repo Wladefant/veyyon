@@ -61,7 +61,7 @@ function cliBar(one: UsageLimit): string {
 	const text = strip(
 		formatUsageBreakdown(
 			[report(one)],
-			[{ provider: "google-antigravity", email: "first@example.test" }],
+			[{ provider: "google-antigravity", type: "oauth", email: "first@example.test" }],
 			Date.now(),
 		),
 	);

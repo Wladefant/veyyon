@@ -10,6 +10,9 @@ on:
       - packages/coding-agent/src/slash-commands/**
       - packages/coding-agent/test/config-hot-reload.test.ts
       - .github/workflows/config-hot-reload.yml
+concurrency:
+  group: config-hot-reload-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 permissions:
   contents: read
   actions: read
