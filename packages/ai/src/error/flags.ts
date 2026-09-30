@@ -392,6 +392,14 @@ export function isStreamEnvelopeError(error: unknown): boolean {
 	);
 }
 
+/** Persisted-text form of {@link isStreamEnvelopeError}: recognizes the
+ *  prefix-tagged envelope diagnostic on an aborted turn's `errorMessage` /
+ *  `stopDetails.explanation` so loop-level salvage can classify it after the
+ *  original `Error` instance is gone. */
+export function isStreamEnvelopeErrorText(text: string): boolean {
+	return text.includes(STREAM_ENVELOPE_ERROR_PREFIX);
+}
+
 /**
  * A stream that ended before it said anything at all.
  *

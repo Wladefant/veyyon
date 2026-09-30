@@ -2109,7 +2109,13 @@ function recoverTransientErrorToolTurn(
 		if (tool.customWireName !== undefined) availableToolNames.add(tool.customWireName);
 	}
 	if (!toolCalls.every(toolCall => availableToolNames.has(toolCall.name))) return message;
-	if (!AIError.isStreamReadErrorText(`${message.errorMessage ?? ""}\n${message.stopDetails?.explanation ?? ""}`))
+	const errorText = `${message.errorMessage ?? ""}\n${message.stopDetails?.explanation ?? ""}`;
+	if (
+		!AIError.isStreamReadErrorText(errorText) &&
+		!AIError.isStreamEnvelopeErrorText(errorText) &&
+		!AIError.isTransientStreamParseError(message.errorMessage) &&
+		!AIError.isTransientStreamParseError(message.stopDetails?.explanation)
+	)
 		return message;
 	return {
 		...message,
