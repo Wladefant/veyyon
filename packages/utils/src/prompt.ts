@@ -1,5 +1,6 @@
 import type { HelperDelegate, HelperOptions, Template, TemplateDelegate } from "handlebars";
 import Handlebars from "handlebars";
+import { precompiledTemplate } from "./prompt-precompiled";
 import { analyzeTemplate, assertTemplateVariablesFilled, type TemplateVariables } from "./prompt-variables";
 import { internString } from "./strings";
 
@@ -494,6 +495,27 @@ handlebars.registerHelper("not", (value: unknown): boolean => !value);
 handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
 
 /**
+ * The helpers this module registers, which every analysis `precompileTemplate` produces assumes.
+ * Captured after the last registration above, before any caller can add one.
+ */
+const BUILTIN_HELPER_NAMES: readonly string[] = Object.keys(handlebars.helpers);
+
+/**
+ * Helpers registered through {@link registerHelper} after this module loaded. A precompiled
+ * analysis of a template whose text contains one of these names is recomputed, because a
+ * zero-argument mustache of that name is now a helper call rather than a context variable.
+ */
+const helpersRegisteredAfterLoad: string[] = [];
+
+/**
+ * Options for every template compile: at render and in {@link precompileTemplate}. A function
+ * rather than a constant because `Handlebars.precompile` writes defaults into the object it gets.
+ */
+function compileOptions(): CompileOptions {
+	return { noEscape: true, strict: false };
+}
+
+/**
  * Analyses keyed on the raw template. A template's AST walk costs more than
  * rendering it, and every render asserts its context, so without this each
  * render parses the template a second time to learn what it already learned.
@@ -503,6 +525,9 @@ const templateAnalysisCache = new Map<string, TemplateVariables>();
 
 export function registerHelper(name: string, fn: HelperDelegate): void {
 	handlebars.registerHelper(name, fn);
+	if (!BUILTIN_HELPER_NAMES.includes(name) && !helpersRegisteredAfterLoad.includes(name)) {
+		helpersRegisteredAfterLoad.push(name);
+	}
 	// A new helper turns a zero-argument mustache of its name from a context
 	// variable into a helper call, so every cached analysis may now be wrong.
 	templateAnalysisCache.clear();
@@ -535,11 +560,37 @@ export function compile(template: string): (context: TemplateContext) => string 
 	// (a full-template regex pass) as well as the Handlebars compile.
 	const cached = compiledTemplateCache.get(template);
 	if (cached) return cached;
-	const compiled = handlebars.compile(disambiguateClosingBraces(template), { noEscape: true, strict: false }) as (
-		context: TemplateContext,
-	) => string;
+	const precompiled = precompiledTemplate(template);
+	const compiled = (
+		precompiled
+			? handlebars.template(precompiled.spec())
+			: handlebars.compile(disambiguateClosingBraces(template), compileOptions())
+	) as (context: TemplateContext) => string;
 	compiledTemplateCache.set(template, compiled);
 	return compiled;
+}
+
+/** A template's precompiled specification, as JavaScript source, and the analysis of its variables. */
+export interface TemplatePrecompilation {
+	/** An object literal expression that `Handlebars.template` revives into the template's render function. */
+	readonly spec: string;
+	readonly variables: TemplateVariables;
+}
+
+/**
+ * Precompile a template of this module's dialect, for the binary build.
+ *
+ * The specification is what {@link compile} builds at run time, with the same options and the same
+ * {@link disambiguateClosingBraces} pass. The analysis assumes {@link BUILTIN_HELPER_NAMES}; a helper
+ * registered later invalidates it for any template whose text contains the helper's name.
+ */
+export function precompileTemplate(template: string): TemplatePrecompilation {
+	const source = disambiguateClosingBraces(template);
+	return {
+		// The typings declare an object; the compiler returns the specification's source text.
+		spec: handlebars.precompile(source, compileOptions()) as unknown as string,
+		variables: analyzeTemplate(source, { helperNames: BUILTIN_HELPER_NAMES }),
+	};
 }
 
 /**
@@ -564,7 +615,11 @@ function analyzerOptions(): { helperNames: string[] } {
 export function analyzePromptTemplate(template: string): TemplateVariables {
 	const cached = templateAnalysisCache.get(template);
 	if (cached) return cached;
-	const analysis = analyzeTemplate(disambiguateClosingBraces(template), analyzerOptions());
+	const precompiled = precompiledTemplate(template);
+	const analysis =
+		precompiled && !helpersRegisteredAfterLoad.some(name => template.includes(name))
+			? precompiled.variables()
+			: analyzeTemplate(disambiguateClosingBraces(template), analyzerOptions());
 	templateAnalysisCache.set(template, analysis);
 	return analysis;
 }

@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
+import { createPrecompiledPromptPlugin } from "./precompiled-prompts";
 
 /** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
 export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);
@@ -164,6 +165,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				await createLegacyPiVirtualModulePlugin(),
 				createMupdfStubPlugin(),
 				createYargsImportMetaResolvePatchPlugin(),
+				createPrecompiledPromptPlugin(),
 			],
 			compile: {
 				...(options.target ? { target: options.target } : {}),
