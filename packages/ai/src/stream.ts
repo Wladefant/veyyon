@@ -1731,7 +1731,7 @@ function googleGenerativeOptions({
 		return {
 			...base,
 			serviceTier: options.serviceTier,
-			thinking: { enabled: true, level: mapEffortToGoogleThinkingLevel(effort) },
+			thinking: { enabled: true, level: mapEffortToGoogleThinkingLevel(effort, googleModel) },
 			hideThinkingSummary: options.hideThinkingSummary,
 			toolChoice,
 		};
@@ -1758,7 +1758,7 @@ function googleVertexOptions({ model, options, selection, base }: OptionsMapping
 		return {
 			...base,
 			serviceTier: options.serviceTier,
-			thinking: { enabled: true, level: mapEffortToGoogleThinkingLevel(effort) },
+			thinking: { enabled: true, level: mapEffortToGoogleThinkingLevel(effort, vertexModel) },
 			hideThinkingSummary: options.hideThinkingSummary,
 			toolChoice,
 		};
@@ -1809,7 +1809,7 @@ function geminiCliThinkingOn(
 		return {
 			...base,
 			requestModelId: selection.wireModelId,
-			thinking: { enabled: true, level: mapEffortToGoogleThinkingLevel(effort) },
+			thinking: { enabled: true, level: mapEffortToGoogleThinkingLevel(effort, model) },
 			hideThinkingSummary: options.hideThinkingSummary,
 			toolChoice,
 			antigravityEndpointMode: options.antigravityEndpointMode,

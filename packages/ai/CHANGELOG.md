@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Cloud Code Assist Gemini 3.6/3.7 Flash requests at `minimal` now send `thinkingLevel: LOW` on the aliased `-low` SKU instead of `MINIMAL`, which the API rejects with HTTP 400.
 - Antigravity accounts that share one project id (`aicode-consumers`) keep their own usage report and their own stored credential instead of merging into the first account's limits or being deduplicated away ([#102](https://github.com/Wladefant/veyyon/issues/102)).
 - Antigravity usage limits are named as the Antigravity app names them (`Gemini Models`, `Claude and GPT models`, `Weekly limit`, `5-hour limit`), are marked as shown by what remains, and mark a window that does not apply once its weekly limit is spent ([#102](https://github.com/Wladefant/veyyon/issues/102)).
 - Preserved and replayed OpenAI-compatible Gemini per-call and message-level thought signatures across continuation turns ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
