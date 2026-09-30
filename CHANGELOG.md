@@ -22,6 +22,7 @@
 - `SessionStorage` has an optional `openPinnedReaderSync` that opens a read handle whose reads keep answering from the file object a path named when it was opened; `FileSessionStorage` implements it outside Windows.
 - `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
 - `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
+- `releaseEmbeddedModulePages()` unmaps the clean resident pages of the running executable's `.bun` section on Linux and returns the bytes released; a later read faults the same bytes back in from the page cache, and on other platforms the call returns 0.
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
@@ -33,6 +34,7 @@
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
 - `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
+- `@veyyon/utils/idle-trim` exports `trimEngine`, the `Bun.shrink()` call `IdleTrim` runs when no `trim` is given.
 
 ### Changed
 
@@ -137,6 +139,7 @@
 - A URL read sends its alternate-markdown, `.md` suffix, content-negotiation, alternate-feed and `llms.txt` probes concurrently, keeps the highest-priority rendition that answers and aborts the rest, and downloads a document's bytes once for the converter and the binary notice, cutting an article read from 93.3 ms to 63.1 ms and a script-shell page read from 216.6 ms to 93.7 ms.
 - The same-file reload comparison lives in `session/provider-replay-projection.ts` and compares each message's replayed fields without deep-copying them first, and skips a message both lists share, cutting it on a 433-message branch from 0.47 ms to 0.13 ms.
 - A running `veyyon` process that has used under 5% CPU in each 5-second window for 30 seconds discards its compiled JavaScript code and returns free memory to the OS, cutting an interactive session's resident memory at idle from 361 MiB to 332 MiB after eight turns and from 325 MiB to 303 MiB after startup, at a cost of 37 ms on the next turn.
+- An idle `veyyon` binary on Linux also unmaps the clean resident pages of its embedded modules when it discards its compiled code, cutting an interactive session's resident memory at idle from 317 MiB to 226 MiB after startup and from 342 MiB to 251 MiB after eight turns, with no measurable change to the next turn.
 - The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
