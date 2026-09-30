@@ -104,7 +104,7 @@ export const evalCellCommonFields = {
  * Per-call input: a single cell. State persists within a language across
  * separate eval calls and across tool calls, so each call is one logical step
  * and later calls reuse what earlier ones defined. This static schema carries
- * the full language union for typing; {@link buildEvalSchema} narrows the wire
+ * the full language union for typing; {@link evalSchemaFor} narrows the wire
  * copy per session so disabled backends are never advertised to the model.
  */
 export const evalSchema = type({
@@ -116,19 +116,31 @@ export type EvalToolParams = typeof evalSchema.infer;
 export type EvalCellInput = EvalToolParams;
 
 /**
- * Build a session-scoped copy of the eval schema whose `language` enum and field
- * descriptions advertise only the runtimes enabled for this session. Disabled
- * backends never reach the model: the wire schema, BM25 discovery corpus, and
- * tool description stay in lockstep with {@link resolveEvalBackends}. The static
- * {@link evalSchema} (full union) remains the type-level source of truth.
+ * Session-scoped copies of the eval schema, keyed by the enabled language list. A copy's
+ * `language` enum and field descriptions advertise only the runtimes enabled for that session.
+ * Disabled backends never reach the model: the wire schema, BM25 discovery corpus, and tool
+ * description stay in lockstep with {@link resolveEvalBackends}. The static {@link evalSchema}
+ * (full union) remains the type-level source of truth.
+ *
+ * ArkType registers every node a `type(...)` call builds in a process-global table and never
+ * releases it, so a copy built per session leaks 18 nodes for every session and spawned agent.
+ * The list is a subsequence of {@link EVAL_LANGUAGE_ORDER}, which bounds the cache at one entry per
+ * subset of the four languages.
  */
-function buildEvalSchema(langs: readonly EvalLanguageToken[]): typeof evalSchema {
+const evalSchemaByLanguages = new Map<string, typeof evalSchema>();
+
+function evalSchemaFor(langs: readonly EvalLanguageToken[]): typeof evalSchema {
+	if (langs.length === 0 || langs.length === EVAL_LANGUAGE_ORDER.length) return evalSchema;
+	const key = langs.join(",");
+	const cached = evalSchemaByLanguages.get(key);
+	if (cached) return cached;
 	const schema = type({
 		language: type.enumerated(...langs).describe(describeLanguageField(langs)),
 		code: type("string").describe(describeCodeField(langs)),
 		...evalCellCommonFields,
-	});
-	return schema as unknown as typeof evalSchema;
+	}) as unknown as typeof evalSchema;
+	evalSchemaByLanguages.set(key, schema);
+	return schema;
 }
 
 export type EvalToolResult = {
@@ -431,14 +443,7 @@ export class EvalTool implements AgentTool<typeof evalSchema, EvalToolDetails> {
 		return EvalTool.#ALL_EXAMPLES.filter(ex => "call" in ex && langs.has(ex.call.language as EvalLanguageToken));
 	}
 	get parameters(): typeof evalSchema {
-		const langs = this.#enabledLanguages();
-		if (langs.length === 0 || langs.length === EVAL_LANGUAGE_ORDER.length) return evalSchema;
-		const key = langs.join(",");
-		if (this.#paramsKey !== key) {
-			this.#cachedParams = buildEvalSchema(langs);
-			this.#paramsKey = key;
-		}
-		return this.#cachedParams ?? evalSchema;
+		return evalSchemaFor(this.#enabledLanguages());
 	}
 	readonly concurrency = "exclusive";
 	readonly strict = true;
@@ -450,9 +455,6 @@ export class EvalTool implements AgentTool<typeof evalSchema, EvalToolDetails> {
 
 	readonly #proxyExecutor?: EvalProxyExecutor;
 	readonly #discoveredAgents: readonly AgentDefinition[];
-
-	#paramsKey?: string;
-	#cachedParams?: typeof evalSchema;
 
 	/**
 	 * Languages enabled for this session, in display order. Detached tools (no
