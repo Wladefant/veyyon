@@ -14,6 +14,7 @@
 - `@veyyon/utils/inflight-marker` atomically records each concurrent tool call independently and durably reports abandoned calls in the normal dated log before removing their markers, including Linux zombies ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - `@veyyon/utils/session-heartbeat` keeps a per-process heartbeat naming the session phase (`provider`, `tool`, `compaction`, `idle`) and busy lanes, rewritten asynchronously on every phase change and every 5 s; the next launch logs `Previous session died silently` for a heartbeat whose process is gone ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - On Windows, Ctrl+Break (`CTRL_BREAK_EVENT`) now runs postmortem cleanup as `Reason.SIGBREAK` and exits 149; without a listener Windows ended the process with `0xC000013A` and no exit record ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- The session heartbeat and the `Previous session died silently` log line now carry `rssBytes`, `freeMemBytes`, `heapTotal`, `heapUsed`, `external`, `smol`, and `forceRAMSize`, so a session the operating system ended for want of memory or a per-process JSC heap ceiling (D04 abort) can be told from a terminal closing under it ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
 ### Changed
 
