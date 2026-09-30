@@ -917,7 +917,12 @@ export class AgentSession {
 	readonly #checkpoint = new CheckpointRuntime();
 	/** The `yield` call that ended the run and whether the run is terminal. */
 	readonly #yields = new YieldTracker();
-	readonly rawSseDebugBuffer: RawSseDebugBuffer;
+	/**
+	 * Recent raw SSE traffic for the debug viewer and the report bundle, which read the session the
+	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
+	 * the displayed session is always a top-level one, so a spawned agent's capture has no reader.
+	 */
+	readonly rawSseDebugBuffer: RawSseDebugBuffer | undefined;
 
 	#resetPromptMaintenanceState(): void {
 		this.#stopRetries.resetForPrompt();
@@ -1396,7 +1401,8 @@ export class AgentSession {
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
 		this.#preferWebsockets = config.preferWebsockets;
 		this.#onPayload = config.onPayload;
-		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
+		const rawSse = config.rawSseDebugBuffer ?? (this.#isSpawned ? undefined : new RawSseDebugBuffer());
+		this.rawSseDebugBuffer = rawSse;
 		// Avoid wrapping in an `async` closure when no user callback is configured: the
 		// outer await on `#onResponse` (provider-response.ts) tolerates a sync void return,
 		// and skipping the wrapper drops a per-event `newPromiseCapability` allocation that
@@ -1404,23 +1410,27 @@ export class AgentSession {
 		const configuredOnResponse = config.onResponse;
 		this.#onResponse = configuredOnResponse
 			? async (response, model) => {
-					this.rawSseDebugBuffer.recordResponse(response, model);
+					rawSse?.recordResponse(response, model);
 					this.#usage.ingestHeaders(response, model);
 					await configuredOnResponse(response, model);
 				}
 			: (response, model) => {
-					this.rawSseDebugBuffer.recordResponse(response, model);
+					rawSse?.recordResponse(response, model);
 					this.#usage.ingestHeaders(response, model);
 				};
 		const configuredOnSseEvent = config.onSseEvent;
-		this.#onSseEvent = configuredOnSseEvent
-			? (event, model) => {
-					this.rawSseDebugBuffer.recordEvent(event, model);
-					configuredOnSseEvent(event, model);
-				}
-			: (event, model) => {
-					this.rawSseDebugBuffer.recordEvent(event, model);
-				};
+		// With no buffer and no caller hook the provider gets no observer, so it neither builds the
+		// per-event record nor resolves an OpenAI event name for one.
+		this.#onSseEvent = !rawSse
+			? configuredOnSseEvent
+			: configuredOnSseEvent
+				? (event, model) => {
+						rawSse.recordEvent(event, model);
+						configuredOnSseEvent(event, model);
+					}
+				: (event, model) => {
+						rawSse.recordEvent(event, model);
+					};
 		this.agent.setProviderResponseInterceptor(this.#onResponse);
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.agent.setOnTurnEnd(async (messages, signal, context) => {
