@@ -11,6 +11,7 @@
 
 ### Changed
 
+- 261 class members that read no instance state are module functions and constants instead of `#private` members; JSC copies every private name of a class into each function its body creates, so with the 73 moved in the other packages the binary shrinks by 815 KiB and an idle session holds 580 KiB less RSS after the idle trim (median of five).
 - The isolation runner loads the commit message generator, its model helper and the commit prompts on the first AI-written isolation commit instead of when the task tool loads, so an idle session holds 390 fewer live objects and 0.10 MiB less heap (median of five) and a source session evaluates 16 fewer modules.
 - The Mermaid render cache imports `lru-cache/raw` like every other module, so a session evaluates one `lru-cache` build instead of two: the binary shrinks by 296 KiB and an idle session holds 537 fewer live objects (median of seven).
 - `AgentSession` runs its retry ladder through `session/runtime/retry-runtime.ts` and its secret redaction and display expansion through `session/runtime/session-secrets.ts`, and holds 404 private names instead of 487, so its compiled bytecode drops from 9,474 KiB to 7,646 KiB across the three modules and loading it from a `--bytecode` binary costs 18,660 KiB RSS instead of 21,424 KiB (median of nine).

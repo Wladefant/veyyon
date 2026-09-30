@@ -671,14 +671,8 @@ export class PlanReviewOverlay implements Component {
 
 	#formatAnnotationFeedback(note: string): string {
 		if (!note.includes("\n")) return `- ${note}\n`;
-		const fence = this.#markdownFenceFor(note);
+		const fence = markdownFenceFor(note);
 		return `${fence}md\n${note}\n${fence}\n`;
-	}
-
-	#markdownFenceFor(text: string): string {
-		let fence = "```";
-		while (text.includes(fence)) fence += "`";
-		return fence;
 	}
 
 	#renderSliderLines(): string[] {
@@ -774,20 +768,10 @@ export class PlanReviewOverlay implements Component {
 		return lines;
 	}
 
-	#sidebarWidthFor(width: number): number {
-		return clampLow(Math.round(width * 0.24), 18, 30);
-	}
-
-	/** Body-content width left over for a sidebar of `sidebarWidth` columns
-	 *  inside a `contentWidth`-wide ModalShell body. */
-	#sidebarBodyWidth(contentWidth: number, sidebarWidth: number): number {
-		return Math.max(1, contentWidth - sidebarWidth - SIDEBAR_DIVIDER_COLS);
-	}
-
 	#sidebarVisible(contentWidth: number): boolean {
 		if (this.#toc.length < SIDEBAR_MIN_HEADINGS) return false;
 		if (contentWidth < SIDEBAR_MIN_TOTAL_WIDTH) return false;
-		return this.#sidebarBodyWidth(contentWidth, this.#sidebarWidthFor(contentWidth)) >= SIDEBAR_MIN_BODY_WIDTH;
+		return sidebarBodyWidth(contentWidth, sidebarWidthFor(contentWidth)) >= SIDEBAR_MIN_BODY_WIDTH;
 	}
 
 	/** Sidebar lines plus, per row, the ToC position shown there (for clicks). */
@@ -847,18 +831,6 @@ export class PlanReviewOverlay implements Component {
 		return [caption, this.#input.render(contentWidth)[0] ?? ""];
 	}
 
-	/** Plain horizontal rule (no outer box glyphs — ModalShell owns those)
-	 *  separating the sidebar/body region from the prompt/slider/options below. */
-	#renderRegionRule(contentWidth: number): string {
-		return theme.fg("borderAccent", theme.boxSharp.horizontal.repeat(Math.max(0, contentWidth)));
-	}
-
-	/** Compose one `sidebar │ body` row inside a `contentWidth`-wide slot. */
-	#composeSplitLine(sidebar: string, body: string, sidebarWidth: number, bodyWidth: number): string {
-		const divider = theme.fg("borderAccent", theme.boxSharp.vertical);
-		return `${fit(sidebar, sidebarWidth)} ${divider} ${fit(body, bodyWidth)}`;
-	}
-
 	render(width: number): readonly string[] {
 		const termHeight = Math.max(14, process.stdout.rows || 40);
 		const sizing = MODAL_SIZING_LARGE;
@@ -867,8 +839,8 @@ export class PlanReviewOverlay implements Component {
 
 		const sidebarShown = this.#sidebarVisible(contentWidth);
 		this.#sidebarShown = sidebarShown;
-		const sidebarWidth = sidebarShown ? this.#sidebarWidthFor(contentWidth) : 0;
-		const bodyContentWidth = sidebarShown ? this.#sidebarBodyWidth(contentWidth, sidebarWidth) : contentWidth;
+		const sidebarWidth = sidebarShown ? sidebarWidthFor(contentWidth) : 0;
+		const bodyContentWidth = sidebarShown ? sidebarBodyWidth(contentWidth, sidebarWidth) : contentWidth;
 
 		const sliderLines = this.#renderSliderLines();
 		const optionLines = this.#renderOptionLines();
@@ -902,7 +874,7 @@ export class PlanReviewOverlay implements Component {
 				const pos = posForRow[i];
 				if (pos !== undefined) this.#tocClickRows.set(content.length, pos);
 				this.#bodyClickRows.add(content.length);
-				content.push(this.#composeSplitLine(sidebar[i] ?? "", body[i] ?? "", sidebarWidth, bodyContentWidth));
+				content.push(composeSplitLine(sidebar[i] ?? "", body[i] ?? "", sidebarWidth, bodyContentWidth));
 			}
 		} else {
 			for (const line of body) {
@@ -910,7 +882,7 @@ export class PlanReviewOverlay implements Component {
 				content.push(line);
 			}
 		}
-		content.push(this.#renderRegionRule(contentWidth));
+		content.push(renderRegionRule(contentWidth));
 		for (const line of promptLines) content.push(line);
 		for (const line of sliderLines) content.push(line);
 		for (let i = 0; i < optionLines.length; i++) {
@@ -934,4 +906,32 @@ export class PlanReviewOverlay implements Component {
 		this.#sidebarClickMaxCol = sidebarShown ? (shell.geometry?.leftPad ?? 0) + 2 + sidebarWidth + 1 : 0;
 		return shell.lines;
 	}
+}
+
+function markdownFenceFor(text: string): string {
+	let fence = "```";
+	while (text.includes(fence)) fence += "`";
+	return fence;
+}
+
+function sidebarWidthFor(width: number): number {
+	return clampLow(Math.round(width * 0.24), 18, 30);
+}
+
+/** Body-content width left over for a sidebar of `sidebarWidth` columns
+ *  inside a `contentWidth`-wide ModalShell body. */
+function sidebarBodyWidth(contentWidth: number, sidebarWidth: number): number {
+	return Math.max(1, contentWidth - sidebarWidth - SIDEBAR_DIVIDER_COLS);
+}
+
+/** Plain horizontal rule (no outer box glyphs — ModalShell owns those)
+ *  separating the sidebar/body region from the prompt/slider/options below. */
+function renderRegionRule(contentWidth: number): string {
+	return theme.fg("borderAccent", theme.boxSharp.horizontal.repeat(Math.max(0, contentWidth)));
+}
+
+/** Compose one `sidebar │ body` row inside a `contentWidth`-wide slot. */
+function composeSplitLine(sidebar: string, body: string, sidebarWidth: number, bodyWidth: number): string {
+	const divider = theme.fg("borderAccent", theme.boxSharp.vertical);
+	return `${fit(sidebar, sidebarWidth)} ${divider} ${fit(body, bodyWidth)}`;
 }

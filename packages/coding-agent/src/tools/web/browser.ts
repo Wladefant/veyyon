@@ -219,7 +219,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 					result = await this.#open(name, params, details, timeoutMs, signal);
 					break;
 				case "close":
-					result = await this.#close(name, params, details, signal);
+					result = await close(name, params, details, signal);
 					break;
 				case "run":
 					result = await this.#run(name, params, details, timeoutMs, signal);
@@ -305,23 +305,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		return toolResult(details).text(lines.join("\n")).done();
 	}
 
-	async #close(
-		name: string,
-		params: BrowserParams,
-		details: BrowserToolDetails,
-		signal?: AbortSignal,
-	): Promise<AgentToolResult<BrowserToolDetails>> {
-		const kill = !!params.kill;
-		if (params.all) {
-			const count = await untilAborted(signal, () => releaseAllTabs({ kill }));
-			details.result = `Closed ${count} tab(s)`;
-			return toolResult(details).text(details.result).done();
-		}
-		const closed = await untilAborted(signal, () => releaseTab(name, { kill }));
-		details.result = closed ? `Closed tab ${JSON.stringify(name)}` : `No tab named ${JSON.stringify(name)}`;
-		return toolResult(details).text(details.result).done();
-	}
-
 	async #run(
 		name: string,
 		params: BrowserParams,
@@ -394,6 +377,23 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		}
 		return toolResult(details).content(content).done();
 	}
+}
+
+async function close(
+	name: string,
+	params: BrowserParams,
+	details: BrowserToolDetails,
+	signal?: AbortSignal,
+): Promise<AgentToolResult<BrowserToolDetails>> {
+	const kill = !!params.kill;
+	if (params.all) {
+		const count = await untilAborted(signal, () => releaseAllTabs({ kill }));
+		details.result = `Closed ${count} tab(s)`;
+		return toolResult(details).text(details.result).done();
+	}
+	const closed = await untilAborted(signal, () => releaseTab(name, { kill }));
+	details.result = closed ? `Closed tab ${JSON.stringify(name)}` : `No tab named ${JSON.stringify(name)}`;
+	return toolResult(details).text(details.result).done();
 }
 
 /** Persist over-cap browser run output as a session artifact; mirrors the bash minimizer's save path. */

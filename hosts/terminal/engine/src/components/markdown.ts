@@ -1333,7 +1333,7 @@ export class Markdown implements Component {
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
 		let cacheKey: string | undefined;
 		if (!this.transientRenderCache) {
-			cacheKey = this.#renderCacheKey(normalizedText, signature);
+			cacheKey = renderCacheKey(normalizedText, signature);
 			const cached = renderCache.get(cacheKey);
 			if (cached !== undefined) {
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
@@ -1395,10 +1395,6 @@ export class Markdown implements Component {
 			bgColorProbe,
 			headingProbe,
 		};
-	}
-
-	#renderCacheKey(normalizedText: string, signature: RenderSignature): string {
-		return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}`;
 	}
 
 	#renderStreamingContentLines(
@@ -1632,7 +1628,7 @@ export class Markdown implements Component {
 		// The line still streaming is plain until its newline arrives, unless the fence has closed.
 		const lastLine = text.slice(stableEnd);
 		const lastRows =
-			highlightDiff && this.#codeTokenHasClosingFence(token)
+			highlightDiff && codeTokenHasClosingFence(token)
 				? highlightDiff(lastLine, lang)
 				: [this.#theme.codeBlock(lastLine)];
 		this.#layoutRows(
@@ -1671,7 +1667,7 @@ export class Markdown implements Component {
 		}
 
 		if (canStreamDiff) {
-			const closedFence = this.#codeTokenHasClosingFence(token);
+			const closedFence = codeTokenHasClosingFence(token);
 			const lineEnd = tokenText.lastIndexOf("\n");
 			if (closedFence || lineEnd >= 0) {
 				const completedText = closedFence ? tokenText : tokenText.slice(0, lineEnd);
@@ -1691,37 +1687,6 @@ export class Markdown implements Component {
 			bodyLines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
 		}
 		return bodyLines;
-	}
-
-	#codeTokenHasClosingFence(token: Token): boolean {
-		const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
-		const firstLineEnd = raw.indexOf("\n");
-		if (firstLineEnd < 0) return false;
-		const openingLine = raw.slice(0, firstLineEnd);
-		const openingTrimmed = openingLine.trimStart();
-		const openingIndent = openingLine.length - openingTrimmed.length;
-		if (openingIndent > 3) return false;
-		const fenceChar = openingTrimmed.charAt(0);
-		if (fenceChar !== "`" && fenceChar !== "~") return false;
-		let fenceLength = 0;
-		while (openingTrimmed.charAt(fenceLength) === fenceChar) fenceLength++;
-		if (fenceLength < 3) return false;
-
-		let lineStart = firstLineEnd + 1;
-		while (lineStart <= raw.length) {
-			const lineEnd = raw.indexOf("\n", lineStart);
-			const line = lineEnd >= 0 ? raw.slice(lineStart, lineEnd) : raw.slice(lineStart);
-			const trimmed = line.trimStart();
-			const indent = line.length - trimmed.length;
-			let closingLength = 0;
-			while (trimmed.charAt(closingLength) === fenceChar) closingLength++;
-			if (indent <= 3 && closingLength >= fenceLength && trimmed.slice(closingLength).trim().length === 0) {
-				return true;
-			}
-			if (lineEnd < 0) break;
-			lineStart = lineEnd + 1;
-		}
-		return false;
 	}
 
 	#highlightStreamingDiffLines(completedText: string, lang: string | undefined): readonly string[] {
@@ -1811,15 +1776,8 @@ export class Markdown implements Component {
 			return this.#defaultStylePrefix;
 		}
 
-		this.#defaultStylePrefix = this.#getStylePrefix(text => this.#applyDefaultStyle(text));
+		this.#defaultStylePrefix = getStylePrefix(text => this.#applyDefaultStyle(text));
 		return this.#defaultStylePrefix;
-	}
-
-	#getStylePrefix(styleFn: (text: string) => string): string {
-		const sentinel = "\u0000";
-		const styled = styleFn(sentinel);
-		const sentinelIndex = styled.indexOf(sentinel);
-		return sentinelIndex >= 0 ? styled.slice(0, sentinelIndex) : "";
 	}
 
 	#getDefaultInlineStyleContext(): InlineStyleContext {
@@ -2032,7 +1990,7 @@ export class Markdown implements Component {
 	 */
 	#applyQuoteBorder(renderedLines: string[], width: number): string[] {
 		const quoteStyle = (text: string) => this.#theme.quote(this.#theme.italic(text));
-		const quoteStylePrefix = this.#getStylePrefix(quoteStyle);
+		const quoteStylePrefix = getStylePrefix(quoteStyle);
 		const applyQuoteStyle = (line: string): string => {
 			if (!quoteStylePrefix) {
 				return quoteStyle(line);
@@ -2247,36 +2205,6 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * Get the visible width of the longest word in a string.
-	 */
-	#getLongestWordWidth(text: string, maxWidth?: number): number {
-		const words = text.split(/\s+/).filter(word => word.length > 0);
-		let longest = 0;
-		for (const word of words) {
-			longest = Math.max(longest, visibleWidth(word));
-		}
-		if (maxWidth === undefined) {
-			return longest;
-		}
-		return Math.min(longest, maxWidth);
-	}
-
-	#terminalLineWidths(text: string): number[] {
-		return splitTerminalLines(text).map(line => visibleWidth(line));
-	}
-
-	/**
-	 * Wrap a table cell to fit into a column.
-	 *
-	 * Delegates to wrapTextWithAnsi() so ANSI codes + long tokens are handled
-	 * consistently with the rest of the renderer.
-	 */
-	#wrapCellText(text: string, maxWidth: number): string[] {
-		const cellWidth = Math.max(1, maxWidth);
-		return splitTerminalLines(text).flatMap(line => wrapTextWithAnsi(line, cellWidth));
-	}
-
-	/**
 	 * Render a table with width-aware cell wrapping.
 	 * Cells that don't fit are wrapped to multiple lines.
 	 */
@@ -2314,9 +2242,9 @@ export class Markdown implements Component {
 		const inspectCells = (rowCells: typeof token.header) => {
 			for (let i = 0; i < rowCells.length; i++) {
 				const text = this.#renderInlineTokens(rowCells[i]?.tokens || [], styleContext);
-				const lineWidths = this.#terminalLineWidths(text);
+				const lineWidths = terminalLineWidths(text);
 				naturalWidths[i] = Math.max(naturalWidths[i] || 0, ...lineWidths, 0);
-				minWordWidths[i] = Math.max(minWordWidths[i] || 1, this.#getLongestWordWidth(text, maxUnbrokenWordWidth));
+				minWordWidths[i] = Math.max(minWordWidths[i] || 1, getLongestWordWidth(text, maxUnbrokenWordWidth));
 			}
 		};
 		inspectCells(token.header);
@@ -2404,7 +2332,7 @@ export class Markdown implements Component {
 			`${left}${h}${columnWidths.map(w => h.repeat(w)).join(`${h}${mid}${h}`)}${h}${right}`;
 		const renderRowCells = (cells: typeof token.header, isHeader: boolean): string[] => {
 			const cellLines = cells.map((cell, i) =>
-				this.#wrapCellText(this.#renderInlineTokens(cell.tokens || [], styleContext), columnWidths[i]),
+				wrapCellText(this.#renderInlineTokens(cell.tokens || [], styleContext), columnWidths[i]),
 			);
 			const maxLines = Math.max(...cellLines.map(c => c.length));
 			const out: string[] = [];
@@ -2439,6 +2367,78 @@ export class Markdown implements Component {
 		}
 		return lines;
 	}
+}
+
+function renderCacheKey(normalizedText: string, signature: RenderSignature): string {
+	return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}`;
+}
+
+function codeTokenHasClosingFence(token: Token): boolean {
+	const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
+	const firstLineEnd = raw.indexOf("\n");
+	if (firstLineEnd < 0) return false;
+	const openingLine = raw.slice(0, firstLineEnd);
+	const openingTrimmed = openingLine.trimStart();
+	const openingIndent = openingLine.length - openingTrimmed.length;
+	if (openingIndent > 3) return false;
+	const fenceChar = openingTrimmed.charAt(0);
+	if (fenceChar !== "`" && fenceChar !== "~") return false;
+	let fenceLength = 0;
+	while (openingTrimmed.charAt(fenceLength) === fenceChar) fenceLength++;
+	if (fenceLength < 3) return false;
+
+	let lineStart = firstLineEnd + 1;
+	while (lineStart <= raw.length) {
+		const lineEnd = raw.indexOf("\n", lineStart);
+		const line = lineEnd >= 0 ? raw.slice(lineStart, lineEnd) : raw.slice(lineStart);
+		const trimmed = line.trimStart();
+		const indent = line.length - trimmed.length;
+		let closingLength = 0;
+		while (trimmed.charAt(closingLength) === fenceChar) closingLength++;
+		if (indent <= 3 && closingLength >= fenceLength && trimmed.slice(closingLength).trim().length === 0) {
+			return true;
+		}
+		if (lineEnd < 0) break;
+		lineStart = lineEnd + 1;
+	}
+	return false;
+}
+
+function getStylePrefix(styleFn: (text: string) => string): string {
+	const sentinel = "\u0000";
+	const styled = styleFn(sentinel);
+	const sentinelIndex = styled.indexOf(sentinel);
+	return sentinelIndex >= 0 ? styled.slice(0, sentinelIndex) : "";
+}
+
+/**
+ * Get the visible width of the longest word in a string.
+ */
+function getLongestWordWidth(text: string, maxWidth?: number): number {
+	const words = text.split(/\s+/).filter(word => word.length > 0);
+	let longest = 0;
+	for (const word of words) {
+		longest = Math.max(longest, visibleWidth(word));
+	}
+	if (maxWidth === undefined) {
+		return longest;
+	}
+	return Math.min(longest, maxWidth);
+}
+
+function terminalLineWidths(text: string): number[] {
+	return splitTerminalLines(text).map(line => visibleWidth(line));
+}
+
+/**
+ * Wrap a table cell to fit into a column.
+ *
+ * Delegates to wrapTextWithAnsi() so ANSI codes + long tokens are handled
+ * consistently with the rest of the renderer.
+ */
+function wrapCellText(text: string, maxWidth: number): string[] {
+	const cellWidth = Math.max(1, maxWidth);
+	return splitTerminalLines(text).flatMap(line => wrapTextWithAnsi(line, cellWidth));
 }
 
 /**

@@ -440,7 +440,7 @@ export class AdvisorRoster {
 			a.runtime.reset();
 			a.adviseTool.resetDeliveredNotes();
 			a.emissionGuard.reset();
-			this.#attachRecorderFeed(a);
+			attachRecorderFeed(a);
 		}
 		this.#primaryTurnsCompleted = 0;
 		this.#interruptImmuneTurnStart = undefined;
@@ -624,7 +624,7 @@ export class AdvisorRoster {
 
 		for (const descriptor of descriptors) {
 			const advisor = this.#instantiate(descriptor, advisorServiceTierResolver);
-			this.#attachRecorderFeed(advisor);
+			attachRecorderFeed(advisor);
 			if (seedToCurrent) advisor.runtime.seedTo(host.agent.state.messages.length);
 			this.#advisors.push(advisor);
 		}
@@ -888,15 +888,6 @@ export class AdvisorRoster {
 		return advisorRef;
 	}
 
-	/** Subscribe the advisor agent's finalized messages into the transcript recorder.
-	 *  Idempotent-by-replacement: callers detach the prior feed first. Kept separate
-	 *  so the re-prime path can mute the feed across an abort-driven reset. */
-	#attachRecorderFeed(advisor: ActiveAdvisor): void {
-		advisor.agentUnsubscribe = advisor.agent.subscribe(event => {
-			if (event.type === "message_end") advisor.recorder.record(event.message);
-		});
-	}
-
 	// ------------------------------------------------------------ delivery
 
 	/**
@@ -958,6 +949,15 @@ export class AdvisorRoster {
 			.steerAdvice(formatAdvisorBatchContent(notes), details)
 			.catch(err => logger.debug("advisor delivery failed", { err: errorMessage(err) }));
 	}
+}
+
+/** Subscribe the advisor agent's finalized messages into the transcript recorder.
+ *  Idempotent-by-replacement: callers detach the prior feed first. Kept separate
+ *  so the re-prime path can mute the feed across an abort-driven reset. */
+function attachRecorderFeed(advisor: ActiveAdvisor): void {
+	advisor.agentUnsubscribe = advisor.agent.subscribe(event => {
+		if (event.type === "message_end") advisor.recorder.record(event.message);
+	});
 }
 
 /** A visible advisor card carrying `notes`, as the aside batch and a preserved note both record it. */

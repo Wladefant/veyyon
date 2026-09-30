@@ -245,8 +245,8 @@ export class EventController {
 		this.#handlers = {
 			agent_start: e => this.#handleAgentStart(e),
 			agent_end: e => this.#handleAgentEnd(e),
-			turn_start: async () => this.#handleTurnStart(),
-			turn_end: async e => this.#handleTurnEnd(e),
+			turn_start: async () => handleTurnStart(),
+			turn_end: async e => handleTurnEnd(e),
 			message_start: e => this.#handleMessageStart(e),
 			message_update: e => this.#handleMessageUpdate(e),
 			message_end: e => this.#handleMessageEnd(e),
@@ -860,45 +860,6 @@ export class EventController {
 		}
 	}
 
-	/** A new turn interrupts any speech still queued/playing from the previous one. */
-	#handleTurnStart(): void {
-		vocalizer.clear();
-	}
-
-	/**
-	 * Speak streamed assistant output as a side effect of the turn. The mode
-	 * decides which deltas feed the vocalizer (the vocalizer re-checks enabled):
-	 * assistant|all speak text; all also speaks thinking; yield speaks nothing
-	 * live (the final message is spoken at turn end).
-	 */
-	#vocalizeDelta(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
-		if (!settings.get("speech.enabled")) return;
-		const mode = settings.get("speech.mode");
-		const delta = event.assistantMessageEvent;
-		if (delta.type === "text_delta" && (mode === "assistant" || mode === "all")) {
-			vocalizer.pushDelta(delta.delta);
-		} else if (delta.type === "thinking_delta" && mode === "all") {
-			vocalizer.pushDelta(delta.delta);
-		}
-	}
-
-	/**
-	 * End-of-turn vocalization: yield mode speaks the final assistant message in
-	 * one shot here (the only mode that is post-hoc); every other mode just makes
-	 * sure the live buffer's trailing partial gets flushed.
-	 */
-	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
-		if (!settings.get("speech.enabled")) return;
-		if (settings.get("speech.mode") !== "yield") {
-			vocalizer.flush();
-			return;
-		}
-		if (event.message.role !== "assistant") return;
-		if (event.message.stopReason === "aborted") return; // interrupted: never speak the aborted partial
-		const text = extractTextContent(event.message);
-		if (text) vocalizer.speak(text);
-	}
-
 	async #handleMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): Promise<void> {
 		this.#ensureWorkingLoaderWhileStreaming();
 		// Living shimmer: a text delta means the model is writing (streaming
@@ -908,7 +869,7 @@ export class EventController {
 		const streamDelta = event.assistantMessageEvent;
 		if (streamDelta?.type === "text_delta") setShimmerActivity("streaming");
 		else if (streamDelta?.type === "thinking_delta") setShimmerActivity("thinking");
-		this.#vocalizeDelta(event);
+		vocalizeDelta(event);
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			this.#projection.recordAssistantMessageToolCalls(event.message);
 			const smoothStreaming = this.ctx.settings.get("display.smoothStreaming");
@@ -1843,4 +1804,43 @@ export class EventController {
 			actions: "focus",
 		});
 	}
+}
+
+/** A new turn interrupts any speech still queued/playing from the previous one. */
+function handleTurnStart(): void {
+	vocalizer.clear();
+}
+
+/**
+ * Speak streamed assistant output as a side effect of the turn. The mode
+ * decides which deltas feed the vocalizer (the vocalizer re-checks enabled):
+ * assistant|all speak text; all also speaks thinking; yield speaks nothing
+ * live (the final message is spoken at turn end).
+ */
+function vocalizeDelta(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+	if (!settings.get("speech.enabled")) return;
+	const mode = settings.get("speech.mode");
+	const delta = event.assistantMessageEvent;
+	if (delta.type === "text_delta" && (mode === "assistant" || mode === "all")) {
+		vocalizer.pushDelta(delta.delta);
+	} else if (delta.type === "thinking_delta" && mode === "all") {
+		vocalizer.pushDelta(delta.delta);
+	}
+}
+
+/**
+ * End-of-turn vocalization: yield mode speaks the final assistant message in
+ * one shot here (the only mode that is post-hoc); every other mode just makes
+ * sure the live buffer's trailing partial gets flushed.
+ */
+function handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
+	if (!settings.get("speech.enabled")) return;
+	if (settings.get("speech.mode") !== "yield") {
+		vocalizer.flush();
+		return;
+	}
+	if (event.message.role !== "assistant") return;
+	if (event.message.stopReason === "aborted") return; // interrupted: never speak the aborted partial
+	const text = extractTextContent(event.message);
+	if (text) vocalizer.speak(text);
 }

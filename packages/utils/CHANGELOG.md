@@ -28,6 +28,7 @@
 
 ### Changed
 
+- Six class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `@veyyon/utils/json-snapshot` frames each snapshot with a layout version, payload byte length and CRC-32 instead of a SHA-256 digest, and rejects snapshots framed by the previous layout.
 - `utf8ByteLength` measures a whole string, or a range longer than 64 code units, with `Buffer.byteLength`, and `isWellFormedUtf16` answers with `String.prototype.isWellFormed`, instead of looping over code units, cutting a 3 KB ASCII string from 11.1 µs to 28 ns and from 1.3 µs to 4.5 ns with identical answers.
 - `wrapTextWithAnsi` returns a fitting row holding one-cell punctuation, arrows, box drawing, geometric shapes, dingbats or Latin-1, or a leading indent after an SGR sequence, without calling the native wrapper, cutting such a row from about 620 ns to 70 ns and a 13,470-entry transcript's first frame from 197.3 ms to 190.7 ms with rows identical to the native wrapper's across 300,000 generated lines.

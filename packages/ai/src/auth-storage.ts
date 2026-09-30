@@ -259,6 +259,8 @@ function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStr
 	return resolveRegisteredRankingStrategy(provider);
 }
 
+const defaultBackoffMs = 60_000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthStorage Class
 // ─────────────────────────────────────────────────────────────────────────────
@@ -269,7 +271,7 @@ function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStr
  * usage limit tracking, and OAuth token refresh.
  */
 export class AuthStorage {
-	static readonly #defaultBackoffMs = 60_000; // Default backoff when no reset time available
+	// Default backoff when no reset time available
 
 	/** Provider -> credentials cache, populated from store on reload(). */
 	#data: Map<string, StoredCredential[]> = new Map();
@@ -2451,7 +2453,8 @@ export class AuthStorage {
 			const provider = providerId as Provider;
 			const providerImpl = resolver(provider);
 			if (!providerImpl) continue;
-			const baseUrl = options?.baseUrlResolver?.(provider);
+			// The base URL resolver builds the provider's model list, so it is read only once a request is
+			// built, never for a registered usage provider that holds no credential.
 			let entries = this.#getStoredCredentials(providerId);
 			if (entries.length > 0) {
 				const dedupedEntries = this.#pruneDuplicateStoredCredentials(providerId, entries);
@@ -2466,12 +2469,17 @@ export class AuthStorage {
 				const envKey = getEnvApiKey(providerId);
 				const apiKey = runtimeKey ?? envKey;
 				if (!apiKey) continue;
-				const request = buildUsageRequest(provider, { type: "api_key", apiKey }, baseUrl);
+				const request = buildUsageRequest(
+					provider,
+					{ type: "api_key", apiKey },
+					options?.baseUrlResolver?.(provider),
+				);
 				if (providerImpl.supports && !providerImpl.supports(request)) continue;
 				requests.push(request);
 				continue;
 			}
 
+			const baseUrl = options?.baseUrlResolver?.(provider);
 			for (const entry of entries) {
 				const credential = entry.credential;
 				const request =
@@ -2937,7 +2945,7 @@ export class AuthStorage {
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
 		const now = Date.now();
-		let blockedUntil = now + (options?.retryAfterMs ?? AuthStorage.#defaultBackoffMs);
+		let blockedUntil = now + (options?.retryAfterMs ?? defaultBackoffMs);
 
 		if (credentialType === "oauth" && target.credential.type === "oauth" && strategy) {
 			const report = await this.#getUsageReport(provider, target.credential, options);
@@ -3042,7 +3050,7 @@ export class AuthStorage {
 			const scopedLimits = usage ? getScopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
 			if (!blocked && scopedLimits && isUsageLimitReached(scopedLimits)) {
 				const resetAtMs = getUsageResetAtMs(scopedLimits, nowMs);
-				blockedUntil = resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs;
+				blockedUntil = resetAtMs ?? Date.now() + defaultBackoffMs;
 				this.#blocks.markCredentialBlocked(
 					args.provider,
 					args.providerKey,
@@ -3524,7 +3532,7 @@ export class AuthStorage {
 						provider,
 						providerKey,
 						selection.index,
-						resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs,
+						resetAtMs ?? Date.now() + defaultBackoffMs,
 						blockScope,
 					);
 					return true;
@@ -4326,7 +4334,7 @@ export class AuthStorage {
 			provider,
 			getProviderTypeKey(provider, matched.type),
 			matched.index,
-			Date.now() + AuthStorage.#defaultBackoffMs,
+			Date.now() + defaultBackoffMs,
 		);
 		const failed = matched;
 		const siblingRemains = stored.some(
@@ -4419,12 +4427,7 @@ export class AuthStorage {
 		// account failed authentication, and an explicit choice must stop pinning traffic to it —
 		// otherwise a revoked grant would be retried until the turn died instead of failing over.
 		if (target) this.#authDeadCredentials.add(target.id);
-		this.#blocks.markCredentialBlocked(
-			provider,
-			providerKey,
-			sessionCredential.index,
-			Date.now() + AuthStorage.#defaultBackoffMs,
-		);
+		this.#blocks.markCredentialBlocked(provider, providerKey, sessionCredential.index, Date.now() + defaultBackoffMs);
 
 		if (hasSibling && target) {
 			// Parked, not emitted: the label of the account that DIED must be read now, before

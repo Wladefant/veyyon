@@ -217,8 +217,8 @@ export class ExtensionUiController {
 
 	setHookWidget(key: string, content: TerminalWidgetContent, options?: ExtensionWidgetOptions): void {
 		const placement = options?.placement ?? "aboveEditor";
-		this.#removeHookWidget(this.#hookWidgetsAbove, key);
-		this.#removeHookWidget(this.#hookWidgetsBelow, key);
+		removeHookWidget(this.#hookWidgetsAbove, key);
+		removeHookWidget(this.#hookWidgetsBelow, key);
 
 		if (content === undefined) {
 			this.#rebuildHookWidgets();
@@ -228,12 +228,6 @@ export class ExtensionUiController {
 		const target = placement === "belowEditor" ? this.#hookWidgetsBelow : this.#hookWidgetsAbove;
 		target.set(key, this.#createHookWidget(content));
 		this.#rebuildHookWidgets();
-	}
-
-	#removeHookWidget(widgets: Map<string, ExtensionUiComponent>, key: string): void {
-		const existing = widgets.get(key);
-		existing?.dispose?.();
-		widgets.delete(key);
 	}
 
 	#createHookWidget(content: TerminalWidgetContent): ExtensionUiComponent {
@@ -256,32 +250,9 @@ export class ExtensionUiController {
 	}
 
 	#rebuildHookWidgets(): void {
-		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerAbove, this.#hookWidgetsAbove, true, true);
-		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerBelow, this.#hookWidgetsBelow, false, false);
+		renderHookWidgetContainer(this.ctx.hookWidgetContainerAbove, this.#hookWidgetsAbove, true, true);
+		renderHookWidgetContainer(this.ctx.hookWidgetContainerBelow, this.#hookWidgetsBelow, false, false);
 		this.ctx.ui.requestRender();
-	}
-
-	#renderHookWidgetContainer(
-		container: Container,
-		widgets: Map<string, ExtensionUiComponent>,
-		spacerWhenEmpty: boolean,
-		leadingSpacer: boolean,
-	): void {
-		container.clear();
-
-		if (widgets.size === 0) {
-			if (spacerWhenEmpty) {
-				container.addChild(new Spacer(1));
-			}
-			return;
-		}
-
-		if (leadingSpacer) {
-			container.addChild(new Spacer(1));
-		}
-		for (const widget of widgets.values()) {
-			container.addChild(widget);
-		}
 	}
 
 	initializeHookRunner(uiContext: ExtensionUIContext, _hasUI: boolean): void {
@@ -1254,6 +1225,35 @@ export class ExtensionUiController {
 
 	#advanceDialogQueue(): void {
 		this.#dialogQueue.shift()?.();
+	}
+}
+
+function removeHookWidget(widgets: Map<string, ExtensionUiComponent>, key: string): void {
+	const existing = widgets.get(key);
+	existing?.dispose?.();
+	widgets.delete(key);
+}
+
+function renderHookWidgetContainer(
+	container: Container,
+	widgets: Map<string, ExtensionUiComponent>,
+	spacerWhenEmpty: boolean,
+	leadingSpacer: boolean,
+): void {
+	container.clear();
+
+	if (widgets.size === 0) {
+		if (spacerWhenEmpty) {
+			container.addChild(new Spacer(1));
+		}
+		return;
+	}
+
+	if (leadingSpacer) {
+		container.addChild(new Spacer(1));
+	}
+	for (const widget of widgets.values()) {
+		container.addChild(widget);
 	}
 }
 /** The terminal host's autoresearch surfaces: the run screen and the launcher, each a `custom` overlay. */

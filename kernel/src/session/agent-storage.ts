@@ -149,7 +149,7 @@ export class AgentStorage {
 
 	private constructor(dbPath: string) {
 		this.#autoPerfBackfill = dbPath === getAgentDbPath();
-		this.#ensureDir(dbPath);
+		ensureDir(dbPath);
 		try {
 			this.#db = new Database(dbPath);
 		} catch (err) {
@@ -164,7 +164,7 @@ export class AgentStorage {
 		}
 
 		this.#initializeSchema();
-		this.#hardenPermissions(dbPath);
+		hardenPermissions(dbPath);
 
 		// Create AuthCredentialStore with our open database
 		this.#authStore = new SqliteAuthCredentialStore(this.#db);
@@ -730,44 +730,31 @@ ON CONFLICT(model_key) DO UPDATE SET
 			try {
 				parsed = JSON.parse(row.data);
 			} catch (error) {
-				this.#reportUnreadableCredential(
-					row.id,
-					row.provider,
-					`stored data is not valid JSON: ${errorMessage(error)}`,
-				);
+				reportUnreadableCredential(row.id, row.provider, `stored data is not valid JSON: ${errorMessage(error)}`);
 				continue;
 			}
 			if (!isRecord(parsed)) {
-				this.#reportUnreadableCredential(row.id, row.provider, "stored data is not an object");
+				reportUnreadableCredential(row.id, row.provider, "stored data is not an object");
 				continue;
 			}
 
 			let credential: AuthCredential;
 			if (row.credential_type === "api_key") {
 				if (typeof parsed.key !== "string") {
-					this.#reportUnreadableCredential(row.id, row.provider, "api_key credential has no string key");
+					reportUnreadableCredential(row.id, row.provider, "api_key credential has no string key");
 					continue;
 				}
 				credential = { type: "api_key", key: parsed.key };
 			} else if (row.credential_type === "oauth") {
 				credential = { type: "oauth", ...parsed } as AuthCredential;
 			} else {
-				this.#reportUnreadableCredential(row.id, row.provider, `unknown credential type "${row.credential_type}"`);
+				reportUnreadableCredential(row.id, row.provider, `unknown credential type "${row.credential_type}"`);
 				continue;
 			}
 
 			results.push({ id: row.id, provider: row.provider, credential, disabledCause: row.disabled_cause });
 		}
 		return results;
-	}
-
-	#reportUnreadableCredential(id: number, provider: string, reason: string): void {
-		logger.error("AgentStorage skipped an unreadable auth credential", {
-			id,
-			provider,
-			reason,
-			fix: `Run "veyyon auth-broker login ${provider}" to replace it.`,
-		});
 	}
 
 	/**
@@ -828,41 +815,50 @@ ON CONFLICT(model_key) DO UPDATE SET
 	cleanExpiredCache(): void {
 		this.#authStore.cleanExpiredCache();
 	}
+}
 
-	/**
-	 * Ensures the parent directory for the database file exists.
-	 * @param dbPath - Path to the database file
-	 */
-	#ensureDir(dbPath: string): void {
-		const dir = path.dirname(dbPath);
-		try {
-			fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-		} catch (err) {
-			const code = (err as NodeJS.ErrnoException).code;
-			// EEXIST is fine - directory already exists
-			if (code !== "EEXIST") {
-				throw new Error(`Failed to create agent storage directory '${dir}': ${code || err}`);
-			}
-		}
-		// Verify directory was created
-		if (!fs.existsSync(dir)) {
-			throw new Error(`Agent storage directory '${dir}' does not exist after creation attempt`);
+function reportUnreadableCredential(id: number, provider: string, reason: string): void {
+	logger.error("AgentStorage skipped an unreadable auth credential", {
+		id,
+		provider,
+		reason,
+		fix: `Run "veyyon auth-broker login ${provider}" to replace it.`,
+	});
+}
+
+/**
+ * Ensures the parent directory for the database file exists.
+ * @param dbPath - Path to the database file
+ */
+function ensureDir(dbPath: string): void {
+	const dir = path.dirname(dbPath);
+	try {
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		// EEXIST is fine - directory already exists
+		if (code !== "EEXIST") {
+			throw new Error(`Failed to create agent storage directory '${dir}': ${code || err}`);
 		}
 	}
+	// Verify directory was created
+	if (!fs.existsSync(dir)) {
+		throw new Error(`Agent storage directory '${dir}' does not exist after creation attempt`);
+	}
+}
 
-	#hardenPermissions(dbPath: string): void {
-		const dir = path.dirname(dbPath);
-		try {
-			fs.chmodSync(dir, 0o700);
-		} catch (error) {
-			logger.warn("AgentStorage failed to chmod agent dir", { path: dir, error: String(error) });
-		}
+function hardenPermissions(dbPath: string): void {
+	const dir = path.dirname(dbPath);
+	try {
+		fs.chmodSync(dir, 0o700);
+	} catch (error) {
+		logger.warn("AgentStorage failed to chmod agent dir", { path: dir, error: String(error) });
+	}
 
-		if (!fs.existsSync(dbPath)) return;
-		try {
-			fs.chmodSync(dbPath, 0o600);
-		} catch (error) {
-			logger.warn("AgentStorage failed to chmod db file", { path: dbPath, error: String(error) });
-		}
+	if (!fs.existsSync(dbPath)) return;
+	try {
+		fs.chmodSync(dbPath, 0o600);
+	} catch (error) {
+		logger.warn("AgentStorage failed to chmod db file", { path: dbPath, error: String(error) });
 	}
 }

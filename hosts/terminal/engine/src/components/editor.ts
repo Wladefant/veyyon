@@ -886,24 +886,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		};
 	}
 
-	#renderTerminalCursorMarker(text: string, marker: string, maxWidth: number): string {
-		if (!marker) return text;
-		if (visibleWidth(text) < maxWidth) {
-			return text + marker;
-		}
-
-		let insertAt = text.length;
-		let offset = 0;
-		for (const seg of segmenter.segment(text)) {
-			if (visibleWidth(seg.segment) > 0) {
-				insertAt = offset;
-			}
-			offset += seg.segment.length;
-		}
-
-		return `${text.slice(0, insertAt)}${marker}${text.slice(insertAt)}`;
-	}
-
 	#getPageScrollStep(totalVisualLines: number): number {
 		const visibleHeight =
 			this.#maxHeight === undefined ? DEFAULT_PAGE_SCROLL_LINES : this.#getVisibleContentHeight(totalVisualLines);
@@ -1102,7 +1084,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	#renderZeroWidthCursorRow(gutterText: string, showPromptGutter: boolean, marker: string): string {
 		const budget = visibleWidth(gutterText);
 		if (this.#useTerminalCursor) {
-			return this.#renderTerminalCursorMarker(gutterText, marker, budget);
+			return renderTerminalCursorMarker(gutterText, marker, budget);
 		}
 		const replacement = this.cursorOverride
 			? { text: this.cursorOverride, width: this.cursorOverrideWidth ?? 1 }
@@ -1134,7 +1116,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		}
 		if (after.length === 0 && !paint.borderVisible && width >= paint.contentWidth) {
 			return {
-				text: this.#renderTerminalCursorMarker(before, marker, paint.contentWidth),
+				text: renderTerminalCursorMarker(before, marker, paint.contentWidth),
 				width,
 				decorated: false,
 				overflow: 0,
@@ -1957,7 +1939,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 					this.#tryTriggerAutocomplete();
 				}
 				// Check if we're typing an internal URL scheme (e.g. local://, skill://)
-				else if (this.#textTriggersUrlAutocomplete(textBeforeCursor)) {
+				else if (textTriggersUrlAutocomplete(textBeforeCursor)) {
 					this.#tryTriggerAutocomplete();
 				}
 			}
@@ -1967,7 +1949,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	}
 
 	#handlePaste(pastedText: string): void {
-		let filteredText = this.#sanitizePastedText(pastedText);
+		let filteredText = sanitizePastedText(pastedText);
 
 		// If pasting a file path (starts with /, ~, or .) and the character before
 		// the cursor is a word character, prepend a space for better readability.
@@ -2016,32 +1998,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		});
 	}
 
-	/** Normalize raw pasted text: decode tmux re-encoded control bytes (both extended-keys formats),
-	 *  normalize CRLF and
-	 *  NFC (macOS NFD filename drag-drops), expand tabs, and strip control characters except newline. */
-	#sanitizePastedText(pastedText: string): string {
-		// Decode tmux's re-encoded control bytes (both extended-keys formats) back to
-		// their literal byte so the per-char filter below preserves newlines instead of
-		// stripping ESC and leaking the printable tail into the editor. See the decoder.
-		const decodedText = decodeReencodedPasteControls(pastedText);
-
-		// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
-		// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
-		// land in the buffer as the same precomposed syllables a terminal
-		// renders — without this, cursor column accounting drifts by
-		// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
-		// hardware cursor.
-		const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
-
-		// Convert tabs to spaces (4 spaces per tab).
-		const tabExpandedText = cleanText.replace(/\t/g, "   ");
-
-		// Strip control characters except newline (tabs already expanded above, CRs already
-		// normalized). Single regex pass instead of split/filter/join to avoid allocating a
-		// per-code-unit array for large pastes.
-		return tabExpandedText.replace(/[\x00-\x09\x0B-\x1F]/g, "");
-	}
-
 	/** Store `content` in the paste buffer and insert a collapsed `[Paste #N]` marker that expands
 	 *  back to `content` on submit. `lineCount` is the content's line count. */
 	#storePasteMarker(content: string, lineCount: number): void {
@@ -2067,7 +2023,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 			this.#isInSlashAutocompleteContext() ||
 			textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/) ||
 			textBeforeCursor.match(/#[^\s#]*$/) ||
-			this.#textTriggersUrlAutocomplete(textBeforeCursor)
+			textTriggersUrlAutocomplete(textBeforeCursor)
 		) {
 			this.#tryTriggerAutocomplete();
 		}
@@ -2928,18 +2884,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		return this.#isInSubmittedSlashCommandContext() && /^\/\S+ $/.test(textBeforeCursor);
 	}
 
-	// Autocomplete methods
-	/**
-	 * Whether the text ending at the cursor looks like a `scheme://` URL token.
-	 * Generic by design: any scheme triggers a suggestion fetch and the active
-	 * provider decides whether it has candidates (returning none is a no-op).
-	 * MUST stay in sync with the token grammar in coding-agent's
-	 * `internal-url-autocomplete.ts`.
-	 */
-	#textTriggersUrlAutocomplete(textBeforeCursor: string): boolean {
-		return /(?:^|[\s"'`(<=])[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'`()<>]*$/i.test(textBeforeCursor);
-	}
-
 	async #tryTriggerAutocomplete(explicitTab: boolean = false): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 		// Check if we should trigger file completion on Tab
@@ -3280,4 +3224,60 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 		return null;
 	}
+}
+
+function renderTerminalCursorMarker(text: string, marker: string, maxWidth: number): string {
+	if (!marker) return text;
+	if (visibleWidth(text) < maxWidth) {
+		return text + marker;
+	}
+
+	let insertAt = text.length;
+	let offset = 0;
+	for (const seg of segmenter.segment(text)) {
+		if (visibleWidth(seg.segment) > 0) {
+			insertAt = offset;
+		}
+		offset += seg.segment.length;
+	}
+
+	return `${text.slice(0, insertAt)}${marker}${text.slice(insertAt)}`;
+}
+
+/** Normalize raw pasted text: decode tmux re-encoded control bytes (both extended-keys formats),
+ *  normalize CRLF and
+ *  NFC (macOS NFD filename drag-drops), expand tabs, and strip control characters except newline. */
+function sanitizePastedText(pastedText: string): string {
+	// Decode tmux's re-encoded control bytes (both extended-keys formats) back to
+	// their literal byte so the per-char filter below preserves newlines instead of
+	// stripping ESC and leaking the printable tail into the editor. See the decoder.
+	const decodedText = decodeReencodedPasteControls(pastedText);
+
+	// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
+	// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)
+	// land in the buffer as the same precomposed syllables a terminal
+	// renders — without this, cursor column accounting drifts by
+	// `(NFD cells − NFC cells)` and the visible glyph desyncs from the
+	// hardware cursor.
+	const cleanText = decodedText.replace(/\r\n?/g, "\n").normalize("NFC");
+
+	// Convert tabs to spaces (4 spaces per tab).
+	const tabExpandedText = cleanText.replace(/\t/g, "   ");
+
+	// Strip control characters except newline (tabs already expanded above, CRs already
+	// normalized). Single regex pass instead of split/filter/join to avoid allocating a
+	// per-code-unit array for large pastes.
+	return tabExpandedText.replace(/[\x00-\x09\x0B-\x1F]/g, "");
+}
+
+// Autocomplete methods
+/**
+ * Whether the text ending at the cursor looks like a `scheme://` URL token.
+ * Generic by design: any scheme triggers a suggestion fetch and the active
+ * provider decides whether it has candidates (returning none is a no-op).
+ * MUST stay in sync with the token grammar in coding-agent's
+ * `internal-url-autocomplete.ts`.
+ */
+function textTriggersUrlAutocomplete(textBeforeCursor: string): boolean {
+	return /(?:^|[\s"'`(<=])[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'`()<>]*$/i.test(textBeforeCursor);
 }

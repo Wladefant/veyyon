@@ -429,21 +429,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		const stmt = this.#db.prepare("PRAGMA table_info(auth_credentials)");
 		try {
 			const cols = stmt.all() as Array<{ name?: string }>;
-			return this.#inferAuthSchemaVersionFromColumns(cols);
+			return inferAuthSchemaVersionFromColumns(cols);
 		} finally {
 			stmt.finalize();
 		}
-	}
-
-	#inferAuthSchemaVersionFromColumns(cols: Array<{ name?: string }>): number {
-		const hasDisabledCause = cols.some(column => column.name === "disabled_cause");
-		const hasIdentityKey = cols.some(column => column.name === "identity_key");
-		const hasAccountId = cols.some(column => column.name === "account_id");
-		const hasEmail = cols.some(column => column.name === "email");
-		if (hasIdentityKey) return 3;
-		if (hasAccountId || hasEmail) return 2;
-		if (hasDisabledCause) return 1;
-		return 0;
 	}
 
 	#createAuthCredentialsTable(): void {
@@ -926,35 +915,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	deleteAuthCredential(id: number, disabledCause: string): void {
-		this.#disable(
-			this.#deleteStmt,
+		disable(this.#deleteStmt, id, disabledCause, "Auth credential could not be disabled; it stays in rotation", {
 			id,
-			disabledCause,
-			"Auth credential could not be disabled; it stays in rotation",
-			{
-				id,
-			},
-		);
-	}
-
-	/**
-	 * Soft-delete through `stmt`, bound to `(cause, target)`. The method is void, so a swallowed
-	 * failure would tell the caller the credential was disabled when it is still enabled and still in
-	 * rotation — a key revoked upstream keeps being retried on every request — so the failure is
-	 * reported with the target it names.
-	 */
-	#disable(
-		stmt: Statement,
-		target: number | string,
-		disabledCause: string,
-		warning: string,
-		details: Record<string, number | string>,
-	): void {
-		try {
-			stmt.run(normalizeDisabledCause(disabledCause), target);
-		} catch (error) {
-			logger.warn(warning, { ...details, disabledCause, error: errorMessage(error) });
-		}
+		});
 	}
 
 	/**
@@ -984,7 +947,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		return result.changes === 1;
 	}
 	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
-		this.#disable(
+		disable(
 			this.#deleteByProviderStmt,
 			provider,
 			disabledCause,
@@ -1492,5 +1455,36 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#upsertProviderSelectionStmt.finalize();
 		this.#deleteProviderSelectionStmt.finalize();
 		this.#db.close();
+	}
+}
+
+function inferAuthSchemaVersionFromColumns(cols: Array<{ name?: string }>): number {
+	const hasDisabledCause = cols.some(column => column.name === "disabled_cause");
+	const hasIdentityKey = cols.some(column => column.name === "identity_key");
+	const hasAccountId = cols.some(column => column.name === "account_id");
+	const hasEmail = cols.some(column => column.name === "email");
+	if (hasIdentityKey) return 3;
+	if (hasAccountId || hasEmail) return 2;
+	if (hasDisabledCause) return 1;
+	return 0;
+}
+
+/**
+ * Soft-delete through `stmt`, bound to `(cause, target)`. The method is void, so a swallowed
+ * failure would tell the caller the credential was disabled when it is still enabled and still in
+ * rotation — a key revoked upstream keeps being retried on every request — so the failure is
+ * reported with the target it names.
+ */
+function disable(
+	stmt: Statement,
+	target: number | string,
+	disabledCause: string,
+	warning: string,
+	details: Record<string, number | string>,
+): void {
+	try {
+		stmt.run(normalizeDisabledCause(disabledCause), target);
+	} catch (error) {
+		logger.warn(warning, { ...details, disabledCause, error: errorMessage(error) });
 	}
 }

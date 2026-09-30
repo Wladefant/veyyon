@@ -588,10 +588,6 @@ export class BashTool
 		);
 	}
 
-	#formatResultOutput(result: BashResult | BashInteractiveResult): string {
-		return normalizeResultOutput(result) || "(no output)";
-	}
-
 	/**
 	 * Bound a bash output body through the SAME artifact-spill path the
 	 * completed-command path uses ({@link enforceInlineByteCap}). A no-op when the
@@ -673,7 +669,7 @@ export class BashTool
 		const signal = "signal" in result ? result.signal : undefined;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
 
-		const outputLines = [this.#formatResultOutput(result)];
+		const outputLines = [formatResultOutput(result)];
 		const notices: string[] = [];
 		if (options.notices) {
 			for (const notice of options.notices) {
@@ -722,43 +718,6 @@ export class BashTool
 			.truncationFromSummary(result, { direction: "tail" });
 		if (failedExit) resultBuilder.error();
 		return resultBuilder.done();
-	}
-
-	#buildBackgroundStartResult(
-		jobId: string,
-		previewText: string,
-		timeoutSec: number | undefined,
-		options: { requestedTimeoutSec?: number; notices?: readonly string[]; reason?: BackgroundReason } = {},
-	): AgentToolResult<BashToolDetails> {
-		const reason: BackgroundReason = options.reason ?? "threshold";
-		const details: BashToolDetails = {
-			async: { state: "running", jobId, type: "bash", reason },
-		};
-		if (timeoutSec === undefined) {
-			details.timeoutDisabled = true;
-		} else {
-			details.timeoutSeconds = timeoutSec;
-		}
-		if (options.requestedTimeoutSec !== undefined && options.requestedTimeoutSec !== timeoutSec) {
-			details.requestedTimeoutSeconds = options.requestedTimeoutSec;
-		}
-		const lines: string[] = [];
-		const trimmedPreview = previewText.trimEnd();
-		if (trimmedPreview.length > 0) {
-			lines.push(trimmedPreview, "");
-		}
-		if (options.notices?.length) {
-			lines.push(...options.notices, "");
-		}
-		lines.push(formatBackgroundNotice(jobId, reason));
-		return {
-			content: [{ type: "text", text: lines.join("\n") }],
-			details,
-		};
-	}
-
-	#extractTextResult(result: AgentToolResult<BashToolDetails>): string {
-		return result.content.find(block => block.type === "text")?.text ?? "";
 	}
 
 	#startManagedBashJob(options: {
@@ -823,7 +782,7 @@ export class BashTool
 						notices: options.notices ?? [],
 						wallTimeMs,
 					});
-					const finalText = this.#extractTextResult(finalResult);
+					const finalText = extractTextResult(finalResult);
 					latestText = finalText;
 					// Hand the detailed result to the foreground auto-background
 					// waiter (which renders it, footer included) before deciding
@@ -901,7 +860,7 @@ export class BashTool
 			);
 		}
 		if (stallMs > 0) {
-			waiters.push(this.#watchStall(job, stallMs, internal.signal));
+			waiters.push(watchStall(job, stallMs, internal.signal));
 		}
 		// The operator's manual "background this now" key: the TUI resolves this
 		// waiter through the foreground-wait registry. Registered for exactly the
@@ -932,47 +891,8 @@ export class BashTool
 		}
 	}
 
-	/**
-	 * Resolve to a `stall` background result once the job has produced no new
-	 * output for `stallMs`. Every output chunk pushes `getLastOutputAt()`
-	 * forward, resetting the idle window, so a command that keeps printing never
-	 * stalls. The poll is capped so the loop exits promptly after `signal`
-	 * fires (the race already having a winner).
-	 */
-	async #watchStall(
-		job: ManagedBashJobHandle,
-		stallMs: number,
-		signal: AbortSignal,
-	): Promise<{ kind: "background"; reason: BackgroundReason }> {
-		const POLL_CAP_MS = 500;
-		while (!signal.aborted) {
-			const idleMs = performance.now() - job.getLastOutputAt();
-			const remainingMs = stallMs - idleMs;
-			if (remainingMs <= 0) {
-				return { kind: "background", reason: "stall" };
-			}
-			await Bun.sleep(Math.min(remainingMs, POLL_CAP_MS));
-		}
-		// The race is already settled; never resolve so this loser is discarded.
-		return await new Promise<never>(() => {});
-	}
-
-	/**
-	 * The foreground wait for a `baseMs` timer, capped just under the hard
-	 * timeout: there is no point backgrounding (or flagging a stall) a second
-	 * before the command would time out anyway. `baseMs <= 0` disables the
-	 * timer (returns `0`). Shared by the auto-background and stall timers so the
-	 * clamp lives in ONE place.
-	 */
-	#resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
-		if (baseMs <= 0) return 0;
-		if (timeoutMs === undefined) return baseMs;
-		const timeoutBufferMs = 1_000;
-		return clampLow(timeoutMs - timeoutBufferMs, 0, baseMs);
-	}
-
 	#resolveStallWaitMs(timeoutMs: number | undefined): number {
-		return this.#resolveWaitMs(this.#stallMs, timeoutMs);
+		return resolveWaitMs(this.#stallMs, timeoutMs);
 	}
 
 	async execute(
@@ -1186,7 +1106,7 @@ export class BashTool
 			throw new ToolError("Async job manager unavailable for this session.");
 		}
 		const job = this.#startManagedBashJob({ ...call, onUpdate, forwardUpdates: false });
-		return this.#buildBackgroundStartResult(job.jobId, "", call.timeoutSec, {
+		return buildBackgroundStartResult(job.jobId, "", call.timeoutSec, {
 			requestedTimeoutSec: call.requestedTimeoutSec,
 			notices: call.notices,
 		});
@@ -1215,9 +1135,9 @@ export class BashTool
 		// Wall-clock timer only when auto-background is on, stall timer only
 		// when stall detection is on. With neither, the race still runs so the
 		// manual key and the completion path stay live, just without a timer.
-		const wallThresholdMs = autoBackgroundActive ? this.#resolveWaitMs(configuredThresholdMs, timeoutMs) : 0;
+		const wallThresholdMs = autoBackgroundActive ? resolveWaitMs(configuredThresholdMs, timeoutMs) : 0;
 		const stallMs = this.#stallDetectionEnabled ? this.#resolveStallWaitMs(timeoutMs) : 0;
-		// "Immediately" is a CONFIGURED zero, never a clamped one. `#resolveWaitMs`
+		// "Immediately" is a CONFIGURED zero, never a clamped one. `resolveWaitMs`
 		// collapses the timer to 0 when the command's own timeout would fire
 		// first, and reading that as "background now" would shunt every
 		// short-timeout command straight to a background job the moment
@@ -1226,7 +1146,7 @@ export class BashTool
 		const job = this.#startManagedBashJob({ ...call, onUpdate, forwardUpdates: !startBackgrounded });
 		const backgroundOptions = { requestedTimeoutSec: call.requestedTimeoutSec, notices: call.notices };
 		if (startBackgrounded) {
-			return this.#buildBackgroundStartResult(job.jobId, "", timeoutSec, {
+			return buildBackgroundStartResult(job.jobId, "", timeoutSec, {
 				...backgroundOptions,
 				reason: "threshold",
 			});
@@ -1250,7 +1170,7 @@ export class BashTool
 		}
 		job.stopUpdates();
 		manager.resumeDeliveries([job.jobId]);
-		return this.#buildBackgroundStartResult(job.jobId, job.getLatestText(), timeoutSec, {
+		return buildBackgroundStartResult(job.jobId, job.getLatestText(), timeoutSec, {
 			...backgroundOptions,
 			reason: waitResult.reason,
 		});
@@ -1268,7 +1188,7 @@ export class BashTool
 		try {
 			// Emit partial update so the editor can embed the live terminal card.
 			onUpdate?.({ content: [], details: { terminalId: handle.terminalId } });
-			const exitStatus = await this.#waitForClientTerminal(handle, call.timeoutMs, signal, onUpdate);
+			const exitStatus = await waitForClientTerminal(handle, call.timeoutMs, signal, onUpdate);
 			if (exitStatus === "timeout") {
 				let current = { output: "", truncated: false };
 				try {
@@ -1309,91 +1229,6 @@ export class BashTool
 			} catch (error) {
 				logger.warn("ACP terminal release failed", { terminalId: handle.terminalId, error });
 			}
-		}
-	}
-
-	/**
-	 * Poll the client's terminal until the process exits, the timeout elapses, or the caller
-	 * aborts, pushing its output on every tick. A timeout kills the command before returning, so
-	 * a slow `terminal/output` RPC cannot let it keep running past the enforced deadline; the
-	 * handle stays valid post-kill, so the buffered output is still readable. An abort kills and
-	 * throws.
-	 */
-	async #waitForClientTerminal(
-		handle: ClientBridgeTerminalHandle,
-		timeoutMs: number | undefined,
-		signal: AbortSignal | undefined,
-		onUpdate: AgentToolUpdateCallback<BashToolDetails> | undefined,
-	): Promise<ClientBridgeTerminalExitStatus | "timeout"> {
-		const exitPromise = handle.waitForExit();
-		type BridgeRaceResult =
-			| { kind: "exit"; status: ClientBridgeTerminalExitStatus }
-			| { kind: "poll" }
-			| { kind: "timeout" }
-			| { kind: "aborted" };
-
-		// Set up abort listener before entering the poll loop. The listener
-		// kicks off `handle.kill()` synchronously so a `session/cancel`
-		// arriving mid-poll terminates the remote command immediately,
-		// instead of waiting for the next `currentOutput()` to return.
-		const { promise: abortedP, resolve: resolveAborted } = Promise.withResolvers<void>();
-		let killStarted = false;
-		const fireKill = (): Promise<void> => {
-			if (killStarted) return Promise.resolve();
-			killStarted = true;
-			return handle.kill().catch((error: unknown) => {
-				logger.warn("ACP terminal kill failed", { terminalId: handle.terminalId, error });
-			});
-		};
-		const onAbortSignal = () => {
-			resolveAborted();
-			void fireKill();
-		};
-		signal?.addEventListener("abort", onAbortSignal, { once: true });
-
-		try {
-			if (signal?.aborted) {
-				await fireKill();
-				throw new ToolAbortError("Command aborted");
-			}
-			const timeoutPromise = timeoutMs ? Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const })) : undefined;
-			for (;;) {
-				const racers: Array<Promise<BridgeRaceResult>> = [
-					exitPromise.then(s => ({ kind: "exit" as const, status: s })),
-					Bun.sleep(250).then(() => ({ kind: "poll" as const })),
-				];
-				if (timeoutPromise) racers.push(timeoutPromise);
-				if (signal) {
-					racers.push(abortedP.then(() => ({ kind: "aborted" as const })));
-				}
-				const raced = await Promise.race(racers);
-				if (raced.kind === "aborted" || signal?.aborted) {
-					await fireKill();
-					throw new ToolAbortError("Command aborted");
-				}
-				if (raced.kind === "timeout") {
-					await fireKill();
-					return "timeout";
-				}
-				if (raced.kind === "exit") return raced.status;
-
-				// Poll tick: push current output so agent-loop transcript stays consistent.
-				// Race the read against abort so a stuck `terminal/output` RPC does not
-				// delay cancellation.
-				const pollOutput = await Promise.race([
-					handle.currentOutput(),
-					abortedP.then(() => undefined as ClientBridgeTerminalOutput | undefined),
-				]);
-				// Abort fired during the poll-tick read; the next iteration observes
-				// `signal?.aborted` and exits via the abort branch.
-				if (pollOutput === undefined) continue;
-				onUpdate?.({
-					content: [{ type: "text", text: pollOutput.output }],
-					details: { terminalId: handle.terminalId },
-				});
-			}
-		} finally {
-			signal?.removeEventListener("abort", onAbortSignal);
 		}
 	}
 
@@ -1479,5 +1314,170 @@ export class BashTool
 					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 				});
 		return { result, wallTimeMs: performance.now() - wallTimeStart };
+	}
+}
+
+function formatResultOutput(result: BashResult | BashInteractiveResult): string {
+	return normalizeResultOutput(result) || "(no output)";
+}
+
+function buildBackgroundStartResult(
+	jobId: string,
+	previewText: string,
+	timeoutSec: number | undefined,
+	options: { requestedTimeoutSec?: number; notices?: readonly string[]; reason?: BackgroundReason } = {},
+): AgentToolResult<BashToolDetails> {
+	const reason: BackgroundReason = options.reason ?? "threshold";
+	const details: BashToolDetails = {
+		async: { state: "running", jobId, type: "bash", reason },
+	};
+	if (timeoutSec === undefined) {
+		details.timeoutDisabled = true;
+	} else {
+		details.timeoutSeconds = timeoutSec;
+	}
+	if (options.requestedTimeoutSec !== undefined && options.requestedTimeoutSec !== timeoutSec) {
+		details.requestedTimeoutSeconds = options.requestedTimeoutSec;
+	}
+	const lines: string[] = [];
+	const trimmedPreview = previewText.trimEnd();
+	if (trimmedPreview.length > 0) {
+		lines.push(trimmedPreview, "");
+	}
+	if (options.notices?.length) {
+		lines.push(...options.notices, "");
+	}
+	lines.push(formatBackgroundNotice(jobId, reason));
+	return {
+		content: [{ type: "text", text: lines.join("\n") }],
+		details,
+	};
+}
+
+function extractTextResult(result: AgentToolResult<BashToolDetails>): string {
+	return result.content.find(block => block.type === "text")?.text ?? "";
+}
+
+/**
+ * Resolve to a `stall` background result once the job has produced no new
+ * output for `stallMs`. Every output chunk pushes `getLastOutputAt()`
+ * forward, resetting the idle window, so a command that keeps printing never
+ * stalls. The poll is capped so the loop exits promptly after `signal`
+ * fires (the race already having a winner).
+ */
+async function watchStall(
+	job: ManagedBashJobHandle,
+	stallMs: number,
+	signal: AbortSignal,
+): Promise<{ kind: "background"; reason: BackgroundReason }> {
+	const POLL_CAP_MS = 500;
+	while (!signal.aborted) {
+		const idleMs = performance.now() - job.getLastOutputAt();
+		const remainingMs = stallMs - idleMs;
+		if (remainingMs <= 0) {
+			return { kind: "background", reason: "stall" };
+		}
+		await Bun.sleep(Math.min(remainingMs, POLL_CAP_MS));
+	}
+	// The race is already settled; never resolve so this loser is discarded.
+	return await new Promise<never>(() => {});
+}
+
+/**
+ * The foreground wait for a `baseMs` timer, capped just under the hard
+ * timeout: there is no point backgrounding (or flagging a stall) a second
+ * before the command would time out anyway. `baseMs <= 0` disables the
+ * timer (returns `0`). Shared by the auto-background and stall timers so the
+ * clamp lives in ONE place.
+ */
+function resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
+	if (baseMs <= 0) return 0;
+	if (timeoutMs === undefined) return baseMs;
+	const timeoutBufferMs = 1_000;
+	return clampLow(timeoutMs - timeoutBufferMs, 0, baseMs);
+}
+
+/**
+ * Poll the client's terminal until the process exits, the timeout elapses, or the caller
+ * aborts, pushing its output on every tick. A timeout kills the command before returning, so
+ * a slow `terminal/output` RPC cannot let it keep running past the enforced deadline; the
+ * handle stays valid post-kill, so the buffered output is still readable. An abort kills and
+ * throws.
+ */
+async function waitForClientTerminal(
+	handle: ClientBridgeTerminalHandle,
+	timeoutMs: number | undefined,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<BashToolDetails> | undefined,
+): Promise<ClientBridgeTerminalExitStatus | "timeout"> {
+	const exitPromise = handle.waitForExit();
+	type BridgeRaceResult =
+		| { kind: "exit"; status: ClientBridgeTerminalExitStatus }
+		| { kind: "poll" }
+		| { kind: "timeout" }
+		| { kind: "aborted" };
+
+	// Set up abort listener before entering the poll loop. The listener
+	// kicks off `handle.kill()` synchronously so a `session/cancel`
+	// arriving mid-poll terminates the remote command immediately,
+	// instead of waiting for the next `currentOutput()` to return.
+	const { promise: abortedP, resolve: resolveAborted } = Promise.withResolvers<void>();
+	let killStarted = false;
+	const fireKill = (): Promise<void> => {
+		if (killStarted) return Promise.resolve();
+		killStarted = true;
+		return handle.kill().catch((error: unknown) => {
+			logger.warn("ACP terminal kill failed", { terminalId: handle.terminalId, error });
+		});
+	};
+	const onAbortSignal = () => {
+		resolveAborted();
+		void fireKill();
+	};
+	signal?.addEventListener("abort", onAbortSignal, { once: true });
+
+	try {
+		if (signal?.aborted) {
+			await fireKill();
+			throw new ToolAbortError("Command aborted");
+		}
+		const timeoutPromise = timeoutMs ? Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const })) : undefined;
+		for (;;) {
+			const racers: Array<Promise<BridgeRaceResult>> = [
+				exitPromise.then(s => ({ kind: "exit" as const, status: s })),
+				Bun.sleep(250).then(() => ({ kind: "poll" as const })),
+			];
+			if (timeoutPromise) racers.push(timeoutPromise);
+			if (signal) {
+				racers.push(abortedP.then(() => ({ kind: "aborted" as const })));
+			}
+			const raced = await Promise.race(racers);
+			if (raced.kind === "aborted" || signal?.aborted) {
+				await fireKill();
+				throw new ToolAbortError("Command aborted");
+			}
+			if (raced.kind === "timeout") {
+				await fireKill();
+				return "timeout";
+			}
+			if (raced.kind === "exit") return raced.status;
+
+			// Poll tick: push current output so agent-loop transcript stays consistent.
+			// Race the read against abort so a stuck `terminal/output` RPC does not
+			// delay cancellation.
+			const pollOutput = await Promise.race([
+				handle.currentOutput(),
+				abortedP.then(() => undefined as ClientBridgeTerminalOutput | undefined),
+			]);
+			// Abort fired during the poll-tick read; the next iteration observes
+			// `signal?.aborted` and exits via the abort branch.
+			if (pollOutput === undefined) continue;
+			onUpdate?.({
+				content: [{ type: "text", text: pollOutput.output }],
+				details: { terminalId: handle.terminalId },
+			});
+		}
+	} finally {
+		signal?.removeEventListener("abort", onAbortSignal);
 	}
 }

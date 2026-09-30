@@ -1586,22 +1586,10 @@ export class InputController {
 		this.ctx.editor.pendingImageLinks.push(imageLink);
 		this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 		const imageNum = this.ctx.editor.pendingImages.length;
-		const dims = await this.#imageDimensions(imageData);
+		const dims = await imageDimensions(imageData);
 		const label = dims ? `[Image #${imageNum}, ${dims.width}x${dims.height}]` : `[Image #${imageNum}]`;
 		this.ctx.editor.insertText(`${label} `);
 		this.ctx.ui.requestRender();
-	}
-
-	/** Probe pixel dimensions for the marker label (`[Image #N, WxH]`). Returns undefined when the
-	 *  header can't be decoded, so the caller falls back to a bare `[Image #N]`. */
-	async #imageDimensions(image: ImageContent): Promise<{ width: number; height: number } | undefined> {
-		try {
-			const { width, height } = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();
-			if (width && height) return { width, height };
-		} catch {
-			// Unknown/corrupt header — fall back to a bare label.
-		}
-		return undefined;
 	}
 
 	async #normalizeAndInsertPastedImage(image: ImageContent, unsupportedMessage: string): Promise<boolean> {
@@ -2056,15 +2044,8 @@ export class InputController {
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
 
-	#getEditorTerminalPath(): string | null {
-		if (process.platform === "win32") {
-			return null;
-		}
-		return "/dev/tty";
-	}
-
 	async #openEditorTerminalHandle(): Promise<fs.FileHandle | null> {
-		const terminalPath = this.#getEditorTerminalPath();
+		const terminalPath = getEditorTerminalPath();
 		if (!terminalPath) {
 			return null;
 		}
@@ -2133,4 +2114,23 @@ export class InputController {
 			});
 		}
 	}
+}
+
+/** Probe pixel dimensions for the marker label (`[Image #N, WxH]`). Returns undefined when the
+ *  header can't be decoded, so the caller falls back to a bare `[Image #N]`. */
+async function imageDimensions(image: ImageContent): Promise<{ width: number; height: number } | undefined> {
+	try {
+		const { width, height } = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();
+		if (width && height) return { width, height };
+	} catch {
+		// Unknown/corrupt header — fall back to a bare label.
+	}
+	return undefined;
+}
+
+function getEditorTerminalPath(): string | null {
+	if (process.platform === "win32") {
+		return null;
+	}
+	return "/dev/tty";
 }

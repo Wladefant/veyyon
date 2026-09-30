@@ -374,17 +374,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		});
 	}
 
-	#parseInputArgs(input: string): unknown {
-		if (!input) return undefined;
-		try {
-			return JSON.parse(input);
-		} catch {
-			return input;
-		}
-	}
-
 	#applyRawBlock(block: ToolExecutionBlock): void {
-		const args = this.#parseInputArgs(block.input);
+		const args = parseInputArgs(block.input);
 		const producer =
 			this.#producer ??
 			createToolExecutionProducer({
@@ -521,7 +512,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			if (!producer) {
 				producer = createToolExecutionProducer({
 					toolName: this.#block.toolName,
-					args: this.#parseInputArgs(this.#block.input),
+					args: parseInputArgs(this.#block.input),
 					options: this.#options,
 					tool: this.#options.tool,
 					toolCallId: this.#block.toolCallId,
@@ -996,7 +987,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			spinnerFrame: this.#spinnerFrame,
 			renderContext: buildToolRenderContext(
 				this.#block.toolName,
-				this.#parseInputArgs(this.#block.input),
+				parseInputArgs(this.#block.input),
 				{
 					content: this.#producer?.result?.content ?? [{ type: "text", text: fallbackText }],
 					details: this.#producer?.result?.details,
@@ -1007,7 +998,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		};
 
 		const { hasResult, drawsCall } = this.#phases(display);
-		const callArgs = this.#producer ? this.#producer.callPreview.arguments : this.#parseInputArgs(this.#block.input);
+		const callArgs = this.#producer ? this.#producer.callPreview.arguments : parseInputArgs(this.#block.input);
 
 		const callRendered = drawsCall ? this.#renderCallPhase(display, hasResult, callArgs, renderState) : false;
 		if (hasResult) {
@@ -1366,7 +1357,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			),
 		);
 
-		const args = this.#parseInputArgs(this.#block.input);
+		const args = parseInputArgs(this.#block.input);
 		const argsObject = args && typeof args === "object" ? (args as Record<string, unknown>) : null;
 
 		if (!this.#expanded && argsObject && Object.keys(argsObject).length > 0) {
@@ -1443,5 +1434,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		}
 
 		return lines.join("\n");
+	}
+}
+
+function parseInputArgs(input: string): unknown {
+	if (!input) return undefined;
+	try {
+		return JSON.parse(input);
+	} catch {
+		return input;
 	}
 }

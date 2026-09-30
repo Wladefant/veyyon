@@ -1628,13 +1628,6 @@ export class SessionManager {
 		}
 	}
 
-	static #cleanTitle(raw: string): string {
-		return raw
-			.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-			.replace(/ +/g, " ")
-			.trim();
-	}
-
 	/** Puts a binary blob into the blob store and returns the blob reference. */
 	async putBlob(data: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
 		return this.#blobs.put(data, options);
@@ -2448,7 +2441,7 @@ export class SessionManager {
 	async setSessionName(name: string, source: SessionTitleSource = "auto", trigger?: string): Promise<boolean> {
 		if (this.#titleSource === "user" && source === "auto") return false;
 
-		const title = SessionManager.#cleanTitle(name);
+		const title = cleanTitle(name);
 		if (!title) return false;
 
 		const previousTitle = this.#sessionName;
@@ -3327,6 +3320,13 @@ export class SessionManager {
 	static listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
 		return listAllSessions(storage);
 	}
+}
+
+function cleanTitle(raw: string): string {
+	return raw
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+		.replace(/ +/g, " ")
+		.trim();
 }
 
 /**

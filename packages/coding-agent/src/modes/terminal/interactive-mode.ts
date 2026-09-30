@@ -1950,18 +1950,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#todoAutoClearTimer = undefined;
 	}
 
-	#isClosedTodo(task: TodoItem): boolean {
-		return isTerminalTodoStatus(task.status);
-	}
-
 	#hasClosedTodos(phases: TodoPhase[]): boolean {
-		return phases.some(phase => phase.tasks.some(task => this.#isClosedTodo(task)));
+		return phases.some(phase => phase.tasks.some(task => isClosedTodo(task)));
 	}
 
 	#removeClosedTodos(phases: TodoPhase[]): TodoPhase[] {
 		const next: TodoPhase[] = [];
 		for (const phase of phases) {
-			const tasks = phase.tasks.filter(task => !this.#isClosedTodo(task));
+			const tasks = phase.tasks.filter(task => !isClosedTodo(task));
 			if (tasks.length > 0) next.push({ name: phase.name, tasks });
 		}
 		return next;
@@ -2790,15 +2786,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#hidePlanReview();
 	}
 
-	#getEditorTerminalPath(): string | null {
-		if (process.platform === "win32") {
-			return null;
-		}
-		return "/dev/tty";
-	}
-
 	async #openEditorTerminalHandle(): Promise<fs.FileHandle | null> {
-		const terminalPath = this.#getEditorTerminalPath();
+		const terminalPath = getEditorTerminalPath();
 		if (!terminalPath) {
 			return null;
 		}
@@ -2819,19 +2808,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			return this.session.getContextUsage({ contextWindow });
 		}
 		return this.session.getContextUsage();
-	}
-
-	#formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
-		if (!contextUsage) {
-			return "Approve and keep context";
-		}
-		const tokens = formatContextTokenCount(contextUsage.tokens);
-		const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
-		return `Approve and keep context (~${tokens} / ${contextWindow})`;
-	}
-
-	#isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
-		return contextUsage !== undefined && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
 	}
 
 	async #copyPlanToClipboard(content: string): Promise<void> {
@@ -3324,8 +3300,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		const contextUsage = this.#getPlanApprovalContextUsage();
-		const keepContextLabel = this.#formatKeepContextLabel(contextUsage);
-		const keepContextDisabled = this.#isKeepContextDisabled(contextUsage);
+		const keepContextLabel = formatKeepContextLabel(contextUsage);
+		const keepContextDisabled = isKeepContextDisabled(contextUsage);
 
 		// Model-tier slider: let the operator pick which configured role model
 		// (smol/default/slow/…) executes the approved plan. The slider always starts
@@ -4596,4 +4572,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (next.isStreaming) void this.#eventController.handleEvent({ type: "agent_start" });
 		return kept;
 	}
+}
+
+function isClosedTodo(task: TodoItem): boolean {
+	return isTerminalTodoStatus(task.status);
+}
+
+function getEditorTerminalPath(): string | null {
+	if (process.platform === "win32") {
+		return null;
+	}
+	return "/dev/tty";
+}
+
+function formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
+	if (!contextUsage) {
+		return "Approve and keep context";
+	}
+	const tokens = formatContextTokenCount(contextUsage.tokens);
+	const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
+	return `Approve and keep context (~${tokens} / ${contextWindow})`;
+}
+
+function isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
+	return contextUsage !== undefined && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
 }

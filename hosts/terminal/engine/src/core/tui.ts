@@ -183,6 +183,75 @@ export interface AdoptedScreen {
 	readonly windowTopRow: number;
 }
 /**
+ * Weight of the newest frame in `#frameCostEstimateMs`. At 0.3 a sustained
+ * change in frame cost is ~90% absorbed within seven frames, so the loop
+ * reaches its duty-cycle floor inside a quarter second of going slow, while
+ * an isolated spike lifts the floor by under a third of itself.
+ */
+const FRAME_COST_SMOOTHING = 0.3;
+
+const MIN_RENDER_INTERVAL_MS = 1000 / 30;
+
+const INPUT_RENDER_GRACE_MS = MIN_RENDER_INTERVAL_MS;
+
+/**
+ * Cap on the adaptive floor derived from `#frameCostEstimateMs`. Bounds the
+ * UI responsiveness at ~5 fps under sustained heavy renders — anything
+ * slower feels dead to the user and no longer justifies further CPU savings.
+ */
+const MAX_ADAPTIVE_RENDER_MS = 200;
+
+// Pane-reflow settle window for tmux/screen/zellij. The host process gets
+// SIGWINCH (and `process.stdout` already reports the new geometry) before
+// the multiplexer finishes repainting the pane at the new size, and
+// drag-resize/pane-close animations fire several events in flight. A forced
+// render on each SIGWINCH races those mid-reflow paints — the multiplexer's
+// catch-up paint then partially overwrites the TUI output, which the user
+// sees as a viewport flash or blank screen before the next throttled frame
+// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
+// a single forced render lets the multiplexer settle first.
+const MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
+
+// Resize viewport fast path (non-multiplexer). A drag emits a SIGWINCH burst,
+// and outside a multiplexer the host gets each new geometry atomically. The
+// authoritative resize paint erases and replays the entire transcript so it
+// rewraps at the new width — O(history) compose (markdown re-lexes every
+// block, the per-width cache missing on every distinct drag width) plus an
+// O(history) write that pushes all of it back through native scrollback. At
+// drag rates that whole-history pass is recomputed dozens of times a second
+// and discarded the instant the next event lands. While the drag is in
+// flight the engine instead composes and paints ONLY the viewport (see
+// `#renderResizeViewport`): a state-isolated, throwaway frame that never
+// touches the commit ledger. The authoritative full replay fires once, after
+// the drag has been quiet for this long. Multiplexer sessions keep their own
+// debounce (`#armMultiplexerResizeTimer`, see #2088) and never take this path.
+const RESIZE_VIEWPORT_SETTLE_MS = 120;
+
+// Ghostty can drop Kitty graphics commands sent during its first post-startup
+// settle window, leaving only Unicode placeholder cells. Hold the first image
+// paint until that window has passed; later images render normally.
+const GHOSTTY_INITIAL_IMAGE_DELAY_MS = 100;
+
+// Post-paint settle window for ConPTY hosts. The `sessionReplace` /
+// `historyRebuild` / `overlayRebuild` intents drive `#emitFullPaint` over
+// a transcript that overflows the viewport, scroll-pushing everything past
+// the last `height` rows into native scrollback. Windows Terminal's
+// viewport-follow logic gets lossy during that burst: spinner/blink-driven
+// `requestRender(false)` calls firing inside the window each produce another
+// diff write, and the WT host processes them faster than its viewport
+// tracker can keep up — the visible tail ends up parked a few rows above
+// the actual last row until any focus event (Alt+Tab) forces a host repaint.
+// Coalescing every non-forced render inside this window into a single
+// trailing render lets the host fully settle the big paint before any
+// follow-up writes touch the buffer. The first-ever `initial` paint is
+// deliberately exempt: nothing has been on screen yet, so no drift can
+// have accumulated, and tests that start the TUI over an over-tall
+// component depend on the next paint firing without delay. Only armed on
+// ConPTY hosts (`isConPTYHosted()`); other terminals do not exhibit the
+// drift and would just see an unnecessary post-paint latency. See #2095.
+const CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
+
+/**
  * TUI - Main class for managing terminal UI with differential rendering
  */
 export class TUI extends Container {
@@ -234,68 +303,7 @@ export class TUI extends Container {
 	 * time published at 14.2 fps against a 30 fps capture.
 	 */
 	#frameCostEstimateMs = 0;
-	/**
-	 * Weight of the newest frame in `#frameCostEstimateMs`. At 0.3 a sustained
-	 * change in frame cost is ~90% absorbed within seven frames, so the loop
-	 * reaches its duty-cycle floor inside a quarter second of going slow, while
-	 * an isolated spike lifts the floor by under a third of itself.
-	 */
-	static readonly #FRAME_COST_SMOOTHING = 0.3;
-	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
-	static readonly #INPUT_RENDER_GRACE_MS = TUI.#MIN_RENDER_INTERVAL_MS;
-	/**
-	 * Cap on the adaptive floor derived from `#frameCostEstimateMs`. Bounds the
-	 * UI responsiveness at ~5 fps under sustained heavy renders — anything
-	 * slower feels dead to the user and no longer justifies further CPU savings.
-	 */
-	static readonly #MAX_ADAPTIVE_RENDER_MS = 200;
 	#inputRenderGraceUntilMs = 0;
-	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
-	// SIGWINCH (and `process.stdout` already reports the new geometry) before
-	// the multiplexer finishes repainting the pane at the new size, and
-	// drag-resize/pane-close animations fire several events in flight. A forced
-	// render on each SIGWINCH races those mid-reflow paints — the multiplexer's
-	// catch-up paint then partially overwrites the TUI output, which the user
-	// sees as a viewport flash or blank screen before the next throttled frame
-	// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
-	// a single forced render lets the multiplexer settle first.
-	static readonly #MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
-	// Resize viewport fast path (non-multiplexer). A drag emits a SIGWINCH burst,
-	// and outside a multiplexer the host gets each new geometry atomically. The
-	// authoritative resize paint erases and replays the entire transcript so it
-	// rewraps at the new width — O(history) compose (markdown re-lexes every
-	// block, the per-width cache missing on every distinct drag width) plus an
-	// O(history) write that pushes all of it back through native scrollback. At
-	// drag rates that whole-history pass is recomputed dozens of times a second
-	// and discarded the instant the next event lands. While the drag is in
-	// flight the engine instead composes and paints ONLY the viewport (see
-	// `#renderResizeViewport`): a state-isolated, throwaway frame that never
-	// touches the commit ledger. The authoritative full replay fires once, after
-	// the drag has been quiet for this long. Multiplexer sessions keep their own
-	// debounce (`#armMultiplexerResizeTimer`, see #2088) and never take this path.
-	static readonly #RESIZE_VIEWPORT_SETTLE_MS = 120;
-	// Ghostty can drop Kitty graphics commands sent during its first post-startup
-	// settle window, leaving only Unicode placeholder cells. Hold the first image
-	// paint until that window has passed; later images render normally.
-	static readonly #GHOSTTY_INITIAL_IMAGE_DELAY_MS = 100;
-	// Post-paint settle window for ConPTY hosts. The `sessionReplace` /
-	// `historyRebuild` / `overlayRebuild` intents drive `#emitFullPaint` over
-	// a transcript that overflows the viewport, scroll-pushing everything past
-	// the last `height` rows into native scrollback. Windows Terminal's
-	// viewport-follow logic gets lossy during that burst: spinner/blink-driven
-	// `requestRender(false)` calls firing inside the window each produce another
-	// diff write, and the WT host processes them faster than its viewport
-	// tracker can keep up — the visible tail ends up parked a few rows above
-	// the actual last row until any focus event (Alt+Tab) forces a host repaint.
-	// Coalescing every non-forced render inside this window into a single
-	// trailing render lets the host fully settle the big paint before any
-	// follow-up writes touch the buffer. The first-ever `initial` paint is
-	// deliberately exempt: nothing has been on screen yet, so no drift can
-	// have accumulated, and tests that start the TUI over an over-tall
-	// component depend on the next paint firing without delay. Only armed on
-	// ConPTY hosts (`isConPTYHosted()`); other terminals do not exhibit the
-	// drift and would just see an unnecessary post-paint latency. See #2095.
-	static readonly #CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
 	#postFullPaintSettleUntilMs = 0;
 	#postFullPaintSettleTimer: RenderTimer | undefined;
 	#sixelProbe = new SixelProbe({
@@ -1421,7 +1429,7 @@ export class TUI extends Container {
 		this.#stopped = false;
 		this.#watchdog.start();
 		this.#ghosttyInitialImageDelayDone = false;
-		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + TUI.#GHOSTTY_INITIAL_IMAGE_DELAY_MS;
+		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + GHOSTTY_INITIAL_IMAGE_DELAY_MS;
 		// A DECRQM report for mode 2026 is authoritative: enable synchronized
 		// output when the terminal reports support (upgrading conservatively
 		// defaulted-off hosts like zellij/tmux-master/foot) and disable it when
@@ -1984,7 +1992,7 @@ export class TUI extends Container {
 			const deferredClearScrollback = this.#deferredForcedClearScrollback;
 			this.#deferredForcedClearScrollback = false;
 			this.requestRender(true, { clearScrollback: deferredClearScrollback });
-		}, TUI.#MULTIPLEXER_RESIZE_DEBOUNCE_MS);
+		}, MULTIPLEXER_RESIZE_DEBOUNCE_MS);
 	}
 
 	/**
@@ -2007,7 +2015,7 @@ export class TUI extends Container {
 	 */
 	#armPostFullPaintSettle(): void {
 		if (!isConPTYHosted()) return;
-		const until = this.#renderScheduler.now() + TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS;
+		const until = this.#renderScheduler.now() + CONPTY_POST_FULL_PAINT_SETTLE_MS;
 		if (until <= this.#postFullPaintSettleUntilMs) return;
 		this.#postFullPaintSettleUntilMs = until;
 		const hadPendingRender = this.#renderRequested || this.#renderTimer !== undefined;
@@ -2025,7 +2033,7 @@ export class TUI extends Container {
 			// caller's render still happens — just deferred to the end of the
 			// window. Subsequent `requestRender(false)` calls during the
 			// settle see this timer and fold into it (existing gate at L1263).
-			this.#schedulePostFullPaintSettle(TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS);
+			this.#schedulePostFullPaintSettle(CONPTY_POST_FULL_PAINT_SETTLE_MS);
 		}
 	}
 
@@ -2097,7 +2105,7 @@ export class TUI extends Container {
 		}
 		const now = this.#renderScheduler.now();
 		const elapsed = now - this.#lastRenderAt;
-		const cadenceDelay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
+		const cadenceDelay = Math.max(0, MIN_RENDER_INTERVAL_MS - elapsed);
 		// Adaptive backpressure — target ~50% render duty cycle: the next frame
 		// starts no sooner than `frame_end + estimated_cost`, i.e.
 		// `frame_start + 2 × estimated_cost`. So `elapsed` (which counts from
@@ -2106,7 +2114,7 @@ export class TUI extends Container {
 		// than the previous sample, so a sustained slow loop is held to half the
 		// CPU (#4145) and an isolated expensive paint is not charged to the
 		// cheap frame behind it. Capped so a pathological cost cannot lock the UI.
-		const adaptiveFloor = Math.min(TUI.#MAX_ADAPTIVE_RENDER_MS, this.#frameCostEstimateMs * 2);
+		const adaptiveFloor = Math.min(MAX_ADAPTIVE_RENDER_MS, this.#frameCostEstimateMs * 2);
 		const adaptiveDelay = Math.max(0, adaptiveFloor - elapsed);
 		const inputGraceDelay = Math.max(0, this.#inputRenderGraceUntilMs - now);
 		const delay = Math.max(cadenceDelay, adaptiveDelay, inputGraceDelay);
@@ -2143,7 +2151,7 @@ export class TUI extends Container {
 		} finally {
 			popLoopPhase();
 			const costMs = this.#renderScheduler.now() - start;
-			this.#frameCostEstimateMs += TUI.#FRAME_COST_SMOOTHING * (costMs - this.#frameCostEstimateMs);
+			this.#frameCostEstimateMs += FRAME_COST_SMOOTHING * (costMs - this.#frameCostEstimateMs);
 		}
 	}
 
@@ -2213,7 +2221,7 @@ export class TUI extends Container {
 		// key would make idle navigation pay a full frame of latency.
 		const c0 = data.charCodeAt(0);
 		if ((c0 === 3 || c0 === 27) && (matchesKey(data, "ctrl+c") || matchesKey(data, "escape"))) {
-			this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + TUI.#INPUT_RENDER_GRACE_MS;
+			this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + INPUT_RENDER_GRACE_MS;
 		}
 		if (this.#inputListeners.size > 0) {
 			let current = data;
@@ -3459,7 +3467,7 @@ export class TUI extends Container {
 			// matches the gesture-driven reset path.
 			this.#resizeEventPending = true;
 			this.requestRender(true, { clearScrollback: !isMultiplexerSession() });
-		}, TUI.#RESIZE_VIEWPORT_SETTLE_MS);
+		}, RESIZE_VIEWPORT_SETTLE_MS);
 	}
 
 	#requestResizeViewportPaint(): void {

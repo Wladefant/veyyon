@@ -999,28 +999,14 @@ export class Agent {
 		return this.#abortController?.signal.aborted === true && this.#state.isStreaming;
 	}
 
-	/**
-	 * Take from `queue` what `mode` allows — the first message, or all of them — and return the
-	 * taken messages with what remains. The queue is never mutated in place.
-	 */
-	static #dequeue(
-		queue: AgentMessage[],
-		mode: "all" | "one-at-a-time",
-	): { taken: AgentMessage[]; remaining: AgentMessage[] } {
-		if (mode === "one-at-a-time") {
-			return queue.length > 0 ? { taken: [queue[0]], remaining: queue.slice(1) } : { taken: [], remaining: queue };
-		}
-		return { taken: queue.slice(), remaining: [] };
-	}
-
 	#dequeueSteeringMessages(): AgentMessage[] {
-		const { taken, remaining } = Agent.#dequeue(this.#steeringQueue, this.#steeringMode);
+		const { taken, remaining } = dequeue(this.#steeringQueue, this.#steeringMode);
 		this.#steeringQueue = remaining;
 		return taken;
 	}
 
 	#dequeueFollowUpMessages(): AgentMessage[] {
-		const { taken, remaining } = Agent.#dequeue(this.#followUpQueue, this.#followUpMode);
+		const { taken, remaining } = dequeue(this.#followUpQueue, this.#followUpMode);
 		this.#followUpQueue = remaining;
 		return taken;
 	}
@@ -1476,4 +1462,18 @@ export class Agent {
 			this.#emit({ type: "message_end", message: toolResult });
 		}
 	}
+}
+
+/**
+ * Take from `queue` what `mode` allows — the first message, or all of them — and return the
+ * taken messages with what remains. The queue is never mutated in place.
+ */
+function dequeue(
+	queue: AgentMessage[],
+	mode: "all" | "one-at-a-time",
+): { taken: AgentMessage[]; remaining: AgentMessage[] } {
+	if (mode === "one-at-a-time") {
+		return queue.length > 0 ? { taken: [queue[0]], remaining: queue.slice(1) } : { taken: [], remaining: queue };
+	}
+	return { taken: queue.slice(), remaining: [] };
 }

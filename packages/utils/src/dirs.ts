@@ -1457,25 +1457,9 @@ class DirResolver {
 		};
 	}
 
-	/**
-	 * Cache key for a resolved subdirectory.
-	 *
-	 * The category is part of the key because it is part of the answer. Under XDG
-	 * the three categories are three different roots (`~/.local/share/veyyon`,
-	 * `~/.local/state/veyyon`, `~/.cache/veyyon`), so keying on the name alone
-	 * meant the first caller to ask for a given name decided the root for every
-	 * later caller, whatever category they asked for. Nothing collides today, and
-	 * that is exactly why it needed fixing before something did: the symptom would
-	 * be data written under one root and read back from another, on XDG machines
-	 * only, with no error anywhere.
-	 */
-	static #cacheKey(subdir: string, xdg?: XdgCategory): string {
-		return `${xdg ?? ""}\0${subdir}`;
-	}
-
 	/** Config-root subdirectory, with optional XDG override. */
 	rootSubdir(subdir: string, xdg?: XdgCategory): string {
-		const key = DirResolver.#cacheKey(subdir, xdg);
+		const key = cacheKey(subdir, xdg);
 		const cached = this.#rootCache.get(key);
 		if (cached) return cached;
 		const base = xdg ? this.#rootDirs[xdg] : this.configRoot;
@@ -1487,7 +1471,7 @@ class DirResolver {
 	/** Agent subdirectory, with optional XDG override. */
 	agentSubdir(userAgentDir: string | undefined, subdir: string, xdg?: XdgCategory): string {
 		if (!userAgentDir || userAgentDir === this.agentDir) {
-			const key = DirResolver.#cacheKey(subdir, xdg);
+			const key = cacheKey(subdir, xdg);
 			const cached = this.#agentCache.get(key);
 			if (cached) return cached;
 			const base = xdg ? this.#agentDirs[xdg] : this.agentDir;
@@ -1497,6 +1481,22 @@ class DirResolver {
 		}
 		return path.join(userAgentDir, subdir);
 	}
+}
+
+/**
+ * Cache key for a resolved subdirectory.
+ *
+ * The category is part of the key because it is part of the answer. Under XDG
+ * the three categories are three different roots (`~/.local/share/veyyon`,
+ * `~/.local/state/veyyon`, `~/.cache/veyyon`), so keying on the name alone
+ * meant the first caller to ask for a given name decided the root for every
+ * later caller, whatever category they asked for. Nothing collides today, and
+ * that is exactly why it needed fixing before something did: the symptom would
+ * be data written under one root and read back from another, on XDG machines
+ * only, with no error anywhere.
+ */
+function cacheKey(subdir: string, xdg?: XdgCategory): string {
+	return `${xdg ?? ""}\0${subdir}`;
 }
 
 /**

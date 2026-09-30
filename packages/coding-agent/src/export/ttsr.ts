@@ -184,70 +184,6 @@ export class TtsrManager {
 		return gap >= (rule?.repeatGap ?? this.#settings.repeatGap);
 	}
 
-	#compileConditions(rule: Rule): RegExp[] {
-		if (!rule.condition || rule.condition.length === 0) {
-			return [];
-		}
-		const compiled: RegExp[] = [];
-		for (const pattern of rule.condition) {
-			if (pattern.trim().length === 0) {
-				// `new RegExp("")` matches EVERY stream, so a blank condition compiled into a catch-all:
-				// a rule whose frontmatter said `condition: ""` fired on every delta rather than never,
-				// which is the loudest possible reading of the quietest possible mistake. `astCondition`
-				// has always filtered blanks; this is the same rule for the same reason, in one place.
-				logger.warn("TTSR condition is blank, skipping condition", { ruleName: rule.name });
-				continue;
-			}
-			try {
-				compiled.push(new RegExp(pattern));
-			} catch (error) {
-				logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
-					ruleName: rule.name,
-					pattern,
-					error: errorMessage(error),
-				});
-			}
-		}
-
-		return compiled;
-	}
-
-	#compileGlobalPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
-		if (!globs || globs.length === 0) {
-			return undefined;
-		}
-
-		const compiled: Bun.Glob[] = [];
-		for (const raw of globs) {
-			const glob = raw.trim();
-			if (glob.length === 0) continue;
-			compiled.push(new Bun.Glob(glob));
-		}
-		return compiled.length > 0 ? compiled : undefined;
-	}
-
-	#parseToolScopeToken(token: string): ToolScope | undefined {
-		const match = TOOL_SCOPE_TOKEN_PATTERN.exec(token);
-		if (!match) {
-			return undefined;
-		}
-
-		const groups = match.groups;
-		const hasToolPrefix = groups?.prefix !== undefined;
-		const toolName = (groups?.tool ?? (hasToolPrefix ? undefined : groups?.bare))?.trim().toLowerCase();
-		const pathPattern = groups?.path?.trim();
-
-		if (!pathPattern) {
-			return { toolName };
-		}
-
-		return {
-			toolName,
-			pathPattern,
-			pathGlob: new Bun.Glob(pathPattern),
-		};
-	}
-
 	#buildScope(rule: Rule): TtsrScope {
 		if (!rule.scope || rule.scope.length === 0) {
 			return {
@@ -287,7 +223,7 @@ export class TtsrManager {
 				continue;
 			}
 
-			const toolScope = this.#parseToolScopeToken(token);
+			const toolScope = parseToolScopeToken(token);
 			if (!toolScope) {
 				logger.warn("TTSR scope token is invalid, skipping token", {
 					ruleName: rule.name,
@@ -307,10 +243,6 @@ export class TtsrManager {
 		return scope;
 	}
 
-	#hasReachableScope(scope: TtsrScope): boolean {
-		return scope.allowText || scope.allowThinking || scope.allowAnyTool || scope.toolScopes.length > 0;
-	}
-
 	#bufferKey(context: TtsrMatchContext): string {
 		if (context.streamKey && context.streamKey.trim().length > 0) {
 			return context.streamKey;
@@ -322,16 +254,12 @@ export class TtsrManager {
 		return toolName ? `tool:${toolName}` : "tool";
 	}
 
-	#normalizePath(pathValue: string): string {
-		return pathValue.replaceAll("\\", "/");
-	}
-
 	#matchesGlob(glob: Bun.Glob, filePaths: string[] | undefined): boolean {
 		if (!filePaths || filePaths.length === 0) {
 			return false;
 		}
 		for (const filePath of filePaths) {
-			const normalized = this.#normalizePath(filePath);
+			const normalized = normalizePath(filePath);
 			if (glob.match(normalized)) {
 				return true;
 			}
@@ -387,25 +315,6 @@ export class TtsrManager {
 	}
 
 	/**
-	 * The text a condition matched, or undefined when none did.
-	 *
-	 * The matched text rather than a boolean, because {@link Rule.pathScope} needs to ask where
-	 * the match actually pointed. Matching the buffer and then testing the WHOLE buffer for a
-	 * path outside the working directory would fire on any absolute path anywhere in the stream,
-	 * which is the imprecision this exists to remove.
-	 */
-	#matchedText(entry: TtsrEntry, streamBuffer: string): string | undefined {
-		for (const condition of entry.conditions) {
-			condition.lastIndex = 0;
-			const match = condition.exec(streamBuffer);
-			if (match) {
-				return match[0];
-			}
-		}
-		return undefined;
-	}
-
-	/**
 	 * Whether the matched text satisfies the rule's `pathScope`.
 	 *
 	 * Absent scope means every match counts, which is every rule that does not opt in. With a
@@ -450,7 +359,7 @@ export class TtsrManager {
 			return false;
 		}
 
-		const conditions = this.#compileConditions(rule);
+		const conditions = compileConditions(rule);
 		const astConditions =
 			rule.astCondition && rule.astCondition.length > 0
 				? rule.astCondition.map(pattern => pattern.trim()).filter(p => p.length > 0)
@@ -470,14 +379,14 @@ export class TtsrManager {
 		}
 
 		const scope = this.#buildScope(rule);
-		if (!this.#hasReachableScope(scope)) {
+		if (!hasReachableScope(scope)) {
 			logger.warn("TTSR scope excludes all streams, skipping rule", {
 				ruleName: rule.name,
 				scope: rule.scope,
 			});
 			return false;
 		}
-		const globalPathGlobs = this.#compileGlobalPathGlobs(rule.globs);
+		const globalPathGlobs = compileGlobalPathGlobs(rule.globs);
 		this.#rules.set(rule.name, {
 			rule,
 			conditions,
@@ -527,7 +436,7 @@ export class TtsrManager {
 	/** Derive an ast-grep language alias from candidate paths (bare extension, e.g. "ts"), if any. */
 	#deriveLang(filePaths: string[] | undefined): string | undefined {
 		for (const filePath of filePaths ?? []) {
-			const ext = path.extname(this.#normalizePath(filePath));
+			const ext = path.extname(normalizePath(filePath));
 			if (ext.length > 1) {
 				return ext.slice(1).toLowerCase();
 			}
@@ -581,7 +490,7 @@ export class TtsrManager {
 
 		const matches: Rule[] = [];
 		for (const entry of candidates) {
-			if (await this.#astConditionsMatch(entry.astConditions, snapshot, lang)) {
+			if (await astConditionsMatch(entry.astConditions, snapshot, lang)) {
 				// A warm-up belongs to the rule, not to the condition dialect it is
 				// written in, or an author moving a rule from regex to ast-grep would
 				// silently lose it.
@@ -596,26 +505,6 @@ export class TtsrManager {
 			}
 		}
 		return matches;
-	}
-
-	async #astConditionsMatch(patterns: string[], source: string, lang: string): Promise<boolean> {
-		try {
-			const result = await astMatch({
-				patterns,
-				source,
-				lang,
-				strictness: AstMatchStrictness.Smart,
-				limit: 1,
-			});
-			return result.totalMatches > 0;
-		} catch (error) {
-			logger.warn("TTSR ast match failed, treating as no match", {
-				patterns,
-				lang,
-				error: errorMessage(error),
-			});
-			return false;
-		}
 	}
 
 	/** True when any registered rule carries ast-grep conditions. */
@@ -647,7 +536,7 @@ export class TtsrManager {
 			if (!this.#matchesGlobalPaths(entry, context)) {
 				continue;
 			}
-			const matched = this.#matchedText(entry, buffer);
+			const matched = matchedText(entry, buffer);
 			if (matched === undefined) {
 				continue;
 			}
@@ -901,5 +790,116 @@ export class TtsrManager {
 	/** Get settings. */
 	getSettings(): Required<TtsrSettings> {
 		return this.#settings;
+	}
+}
+
+function compileConditions(rule: Rule): RegExp[] {
+	if (!rule.condition || rule.condition.length === 0) {
+		return [];
+	}
+	const compiled: RegExp[] = [];
+	for (const pattern of rule.condition) {
+		if (pattern.trim().length === 0) {
+			// `new RegExp("")` matches EVERY stream, so a blank condition compiled into a catch-all:
+			// a rule whose frontmatter said `condition: ""` fired on every delta rather than never,
+			// which is the loudest possible reading of the quietest possible mistake. `astCondition`
+			// has always filtered blanks; this is the same rule for the same reason, in one place.
+			logger.warn("TTSR condition is blank, skipping condition", { ruleName: rule.name });
+			continue;
+		}
+		try {
+			compiled.push(new RegExp(pattern));
+		} catch (error) {
+			logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
+				ruleName: rule.name,
+				pattern,
+				error: errorMessage(error),
+			});
+		}
+	}
+
+	return compiled;
+}
+
+function compileGlobalPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
+	if (!globs || globs.length === 0) {
+		return undefined;
+	}
+
+	const compiled: Bun.Glob[] = [];
+	for (const raw of globs) {
+		const glob = raw.trim();
+		if (glob.length === 0) continue;
+		compiled.push(new Bun.Glob(glob));
+	}
+	return compiled.length > 0 ? compiled : undefined;
+}
+
+function parseToolScopeToken(token: string): ToolScope | undefined {
+	const match = TOOL_SCOPE_TOKEN_PATTERN.exec(token);
+	if (!match) {
+		return undefined;
+	}
+
+	const groups = match.groups;
+	const hasToolPrefix = groups?.prefix !== undefined;
+	const toolName = (groups?.tool ?? (hasToolPrefix ? undefined : groups?.bare))?.trim().toLowerCase();
+	const pathPattern = groups?.path?.trim();
+
+	if (!pathPattern) {
+		return { toolName };
+	}
+
+	return {
+		toolName,
+		pathPattern,
+		pathGlob: new Bun.Glob(pathPattern),
+	};
+}
+
+function hasReachableScope(scope: TtsrScope): boolean {
+	return scope.allowText || scope.allowThinking || scope.allowAnyTool || scope.toolScopes.length > 0;
+}
+
+function normalizePath(pathValue: string): string {
+	return pathValue.replaceAll("\\", "/");
+}
+
+/**
+ * The text a condition matched, or undefined when none did.
+ *
+ * The matched text rather than a boolean, because {@link Rule.pathScope} needs to ask where
+ * the match actually pointed. Matching the buffer and then testing the WHOLE buffer for a
+ * path outside the working directory would fire on any absolute path anywhere in the stream,
+ * which is the imprecision this exists to remove.
+ */
+function matchedText(entry: TtsrEntry, streamBuffer: string): string | undefined {
+	for (const condition of entry.conditions) {
+		condition.lastIndex = 0;
+		const match = condition.exec(streamBuffer);
+		if (match) {
+			return match[0];
+		}
+	}
+	return undefined;
+}
+
+async function astConditionsMatch(patterns: string[], source: string, lang: string): Promise<boolean> {
+	try {
+		const result = await astMatch({
+			patterns,
+			source,
+			lang,
+			strictness: AstMatchStrictness.Smart,
+			limit: 1,
+		});
+		return result.totalMatches > 0;
+	} catch (error) {
+		logger.warn("TTSR ast match failed, treating as no match", {
+			patterns,
+			lang,
+			error: errorMessage(error),
+		});
+		return false;
 	}
 }

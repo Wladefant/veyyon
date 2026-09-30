@@ -263,7 +263,7 @@ export class CachedOutputBlock {
 
 	/** Render with caching. Returns the cached (shared, caller-immutable) lines if options haven't changed. */
 	render(options: OutputBlockOptions, theme: Theme): readonly string[] {
-		const key = this.#buildKey(options);
+		const key = buildKey(options);
 		if (this.#cache?.key === key) return this.#cache.lines;
 		const lines = renderOutputBlock(options, theme);
 		this.#cache = { key, lines };
@@ -274,27 +274,27 @@ export class CachedOutputBlock {
 	invalidate(): void {
 		this.#cache = undefined;
 	}
+}
 
-	#buildKey(options: OutputBlockOptions): bigint {
-		const h = new Hasher();
-		h.u32(options.width);
-		h.u32(normalizeContentPaddingLeft(options.contentPaddingLeft));
-		h.optional(options.header);
-		h.optional(options.headerMeta);
-		h.optional(options.state);
-		h.optional(options.borderColor);
-		h.bool(options.applyBg ?? true);
-		if (options.sections) {
-			for (const s of options.sections) {
-				h.optional(s.label);
-				h.bool(s.separator ?? false);
-				for (const line of s.lines) {
-					h.str(line);
-				}
+function buildKey(options: OutputBlockOptions): bigint {
+	const h = new Hasher();
+	h.u32(options.width);
+	h.u32(normalizeContentPaddingLeft(options.contentPaddingLeft));
+	h.optional(options.header);
+	h.optional(options.headerMeta);
+	h.optional(options.state);
+	h.optional(options.borderColor);
+	h.bool(options.applyBg ?? true);
+	if (options.sections) {
+		for (const s of options.sections) {
+			h.optional(s.label);
+			h.bool(s.separator ?? false);
+			for (const line of s.lines) {
+				h.str(line);
 			}
 		}
-		return h.digest();
 	}
+	return h.digest();
 }
 
 /**
