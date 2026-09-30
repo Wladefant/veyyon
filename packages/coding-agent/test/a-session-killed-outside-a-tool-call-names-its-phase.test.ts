@@ -46,6 +46,11 @@ interface LogEntry {
 	external?: number;
 	smol?: boolean;
 	forceRAMSize?: string;
+	commitChargeBytes?: number;
+	commitLimitBytes?: number;
+	processCommitBytes?: number;
+	cgroupMemoryBytes?: number;
+	cgroupMemoryMaxBytes?: number;
 }
 
 interface Arena {
@@ -195,6 +200,13 @@ describe("a session that died below JavaScript", () => {
 		expect(beat.heapTotal).toBeGreaterThan(0);
 		expect(beat.heapUsed).toBeGreaterThan(0);
 		expect(beat.external).toBeGreaterThanOrEqual(0);
+		// The resource that runs out on Windows is commit, not RAM: the limit is
+		// RAM plus pagefile, and this process holds some of the charge.
+		if (process.platform === "win32") {
+			expect(beat.commitChargeBytes).toBeGreaterThan(0);
+			expect(beat.commitLimitBytes).toBeGreaterThanOrEqual(beat.commitChargeBytes ?? Number.POSITIVE_INFINITY);
+			expect(beat.processCommitBytes).toBeGreaterThan(0);
+		}
 
 		await runFixture(arena, "report");
 
@@ -212,6 +224,11 @@ describe("a session that died below JavaScript", () => {
 		expect(reported[0].heapTotal).toBe(beat.heapTotal);
 		expect(reported[0].heapUsed).toBe(beat.heapUsed);
 		expect(reported[0].external).toBe(beat.external);
+		expect(reported[0].commitChargeBytes).toBe(beat.commitChargeBytes);
+		expect(reported[0].commitLimitBytes).toBe(beat.commitLimitBytes);
+		expect(reported[0].processCommitBytes).toBe(beat.processCommitBytes);
+		expect(reported[0].cgroupMemoryBytes).toBe(beat.cgroupMemoryBytes);
+		expect(reported[0].cgroupMemoryMaxBytes).toBe(beat.cgroupMemoryMaxBytes);
 		expect(Date.parse(reported[0].startedAt ?? "")).toBeGreaterThan(0);
 		expect(Date.parse(reported[0].heartbeatAt ?? "")).toBeGreaterThanOrEqual(Date.parse(reported[0].startedAt ?? ""));
 		// Swept, so the same death is not re-reported on every later launch.
