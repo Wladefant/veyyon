@@ -70,8 +70,14 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * RE-MEASURED 2026-09-26 at 353, from 352: `hosts/terminal/engine/src/core/paint-sequences.ts`,
  * the escape sequence each paint shape writes, split out of `core/tui.ts`, which the shell already
  * evaluates, so the graph runs no new code. The ceiling keeps the one leaf of margin.
+ *
+ * RE-MEASURED 2026-09-29 at 355, from 353: `@veyyon/utils/log-file`, the rotating profile log that
+ * replaced `winston` and `winston-daily-rotate-file`, written through by `@veyyon/utils/logger`, and
+ * `@veyyon/utils/stall-sampler`, the event-loop stall profile `core/tui.ts` arms. Both import
+ * `node:` built-ins and utils leaves the shell already evaluates. The ceiling keeps the one leaf of
+ * margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 355;
+const SHELL_GRAPH_MODULE_CEILING = 357;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });
