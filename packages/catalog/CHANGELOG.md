@@ -7,6 +7,7 @@
 - `@veyyon/catalog/models` imports `models.json` by path and reads it when the registry is built, so a process no longer holds the 2.2 MB catalog text on its heap for its whole life.
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
 - The models.dev overlay drops its parsed `api.json` 30 seconds after the last provider reads it and reads `models-dev.json` again on the next use, which cut the idle heap after a model refresh from 68.7 MiB to 59.7 MiB and its live objects from 752,441 to 595,112 (median of 3 runs).
+- Model id classification no longer keeps a process-lifetime table from each id to its answer, which cut the idle heap of an interactive session from 66.8 MiB to 63.6 MiB (median of 3 runs) and stops each newly seen model id from growing the heap.
 
 ### Fixed
 
