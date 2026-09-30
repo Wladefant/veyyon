@@ -32,6 +32,7 @@
 - `SessionManager` moves a `session_init`, `settings_snapshot` or `subagent_spawn` entry out of memory as soon as the append that wrote it completes, instead of at the next whole-file publish, which cut the heap after 40 live subagents from 102.4 MiB to 96.9 MiB (median of 3 runs).
 - A forwarding tool wrapper reads each forwarded property through one accessor shared by every wrapper instead of a getter and setter pair built per wrapper and per key, which cut the live objects after 40 live subagents from 756,648 to 729,618 and the heap from 95.4 MiB to 94.3 MiB (median of 3 runs).
 - A listed session holds at most 4,096 characters of first-message and message text, copied out of the scanned window, and the session list index moves to version 2 so rows an earlier build indexed without the bound are rescanned, which cut the rows of a 125-session directory from 21.39 MiB to 1.97 MiB and its list index from 5.45 MiB to 557 KiB.
+- The error a cold entry's failed read-back raises formats its cause with `errorMessage` from `@veyyon/utils`; no user-visible change.
 
 ### Fixed
 

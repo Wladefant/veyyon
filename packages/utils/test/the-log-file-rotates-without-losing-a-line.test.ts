@@ -412,8 +412,9 @@ describe("leftovers in the directory", () => {
 	it("deletes a compression temporary a dead process abandoned, and keeps one still being written", () => {
 		const dir = tempDir();
 		const now = new Date();
-		const abandoned = path.join(dir, `${logFileName(now)}.3.gz.4242.tmp`);
-		const inFlight = path.join(dir, `${logFileName(now)}.4.gz.4243.tmp`);
+		// The staging names atomicWriteFileWith gives `<generation>.gz`.
+		const abandoned = path.join(dir, `.${logFileName(now)}.3.gz.4242.1.tmp`);
+		const inFlight = path.join(dir, `.${logFileName(now)}.4.gz.4243.1.tmp`);
 		fs.writeFileSync(abandoned, "partial");
 		fs.writeFileSync(inFlight, "partial");
 		const old = new Date(now.getTime() - 61_000);

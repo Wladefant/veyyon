@@ -36,6 +36,8 @@
 - `prompt.render` returns the shared copy of its result, so equal renders of a template hold one buffer.
 - `@veyyon/utils/env` fingerprints a `.env` value with `Bun.CryptoHasher` instead of `node:crypto`, so the launch card path loads no `node:crypto`; a compiled binary that imports the module starts in 11.9 ms instead of 12.5 ms and peaks at 33,468 KiB RSS instead of 34,812 KiB (median of 31).
 - The logger writes the profile log through `RotatingLogFile` instead of `winston` and `winston-daily-rotate-file`, with the same line format, 10 MiB size limit and five-file retention, and deletes the `-audit.json` files `winston-daily-rotate-file` left in the logs directory; 29 packages leave the install, the compiled binary shrinks by 2.1 MiB, and an idle interactive session holds 91.4 MiB of heap and extra memory instead of 93.4 MiB, 569,868 objects instead of 584,359, and 320 MiB RSS after a full GC instead of 322.5 MiB (median of six).
+- `RotatingLogFile` writes a gzipped generation through `atomicWriteFileWith`, staged as the hidden `.<file>.gz.<pid>.<n>.tmp` sibling, and deletes one that a process which exited mid-copy left for a minute.
+- `stallSampler` checks inspector profile payloads with the shared `isRecord`; no user-visible change.
 
 ### Fixed
 

@@ -115,6 +115,7 @@
 - The same-file reload comparison lives in `session/provider-replay-projection.ts` and compares each message's replayed fields without deep-copying them first, and skips a message both lists share, cutting it on a 433-message branch from 0.47 ms to 0.13 ms.
 - A running `veyyon` process that has used under 5% CPU in each 5-second window for 30 seconds discards its compiled JavaScript code and returns free memory to the OS, cutting an interactive session's resident memory at idle from 361 MiB to 332 MiB after eight turns and from 325 MiB to 303 MiB after startup, at a cost of 37 ms on the next turn.
 - An idle `veyyon` binary on Linux also unmaps the clean resident pages of its embedded modules when it discards its compiled code, cutting an interactive session's resident memory at idle from 317 MiB to 226 MiB after startup and from 342 MiB to 251 MiB after eight turns, with no measurable change to the next turn.
+- The settings screen reads a record setting's override layers with `isRecord` from `@veyyon/utils`; no user-visible change.
 
 ### Fixed
 

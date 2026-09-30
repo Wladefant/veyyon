@@ -15,8 +15,10 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type * as StreamPromises from "node:stream/promises";
 import type * as Zlib from "node:zlib";
 import { APP_DIRECTORY_SLUG } from "./app-identity";
+import { atomicWriteFileWith } from "./atomic-write";
 import { isEnoent } from "./fs-error";
 
 /**
@@ -53,9 +55,12 @@ const LOG_ENTRY = new RegExp(`^${APP_DIRECTORY_SLUG}\\.\\d{4}-\\d{2}-\\d{2}\\.lo
 /** Bookkeeping files an earlier log writer (`winston-daily-rotate-file`) left in the directory. */
 const STALE_AUDIT = /^\.[0-9a-f]{40}-audit\.json$/;
 
-/** A compression's private output, published as `<file>.gz` when the copy finishes. */
+/**
+ * A compression's private output: the staging name {@link atomicWriteFileWith} gives `<file>.gz`
+ * (`.<file>.gz.<pid>.<counter>.tmp`), renamed over `<file>.gz` when the copy finishes.
+ */
 const COMPRESS_TEMPORARY = new RegExp(
-	`^${APP_DIRECTORY_SLUG}\\.\\d{4}-\\d{2}-\\d{2}\\.log(?:\\.\\d+)?\\.gz\\.\\d+\\.tmp$`,
+	`^\\.${APP_DIRECTORY_SLUG}\\.\\d{4}-\\d{2}-\\d{2}\\.log(?:\\.\\d+)?\\.gz\\.\\d+\\.\\d+\\.tmp$`,
 );
 
 /** Age at which a compression temporary belongs to a process that exited mid-copy. */
@@ -253,7 +258,8 @@ export class RotatingLogFile {
 
 	/**
 	 * Gzips `file` to `file.gz` off the main thread, then deletes `file`. Two writers compressing the
-	 * same generation each write a private temporary and publish the same bytes.
+	 * same generation each stage a private temporary and publish the same bytes. The archive and its
+	 * directory entry are not flushed to disk: a log generation does not justify an fsync per rotation.
 	 *
 	 * `node:zlib` is resolved here rather than at module scope: it costs about 5 ms and 0.8 MiB to
 	 * load, every process reaches this module through the logger, and most never compress anything.
@@ -262,36 +268,18 @@ export class RotatingLogFile {
 		if (compressing.has(file)) return;
 		compressing.add(file);
 		const zlib = require("node:zlib") as typeof Zlib;
-		const temporary = `${file}.gz.${process.pid}.tmp`;
-		const source = fs.createReadStream(file);
-		const gzip = zlib.createGzip();
-		const sink = fs.createWriteStream(temporary);
-		let settled = false;
-		const fail = (error: Error): void => {
-			if (settled) return;
-			settled = true;
-			source.destroy();
-			gzip.destroy();
-			sink.destroy();
-			fs.rm(temporary, { force: true }, () => compressing.delete(file));
-			// A generation another writer compressed or pruned first is not a failure.
-			if (!isEnoent(error)) this.#onError(error);
-		};
-		source.on("error", fail);
-		gzip.on("error", fail);
-		sink.on("error", fail);
-		sink.on("finish", () => {
-			if (settled) return;
-			settled = true;
-			fs.rename(temporary, `${file}.gz`, error => {
-				if (error) {
-					fs.rm(temporary, { force: true }, () => compressing.delete(file));
-					if (!isEnoent(error)) this.#onError(error);
-					return;
-				}
-				fs.rm(file, { force: true }, () => compressing.delete(file));
-			});
-		});
-		source.pipe(gzip).pipe(sink);
+		const { pipeline } = require("node:stream/promises") as typeof StreamPromises;
+		atomicWriteFileWith(
+			`${file}.gz`,
+			temporary => pipeline(fs.createReadStream(file), zlib.createGzip(), fs.createWriteStream(temporary)),
+			// The archive keeps the permissions the live file was created with.
+			{ fsync: false, mode: 0o666 },
+		)
+			.then(() => fs.promises.rm(file, { force: true }))
+			.catch(error => {
+				// A generation another writer compressed or pruned first is not a failure.
+				if (!isEnoent(error)) this.#onError(asError(error));
+			})
+			.finally(() => compressing.delete(file));
 	}
 }
