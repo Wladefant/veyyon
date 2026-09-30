@@ -29,6 +29,7 @@ import { atomicWriteFileSync } from "./atomic-write";
 import { AGENT_DIR_ENV_KEYS, CONFIG_DIR_ENV_KEYS, PROFILE_ENV_KEYS, SANDBOX_MARKER_ENV_KEY } from "./dir-env-keys";
 import { withFileLockSync } from "./file-lock";
 import { isMissingPath } from "./fs-error";
+import { logFileName } from "./log-file";
 import { isUuid } from "./regex";
 import { bareVersion } from "./semver";
 import { sleepSync } from "./sleep";
@@ -2043,7 +2044,7 @@ export function getLogsDir(): string {
 
 /** Get the path to a dated log file (~/.veyyon/profiles/<name>/logs/veyyon.YYYY-MM-DD.log). */
 export function getLogPath(date = new Date()): string {
-	return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.log`);
+	return path.join(getLogsDir(), logFileName(date));
 }
 
 /**
