@@ -122,6 +122,47 @@ describe("citations", () => {
 		expect([...into.shas]).toEqual([SHA_A]);
 		expect([...into.prs].sort((a, b) => a - b)).toEqual([4269, 5001, 6002, 7003]);
 	});
+
+	const cited = (text: string) => {
+		const into: Citations = { shas: new Set(), prs: new Set() };
+		collectCitations(text, index, into);
+		return into;
+	};
+
+	it("does not count a commit the text says was not ported", () => {
+		// Wladefant/veyyon#180 named two follow-ups only to say they were still owed.
+		expect([...cited("Ported 4e78d12428e5 but not 1778ab93b444 or deadbeef1234.").shas]).toEqual([SHA_A]);
+		expect(cited("1778ab93b444 is not ported yet").shas.size).toBe(0);
+		expect(cited("Ports 4e78d12428e5, not 1778ab93b444").shas.has(SHA_B)).toBe(false);
+		expect(cited("Still lacks 4e78d12428e5, missing from the fork.").shas.size).toBe(0);
+	});
+
+	it("denies the list items under a line that says they are not ported", () => {
+		const text = [
+			"Two follow-ups remain unported:",
+			"- 4e78d12428e5",
+			"- 1778ab93b444",
+			"",
+			"Ports 1778ab93b444 here.",
+		].join("\n");
+		expect([...cited(text).shas]).toEqual([SHA_B]);
+		expect(cited(["Ports these:", "- 4e78d12428e5", "- 1778ab93b444"].join("\n")).shas.size).toBe(2);
+	});
+
+	it("denies a pull request the text says was not ported, and keeps one it carried", () => {
+		expect([...cited("Carries oh-my-pi#4269 but not oh-my-pi#5001").prs]).toEqual([4269]);
+	});
+
+	it("keeps a citation whose sentence denies something else", () => {
+		expect([...cited("Port 4e78d12428e5 so the queue does not grow without bound.").shas]).toEqual([SHA_A]);
+		expect([...cited("Port 4e78d12428e5 without changing behavior").shas]).toEqual([SHA_A]);
+		expect([...cited("Port the remaining upstream change 4e78d12428e5").shas]).toEqual([SHA_A]);
+	});
+
+	it("denies a commit whatever the distance between it and the negation", () => {
+		expect(cited("4e78d12428e5 from upstream is still definitely not ported").shas.size).toBe(0);
+		expect(cited("Still not ported, upstream's 4e78d12428e5 change from last week").shas.size).toBe(0);
+	});
 });
 
 describe("classification", () => {
