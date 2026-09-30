@@ -18,6 +18,8 @@
  * WHAT IT DOES NOT CATCH: it says nothing about the quality of the review the
  * model writes once the reminder lands, and it does not cover an enforcer added
  * to the settle chain beside these two.
+ *
+ * Subject: `session/runtime/finalize-reminders.ts`, driven through `AgentSession`.
  */
 import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";

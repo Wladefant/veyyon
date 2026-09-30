@@ -11,7 +11,10 @@
  * every kind of session that can start one: the first top-level session, a later top-level session
  * built while the first is still running a job, and a spawned agent of that later session. Each
  * starts a real background bash job through its own `bash` tool, and the suite asserts which
- * session's `deliverAsyncJobResult` received it and which session's `job` tool lists it.
+ * session's `deliverAsyncJobResult` received it and which session's `job` tool lists it. A job is
+ * identified by the `AsyncJob` the delivery carries, not its id: every top-level session's manager
+ * numbers from `bg_1`, so the first session's own `bg_1` landing late would otherwise read as the
+ * second session's job reaching the first.
  *
  * Not caught: the interactive `/new` controller itself. The later session here is built the way
  * `nextSessionFactory` builds it (a fresh SessionManager through `createAgentSession`) while the
@@ -22,7 +25,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
+import { type AsyncJob, AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
@@ -85,45 +88,49 @@ describe("a background job reports to the session that started it", () => {
 		return session;
 	}
 
-	/** Start `echo <marker>` in the background through the session's own bash tool; resolve to the job id. */
-	async function startBackgroundEcho(session: AgentSession, marker: string): Promise<string> {
+	/** Start `command` (default `echo <marker>`) in the background through the session's own bash tool. */
+	async function startBackground(
+		session: AgentSession,
+		marker: string,
+		command = `echo ${marker}`,
+	): Promise<AsyncJob> {
 		const manager = session.asyncJobManager;
 		expect(manager, "a session that cannot run background work cannot report it").toBeDefined();
 		const before = new Set(manager!.getAllJobs().map(job => job.id));
 		const bash = session.getToolByName("bash");
 		expect(bash).toBeDefined();
-		await bash!.execute(`call-${marker}`, { command: `echo ${marker}`, async: true });
+		await bash!.execute(`call-${marker}`, { command, async: true });
 		const started = manager!.getAllJobs().filter(job => !before.has(job.id));
 		expect(started).toHaveLength(1);
-		return started[0]!.id;
+		return started[0]!;
 	}
 
 	/**
-	 * Record every job id each watched session receives. The returned function resolves once each
+	 * Record every job each watched session receives. The returned function resolves once each
 	 * named job has been delivered somewhere among the watched sessions, then reports who got what.
 	 * A job delivered to an unwatched session never resolves, so the test fails on its timeout.
 	 */
-	function watchDeliveries(...watched: AgentSession[]): (jobIds: string[]) => Promise<string[][]> {
-		const received = watched.map(() => [] as string[]);
-		const arrivals = new Map<string, PromiseWithResolvers<void>>();
-		const arrival = (jobId: string) => {
-			let pending = arrivals.get(jobId);
+	function watchDeliveries(...watched: AgentSession[]): (jobs: AsyncJob[]) => Promise<(AsyncJob | undefined)[][]> {
+		const received = watched.map(() => [] as (AsyncJob | undefined)[]);
+		const arrivals = new Map<AsyncJob | undefined, PromiseWithResolvers<void>>();
+		const arrival = (job: AsyncJob | undefined) => {
+			let pending = arrivals.get(job);
 			if (!pending) {
 				pending = Promise.withResolvers<void>();
-				arrivals.set(jobId, pending);
+				arrivals.set(job, pending);
 			}
 			return pending;
 		};
 		watched.forEach((session, index) => {
 			const original = session.deliverAsyncJobResult.bind(session);
 			vi.spyOn(session, "deliverAsyncJobResult").mockImplementation((jobId, text, job) => {
-				received[index]!.push(jobId);
-				arrival(jobId).resolve();
+				received[index]!.push(job);
+				arrival(job).resolve();
 				return original(jobId, text, job);
 			});
 		});
-		return async jobIds => {
-			await Promise.all(jobIds.map(jobId => arrival(jobId).promise));
+		return async jobs => {
+			await Promise.all(jobs.map(job => arrival(job).promise));
 			return received;
 		};
 	}
@@ -135,21 +142,35 @@ describe("a background job reports to the session that started it", () => {
 		return (result.details as { jobs: { id: string }[] }).jobs.map(entry => entry.id);
 	}
 
+	/** `delivered` holds exactly `jobs`, in order, compared by identity. */
+	function expectDelivered(delivered: (AsyncJob | undefined)[], jobs: AsyncJob[]): void {
+		expect(delivered).toHaveLength(jobs.length);
+		for (const [index, job] of jobs.entries()) expect(delivered[index]).toBe(job);
+	}
+
 	it("delivers a later top-level session's job to that session, not the first", async () => {
 		const first = await startSession();
-		// The first session has a job in flight when the second is built, as a `/new` handoff leaves it.
-		const firstJob = await startBackgroundEcho(first, "first");
+		// The first session has a job in flight when the second is built, as a `/new` handoff leaves it,
+		// and that job finishes only after the second session's job has started, so both deliveries
+		// land while the watch is installed.
+		const release = path.join(tempDirs[0]!, "release-first");
+		const firstJob = await startBackground(
+			first,
+			"first",
+			`while [ ! -e '${release}' ]; do sleep 0.05; done; echo first`,
+		);
 		const second = await startSession();
 		const settled = watchDeliveries(first, second);
 
-		const secondJob = await startBackgroundEcho(second, "second");
-		const [toFirst, toSecond] = await settled([secondJob]);
+		const secondJob = await startBackground(second, "second");
+		fs.writeFileSync(release, "");
+		const [toFirst, toSecond] = await settled([firstJob, secondJob]);
 
-		expect(toSecond).toEqual([secondJob]);
-		expect(toFirst).not.toContain(secondJob);
+		expectDelivered(toFirst, [firstJob]);
+		expectDelivered(toSecond, [secondJob]);
 		expect(second.asyncJobManager).not.toBe(first.asyncJobManager);
-		expect(await jobToolIds(second)).toEqual([secondJob]);
-		expect(await jobToolIds(first)).toEqual([firstJob]);
+		expect(await jobToolIds(second)).toEqual([secondJob.id]);
+		expect(await jobToolIds(first)).toEqual([firstJob.id]);
 	}, 60000);
 
 	it("keeps delivering the first session's job to the first session after a later one exists", async () => {
@@ -157,11 +178,11 @@ describe("a background job reports to the session that started it", () => {
 		const second = await startSession();
 		const settled = watchDeliveries(first, second);
 
-		const firstJob = await startBackgroundEcho(first, "first");
+		const firstJob = await startBackground(first, "first");
 		const [toFirst, toSecond] = await settled([firstJob]);
 
-		expect(toFirst).toEqual([firstJob]);
-		expect(toSecond).toEqual([]);
+		expectDelivered(toFirst, [firstJob]);
+		expectDelivered(toSecond, []);
 	}, 60000);
 
 	it("delivers a spawned agent's job to the later session that spawned it", async () => {
@@ -177,11 +198,11 @@ describe("a background job reports to the session that started it", () => {
 		const settled = watchDeliveries(first, second);
 
 		expect(child.asyncJobManager).toBe(second.asyncJobManager);
-		const childJob = await startBackgroundEcho(child, "child");
+		const childJob = await startBackground(child, "child");
 		const [toFirst, toSecond] = await settled([childJob]);
 
-		expect(toSecond).toEqual([childJob]);
-		expect(toFirst).toEqual([]);
+		expectDelivered(toSecond, [childJob]);
+		expectDelivered(toFirst, []);
 	}, 60000);
 
 	it("falls back to the process manager for a spawned agent given no manager", async () => {

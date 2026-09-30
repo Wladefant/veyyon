@@ -24,12 +24,13 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { execFile } from "node:child_process";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import * as bundled from "../src/identity/bundled";
+import * as models from "../src/models";
 import type { CatalogReachability } from "./fixtures/bundled-catalog-reachability";
 
 const run = promisify(execFile);
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "bundled-catalog-reachability.ts");
 const MODELS = path.join(import.meta.dirname, "..", "src", "models.ts");
-const BUNDLED = path.join(import.meta.dirname, "..", "src", "identity", "bundled.ts");
 const FIXTURE_TIMEOUT_MS = 60_000;
 
 /** The hold window the catalog documents: 30 s past the last read. */
@@ -64,8 +65,8 @@ const NOT_READERS = [
 	"setEnrichedRegistrySnapshotStore",
 ];
 
-it("classifies every catalog export as a reader or not", async () => {
-	const exported = [...Object.keys(await import(MODELS)), ...Object.keys(await import(BUNDLED))].sort();
+it("classifies every catalog export as a reader or not", () => {
+	const exported = [...Object.keys(models), ...Object.keys(bundled)].sort();
 	expect(exported).toEqual([...READERS, ...NOT_READERS].sort());
 });
 

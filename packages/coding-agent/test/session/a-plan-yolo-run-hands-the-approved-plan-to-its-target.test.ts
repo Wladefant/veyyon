@@ -2,7 +2,8 @@
  * WHY: a session started with `planYolo` runs its first prompt in read-only plan mode and, when the
  * model resolves the plan, switches to the target model with the approved plan in hand. Nothing
  * drove that handoff through a real `AgentSession`, so arming it twice, leaving the plan phase's
- * tools active after approval, or approving without a plan file could each ship green.
+ * tools active after approval, or approving without a plan file could each ship green. The handoff
+ * is `session/runtime/model-handoff.ts`.
  *
  * The class this closes is a plan-yolo transition that leaves session state half-moved: plan mode,
  * the standing resolve handler, the active tool set and the model change together or not at all,

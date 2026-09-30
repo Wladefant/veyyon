@@ -1,3 +1,8 @@
+/**
+ * A failed turn walks `retry.fallbackChains` before the retry gives up.
+ *
+ * Subject: `session/runtime/retry-fallback.ts`, driven through `AgentSession`.
+ */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";

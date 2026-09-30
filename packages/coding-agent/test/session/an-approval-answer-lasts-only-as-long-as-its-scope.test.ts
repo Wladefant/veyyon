@@ -4,10 +4,10 @@
  *
  * WHY THIS SUITE EXISTS: the session's approval state (the `--auto-approve` flag, the `/yolo`
  * bypass, the per-tool decisions an approval prompt was asked to keep, and the ACP client's
- * standing answers) is held by `SessionApprovals`. Each store has a scope: a kept tool decision ends
- * with its conversation, a client's standing answer ends with that client, and a permission prompt
- * ends with its call. The class this suite closes is "an answer that outlives, or never reaches, the
- * scope it was given for":
+ * standing answers) is held by `SessionApprovals` in `session/runtime/session-approvals.ts`. Each
+ * store has a scope: a kept tool decision ends with its conversation, a client's standing answer ends
+ * with that client, and a permission prompt ends with its call. The class this suite closes is "an
+ * answer that outlives, or never reaches, the scope it was given for":
  *
  * - a kept decision carried across `/new`, `/resume` or a handoff, or lost on a reload;
  * - a new ACP client that inherits the previous client's `allow_always` or `reject_always`;

@@ -22,9 +22,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
 import { EVAL_LANGUAGE_ORDER } from "@veyyon/coding-agent/tools/shell/eval";
 import { TempDir } from "@veyyon/utils";
+import { ArgotSession } from "argot";
+import { makeToolSession } from "../helpers/tool-session";
 
 /** A profile with one SSH host, which is what makes the `ssh` factory construct its tool. */
 const profile = TempDir.createSync("@schema-node-profile-");
@@ -56,13 +59,7 @@ function evalLanguageSubsets(): Record<string, boolean>[] {
  * top-level session (checkpoint, rewind).
  */
 function topLevelSession(overrides: Record<string, unknown>): ToolSession {
-	return {
-		cwd: process.cwd(),
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(overrides),
-	} as unknown as ToolSession;
+	return makeToolSession({ getSessionSpawns: () => "*", settings: Settings.isolated(overrides) });
 }
 
 /**
@@ -81,20 +78,18 @@ function capableSession(overrides: Record<string, unknown>): ToolSession {
 		...overrides,
 	});
 	settings.getAgentDir = () => profile.path();
-	return {
-		cwd: process.cwd(),
+	return makeToolSession({
 		hasUI: true,
 		taskDepth: 1,
-		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		getAgentId: () => "0-Main",
-		agentRegistry: {},
-		getArgotSession: () => ({}),
+		agentRegistry: new AgentRegistry(),
+		getArgotSession: () => new ArgotSession(),
 		isToolDiscoveryEnabled: () => true,
 		getSelectedDiscoveredToolNames: () => [],
 		activateDiscoveredTools: async () => [],
 		settings,
-	} as unknown as ToolSession;
+	});
 }
 
 const SHAPES: Record<string, (overrides: Record<string, unknown>) => ToolSession> = {

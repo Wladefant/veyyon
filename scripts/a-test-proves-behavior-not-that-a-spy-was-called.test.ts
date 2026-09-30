@@ -393,7 +393,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/tools/lsp-diagnostics-freshness.test.ts": 5,
 	"packages/coding-agent/test/tools/lsp-regressions.test.ts": 20,
 	"packages/coding-agent/test/tools/provider-network-confidentiality.test.ts": 3,
-	"packages/coding-agent/test/tools/read-pdf-images.test.ts": 3,
+	"packages/coding-agent/test/tools/a-pdf-read-lists-and-extracts-its-images.test.ts": 3,
 	"packages/coding-agent/test/tools/read-pdf-line-range.test.ts": 1,
 	"packages/coding-agent/test/tools/report-tool-issue.test.ts": 10,
 	"packages/coding-agent/test/tools/search-url-paths.test.ts": 4,
