@@ -36,9 +36,10 @@ import { hasObsidian } from "./internal-urls/vault-protocol";
 import { assertEvalPromptOverrideIdsExist } from "./prompts/eval-overrides";
 import { sessionPrompts } from "./prompts/session/rows";
 import {
-	assembleDefaultTemplate,
-	assembleStatementSections,
+	assembleStatementSectionTemplates,
 	type DefaultTemplateSections,
+	defaultTemplatePieces,
+	joinSectionTemplates,
 	parseSectionOverridesJson,
 } from "./system-prompt-builder/default-template";
 import { type GateInputs, OMITTED_GATE_DEFAULTS } from "./system-prompt-builder/gate-inputs";
@@ -1248,16 +1249,19 @@ async function resolvePromptOverrides(
 	return { statementOverrides, evalSections, usingEvalSections, sectionFiles, replacedStatementSections };
 }
 
-/** The Handlebars template a build renders: the caller's custom prompt shell, or the assembled default. */
-function promptTemplate(data: StatementContext, overrides: PromptOverrides, hasCustomPrompt: boolean): string {
-	if (hasCustomPrompt) return sessionPrompts["session/custom-system-prompt"].text;
+/**
+ * The Handlebars templates a build renders, in order: the caller's custom prompt shell, or the
+ * default prompt's statement and banner templates with the section overrides in place.
+ */
+function promptTemplates(data: StatementContext, overrides: PromptOverrides, hasCustomPrompt: boolean): string[] {
+	if (hasCustomPrompt) return [sessionPrompts["session/custom-system-prompt"].text];
 	// Build statement sections only for the default prompt. Append-mode
 	// overrides extend exactly what this session would otherwise send.
-	const statementSections = assembleStatementSections(data, overrides.statementOverrides);
-	const sectionOverrides = overrides.usingEvalSections
-		? overrides.evalSections
-		: applySectionOverrides(overrides.sectionFiles, statementSections);
-	return assembleDefaultTemplate({ ...statementSections, ...sectionOverrides });
+	const statementSections = assembleStatementSectionTemplates(data, overrides.statementOverrides);
+	if (overrides.usingEvalSections) return defaultTemplatePieces(statementSections, overrides.evalSections);
+	if (overrides.sectionFiles.length === 0) return defaultTemplatePieces(statementSections);
+	const sectionOverrides = applySectionOverrides(overrides.sectionFiles, joinSectionTemplates(statementSections));
+	return defaultTemplatePieces(statementSections, sectionOverrides);
 }
 
 /**
@@ -1270,7 +1274,7 @@ function assemblePromptBlocks(
 	overrides: PromptOverrides,
 	hasCustomPrompt: boolean,
 ): string[] {
-	const rendered = prompt.render(promptTemplate(data, overrides, hasCustomPrompt), data);
+	const rendered = prompt.renderSequence(promptTemplates(data, overrides, hasCustomPrompt), data);
 	// Custom prompt templates already render context files and append text; the
 	// project footer still carries environment, cwd, workspace, and dir-context.
 	const projectPrompt = prompt

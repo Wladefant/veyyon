@@ -96,8 +96,17 @@ const reachable = moduleReach(BARREL);
  * `node:zlib`, `./app-identity` and `./fs-error`, all already on this graph, so the barrel pays one
  * module and no edge; the two npm packages it replaced, 29 with their dependencies, were never counted
  * here and no longer load.
+ *
+ * RE-MEASURED 2026-09-30 at 90. The new modules are `prompt-precompiled.ts`, the registry of templates
+ * the binary build compiled, and `prompt-handlebars.ts`, which splits Handlebars into the runtime,
+ * loaded on import, and the compiler, loaded by the first template no build compiled. `prompt.ts` is
+ * exported from the barrel and imports both, and `prompt-variables.ts` parses through the second, so a
+ * subpath cannot move either off the graph; folding `prompt-handlebars.ts` into `prompt.ts` would
+ * close a cycle with `prompt-variables.ts`. The first imports nothing that runs and the second only
+ * the `handlebars/runtime` package entry, so the barrel pays two modules and no edge, and a binary
+ * session evaluates no Handlebars compiler module.
  */
-const BARREL_CEILING = 88;
+const BARREL_CEILING = 90;
 
 describe("the @veyyon/utils barrel", () => {
 	/** The number that multiplies by six hundred realms. */

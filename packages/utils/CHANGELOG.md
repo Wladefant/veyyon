@@ -12,6 +12,7 @@
 
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
+- `@veyyon/utils/prompt` exports `renderSequence(templates, context, options)`, which returns what `render` returns for the joined templates and renders each precompiled template on its own when no boundary changes the bytes, so the joined text is not parsed.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
@@ -44,6 +45,7 @@
 - The logger writes the profile log through `RotatingLogFile` instead of `winston` and `winston-daily-rotate-file`, with the same line format, 10 MiB size limit and five-file retention, and deletes the `-audit.json` files `winston-daily-rotate-file` left in the logs directory; 29 packages leave the install, the compiled binary shrinks by 2.1 MiB, and an idle interactive session holds 91.4 MiB of heap and extra memory instead of 93.4 MiB, 569,868 objects instead of 584,359, and 320 MiB RSS after a full GC instead of 322.5 MiB (median of six).
 - `RotatingLogFile` writes a gzipped generation through `atomicWriteFileWith`, staged as the hidden `.<file>.gz.<pid>.<n>.tmp` sibling, and deletes one that a process which exited mid-copy left for a minute.
 - `stallSampler` checks inspector profile payloads with the shared `isRecord`; no user-visible change.
+- `@veyyon/utils/prompt` loads the Handlebars parser and compiler through `@veyyon/utils/prompt-handlebars` on the first template no build precompiled, so a process that renders only precompiled templates evaluates the Handlebars runtime alone.
 
 ### Fixed
 

@@ -21,9 +21,10 @@
  * run from source, where every template compiles at render. The source arm is the reference, and its
  * parse count is the negative control that proves the counter sees a runtime compile.
  *
- * WHAT IT DOES NOT CATCH. A template a caller assembles at run time (the default system prompt) is not
- * precompiled and compiles at render, as before. Renders are compared under four synthetic contexts,
- * so a divergence reachable only through a block body those contexts leave unrendered would pass.
+ * WHAT IT DOES NOT CATCH. A sequence of templates a caller renders together (the default system
+ * prompt) is `a-session-of-precompiled-prompts-evaluates-no-handlebars-compiler.test.ts`. Renders are
+ * compared under four synthetic contexts, so a divergence reachable only through a block body those
+ * contexts leave unrendered would pass.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type ExecFileSyncOptionsWithStringEncoding, execFileSync } from "node:child_process";
