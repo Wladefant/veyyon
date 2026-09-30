@@ -293,7 +293,9 @@ export async function run(ports: Ports, policy: PortPolicy, live: boolean): Prom
 	});
 	if (rows.length > 0 && !(await ports.digestExists(digestMarker(tip)))) out.digest = await ports.postDigest(body);
 	const tsv = rows.length ? `${data.tsv.replace(/\n*$/, "\n")}${rows.map(r => rowToTsv(r)).join("\n")}\n` : data.tsv;
-	await ports.writeData(tsv, { ompWatermark: tip, updated: new Date().toISOString() }, data.parent);
+	if (rows.length > 0 || data.state?.ompWatermark !== tip) {
+		await ports.writeData(tsv, { ompWatermark: tip, updated: new Date().toISOString() }, data.parent);
+	}
 	return { ...out, watermark: tip };
 }
 

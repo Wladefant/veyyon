@@ -96,6 +96,14 @@ describe("a commit is recorded and posted once", () => {
 		expect(store.tsv.split("\n").filter(Boolean)).toHaveLength(4);
 	});
 
+	it("makes no data commit when nothing is new and the watermark already sits at the tip", async () => {
+		const { store, ports } = remote(listed);
+		await run(ports, policy, true);
+		const writes = store.writes;
+		await run(ports, policy, true);
+		expect(store.writes).toBe(writes);
+	});
+
 	it("skips a commit already in the backlog even when the watermark is absent", async () => {
 		const { store, ports } = remote(listed);
 		store.tsv = `${HEADER}\n${listed[0].sha.slice(0, 12)}\t2026-10-01\tfix(tui): a\ttui\ttake as-is\t\t\t\t\tlow\tx\n`;
