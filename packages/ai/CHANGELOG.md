@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed `ANTHROPIC_BASE_URL` being ignored for Anthropic chat requests and forwarded `ANTHROPIC_CUSTOM_HEADERS` to non-official gateways.
 - Added `isStreamEnvelopeErrorText` to error flags so loop-level salvage can recognize Anthropic stream-envelope truncation errors and recover completed tool calls.
 - Fixed native Anthropic adaptive-only models keeping thinking on when reasoning was disabled or tool choice was forced by pinning the lowest adaptive effort instead of dropping output configuration effort.
 - Antigravity accounts that share one project id (`aicode-consumers`) keep their own usage report and their own stored credential instead of merging into the first account's limits or being deduplicated away ([#102](https://github.com/Wladefant/veyyon/issues/102)).
