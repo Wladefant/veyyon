@@ -189,29 +189,37 @@ export declare class Shell {
 }
 
 /**
- * Install the bounded Tokio runtime napi-rs adopts for async exports and the
- * bounded Rayon global pool used by native parallel iterators.
+ * Install the bounded Tokio runtime napi-rs adopts for async exports and, on
+ * Windows, the bounded Rayon global pool used by native parallel iterators.
  *
  * The JS loader calls this exactly once, synchronously, right *after* `dlopen`
  * returns and *before* any async native or parallel iterator runs — never from
  * `#[module_init]`. Building a multi-thread runtime eagerly spawns worker
  * threads, and doing that during module init (while the dynamic-loader lock is
  * held) deadlocks on some hosts: a fresh worker blocks acquiring the loader
- * lock that the init thread still owns. napi-rs only materializes its runtime
- * on the first async call (`RT` is a `LazyLock`) and
- * `create_custom_tokio_runtime` merely records the runtime in a `OnceLock`, so
- * installing it post-load is still honored.
+ * lock that the init thread still owns.
  *
- * Without the Tokio override napi builds its own default (one worker per CPU,
- * spawned eagerly), which aborts the process (`os error 1455`) on a
- * memory-constrained Windows host before any JS error can surface;
- * [`create_windows_napi_tokio_runtime`] pre-flights the spawn instead. Rayon
- * has the same one-thread-per-core lazy default, so [`configure_rayon_pool`]
- * installs a probed global pool before `count_tokens` or vendored `sort` can
- * trigger it across a N-API nounwind boundary. If no worker thread is
- * spawnable, patched Rayon callsites stay sequential rather than registering a
- * current-thread-only global pool that cannot steal work from later native
- * calls. Idempotent.
+ * napi-rs builds its default runtime while it registers the module's exports,
+ * which runs after `#[module_init]` and before `require` returns: one worker
+ * per CPU, spawned eagerly, so a 32-thread host idles with 32 scheduler
+ * threads. No async native has run at that point, so this call shuts that
+ * runtime down, records the capped one with `create_custom_tokio_runtime`, and
+ * starts it in its place; napi-rs reads the runtime slot on every spawn, so
+ * every later async export runs on the capped runtime. Shutting down first
+ * also holds when a napi-rs build defers its runtime to the first async call:
+ * the shutdown then builds and drops a default runtime, and the start still
+ * takes the capped one.
+ *
+ * On a memory-constrained Windows host a refused worker spawn aborts the
+ * process (`os error 1455`) before any JS error can surface;
+ * [`create_windows_napi_tokio_runtime`] pre-flights the spawn, and
+ * [`create_napi_tokio_runtime`] builds the same capped runtime elsewhere.
+ * Rayon has the same one-thread-per-core lazy default, so on Windows
+ * [`configure_rayon_pool`] installs a probed global pool before `count_tokens`
+ * or vendored `sort` can trigger it across a N-API nounwind boundary. If no
+ * worker thread is spawnable, patched Rayon callsites stay sequential rather
+ * than registering a current-thread-only global pool that cannot steal work
+ * from later native calls. Idempotent.
  */
 export declare function __veyyonInstallTokioRuntime(): void
 
