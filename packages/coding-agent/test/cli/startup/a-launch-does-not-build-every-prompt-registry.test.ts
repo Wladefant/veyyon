@@ -216,11 +216,35 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * tokenizer with the setext underline precheck, split out of `components/markdown.ts`. It imports
  * `marked`, which `markdown.ts` already reached, so the launch runs no new code.
  *
+ * 1579 to 1620, forty-one modules, every one a file added to the tree; no module that existed at
+ * 1579 joined the graph:
+ *
+ * - Nineteen `session/runtime/*.ts` collaborators and `session/failed-turn.ts`, split out of
+ *   `session/agent-session.ts` (16447 lines to 10173): compaction runtime, summarizer and recovery,
+ *   context accounting, finalize reminders, history rewrites, loop guards, memory context, message
+ *   persistence, model handoff, plan mode, provider sessions, provider usage, retry fallback, retry
+ *   runtime, session approvals, session secrets, stop retries and yield tracking. Each imports
+ *   modules the class already reached.
+ * - Thirteen `packages/ai/src/auth-storage/*.ts` modules split out of `auth-storage.ts` (7449 lines
+ *   to 4794). Each imports modules `auth-storage.ts` already reached.
+ * - `session/provider-replay-projection.ts`, the replayed-field comparison a same-file reload runs,
+ *   split out of `session/agent-session.ts`.
+ * - `kernel/src/session/session-entry-index.ts` and `kernel/src/session/session-cold-payloads.ts`,
+ *   the loader's entry index and the compacted payloads a session file keeps until read. They
+ *   import kernel session modules and `@veyyon/utils/type-guards`, already here.
+ * - `session/top-level-sessions.ts` and `mcp/manager-lease.ts`, the disposal order of the sessions
+ *   a daemon keeps and the lease a session holds on the shared MCP manager. They import modules the
+ *   session factory already reached.
+ * - `@veyyon/utils` `log-file.ts`, `idle-trim.ts` and `stall-sampler.ts`: the rotating profile log
+ *   that replaced `winston` and `winston-daily-rotate-file` (29 npm packages off the launch), the
+ *   idle code discard, and the event-loop stall profile. They import `node:` built-ins,
+ *   `./app-identity`, `./fs-error`, `./logger` and `./type-guards`, all already here.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1579;
+const LAUNCH_REACH_CEILING = 1620;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

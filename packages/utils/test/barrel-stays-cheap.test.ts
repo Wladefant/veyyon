@@ -89,8 +89,15 @@ const reachable = moduleReach(BARREL);
  * filesystem. `tab-spacing.ts` re-exports `DEFAULT_TAB_WIDTH` from it and is exported from the
  * barrel, so a subpath cannot move it off the graph without dropping a root export main published.
  * It is a zero-import leaf: `moduleReach("tab-width.ts")` is 1.
+ *
+ * RE-MEASURED 2026-09-29 at 88. The new module is `log-file.ts`, the rotating profile log that replaced
+ * `winston` and `winston-daily-rotate-file`. `logger.ts` is exported from the barrel and writes through
+ * it, so a subpath cannot move it off the graph. Its imports are `node:fs`, `node:path`, a type-only
+ * `node:zlib`, `./app-identity` and `./fs-error`, all already on this graph, so the barrel pays one
+ * module and no edge; the two npm packages it replaced, 29 with their dependencies, were never counted
+ * here and no longer load.
  */
-const BARREL_CEILING = 87;
+const BARREL_CEILING = 88;
 
 describe("the @veyyon/utils barrel", () => {
 	/** The number that multiplies by six hundred realms. */

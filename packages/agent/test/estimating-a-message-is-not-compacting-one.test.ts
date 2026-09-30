@@ -102,8 +102,14 @@ const PRUNING_CEILING = 195;
  * output ceilings, split out of `provider-models/openai-compat.ts`, which this closure already
  * reached through the model metadata compaction budgets are computed from. It imports only what
  * was already here, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-09-29: engine 319, remote summarizer 221. The one new module is
+ * `@veyyon/utils/log-file`, the rotating profile log that replaced `winston` and
+ * `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on both reaches, writes through it, and
+ * its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already here, so the growth is
+ * that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 318;
+const COMPACTION_ENGINE_CEILING = 319;
 const REMOTE_SUMMARIZER_CEILING = 221;
 
 describe("the estimator is a leaf", () => {
