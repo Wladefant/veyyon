@@ -93,9 +93,9 @@ export function deriveToolSession(base: ToolSession, overrides: Partial<ToolSess
 }
 
 /**
- * Every built-in tool bound to the advisor's tool session. Built whether or not an advisor runs,
- * since one can be switched on mid-session; the advisor's config `tools` selects which of these it
- * receives (read and search by default).
+ * Every built-in tool bound to the advisor's tool session. The session calls this on the first
+ * advisor turn or advisor tool listing, not when it starts; the advisor's config `tools` selects
+ * which of these it receives (read and search by default).
  */
 export async function buildAdvisorTools(advisorToolSession: ToolSession): Promise<Tool[]> {
 	const builds: Array<Tool | null | Promise<Tool | null>> = [];

@@ -1760,7 +1760,7 @@ export class AgentSession {
 			}),
 			saveArtifact: (content, toolType) => this.sessionManager.saveArtifact(content, toolType),
 		};
-		return new AdvisorRoster(host, config.advisorTools, config);
+		return new AdvisorRoster(host, config.loadAdvisorTools, config);
 	}
 
 	/**
@@ -10111,10 +10111,10 @@ export class AgentSession {
 	/**
 	 * The names of the tools available to advisors this session (the pool a
 	 * `/advisor configure` editor lists). The advisor is a full agent, so this is the
-	 * full built tool set; a tool whose optional factory returns null (e.g. lsp with
-	 * no servers) is absent.
+	 * full built tool set, built here if no advisor has reviewed a turn yet; a tool
+	 * whose optional factory returns null (e.g. lsp with no servers) is absent.
 	 */
-	getAdvisorAvailableToolNames(): string[] {
+	getAdvisorAvailableToolNames(): Promise<string[]> {
 		return this.#advisorRoster.availableToolNames();
 	}
 

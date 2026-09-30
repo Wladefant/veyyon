@@ -129,7 +129,6 @@ describe("plan mode state across its boundaries", () => {
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 			toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
 			builtInToolNames: tools.map(tool => tool.name),
-			advisorTools: [],
 		});
 		session = created;
 		return { session: created, mock, store };

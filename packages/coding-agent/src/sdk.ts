@@ -1430,8 +1430,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		const advisorTools = await buildAdvisorTools(advisorToolSession);
-
 		// A session that created its manager holds it; a top-level session handed a
 		// session-created manager (the `/new` that keeps the previous conversation
 		// running) holds it too. Spawned agents hold nothing and MUST NOT disconnect
@@ -1514,7 +1512,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			providerSessionId: options.providerSessionId,
 			providerPromptCacheKeySource,
 			parentEvalSessionId: options.parentEvalSessionId,
-			advisorTools,
+			loadAdvisorTools: () => buildAdvisorTools(advisorToolSession),
 			titleSystemPrompt: options.titleSystemPrompt,
 		});
 		hasSession = true;

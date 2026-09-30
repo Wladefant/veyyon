@@ -370,6 +370,13 @@ export class SelectorController {
 			this.ctx.showError(`Failed to read the advisor configuration: ${errorMessage(err)}`);
 			return;
 		}
+		let availableToolNames: string[];
+		try {
+			availableToolNames = await this.ctx.session.getAdvisorAvailableToolNames();
+		} catch (err) {
+			this.ctx.showError(`Failed to build the advisor tools: ${errorMessage(err)}`);
+			return;
+		}
 		const advisorRole = resolveAdvisorRoleSelection(
 			this.ctx.settings,
 			this.ctx.session.modelRegistry.getAvailable(),
@@ -382,7 +389,7 @@ export class SelectorController {
 				modelRegistry: this.ctx.session.modelRegistry,
 				settings: this.ctx.settings,
 				scopedModels: this.ctx.session.scopedModels,
-				availableToolNames: this.ctx.session.getAdvisorAvailableToolNames(),
+				availableToolNames,
 				defaultModelLabel: advisorRole
 					? formatModelSelectorValue(formatModelStringWithRouting(advisorRole.model), advisorRole.thinkingLevel)
 					: undefined,
