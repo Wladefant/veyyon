@@ -564,12 +564,16 @@ bottom.
 - **The scroll tape**: the composed frame is NOT the scroll-back source. A
   virtualized root (the coding agent's `TranscriptContainer`) drops rows from
   its render output once the engine reports them committed, which holds the
-  frame near the viewport height however long the session runs. Every prepared
-  row the engine lets scroll off is therefore recorded on `#scrollTape`
-  (`scrollTapeRows`, bounded by `setScrollTapeCap`, default 20k rows), the
-  engine's own mirror of terminal scrollback. The **scroll space** is the tape
-  followed by the frame's uncommitted rows; the frame's row 0 sits at
-  `tape.length − committedRows`, because those rows are on both.
+  frame near the viewport height however long the session runs. While scroll
+  isolation is on, every prepared row the engine lets scroll off is therefore
+  recorded on `#scrollTape` (`scrollTapeRows`, bounded by `setScrollTapeCap`,
+  default 20k rows), the engine's own mirror of terminal scrollback. With
+  isolation off nothing reads the tape, so it only counts the rows
+  (`scrolledOffRows`) and keeps none; enabling isolation after the first paint
+  replays the history, as `resetDisplay` does, so the tape records it. The
+  **scroll space** is the tape followed by the frame's uncommitted rows; the
+  frame's row 0 sits at `tape.length − committedRows`, because those rows are
+  on both.
 - **Frozen view**: wheel-up anchors `#virtualScrollTop` in scroll-space rows.
   On the first frozen frame the engine snapshots the whole scroll space, so
   nothing under the reader can move: a quiet frame still compacts, and a

@@ -200,7 +200,7 @@ describe("a virtualized transcript never loses history to a rebuild", () => {
 			const off = await conversation({ rebuild: false, virtualized: true });
 
 			expect(on.history()).toEqual(off.history());
-			expect(on.tui.scrollTapeRows).toBe(off.tui.scrollTapeRows);
+			expect(on.tui.scrolledOffRows).toBe(off.tui.scrolledOffRows);
 		},
 		CASE_TIMEOUT_MS,
 	);

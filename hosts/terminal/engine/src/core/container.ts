@@ -70,6 +70,15 @@ export class Container implements Component, MouseRoutable {
 		}
 	}
 
+	releaseRenderCache(): void {
+		this.#memoLines = undefined;
+		this.#memoChildLines = [];
+		this.#memoWidth = -1;
+		for (const child of this.children) {
+			child.releaseRenderCache?.();
+		}
+	}
+
 	/**
 	 * Propagate teardown to children. Call when the container's children are
 	 * being permanently discarded (not when they are detached for reuse — use
