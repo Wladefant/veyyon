@@ -17,11 +17,16 @@ export interface IdleTrimOptions {
 	cpuUsage?: () => { user: number; system: number };
 	/** Timer source; injectable for tests. Default `setTimeout`. */
 	schedule?: (cb: () => void, ms: number) => IdleTrimTimer;
-	/**
-	 * The trim itself; injectable for tests. Default `Bun.shrink()`, which has no `node:*`
-	 * equivalent: V8 exposes no call that discards compiled code.
-	 */
+	/** The trim itself; injectable for tests and for a caller that releases more. Default `trimEngine`. */
 	trim?: () => void;
+}
+
+/**
+ * Deletes the engine's compiled code, runs a full collection and releases free malloc pages.
+ * `Bun.shrink()` has no `node:*` equivalent: V8 exposes no call that discards compiled code.
+ */
+export function trimEngine(): void {
+	Bun.shrink();
 }
 
 /** Timer handle the trim arms. `cancel`, when present, is invoked on stop(). */
@@ -90,7 +95,7 @@ export class IdleTrim {
 				const timer = setTimeout(cb, ms);
 				return { unref: () => timer.unref?.(), cancel: () => clearTimeout(timer) };
 			});
-		this.#trim = options.trim ?? (() => Bun.shrink());
+		this.#trim = options.trim ?? trimEngine;
 	}
 
 	/** Start sampling. The quiet period starts now. Idempotent. */

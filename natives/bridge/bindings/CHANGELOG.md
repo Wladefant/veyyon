@@ -6,6 +6,7 @@
 
 - `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
 - `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
+- `releaseEmbeddedModulePages()` unmaps the clean resident pages of the running executable's `.bun` section on Linux and returns the bytes released; a later read faults the same bytes back in from the page cache, and on other platforms the call returns 0.
 
 ### Changed
 

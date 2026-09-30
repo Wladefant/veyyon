@@ -24,6 +24,8 @@ Entries append to the session JSONL through an open writer. Compaction, elision,
 
 A process that uses under 5% CPU in every 5-second window for 30 seconds calls `Bun.shrink()`. JavaScriptCore discards the compiled code of every function, runs a full collection and returns free pages to the operating system. A function that runs again is compiled again from source. The process trims again only after a window over 5% CPU. After eight turns of an interactive session, resident memory at idle drops from 361MiB to 332MiB, and the next turn takes 37ms longer, on a Ryzen 9 9950X. Implementation: `packages/utils/src/idle-trim.ts`.
 
+On Linux the same trim unmaps the resident pages of the binary's `.bun` section, which holds the sources and bytecode of the embedded modules. The trim reads `/proc/self/pagemap` over the section and calls `madvise(MADV_DONTNEED)` on each run of pages present and file-backed; a page the process wrote is anonymous and stays. A later read of a released page faults the same bytes back in from the page cache. Resident memory at idle after startup drops from 317MiB to 226MiB and after eight turns from 342MiB to 251MiB, and the first turn after idle takes 0.64s against 0.66s, on a Ryzen 9 9950X. Implementation: `natives/bridge/addon/src/embedded_pages.rs`.
+
 ## Runtime architecture
 
 The CLI, TUI, and session loop run as TypeScript on Bun. Native grep, PTY handling, shell support, and tree-sitter parsing execute via native addons. Rust crates provide glob matching, grep orchestration, key normalization, text indexing, diffing, and directory walking. Token streaming renders output incrementally as chunks arrive from provider streams.

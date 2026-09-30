@@ -28,6 +28,7 @@ pub mod block;
 pub mod clipboard;
 pub mod cpu_budget;
 pub mod crash_handler;
+pub mod embedded_pages;
 pub mod fd;
 pub mod glob;
 pub mod glob_util;

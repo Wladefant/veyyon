@@ -24,6 +24,7 @@ import {
 } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
+import { releaseEmbeddedModulePages } from "@veyyon/natives";
 import {
 	$env,
 	errorMessage,
@@ -36,7 +37,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@veyyon/utils";
-import { IdleTrim } from "@veyyon/utils/idle-trim";
+import { IdleTrim, trimEngine } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
 import {
 	type Args,
@@ -374,8 +375,17 @@ function resumeStartupWatchdog(): void {
 	if (startupWatchdogActive) armStartupWatchdog();
 }
 
-/** Releases compiled code and free pages once a root command has been quiet; see `IdleTrim`. */
-const idleTrim = new IdleTrim();
+/**
+ * Once a root command has been quiet (see `IdleTrim`): discards compiled code, returns free malloc
+ * pages, and unmaps the resident pages of the binary's embedded module graph, which loading every
+ * module left mapped.
+ */
+const idleTrim = new IdleTrim({
+	trim: () => {
+		trimEngine();
+		releaseEmbeddedModulePages();
+	},
+});
 
 export interface InteractiveModeNotify {
 	kind: "warn" | "error" | "info";

@@ -1447,6 +1447,13 @@ export interface PtyStartOptions {
 export declare function readImageFromClipboard(): Promise<ClipboardImage | undefined | null>
 
 /**
+ * Unmaps the clean resident pages of the executable's `.bun` section and
+ * returns the number of bytes released. Returns 0 when the executable has no
+ * such section or the platform has no implementation.
+ */
+export declare function releaseEmbeddedModulePages(): number
+
+/**
  * Search content for a pattern (one-shot, compiles pattern each time).
  * For repeated searches with the same pattern, use [`grep`] with file filters.
  *

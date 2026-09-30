@@ -16,6 +16,7 @@
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
 - `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
+- `@veyyon/utils/idle-trim` exports `trimEngine`, the `Bun.shrink()` call `IdleTrim` runs when no `trim` is given.
 
 ### Changed
 
