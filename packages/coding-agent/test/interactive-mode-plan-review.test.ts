@@ -450,11 +450,15 @@ describe("InteractiveMode plan review rendering", () => {
 		const choice = mode.showPlanReview("# Plan\n\nOriginal body.\n", "Plan mode - next step", ["Approve"]);
 		expect(capturedOverlay).toBeDefined();
 		const overlay = capturedOverlay!;
-		const requestRender = vi.spyOn(mode.ui, "requestRender");
+		// What a repaint requested now would draw: the overlay's rows at the moment of each request.
+		const repainted: string[] = [];
+		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {
+			repainted.push(Bun.stripANSI(overlay.render(100).join("\n")));
+		});
 
 		overlay.setPlanContent("# Plan\n\nSwapped body.\n");
 
-		expect(requestRender).toHaveBeenCalled();
+		expect(repainted.some(frame => frame.includes("Swapped body."))).toBe(true);
 		overlay.handleInput("\x1b");
 		await expect(choice).resolves.toBeUndefined();
 	});

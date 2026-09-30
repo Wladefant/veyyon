@@ -116,7 +116,7 @@ const MUTATIONS: Record<string, Mutation> = {
 	},
 };
 
-/** Public methods that read the card or end its life, and never change what it draws. */
+/** Public methods that read the card, drop what it drew or end its life, and never change what it draws. */
 const NOT_MUTATIONS = [
 	"canBeDisplacedBy",
 	"constructor",
@@ -126,6 +126,7 @@ const NOT_MUTATIONS = [
 	"highlightRequests",
 	"isDisplaceableBlock",
 	"isTranscriptBlockFinalized",
+	"releaseRenderCache",
 	"render",
 	"stopAnimation",
 	"whenPreviewSettled",
@@ -138,6 +139,7 @@ const QUERIES: Record<string, (card: ToolExecutionComponent) => unknown> = {
 	getTranscriptBlockVersion: card => card.getTranscriptBlockVersion(),
 	isDisplaceableBlock: card => card.isDisplaceableBlock(),
 	isTranscriptBlockFinalized: card => card.isTranscriptBlockFinalized(),
+	releaseRenderCache: card => card.releaseRenderCache(),
 	whenPreviewSettled: card => card.whenPreviewSettled(),
 	stopAnimation: card => card.stopAnimation(),
 	dispose: card => card.dispose(),

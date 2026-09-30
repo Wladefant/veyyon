@@ -67,7 +67,6 @@ import { describeLegacyPromptFile, findLegacyPromptFiles } from "./legacy-system
 import { MCPManager } from "./mcp";
 import { holdCreatedMcpManager, holdSharedMcpManager, type McpManagerRelease } from "./mcp/manager-lease";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory/backend";
-import { shutdownMnemopiEmbedClient } from "./memory/mnemopi/embed-client";
 import { recordRestLaunchFacts } from "./modes/launch-facts";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID, mainAgentIdFor } from "./registry/agent-registry";
@@ -75,7 +74,7 @@ import { resolveHarnessProfileForModel, resolvePromptSectionOrderForModel } from
 import { attachSecretsNoticeSink } from "./secrets/notices";
 import { SecretRequestLeases } from "./secrets/request-leases";
 import { SessionSecretRuntime } from "./secrets/session-runtime";
-import { AgentSession, RESCOPE_TERMINATE_REASON } from "./session/agent-session";
+import { AgentSession } from "./session/agent-session";
 import { discoverAuthStorage } from "./session/auth-broker-config";
 import { sessionCpuExecHooks } from "./session/cpu-limit";
 import { convertToLlm, LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "./session/messages";
@@ -83,7 +82,7 @@ import { computeNonMessageBreakdown } from "./session/non-message-tokens";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
 import { StartupModelSelection } from "./session/startup-model";
 import { wrapSteeringForModel } from "./session/steering-envelope";
-import { enterTopLevelSession, leaveTopLevelSession } from "./session/top-level-sessions";
+import { orderSessionDisposal } from "./session/top-level-sessions";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -98,7 +97,6 @@ import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { type ClaimedTicket, TopicReplenishmentEngine } from "./task/topic-replenishment";
 import { AUTO_THINKING, shouldDisableReasoning, toReasoningEffort } from "./thinking";
-import { shutdownTinyTitleClient } from "./tiny/title-client";
 import {
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
@@ -1487,8 +1485,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		const advisorTools = await buildAdvisorTools(advisorToolSession);
-
 		// A session that created its manager holds it; a top-level session handed a
 		// session-created manager (the `/new` that keeps the previous conversation
 		// running) holds it too. Spawned agents hold nothing and MUST NOT disconnect
@@ -1573,7 +1569,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			providerSessionId: options.providerSessionId,
 			providerPromptCacheKeySource,
 			parentEvalSessionId: options.parentEvalSessionId,
-			advisorTools,
+			loadAdvisorTools: () => buildAdvisorTools(advisorToolSession),
 			titleSystemPrompt: options.titleSystemPrompt,
 		});
 		hasSession = true;
@@ -1707,64 +1703,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				agentRegistry.noteTurn(resolvedAgentId);
 			}
 		});
-		{
-			const originalDispose = session.dispose.bind(session);
-			let disposeCall: Promise<void> | undefined;
-			if (agentKind === "main") enterTopLevelSession(session);
-			session.dispose = options => {
-				if (!disposeCall) {
-					// Decided before the first await, so overlapping disposals of two
-					// top-level sessions agree on which one is last.
-					const lastTopLevel = agentKind === "main" && leaveTopLevelSession(session);
-					disposeCall = (async () => {
-						try {
-							// Reject new session work (eval starts) the moment disposal
-							// begins — the lifecycle await below opens an async gap before
-							// AgentSession.dispose() would otherwise set its guards.
-							session.beginDispose();
-							if (lastTopLevel) {
-								// The last top-level teardown owns the global agent lifecycle: park
-								// timers, adopted spawned agent sessions, revivers. Tear it down while
-								// shared resources (kernels, MCP, LSP) are still live.
-								await AgentLifecycleManager.global().dispose();
-							} else if (agentKind === "main") {
-								// Another top-level conversation still runs on the global lifecycle,
-								// so end only the agents this one spawned. Spawned agent disposal
-								// must NOT touch the global lifecycle.
-								await session.terminateSpawnedAgents(RESCOPE_TERMINATE_REASON);
-							}
-							await originalDispose(options);
-							if (lastTopLevel) {
-								// Process-wide worker subprocesses, shut down after the session's own
-								// memory consolidation, which may still embed (issue #3031).
-								await shutdownTinyTitleClient();
-								await shutdownMnemopiEmbedClient();
-							}
-						} finally {
-							// The expansion log queues its appends so a tool call is never blocked by a
-							// write, which means an exit that does not wait for the queue loses whichever
-							// records were still in it, and loses them silently. Flushed here rather than
-							// left to the event loop because quitting the TUI ends the process rather than
-							// waiting for pending work: the last credential an agent used is exactly the
-							// one an incident asks about.
-							try {
-								await secretRuntime.flushAuditLog();
-							} finally {
-								// Stop routing machine faults into this session's notices. Left attached, the sink
-								// keeps a disposed `OperatorNotices` reachable and posts later faults into a channel
-								// nothing renders, and in a process that opens sessions in sequence the count grows
-								// by one per session forever.
-								detachFaultSink?.();
-								detachSecretsNoticeSink?.();
-								unregisterUnlessParked();
-								unsubscribeCredentialDisabled?.();
-							}
-						}
-					})();
+		orderSessionDisposal(session, {
+			topLevel: agentKind === "main",
+			finalize: async () => {
+				// The expansion log queues its appends so a tool call is never blocked by a write, which
+				// means an exit that does not wait for the queue loses whichever records were still in it,
+				// and loses them silently. Flushed here rather than left to the event loop because quitting
+				// the TUI ends the process rather than waiting for pending work: the last credential an
+				// agent used is the one an incident asks about.
+				try {
+					await secretRuntime.flushAuditLog();
+				} finally {
+					// Stop routing machine faults into this session's notices. Left attached, the sink keeps
+					// a disposed `OperatorNotices` reachable and posts later faults into a channel nothing
+					// renders, and in a process that opens sessions in sequence the count grows by one per
+					// session forever.
+					detachFaultSink?.();
+					detachSecretsNoticeSink?.();
+					unregisterUnlessParked();
+					unsubscribeCredentialDisabled?.();
 				}
-				return disposeCall;
-			};
-		}
+			},
+		});
 
 		prewarmCodexTransport({
 			model,

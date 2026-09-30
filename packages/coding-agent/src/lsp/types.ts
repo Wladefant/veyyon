@@ -1,4 +1,5 @@
 import type { ptree } from "@veyyon/utils";
+import { lazy } from "@veyyon/utils/abortable";
 import { type } from "arktype";
 import { describeTimeoutParam } from "../tools/core/tool-timeouts";
 
@@ -6,20 +7,22 @@ import { describeTimeoutParam } from "../tools/core/tool-timeouts";
 // Tool Schema
 // =============================================================================
 
-export const lspSchema = type({
-	action:
-		"'diagnostics' | 'definition' | 'references' | 'hover' | 'symbols' | 'rename' | 'rename_file' | 'code_actions' | 'type_definition' | 'implementation' | 'incoming_calls' | 'outgoing_calls' | 'status' | 'reload' | 'capabilities' | 'request'",
-	file: "string?",
-	line: "number?",
-	symbol: "string?",
-	query: "string?",
-	new_name: "string?",
-	apply: "boolean?",
-	"timeout?": type("number").describe(describeTimeoutParam("lsp")),
-	payload: "string?",
-});
+export const lspSchema = lazy(() =>
+	type({
+		action:
+			"'diagnostics' | 'definition' | 'references' | 'hover' | 'symbols' | 'rename' | 'rename_file' | 'code_actions' | 'type_definition' | 'implementation' | 'incoming_calls' | 'outgoing_calls' | 'status' | 'reload' | 'capabilities' | 'request'",
+		file: "string?",
+		line: "number?",
+		symbol: "string?",
+		query: "string?",
+		new_name: "string?",
+		apply: "boolean?",
+		"timeout?": type("number").describe(describeTimeoutParam("lsp")),
+		payload: "string?",
+	}),
+);
 
-export type LspParams = typeof lspSchema.infer;
+export type LspParams = typeof lspSchema.value.infer;
 
 export interface LspToolDetails {
 	serverName?: string;

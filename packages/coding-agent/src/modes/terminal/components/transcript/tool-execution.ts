@@ -753,6 +753,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				block.invalidate();
 				component.invalidate?.();
 			},
+			releaseRenderCache: () => {
+				block.invalidate();
+				component.releaseRenderCache?.();
+			},
 			dispose: () => component.dispose?.(),
 		});
 		railWrappers.set(component, { owner: this, framed });
@@ -845,6 +849,28 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	override invalidate(): void {
 		super.invalidate();
 		this.#updateDisplay();
+	}
+
+	/**
+	 * Drop the drawn display with every row it memoized, and the producer's built block it was drawn
+	 * from. Both derive from the call and result, so the next render builds them again from the same
+	 * inputs; forgetting the key is what makes that render draw rather than keep a display that is no
+	 * longer there.
+	 */
+	override releaseRenderCache(): void {
+		this.#removeMultiFileBoxes();
+		this.#removeImages();
+		this.#removeNotExecutedNotice();
+		// A rail frame outlives the content box: `railWrappers` keeps it beside the child it frames,
+		// and a field child (`#contentText`) outlives every rebuild, so the frame's rows are dropped
+		// here rather than left to the table.
+		this.#contentBox.releaseRenderCache();
+		for (const child of this.#contentBox.children) child.dispose?.();
+		this.#contentBox.clear();
+		this.#producer?.releaseBlock();
+		this.#lastDisplayKey = undefined;
+		this.#displayStale = true;
+		super.releaseRenderCache();
 	}
 
 	/**
@@ -957,10 +983,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		const display = this.#block.display;
 
 		// Clean up previous multi-file boxes
-		for (const box of this.#multiFileBoxes) {
-			this.removeChild(box);
-		}
-		this.#multiFileBoxes = [];
+		this.#removeMultiFileBoxes();
 
 		this.#contentBox.setBgFn(undefined);
 		const previousChildren = this.#contentBox.children;
@@ -1239,15 +1262,26 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		return pendingBox;
 	}
 
-	#rebuildImages(images: readonly ToolExecutionImageItem[] | undefined): void {
-		for (const img of this.#imageComponents) {
-			this.removeChild(img);
-		}
+	#removeMultiFileBoxes(): void {
+		for (const box of this.#multiFileBoxes) this.removeChild(box);
+		this.#multiFileBoxes = [];
+	}
+
+	#removeImages(): void {
+		for (const img of this.#imageComponents) this.removeChild(img);
 		this.#imageComponents = [];
-		for (const spacer of this.#imageSpacers) {
-			this.removeChild(spacer);
-		}
+		for (const spacer of this.#imageSpacers) this.removeChild(spacer);
 		this.#imageSpacers = [];
+	}
+
+	#removeNotExecutedNotice(): void {
+		if (!this.#notExecutedNotice) return;
+		this.removeChild(this.#notExecutedNotice);
+		this.#notExecutedNotice = undefined;
+	}
+
+	#rebuildImages(images: readonly ToolExecutionImageItem[] | undefined): void {
+		this.#removeImages();
 		if (!images || images.length === 0) return;
 
 		const hiddenReason: ImageFallbackReason | undefined =
@@ -1296,10 +1330,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#rebuildNotExecutedNotice(display: ToolExecutionDisplay | undefined): void {
-		if (this.#notExecutedNotice) {
-			this.removeChild(this.#notExecutedNotice);
-			this.#notExecutedNotice = undefined;
-		}
+		this.#removeNotExecutedNotice();
 		const reason =
 			display?.notExecutedReason ??
 			notExecutedReason(

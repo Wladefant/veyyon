@@ -1,5 +1,6 @@
 import type { HelperDelegate, HelperOptions, Template, TemplateDelegate } from "handlebars";
-import Handlebars from "handlebars";
+import { createRuntimeEnvironment, withCompiler } from "./prompt-handlebars";
+import { precompiledTemplate } from "./prompt-precompiled";
 import { analyzeTemplate, assertTemplateVariablesFilled, type TemplateVariables } from "./prompt-variables";
 import { internString } from "./strings";
 
@@ -287,7 +288,12 @@ export interface TemplateContext extends Record<string, unknown> {
 	arguments?: string;
 }
 
-const handlebars = Handlebars.create();
+/**
+ * The environment every prompt renders on, with the helpers below. It starts without the compiler:
+ * a precompiled template revives on the runtime, and {@link withCompiler} installs the compiler for
+ * the first template that is not one.
+ */
+const handlebars = createRuntimeEnvironment();
 
 handlebars.registerHelper("arg", function (this: TemplateContext, index: number | string): string {
 	const args = this.args ?? [];
@@ -303,17 +309,14 @@ handlebars.registerHelper("arg", function (this: TemplateContext, index: number 
  * Renders an array with customizable prefix, suffix, and join separator.
  * Note: Use \n in join for newlines (will be unescaped automatically).
  */
-handlebars.registerHelper(
-	"list",
-	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
-		if (!Array.isArray(context) || context.length === 0) return "";
-		const prefix = (options.hash.prefix as string) ?? "";
-		const suffix = (options.hash.suffix as string) ?? "";
-		const rawSeparator = (options.hash.join as string) ?? "\n";
-		const separator = rawSeparator.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
-		return context.map(item => `${prefix}${options.fn(item)}${suffix}`).join(separator);
-	},
-);
+handlebars.registerHelper("list", function (this: unknown, context: unknown[], options: HelperOptions): string {
+	if (!Array.isArray(context) || context.length === 0) return "";
+	const prefix = (options.hash.prefix as string) ?? "";
+	const suffix = (options.hash.suffix as string) ?? "";
+	const rawSeparator = (options.hash.join as string) ?? "\n";
+	const separator = rawSeparator.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+	return context.map(item => `${prefix}${options.fn(item)}${suffix}`).join(separator);
+});
 
 /**
  * {{join array ", "}}
@@ -348,7 +351,7 @@ handlebars.registerHelper(
  */
 handlebars.registerHelper(
 	"when",
-	function (this: unknown, lhs: unknown, operator: string, rhs: unknown, options: Handlebars.HelperOptions): string {
+	function (this: unknown, lhs: unknown, operator: string, rhs: unknown, options: HelperOptions): string {
 		const ops: Record<string, (a: unknown, b: unknown) => boolean> = {
 			"==": (a, b) => a === b,
 			"===": (a, b) => a === b,
@@ -370,7 +373,7 @@ handlebars.registerHelper(
  * True if any argument is truthy.
  */
 handlebars.registerHelper("ifAny", function (this: unknown, ...args: unknown[]): string {
-	const options = args.pop() as Handlebars.HelperOptions;
+	const options = args.pop() as HelperOptions;
 	return args.some(Boolean) ? options.fn(this) : options.inverse(this);
 });
 
@@ -379,7 +382,7 @@ handlebars.registerHelper("ifAny", function (this: unknown, ...args: unknown[]):
  * True if all arguments are truthy.
  */
 handlebars.registerHelper("ifAll", function (this: unknown, ...args: unknown[]): string {
-	const options = args.pop() as Handlebars.HelperOptions;
+	const options = args.pop() as HelperOptions;
 	return args.every(Boolean) ? options.fn(this) : options.inverse(this);
 });
 
@@ -387,24 +390,21 @@ handlebars.registerHelper("ifAll", function (this: unknown, ...args: unknown[]):
  * {{#table rows headers="Col1|Col2"}}{{col1}}|{{col2}}{{/table}}
  * Generates a markdown table from an array of objects.
  */
-handlebars.registerHelper(
-	"table",
-	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
-		if (!Array.isArray(context) || context.length === 0) return "";
-		const headersStr = options.hash.headers as string | undefined;
-		const headers = headersStr?.split("|") ?? [];
-		const separator = headers.map(() => "---").join(" | ");
-		const headerRow = headers.length > 0 ? `| ${headers.join(" | ")} |\n| ${separator} |\n` : "";
-		const rows = context.map(item => `| ${options.fn(item).trim()} |`).join("\n");
-		return headerRow + rows;
-	},
-);
+handlebars.registerHelper("table", function (this: unknown, context: unknown[], options: HelperOptions): string {
+	if (!Array.isArray(context) || context.length === 0) return "";
+	const headersStr = options.hash.headers as string | undefined;
+	const headers = headersStr?.split("|") ?? [];
+	const separator = headers.map(() => "---").join(" | ");
+	const headerRow = headers.length > 0 ? `| ${headers.join(" | ")} |\n| ${separator} |\n` : "";
+	const rows = context.map(item => `| ${options.fn(item).trim()} |`).join("\n");
+	return headerRow + rows;
+});
 
 /**
  * {{#codeblock lang="diff"}}...{{/codeblock}}
  * Wraps content in a fenced code block.
  */
-handlebars.registerHelper("codeblock", function (this: unknown, options: Handlebars.HelperOptions): string {
+handlebars.registerHelper("codeblock", function (this: unknown, options: HelperOptions): string {
 	const lang = (options.hash.lang as string) ?? "";
 	const content = options.fn(this).trim();
 	return `\`\`\`${lang}\n${content}\n\`\`\``;
@@ -414,7 +414,7 @@ handlebars.registerHelper("codeblock", function (this: unknown, options: Handleb
  * {{#xml "tag"}}content{{/xml}}
  * Wraps content in XML-style tags. Returns empty string if content is empty.
  */
-handlebars.registerHelper("xml", function (this: unknown, tag: string, options: Handlebars.HelperOptions): string {
+handlebars.registerHelper("xml", function (this: unknown, tag: string, options: HelperOptions): string {
 	const content = options.fn(this).trim();
 	if (!content) return "";
 	return `<${tag}>\n${content}\n</${tag}>`;
@@ -457,7 +457,7 @@ handlebars.registerHelper("sub", (a: number, b: number): number => (a ?? 0) - (b
  */
 handlebars.registerHelper(
 	"has",
-	function (this: unknown, collection: unknown, item: unknown, options: Handlebars.HelperOptions): string {
+	function (this: unknown, collection: unknown, item: unknown, options: HelperOptions): string {
 		let found = false;
 		if (Array.isArray(collection)) {
 			found = collection.includes(item);
@@ -494,6 +494,27 @@ handlebars.registerHelper("not", (value: unknown): boolean => !value);
 handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
 
 /**
+ * The helpers this module registers, which every analysis `precompileTemplate` produces assumes.
+ * Captured after the last registration above, before any caller can add one.
+ */
+const BUILTIN_HELPER_NAMES: readonly string[] = Object.keys(handlebars.helpers);
+
+/**
+ * Helpers registered through {@link registerHelper} after this module loaded. A precompiled
+ * analysis of a template whose text contains one of these names is recomputed, because a
+ * zero-argument mustache of that name is now a helper call rather than a context variable.
+ */
+const helpersRegisteredAfterLoad: string[] = [];
+
+/**
+ * Options for every template compile: at render and in {@link precompileTemplate}. A function
+ * rather than a constant because `Handlebars.precompile` writes defaults into the object it gets.
+ */
+function compileOptions(): CompileOptions {
+	return { noEscape: true, strict: false };
+}
+
+/**
  * Analyses keyed on the raw template. A template's AST walk costs more than
  * rendering it, and every render asserts its context, so without this each
  * render parses the template a second time to learn what it already learned.
@@ -503,6 +524,9 @@ const templateAnalysisCache = new Map<string, TemplateVariables>();
 
 export function registerHelper(name: string, fn: HelperDelegate): void {
 	handlebars.registerHelper(name, fn);
+	if (!BUILTIN_HELPER_NAMES.includes(name) && !helpersRegisteredAfterLoad.includes(name)) {
+		helpersRegisteredAfterLoad.push(name);
+	}
 	// A new helper turns a zero-argument mustache of its name from a context
 	// variable into a helper call, so every cached analysis may now be wrong.
 	templateAnalysisCache.clear();
@@ -535,11 +559,37 @@ export function compile(template: string): (context: TemplateContext) => string 
 	// (a full-template regex pass) as well as the Handlebars compile.
 	const cached = compiledTemplateCache.get(template);
 	if (cached) return cached;
-	const compiled = handlebars.compile(disambiguateClosingBraces(template), { noEscape: true, strict: false }) as (
-		context: TemplateContext,
-	) => string;
+	const precompiled = precompiledTemplate(template);
+	const compiled = (
+		precompiled
+			? handlebars.template(precompiled.spec())
+			: withCompiler(handlebars).compile(disambiguateClosingBraces(template), compileOptions())
+	) as (context: TemplateContext) => string;
 	compiledTemplateCache.set(template, compiled);
 	return compiled;
+}
+
+/** A template's precompiled specification, as JavaScript source, and the analysis of its variables. */
+export interface TemplatePrecompilation {
+	/** An object literal expression that `Handlebars.template` revives into the template's render function. */
+	readonly spec: string;
+	readonly variables: TemplateVariables;
+}
+
+/**
+ * Precompile a template of this module's dialect, for the binary build.
+ *
+ * The specification is what {@link compile} builds at run time, with the same options and the same
+ * {@link disambiguateClosingBraces} pass. The analysis assumes {@link BUILTIN_HELPER_NAMES}; a helper
+ * registered later invalidates it for any template whose text contains the helper's name.
+ */
+export function precompileTemplate(template: string): TemplatePrecompilation {
+	const source = disambiguateClosingBraces(template);
+	return {
+		// The typings declare an object; the compiler returns the specification's source text.
+		spec: withCompiler(handlebars).precompile(source, compileOptions()) as unknown as string,
+		variables: analyzeTemplate(source, { helperNames: BUILTIN_HELPER_NAMES }),
+	};
 }
 
 /**
@@ -564,7 +614,11 @@ function analyzerOptions(): { helperNames: string[] } {
 export function analyzePromptTemplate(template: string): TemplateVariables {
 	const cached = templateAnalysisCache.get(template);
 	if (cached) return cached;
-	const analysis = analyzeTemplate(disambiguateClosingBraces(template), analyzerOptions());
+	const precompiled = precompiledTemplate(template);
+	const analysis =
+		precompiled && !helpersRegisteredAfterLoad.some(name => template.includes(name))
+			? precompiled.variables()
+			: analyzeTemplate(disambiguateClosingBraces(template), analyzerOptions());
 	templateAnalysisCache.set(template, analysis);
 	return analysis;
 }
@@ -611,4 +665,52 @@ export function render(template: string, context: TemplateContext = {}, options:
 	const compiled = compile(template);
 	const rendered = compiled(resolved);
 	return internString(format(rendered, { renderPhase: "post-render" }));
+}
+
+/**
+ * Render templates written one after another: the result of `render(templates.join(""), ...)`.
+ *
+ * When every template holding a mustache is one the binary build precompiled, each renders on its
+ * own and the results are joined, so the joined text is never parsed or compiled at run time. A
+ * precompiled template compiled on its own at build time, so no block, comment or raw block opens
+ * in one template and closes in the next. The results are the same because nothing else in one
+ * template reaches into its neighbour: every template but the last ends with a newline, so each
+ * starts a line as a whole template does and Handlebars' standalone-line rule reads its first and
+ * last lines the same way, and no template uses the `~` whitespace control, which strips across a
+ * boundary. Any other sequence renders joined. A context that leaves a hole throws
+ * {@link MissingTemplateVariableError} either way; rendered one by one, the error lists the holes
+ * of the first template that has one.
+ */
+export function renderSequence(
+	templates: readonly string[],
+	context: TemplateContext = {},
+	options: RenderOptions = {},
+): string {
+	if (!rendersOneByOne(templates)) return render(templates.join(""), context, options);
+	const resolved = context ?? {};
+	let rendered = "";
+	for (const template of templates) {
+		if (!template.includes("{{")) {
+			rendered += template;
+			continue;
+		}
+		if (!options.allowMissing) assertPromptContext(template, resolved, options.label);
+		rendered += compile(template)(resolved);
+	}
+	return internString(format(rendered, { renderPhase: "post-render" }));
+}
+
+/** Whether {@link renderSequence} renders `templates` one by one. */
+function rendersOneByOne(templates: readonly string[]): boolean {
+	let last = templates.length - 1;
+	while (last >= 0 && templates[last] === "") last--;
+	for (let index = 0; index <= last; index++) {
+		const template = templates[index]!;
+		if (template === "") continue;
+		if (index < last && !template.endsWith("\n")) return false;
+		if (!template.includes("{{")) continue;
+		if (precompiledTemplate(template) === undefined) return false;
+		if (template.includes("{{~") || template.includes("~}}")) return false;
+	}
+	return true;
 }
