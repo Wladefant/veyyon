@@ -1,5 +1,6 @@
 import type { UsageLimit, UsageReport } from "@veyyon/ai";
 import type { OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
+import { resolveDisplayFraction } from "@veyyon/ai/usage";
 import { formatCount, sanitizeText } from "@veyyon/utils";
 import { formatDurationCoarse, formatProviderName } from "../../session/account-format";
 import type { SlashCommandRuntime } from "../types";
@@ -8,6 +9,13 @@ import { renderAsciiBar } from "./format";
 
 function formatUsageAmount(limit: UsageLimit): string {
 	const amount = limit.amount;
+	// Worded as the provider's own app words it: nothing for a window that does not apply, what is LEFT
+	// for a remaining-style one. `resolveDisplayFraction` is the one owner of which way that reads.
+	if (limit.display?.inapplicable) return "does not apply right now";
+	if (limit.display?.remaining) {
+		const left = resolveDisplayFraction(limit);
+		if (left !== undefined) return `${(left * 100).toFixed(1)}% left`;
+	}
 	const used = amount.used ?? (amount.usedFraction !== undefined ? amount.usedFraction * 100 : undefined);
 	const remainingFraction =
 		amount.remainingFraction ??
@@ -118,9 +126,13 @@ function renderUsageReports(
 				lines.push(
 					`  ${formatUsageReportAccount(report, limit, index)}: ${formatUsageAmount(limit)}${inUse ? "  ← in use by this session" : ""}`,
 				);
-				lines.push(`  ${renderAsciiBar(limit.amount.usedFraction)}`);
-				if (limit.window?.resetsAt && limit.window.resetsAt > nowMs) {
-					lines.push(`  resets in ${formatDurationCoarse(limit.window.resetsAt - nowMs)}`);
+				// A window the provider says does not apply has no bar, no percent and no reset to show.
+				if (!limit.display?.inapplicable) {
+					const bar = renderAsciiBar(resolveDisplayFraction(limit));
+					lines.push(`  ${bar}${limit.display?.remaining ? " left" : ""}`);
+					if (limit.window?.resetsAt && limit.window.resetsAt > nowMs) {
+						lines.push(`  resets in ${formatDurationCoarse(limit.window.resetsAt - nowMs)}`);
+					}
 				}
 				if (limit.notes && limit.notes.length > 0)
 					lines.push(

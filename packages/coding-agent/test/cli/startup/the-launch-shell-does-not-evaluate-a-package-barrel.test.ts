@@ -67,22 +67,17 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * `contracts/view/src/symbols.ts` evaluate where the package was reached by type only. The
  * ceiling keeps one leaf of margin over the measurement, still well under the barrel edge.
  *
- * RE-MEASURED on fork main at 355 with CI's Bun 1.4.0, versus 351 at 4934f99fb.
- * The exact added set is `config/settings-migrations.ts` (35ae07caf extracted the
- * existing migrations) and `thinking/index.ts`, `catalog/model-thinking.ts`,
- * `catalog/hosts.ts` (0049bd30b's configured agent effort validation, retained by
- * the fork merge). These are settings contracts on the shell path, not an
- * accidental package barrel. Bun 1.4.2 reports 16 fewer for this same graph because
- * its cache omits the builtin node:/bun: entries that Bun 1.4.0 includes.
+ * RE-MEASURED 2026-09-26 at 353, from 352: `hosts/terminal/engine/src/core/paint-sequences.ts`,
+ * the escape sequence each paint shape writes, split out of `core/tui.ts`, which the shell already
+ * evaluates, so the graph runs no new code. The ceiling keeps the one leaf of margin.
  *
- * RE-MEASURED 2026-09-27 after the santhreal merge up to e4967b27fd04: the static module reach of
- * the three entries is 341 against 340 on fork main 37f0bda52a, and the one added module is
- * `hosts/terminal/engine/src/core/paint-sequences.ts`, the escape sequence each paint shape
- * writes, split out of `core/tui.ts`, which the shell already evaluates. That puts the graph at 356
- * on CI's Bun 1.4.0, one over main's 355, and the graph runs no new code. Keep one additional
- * module of margin: 356 and 357 pass, 358 fails.
+ * RE-MEASURED 2026-09-29 at 355, from 353: `@veyyon/utils/log-file`, the rotating profile log that
+ * replaced `winston` and `winston-daily-rotate-file`, written through by `@veyyon/utils/logger`, and
+ * `@veyyon/utils/stall-sampler`, the event-loop stall profile `core/tui.ts` arms. Both import
+ * `node:` built-ins and utils leaves the shell already evaluates. The ceiling keeps the one leaf of
+ * margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 359;
+const SHELL_GRAPH_MODULE_CEILING = 357;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });

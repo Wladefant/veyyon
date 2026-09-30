@@ -8,14 +8,15 @@ export const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 
 /**
  * Pinned OpenAI Codex client version (corresponds to @openai/codex package version).
+ * Updated from npm by `bun run check-spoofed-versions --update`.
  *
- * The Codex model registry filters `/codex/models` by this value: a model whose
- * `minimal_client_version` is above it is omitted from the response, not listed
- * as unsupported. `gpt-6-astra` states `0.153.0`, so `0.144.1` and `0.152.0`
- * received the same ten models and `0.153.2` received eleven. Track the latest
- * stable `@openai/codex` release.
+ * The Codex model registry filters `/codex/models?client_version=` and `/responses` by this value,
+ * independently of a model's declared `minimal_client_version`: a model above the pin is omitted from the
+ * response, not listed as unsupported. `gpt-6.1-sol` declares `0.153.0` yet is omitted at `0.155.1` and listed
+ * at `0.159.0`; `gpt-6-sol` and `gpt-6-luna` are listed from `0.155.1`, `gpt-6-astra` from `0.153.0`. An older
+ * pin silently hides newer SKUs from discovery, so track the latest stable `@openai/codex` release.
  */
-export const CODEX_CLIENT_VERSION = "0.153.2";
+export const CODEX_CLIENT_VERSION = "0.159.2";
 
 export const OPENAI_HEADERS = {
 	BETA: "OpenAI-Beta",

@@ -136,6 +136,31 @@ describe("a conversation /new left running", () => {
 		return AgentRegistry.global().get(mainAgentIdFor(session.sessionManager.getSessionId())) !== undefined;
 	}
 
+	/**
+	 * The process-wide releases disposals make from here on, in order: `manager`'s servers disconnecting
+	 * and the two worker subprocesses stopping. Each release still runs.
+	 */
+	function recordReleases(manager: MCPManager, workers: boolean): string[] {
+		const log: string[] = [];
+		const passThrough = (label: string, release: () => Promise<void>) => async () => {
+			log.push(label);
+			await release();
+		};
+		const disconnectAll = manager.disconnectAll.bind(manager);
+		vi.spyOn(manager, "disconnectAll").mockImplementation(passThrough("mcp disconnected", disconnectAll));
+		if (workers) {
+			const { shutdownTinyTitleClient } = titleClient;
+			const { shutdownMnemopiEmbedClient } = embedClient;
+			vi.spyOn(titleClient, "shutdownTinyTitleClient").mockImplementation(
+				passThrough("title worker stopped", shutdownTinyTitleClient),
+			);
+			vi.spyOn(embedClient, "shutdownMnemopiEmbedClient").mockImplementation(
+				passThrough("embed worker stopped", shutdownMnemopiEmbedClient),
+			);
+		}
+		return log;
+	}
+
 	it("releases what it holds once it goes quiet, and nothing the conversation on screen uses", async () => {
 		const first = await topLevelSession({ enableMCP: true });
 		const manager = first.mcpManager;
@@ -144,9 +169,7 @@ describe("a conversation /new left running", () => {
 		const next = await topLevelSession({ mcpManager: manager });
 
 		const released = vi.spyOn(ownedResources, "disposeOwnedResources");
-		const disconnected = vi.spyOn(manager, "disconnectAll");
-		const titleWorkerStopped = vi.spyOn(titleClient, "shutdownTinyTitleClient");
-		const embedWorkerStopped = vi.spyOn(embedClient, "shutdownMnemopiEmbedClient");
+		const processReleases = recordReleases(manager, true);
 		const firstId = first.session.sessionManager.getSessionId();
 		const nextId = next.session.sessionManager.getSessionId();
 
@@ -165,46 +188,42 @@ describe("a conversation /new left running", () => {
 		// handed, and the process-wide workers.
 		expect(registered(next.session)).toBe(true);
 		expect(released.mock.calls.some(([, owner]) => owner === nextId)).toBe(false);
-		expect(disconnected).not.toHaveBeenCalled();
-		expect(titleWorkerStopped).not.toHaveBeenCalled();
-		expect(embedWorkerStopped).not.toHaveBeenCalled();
+		expect(processReleases).toEqual([]);
 
 		// It is the last one, so its disposal disconnects the servers and stops the workers.
 		live.splice(live.indexOf(next.session), 1);
 		await next.session.dispose();
-		expect(disconnected).toHaveBeenCalledTimes(1);
-		expect(titleWorkerStopped).toHaveBeenCalledTimes(1);
-		expect(embedWorkerStopped).toHaveBeenCalledTimes(1);
+		expect(processReleases.toSorted()).toEqual(["embed worker stopped", "mcp disconnected", "title worker stopped"]);
 	}, 60_000);
 
 	it("the session that created the manager disconnects it only after every session it handed it to", async () => {
 		const creator = await topLevelSession({ enableMCP: true });
 		const manager = creator.mcpManager;
 		if (!manager) throw new Error("a session with MCP enabled creates its manager");
-		const disconnected = vi.spyOn(manager, "disconnectAll");
+		const processReleases = recordReleases(manager, false);
 		const first = await topLevelSession({ mcpManager: manager });
 		const next = await topLevelSession({ mcpManager: manager });
 
 		await handOff(first.session).settled;
 		live.splice(live.indexOf(next.session), 1);
 		await next.session.dispose();
-		expect(disconnected).not.toHaveBeenCalled();
+		expect(processReleases).toEqual([]);
 
 		live.splice(live.indexOf(creator.session), 1);
 		await creator.session.dispose();
-		expect(disconnected).toHaveBeenCalledTimes(1);
+		expect(processReleases).toEqual(["mcp disconnected"]);
 	}, 60_000);
 
 	it("a manager the caller built is disconnected by no session", async () => {
 		const manager = new MCPManager(sharedTempDir);
-		const disconnected = vi.spyOn(manager, "disconnectAll");
+		const processReleases = recordReleases(manager, false);
 		const first = await topLevelSession({ mcpManager: manager });
 		const next = await topLevelSession({ mcpManager: manager });
 
 		await handOff(first.session).settled;
 		live.splice(live.indexOf(next.session), 1);
 		await next.session.dispose();
-		expect(disconnected).not.toHaveBeenCalled();
+		expect(processReleases).toEqual([]);
 	}, 60_000);
 
 	it("ends the agents it spawned and none of the conversation on screen", async () => {

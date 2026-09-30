@@ -11,7 +11,7 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
-import { errorMessage, formatDuration, prompt } from "@veyyon/utils";
+import { errorMessage, formatDuration, lazy, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
@@ -26,18 +26,20 @@ import { isIrcEnabled } from "./irc-enabled";
 
 export { isIrcEnabled };
 
-const ircSchema = type({
-	op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
-	"to?": type("string").describe('send: recipient agent id or "all"'),
-	"message?": type("string").describe("send: message body"),
-	"replyTo?": type("string").describe("send: message id being answered"),
-	"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
-	"from?": type("string").describe("wait: only accept a message from this agent id"),
-	"timeoutMs?": type("number").describe("wait: timeout in milliseconds (0 waits indefinitely)"),
-	"peek?": type("boolean").describe("inbox: list messages without consuming them"),
-});
+const ircSchema = lazy(() =>
+	type({
+		op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
+		"to?": type("string").describe('send: recipient agent id or "all"'),
+		"message?": type("string").describe("send: message body"),
+		"replyTo?": type("string").describe("send: message id being answered"),
+		"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
+		"from?": type("string").describe("wait: only accept a message from this agent id"),
+		"timeoutMs?": type("number").describe("wait: timeout in milliseconds (0 waits indefinitely)"),
+		"peek?": type("boolean").describe("inbox: list messages without consuming them"),
+	}),
+);
 
-export type IrcParams = typeof ircSchema.infer;
+export type IrcParams = typeof ircSchema.value.infer;
 
 interface IrcPeerInfo {
 	id: string;
@@ -66,13 +68,15 @@ function formatIncoming(msg: IrcMessage): string {
 	return `[${msg.id}] ${msg.from}${replyTag}: ${msg.body}`;
 }
 
-export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
+export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 	readonly name = "irc";
 	readonly approval = "read" as const;
 	readonly label = "IRC";
 	readonly summary = "Send and receive messages between agents";
 	readonly description: string;
-	readonly parameters = ircSchema;
+	get parameters(): typeof ircSchema.value {
+		return ircSchema.value;
+	}
 	readonly strict = true;
 	// Only the ops that block observe an interrupt. `list`, `inbox`, a
 	// fire-and-forget `send` and a `send` the tool rejects all return at once,
@@ -83,7 +87,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	readonly interruptible = (args: Partial<IrcParams>): boolean =>
 		args.op === "wait" || (args.op === "send" && args.await === true);
 
-	readonly examples: readonly ToolExample<typeof ircSchema.infer>[] = [
+	readonly examples: readonly ToolExample<typeof ircSchema.value.infer>[] = [
 		{
 			caption: "Fire-and-forget DM — same send wakes idle/parked peers",
 			call: {

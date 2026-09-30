@@ -9,6 +9,7 @@
  * helpers answer per entry, and give the record a profile write starts from so
  * an override is never copied into the profile file.
  */
+import { isRecord } from "@veyyon/utils";
 import { type SettingSource, settings } from "../../../../config/settings";
 import { getType, isSettingPath, type SettingPath } from "../../../../config/settings-schema";
 
@@ -61,7 +62,7 @@ export function overriddenRecordEntries(path: SettingPath): Array<{ key: string;
 	const keys = new Set<string>();
 	for (const layer of ["runtime", "config-file"] as const) {
 		const value = settings.layerValue(layer, segments);
-		if (value && typeof value === "object" && !Array.isArray(value)) {
+		if (isRecord(value)) {
 			for (const key of Object.keys(value)) keys.add(key);
 		}
 	}

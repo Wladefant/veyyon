@@ -397,6 +397,9 @@ describe("TranscriptContainer", () => {
 		const container = new TranscriptContainer();
 		const block = new VersionedFinalizedBlock(["original"]);
 		container.addChild(block);
+		// The engine keeps a screen of committed rows in the frame; a block inside
+		// it stays assembled, so a post-finalize mutation reaches the frame.
+		container.setNativeScrollbackRetainRows(2);
 
 		expect(container.render(40)).toEqual(["original"]);
 		container.setNativeScrollbackCommittedRows(1);

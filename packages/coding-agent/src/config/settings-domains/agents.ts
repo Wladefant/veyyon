@@ -29,7 +29,7 @@
  */
 
 import { isRecord } from "@veyyon/utils/type-guards";
-import { parseConfiguredThinkingLevel } from "../../thinking";
+import { parseConfiguredThinkingLevel } from "../../thinking/constants";
 
 /**
  * One lane in {@link AGENTS_SETTINGS}`["agent.agents"]`, keyed at the top

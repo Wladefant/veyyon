@@ -36,20 +36,33 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 16575 lines upstream. Model target selection left earlier — the role resolver, the
+ * MEASURED at 10173 lines. Model target selection left earlier — the role resolver, the
  * configured-target reader, the compaction candidate walk and its effort map — and provider request
  * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
  * after it, because not one of those members read or wrote a field of the runtime: every input was
  * a parameter, so they sat in the class only because of where they were typed. TTSR, the todo board,
  * the thinking level, the advisor roster, the streaming-edit guard, tool discovery, the checkpoint
- * state, user shell and eval runs, the post-prompt task tracker and the IRC inbox left as
- * collaborators under `runtime/`. The fork measures 16,734 after re-landing its session contracts
- * (video input, in-flight tool markers and the heartbeat, terminal error-turn persistence, the
- * retry-continuation backstop). The number falls again when the next one leaves. It ratchets:
- * slack is what it takes to not fail on the next honest edit, and a ceiling left far above a
- * shrinking file stops being a bound.
+ * state, user shell and eval runs, the post-prompt task tracker, the IRC inbox, the retry ladder and
+ * its model fallback, secret redaction, compaction with its summarizer and dead-end recovery, and
+ * the prewalk and plan-yolo model handoffs, plan mode with its plan reference and decision
+ * ladder, the message write queue with its persistence-key index, the context figure with its
+ * prompt snapshot and rewrite anchor, the memory backend state with its delivered recall, the
+ * provider session ids with the inherited prompt cache key, the tool-call loop guard with the
+ * Gemini reasoning-header detector, the empty-stop and unexpected-stop retry cycles, the
+ * provider usage recording with its saved-reset redeems, the history rewrites (stale-result and
+ * overflow prunes, image drops, shake and dedup), the terminal `yield` record, the evidence
+ * ledger with the rewind, verification and review reminders, and the approval state (the
+ * auto-approve flag, the `/yolo` bypass, the kept per-tool decisions and the ACP permission proxy)
+ * left as collaborators under `runtime/`.
+ * The number falls
+ * again when the next one leaves. It ratchets: slack is what it takes to not fail on the next honest
+ * edit, and a ceiling left far above a shrinking file stops being a bound.
+ *
+ * RE-MEASURED 2026-09-30 at 10412 after the santhreal merge: upstream's 10173 plus the fork's own
+ * additions (the `agent.maxConcurrency` resize wiring, the unsupported-input guard, the session
+ * liveness records and the terminal-ownership checks), which the collaborators above do not yet carry.
  */
-const RUNTIME_CEILING = 16_785;
+const RUNTIME_CEILING = 10_430;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -62,18 +75,37 @@ const RUNTIME_DIR = "runtime";
 const COLLABORATORS = [
 	"advisor-roster.ts",
 	"checkpoint-runtime.ts",
+	"compaction-recovery.ts",
+	"compaction-runtime.ts",
+	"compaction-summarizer.ts",
+	"context-accounting.ts",
+	"finalize-reminders.ts",
+	"history-rewrites.ts",
 	"irc-inbox.ts",
+	"loop-guards.ts",
 	"max-concurrency-runtime.ts",
+	"memory-context.ts",
+	"message-persistence.ts",
+	"model-handoff.ts",
+	"plan-mode-runtime.ts",
 	"post-prompt-tasks.ts",
+	"provider-sessions.ts",
+	"provider-usage.ts",
+	"retry-fallback.ts",
+	"retry-runtime.ts",
+	"session-approvals.ts",
+	"session-secrets.ts",
+	"stop-retries.ts",
 	"streaming-edit-guard.ts",
 	"thinking-runtime.ts",
 	"todo-runtime.ts",
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
 	"user-executions.ts",
+	"yield-tracker.ts",
 ] as const;
 
-/** MEASURED: the largest collaborator is `advisor-roster.ts` at 934 lines. */
+/** MEASURED: the largest collaborator is `retry-runtime.ts` at 959 lines. */
 const COLLABORATOR_CEILING = 1_000;
 
 /** MEASURED: the largest sibling is `agent-session-types.ts` at 782 lines. */
