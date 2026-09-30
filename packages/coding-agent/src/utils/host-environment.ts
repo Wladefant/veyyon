@@ -17,7 +17,7 @@
  * already doing from inside the prompt builder.
  */
 import * as os from "node:os";
-import { errorMessage, firstNonEmpty, getGpuCachePath, isEnoent, logger } from "@veyyon/utils";
+import { detachedString, errorMessage, firstNonEmpty, getGpuCachePath, isEnoent, logger } from "@veyyon/utils";
 
 function parseWmicTable(output: string, header: string): string | null {
 	const lines = output
@@ -347,9 +347,8 @@ export async function getCpuModel(): Promise<string | undefined> {
 		const cpuInfo = await Bun.file("/proc/cpuinfo").text();
 		const model = /^model name\s*:\s*(.+)$/m.exec(cpuInfo)?.[1]?.trim();
 		// A regex capture is a JSC substring of `cpuInfo`, and this cache holds it for the process
-		// life: 35 characters kept the whole file alive, 60 KB on a 32-thread host. The JSON round trip
-		// copies the characters out.
-		processCpuModel = { value: model ? (JSON.parse(JSON.stringify(model)) as string) : undefined };
+		// life: 35 characters kept the whole file alive, 60 KB on a 32-thread host.
+		processCpuModel = { value: model ? detachedString(model) : undefined };
 	} catch (error) {
 		if (!isEnoent(error)) {
 			logger.warn("CPU model could not be read; the prompt's environment section will omit it", {

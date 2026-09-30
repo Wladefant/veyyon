@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { Message } from "@veyyon/ai";
 import {
 	DAY_MS,
+	detachedString,
 	getProfileSessionsDir,
 	getSessionsDir,
 	HOUR_MS,
@@ -441,15 +442,15 @@ function walkListEntries(entries: Record<string, unknown>[]): {
 /**
  * `text` cut to {@link SESSION_LIST_TEXT_CHARS} without splitting a surrogate pair.
  *
- * A cut string is copied out through JSON. A JSC substring references its whole
- * parent, so a `slice` of the joined scan text would keep that text alive for as
- * long as the row holding it.
+ * A cut string is copied out with `detachedString`. A JSC substring references its
+ * whole parent, so a `slice` of the joined scan text would keep that text alive for
+ * as long as the row holding it.
  */
 function boundListText(text: string): string {
 	if (text.length <= SESSION_LIST_TEXT_CHARS) return text;
 	const last = text.charCodeAt(SESSION_LIST_TEXT_CHARS - 1);
 	const end = last >= 0xd800 && last <= 0xdbff ? SESSION_LIST_TEXT_CHARS - 1 : SESSION_LIST_TEXT_CHARS;
-	return JSON.parse(JSON.stringify(text.slice(0, end))) as string;
+	return detachedString(text.slice(0, end));
 }
 
 /**
