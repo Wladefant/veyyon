@@ -683,6 +683,54 @@ const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 // converts the already-successful response into a timeout error.
 const OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS = 2_500;
 
+const OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE: Readonly<Record<string, number>> = {
+	SERVICE_UNAVAILABLE: 503,
+	TOO_MANY_REQUESTS: 429,
+	REQUEST_TIMEOUT: 408,
+};
+
+function parseOpenAICompletionsErrorStatus(value: unknown): number | undefined {
+	const status =
+		typeof value === "number"
+			? value
+			: typeof value === "string" && /^\d{3}$/.test(value.trim())
+				? Number(value)
+				: undefined;
+	return status !== undefined && Number.isInteger(status) && status >= 400 && status <= 599 ? status : undefined;
+}
+
+/**
+ * Classify an SSE chunk that carries an `error` envelope inside a successful
+ * HTTP response (queue-full, in-stream timeouts). Returns undefined for a
+ * regular completion chunk. A status found in `code` or implied by `type` keeps
+ * HTTP semantics so retry and model-fallback recovery treat it like a non-2xx.
+ */
+function createOpenAICompletionsStreamError(chunk: unknown, provider: string): Error | undefined {
+	if (!chunk || typeof chunk !== "object") return undefined;
+	const error = Reflect.get(chunk, "error");
+	if (!error || typeof error !== "object") return undefined;
+
+	const messageValue = Reflect.get(error, "message");
+	const typeValue = Reflect.get(error, "type");
+	const codeValue = Reflect.get(error, "code");
+	const type = typeof typeValue === "string" ? typeValue.trim() : undefined;
+	const status =
+		parseOpenAICompletionsErrorStatus(codeValue) ??
+		(type ? OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE[type.toUpperCase()] : undefined);
+	const detail =
+		typeof messageValue === "string" && messageValue.length > 0
+			? messageValue
+			: "Provider returned an in-band OpenAI completions stream error";
+	if (status === undefined) {
+		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
+	}
+	// A nonnumeric string `code` is the machine code (insufficient_quota, usage_limit_reached) that
+	// quota classification reads; `type` is the generic class and only the fallback.
+	const machineCode = typeof codeValue === "string" && !/^\d+$/.test(codeValue.trim()) ? codeValue.trim() : undefined;
+	const code = machineCode || type;
+	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code });
+}
+
 type ToolCallStreamBlock = ToolCall & {
 	partialArgs?: string | Record<string, unknown>;
 	streamIndex?: number;
@@ -1552,6 +1600,8 @@ const streamOpenAICompletionsOnce = (
 			});
 			for await (const chunk of terminalAwareStream) {
 				if (!chunk || typeof chunk !== "object") continue;
+				const streamError = createOpenAICompletionsStreamError(chunk, model.provider);
+				if (streamError) throw streamError;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
 				// and each chunk in a streamed completion carries the same id.
