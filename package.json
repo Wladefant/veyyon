@@ -167,6 +167,7 @@
 		"release": "bun scripts/release-cut.ts",
 		"release:dry": "bun scripts/release-cut.ts --dry-run",
 		"upstream:status": "bun scripts/upstream-status.ts",
+		"upstream:sync": "bun scripts/upstream-sync.ts",
 		"changelog:check": "bun scripts/require-changelog.ts",
 		"changelog:root": "bun scripts/sync-root-changelog.ts",
 		"changelog:root:check": "bun scripts/sync-root-changelog.ts --check",
