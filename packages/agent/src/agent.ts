@@ -377,18 +377,7 @@ interface CursorToolResultEntry {
 }
 
 export class Agent {
-	#state: AgentState = {
-		systemPrompt: [],
-		model: getBundledModel("google", "gemini-2.5-flash-lite-preview-06-17"),
-		thinkingLevel: undefined,
-		disableReasoning: false,
-		tools: [],
-		messages: [],
-		isStreaming: false,
-		streamMessage: null,
-		pendingToolCalls: new Set<string>(),
-		error: undefined,
-	};
+	#state: AgentState;
 
 	#listeners = new Set<(e: AgentEvent) => void>();
 	#abortController?: AbortController;
@@ -473,7 +462,21 @@ export class Agent {
 	hasIrcInterrupts?: AgentLoopConfig["hasIrcInterrupts"];
 
 	constructor(opts: AgentOptions = {}) {
-		this.#state = { ...this.#state, ...opts.initialState };
+		// The fallback model is read only when the caller names none: reading it builds the whole Google
+		// provider's model list, which a session that brings its own model never uses.
+		this.#state = {
+			systemPrompt: [],
+			model: opts.initialState?.model ?? getBundledModel("google", "gemini-2.5-flash-lite-preview-06-17"),
+			thinkingLevel: undefined,
+			disableReasoning: false,
+			tools: [],
+			messages: [],
+			isStreaming: false,
+			streamMessage: null,
+			pendingToolCalls: new Set<string>(),
+			error: undefined,
+			...opts.initialState,
+		};
 		internPromptParts(this.#state.systemPrompt);
 		if (opts.initialState?.messages) this.#state.messages = opts.initialState.messages.slice();
 		if (opts.initialState?.pendingToolCalls)
