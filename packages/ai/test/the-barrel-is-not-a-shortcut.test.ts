@@ -244,11 +244,20 @@ describe("the modules that were repointed stay cut", () => {
 	 * returns each model's resolved compat record through it so equal records are held once. The leaf
 	 * imports nothing, so no consumer gained an edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-09-30: `agent/src/proxy.ts` 145 -> 147, `parser.ts` 122 -> 124, `db.ts`
+	 * 124 -> 126 and `sync-worker.ts` 123 -> 125, each by the two modules `utils/prompt-precompiled.ts`
+	 * and `utils/prompt-handlebars.ts`. `utils/prompt.ts`, already on every one of these reaches, reads
+	 * the binary's build-time precompiled templates from the first and loads the Handlebars compiler
+	 * through the second only when a template has no precompiled form. The first imports one type from
+	 * `./prompt-variables` and the second imports only `handlebars/runtime`, so no consumer gained an
+	 * edge to a subsystem it did not already reach.
+	 */
 	it.each([
-		["agent/src/proxy.ts", 145],
-		["apps/stats/src/parser.ts", 122],
-		["apps/stats/src/db.ts", 124],
-		["apps/stats/src/sync-worker.ts", 123],
+		["agent/src/proxy.ts", 147],
+		["apps/stats/src/parser.ts", 124],
+		["apps/stats/src/db.ts", 126],
+		["apps/stats/src/sync-worker.ts", 125],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
