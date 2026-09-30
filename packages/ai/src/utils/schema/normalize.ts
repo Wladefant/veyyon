@@ -52,6 +52,7 @@ export interface NormalizeSchemaOptions {
 	inferTypeForBareEnum: boolean;
 	foldOneOfIntoAnyOf: boolean;
 	dropNonScalarEnum: boolean;
+	stringEnumsOnly?: boolean;
 	rejectResidualIncompatibilities?: ReadonlyArray<ResidualSchemaIncompatibility>;
 	validateAndFallback?: { fallback: unknown };
 }
@@ -408,6 +409,7 @@ function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaOpt
 	}
 	if (options.foldOneOfIntoAnyOf) current = foldOneOfIntoAnyOf(current);
 	if (options.dropNonScalarEnum) current = dropNonScalarEnumForMfjs(current);
+	if (options.stringEnumsOnly) current = dropNonStringEnumForGoogle(current);
 	return current;
 }
 
@@ -426,6 +428,13 @@ function dropNonScalarEnumForMfjs(schema: JsonObject): JsonObject {
 	const allScalar = (schema.enum as unknown[]).every(v => typeof v === "string" || typeof v === "number");
 	if (allScalar) return schema;
 	return copySchemaWithout(schema, "enum");
+}
+
+/** Google's Schema enum field accepts string values only; omit unsupported enums without dropping the node's type. */
+function dropNonStringEnumForGoogle(schema: JsonObject): JsonObject {
+	if (!Array.isArray(schema.enum)) return schema;
+	const isStringEnum = schema.enum.length > 0 && schema.enum.every(value => typeof value === "string");
+	return isStringEnum ? schema : copySchemaWithout(schema, "enum");
 }
 
 /** Copy all keys from a schema except the specified combiner key. */
@@ -980,6 +989,7 @@ export function normalizeSchemaForGoogle(value: unknown): unknown {
 		extractNullableFromUnions: false,
 		inferTypeForBareEnum: true,
 		dropNonScalarEnum: false,
+		stringEnumsOnly: true,
 		foldOneOfIntoAnyOf: false,
 	});
 }

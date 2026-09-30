@@ -224,6 +224,140 @@ describe("wrapLeakedThinkingStream", () => {
 		expect(calls[0]?.thoughtSignature).toBe("tsig");
 	});
 
+	it("captures a native thinking signature delivered at thinking_end, not on the delta", async () => {
+		// Anthropic sends thinking_delta first (no signature), then signature_delta,
+		// so the completed signature only appears on the thinking_end partial.
+		const signature = `SIG_${"x".repeat(400)}`;
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: "reason",
+				partial: msg({ content: [{ type: "thinking", thinking: "reason", thinkingSignature: "" }] }),
+			});
+			const signed = msg({ content: [{ type: "thinking", thinking: "reason", thinkingSignature: signature }] });
+			inner.push({ type: "thinking_end", contentIndex: 0, content: "reason", partial: signed });
+			inner.push({ type: "done", reason: "stop", message: signed });
+		});
+
+		expect(thinks(result).map(b => b.thinkingSignature)).toEqual([signature]);
+	});
+
+	it("projects a signature-only thinking block that streamed no deltas before its tool call", async () => {
+		// OpenRouter's Responses translation of Gemini thought signatures: a
+		// text-less reasoning item opens and closes with only a signature at
+		// output_item.done, immediately before the function call it signs.
+		const signature = JSON.stringify({
+			id: "Lg2okuAw",
+			type: "reasoning",
+			summary: [],
+			encrypted_content: "ErgLCrULARFNMg9buQ",
+			format: "google-gemini-v1",
+		});
+		const call: ToolCall = {
+			type: "toolCall",
+			id: "Lg2okuAw|fc_tmp_s3divb08p1a",
+			name: "lookup_population",
+			arguments: { city: "Paris" },
+		};
+		const signedBlock = { type: "thinking" as const, thinking: "", thinkingSignature: signature };
+		const { events, result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			const withBlock = msg({ content: [signedBlock] });
+			inner.push({ type: "thinking_end", contentIndex: 0, content: "", partial: withBlock });
+			const withCall = msg({ content: [signedBlock, call] });
+			inner.push({ type: "toolcall_start", contentIndex: 1, partial: withCall });
+			inner.push({ type: "toolcall_end", contentIndex: 1, toolCall: call, partial: withCall });
+			inner.push({
+				type: "done",
+				reason: "toolUse",
+				message: msg({ content: [signedBlock, call], stopReason: "toolUse" }),
+			});
+		});
+
+		expect(result.content.map(b => b.type)).toEqual(["thinking", "toolCall"]);
+		expect(thinks(result).map(b => [b.thinking, b.thinkingSignature])).toEqual([["", signature]]);
+		// The signature block must be projected before the function call it signs.
+		const thinkingEnd = events.findIndex(event => event.type === "thinking_end");
+		const toolStart = events.findIndex(event => event.type === "toolcall_start");
+		expect(thinkingEnd).toBeGreaterThanOrEqual(0);
+		expect(thinkingEnd).toBeLessThan(toolStart);
+	});
+
+	it("recovers a signature-bearing thinking block that emitted no per-block events", async () => {
+		const signature = JSON.stringify({ id: "rs_1", type: "reasoning", encrypted_content: "abc" });
+		const block = { type: "thinking" as const, thinking: "recovered reasoning", thinkingSignature: signature };
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({ type: "done", reason: "stop", message: msg({ content: [block] }) });
+		});
+
+		expect(thinks(result).map(b => [b.thinking, b.thinkingSignature])).toEqual([["recovered reasoning", signature]]);
+	});
+
+	it("keeps consecutive native thinking blocks with distinct signatures apart", async () => {
+		const a = { type: "thinking" as const, thinking: "first", thinkingSignature: "SIG_A" };
+		const c = { type: "thinking" as const, thinking: "second", thinkingSignature: "SIG_B" };
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: "first",
+				partial: msg({ content: [{ type: "thinking", thinking: "first" }] }),
+			});
+			inner.push({ type: "thinking_end", contentIndex: 0, content: "first", partial: msg({ content: [a] }) });
+			inner.push({
+				type: "thinking_delta",
+				contentIndex: 1,
+				delta: "second",
+				partial: msg({ content: [a, { type: "thinking", thinking: "second" }] }),
+			});
+			inner.push({ type: "thinking_end", contentIndex: 1, content: "second", partial: msg({ content: [a, c] }) });
+			inner.push({ type: "done", reason: "stop", message: msg({ content: [a, c] }) });
+		});
+
+		expect(thinks(result).map(block => [block.thinking, block.thinkingSignature])).toEqual([
+			["first", "SIG_A"],
+			["second", "SIG_B"],
+		]);
+	});
+
+	it("keeps the content of a signed thinking block that arrives only at thinking_end", async () => {
+		const block = { type: "thinking" as const, thinking: "end-only reasoning", thinkingSignature: "SIG_END" };
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({
+				type: "thinking_end",
+				contentIndex: 0,
+				content: block.thinking,
+				partial: msg({ content: [block] }),
+			});
+			inner.push({ type: "done", reason: "stop", message: msg({ content: [block] }) });
+		});
+
+		expect(thinks(result).map(b => [b.thinking, b.thinkingSignature])).toEqual([["end-only reasoning", "SIG_END"]]);
+	});
+
+	it("restores a recovered signed block ahead of the tool call it precedes", async () => {
+		const call: ToolCall = { type: "toolCall", id: "call_1", name: "lookup", arguments: {} };
+		const block = { type: "thinking" as const, thinking: "why", thinkingSignature: "SIG_ORDER" };
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			const withCall = msg({ content: [call] });
+			inner.push({ type: "toolcall_start", contentIndex: 0, partial: withCall });
+			inner.push({ type: "toolcall_end", contentIndex: 0, toolCall: call, partial: withCall });
+			inner.push({
+				type: "done",
+				reason: "toolUse",
+				message: msg({ content: [block, call], stopReason: "toolUse" }),
+			});
+		});
+
+		expect(result.content.map(b => b.type)).toEqual(["thinking", "toolCall"]);
+	});
+
 	it("preserves native tool-call ids and streamed partial JSON while healing", async () => {
 		const inner = new AssistantMessageEventStream();
 		const out = wrapLeakedThinkingStream(inner);
