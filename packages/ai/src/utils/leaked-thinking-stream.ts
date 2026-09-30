@@ -82,8 +82,9 @@ export function wrapLeakedThinkingStream(inner: AssistantMessageEventStream): As
 						break;
 					}
 					case "thinking_end": {
+						projector ??= new LeakedThinkingProjector(out, event.partial);
 						const block = event.partial.content[event.contentIndex];
-						projector?.thinkingEnd(block?.type === "thinking" ? block.thinkingSignature : undefined);
+						projector.thinkingEnd(block?.type === "thinking" ? block.thinkingSignature : undefined);
 						break;
 					}
 					case "toolcall_start": {
@@ -177,10 +178,45 @@ class LeakedThinkingProjector {
 	 * it via `signature_delta` after every `thinking_delta`, so it is absent while
 	 * deltas stream and only present on the `thinking_end` partial. Stamp it onto
 	 * the open projected block so {@link finish} persists the signed block.
+	 *
+	 * A block that never streamed a delta but closes with a signature is
+	 * projected here instead of dropped: Gemini thought signatures arrive via
+	 * OpenRouter's Responses translation as a text-less reasoning item whose id
+	 * is the following function call's `call_id`. Losing that signature makes
+	 * every current-turn function-call replay unsigned, which Gemini 3 punishes
+	 * with empty stops and `server_error: stream closed with reason: error`.
 	 */
 	thinkingEnd(signature: string | undefined): void {
-		if (signature === undefined || !this.#thinking) return;
-		(this.#partial.content[this.#thinking.index] as ThinkingContent).thinkingSignature = signature;
+		if (this.#thinking) {
+			if (signature !== undefined) {
+				(this.#partial.content[this.#thinking.index] as ThinkingContent).thinkingSignature = signature;
+			}
+			return;
+		}
+		if (signature) {
+			this.#projectSignedThinking("", signature);
+		}
+	}
+
+	/**
+	 * Project a completed signature-bearing thinking block whose deltas never
+	 * reached the projector. Releases held-back text first (same boundary
+	 * semantics as {@link toolStart}) so block order survives for replay —
+	 * the signature item must precede the function call it signs.
+	 */
+	#projectSignedThinking(thinking: string, signature: string): void {
+		this.#apply(this.#healer.flushEvents(), this.#lastTextSignature);
+		this.#closeText();
+		this.#closeThinking();
+		this.#partial.content.push({ type: "thinking", thinking, thinkingSignature: signature });
+		const index = this.#partial.content.length - 1;
+		this.#out.push({ type: "thinking_start", contentIndex: index, partial: this.#partial });
+		this.#out.push({
+			type: "thinking_end",
+			contentIndex: index,
+			content: thinking,
+			partial: this.#partial,
+		});
 	}
 
 	/** Forward a native tool call's start, releasing any held-back text first. */
@@ -242,6 +278,26 @@ class LeakedThinkingProjector {
 	 * flush held-back fragments, close open blocks, and return the healed content.
 	 */
 	finish(message: AssistantMessage): AssistantMessage["content"] {
+		// Safety net: signature-bearing thinking blocks whose events never
+		// reached the projector at all (e.g. a terminal message assembled from
+		// blocks that skipped per-item events) must still survive with their
+		// text and signature intact.
+		for (const block of message.content) {
+			if (block?.type !== "thinking" || !block.thinkingSignature) continue;
+			if (this.#thinking) {
+				const open = this.#partial.content[this.#thinking.index] as ThinkingContent;
+				if (open.thinking === block.thinking && !open.thinkingSignature) {
+					open.thinkingSignature = block.thinkingSignature;
+					continue;
+				}
+			}
+			if (
+				this.#partial.content.some(p => p.type === "thinking" && p.thinkingSignature === block.thinkingSignature)
+			) {
+				continue;
+			}
+			this.#projectSignedThinking(block.thinking, block.thinkingSignature);
+		}
 		let fullText = "";
 		let tailSignature: string | undefined;
 		for (const block of message.content) {
