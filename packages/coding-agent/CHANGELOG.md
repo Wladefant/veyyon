@@ -131,6 +131,7 @@
 
 ### Fixed
 
+- A models.yml at a path other than the default one, rejected by a check after the schema (a missing `apiKey`, a retired key), names the file that was read in its error instead of the default models.yml path.
 - A language server error reaches the `lsp` tool's result once as `LSP error: <message>` instead of `LSP error: LSP error: <message>`, and `rename_file` drops a server that answers `workspace/willRenameFiles` with the JSON-RPC `MethodNotFound` code whatever its message says, instead of listing it as a server note.
 - A settings file with `defaultThinkingLevel: off` starts sessions with thinking off instead of at `high`.
 - A `retry.fallbackChains` entry that is not a string is skipped with a config warning and the next entry is tried, instead of leaving the failed turn's prompt waiting forever on a retry that threw.

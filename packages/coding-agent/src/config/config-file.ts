@@ -271,7 +271,8 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	readonly #schemaSource: Type | DeferredSchema;
 	#resolvedSchema?: Type;
 	#cache?: LoadResult<T>;
-	#auxValidate?: (value: T) => void;
+	/** The file's own checks after the schema, in registration order; a relocated handle shares them. */
+	#validations: readonly { readonly name: string; readonly validate: (value: T) => void }[] = [];
 	/**
 	 * Whether the unreadable-base fault has been reported for this instance.
 	 *
@@ -332,7 +333,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	relocate(configPath?: string): ConfigFile<T> {
 		if (!configPath || configPath === this.#basePath) return this;
 		const result = new ConfigFile<T>(this.id, this.#schemaSource, configPath);
-		result.#auxValidate = this.#auxValidate;
+		result.#validations = this.#validations;
 		result.#ensureMigrated();
 		return result;
 	}
@@ -399,15 +400,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	}
 
 	withValidation(name: string, validate: (value: T) => void): this {
-		const prev = this.#auxValidate;
-		this.#auxValidate = (value: T) => {
-			prev?.(value);
-			try {
-				validate(value);
-			} catch (error) {
-				throw new ConfigError(this.id, undefined, { err: error, stage: `Validate(${name})` }, this.path());
-			}
-		};
+		this.#validations = [...this.#validations, { name, validate }];
 		return this;
 	}
 
@@ -463,14 +456,15 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				value = validated.value;
 				if (accepted && snapshotKey) keepAcceptedValue(accepted, snapshotKey, value);
 			}
-			try {
-				this.#auxValidate?.(value);
-			} catch (error) {
-				const wrapped =
-					error instanceof ConfigError
-						? error
-						: new ConfigError(this.id, undefined, { err: error, stage: "AuxValidate" }, this.#resolveReadPath());
-				return this.#storeCache({ error: wrapped, status: "error" });
+			for (const { name, validate } of this.#validations) {
+				try {
+					validate(value);
+				} catch (error) {
+					return this.#storeCache({
+						error: new ConfigError(this.id, undefined, { err: error, stage: `Validate(${name})` }, readPath),
+						status: "error",
+					});
+				}
 			}
 			return this.#storeCache({ value, status: "ok" });
 		} catch (error) {
