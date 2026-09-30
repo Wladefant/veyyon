@@ -319,6 +319,19 @@ describe("github copilot model limits mapping", () => {
 		expect(model).toBeDefined();
 		expect(model?.api).toBe("openai-responses");
 	});
+	it("routes grok-4.6 to the openai-responses endpoint (#8807)", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				{
+					id: "grok-4.6",
+					name: "Grok 4.6",
+				},
+			],
+		});
+
+		const model = models.find(candidate => candidate.id === "grok-4.6");
+		expect(model?.api).toBe("openai-responses");
+	});
 });
 
 /**
