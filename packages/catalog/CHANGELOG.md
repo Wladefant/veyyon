@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- ChatGPT Codex discovery identifies as Codex CLI 0.159.2, so a subscription lists `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol`, which the backend omits below 0.155.1 and 0.159.0, and the bundled catalog carries them with their prices ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- `gen:models` reads the first enabled, unexpired login of a provider from the shared auth store instead of the first row, so an expired earliest login no longer makes Codex discovery fall back to the previous models.
 - Loading the provider catalog no longer evaluates arktype: `chatgpt-web` discovery checks its daemon's JSON with `isRecord` instead of four all-`unknown` schemas.
 - `COMMAND_CODE_COSTS` uses plain string keys instead of computed `["…"]` keys, which Biome's `useLiteralKeys` rule rejected; no behavior change.
 - Claude Opus 5.5 downgrades forced tool choice (`supportsForcedToolChoice: false`) to avoid 400 invalid_request_error rejections, and default models for anthropic, amazon-bedrock, and litellm promote to Opus 5.5.
