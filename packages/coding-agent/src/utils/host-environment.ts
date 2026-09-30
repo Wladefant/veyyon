@@ -345,8 +345,11 @@ export async function getCpuModel(): Promise<string | undefined> {
 	}
 	try {
 		const cpuInfo = await Bun.file("/proc/cpuinfo").text();
-		const match = /^model name\s*:\s*(.+)$/m.exec(cpuInfo);
-		processCpuModel = { value: match?.[1]?.trim() || undefined };
+		const model = /^model name\s*:\s*(.+)$/m.exec(cpuInfo)?.[1]?.trim();
+		// A regex capture is a JSC substring of `cpuInfo`, and this cache holds it for the process
+		// life: 35 characters kept the whole file alive, 60 KB on a 32-thread host. The JSON round trip
+		// copies the characters out.
+		processCpuModel = { value: model ? (JSON.parse(JSON.stringify(model)) as string) : undefined };
 	} catch (error) {
 		if (!isEnoent(error)) {
 			logger.warn("CPU model could not be read; the prompt's environment section will omit it", {

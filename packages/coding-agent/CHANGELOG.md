@@ -116,6 +116,7 @@
 - A running `veyyon` process that has used under 5% CPU in each 5-second window for 30 seconds discards its compiled JavaScript code and returns free memory to the OS, cutting an interactive session's resident memory at idle from 361 MiB to 332 MiB after eight turns and from 325 MiB to 303 MiB after startup, at a cost of 37 ms on the next turn.
 - An idle `veyyon` binary on Linux also unmaps the clean resident pages of its embedded modules when it discards its compiled code, cutting an interactive session's resident memory at idle from 317 MiB to 226 MiB after startup and from 342 MiB to 251 MiB after eight turns, with no measurable change to the next turn.
 - The settings screen reads a record setting's override layers with `isRecord` from `@veyyon/utils`; no user-visible change.
+- A process keeps the CPU model its system prompt shows without the `/proc/cpuinfo` text it was read from, releasing 61 KB of heap for the process life on a 32-thread host.
 
 ### Fixed
 
