@@ -126,6 +126,7 @@
 - A process keeps the CPU model its system prompt shows without the `/proc/cpuinfo` text it was read from, releasing 61 KB of heap for the process life on a 32-thread host.
 - A kept-alive spawned agent's session options and a parked agent's reviver hold only the run fields they read, and each progress snapshot copies its tail lines out of the streamed text, so a finished agent no longer keeps its run's assistant text, the spawning tool call's progress callback and abort signal, or the streamed message a tail line was cut from; after five turns spawning four agents each and the 20 agents parked, heap and extra memory is 61.2 MiB instead of 64.2 MiB and live objects 547,990 instead of 549,635 (median of three).
 - The CPU model the system prompt shows is copied through `detachedString` from `@veyyon/utils`; no user-visible change.
+- A session whose tools, commands and extensions are all first-party no longer evaluates Zod: the `search` tool declares its parameters with ArkType, which lists its `type` values as `files`, `structure`, `text`, and the command, custom-tool and extension loaders read `api.zod` from the package namespace only for author code, cutting the idle heap and extra memory of the compiled binary from 83.7 MiB to 81.9 MiB and live objects from 546,500 to 528,700 (median of five).
 
 ### Fixed
 
