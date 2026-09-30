@@ -33,6 +33,7 @@ import { getEnvApiKey } from "./env-api-key";
 import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
 import { isAuthRetryableError } from "./error/auth-classify";
+import { AUTHENTICATED_API_KEY_SENTINEL } from "./provider-env-keys";
 import { resolveProviderInFlightLimit } from "./provider-inflight-limits";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
@@ -853,6 +854,19 @@ function resolveVertexRequest(input: string | URL | Request): string | URL | Req
 // dropped so the specifier a caller already uses keeps working.
 export { getEnvApiKey, getEnvApiKeyName, listProvidersWithEnvKey } from "./env-api-key";
 
+/**
+ * The key a request to `model` is sent with. Every Amazon Bedrock model that reaches the generic
+ * transports is a Mantle GPT model on the Responses API: Converse models return before a key is looked up.
+ * Mantle takes a Bedrock API key and has no SigV4 path here, so the ambient-credentials sentinel is not a key
+ * for it, and sending it would put `Authorization: Bearer <authenticated>` on the wire.
+ */
+function resolveRequestApiKey(model: Model<Api>, explicit: string | undefined): string | undefined {
+	const key = explicit || getEnvApiKey(model.provider);
+	if (model.provider !== "amazon-bedrock") return key;
+	if (key && key !== AUTHENTICATED_API_KEY_SENTINEL) return key;
+	return $env.AWS_BEARER_TOKEN_BEDROCK;
+}
+
 export function stream<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
@@ -911,7 +925,7 @@ function streamDispatch<TApi extends Api>(
 		return streamBedrock(model as Model<"bedrock-converse-stream">, context, requestOptions as BedrockOptions);
 	}
 
-	const apiKey = requestOptions.apiKey || getEnvApiKey(model.provider);
+	const apiKey = resolveRequestApiKey(model, requestOptions.apiKey);
 	if (!apiKey) {
 		throw new AIError.MissingApiKeyError(model.provider);
 	}
@@ -1247,8 +1261,10 @@ export function streamSimple<TApi extends Api>(
 
 	// The resolver form is handled by the wrapper above; only a static string
 	// key reaches this point.
-	const apiKey =
-		(typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined) || getEnvApiKey(model.provider);
+	const apiKey = resolveRequestApiKey(
+		model,
+		typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined,
+	);
 	if (!apiKey) {
 		throw new AIError.MissingApiKeyError(model.provider);
 	}
