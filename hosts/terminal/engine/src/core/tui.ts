@@ -91,7 +91,6 @@ import {
 	lineRewriteSequence,
 	PreparedFrameCache,
 	pathToDescendant,
-	prepareLine,
 	prepareLinesArray,
 } from "./renderer";
 import {
@@ -1778,11 +1777,10 @@ export class TUI extends Container {
 		for (let i = 0; i < nextLines.length; i++) {
 			const frameRow = segment.start + i;
 			const raw = nextLines[i]!;
-			const prepared = prepareLine(raw, width);
 			this.#composedFrame[frameRow] = raw;
-			this.#prepared.setRow(frameRow, prepared);
-			if (previousWindow[screenStart + i] === prepared.line) continue;
-			previousWindow[screenStart + i] = prepared.line;
+			const line = this.#prepared.setRow(frameRow, raw, width);
+			if (previousWindow[screenStart + i] === line) continue;
+			previousWindow[screenStart + i] = line;
 			if (firstChanged === -1) firstChanged = i;
 			lastChanged = i;
 		}
