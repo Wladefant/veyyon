@@ -184,6 +184,7 @@
 - Closing `/settings`, flipping an appearance toggle there or hovering a status line preset keeps the configured `statusLine.segmentOptions` on the status line, instead of resetting them to the preset's until the next unrelated resync.
 - `@veyyon/coding-agent/export/html` exports `buildSessionData` and `collectSubSessions` again, which moving them to `export/session-data` had dropped from that entry point.
 - A resumed session at rest drops the committed transcript blocks above the retained screen from the terminal frame, including blocks that report a version and blocks a frame carries without drawing, keeps one block more instead of dropping none when the commit lands on a block boundary, and releases the rows each dropped block memoized, so a resumed 600-turn session at rest holds 87.9 MiB of heap and 746,900 objects instead of 105.5 MiB and 962,500 (median of three).
+- A session replace or display reset that lands between the paint that committed transcript rows and the next frame replays the whole transcript, instead of dropping the committed rows from the replayed frame and leaving 35 of 600 rows in the terminal's scrollback or 21 of 699 on the alternate-screen scroll tape.
 
 ### Removed
 

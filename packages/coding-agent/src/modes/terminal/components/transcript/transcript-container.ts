@@ -373,9 +373,13 @@ export class TranscriptContainer
 	}
 
 	prepareNativeScrollbackReplay(): void {
+		// The replay frame drops nothing, whether or not an earlier frame did:
+		// the previous paint may have published a commit claim this transcript
+		// has not dropped yet, and dropping it now would leave the replay with
+		// only the tail of the history it erases.
+		this.#replayPending = true;
 		if (this.#compactedChildStart === 0) return;
 		this.#compactedChildStart = 0;
-		this.#replayPending = true;
 		this.#generation++;
 		this.#lines.length = 0;
 		this.#stableRowsFloor = 0;
