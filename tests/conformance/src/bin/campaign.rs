@@ -33,6 +33,11 @@
 //! Inline `#[cfg(test)]` modules are excluded from planning. A mutant inside a
 //! test mutates the oracle, and a suite that kills it has proved nothing.
 
+#![expect(
+	clippy::disallowed_methods,
+	reason = "a standalone binary owns its process; `exit` carries its status to the shell"
+)]
+
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::{

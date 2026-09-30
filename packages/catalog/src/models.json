@@ -80849,7 +80849,7 @@
 				]
 			},
 			"applyPatchToolType": "freeform",
-			"priority": 12,
+			"priority": 13,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -80970,7 +80970,7 @@
 				]
 			},
 			"applyPatchToolType": "freeform",
-			"priority": 8,
+			"priority": 9,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -81014,7 +81014,7 @@
 				]
 			},
 			"applyPatchToolType": "freeform",
-			"priority": 6,
+			"priority": 5,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -81058,7 +81058,7 @@
 				]
 			},
 			"applyPatchToolType": "freeform",
-			"priority": 7,
+			"priority": 8,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -81072,7 +81072,7 @@
 		},
 		"gpt-6-astra": {
 			"id": "gpt-6-astra",
-			"name": "GPT-6-Astra",
+			"name": "GPT-6 Astra",
 			"api": "openai-codex-responses",
 			"provider": "openai-codex",
 			"baseUrl": "https://chatgpt.com/backend-api",
@@ -81082,10 +81082,142 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+				"input": 10,
+				"output": 50,
+				"cacheRead": 1,
+				"cacheWrite": 12.5
+			},
+			"pricing": "unknown",
+			"contextWindow": 272000,
+			"maxTokens": 128000,
+			"preferWebsockets": true,
+			"useResponsesLite": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			},
+			"applyPatchToolType": "freeform",
+			"priority": 2,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			}
+		},
+		"gpt-6-luna": {
+			"id": "gpt-6-luna",
+			"name": "GPT-6 Luna",
+			"api": "openai-codex-responses",
+			"provider": "openai-codex",
+			"baseUrl": "https://chatgpt.com/backend-api",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.5,
+				"cacheRead": 0.01,
+				"cacheWrite": 0.125
+			},
+			"pricing": "unknown",
+			"contextWindow": 272000,
+			"maxTokens": 128000,
+			"preferWebsockets": true,
+			"useResponsesLite": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			},
+			"applyPatchToolType": "freeform",
+			"priority": 4,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			}
+		},
+		"gpt-6-sol": {
+			"id": "gpt-6-sol",
+			"name": "GPT-6 Sol",
+			"api": "openai-codex-responses",
+			"provider": "openai-codex",
+			"baseUrl": "https://chatgpt.com/backend-api",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.2,
+				"cacheWrite": 2.5
+			},
+			"pricing": "unknown",
+			"contextWindow": 272000,
+			"maxTokens": 128000,
+			"preferWebsockets": true,
+			"useResponsesLite": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			},
+			"applyPatchToolType": "freeform",
+			"priority": 3,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			}
+		},
+		"gpt-6.1-sol": {
+			"id": "gpt-6.1-sol",
+			"name": "GPT-6.1 Sol",
+			"api": "openai-codex-responses",
+			"provider": "openai-codex",
+			"baseUrl": "https://chatgpt.com/backend-api",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.1,
+				"cacheWrite": 2.5
 			},
 			"pricing": "unknown",
 			"contextWindow": 272000,
@@ -81126,10 +81258,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.4,
+				"cacheWrite": 5
 			},
 			"pricing": "unknown",
 			"contextWindow": 272000,
@@ -81229,7 +81361,7 @@
 				]
 			},
 			"applyPatchToolType": "freeform",
-			"priority": 3,
+			"priority": 4,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [

@@ -156,6 +156,10 @@ fn pre_exec_detach_session_reparent() -> Result<(), std::io::Error> {
 	if pid > 0 {
 		// Intermediate parent: exit now to orphan the grandchild. `_exit` avoids
 		// running atexit handlers or flushing inherited buffers in the fork.
+		#[allow(
+			clippy::disallowed_methods,
+			reason = "post-fork intermediate child of a double fork: `_exit` ends the child, never the host"
+		)]
 		unsafe { libc::_exit(0) };
 	}
 	Ok(())
