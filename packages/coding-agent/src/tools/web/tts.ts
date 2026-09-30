@@ -7,6 +7,7 @@ import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ApiKey } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { lazy } from "@veyyon/utils/abortable";
 import { type } from "arktype";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../config/settings-instance";
@@ -39,16 +40,18 @@ const formatVoiceList = (): string =>
 type TtsCodec = "mp3" | "wav";
 type TtsBackend = "local" | "xai";
 
-const ttsSchema = type({
-	text: "1 <= string <= 15000",
-	voice_id: "string = 'eve'",
-	language: "string = 'en'",
-	output_path: "string",
-	sample_rate: "number.integer?",
-	bit_rate: "number.integer?",
-});
+const ttsSchema = lazy(() =>
+	type({
+		text: "1 <= string <= 15000",
+		voice_id: "string = 'eve'",
+		language: "string = 'en'",
+		output_path: "string",
+		sample_rate: "number.integer?",
+		bit_rate: "number.integer?",
+	}),
+);
 
-type TtsSchemaType = typeof ttsSchema.infer;
+type TtsSchemaType = typeof ttsSchema.value.infer;
 
 interface TtsToolDetails {
 	bytes: number;
@@ -258,7 +261,7 @@ async function synthesizeLocal(
 	};
 }
 
-export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
+export const ttsTool: CustomTool<typeof ttsSchema.value, TtsToolDetails> = {
 	name: "tts",
 	label: "Speech Generation",
 	strict: false,
@@ -270,7 +273,9 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 		"auto prefers local, but routes an .mp3 request to xAI when credentials exist (only the cloud path emits MP3); " +
 		"otherwise an .mp3 path is written as a sibling .wav. xAI codec is inferred from the output_path suffix. " +
 		`Max ${XAI_MAX_TEXT_LENGTH.toLocaleString("en-US")} characters.`,
-	parameters: ttsSchema,
+	get parameters() {
+		return ttsSchema.value;
+	},
 	async execute(
 		_toolCallId: string,
 		params: TtsSchemaType,

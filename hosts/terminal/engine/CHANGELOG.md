@@ -16,6 +16,7 @@
 - The engine ends every rewritten row at column zero, so a row that fills the width on a ConPTY host cannot spend its pending wrap on the next cursor move and scroll a live row into native history ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed duplicate `stdin` event listeners (`end`, `close`, `error`) being registered if `ProcessTerminal.start()` is called repeatedly on an active terminal instance ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
+- `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 
 ### Changed
 
@@ -29,10 +30,13 @@
 - `Markdown` skips marked's setext-heading rule when no `=` or `-` underline comes before the next blank line, with identical tokens, so a 13,362-entry transcript renders in 240 ms instead of 320 ms, re-renders at a new width in 204 ms instead of 280 ms, and streaming an 8.6k-character paragraph over 360 frames costs 22 ms instead of 58 ms.
 - A `Box` with no background and no border ends each row at its ink instead of padding it with spaces to the given width, which the renderer erases anyway, so a resumed 38 MB transcript draws its first frame in 211.1 MiB instead of 223.4 MiB.
 - A `Markdown` render with no background style ends each row, and each blank padding row, at its ink instead of padding it with spaces to the render width, so writing a resumed 38 MB transcript's first frame sends 7.05M characters instead of 8.11M and the frame holds 133.0 MiB of heap instead of 135.0 MiB.
+- The prepared-frame cache keeps each composed row's fitted string and its source in two arrays instead of one `{ raw, width, line }` record per row, so a resumed 600-turn session holds 31,652 fewer objects and 105.4 MiB of heap instead of 107.0 MiB.
+- The scroll tape records scrolled-off rows only while `tui.scrollIsolation` is on and counts them otherwise, and turning scroll isolation on after the first paint replays the history into the tape, so a session with scroll isolation off holds none of the up to 20,000 row strings the tape kept.
 
 ### Fixed
 
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
+- After a resize under the `alt-arrows` scroll transport, the engine replays the transcript once instead of on every later frame, so a resumed 600-turn session at rest spends 0.06 CPU seconds per 10 seconds after a resize instead of 6.85 (median of three).
 
 ## [1.5.4] - 2026-09-24
 

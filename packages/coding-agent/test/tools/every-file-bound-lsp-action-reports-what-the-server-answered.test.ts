@@ -570,7 +570,7 @@ function textOf(result: AgentToolResult<LspToolDetails>): string {
 
 /** Every action the schema declares, so a new one arrives uncovered and fails the sweep. */
 function declaredActions(): string[] {
-	return [...new Set(lspSchema.get("action").expression.match(/[a-z_]+/g) ?? [])];
+	return [...new Set(lspSchema.value.get("action").expression.match(/[a-z_]+/g) ?? [])];
 }
 
 describe("a file-bound lsp action", () => {

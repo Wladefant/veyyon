@@ -14,7 +14,7 @@ import type { Theme } from "../../theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
 import { formatStatusIcon, replaceTabs } from "../core/render-utils";
-import { readTerminalRows } from "./terminal-output";
+import { loadXtermTerminal, readTerminalRows } from "./terminal-output";
 
 export interface BashInteractiveResult extends OutputSummary {
 	exitCode: number | undefined;
@@ -30,18 +30,6 @@ function normalizeCaptureChunk(chunk: string): string {
 // Caps only the live xterm display backlog; OutputSink remains the bounded
 // source of truth for the final captured output.
 const MAX_LIVE_WRITE_QUEUE_CHUNKS = 512;
-
-// @xterm/headless is only needed once an interactive PTY session actually starts,
-// so it is loaded lazily (and memoized) instead of weighing down CLI startup.
-let xtermTerminalCtor: typeof XtermModule.Terminal | undefined;
-
-async function loadXtermTerminal(): Promise<typeof XtermModule.Terminal> {
-	if (!xtermTerminalCtor) {
-		const mod = (await import("@xterm/headless")) as typeof XtermModule & { default?: typeof XtermModule };
-		xtermTerminalCtor = (mod.default ?? mod).Terminal;
-	}
-	return xtermTerminalCtor;
-}
 
 function normalizeInputForPty(data: string, applicationCursorKeysMode: boolean): string {
 	const kitty = parseKittySequence(data);
