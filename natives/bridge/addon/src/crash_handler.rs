@@ -132,6 +132,11 @@ pub fn install() {
 			},
 		}));
 
+		#[expect(
+			clippy::disallowed_methods,
+			reason = "an allocation failure cannot be recovered; the hook persists what it can, then \
+			          aborts"
+		)]
 		std::alloc::set_alloc_error_hook(|layout| {
 			// Print the canonical line before doing anything allocation-prone.
 			// If this is genuine process-wide OOM, report formatting/path work may

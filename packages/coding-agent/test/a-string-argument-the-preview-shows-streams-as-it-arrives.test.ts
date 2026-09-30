@@ -29,7 +29,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core/types";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
-import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
 import {
 	decodeStreamedToolArgs,
 	STREAMING_STRING_KEYS_BY_TOOL,
@@ -44,6 +43,7 @@ import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { TUI } from "@veyyon/tui";
 import { STREAMING_JSON_PARSE_MIN_GROWTH, stripAnsi, TempDir } from "@veyyon/utils";
 import { ArgotSession } from "argot";
+import { createToolExecution } from "./helpers/tool-execution";
 import { makeToolSession } from "./helpers/tool-session";
 
 setDefaultTimeout(120_000);
@@ -113,7 +113,7 @@ function shownArguments(tool: AgentTool, args: ToolArguments): string[] {
 	for (const variant of args.variants) {
 		const values: Record<string, unknown> = { ...variant };
 		for (const key of args.free) values[key] = sentinel(key);
-		const component = new ToolExecutionComponent(
+		const component = createToolExecution(
 			tool.name,
 			{ ...values, __partialJson: JSON.stringify(values).slice(0, -1) },
 			{},

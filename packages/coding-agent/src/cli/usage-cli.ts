@@ -8,7 +8,7 @@
  * always covers the full credential pool.
  */
 import type { AuthStorage, UsageHistoryEntry, UsageLimit, UsageReport, UsageUnit } from "@veyyon/ai";
-import { resolveUsedFraction } from "@veyyon/ai/usage";
+import { providerSharesProjectAcrossAccounts, resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
 import { clamp01, DAY_MS, formatCount, formatDuration, formatNumber, pluralize, sanitizeText } from "@veyyon/utils";
 import { SUB_CELL_BAR_RAMP, subCellBar } from "@veyyon/utils/bar";
 import chalk from "chalk";
@@ -208,7 +208,11 @@ function describeAmount(limit: UsageLimit): string {
 		parts.push(`${formatUnitValue(amount.remaining, amount.unit)}${UNIT_SUFFIX[amount.unit]} left`);
 	}
 	const fraction = resolveUsedFraction(limit);
-	if (fraction !== undefined) {
+	if (limit.display?.inapplicable) {
+		parts.push("does not apply right now");
+	} else if (limit.display?.remaining && fraction !== undefined) {
+		parts.push(`${((1 - clamp01(fraction)) * 100).toFixed(1)}% left`);
+	} else if (fraction !== undefined) {
 		parts.push(`${(fraction * 100).toFixed(1)}% used`);
 	} else if (amount.remainingFraction !== undefined) {
 		parts.push(`${(amount.remainingFraction * 100).toFixed(1)}% left`);
@@ -225,9 +229,9 @@ function describeAmount(limit: UsageLimit): string {
  * glyphs it drew before were the same unconditional block glyphs.
  */
 function renderBar(limit: UsageLimit): string {
-	const fraction = resolveUsedFraction(limit);
+	const fraction = resolveDisplayFraction(limit);
 	if (fraction === undefined) return chalk.dim("·".repeat(BAR_WIDTH));
-	const bar = subCellBar(clamp01(fraction), BAR_WIDTH);
+	const bar = subCellBar(fraction, BAR_WIDTH);
 	const trackAt = bar.indexOf(SUB_CELL_BAR_RAMP.track);
 	const color = STATUS_COLOR[resolveStatus(limit)];
 	return trackAt < 0 ? color(bar) : color(bar.slice(0, trackAt)) + chalk.dim(bar.slice(trackAt));
@@ -247,12 +251,15 @@ function limitTitle(limit: UsageLimit): string {
 
 function reportAccountLabel(report: UsageReport, index: number): string {
 	const meta = report.metadata ?? {};
+	// A project shared by every account of the provider would head two accounts with one name.
+	const projectNamesAccount = !providerSharesProjectAcrossAccounts(report.provider);
 	for (const key of ["email", "accountId", "projectId"] as const) {
+		if (key === "projectId" && !projectNamesAccount) continue;
 		const value = meta[key];
 		if (typeof value === "string" && value) return value;
 	}
 	for (const limit of report.limits) {
-		const scoped = limit.scope.accountId ?? limit.scope.projectId;
+		const scoped = limit.scope.accountId ?? (projectNamesAccount ? limit.scope.projectId : undefined);
 		if (scoped) return scoped;
 	}
 	return `account ${index + 1}`;
@@ -265,13 +272,15 @@ function reportIdentifiers(report: UsageReport): Set<string> {
 		if (typeof value === "string" && value) ids.add(value.toLowerCase());
 	};
 	const meta = report.metadata ?? {};
+	// A project shared by every account of the provider names none of them.
+	const projectNamesAccount = !providerSharesProjectAcrossAccounts(report.provider);
 	add(meta.email);
 	add(meta.accountId);
-	add(meta.projectId);
+	if (projectNamesAccount) add(meta.projectId);
 	add(meta.orgId);
 	for (const limit of report.limits) {
 		add(limit.scope.accountId);
-		add(limit.scope.projectId);
+		if (projectNamesAccount) add(limit.scope.projectId);
 		add(limit.scope.orgId);
 	}
 	return ids;
@@ -310,7 +319,8 @@ export function collectUnreportedAccounts(
 		// report). The email/account fallback below applies only when both
 		// sides are org-less.
 		const accountOrg = account.orgId?.toLowerCase();
-		const ids = [account.email, account.accountId, account.projectId]
+		const projectNamesAccount = !providerSharesProjectAcrossAccounts(account.provider);
+		const ids = [account.email, account.accountId, projectNamesAccount ? account.projectId : undefined]
 			.filter((value): value is string => typeof value === "string" && value.length > 0)
 			.map(value => value.toLowerCase());
 		const sameOrgReports: UsageReport[] = [];

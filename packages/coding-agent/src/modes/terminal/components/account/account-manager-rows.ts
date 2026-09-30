@@ -31,7 +31,11 @@ import {
 	accountOriginLabel,
 	credentialStateNote,
 } from "../../../../session/account-inventory";
-import { formatUsageWindowLine, usageWindowLabelColumn } from "../../../../slash-commands/helpers/format";
+import {
+	formatUsageWindowLine,
+	USAGE_WINDOW_LABEL_MAX_WORDED,
+	usageWindowLabelColumn,
+} from "../../../../slash-commands/helpers/format";
 
 /** Width of the usage bar in the manager's body pane, in cells. */
 export const USAGE_BAR_WIDTH = 10;
@@ -296,13 +300,23 @@ export function accountPlanLine(row: AccountRow): string {
  */
 export function accountUsageLines(row: AccountRow, nowMs: number): string[] {
 	const labels = row.usage.map(window => sanitizeAccountText(window.label));
-	const column = usageWindowLabelColumn(labels);
+	const column = usageWindowLabelColumn(
+		labels,
+		row.usage.some(window => window.display) ? USAGE_WINDOW_LABEL_MAX_WORDED : undefined,
+	);
 	return row.usage.map((window, index) => {
 		const resets =
 			window.resetsAtMs === undefined
 				? undefined
 				: `   resets in ${formatDurationCoarse(Math.max(0, window.resetsAtMs - nowMs))}`;
-		return formatUsageWindowLine(labels[index] ?? "", window.usedFraction, USAGE_BAR_WIDTH, resets, column);
+		return formatUsageWindowLine(
+			labels[index] ?? "",
+			window.usedFraction,
+			USAGE_BAR_WIDTH,
+			resets,
+			column,
+			window.display,
+		);
 	});
 }
 

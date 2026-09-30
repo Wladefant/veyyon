@@ -1,0 +1,13 @@
+# In-process shell builtins and the addon run inside the Veyyon host, so a
+# process-level exit from any crate in the workspace terminates the host and
+# every lane with no log line (issue #73: `uu-tail` called `process::exit(13)`
+# on a closed pipe). Surface the failure as a return value instead. A site that
+# truly owns the process (a binary's `main`, a post-fork child, the fatal crash
+# handler) carries an `#[expect(clippy::disallowed_methods, reason = "...")]`.
+disallowed-methods = [
+	{ path = "std::process::exit", reason = "in-process builtins run inside the host; exit kills Veyyon and every lane (#73)" },
+	{ path = "std::process::abort", reason = "abort kills the host and every lane; only the fatal crash handler may, with an #[expect] naming why" },
+	{ path = "libc::exit", reason = "exit kills the host and every lane (#73)" },
+	{ path = "libc::_exit", reason = "_exit kills the host unless this is a post-fork child; say so with an #[expect]" },
+	{ path = "libc::abort", reason = "abort kills the host and every lane" },
+]

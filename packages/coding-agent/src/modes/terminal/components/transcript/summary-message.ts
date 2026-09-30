@@ -21,6 +21,10 @@ export class SummaryMessageComponent implements Component {
 	}
 
 	invalidate(): void {
+		this.releaseRenderCache();
+	}
+
+	releaseRenderCache(): void {
 		this.#cache = undefined;
 		this.#detail = undefined;
 	}

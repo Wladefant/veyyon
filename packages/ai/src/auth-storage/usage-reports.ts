@@ -3,7 +3,13 @@
  * produced, and reading exhausted windows and reset times out of a report's limits.
  */
 
-import type { CredentialRankingContext, CredentialRankingStrategy, UsageLimit, UsageReport } from "../usage";
+import {
+	type CredentialRankingContext,
+	type CredentialRankingStrategy,
+	providerSharesProjectAcrossAccounts,
+	type UsageLimit,
+	type UsageReport,
+} from "../usage";
 
 export function getUsageReportMetadataValue(report: UsageReport, key: string): string | undefined {
 	const metadata = report.metadata;
@@ -58,10 +64,14 @@ export function getUsageReportIdentifiers(report: UsageReport): string[] {
 	if (report.provider === "openai-codex") {
 		return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 	}
-	const projectId = getUsageReportMetadataValue(report, "projectId") ?? getUsageReportScopeProjectId(report);
-	// Only add project as a fallback when no email is available — two users
-	// with different emails on the same GCP project must not merge.
-	if (projectId && !email) identifiers.push(`project:${projectId}`);
+	// Only add project as a fallback when no email is available — two users with different emails on the
+	// same GCP project must not merge. Where every account sits on one shared project (Antigravity's
+	// `aicode-consumers`) it never identifies anyone, so a report that names no account stays its own group
+	// rather than absorbing a sibling's limits. Every other provider keeps the fallback exactly as it was.
+	if (!providerSharesProjectAcrossAccounts(report.provider)) {
+		const projectId = getUsageReportMetadataValue(report, "projectId") ?? getUsageReportScopeProjectId(report);
+		if (projectId && !email) identifiers.push(`project:${projectId}`);
+	}
 	const accountId = getUsageReportMetadataValue(report, "accountId");
 	if (accountId) identifiers.push(`account:${accountId}`);
 	const account = getUsageReportMetadataValue(report, "account");

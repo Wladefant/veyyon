@@ -30,11 +30,12 @@ interface HeapSample {
 }
 
 let tempDir: TempDir;
-let binary: string;
 let payloadLength: number;
 
 function sample(mode: "idle" | "read"): HeapSample {
-	return JSON.parse(execFileSync(binary, [mode], { encoding: "utf8" })) as HeapSample;
+	return JSON.parse(
+		execFileSync(join(tempDir.path(), "docs-embed-probe"), [mode], { encoding: "utf8" }),
+	) as HeapSample;
 }
 
 beforeAll(async () => {
@@ -53,7 +54,7 @@ console.log(JSON.stringify({ bytes: stats.heapSize + stats.extraMemorySize, file
 	);
 	const payload = (await buildDocsIndexPayload()).payload;
 	payloadLength = payload.length;
-	binary = join(tempDir.path(), "docs-embed-probe");
+	const binary = join(tempDir.path(), "docs-embed-probe");
 	const output = await Bun.build({
 		entrypoints: [entry],
 		define: { "process.env.VEYYON_DOCS_EMBED": JSON.stringify(payload) },
