@@ -60,6 +60,7 @@ packages/coding-agent/src/memory/mnemopi/state.ts
 packages/coding-agent/src/memory/resolve.ts
 packages/coding-agent/src/modes/terminal/components/dialogs/plugin-settings.ts
 packages/coding-agent/src/modes/terminal/controllers/selector-controller.ts
+packages/coding-agent/src/modes/terminal/interactive-mode.ts
 packages/coding-agent/src/modes/terminal/setup-wizard/lazy.ts
 packages/coding-agent/src/sdk.ts
 packages/coding-agent/src/session/agent-session.ts
@@ -77,8 +78,8 @@ packages/coding-agent/src/tools/fs/manifest.ts
 packages/coding-agent/src/tools/fs/set-cwd.ts
 packages/coding-agent/src/tools/index.ts
 packages/coding-agent/src/tools/search/manifest.ts
-packages/coding-agent/src/tools/shell/bash-interactive.ts
 packages/coding-agent/src/tools/shell/manifest.ts
+packages/coding-agent/src/tools/shell/terminal-output.ts
 packages/coding-agent/src/tools/web/browser/launch.ts
 packages/coding-agent/src/tools/web/browser/readable.ts
 packages/coding-agent/src/tools/web/browser/tab-supervisor.ts

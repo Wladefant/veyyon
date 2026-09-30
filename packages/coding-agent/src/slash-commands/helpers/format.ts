@@ -1,3 +1,5 @@
+import type { UsageLimitDisplay } from "@veyyon/ai";
+import { fractionToDraw } from "@veyyon/ai/usage";
 import { SUB_CELL_BAR_RAMP, subCellBar } from "@veyyon/utils/bar";
 import { clamp01 } from "@veyyon/utils/math";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -64,12 +66,19 @@ export const USAGE_WINDOW_LABEL_COLUMN = 8;
 export const USAGE_WINDOW_LABEL_MAX = 20;
 
 /**
+ * Longest label for a window the provider words itself (`display` set): `Weekly limit · Claude and GPT
+ * models` is the provider's own text, and clipping it to `Weekly limit · Clau…` hides the bucket.
+ * Other providers keep {@link USAGE_WINDOW_LABEL_MAX}, so their bar column does not move.
+ */
+export const USAGE_WINDOW_LABEL_MAX_WORDED = 36;
+
+/**
  * The column a group of windows shares, so their bars align without padding a short group out to
  * the maximum. One account's windows are laid out together; two accounts need not agree.
  */
-export function usageWindowLabelColumn(labels: readonly string[]): number {
+export function usageWindowLabelColumn(labels: readonly string[], max: number = USAGE_WINDOW_LABEL_MAX): number {
 	let widest = 0;
-	for (const label of labels) widest = Math.max(widest, visibleWidth(truncateToWidth(label, USAGE_WINDOW_LABEL_MAX)));
+	for (const label of labels) widest = Math.max(widest, visibleWidth(truncateToWidth(label, max)));
 	return Math.max(USAGE_WINDOW_LABEL_COLUMN, widest + 1);
 }
 
@@ -86,8 +95,15 @@ export function formatUsageWindowLine(
 	barWidth: number,
 	resetsSuffix?: string,
 	labelColumn: number = USAGE_WINDOW_LABEL_COLUMN,
+	display?: UsageLimitDisplay,
 ): string {
-	const clipped = truncateToWidth(label, USAGE_WINDOW_LABEL_MAX);
+	const clipped = truncateToWidth(label, Math.max(USAGE_WINDOW_LABEL_MAX, labelColumn - 1));
 	const padded = clipped + " ".repeat(Math.max(1, labelColumn - visibleWidth(clipped)));
+	// A window the provider says does not apply has nothing to measure: no bar, no percent, no reset.
+	if (display?.inapplicable) return `${padded}does not apply right now`;
+	// Worded as what is LEFT, the way the provider's own app words it.
+	if (display?.remaining) {
+		return `${padded}${renderAsciiBar(fractionToDraw(usedFraction, display), barWidth)} left${resetsSuffix ?? ""}`;
+	}
 	return `${padded}${renderAsciiBar(usedFraction, barWidth)}${resetsSuffix ?? ""}`;
 }

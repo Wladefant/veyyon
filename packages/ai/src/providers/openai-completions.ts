@@ -102,19 +102,25 @@ import {
 	applyWireModelIdTransform,
 	calculateOpenAIUsageAccounting,
 	clearOpenAIStrictToolsState,
+	clearOpenAIToolChoiceState,
 	createOpenAIStrictToolsState,
+	createOpenAIToolChoiceState,
 	disableStrictToolsForScope,
 	getOpenAIPromptCacheKey,
 	getOpenAIStrictToolsScope,
 	isCompiledGrammarTooLargeStrictError,
 	isOpenRouterAnthropicModel,
 	isStrictToolsDisabledForScope,
+	isToolChoiceRejectedForScope,
+	isToolChoiceRejection,
 	type OpenAICompatPolicy,
 	type OpenAICompletionsParams,
 	type OpenAIRequestSetup,
 	type OpenAIStrictToolsScope,
 	type OpenAIStrictToolsState,
+	type OpenAIToolChoiceState,
 	parseAzureDeploymentNameMap,
+	rejectToolChoiceForScope,
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
@@ -593,17 +599,21 @@ const OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX = "openai-completions:";
 
 type OpenAICompletionsProviderSessionState = ProviderSessionState &
 	OpenAIStrictToolsState &
-	OpenAIReasoningEffortFallbackState;
+	OpenAIReasoningEffortFallbackState &
+	OpenAIToolChoiceState;
 
 function createOpenAICompletionsProviderSessionState(): OpenAICompletionsProviderSessionState {
 	const strictToolsState = createOpenAIStrictToolsState();
 	const reasoningEffortFallbackState = createOpenAIReasoningEffortFallbackState();
+	const toolChoiceState = createOpenAIToolChoiceState();
 	const state: OpenAICompletionsProviderSessionState = {
 		...strictToolsState,
 		...reasoningEffortFallbackState,
+		...toolChoiceState,
 		close: () => {
 			clearOpenAIStrictToolsState(state);
 			clearOpenAIReasoningEffortFallbackState(state);
+			clearOpenAIToolChoiceState(state);
 		},
 	};
 	return state;
@@ -711,6 +721,9 @@ async function connectOpenAICompletionsStream(args: ConnectOpenAICompletionsStre
 	let activeReasoningEffortFallbackKey: string | undefined;
 	let activeRequestParams: OpenAICompletionsParams | undefined;
 	let currentDisableStrictTools = args.disableStrictTools;
+	// With no session the rejected `tool_choice` form is remembered for this call only, which is
+	// still what lets the one retry leave it out.
+	const toolChoiceState = args.providerSessionState ?? createOpenAIToolChoiceState();
 
 	const createCompletionsStream = async (toolStrictModeOverride?: ToolStrictModeOverride, captureOnly = false) => {
 		const effectiveToolStrictModeOverride = currentDisableStrictTools ? "none" : toolStrictModeOverride;
@@ -719,6 +732,8 @@ async function connectOpenAICompletionsStream(args: ConnectOpenAICompletionsStre
 			args.context,
 			args.options,
 			effectiveToolStrictModeOverride,
+			toolChoiceState,
+			args.strictToolsScope,
 		);
 		appliedStrictTools = strictToolsApplied;
 		const reasoningEffortFallbackKey = createOpenAIReasoningEffortFallbackKey(
@@ -814,6 +829,15 @@ async function connectOpenAICompletionsStream(args: ConnectOpenAICompletionsStre
 				activeReasoningEffortFallbackKey,
 				reasoningEffortFallback,
 			);
+		} else if (
+			!args.requestSignal.aborted &&
+			isToolChoiceRejection(error, capturedErrorResponse, activeRequestParams?.tool_choice)
+		) {
+			// The endpoint takes the request but not the `tool_choice` form it named. Retry once
+			// without that form and remember it for this model, so the session pays one request.
+			// The retry sends no such form, so its own failure cannot land here again.
+			rejectToolChoiceForScope(toolChoiceState, args.strictToolsScope, activeRequestParams?.tool_choice);
+			openaiHandle = await createCompletionsStream();
 		} else if (
 			isOpenRouterAnthropicModel(args.model) &&
 			!currentDisableStrictTools &&
@@ -1751,7 +1775,9 @@ function buildParams(
 	model: Model<"openai-completions">,
 	context: Context,
 	options: OpenAICompletionsOptions | undefined,
-	toolStrictModeOverride?: ToolStrictModeOverride,
+	toolStrictModeOverride: ToolStrictModeOverride,
+	toolChoiceState: OpenAIToolChoiceState,
+	toolChoiceScope: OpenAIStrictToolsScope,
 ): {
 	params: OpenAICompletionsParams;
 	toolStrictMode: AppliedToolStrictMode;
@@ -1862,6 +1888,11 @@ function buildParams(
 		// that function in `tools`. Active-tool filtering normally enforces this
 		// before provider dispatch; this guard keeps raw provider callers from
 		// emitting a self-inconsistent OpenAI-compatible payload.
+		delete params.tool_choice;
+	}
+	if (isToolChoiceRejectedForScope(toolChoiceState, toolChoiceScope, params.tool_choice)) {
+		// This model rejected this form of `tool_choice` earlier in the session. Leaving the field
+		// out is `auto`, and the reasoning policy below reads the choice that is actually sent.
 		delete params.tool_choice;
 	}
 

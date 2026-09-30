@@ -8,6 +8,7 @@
  * runs isn't required.
  */
 import { scheduler } from "node:timers/promises";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import * as logger from "@veyyon/utils/logger";
 import {
 	type AuthCredential,
@@ -303,12 +304,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async #runBackground(): Promise<void> {
-		let backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+		const backoff = { baseMs: BACKGROUND_BACKOFF_INITIAL_MS, maxMs: BACKGROUND_BACKOFF_MAX_MS, jitter: 0 };
+		let failures = 0;
 		while (!this.#closed && !this.#backgroundAbort.signal.aborted) {
 			if (this.#streamSnapshots && !this.#streamingUnsupported) {
 				try {
 					await this.#consumeSnapshotStream();
-					backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+					failures = 0;
 					continue;
 				} catch (error) {
 					if (this.#closed || this.#backgroundAbort.signal.aborted) break;
@@ -321,8 +323,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					// This sleep rejects for exactly one reason: the background abort fired, meaning shutdown. The
 					// loop re-checks `#closed` and the signal at the top and exits, so there is nothing to report --
 					// and the failure that caused the backoff has already been recorded above.
-					await scheduler.wait(backoffMs, { signal: this.#backgroundAbort.signal }).catch(() => {});
-					backoffMs = Math.min(BACKGROUND_BACKOFF_MAX_MS, backoffMs * 2);
+					await scheduler
+						.wait(exponentialBackoffDelay(failures++, backoff), { signal: this.#backgroundAbort.signal })
+						.catch(() => {});
 					continue;
 				}
 			}
@@ -333,14 +336,14 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					signal: this.#backgroundAbort.signal,
 				});
 				if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
-				backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+				failures = 0;
 			} catch (error) {
 				if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+				const backoffMs = exponentialBackoffDelay(failures++, backoff);
 				this.#reportStaleSnapshot("background-sync", error, { backoffMs });
 				// As above: the sleep rejects only on the shutdown abort, which the loop's own checks handle, and
 				// the fetch failure that caused this backoff was just reported.
 				await scheduler.wait(backoffMs, { signal: this.#backgroundAbort.signal }).catch(() => {});
-				backoffMs = Math.min(BACKGROUND_BACKOFF_MAX_MS, backoffMs * 2);
 			}
 		}
 	}

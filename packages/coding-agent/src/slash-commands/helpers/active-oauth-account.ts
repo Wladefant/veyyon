@@ -1,5 +1,6 @@
 import type { UsageLimit, UsageReport } from "@veyyon/ai";
 import type { OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
+import { providerSharesProjectAcrossAccounts } from "@veyyon/ai/usage";
 
 function normalizeIdentityValue(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
@@ -60,6 +61,9 @@ export function limitMatchesActiveAccount(
 
 	if (activeAccountId && reportAccountId === activeAccountId) return true;
 	if (activeEmail && reportEmail === activeEmail) return true;
+	// A project shared by every account of a provider (Antigravity's `aicode-consumers`) names no
+	// account, and matching on it would hand one account's limits to every sibling.
+	if (providerSharesProjectAcrossAccounts(report.provider)) return false;
 	if (activeProjectId && reportProjectId === activeProjectId) return true;
 	return false;
 }

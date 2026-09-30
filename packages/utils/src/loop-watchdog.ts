@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import * as logger from "./logger";
 import { takeLoopPhaseProfile } from "./loop-phase";
+import type { StallStackSource } from "./stall-sampler";
 
 export interface LoopWatchdogOptions {
 	/** How far ahead each probe tick is scheduled, in ms. Default 250. */
@@ -16,6 +17,12 @@ export interface LoopWatchdogOptions {
 	 * Default `process.cpuUsage`.
 	 */
 	cpuUsage?: () => { user: number; system: number };
+	/**
+	 * Where a block's JavaScript stacks come from. Given one, every block logged is followed by a
+	 * `ui.loop-blocked.stack` line at the same level, carrying the functions the samples inside
+	 * the block were executing. Absent, blocks are reported without stacks.
+	 */
+	stacks?: StallStackSource;
 }
 
 /**
@@ -89,6 +96,9 @@ export class LoopWatchdog {
 	#handle: LoopWatchdogTimer | undefined;
 	/** CPU consumed when the armed tick's interval began, in microseconds. */
 	#cpuAtArm = 0;
+	/** When the armed tick's interval began. A block's stacks are read from here to the late tick. */
+	#armedAtMs = 0;
+	#stacks: StallStackSource | undefined;
 
 	constructor(options: LoopWatchdogOptions = {}) {
 		this.#intervalMs = options.intervalMs ?? 250;
@@ -101,6 +111,7 @@ export class LoopWatchdog {
 				return { unref: () => timer.unref?.(), cancel: () => clearTimeout(timer) };
 			});
 		this.#cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
+		this.#stacks = options.stacks;
 	}
 
 	start(): void {
@@ -120,7 +131,8 @@ export class LoopWatchdog {
 
 	#armTick(): void {
 		const generation = this.#generation;
-		this.#expected = this.#now() + this.#intervalMs;
+		this.#armedAtMs = this.#now();
+		this.#expected = this.#armedAtMs + this.#intervalMs;
 		const cpu = this.#cpuUsage();
 		this.#cpuAtArm = cpu.user + cpu.system;
 		this.#handle = this.#schedule(() => this.#tick(generation), this.#intervalMs);
@@ -172,11 +184,18 @@ export class LoopWatchdog {
 					...(attributed ? {} : { topPhase: phase ?? "none" }),
 					...(loopThreadOnly ? {} : { cpuThreads: "multiple" }),
 				};
-				if (ranTheBlock) logger.warn("ui.loop-blocked", line);
-				else logger.debug("ui.loop-blocked", line);
+				const log = ranTheBlock ? logger.warn : logger.debug;
+				log("ui.loop-blocked", line);
+				// The stall began somewhere after this interval was armed, possibly before its
+				// deadline, so the whole interval is read. The samples arrive once the profiler has
+				// answered, which is after the loop came back, so this line follows the block line.
+				void this.#stacks?.stacksBetween(this.#armedAtMs, this.#now()).then(stacks => {
+					if (stacks) log("ui.loop-blocked.stack", { blockedMs: line.blockedMs, ...stacks });
+				});
 			}
 		} else {
 			this.#wasBlocked = false;
+			this.#stacks?.quiet(this.#now());
 		}
 		this.#armTick();
 	}

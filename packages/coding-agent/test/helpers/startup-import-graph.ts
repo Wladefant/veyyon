@@ -24,6 +24,11 @@ export interface WorkspacePackage {
 export interface StartupImportGraph {
 	/** Absolute paths of every source file the entry evaluates. */
 	files: ReadonlySet<string>;
+	/**
+	 * Absolute paths of files imported `with { type: "file" }`. The entry holds each one's path, not
+	 * its contents, so none of them is in `files`.
+	 */
+	byPath: ReadonlySet<string>;
 	/** Package names resolved out of the walk: workspace packages and node_modules alike. */
 	packages: ReadonlySet<string>;
 	/** Files whose imports could not be scanned. A non-empty list invalidates the walk. */
@@ -136,6 +141,7 @@ function packageOfNodeModulePath(path: string): string {
 export function buildStartupImportGraph(repoRoot: string, entry: string): StartupImportGraph {
 	const packages = workspacePackages(repoRoot);
 	const files = new Set<string>();
+	const byPath = new Set<string>();
 	const named = new Set<string>();
 	const unscannable: string[] = [];
 	const unresolved: string[] = [];
@@ -158,6 +164,12 @@ export function buildStartupImportGraph(repoRoot: string, entry: string): Startu
 		} catch {
 			unscannable.push(file);
 			return;
+		}
+		// `with { type: "file" }` binds a path to the bundled file; the process reads its bytes only
+		// when code opens that path. The scanner does not report import attributes, so read them here.
+		const pathTyped = new Set<string>();
+		for (const match of source.matchAll(/\bfrom\s*(["'])([^"']+)\1\s*with\s*\{\s*type\s*:\s*["']file["']\s*\}/g)) {
+			pathTyped.add(match[2]!);
 		}
 		for (const imported of imports) {
 			if (imported.kind !== "import-statement") continue;
@@ -192,12 +204,13 @@ export function buildStartupImportGraph(repoRoot: string, entry: string): Startu
 				named.add(packageOfNodeModulePath(resolved));
 				continue;
 			}
-			visit(resolved);
+			if (pathTyped.has(spec)) byPath.add(resolved);
+			else visit(resolved);
 		}
 	};
 
 	visit(entry);
-	return { files, packages: named, unscannable, unresolved };
+	return { files, byPath, packages: named, unscannable, unresolved };
 }
 
 /** The dependencies `packages/coding-agent/package.json` declares. */

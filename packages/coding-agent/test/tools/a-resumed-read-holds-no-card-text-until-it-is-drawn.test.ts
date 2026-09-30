@@ -14,7 +14,11 @@
  * again, which writes an unchanged result's card as the tag it was loaded from; rebuilding with
  * previews on draws the rows; and a result whose content is replaced after the load (a prune, a shake,
  * a compaction elision) still writes the card text it was loaded with, since the rebuild reads the
- * rows the line was written with.
+ * rows the line was written with. Every step `STEPS` names is measured, so a new one is measured too.
+ *
+ * The string bytes are measured in a fresh process (`fixtures/resumed-read-string-growth.ts`): in the
+ * process a suite shares, strings other files left behind die or stay alive in the window and moved
+ * the delta by more than the body both ways.
  *
  * DOES NOT CATCH: a consumer outside the transcript rebuild and the session writer that reads
  * `displayContent.text` of every loaded result, which builds every card text again; the bound here
@@ -22,95 +26,44 @@
  * and is built eagerly, as it costs one string cell.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { execFile } from "node:child_process";
 import * as fs from "node:fs";
-import { stripVTControlCharacters } from "node:util";
-import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
-import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
-import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import * as path from "node:path";
+import { promisify, stripVTControlCharacters } from "node:util";
+import type { ToolResultMessage } from "@veyyon/ai";
+import { resetSettingsForTest } from "@veyyon/coding-agent/config/settings";
 import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
-import { BUILTIN_RESULT_CODECS } from "@veyyon/coding-agent/tools/index";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
-import type { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
-import { liveStringBytes } from "../helpers/live-string-bytes";
+import {
+	fileRows,
+	type Growth,
+	ROWS_TAG,
+	readResult,
+	rebuiltBuilder,
+	recordReads,
+	STEPS,
+	type Step,
+	setUpReadSessions,
+} from "../fixtures/resumed-read-string-growth";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
-const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+const run = promisify(execFile);
+const FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "resumed-read-string-growth.ts");
 
-/** A heap snapshot walks the whole process heap; in a shared suite process each takes seconds. */
-const SNAPSHOT_ROW_TIMEOUT_MS = 60_000;
+/** A fresh process loads the modules and takes two heap snapshots of its own heap. */
+const MEASURED_ROW_TIMEOUT_MS = 60_000;
 
-/** The rows a read returned: distinct per read, so the loader's string pool shares none of them. */
-function fileRows(read: number, rows: number): string[] {
-	return Array.from(
-		{ length: rows },
-		(_, row) => `\tconst value${read}_${row} = compute(${row}, "${"x".repeat(32)}");`,
-	);
-}
-
-/** A read result as the read tool returns it: numbered rows under a snapshot header, and its card text. */
-function readResult(read: number, rows: number): { result: ToolResultMessage<ReadToolDetails>; body: string } {
-	const lines = fileRows(read, rows);
-	const body = `[src/file-${read}.ts#1A2B]\n${lines.map((line, i) => `${i + 1}:${line}`).join("\n")}`;
-	return {
-		body,
-		result: {
-			role: "toolResult",
-			toolCallId: `read-${read}`,
-			toolName: "read",
-			content: [{ type: "text", text: body }],
-			details: { displayContent: { text: lines.join("\n"), startLine: 1 } },
-			isError: false,
-			timestamp: 2,
-		},
-	};
-}
-
-function assistantCalling(ids: readonly string[]): AssistantMessage {
-	return {
-		role: "assistant",
-		content: ids.map((id, read) => ({
-			type: "toolCall",
-			id,
-			name: "read",
-			arguments: { path: `src/file-${read}.ts` },
-		})),
-		timestamp: 1,
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "claude-test",
-		stopReason: "toolUse",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-	};
-}
-
-function rebuiltBuilder(manager: SessionManager, preview: boolean): ChatTranscriptBuilder {
-	const builder = new ChatTranscriptBuilder({
-		ui,
-		cwd: manager.getCwd(),
-		requestRender: () => {},
-		getSettings: () => Settings.isolated({ "read.toolResultPreview": preview }),
-	});
-	builder.rebuild(manager.buildSessionContext({ transcript: true }));
-	return builder;
-}
+const STEP_NAMES: Record<Step, string> = {
+	open: "the session opens and its transcript rebuilds with previews off",
+	rewrite: "the session rewrites every entry after its first",
+};
 
 describe("a resumed read holds no card text until it is drawn", () => {
 	let root: TempDir;
 
 	beforeAll(async () => {
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true });
-		await initTheme();
-		registerToolResultCodecs(BUILTIN_RESULT_CODECS);
+		await setUpReadSessions();
 	});
 
 	afterAll(() => {
@@ -125,62 +78,48 @@ describe("a resumed read holds no card text until it is drawn", () => {
 		await root.remove();
 	});
 
-	async function recordReads(results: readonly ToolResultMessage<ReadToolDetails>[]): Promise<string> {
-		const manager = SessionManager.create(root.path(), root.join("sessions"));
-		manager.appendMessage(assistantCalling(results.map(result => result.toolCallId)));
-		for (const result of results) manager.appendMessage(result);
-		await manager.flush();
-		const file = manager.getSessionFile() as string;
-		// The written line holds the tag and no text, so the load is the path under test.
-		expect(fs.readFileSync(file, "utf8")).toContain('"from":"rows"');
-		return file;
+	async function measureInFreshProcess(step: Step): Promise<Growth> {
+		const { env, cleanup } = hermeticSpawnEnv();
+		try {
+			const { stdout, stderr } = await run(process.execPath, [FIXTURE, root.path(), step], {
+				env,
+				timeout: MEASURED_ROW_TIMEOUT_MS - 5_000,
+				killSignal: "SIGKILL",
+			});
+			expect(stderr).toBe("");
+			return JSON.parse(stdout) as Growth;
+		} finally {
+			cleanup();
+		}
 	}
 
-	/** What a resumed session does after its transcript rebuilds, each leaving the rows unbuilt. */
-	const AFTER_OPEN: Array<{ step: string; run: (manager: SessionManager) => Promise<void> }> = [
-		{ step: "the session opens and its transcript rebuilds with previews off", run: async () => {} },
-		{
-			step: "the session rewrites every entry after its first",
-			run: manager => manager.rewriteEntries([manager.getEntries()[0]!]),
-		},
-	];
+	function tags(file: string): number {
+		return fs.readFileSync(file, "utf8").match(ROWS_TAG)?.length ?? 0;
+	}
 
-	for (const { step, run } of AFTER_OPEN) {
+	for (const step of Object.keys(STEPS) as Step[]) {
 		it(
-			`keeps no copy of the rows after ${step}`,
+			`keeps no copy of the rows after ${STEP_NAMES[step]}`,
 			async () => {
-				const reads = Array.from({ length: 24 }, (_, read) => readResult(read, 2000));
-				const bodyBytes = reads.reduce((sum, read) => sum + read.body.length, 0);
-				const file = await recordReads(reads.map(read => read.result));
-				// A throwaway pass over a one-read session loads every module and cache the measured pass
-				// reaches, without leaving the measured session's own text behind.
-				const warmed = await SessionManager.open(await recordReads([readResult(99, 3).result]));
-				rebuiltBuilder(warmed, false).reset();
-				await run(warmed);
-
-				const before = liveStringBytes();
-				const manager = await SessionManager.open(file);
-				const builder = rebuiltBuilder(manager, false);
-				await run(manager);
-				const grown = liveStringBytes() - before;
-
-				expect(manager.getEntries().length).toBe(reads.length + 1);
+				const growth = await measureInFreshProcess(step);
+				// The written lines hold the tag and no text, so the load is the path under test.
+				expect(growth.tagsWritten).toBe(growth.reads);
+				expect(growth.entries).toBe(growth.reads + 1);
 				// The measurement sees the loaded results, so a bound it passes is not a count that missed them.
-				// Half, since strings an earlier file in the same process left behind can die in the window.
-				expect(grown).toBeGreaterThan(bodyBytes / 2);
+				expect(growth.grown).toBeGreaterThan(growth.bodyBytes / 2);
 				// The session holds each result's text once. A second copy of the rows, in any form, is
 				// another body's worth of bytes on top.
-				expect(grown).toBeLessThan(bodyBytes * 1.5);
-				builder.reset();
+				expect(growth.grown).toBeLessThan(growth.bodyBytes * 1.5);
 				// Every card is still written as its tag.
-				expect(fs.readFileSync(file, "utf8").match(/"from":"rows"/g)?.length).toBe(reads.length);
+				expect(growth.tagsAfter).toBe(growth.reads);
 			},
-			SNAPSHOT_ROW_TIMEOUT_MS,
+			MEASURED_ROW_TIMEOUT_MS,
 		);
 	}
 
 	it("draws the loaded rows when read previews are on", async () => {
-		const file = await recordReads([readResult(0, 3).result]);
+		const file = await recordReads(root.path(), [readResult(0, 3).result]);
+		expect(tags(file)).toBe(1);
 		const builder = rebuiltBuilder(await SessionManager.open(file), true);
 		const drawn = builder.container.render(160).map(line => stripVTControlCharacters(line));
 		builder.reset();
@@ -194,7 +133,8 @@ describe("a resumed read holds no card text until it is drawn", () => {
 	it("writes the card text it was loaded with once the result's content is replaced", async () => {
 		const { result } = readResult(0, 40);
 		const loadedText = result.details?.displayContent?.text;
-		const file = await recordReads([result]);
+		const file = await recordReads(root.path(), [result]);
+		expect(tags(file)).toBe(1);
 		const manager = await SessionManager.open(file);
 		const loaded = manager
 			.getEntries()

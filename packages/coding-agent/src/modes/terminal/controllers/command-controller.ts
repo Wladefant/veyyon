@@ -6,7 +6,7 @@ import type { UsageLimit, UsageReport } from "@veyyon/ai";
 import type { AuthStorage, OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { getProviderDetails, type ProviderDetails } from "@veyyon/ai/provider-details";
-import { resolveUsedFraction } from "@veyyon/ai/usage";
+import { resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
@@ -14,13 +14,13 @@ import { Loader, Markdown, type OverlayHandle, Spacer, Text } from "@veyyon/tui"
 import {
 	APP_NAME,
 	CHANGELOG_URL,
-	clamp01,
 	errorMessage,
 	formatDuration,
 	isAbortError,
 	logger,
 	Snowflake,
 	sanitizeText,
+	stripAnsi,
 } from "@veyyon/utils";
 import { subCellBar } from "@veyyon/utils/bar";
 import { padding } from "@veyyon/utils/padding";
@@ -190,7 +190,7 @@ export class CommandController {
 	async handleDebugTranscriptCommand(): Promise<void> {
 		try {
 			const width = Math.max(1, this.ctx.ui.terminal.columns);
-			const renderedLines = this.ctx.chatContainer.render(width).map(line => replaceTabs(Bun.stripANSI(line)));
+			const renderedLines = this.ctx.chatContainer.render(width).map(line => replaceTabs(stripAnsi(line)));
 			const rendered = renderedLines.join("\n").trimEnd();
 			if (!rendered) {
 				this.ctx.showError("No messages to dump yet.");
@@ -888,10 +888,17 @@ export class CommandController {
 		this.ctx.updateEditorBorderColor();
 		this.ctx.clearTransientSessionUi();
 		this.ctx.resetTranscript();
+		const displaced =
+			kept.displaced.length > 0
+				? `; stopped ${kept.displaced.join(", ")} (background limit ${this.ctx.settings.get("session.backgroundLimit")})`
+				: "";
 		this.ctx.present([
 			new Spacer(1),
 			new Text(
-				theme.fg("accent", `${theme.status.success} New session started — ${kept.sessionId} keeps running`),
+				theme.fg(
+					"accent",
+					`${theme.status.success} New session started — ${kept.sessionId} keeps running${displaced}`,
+				),
 				1,
 				1,
 			),
@@ -1610,12 +1617,12 @@ function resolveStatusColor(status: UsageLimit["status"]): "success" | "warning"
  * drive it. See `tiny-title-download-progress.ts` for the animated case.
  */
 function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: number): string {
-	const fraction = resolveUsedFraction(limit);
+	const fraction = resolveDisplayFraction(limit);
 	if (fraction === undefined) {
 		return uiTheme.fg("dim", "·".repeat(barWidth));
 	}
 	const ramp = uiTheme.getBarRamp();
-	const bar = subCellBar(clamp01(fraction), barWidth, { ramp });
+	const bar = subCellBar(fraction, barWidth, { ramp });
 	// The first track cell is where the fill ends: every glyph before it is fill,
 	// whole or partial. One slice, so the two tones cannot disagree about the
 	// boundary the way two independently counted `repeat`s could.

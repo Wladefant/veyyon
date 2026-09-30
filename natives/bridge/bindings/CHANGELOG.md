@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `readCommitMemory()` returns the Windows system commit charge and limit and the calling process's private commit bytes in-process, and `undefined` on other platforms ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+
 ### Fixed
 
+- On Windows, the embedded `tail` builtin no longer exits the host process when its output pipe is closed (a timed-out or cancelled `cmd | tail -N` pipeline), which silently killed Veyyon and every lane ([#73](https://github.com/Wladefant/veyyon/issues/73)). A workspace `clippy.toml` now rejects `std::process::exit`, `std::process::abort` and their `libc` equivalents in every crate, including the out-of-workspace shell crates `brush-core` and `brush-builtins` through `check:rs` and `lint:rs`, so no builtin can reintroduce it.
 - The launch-time prune of old addon caches routes non-removable directories through `attachNativeNoticeSink` instead of stderr.
 - On Unix, the embedded shell's `kill` refuses any real signal that would reach the host process, one of its threads, an ancestor, or a process group holding one of them (signal 0 still probes), and cancelling a command no longer SIGKILLs a PID that is no longer its child ([#106](https://github.com/Wladefant/veyyon/issues/106)).
 - On Unix, the embedded shell's `suspend` fails with the same refusal instead of stopping the host process ([#106](https://github.com/Wladefant/veyyon/issues/106)).
@@ -15,6 +20,7 @@
 
 - `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
 - `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
+- `releaseEmbeddedModulePages()` unmaps the clean resident pages of the running executable's `.bun` section on Linux and returns the bytes released; a later read faults the same bytes back in from the page cache, and on other platforms the call returns 0.
 
 ### Changed
 
@@ -22,6 +28,7 @@
 - The first `highlightCode`, `CodeHighlighter`, `supportsLanguage` or `getSupportedLanguages` call in a process deserializes a syntax set the addon's build script linked instead of linking 78 syntaxes at run time, which cuts that call from 81 ms to under 1 ms.
 - `wrapTextWithAnsi` reads the words of a line as slices of it instead of copying each into its own buffer, which cuts wrapping a line wider than its target by 50 to 66% (a line of 40 to 100 words from 8.6 µs to 3.0 µs) and the first render of a 13,470-entry transcript at 120 columns from 291 ms to 234 ms, with identical rows.
 - `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth` and `extractSegments` return a result whose characters all fit in Latin-1 as a one-byte string instead of a two-byte one, which moves 2.9M characters of a rendered 13,470-entry transcript to one byte each and cuts the heap the render holds from 47.1 MiB to 44.4 MiB.
+- The addon runs its async exports on a Tokio runtime of at most four scheduler workers on every platform instead of napi-rs's default of one per CPU, which cuts an idle `vey` on a 32-thread host from 54 threads to 26 and the anonymous memory the addon's load and first async call add from 3.6 MiB to 3.1 MiB.
 
 ## [1.5.5] - 2026-09-25
 

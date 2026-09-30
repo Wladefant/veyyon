@@ -24,6 +24,7 @@ import type {
 	CredentialOrigin,
 	CredentialOriginKind,
 	UsageLimit,
+	UsageLimitDisplay,
 	UsageReport,
 } from "@veyyon/ai";
 import { OAUTH_REFRESH_FAILURE_DISABLE_PREFIX } from "@veyyon/ai/auth-credential-rows";
@@ -46,6 +47,8 @@ export interface AccountUsageWindow {
 	resetsAtMs?: number;
 	/** Window length in ms when the provider states one. Orders the bars, shortest window first. */
 	durationMs?: number;
+	/** How the provider words this window when it differs from the default `% used` bar. */
+	display?: UsageLimitDisplay;
 }
 
 /** Health of one credential as last probed. `undefined` means "not probed yet", never "fine". */
@@ -540,6 +543,7 @@ function usageWindowsFor(limits: readonly UsageLimit[]): AccountUsageWindow[] {
 		if (limit.amount.usedFraction !== undefined) window.usedFraction = limit.amount.usedFraction;
 		if (limit.window?.resetsAt !== undefined) window.resetsAtMs = limit.window.resetsAt;
 		if (limit.window?.durationMs !== undefined) window.durationMs = limit.window.durationMs;
+		if (limit.display) window.display = limit.display;
 		windows.push(window);
 	}
 	return windows;

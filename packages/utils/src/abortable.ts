@@ -205,20 +205,28 @@ export function untilAborted<T>(
 	return promise;
 }
 
+/** A value built on the first read of {@link Lazy.value} and held from then on. */
+export interface Lazy<T> {
+	readonly value: T;
+}
+
 /**
- * Memoizes a function with no arguments, calling it once and caching the result.
+ * Defers `build` to the first read of `value`, then returns that result on every later read, including
+ * a falsy one. A `build` that throws builds again on the next read.
  *
- * @param fn - Function to be called once
- * @returns A function that returns the cached result of `fn`
+ * `typeof held.value` states the built value's type, so a caller names a deferred value's type without
+ * building it: `typeof schema.value.infer` for an ArkType schema.
  */
-export function once<T>(fn: () => T): () => T {
-	let store = undefined as { value: T } | undefined;
-	return () => {
-		if (store) {
-			return store.value;
-		}
-		const value = fn();
-		store = { value };
-		return value;
+export function lazy<T>(build: () => T): Lazy<T> {
+	let pending: (() => T) | undefined = build;
+	let built: T;
+	return {
+		get value(): T {
+			if (pending !== undefined) {
+				built = pending();
+				pending = undefined;
+			}
+			return built;
+		},
 	};
 }

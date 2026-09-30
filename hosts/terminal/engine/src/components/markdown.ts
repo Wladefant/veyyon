@@ -1127,6 +1127,20 @@ export class Markdown implements Component {
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
 	}
+
+	releaseRenderCache(): void {
+		this.invalidate();
+		// Every field below is derived from #text and rebuilt by the next render: a
+		// full lex re-freezes the stable prefix, and the row caches refill as rows render.
+		this.#streamPrefixText = undefined;
+		this.#streamPrefixTokens = undefined;
+		this.#streamPrefixLineCache = undefined;
+		this.#streamPrefixSource = undefined;
+		this.#normalizedCleanHead = undefined;
+		this.#streamingDiffLineCache = undefined;
+		this.#openFenceRowCache = undefined;
+	}
+
 	get transientRenderCache(): boolean {
 		return this.#transientRenderCache;
 	}
@@ -1501,9 +1515,10 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * Wrap each line to `contentWidth` and append its rows to `out`, each padded to the full width
-	 * with margins and background. `state` carries from one call to the next, so rows laid out in
-	 * several calls match rows laid out in one.
+	 * Wrap each line to `contentWidth` and append its rows to `out`: the left margin, then the row.
+	 * A painted row (a background style) is padded to the full width so the fill reaches the edge;
+	 * an unpainted row ends at its ink. `state` carries from one call to the next, so rows laid out
+	 * in several calls match rows laid out in one.
 	 */
 	#layoutRows(
 		lines: readonly string[],
@@ -1536,7 +1551,7 @@ export class Markdown implements Component {
 					continue;
 				}
 				state.afterOsc66 = false;
-				out.push(applyLineBackground(margin + row + margin, signature.width, bgFn));
+				out.push(bgFn ? applyLineBackground(margin + row + margin, signature.width, bgFn) : margin + row);
 			}
 		}
 	}
@@ -1743,7 +1758,8 @@ export class Markdown implements Component {
 	}
 
 	#renderEmptyPaddingLines(signature: RenderSignature): string[] {
-		const emptyLine = applyLineBackground("", signature.width, this.#defaultTextStyle?.bgColor);
+		const bgFn = this.#defaultTextStyle?.bgColor;
+		const emptyLine = bgFn ? applyLineBackground("", signature.width, bgFn) : "";
 		const emptyLines: string[] = [];
 		for (let i = 0; i < signature.paddingY; i++) {
 			emptyLines.push(emptyLine);

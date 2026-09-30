@@ -23,7 +23,7 @@ import { padding } from "@veyyon/utils/padding";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
-import { getMarkdownTheme } from "../../../../theme/markdown-theme";
+import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
 import { type ThemeColor, theme } from "../../../../theme/theme";
 import {
 	matchesAppExternalEditor,
@@ -269,9 +269,7 @@ export class HookSelectorComponent extends Container {
 		// confirmation is about) rather than repeating the heading.
 		const bodyTitle = this.#card ? restTitleLines.join("\n") : title;
 		if (bodyTitle.length > 0) {
-			this.#titleComponent = new Markdown(bodyTitle, 1, 0, getMarkdownTheme(), {
-				color: t => theme.fg("accent", t),
-			});
+			this.#titleComponent = new Markdown(bodyTitle, 1, 0, getMarkdownTheme(), markdownTextStyle("accent"));
 			this.addChild(this.#titleComponent);
 			this.addChild(new Spacer(1));
 		}

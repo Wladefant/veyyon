@@ -15,6 +15,7 @@ import {
 	requiresApproval,
 	resolveEffectiveApprovalMode,
 } from "../../tools/core/approval";
+import { patternGrantKey } from "../../tools/core/approval-modes";
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
 import { TOOL_EXECUTION_ENTRIES, type ToolExecutionEntryName } from "../../tools/core/execution-registry";
 import type { ToolPolicyFrame } from "../../tools/core/refusal-fence";
@@ -81,6 +82,31 @@ export const APPROVAL_SELECT_OPTIONS: ExtensionUISelectOption[] = [
  * the turn's own before it raises the card. Sharing one options object across
  * calls is why it cannot live here.
  */
+
+/**
+ * The row label offering a session grant scoped to one pattern. Built from the
+ * pattern the tool reported for THIS call, so the operator reads the exact
+ * string a later call must reproduce to be dismissed.
+ */
+export function approvePatternLabel(pattern: string): string {
+	return `Approve "${pattern}" for session`;
+}
+
+/**
+ * The dialog rows for one call: {@link APPROVAL_SELECT_OPTIONS}, plus a
+ * pattern-scoped grant after "Approve" when the tool reported a pattern.
+ */
+export function approvalSelectOptions(pattern: string | undefined): ExtensionUISelectOption[] {
+	if (pattern === undefined) return APPROVAL_SELECT_OPTIONS;
+	return [
+		...APPROVAL_SELECT_OPTIONS.slice(0, 1),
+		{
+			label: approvePatternLabel(pattern),
+			description: "Run this and every later call with this same pattern, until you exit.",
+		},
+		...APPROVAL_SELECT_OPTIONS.slice(1),
+	];
+}
 export const APPROVAL_DIALOG_OPTIONS: ExtensionUIDialogOptions = {
 	selectionMarker: "radio",
 	helpText: "↑/↓ navigate  enter confirm  esc cancel",
@@ -316,8 +342,20 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		if (standing === "deny") {
 			throw new Error(`Tool call denied for this session: ${this.tool.name}`);
 		}
+		// A pattern grant is bounded like the tool-wide one and narrower still: the
+		// resolver reports a pattern only for a plain prompt, never for an
+		// `override` or `critical` one. It is read by string equality with the
+		// pattern THIS call reports, so it cannot widen past the string the
+		// operator read on the card.
+		const pattern = grantMayApply ? approvalCheck.pattern : undefined;
+		const patternKey = pattern === undefined ? undefined : patternGrantKey(this.tool.name, pattern);
+		const patternLabel = pattern === undefined ? undefined : approvePatternLabel(pattern);
+		const isGranted = (): boolean =>
+			grantMayApply &&
+			(sessionApprovals?.get(this.tool.name) === "allow" ||
+				(patternKey !== undefined && sessionApprovals?.get(patternKey) === "allow"));
 
-		if (approvalRequired && !(standing === "allow" && grantMayApply)) {
+		if (approvalRequired && !isGranted()) {
 			const hasApprovalHandlers =
 				this.runner?.hasHandlers("tool_approval_requested") || this.runner?.hasHandlers("tool_approval_resolved");
 			const sessionId = policyFrame.sessionManager?.getSessionId() ?? "";
@@ -423,7 +461,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					await resolveApproval(false, "denied for this session");
 					throw new Error(`Tool call denied for this session: ${this.tool.name}`);
 				}
-				if (settledStanding === "allow" && grantMayApply) dismissedByGrant = true;
+				if (isGranted()) dismissedByGrant = true;
 			}
 
 			if (!dismissedByGrant) {
@@ -440,7 +478,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					// no reply at all while a `read` approval was up.
 					choice = await uiContext.select(
 						formatApprovalCard(this.tool, params, approvalReason, requester),
-						APPROVAL_SELECT_OPTIONS,
+						approvalSelectOptions(pattern),
 						signal ? { ...APPROVAL_DIALOG_OPTIONS, signal } : APPROVAL_DIALOG_OPTIONS,
 					);
 				} catch (err) {
@@ -458,6 +496,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					if (grantMayApply) {
 						if (choice === APPROVAL_CHOICE.approveSession) sessionApprovals?.set(this.tool.name, "allow");
 						else if (choice === APPROVAL_CHOICE.denySession) sessionApprovals?.set(this.tool.name, "deny");
+						else if (patternKey !== undefined && choice === patternLabel)
+							sessionApprovals?.set(patternKey, "allow");
 					}
 					if (inFlightKey) IN_FLIGHT_APPROVALS.delete(inFlightKey);
 					releaseWaiters();
@@ -473,7 +513,10 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					await resolveApproval(false, "the turn was stopped before this call was answered");
 					throw new ToolAbortError(`Tool call stopped before approval: ${this.tool.name}`);
 				}
-				const approved = choice === APPROVAL_CHOICE.approveOnce || choice === APPROVAL_CHOICE.approveSession;
+				const approved =
+					choice === APPROVAL_CHOICE.approveOnce ||
+					choice === APPROVAL_CHOICE.approveSession ||
+					(patternLabel !== undefined && choice === patternLabel);
 				await resolveApproval(approved, approved ? undefined : "denied by user");
 				if (!approved) {
 					throw new Error(`Tool call denied by user: ${this.tool.name}`);

@@ -45,6 +45,20 @@ export interface SessionStorageWriter {
 }
 
 /**
+ * A read handle on the object a session path named when it was opened. Reads keep answering from
+ * that object after the path is republished over, renamed or unlinked, so byte offsets recorded
+ * against it stay valid for as long as the handle is open.
+ */
+export interface PinnedSessionReader {
+	/** {@link SessionStorageStat.identity} of the object the handle reads. */
+	readonly identity: string;
+	/** The UTF-8 text of `length` bytes starting at byte `offset`. Throws on a short read. */
+	read(offset: number, length: number): string;
+	/** Release the handle. Later reads throw. */
+	close(): void;
+}
+
+/**
  * Optional guard applied by {@link SessionStorage.writeTextAtomic}. The
  * backend MUST call `commitGuard()` synchronously immediately before it makes
  * the staged content visible at `path`. If it returns `false`, the staged
@@ -167,6 +181,14 @@ export interface SessionStorage {
 	readTextSync?(path: string): string | undefined;
 	/** Read the requested UTF-8 byte windows from the head and tail of the file. */
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]>;
+	/**
+	 * Open a {@link PinnedSessionReader} on what `path` names now.
+	 *
+	 * OPTIONAL: only a backend whose rewrites publish a new object by rename can keep an old object
+	 * readable behind a handle. Absent, or returning `undefined`, means the caller holds every entry
+	 * in memory. A path that is gone throws.
+	 */
+	openPinnedReaderSync?(path: string): PinnedSessionReader | undefined;
 	writeText(path: string, content: string): Promise<void>;
 	writeTextAtomic(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void>;
 	/**
@@ -215,6 +237,51 @@ const writerRegistry = new FinalizationRegistry<number>(fd => {
 		// Ignore - fd may already be closed or invalid
 	}
 });
+
+/** Closes the descriptor of a pinned reader that was dropped without {@link PinnedSessionReader.close}. */
+const pinnedReaderRegistry = new FinalizationRegistry<number>(fd => {
+	try {
+		fs.closeSync(fd);
+	} catch {
+		// Already closed.
+	}
+});
+
+class FilePinnedSessionReader implements PinnedSessionReader {
+	readonly identity: string;
+	#fd: number | undefined;
+
+	constructor(fd: number, identity: string) {
+		this.#fd = fd;
+		this.identity = identity;
+		pinnedReaderRegistry.register(this, fd, this);
+	}
+
+	read(offset: number, length: number): string {
+		const fd = this.#fd;
+		if (fd === undefined) throw new Error("Pinned session reader is closed");
+		const buffer = Buffer.allocUnsafe(length);
+		let filled = 0;
+		while (filled < length) {
+			const read = fs.readSync(fd, buffer, filled, length - filled, offset + filled);
+			if (read === 0) {
+				throw new Error(
+					`Short read from session object ${this.identity}: ${filled} of ${length} bytes at ${offset}`,
+				);
+			}
+			filled += read;
+		}
+		return buffer.toString("utf-8");
+	}
+
+	close(): void {
+		const fd = this.#fd;
+		if (fd === undefined) return;
+		this.#fd = undefined;
+		pinnedReaderRegistry.unregister(this);
+		fs.closeSync(fd);
+	}
+}
 
 export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 	#closed = false;
@@ -502,6 +569,24 @@ export class FileSessionStorage implements SessionStorage {
 			return fs.readFileSync(path, "utf-8");
 		} catch (err) {
 			if (isEnoent(err)) return undefined;
+			throw toError(err);
+		}
+	}
+
+	/**
+	 * On Windows a rename over a path fails while another handle holds the file open, unless every
+	 * holder shares delete access, which this process cannot promise for the handles antivirus and
+	 * indexers open. Holding a read handle there would turn each republish into the EPERM fallback,
+	 * so the pin is POSIX only.
+	 */
+	openPinnedReaderSync(path: string): PinnedSessionReader | undefined {
+		if (process.platform === "win32") return undefined;
+		const fd = fs.openSync(path, "r");
+		try {
+			const stats = fs.fstatSync(fd);
+			return new FilePinnedSessionReader(fd, `${stats.dev}:${stats.ino}`);
+		} catch (err) {
+			fs.closeSync(fd);
 			throw toError(err);
 		}
 	}

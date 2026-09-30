@@ -8,6 +8,7 @@ import {
 	clamp,
 	clampLow,
 	errorMessage,
+	exponentialBackoffDelay,
 	isEexist,
 	isEnoent,
 	isProcessAlive,
@@ -368,7 +369,7 @@ export class DaemonBroker {
 	) {
 		this.#projectDir = projectDir;
 		this.#runtimeDir = runtimeDir;
-		this.#endpoint = daemonBrokerEndpoint(projectDir, runtimeDir);
+		this.#endpoint = daemonBrokerEndpoint(runtimeDir);
 		this.#token = token;
 		this.#idleGraceMs = Number.isFinite(idleGraceMs) && idleGraceMs >= 0 ? idleGraceMs : DEFAULT_IDLE_GRACE_MS;
 		this.#cleanupWaitMs =
@@ -913,7 +914,11 @@ export class DaemonBroker {
 			record.consecutiveFailures = uptime >= 30_000 ? 0 : record.consecutiveFailures + 1;
 			record.snapshot.restartCount++;
 			record.snapshot.state = "restarting";
-			const delay = Math.min(1_000 * 2 ** Math.min(record.consecutiveFailures, 5), RESTART_MAX_DELAY_MS);
+			const delay = exponentialBackoffDelay(record.consecutiveFailures, {
+				baseMs: 1_000,
+				maxMs: RESTART_MAX_DELAY_MS,
+				jitter: 0,
+			});
 			record.log?.append(
 				`\n[daemon exited${exitCode === undefined ? "" : ` with code ${exitCode}`}; restarting in ${delay}ms]\n`,
 			);

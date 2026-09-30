@@ -7,6 +7,7 @@
 
 import * as fsSync from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { EventLoopKeepalive } from "@veyyon/agent-core";
@@ -15,15 +16,20 @@ import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { describePendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
 import { formatNotice, OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import {
+	foreignSessionFileProfile,
+	listSessionsReadOnly,
 	type ResolvedSessionMatch,
 	resolveResumableSession,
 	type SessionInfo,
 } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
+import { releaseEmbeddedModulePages } from "@veyyon/natives";
 import {
 	$env,
 	BUILD_TAG,
 	errorMessage,
+	getActiveProfileOrDefault,
 	getLogPath,
 	getProjectDir,
 	logger,
@@ -33,6 +39,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@veyyon/utils";
+import { IdleTrim, trimEngine } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
 import {
 	type Args,
@@ -370,6 +377,18 @@ function pauseStartupWatchdog(): void {
 function resumeStartupWatchdog(): void {
 	if (startupWatchdogActive) armStartupWatchdog();
 }
+
+/**
+ * Once a root command has been quiet (see `IdleTrim`): discards compiled code, returns free malloc
+ * pages, and unmaps the resident pages of the binary's embedded module graph, which loading every
+ * module left mapped.
+ */
+const idleTrim = new IdleTrim({
+	trim: () => {
+		trimEngine();
+		releaseEmbeddedModulePages();
+	},
+});
 
 export interface InteractiveModeNotify {
 	kind: "warn" | "error" | "info";
@@ -869,6 +888,31 @@ async function forkSessionArgument(parsed: Args, forkSource: string, cwd: string
 	return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 }
 
+/**
+ * Fork a session another profile wrote into the active profile, at the session's recorded
+ * directory when it still exists and the launch directory otherwise.
+ *
+ * Reached only when the launch pinned a profile: a plain `--resume` activates the owning profile at
+ * startup (`cli/resume-profile.ts`), so the match is its own. A pinned profile never writes another
+ * profile's transcript in place; the fork is a new session in the pinned profile whose history is
+ * the source's, and the source stays untouched.
+ */
+async function forkFromOtherProfile(
+	parsed: Args,
+	source: Pick<SessionInfo, "path" | "id" | "cwd">,
+	owner: string,
+	cwd: string,
+): Promise<SessionManager> {
+	const forkCwd = source.cwd && fsSync.existsSync(source.cwd) ? source.cwd : cwd;
+	const manager = await SessionManager.forkFrom(source.path, forkCwd, parsed.sessionDir);
+	process.stderr.write(
+		`${chalk.dim(
+			`Session ${source.id} belongs to profile "${owner}"; forked into profile "${getActiveProfileOrDefault()}" as ${manager.getSessionId()}.`,
+		)}\n`,
+	);
+	return manager;
+}
+
 async function resumeSessionArgument(
 	parsed: Args,
 	sessionArg: string,
@@ -876,9 +920,26 @@ async function resumeSessionArgument(
 	askToMoveSession: SessionPrompt,
 ): Promise<SessionManager | undefined> {
 	if (namesSessionFile(sessionArg)) {
+		const owner = foreignSessionFileProfile(sessionArg);
+		if (owner !== undefined) {
+			// The listing's record supplies the recorded cwd; a file it does not list forks at the launch cwd.
+			const file = path.resolve(sessionArg);
+			const listed = (await listSessionsReadOnly(path.dirname(file), new FileSessionStorage())).find(
+				session => path.resolve(session.path) === file,
+			);
+			return await forkFromOtherProfile(
+				parsed,
+				listed ?? { path: file, id: path.basename(file), cwd: "" },
+				owner,
+				cwd,
+			);
+		}
 		return await SessionManager.open(sessionArg, parsed.sessionDir);
 	}
 	const match = await findSessionOrThrow(sessionArg, cwd, parsed.sessionDir);
+	if (match.scope === "profile") {
+		return await forkFromOtherProfile(parsed, match.session, match.profile, cwd);
+	}
 	// A match whose recorded cwd no longer exists is moved into this project
 	// first. Any other match, from this project or another one, opens where it
 	// is, and the launch continues in its recorded directory.
@@ -1379,13 +1440,22 @@ export async function runRootCommand(
 ): Promise<void> {
 	logger.startTiming();
 	startStartupWatchdog();
+	// Every mode runner is reached from here, so the trim covers each of them without per-mode
+	// wiring. Startup keeps the process busy, so nothing is trimmed before the first idle stretch.
+	idleTrim.start();
 	try {
 		await runRootCommandInner(parsed, rawArgs, deps);
 	} finally {
 		// A throw or early return before a mode handoff must not leak the
 		// watchdog interval into embedders or long-lived test processes.
 		stopStartupWatchdog();
+		idleTrim.stop();
 	}
+}
+
+/** True while the idle trim samples the process. Test observability only. */
+export function __idleTrimRunningForTests(): boolean {
+	return idleTrim.running;
 }
 
 /** True while the startup watchdog interval is armed. Test observability only. */
@@ -2064,7 +2134,12 @@ interface LaunchSessionShared {
  * bootstrap: ACP keeps several concurrent top-level sessions and a single
  * process-global factory must not be clobbered by the most recent one.
  */
-function installPersistedAgentReviver(launch: RootLaunch, session: AgentSession, enableLsp: boolean): void {
+function installPersistedAgentReviver(
+	launch: RootLaunch,
+	session: AgentSession,
+	eventBus: EventBus,
+	enableLsp: boolean,
+): void {
 	const { settings } = launch;
 	AgentLifecycleManager.global().setPersistedAgentReviverFactory(
 		createPersistedAgentReviverFactory({
@@ -2072,6 +2147,7 @@ function installPersistedAgentReviver(launch: RootLaunch, session: AgentSession,
 			authStorage: launch.authStorage,
 			modelRegistry: launch.modelRegistry,
 			settings,
+			eventBus,
 			enableLsp,
 		}),
 		() => resolveAgentIdleTtlMs(settings),
@@ -2091,8 +2167,8 @@ function installPersistedAgentReviver(launch: RootLaunch, session: AgentSession,
  * running turn keeps writing its own transcript, and no inherited
  * provider state, which `AgentSession.newSession` also drops when it
  * resets in place. `mcpManager` is passed so the new session reuses the
- * connected servers rather than re-discovering and re-owning them; the
- * handed-off session stays their owner for the life of the process.
+ * connected servers rather than re-discovering them; each session holds the
+ * manager, and the last one disposed disconnects it.
  */
 function nextSessionFactory(
 	sessionOptions: CreateAgentSessionOptions,
@@ -2249,7 +2325,7 @@ async function runSessionLaunch(
 	// activate an external adapter. This starts no poller or socket; an
 	// authorized extension can bind actor/chat credentials to this session.
 	installTelegramNativeControlHost(() => session.sessionManager.getSessionId());
-	installPersistedAgentReviver(launch, session, sessionOptions.enableLsp ?? true);
+	installPersistedAgentReviver(launch, session, eventBus, sessionOptions.enableLsp ?? true);
 	if (launch.parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		launch.authStorage.setRuntimeApiKey(session.model.provider, launch.parsedArgs.apiKey);
 	}

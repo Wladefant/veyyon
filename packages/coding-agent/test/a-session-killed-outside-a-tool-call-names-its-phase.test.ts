@@ -39,6 +39,18 @@ interface LogEntry {
 	heartbeatAt?: string;
 	activeLanes?: number;
 	lanes?: number;
+	rssBytes?: number;
+	freeMemBytes?: number;
+	heapTotal?: number;
+	heapUsed?: number;
+	external?: number;
+	smol?: boolean;
+	forceRAMSize?: string;
+	commitChargeBytes?: number;
+	commitLimitBytes?: number;
+	processCommitBytes?: number;
+	cgroupMemoryBytes?: number;
+	cgroupMemoryMaxBytes?: number;
 }
 
 interface Arena {
@@ -182,6 +194,19 @@ describe("a session that died below JavaScript", () => {
 
 		const beat = readHeartbeat(arena, pid);
 		expect(beat.phase).toBe("provider");
+		// The memory reading a process killed for want of memory leaves behind.
+		expect(beat.rssBytes).toBeGreaterThan(0);
+		expect(beat.freeMemBytes).toBeGreaterThan(0);
+		expect(beat.heapTotal).toBeGreaterThan(0);
+		expect(beat.heapUsed).toBeGreaterThan(0);
+		expect(beat.external).toBeGreaterThanOrEqual(0);
+		// The resource that runs out on Windows is commit, not RAM: the limit is
+		// RAM plus pagefile, and this process holds some of the charge.
+		if (process.platform === "win32") {
+			expect(beat.commitChargeBytes).toBeGreaterThan(0);
+			expect(beat.commitLimitBytes).toBeGreaterThanOrEqual(beat.commitChargeBytes ?? Number.POSITIVE_INFINITY);
+			expect(beat.processCommitBytes).toBeGreaterThan(0);
+		}
 
 		await runFixture(arena, "report");
 
@@ -194,13 +219,23 @@ describe("a session that died below JavaScript", () => {
 		// The spawned lane streaming beside Main, as in the incident.
 		expect(reported[0].lanes).toBe(1);
 		expect(reported[0].activeLanes).toBe(1);
+		expect(reported[0].rssBytes).toBe(beat.rssBytes);
+		expect(reported[0].freeMemBytes).toBe(beat.freeMemBytes);
+		expect(reported[0].heapTotal).toBe(beat.heapTotal);
+		expect(reported[0].heapUsed).toBe(beat.heapUsed);
+		expect(reported[0].external).toBe(beat.external);
+		expect(reported[0].commitChargeBytes).toBe(beat.commitChargeBytes);
+		expect(reported[0].commitLimitBytes).toBe(beat.commitLimitBytes);
+		expect(reported[0].processCommitBytes).toBe(beat.processCommitBytes);
+		expect(reported[0].cgroupMemoryBytes).toBe(beat.cgroupMemoryBytes);
+		expect(reported[0].cgroupMemoryMaxBytes).toBe(beat.cgroupMemoryMaxBytes);
 		expect(Date.parse(reported[0].startedAt ?? "")).toBeGreaterThan(0);
 		expect(Date.parse(reported[0].heartbeatAt ?? "")).toBeGreaterThanOrEqual(Date.parse(reported[0].startedAt ?? ""));
 		// Swept, so the same death is not re-reported on every later launch.
 		expect(heartbeatFiles(arena)).toEqual([]);
 		await runFixture(arena, "report");
 		expect(silentDeaths(arena)).toHaveLength(1);
-	}, 60_000);
+	}, 120_000);
 
 	it("is named with its tool phase when it died inside a call", async () => {
 		const arena = createArena();

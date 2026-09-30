@@ -12,7 +12,7 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-import { clampLow, errorMessage, isEnoent, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
+import { clampLow, errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
 import { normalizePathForComparison } from "@veyyon/utils/dirs";
 import { type } from "arktype";
 import type { AsyncJobManager } from "../../async/job-manager";
@@ -44,6 +44,7 @@ import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath } from "../core/render-util
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
+import { bashApprovalPattern } from "./bash-approval-pattern";
 import { registerForegroundBashWait } from "./bash-foreground-registry";
 import {
 	bashCredentialTargets,
@@ -215,7 +216,13 @@ export function bashApprovalDecision(
 			? { tier: "exec", critical: true, reason: flagged.reason }
 			: { tier: "exec", override: true, reason: flagged.reason };
 	}
-	return "exec";
+	// A session grant covers the pattern alone, so a call that also sets its own
+	// environment or working directory reports none: `ls` with `LD_PRELOAD`, or
+	// `ls` run from `/etc`, is not the `ls` the grant was made for.
+	const rawEnv = (args as Partial<BashToolInput>).env;
+	const setsEnv = rawEnv !== undefined && rawEnv !== null && Object.keys(rawEnv).length > 0;
+	const pattern = setsEnv || effectiveCwd !== undefined ? undefined : bashApprovalPattern(command);
+	return pattern === undefined ? "exec" : { tier: "exec", pattern };
 }
 
 function saveBashOriginalArtifact(session: ToolSession, originalText: string): Promise<string | undefined> {
@@ -227,30 +234,34 @@ const bashCwdStatement = statementById("tool-policy/bash-cwd");
 if (!bashCwdStatement) throw new Error("Missing required tool-policy/bash-cwd prompt statement");
 const BASH_CWD_DESCRIPTION = bashCwdStatement.text.trim();
 
-const bashSchemaBase = type({
-	command: type("string").describe("command to execute"),
-	"env?": type({ "[string]": "string" }).describe("extra env vars"),
-	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
-	"cwd?": type("string").describe(BASH_CWD_DESCRIPTION),
-	"pty?": type("boolean").describe("run in pty mode"),
-	"backgroundAfter?": type("number").describe(
-		"seconds this command may hold the foreground before it moves to a background job; 0 backgrounds it immediately. Overrides the auto-background setting for this one call, and applies even when that setting is off.",
-	),
-});
+const bashSchemaBase = lazy(() =>
+	type({
+		command: type("string").describe("command to execute"),
+		"env?": type({ "[string]": "string" }).describe("extra env vars"),
+		"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
+		"cwd?": type("string").describe(BASH_CWD_DESCRIPTION),
+		"pty?": type("boolean").describe("run in pty mode"),
+		"backgroundAfter?": type("number").describe(
+			"seconds this command may hold the foreground before it moves to a background job; 0 backgrounds it immediately. Overrides the auto-background setting for this one call, and applies even when that setting is off.",
+		),
+	}),
+);
 
-const bashSchemaWithAsync = type({
-	command: "string",
-	"env?": { "[string]": "string" },
-	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
-	"cwd?": type("string").describe(BASH_CWD_DESCRIPTION),
-	"pty?": "boolean",
-	"async?": type("boolean").describe("run in background"),
-	"backgroundAfter?": type("number").describe(
-		"seconds this command may hold the foreground before it moves to a background job; 0 backgrounds it immediately. Overrides the auto-background setting for this one call, and applies even when that setting is off.",
-	),
-});
+const bashSchemaWithAsync = lazy(() =>
+	type({
+		command: "string",
+		"env?": { "[string]": "string" },
+		"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
+		"cwd?": type("string").describe(BASH_CWD_DESCRIPTION),
+		"pty?": "boolean",
+		"async?": type("boolean").describe("run in background"),
+		"backgroundAfter?": type("number").describe(
+			"seconds this command may hold the foreground before it moves to a background job; 0 backgrounds it immediately. Overrides the auto-background setting for this one call, and applies even when that setting is off.",
+		),
+	}),
+);
 
-type BashToolSchema = typeof bashSchemaBase | typeof bashSchemaWithAsync;
+type BashToolSchema = typeof bashSchemaBase.value | typeof bashSchemaWithAsync.value;
 
 export interface BashToolInput {
 	command: string;
@@ -508,7 +519,9 @@ function stripHeredocBodies(command: string): string {
  *
  * Executes bash commands with optional timeout and working directory.
  */
-export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSchemaWithAsync, BashToolDetails> {
+export class BashTool
+	implements AgentTool<typeof bashSchemaBase.value | typeof bashSchemaWithAsync.value, BashToolDetails>
+{
 	readonly name = "bash";
 	readonly view = bashToolView;
 	// An arrow rather than the bare function so `this.session` is read at CALL
@@ -554,7 +567,9 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			),
 		});
 	}
-	readonly parameters: BashToolSchema;
+	get parameters(): BashToolSchema {
+		return this.#asyncEnabled ? bashSchemaWithAsync.value : bashSchemaBase.value;
+	}
 	// Non-pty calls run alongside each other (the executor isolates overlapping
 	// runs on the same shell session); pty takes over the terminal UI and must
 	// run alone.
@@ -584,7 +599,6 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			0,
 			Math.floor(this.session.settings.get("bash.stallDetection.stallMs") ?? DEFAULT_STALL_DETECTION_MS),
 		);
-		this.parameters = this.#asyncEnabled ? bashSchemaWithAsync : bashSchemaBase;
 	}
 
 	#formatResultOutput(result: BashResult | BashInteractiveResult): string {

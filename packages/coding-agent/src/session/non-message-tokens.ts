@@ -126,8 +126,8 @@ function prunesToolDescriptions(session: AgentSession): boolean {
  */
 // Non-message inputs (system prompt, tools, skills) change rarely — at most
 // once per turn via setSystemPrompt/setTools — but the per-turn compaction and
-// threshold paths call these helpers several times: getContextBreakdown calls
-// both, and #estimateStoredContextTokens adds a third. Memoize on the identity
+// threshold paths call these helpers several times: the context breakdown calls
+// both, and the stored-context estimate adds a third. Memoize on the identity
 // of the three input arrays so the expensive parts (system-prompt tokenization
 // and the per-tool JSON.stringify(toolWireSchema) inside estimateToolSchemaTokens)
 // run at most once per input change rather than per call. The identity keys are

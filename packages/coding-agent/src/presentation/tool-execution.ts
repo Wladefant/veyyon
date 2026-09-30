@@ -182,15 +182,13 @@ export interface ToolExecutionBuildParams {
  * Presentation policies for the card, read from the tool's own policy and its registry definition.
  * A predicate policy is evaluated against the call's arguments.
  */
-function resolveToolExecutionPolicies(
-	params: ToolExecutionBuildParams,
-	definition: ToolViewDefinition | undefined,
-	isPartial: boolean,
-	sealed: boolean,
-): ToolExecutionPolicies {
+function resolveToolExecutionPolicies(params: ToolExecutionBuildParams): ToolExecutionPolicies {
 	const toolName = params.toolName;
 	const args = params.args;
 	const result = params.result;
+	const definition = params.toolViewDefinition ?? toolViewDefinitions[toolName];
+	const isPartial = params.isPartial ?? result === undefined;
+	const sealed = params.sealed ?? false;
 	const toolPolicy = params.tool as Partial<ToolViewDefinition> | undefined;
 	const mergeCallAndResult =
 		toolPolicy?.mergeCallAndResult === true ||
@@ -256,7 +254,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 
 	// Tool view definition & policies
 	const definition = params.toolViewDefinition ?? toolViewDefinitions[toolName];
-	const policies = resolveToolExecutionPolicies(params, definition, isPartial, sealed);
+	const policies = resolveToolExecutionPolicies(params);
 
 	// Call args resolution
 	const callArgs = params.callPreview ? params.callPreview.arguments : args;
@@ -397,18 +395,32 @@ export interface ToolExecutionProducerParams {
 	cwd?: string;
 }
 
+/** What the card drawing a producer's block is on: its expansion, spinner frame and freeze. */
+export type ToolExecutionDrawContext = Pick<ToolExecutionBuildParams, "expanded" | "frame" | "frozen">;
+
+const NO_LISTENERS: readonly (() => void)[] = [];
+
 export class ToolExecutionProducer {
 	#params: ToolExecutionBuildParams & { isPartial: boolean; sealed: boolean };
 	#callPreview: ToolCallPreview;
-	#listeners = new Set<(block: ToolExecutionBlock) => void>();
 	/**
-	 * The block for the current parameters, or `undefined` once they changed with nobody listening.
+	 * Replaced, never mutated, so a notify walks the listeners it started with. A card subscribes
+	 * once, and a one-element array is smaller than the backing store of a one-element Set.
+	 */
+	#listeners: readonly (() => void)[] = NO_LISTENERS;
+	/**
+	 * The block for the current parameters and context, or `undefined` once either changed. It is
+	 * built when it is next read, never when it changes.
 	 *
-	 * A change nobody is subscribed to is built when the block is next read rather than when it
-	 * happens: a card disposed with its transcript seals its producer on the way out, and building the
-	 * sealed block there cost a rebuilt 64k-block transcript two seconds for a block nobody read.
+	 * A card changes several times before a frame draws it: a rebuilt transcript hands it the call and
+	 * then the result, and its spinner starts and stops in between. Building on each change built a
+	 * rebuilt 3,959-card transcript 13,210 blocks for the 3,959 its first frame drew. A card disposed
+	 * with its transcript seals its producer on the way out, and building that sealed block cost a
+	 * rebuilt 64k-block transcript two seconds for a block nobody read.
 	 */
 	#currentBlock: ToolExecutionBlock | undefined;
+	/** The policies for the current parameters and context, which a card reads without building its views. */
+	#currentPolicies: ToolExecutionPolicies | undefined;
 	/** The arguments as the model sent them, so a repeat of the same object is recognised before conforming. */
 	#rawArgs: unknown;
 
@@ -433,7 +445,7 @@ export class ToolExecutionProducer {
 			snapshots: params.options?.snapshots,
 			fuzzyThreshold: params.options?.editFuzzyThreshold,
 			allowFuzzy: params.options?.editAllowFuzzy,
-			onChange: () => this.#recompute(),
+			onChange: () => this.#changed(),
 		});
 		this.#params.callPreview = this.#callPreview;
 		this.#callPreview.update(args);
@@ -452,6 +464,12 @@ export class ToolExecutionProducer {
 		return this.#params.toolCallId;
 	}
 
+	set toolCallId(toolCallId: string | undefined) {
+		if (toolCallId === this.#params.toolCallId) return;
+		this.#params.toolCallId = toolCallId;
+		this.#changed();
+	}
+
 	get callPreview(): ToolCallPreview {
 		return this.#callPreview;
 	}
@@ -468,10 +486,11 @@ export class ToolExecutionProducer {
 		return this.#params.sealed;
 	}
 
-	subscribe(listener: (block: ToolExecutionBlock) => void): () => void {
-		this.#listeners.add(listener);
+	/** Call `listener` when the block changes. The listener reads the block when it needs it. */
+	subscribe(listener: () => void): () => void {
+		if (!this.#listeners.includes(listener)) this.#listeners = [...this.#listeners, listener];
 		return () => {
-			this.#listeners.delete(listener);
+			this.#listeners = this.#listeners.filter(existing => existing !== listener);
 		};
 	}
 
@@ -482,14 +501,14 @@ export class ToolExecutionProducer {
 		const args = displayArguments(this.#params.tool, rawArgs);
 		this.#params.args = args;
 		this.#callPreview.update(args);
-		this.#recompute();
+		this.#changed();
 	}
 
 	setArgsComplete(toolCallId?: string): void {
 		if (toolCallId) this.#params.toolCallId = toolCallId;
 		this.#callPreview.complete = true;
 		this.#callPreview.update(this.#params.args);
-		this.#recompute();
+		this.#changed();
 	}
 
 	updateResult(result: NonNullable<ToolExecutionBuildParams["result"]>, isPartial = false, toolCallId?: string): void {
@@ -497,45 +516,65 @@ export class ToolExecutionProducer {
 		this.#params.result = result;
 		this.#params.isPartial = isPartial;
 		if (!isPartial) this.#callPreview.complete = true;
-		this.#recompute();
+		this.#changed();
 	}
 
 	seal(): void {
 		if (this.#params.sealed) return;
 		this.#params.sealed = true;
 		this.#callPreview.stop();
-		this.#recompute();
+		this.#changed();
 	}
 
 	async whenSettled(): Promise<void> {
 		await this.#callPreview.whenSettled();
 	}
 
-	produceBlock(context?: Pick<ToolExecutionBuildParams, "expanded" | "frame" | "frozen">): ToolExecutionBlock {
-		if (!context) return this.block;
+	/** The block for `context`, built on the first read after the parameters or the context changed. */
+	produceBlock(context?: ToolExecutionDrawContext): ToolExecutionBlock {
+		if (context) this.#applyContext(context);
+		return this.block;
+	}
+
+	/**
+	 * Forget the built block. Nothing changed, so no listener hears of it; the next read builds the
+	 * same block from the same parameters.
+	 */
+	releaseBlock(): void {
+		this.#currentBlock = undefined;
+	}
+
+	/**
+	 * The card's presentation policies for `context`. They are the policies the block for `context`
+	 * carries, resolved without building its views, so a card deciding whether to animate, freeze or
+	 * give way to the next call does not project a view nobody draws.
+	 */
+	policies(context?: ToolExecutionDrawContext): ToolExecutionPolicies {
+		if (context) this.#applyContext(context);
+		this.#currentPolicies ??= this.#currentBlock?.display?.policies ?? resolveToolExecutionPolicies(this.#params);
+		return this.#currentPolicies;
+	}
+
+	#applyContext(context: ToolExecutionDrawContext): void {
 		const expanded = context.expanded ?? false;
 		if (
 			(this.#params.expanded ?? false) === expanded &&
 			this.#params.frame === context.frame &&
 			this.#params.frozen === context.frozen
 		) {
-			return this.block;
+			return;
 		}
 		this.#params.expanded = expanded;
 		this.#params.frame = context.frame;
 		this.#params.frozen = context.frozen;
-		this.#currentBlock = buildToolExecutionBlock(this.#params);
-		return this.#currentBlock;
+		this.#currentBlock = undefined;
+		this.#currentPolicies = undefined;
 	}
 
-	#recompute(): void {
-		if (this.#listeners.size === 0) {
-			this.#currentBlock = undefined;
-			return;
-		}
-		const block = buildToolExecutionBlock(this.#params);
-		this.#currentBlock = block;
-		for (const listener of this.#listeners) listener(block);
+	#changed(): void {
+		this.#currentBlock = undefined;
+		this.#currentPolicies = undefined;
+		for (const listener of this.#listeners) listener();
 	}
 }
 

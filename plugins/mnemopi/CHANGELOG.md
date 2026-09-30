@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
+- The extraction client waits between fallback models through `scheduler.wait` from `node:timers/promises`, the wait its rate-limit retries use; the delay is unchanged.
+
 ## [1.5.0] - 2026-09-18
 
 ### Changed

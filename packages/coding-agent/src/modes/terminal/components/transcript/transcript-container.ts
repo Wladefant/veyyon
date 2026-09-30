@@ -77,6 +77,28 @@ function getBlockSettledRows(child: Component): number {
 }
 
 /**
+ * A segment a component-scoped frame carried whole, whose block is still finalized
+ * at the version it rendered. The previous frame returned these rows and the engine
+ * read them against the terminal, so the carrying frame is the render once more that
+ * a block which finalized or changed version needs before it leaves the frame.
+ */
+function isSettledSince(segment: BlockSegment): boolean {
+	return (
+		segment.finalized && isBlockFinalized(segment.component) && getBlockVersion(segment.component) === segment.version
+	);
+}
+
+/** Index of the first segment from `start` that holds rows, or -1 when none does. */
+function firstRowOwner(segments: readonly (BlockSegment | undefined)[], start: number): number {
+	for (let i = start; i < segments.length; i++) {
+		const segment = segments[i];
+		if (segment === undefined) return -1;
+		if (segment.rowCount > 0) return i;
+	}
+	return -1;
+}
+
+/**
  * A live block's declared settled rows (see {@link FinalizableBlock}) mapped
  * from its raw render into its stripped contribution.
  */
@@ -135,7 +157,10 @@ interface BlockSegment {
 	sep: number;
 	/** Whether the block reported finalized when this segment was rendered. */
 	finalized: boolean;
-	/** Safe to drop after commit: produced while finalized, without post-finalize version tracking. */
+	/**
+	 * Safe to drop after commit: produced by a finalized render at the version the
+	 * previous frame rendered, so the rows the terminal holds are these rows.
+	 */
 	compactable: boolean;
 	/** Block version observed when this segment was rendered (see {@link FinalizableBlock}). */
 	version: number | undefined;
@@ -348,9 +373,13 @@ export class TranscriptContainer
 	}
 
 	prepareNativeScrollbackReplay(): void {
+		// The replay frame drops nothing, whether or not an earlier frame did:
+		// the previous paint may have published a commit claim this transcript
+		// has not dropped yet, and dropping it now would leave the replay with
+		// only the tail of the history it erases.
+		this.#replayPending = true;
 		if (this.#compactedChildStart === 0) return;
 		this.#compactedChildStart = 0;
-		this.#replayPending = true;
 		this.#generation++;
 		this.#lines.length = 0;
 		this.#stableRowsFloor = 0;
@@ -538,8 +567,9 @@ export class TranscriptContainer
 		if (!cursor.chainStable) lines.length = 0;
 
 		// Frame row cursor: rows emitted (reused or pushed) so far. The rows above
-		// a scoped frame's first requested child are reused whole.
-		cursor.row = scopedFrame ? previousSegments[resume]!.startRow : 0;
+		// a scoped frame's first requested child are reused whole; a frame naming
+		// no child reuses every row.
+		cursor.row = scopedFrame ? (resume === count ? lines.length : previousSegments[resume]!.startRow) : 0;
 		cursor.stableRows = cursor.row;
 		this.#assembleBlocks(resume, count, width, previousSegments, segments, lines);
 
@@ -555,7 +585,7 @@ export class TranscriptContainer
 		if (this.#replayPending) {
 			this.#replayPending = false;
 		} else {
-			this.#compactCommittedPrefix();
+			this.#compactCommittedPrefix(scopedFrame ? resume : firstChild);
 		}
 		return lines;
 	}
@@ -663,7 +693,13 @@ export class TranscriptContainer
 					? previous
 					: undefined;
 			const contribution = reused !== undefined ? reused.contribution : stripPlainBlankEdges(raw);
-			const compactable = finalized && version === undefined && previous?.finalized !== false;
+			// A block that finalized or changed version this frame renders once more
+			// before it may leave: the committed-prefix audit reads that render
+			// against the rows the terminal already holds. A post-finalize mutation
+			// of a block already dropped reaches the screen on the next replay, which
+			// renders every child from its source; the dropped block sits a screen
+			// or more above the window, where history is not rewritten.
+			const compactable = finalized && previous?.finalized !== false && previous?.version === version;
 
 			let sep = 0;
 			if (contribution.length === 0) this.#placeEmptyBlock(i, reused, lines);
@@ -767,7 +803,8 @@ export class TranscriptContainer
 	 * frame that is the earliest named child, when the previous render still stands
 	 * for every child above it: same width, same generation (an invalidation or a
 	 * replay bumps it), no child added or removed, and that child's segment where
-	 * the last render left it. Any other frame starts at the first uncompacted child.
+	 * the last render left it. An empty set names no child, so every segment stands
+	 * and the index is `count`. Any other frame starts at the first uncompacted child.
 	 */
 	#scopedResumeIndex(scoped: ReadonlySet<Component> | null, width: number, count: number): number {
 		const first = this.#compactedChildStart;
@@ -790,11 +827,16 @@ export class TranscriptContainer
 			if (index < resume) resume = index;
 		}
 		if (resume <= first) return first;
+		if (resume === count) return count;
 		const segment = this.#segments[resume];
 		return segment !== undefined && segment.component === children[resume] ? resume : first;
 	}
 
-	#compactCommittedPrefix(): void {
+	/**
+	 * Drop the leading blocks whose rows are committed past the rows kept in hand.
+	 * Segments below `carriedUntil` were carried whole from the previous frame.
+	 */
+	#compactCommittedPrefix(carriedUntil: number): void {
 		if (this.#committedRows <= 0 || this.#compactedChildStart >= this.children.length) return;
 		// Committed rows above this are droppable; the rest is the screen's worth
 		// the engine keeps in hand for a shrink. The ceiling bounds the drop only —
@@ -809,24 +851,35 @@ export class TranscriptContainer
 		let dropUntil = this.#compactedChildStart;
 		for (let i = this.#compactedChildStart; i < segments.length; i++) {
 			const segment = segments[i];
-			if (segment === undefined || !segment.compactable) break;
+			if (segment === undefined || !(segment.compactable || (i < carriedUntil && isSettledSince(segment)))) break;
 			const segmentEnd = segment.startRow + segment.rowCount;
 			if (segmentEnd > dropCeiling) break;
 			dropRows = segmentEnd;
 			dropUntil = i + 1;
 		}
-		const retained = segments[dropUntil];
-		if (retained !== undefined && retained.sep > 0) {
-			const committedSeparatorRows = dropCeiling - retained.startRow;
-			if (committedSeparatorRows <= 0) {
-				dropRows = 0;
-				dropUntil = this.#compactedChildStart;
-			} else {
-				const trim = Math.min(retained.sep, committedSeparatorRows);
-				dropRows += trim;
-				retained.sep -= trim;
-				retained.rowCount -= trim;
-			}
+		// A frame opens on content: a block placed at row 0 derives no separator, so the
+		// first block the frame keeps leaves its separator with the dropped rows. The
+		// drop takes rows only below its ceiling. A separator that reaches past the
+		// ceiling keeps the last block that holds rows instead, whose separator lies
+		// below it. Abandoning the drop there would hold the whole prefix for as long
+		// as the ceiling stands on that boundary, which in an idle session is every frame.
+		let ownerIndex = firstRowOwner(segments, dropUntil);
+		let owner = ownerIndex < 0 ? undefined : segments[ownerIndex];
+		if (owner !== undefined && owner.sep > 0 && owner.startRow + owner.sep > dropCeiling) {
+			ownerIndex = dropUntil - 1;
+			while (ownerIndex >= this.#compactedChildStart && segments[ownerIndex]!.rowCount === 0) ownerIndex--;
+			if (ownerIndex < this.#compactedChildStart) return;
+			owner = segments[ownerIndex]!;
+			dropUntil = ownerIndex;
+			dropRows = owner.startRow;
+		}
+		if (owner !== undefined && owner.sep > 0) {
+			const trim = owner.sep;
+			// The kept blocks up to the first that holds rows start below the trimmed separator.
+			for (let i = dropUntil; i <= ownerIndex; i++) segments[i]!.startRow += trim;
+			dropRows += trim;
+			owner.sep = 0;
+			owner.rowCount -= trim;
 		}
 		if (dropRows === 0) return;
 
@@ -835,6 +888,9 @@ export class TranscriptContainer
 		for (let i = this.#compactedChildStart; i < dropUntil; i++) {
 			const segment = segments[i];
 			if (segment === undefined) continue;
+			// The rows now live only in the terminal's scrollback. A replay renders the
+			// block again from its source, so the rows memoized for the next frame are dead weight.
+			segment.component.releaseRenderCache?.();
 			segments[i] = {
 				component: segment.component,
 				rawRef: EMPTY_TAIL,

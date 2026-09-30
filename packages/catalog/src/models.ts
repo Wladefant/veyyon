@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 import { buildModel } from "./build";
 import type { ModelReferenceCandidate } from "./identity/reference";
-import modelsSourceJson from "./models.json" with { type: "text" };
+import modelsJsonAsset from "./models.json" with { type: "file" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
 import { ZERO_MODEL_COST } from "./utils";
 
@@ -16,7 +18,7 @@ import { ZERO_MODEL_COST } from "./utils";
 
 /**
  * Shape of the generated `models.json`, declared independently of the import:
- * the source arrives as text so its bytes can feed the snapshot fingerprint,
+ * the catalog arrives as a file so its bytes can feed the snapshot fingerprint,
  * and parsing waits until a consumer actually builds the registry (a snapshot
  * hit never parses the catalog at all).
  */
@@ -25,10 +27,12 @@ type BundledModelsJson = { readonly [provider: string]: BundledProviderModels };
 
 export type GeneratedProvider = Extract<keyof BundledModelsJson, string>;
 
-// The json import resolves through the file itself rather than a sibling
-// declaration, so its value arrives typed as the literal document; one cast
-// pins it to the text this module treats it as.
-const modelsSource = modelsSourceJson as unknown as string;
+// A file import resolves to a path: absolute in a source checkout, under
+// `/$bunfs/` in a compiled binary, and relative to the bundle in `dist/cli.js`.
+// The catalog is read when a consumer needs it and released after, where a
+// text import holds the 2.2 MB document on the heap for the life of the process.
+// The json import is typed as the literal document; one cast pins it to the path.
+const modelsPath = path.resolve(import.meta.dirname, modelsJsonAsset as unknown as string);
 
 /**
  * Persisted enriched-registry snapshot format. The snapshot stores RESOLVED
@@ -41,6 +45,16 @@ const ENRICHED_REGISTRY_FORMAT_VERSION = 5;
 let fullRegistry: Map<string, Map<string, Model<Api>>> | undefined;
 const lazyProviderModels: Map<string, Map<string, Model<Api>>> = new Map();
 let parsedModels: BundledModelsJson | undefined;
+let bundledProviderNames: readonly GeneratedProvider[] | undefined;
+let releaseTimer: NodeJS.Timeout | undefined;
+const releaseListeners: Array<() => void> = [];
+
+/**
+ * How long the parsed catalog stays in memory past its last read. A launch or a registry build reads
+ * it in one burst; past the burst it is about 3 MiB of objects that only a provider not yet built
+ * reads again, and `models.json` holds the same bytes for that read.
+ */
+const PARSED_CATALOG_HOLD_MS = 30_000;
 let catalogDigest: string | undefined;
 
 /**
@@ -67,7 +81,7 @@ export function setEnrichedRegistrySnapshotStore(store: EnrichedRegistrySnapshot
  * it into their fingerprints so a catalog regeneration invalidates them.
  */
 export function bundledCatalogDigest(): string {
-	catalogDigest ??= createHash("sha256").update(modelsSource).digest("hex");
+	catalogDigest ??= createHash("sha256").update(readFileSync(modelsPath)).digest("hex");
 	return catalogDigest;
 }
 
@@ -76,8 +90,29 @@ export function enrichedRegistryFingerprint(): string {
 	return `v${ENRICHED_REGISTRY_FORMAT_VERSION}:${bundledCatalogDigest()}`;
 }
 
+/**
+ * Run `listener` each time the parsed catalog is released. Data derived from the catalog's specs
+ * registers here so that it is released with them.
+ */
+export function onBundledCatalogRelease(listener: () => void): void {
+	releaseListeners.push(listener);
+}
+
+function releaseParsedModels(): void {
+	releaseTimer = undefined;
+	parsedModels = undefined;
+	for (const listener of releaseListeners) listener();
+}
+
+/** The parsed catalog, held for {@link PARSED_CATALOG_HOLD_MS} past this read. */
 function getParsedModels(): BundledModelsJson {
-	parsedModels ??= JSON.parse(modelsSource) as BundledModelsJson;
+	if (!parsedModels) {
+		parsedModels = JSON.parse(readFileSync(modelsPath, "utf8")) as BundledModelsJson;
+		bundledProviderNames ??= Object.keys(parsedModels);
+	}
+	clearTimeout(releaseTimer);
+	releaseTimer = setTimeout(releaseParsedModels, PARSED_CATALOG_HOLD_MS);
+	releaseTimer.unref();
 	return parsedModels;
 }
 
@@ -149,7 +184,8 @@ export function getBundledProviders(): GeneratedProvider[] {
 			return Array.from(full.keys()) as GeneratedProvider[];
 		}
 	}
-	return Object.keys(getParsedModels()) as GeneratedProvider[];
+	// The provider list outlives the parsed catalog, so listing providers never parses it again.
+	return (bundledProviderNames ?? Object.keys(getParsedModels())).slice();
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {

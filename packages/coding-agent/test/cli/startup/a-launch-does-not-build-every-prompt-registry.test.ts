@@ -208,46 +208,49 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `@veyyon/utils/math` and engine modules the root already reached, so the launch runs no new
  * code. `core/frame-plan.ts`, split out with it, is imported by type only and is not on the graph.
  *
- * 1578 to 1595 (fork), measured 2026-09-27 after the santhreal merge up to e4967b27fd04: the
- * seventeen modules this graph reaches that upstream does not carry. Six are the ChatGPT-web
- * provider and vision input (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
- * `ai/providers/vision-content.ts`, `ai/registry/chatgpt-web.ts`,
- * `catalog/{discovery,provider-models}/chatgpt-web.ts`); two are the native control host
- * (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); two are the task lane's
- * replenishment and ledger bridge (`task/topic-replenishment.ts`, `task/native-ledger-bridge.py`);
- * two are the refusal fence (`tools/core/{refusal-fence,execution-registry}.ts`), the choke point
- * every tool invocation passes through; two are the session liveness records
- * (`utils/{inflight-marker,session-heartbeat}.ts`); and the rest are `async/async-delivery.ts`,
- * `kernel/session/terminal-ownership.ts` and the engine's `windows-altgr.ts`.
+ * 1578 to 1579: `hosts/terminal/engine/src/components/markdown-tokenizer.ts`, the block
+ * tokenizer with the setext underline precheck, split out of `components/markdown.ts`. It imports
+ * `marked`, which `markdown.ts` already reached, so the launch runs no new code.
  *
- * 1595 to 1599 (fork), measured 2026-09-27 after merging fork main through c5930dc653:
- * `session/runtime/max-concurrency-runtime.ts`, the `agent.maxConcurrency` resize collaborator
- * split out of `agent-session.ts`, and `tools/core/polysim-main-guard.ts` with the modules it
- * imports that the graph did not reach before.
+ * 1579 to 1620, forty-one modules, every one a file added to the tree; no module that existed at
+ * 1579 joined the graph:
  *
- * 1561 to 1563: six modules arrived and four left. Arrived, each on the launch path because the module
- * that imports it is: `kernel/session/terminal-ownership.ts`, the check the session manager runs before an
- * authenticated control request touches a session another terminal owns; `utils/inflight-marker.ts` and
- * `utils/session-heartbeat.ts`, which `session/agent-session.ts` writes around every tool call and phase so a
- * session killed below JavaScript names what it was doing; `terminal/engine/windows-altgr.ts`, which
- * `terminal.ts` runs on every key under the kitty keyboard protocol on Windows; `task/spawn-semaphore.ts`,
- * the session-tree concurrency ceiling `session/agent-session.ts` now resizes when `agent.maxConcurrency`
- * reloads; and `async/async-delivery.ts`, the background-job result formatting split out of `sdk.ts`, which
- * raises the count while the launch runs the same code. Left: `tools/core/effect-scope.ts`, removed with the
- * scoped refusals that were its only reader, and `tools/web/gh.ts` with `tools/core/{aborted-partway,tool-result}.ts`,
- * which the bundled `/review` command reached for one fetcher that lives in `tools/web/gh-fetch.ts`. It imports
- * that module now, which also keeps `tools/core/polysim-main-guard.ts` and `tools/shell/bash-guard.ts`, the
- * github tool's push and merge guard, off this graph.
+ * - Nineteen `session/runtime/*.ts` collaborators and `session/failed-turn.ts`, split out of
+ *   `session/agent-session.ts` (16447 lines to 10173): compaction runtime, summarizer and recovery,
+ *   context accounting, finalize reminders, history rewrites, loop guards, memory context, message
+ *   persistence, model handoff, plan mode, provider sessions, provider usage, retry fallback, retry
+ *   runtime, session approvals, session secrets, stop retries and yield tracking. Each imports
+ *   modules the class already reached.
+ * - Thirteen `packages/ai/src/auth-storage/*.ts` modules split out of `auth-storage.ts` (7449 lines
+ *   to 4794). Each imports modules `auth-storage.ts` already reached.
+ * - `session/provider-replay-projection.ts`, the replayed-field comparison a same-file reload runs,
+ *   split out of `session/agent-session.ts`.
+ * - `kernel/src/session/session-entry-index.ts` and `kernel/src/session/session-cold-payloads.ts`,
+ *   the loader's entry index and the compacted payloads a session file keeps until read. They
+ *   import kernel session modules and `@veyyon/utils/type-guards`, already here.
+ * - `session/top-level-sessions.ts` and `mcp/manager-lease.ts`, the disposal order of the sessions
+ *   a daemon keeps and the lease a session holds on the shared MCP manager. They import modules the
+ *   session factory already reached.
+ * - `@veyyon/utils` `log-file.ts`, `idle-trim.ts` and `stall-sampler.ts`: the rotating profile log
+ *   that replaced `winston` and `winston-daily-rotate-file` (29 npm packages off the launch), the
+ *   idle code discard, and the event-loop stall profile. They import `node:` built-ins,
+ *   `./app-identity`, `./fs-error`, `./logger` and `./type-guards`, all already here.
  *
- * 1599 to 1594 (fork): `/review` imports `tools/web/gh-fetch.ts` instead of `tools/web/gh.ts`,
- * dropping `gh.ts`, `aborted-partway.ts`, `tool-result.ts`, `polysim-main-guard.ts` and `bash-guard.ts`
- * (-5 modules) from the launch graph.
+ * 1620 to 1621: `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`.
+ * `catalog/build.ts` and `config/model-registry.ts`, already here, return each model's resolved
+ * compat record through it so equal records are held once.
+ *
+ * 1621 to 1623: `@veyyon/utils` `prompt-precompiled.ts`, the registry of templates the binary build
+ * compiled, and `prompt-handlebars.ts`, which loads the Handlebars compiler for the first template no
+ * build compiled. `prompt.ts`, already here, imports both. The first imports nothing that runs and the
+ * second only the `handlebars/runtime` package entry, so a binary launch evaluates no Handlebars
+ * compiler module.
  *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1594;
+const LAUNCH_REACH_CEILING = 1623;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

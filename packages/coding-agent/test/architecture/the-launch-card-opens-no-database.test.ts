@@ -102,24 +102,28 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * and no subsystem joined the path — which is what the reachability assertions below, not this
  * number, are the proof of.
  *
- * MEASURED at 308 modules on fork main (up from 304 ceiling).
- * The primary architectural invariants below (`the launch card reaches no store`,
- * `the first frame reaches no store`, `the settings store reaches no store`) are completely
- * green: the card reaches no database owners beyond the admitted setting declaration leaf
- * (`coding-agent/src/config/legacy-agent-db-settings.ts`), opening no SQLite database and
- * loading no store runtime at launch.
- * The +4 module delta is non-database leaf and contract restructuring across the workspace:
- * terminal engine utility extractions under `hosts/terminal/engine/src/utils/` (`hover-controller.ts`,
- * `search-filter.ts`, `scroll-layout.ts`, `text-layout.ts`), workspace contract interfaces
- * (`contracts/wire/src/presentation/theme.ts`, `contracts/view/src/index.ts`, `contracts/view/src/symbols.ts`,
- * `contracts/model/src/effort.ts`, `contracts/wire/src/collab-link.ts`), and settings store decomposition
- * under `kernel/src/settings/` (`signal.ts`, `store.ts`, `schema.ts`, `optional-number.ts` from `946d75b87`).
- * Re-pinned at 310 with 2 modules of slack over measured 308.
+ * 310 rather than 304 is the same kind of file count. The settings store moved to
+ * `@veyyon/kernel/settings` (`store`, `schema`, `signal`, `optional-number`) and its migrations and
+ * signals to `config/settings-migrations.ts` and `config/settings-signals.ts`; the model vocabulary
+ * moved to `@veyyon/model` (`effort`, `instrumentation`); the engine's editor helpers moved to
+ * `utils/` (`text-layout`, `hover-controller`, `search-filter`, `scroll-layout`) and its paint
+ * sequences to `core/paint-sequences.ts`; and one owner each replaced copies of the tab width
+ * (`@veyyon/utils/tab-width`), the renderer limits (`tools/core/render-limits.ts`), the status-text
+ * sanitizer and the terminal-emulator probe. Three modules joined with new code: the stall sampler
+ * (`@veyyon/utils/stall-sampler`), through which the terminal's loop watchdog records a stall's
+ * stack, and the first-frame replay pair (`cli/first-frame-replay.ts`, `cli/first-frame-recorder.ts`),
+ * which reach node builtins, `atomic-write` and a type-only engine import. No database, no cold
+ * runtime and no subsystem joined the path; the assertions above and in
+ * `the-launch-card-loads-no-cold-runtime.test.ts` are the proof of that.
+ *
+ * 311 rather than 310 is the log file writer, `@veyyon/utils/log-file`, which the logger imports
+ * statically. It replaced `winston`, `winston-daily-rotate-file` and 27 packages under them, which
+ * the logger loaded through `require` on the first log line, an edge this walk does not follow.
  *
  * The floor is what stops a resolution table that stopped resolving from satisfying the ceiling with
  * a handful of modules while measuring nothing.
  */
-const LAUNCH_CARD_CEILING = 310;
+const LAUNCH_CARD_CEILING = 311;
 const LAUNCH_CARD_FLOOR = 150;
 
 describe("the launch card opens no database", () => {
