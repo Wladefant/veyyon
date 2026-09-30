@@ -44,6 +44,7 @@
 
 ### Changed
 
+- The Mermaid render cache imports `lru-cache/raw` like every other module, so a session evaluates one `lru-cache` build instead of two: the binary shrinks by 296 KiB and an idle session holds 537 fewer live objects (median of seven).
 - `AgentSession` runs its retry ladder through `session/runtime/retry-runtime.ts` and its secret redaction and display expansion through `session/runtime/session-secrets.ts`, and holds 404 private names instead of 487, so its compiled bytecode drops from 9,474 KiB to 7,646 KiB across the three modules and loading it from a `--bytecode` binary costs 18,660 KiB RSS instead of 21,424 KiB (median of nine).
 - `AgentSession` runs compaction through `session/runtime/compaction-runtime.ts`, `compaction-summarizer.ts` and `compaction-recovery.ts`, and the retry ladder's model switches through `session/runtime/retry-fallback.ts`, and holds 372 private names instead of 410, so the compiled bytecode of the session and its retry and compaction modules drops from 7,568 KiB to 6,926 KiB and loading them from a `--bytecode` binary costs 33,144 KiB RSS instead of 39,144 KiB (median of 15).
 - `AgentSession` runs the prewalk and plan-yolo model handoffs through `session/runtime/model-handoff.ts` and holds 362 private names instead of 372, so the session's compiled bytecode in a `--bytecode` binary drops from 6,712 KiB to 6,484 KiB and loading it costs 32,240 KiB RSS instead of 32,512 KiB (median of 15).
