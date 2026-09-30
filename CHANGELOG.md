@@ -33,6 +33,7 @@
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
+- `detachedString` returns a string's characters in a buffer of their own, so a slice, split piece or regex capture stored past the text it was cut from no longer keeps that text alive.
 - `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
 - `@veyyon/utils/idle-trim` exports `trimEngine`, the `Bun.shrink()` call `IdleTrim` runs when no `trim` is given.
 - `@veyyon/utils/log-file` exports `RotatingLogFile`, which appends each line to the profile's day file in one `write(2)`, moves a full file to the next free numbered generation, gzips a generation no writer has appended to for 3 seconds and keeps the newest five files, and `logFileName`, the day file's name for a local date.
@@ -147,6 +148,8 @@
 - An idle `veyyon` binary on Linux also unmaps the clean resident pages of its embedded modules when it discards its compiled code, cutting an interactive session's resident memory at idle from 317 MiB to 226 MiB after startup and from 342 MiB to 251 MiB after eight turns, with no measurable change to the next turn.
 - The settings screen reads a record setting's override layers with `isRecord` from `@veyyon/utils`; no user-visible change.
 - A process keeps the CPU model its system prompt shows without the `/proc/cpuinfo` text it was read from, releasing 61 KB of heap for the process life on a 32-thread host.
+- A kept-alive spawned agent's session options and a parked agent's reviver hold only the run fields they read, and each progress snapshot copies its tail lines out of the streamed text, so a finished agent no longer keeps its run's assistant text, the spawning tool call's progress callback and abort signal, or the streamed message a tail line was cut from; after five turns spawning four agents each and the 20 agents parked, heap and extra memory is 61.2 MiB instead of 64.2 MiB and live objects 547,990 instead of 549,635 (median of three).
+- The CPU model the system prompt shows is copied through `detachedString` from `@veyyon/utils`; no user-visible change.
 - The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
@@ -201,6 +204,7 @@
 - A forwarding tool wrapper reads each forwarded property through one accessor shared by every wrapper instead of a getter and setter pair built per wrapper and per key, which cut the live objects after 40 live subagents from 756,648 to 729,618 and the heap from 95.4 MiB to 94.3 MiB (median of 3 runs).
 - A listed session holds at most 4,096 characters of first-message and message text, copied out of the scanned window, and the session list index moves to version 2 so rows an earlier build indexed without the bound are rescanned, which cut the rows of a 125-session directory from 21.39 MiB to 1.97 MiB and its list index from 5.45 MiB to 557 KiB.
 - The error a cold entry's failed read-back raises formats its cause with `errorMessage` from `@veyyon/utils`; no user-visible change.
+- A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
 - Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The extraction client waits between fallback models through `scheduler.wait` from `node:timers/promises`, the wait its rate-limit retries use; the delay is unchanged.
 - `highlightCode` and `CodeHighlighter` match grammar patterns with Oniguruma instead of fancy-regex, which cuts the highlighting time of a resumed session's transcript by 59% with the same colours, and every Oniguruma match and search in the addon, including the `find` builtin's `-name` and `-regex`, stops after 1,000,000 retries instead of Oniguruma's defaults of 10,000,000 per match and no limit per search.
