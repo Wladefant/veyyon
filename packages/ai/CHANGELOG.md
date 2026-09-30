@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed Anthropic-compatible endpoints backed by Amazon Bedrock permanently rejecting a session once an unsigned thinking block entered its history by recognizing Bedrock's `ValidationException` missing-signature error and retrying with demoted thinking.
 - Fixed Bedrock Converse resending unsigned reasoning content on the request path for non-Claude reasoning models (Amazon Nova and any model addressed via an opaque application-inference-profile ARN) by demoting unsigned thinking blocks to plain text.
 - Fixed Anthropic stream hangs when broken keep-alive leaves the HTTP connection open after the terminal `message_stop` envelope.
 - Fixed `ANTHROPIC_BASE_URL` being ignored for Anthropic chat requests and forwarded `ANTHROPIC_CUSTOM_HEADERS` to non-official gateways.
