@@ -4,7 +4,10 @@
  * Provides a normalized schema to represent multiple limit windows, model tiers,
  * and shared quotas across providers.
  */
+import { clamp01 } from "@veyyon/utils/math";
 import type { FetchImpl, Provider } from "./types";
+
+export * from "./shared-project-providers";
 export type UsageUnit = "percent" | "tokens" | "requests" | "usd" | "minutes" | "bytes" | "unknown";
 
 export type UsageStatus = "ok" | "warning" | "exhausted" | "unknown";
@@ -49,6 +52,17 @@ export interface UsageScope {
 	shared?: boolean;
 }
 
+/**
+ * How a limit is worded and drawn, for providers whose own app words it differently from the
+ * default "percent used" bar. Absent means the default.
+ */
+export interface UsageLimitDisplay {
+	/** Draw and word the limit as what is LEFT (`8% left`), the way the provider's own app does. */
+	remaining?: true;
+	/** The limit does not apply right now (a 5-hour meter under an exhausted weekly one): no bar, no percent. */
+	inapplicable?: true;
+}
+
 /** Normalized limit entry for a single window or quota bucket. */
 export interface UsageLimit {
 	/** Stable identifier for this limit entry. */
@@ -60,6 +74,8 @@ export interface UsageLimit {
 	amount: UsageAmount;
 	status?: UsageStatus;
 	notes?: string[];
+	/** Wording and drawing hints for providers whose own app differs from the default. */
+	display?: UsageLimitDisplay;
 }
 
 /**
@@ -132,6 +148,26 @@ export function resolveUsedFraction(limit: UsageLimit): number | undefined {
 	if (amount.unit === "percent" && amount.used !== undefined) return amount.used / 100;
 	if (amount.remainingFraction !== undefined) return Math.max(0, 1 - amount.remainingFraction);
 	return undefined;
+}
+
+/**
+ * The fraction (0..1) a bar is filled to, and the one place that decides which way a bar points. A
+ * limit that asks to be drawn as what is LEFT ({@link UsageLimitDisplay.remaining}) fills with the
+ * remainder; every other limit fills with what is used. `undefined` means draw no bar: the amount is
+ * unknown, or the provider says the window does not apply right now.
+ *
+ * Takes the used fraction and the display hint separately because the account surfaces carry a
+ * flattened row (`usedFraction` + `display`), not the {@link UsageLimit} it came from.
+ */
+export function fractionToDraw(used: number | undefined, display?: UsageLimitDisplay): number | undefined {
+	if (display?.inapplicable || used === undefined) return undefined;
+	const clamped = clamp01(used);
+	return display?.remaining ? 1 - clamped : clamped;
+}
+
+/** {@link fractionToDraw} for a limit as the provider reported it. */
+export function resolveDisplayFraction(limit: UsageLimit): number | undefined {
+	return fractionToDraw(resolveUsedFraction(limit), limit.display);
 }
 
 /**

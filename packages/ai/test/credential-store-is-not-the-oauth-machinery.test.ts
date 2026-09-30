@@ -117,8 +117,13 @@ const ROWS_CEILING = 8;
  * owns `exponentialBackoffDelay`. This store's open retry and `@veyyon/utils/fetch-retry`, both already on
  * this reach, computed their doubling inline and now take it from that owner. The leaf imports nothing,
  * so this closure gained a name and no edge.
+ *
+ * RE-MEASURED 2026-09-29 at 47. The one new module is `@veyyon/utils/log-file`, the rotating profile log
+ * that replaced `winston` and `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on this reach,
+ * writes through it, and its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already
+ * reached, so this closure gained a name and no edge.
  */
-const STORE_CEILING = 46;
+const STORE_CEILING = 47;
 
 describe("the row helpers are pure", () => {
 	/**
@@ -162,12 +167,13 @@ describe("the row helpers are pure", () => {
 	 * drift returns `undefined` and a valid token reads as one carrying no account. One leaf module is the
 	 * price of that not being possible.
 	 */
-	it("imports three utils owners and one wire leaf at runtime", () => {
+	it("imports three utils owners, one wire leaf and one membership leaf at runtime", () => {
 		expect(runtimeImportsOf("auth-credential-rows.ts")).toEqual([
 			"@veyyon/catalog/wire/codex",
 			"@veyyon/utils/json",
 			"@veyyon/utils/jwt",
 			"@veyyon/utils/type-guards",
+			"./shared-project-providers",
 		]);
 	});
 });

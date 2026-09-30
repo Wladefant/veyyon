@@ -89,7 +89,7 @@ export function finishLocalRead(
 	const resultBuilder = toolResult(details).content(content);
 	if (read.sourcePath) resultBuilder.sourcePath(read.sourcePath);
 	if (read.truncation) resultBuilder.truncation(read.truncation.result, read.truncation.options);
-	if (read.columnTruncated > 0) resultBuilder.limits({ columnMax: read.columnTruncated });
+	if (read.columnTruncated > 0) resultBuilder.limits({ columnMax: read.columnTruncated, columnUnit: "chars" });
 	return resultBuilder.done();
 }
 

@@ -23,19 +23,27 @@
  * phase on disk trails the phase in memory by one write; the tool-call marker,
  * which is synchronous, remains the exact account of a death inside a call.
  *
- * It carries no user content: pid, session id, a phase name, lane counts and
- * timestamps.
+ * It carries no user content: pid, session id, a phase name, lane counts,
+ * memory counters and timestamps.
  */
 
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "./atomic-write";
+import { type MemoryLimits, readMemoryLimits } from "./commit-memory";
 import { getLogsDir } from "./dirs";
 import { isMissingPath } from "./fs-error";
 import * as logger from "./logger";
 import { getProcessStartIdentity, isProcessAlive, isToolCallProcessAlive } from "./process-liveness";
 import { errorMessage } from "./type-guards";
+
+const startupSmol =
+	process.execArgv.includes("--smol") ||
+	process.argv.includes("--smol") ||
+	process.env.BUN_OPTIONS?.includes("--smol") === true;
+const startupForceRAMSize = process.env.BUN_JSC_forceRAMSize || undefined;
 
 /** What a session is doing, from the outside. */
 export type SessionPhase = "provider" | "tool" | "compaction" | "idle";
@@ -90,6 +98,50 @@ export interface SessionHeartbeat {
 	activeLanes: number;
 	/** Spawned sessions in this process. */
 	lanes: number;
+	/**
+	 * Resident set size of the writing process when this file was written. A
+	 * process the operating system kills for want of memory leaves no trace of
+	 * why; the last reading beside `freeMemBytes` is what separates that from a
+	 * console or terminal closing under it (veyyon#73). Absent in files an older
+	 * build wrote.
+	 */
+	rssBytes?: number;
+	/** Free physical memory on the host when this file was written. */
+	freeMemBytes?: number;
+	/**
+	 * Total size of the allocated JavaScript heap in bytes when this file was written.
+	 * What separates host memory pressure from a per-process JSC heap ceiling (D04 abort).
+	 */
+	heapTotal?: number;
+	/**
+	 * Memory actively used by JavaScript objects in bytes when this file was written.
+	 */
+	heapUsed?: number;
+	/**
+	 * Memory allocated outside JavaScript that the engine is tracking.
+	 */
+	external?: number;
+	/** Whether `--smol` was active at startup. */
+	smol?: boolean;
+	/** Value of `BUN_JSC_forceRAMSize` at startup, if set. */
+	forceRAMSize?: string;
+	/**
+	 * Windows: committed bytes across the system when this file was written. The
+	 * resource that runs out there is commit, not physical memory; "Out of Virtual
+	 * Memory" arrives with RAM free (veyyon#73, D06).
+	 */
+	commitChargeBytes?: number;
+	/** Windows: the system commit limit, RAM plus pagefile; allocation fails at it. */
+	commitLimitBytes?: number;
+	/** Windows: private committed bytes of the writing process (`PrivateUsage`). */
+	processCommitBytes?: number;
+	/**
+	 * Linux: `memory.current` of the cgroup closest to its `memory.max`, the
+	 * limit the kernel kills a process at. Absent without cgroup v2.
+	 */
+	cgroupMemoryBytes?: number;
+	/** Linux: the tightest `memory.max` from the process's cgroup up to the root. */
+	cgroupMemoryMaxBytes?: number;
 }
 
 interface Participant {
@@ -128,7 +180,7 @@ function primary(): Participant | undefined {
 	return fallback;
 }
 
-function snapshot(): SessionHeartbeat | undefined {
+function snapshot(limits: MemoryLimits): SessionHeartbeat | undefined {
 	const head = primary();
 	if (!head) return undefined;
 	let lanes = 0;
@@ -139,6 +191,7 @@ function snapshot(): SessionHeartbeat | undefined {
 		if (participant.phase !== "idle") activeLanes++;
 	}
 	startIdentity ??= getProcessStartIdentity(process.pid);
+	const mem = process.memoryUsage();
 	return {
 		pid: process.pid,
 		startIdentity,
@@ -148,6 +201,14 @@ function snapshot(): SessionHeartbeat | undefined {
 		heartbeatAt: new Date().toISOString(),
 		activeLanes,
 		lanes,
+		rssBytes: mem.rss,
+		freeMemBytes: os.freemem(),
+		heapTotal: mem.heapTotal,
+		heapUsed: mem.heapUsed,
+		external: mem.external,
+		...(startupSmol ? { smol: true } : {}),
+		...(startupForceRAMSize !== undefined ? { forceRAMSize: startupForceRAMSize } : {}),
+		...limits,
 	};
 }
 
@@ -156,7 +217,7 @@ async function flush(): Promise<void> {
 	try {
 		while (dirty) {
 			dirty = false;
-			const record = snapshot();
+			const record = snapshot(await readMemoryLimits());
 			if (!record) break;
 			try {
 				await atomicWriteFile(heartbeatPath(process.pid), `${JSON.stringify(record)}\n`, { fsync: false });
@@ -276,6 +337,18 @@ function readHeartbeat(file: string): SessionHeartbeat | undefined {
 		if (typeof beat.startIdentity !== "string") beat.startIdentity = null;
 		if (typeof beat.activeLanes !== "number") beat.activeLanes = 0;
 		if (typeof beat.lanes !== "number") beat.lanes = 0;
+		if (typeof beat.rssBytes !== "number") delete beat.rssBytes;
+		if (typeof beat.freeMemBytes !== "number") delete beat.freeMemBytes;
+		if (typeof beat.heapTotal !== "number") delete beat.heapTotal;
+		if (typeof beat.heapUsed !== "number") delete beat.heapUsed;
+		if (typeof beat.external !== "number") delete beat.external;
+		if (typeof beat.smol !== "boolean") delete beat.smol;
+		if (typeof beat.forceRAMSize !== "string") delete beat.forceRAMSize;
+		if (typeof beat.commitChargeBytes !== "number") delete beat.commitChargeBytes;
+		if (typeof beat.commitLimitBytes !== "number") delete beat.commitLimitBytes;
+		if (typeof beat.processCommitBytes !== "number") delete beat.processCommitBytes;
+		if (typeof beat.cgroupMemoryBytes !== "number") delete beat.cgroupMemoryBytes;
+		if (typeof beat.cgroupMemoryMaxBytes !== "number") delete beat.cgroupMemoryMaxBytes;
 		return beat as SessionHeartbeat;
 	} catch {
 		// Atomic publication means a torn file is not ours to explain.
@@ -325,6 +398,18 @@ export function reportSilentDeaths(): SessionHeartbeat[] {
 					heartbeatAt: beat.heartbeatAt,
 					activeLanes: beat.activeLanes,
 					lanes: beat.lanes,
+					rssBytes: beat.rssBytes,
+					freeMemBytes: beat.freeMemBytes,
+					heapTotal: beat.heapTotal,
+					heapUsed: beat.heapUsed,
+					external: beat.external,
+					smol: beat.smol,
+					forceRAMSize: beat.forceRAMSize,
+					commitChargeBytes: beat.commitChargeBytes,
+					commitLimitBytes: beat.commitLimitBytes,
+					processCommitBytes: beat.processCommitBytes,
+					cgroupMemoryBytes: beat.cgroupMemoryBytes,
+					cgroupMemoryMaxBytes: beat.cgroupMemoryMaxBytes,
 				});
 			} catch (error) {
 				// Keep the evidence for a launch that can log it.

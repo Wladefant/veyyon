@@ -49,7 +49,7 @@ reason from the requested command or file operation, and waits on four options, 
 call that reports a pattern:
 
 - **Approve**: run this call once. Nothing is remembered.
-- **Approve "&lt;pattern&gt;" for session**: run this and every later call that reports the same
+- **`Approve "<pattern>" for session`**: run this and every later call that reports the same
   pattern, until you exit. Only bash reports one.
 - **Approve for session**: run this and every later call to this tool, until you exit.
 - **Deny**: reject this call and return `Tool call denied by user: <name>` to the model.

@@ -26,6 +26,10 @@ import templateJs from "./template.js" with { type: "text" };
 import toolViewsJs from "./tool-views.generated.js" with { type: "text" };
 import { EXPORT_FALLBACK_BASE_BG, webExportThemeVars } from "./web-palette";
 
+// The session snapshot builders are defined beside `/share`, which reads them without this module's
+// template; this entry point keeps publishing them.
+export * from "../session-data";
+
 let cachedTemplate: string | undefined;
 
 /** Compose the standalone export template: minified CSS, tool renderers, and viewer JS inlined. */

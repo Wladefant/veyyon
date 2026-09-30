@@ -42,6 +42,7 @@ A profile has two layers:
 | `sessions/` | Saved session transcripts, one per thread. |
 | `blobs/` | Content-addressed attachment/blob store. |
 | `history.db`, `models.db` | Composer history, model cache. |
+| `resolved-models.json`, `accepted-models-config.json` | Resolved model catalog snapshot, last validated `models.yml`. Rebuilt when missing or stale. |
 | `skills/`, `commands/`, `prompts/`, `tools/`, `themes/`, `modules/` | Skills, slash commands, prompt templates, custom tools, themes, Python modules. |
 | `mcp.json`, `ssh.json` | MCP server and SSH target config. |
 | `keybindings.yml` | This profile's keybindings (`keybindings.yaml` accepted; legacy `keybindings.json` migrates on load). |

@@ -34,7 +34,7 @@ import {
 	selectedButRotated,
 } from "../../session/account-inventory";
 import { TRUNCATE_LENGTHS } from "../../tools/core/render-utils";
-import { formatUsageWindowLine, usageWindowLabelColumn } from "./format";
+import { formatUsageWindowLine, USAGE_WINDOW_LABEL_MAX_WORDED, usageWindowLabelColumn } from "./format";
 
 /** Left margin of every account row, matching the other inline report blocks. */
 const ROW_INDENT = "  ";
@@ -144,7 +144,10 @@ function line(...parts: string[]): string {
 function usageLines(row: AccountRow, now: number, style: AccountStatusStyle): string[] {
 	const lines: string[] = [];
 	const labels = row.usage.map(window => sanitizeText(window.label));
-	const column = usageWindowLabelColumn(labels);
+	const column = usageWindowLabelColumn(
+		labels,
+		row.usage.some(window => window.display) ? USAGE_WINDOW_LABEL_MAX_WORDED : undefined,
+	);
 	for (const [index, window] of row.usage.entries()) {
 		const resets =
 			window.resetsAtMs !== undefined && window.resetsAtMs > now
@@ -154,7 +157,14 @@ function usageLines(row: AccountRow, now: number, style: AccountStatusStyle): st
 			line(
 				DETAIL_INDENT,
 				style.muted(
-					formatUsageWindowLine(labels[index] ?? "", window.usedFraction, USAGE_BAR_WIDTH, resets, column),
+					formatUsageWindowLine(
+						labels[index] ?? "",
+						window.usedFraction,
+						USAGE_BAR_WIDTH,
+						resets,
+						column,
+						window.display,
+					),
 				),
 			),
 		);

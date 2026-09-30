@@ -260,7 +260,10 @@ export interface AgentSessionConfig {
 	onResponse?: SimpleStreamOptions["onResponse"];
 	/** Raw SSE hook used by the active session request path */
 	onSseEvent?: SimpleStreamOptions["onSseEvent"];
-	/** Per-session raw SSE diagnostic buffer */
+	/**
+	 * Per-session raw SSE diagnostic buffer. Absent, a top-level session creates one and a spawned
+	 * session records no raw SSE.
+	 */
 	rawSseDebugBuffer?: RawSseDebugBuffer;
 	/** Current session message-to-LLM conversion pipeline */
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
@@ -355,13 +358,14 @@ export interface AgentSessionConfig {
 	/** Marks `agent.promptCacheKey` as fork-inherited so incompatible route changes can clear it. */
 	providerPromptCacheKeySource?: "explicit" | "fork";
 	/**
-	 * Full advisor toolset, pre-built in `createAgentSession` against a distinct,
-	 * advisor-scoped `ToolSession` (its own `-advisor` session/agent id) so the
-	 * advisor's tool state stays isolated from the primary. The advisor is a full
-	 * agent; its config `tools` selects a subset (default read/search). Undefined
-	 * when the advisor is disabled.
+	 * Builds the full advisor toolset against a distinct, advisor-scoped `ToolSession` (its own
+	 * `-advisor` session/agent id) so the advisor's tool state stays isolated from the primary. The
+	 * advisor is a full agent; its config `tools` selects a subset (default read/search). Called on
+	 * the first advisor turn or tool listing, and again only after a build that failed, so a session
+	 * that never runs an advisor loads and constructs none of these tools. Undefined gives advisors no
+	 * tools beyond `advise`.
 	 */
-	advisorTools?: AgentTool[];
+	loadAdvisorTools?: () => Promise<AgentTool[]>;
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
 	/** Preloaded YAML top-level `instructions` shared baseline, kept separate from

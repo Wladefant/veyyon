@@ -57,7 +57,6 @@ describe("the advisor reads the project context files", () => {
 			// A re-scope rebuilds the advisor from the setting, as a session with the advisor on does.
 			settings: Settings.isolated({ "compaction.enabled": false, "advisor.enabled": true }),
 			modelRegistry,
-			advisorTools: [],
 			advisorContextFiles: [FIRST],
 		});
 		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);

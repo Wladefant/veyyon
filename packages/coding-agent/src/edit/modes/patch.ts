@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
-import { atomicWriteFilePreservingMode, clampLow, errorMessage, isEnoent } from "@veyyon/utils";
+import { atomicWriteFilePreservingMode, clampLow, errorMessage, isEnoent, lazy } from "@veyyon/utils";
 import { type } from "arktype";
 import {
 	type FileDiagnosticsResult,
@@ -1635,20 +1635,24 @@ export async function computePatchDiff(
 	}
 }
 
-export const patchEditEntrySchema = type({
-	"op?": "'create' | 'delete' | 'update'",
-	"rename?": "string",
-	"diff?": "string",
-});
+export const patchEditEntrySchema = lazy(() =>
+	type({
+		"op?": "'create' | 'delete' | 'update'",
+		"rename?": "string",
+		"diff?": "string",
+	}),
+);
 
-export type PatchEditEntry = typeof patchEditEntrySchema.infer;
+export type PatchEditEntry = typeof patchEditEntrySchema.value.infer;
 
-export const patchEditSchema = type({
-	path: "string",
-	edits: patchEditEntrySchema.array(),
-});
+export const patchEditSchema = lazy(() =>
+	type({
+		path: "string",
+		edits: patchEditEntrySchema.value.array(),
+	}),
+);
 
-export type PatchParams = typeof patchEditSchema.infer;
+export type PatchParams = typeof patchEditSchema.value.infer;
 
 export interface ExecutePatchSingleOptions {
 	session: ToolSession;
@@ -1765,7 +1769,7 @@ function mergeDiagnosticsWithWarnings(
 
 export async function executePatchSingle(
 	options: ExecutePatchSingleOptions,
-): Promise<AgentToolResult<EditToolDetails, typeof patchEditEntrySchema>> {
+): Promise<AgentToolResult<EditToolDetails, typeof patchEditEntrySchema.value>> {
 	const {
 		session,
 		path,

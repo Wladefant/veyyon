@@ -181,7 +181,7 @@ async function readOverrideFile(readFile: (file: string) => Promise<string>, fil
 }
 
 /**
- * Fold discovered files into an override map for `assembleDefaultTemplate`.
+ * Fold discovered files into an override map for `defaultTemplatePieces`.
  *
  * Precedence is per section and mode: one file wins each `<section>:<mode>`
  * pair. Replace and append files compose because replacement supplies the body
