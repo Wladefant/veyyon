@@ -116,7 +116,7 @@ function runtimeImportsOf(relative: string): string[] {
  * both still pass, and `env-api-key.ts` (68) and `usage/registry.ts` (20) do not reach the barrel and
  * did not move.
  */
-const AUTH_STORAGE_CEILING = 227;
+const AUTH_STORAGE_CEILING = 229;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc
@@ -177,7 +177,7 @@ const AUTH_STORAGE_CEILING = 227;
  * `catalog/build.ts`, already in this closure, returns each model's resolved compat record through it,
  * so it adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 83;
+const ENV_API_KEY_CEILING = 86;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

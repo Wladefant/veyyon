@@ -114,8 +114,8 @@ const PRUNING_CEILING = 195;
  * both reaches, returns each model's resolved compat record through it, so the growth is that one file
  * and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 320;
-const REMOTE_SUMMARIZER_CEILING = 222;
+const COMPACTION_ENGINE_CEILING = 326;
+const REMOTE_SUMMARIZER_CEILING = 224;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {

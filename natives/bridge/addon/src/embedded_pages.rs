@@ -23,6 +23,8 @@ use napi_derive::napi;
 /// Unmaps the clean resident pages of the executable's `.bun` section and
 /// returns the number of bytes released. Returns 0 when the executable has no
 /// such section or the platform has no implementation.
+// Off Linux the body is a constant, but the Linux body is not, and napi exports one signature.
+#[cfg_attr(not(target_os = "linux"), allow(clippy::missing_const_for_fn))]
 #[napi]
 pub fn release_embedded_module_pages() -> Result<f64> {
 	#[cfg(target_os = "linux")]

@@ -245,10 +245,13 @@ describe("the modules that were repointed stay cut", () => {
 	 * imports nothing, so no consumer gained an edge to a subsystem it did not already reach.
 	 */
 	it.each([
-		["agent/src/proxy.ts", 145],
-		["apps/stats/src/parser.ts", 122],
-		["apps/stats/src/db.ts", 124],
-		["apps/stats/src/sync-worker.ts", 123],
+		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
+		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt
+		// loader, on top of the fork's own graph. Growth from those named modules, not a new edge out of a cut.
+		["agent/src/proxy.ts", 147],
+		["apps/stats/src/parser.ts", 124],
+		["apps/stats/src/db.ts", 126],
+		["apps/stats/src/sync-worker.ts", 125],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
@@ -264,7 +267,7 @@ describe("the modules that were repointed stay cut", () => {
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		["coding-agent/src/commit/shared-llm.ts", 211],
+		["coding-agent/src/commit/shared-llm.ts", 214],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.
