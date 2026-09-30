@@ -224,6 +224,26 @@ describe("wrapLeakedThinkingStream", () => {
 		expect(calls[0]?.thoughtSignature).toBe("tsig");
 	});
 
+	it("captures a native thinking signature delivered at thinking_end, not on the delta", async () => {
+		// Anthropic sends thinking_delta first (no signature), then signature_delta,
+		// so the completed signature only appears on the thinking_end partial.
+		const signature = `SIG_${"x".repeat(400)}`;
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: "reason",
+				partial: msg({ content: [{ type: "thinking", thinking: "reason", thinkingSignature: "" }] }),
+			});
+			const signed = msg({ content: [{ type: "thinking", thinking: "reason", thinkingSignature: signature }] });
+			inner.push({ type: "thinking_end", contentIndex: 0, content: "reason", partial: signed });
+			inner.push({ type: "done", reason: "stop", message: signed });
+		});
+
+		expect(thinks(result).map(b => b.thinkingSignature)).toEqual([signature]);
+	});
+
 	it("preserves native tool-call ids and streamed partial JSON while healing", async () => {
 		const inner = new AssistantMessageEventStream();
 		const out = wrapLeakedThinkingStream(inner);

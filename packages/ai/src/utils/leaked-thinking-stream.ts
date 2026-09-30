@@ -81,6 +81,11 @@ export function wrapLeakedThinkingStream(inner: AssistantMessageEventStream): As
 						projector.thinking(event.delta, block?.type === "thinking" ? block.thinkingSignature : undefined);
 						break;
 					}
+					case "thinking_end": {
+						const block = event.partial.content[event.contentIndex];
+						projector?.thinkingEnd(block?.type === "thinking" ? block.thinkingSignature : undefined);
+						break;
+					}
 					case "toolcall_start": {
 						projector ??= new LeakedThinkingProjector(out, event.partial);
 						const block = event.partial.content[event.contentIndex];
@@ -107,8 +112,9 @@ export function wrapLeakedThinkingStream(inner: AssistantMessageEventStream): As
 						out.push({ type: "error", reason: event.reason, error: { ...event.error, content } });
 						return;
 					}
-					// text_start/text_end/thinking_start/thinking_end are ignored: the
-					// projector owns block boundaries (matches wrapInbandToolStream).
+					// text_start/text_end/thinking_start are ignored: the projector owns
+					// block boundaries (matches wrapInbandToolStream). thinking_end is
+					// handled to capture the signature Anthropic delivers at block close.
 				}
 			}
 			// Inner ended via end(result) without a terminal event.
@@ -164,6 +170,17 @@ class LeakedThinkingProjector {
 		block.thinking += delta;
 		if (signature !== undefined) block.thinkingSignature = signature;
 		this.#out.push({ type: "thinking_delta", contentIndex: index, delta, partial: this.#partial });
+	}
+
+	/**
+	 * Capture a native thinking block's completed signature. Anthropic delivers
+	 * it via `signature_delta` after every `thinking_delta`, so it is absent while
+	 * deltas stream and only present on the `thinking_end` partial. Stamp it onto
+	 * the open projected block so {@link finish} persists the signed block.
+	 */
+	thinkingEnd(signature: string | undefined): void {
+		if (signature === undefined || !this.#thinking) return;
+		(this.#partial.content[this.#thinking.index] as ThinkingContent).thinkingSignature = signature;
 	}
 
 	/** Forward a native tool call's start, releasing any held-back text first. */
