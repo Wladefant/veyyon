@@ -77,8 +77,8 @@ packages/coding-agent/src/tools/fs/manifest.ts
 packages/coding-agent/src/tools/fs/set-cwd.ts
 packages/coding-agent/src/tools/index.ts
 packages/coding-agent/src/tools/search/manifest.ts
-packages/coding-agent/src/tools/shell/bash-interactive.ts
 packages/coding-agent/src/tools/shell/manifest.ts
+packages/coding-agent/src/tools/shell/terminal-output.ts
 packages/coding-agent/src/tools/web/browser/launch.ts
 packages/coding-agent/src/tools/web/browser/readable.ts
 packages/coding-agent/src/tools/web/browser/tab-supervisor.ts
