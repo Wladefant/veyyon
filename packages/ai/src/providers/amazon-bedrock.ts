@@ -809,6 +809,45 @@ function buildSystemPrompt(
 	return blocks;
 }
 
+function buildToolResultBlock(
+	message: ToolResultMessage,
+	model: Model<"bedrock-converse-stream">,
+	hoistedImages: ImageBlockWire[],
+): ToolResultBlockWire {
+	const content: Array<TextBlockWire | ImageBlockWire> = [];
+	// Bedrock's Anthropic Claude models reject an error toolResult that carries a
+	// non-text block ("all content must be type `text` if `is_error` is true"),
+	// so images inside an error result must always be hoisted out regardless of
+	// the model's requiresToolResultImageHoisting flag (no `class "anthropic"`
+	// rule sets it). Mirrors anthropic.ts buildToolResultBlock. Re-serializing a
+	// previously-persisted poisoned result on a later turn repairs it in place.
+	const hoistImages =
+		message.isError ||
+		Boolean((model as { requiresToolResultImageHoisting?: boolean }).requiresToolResultImageHoisting);
+	for (const block of message.content) {
+		if (block.type === "image") {
+			const image: ImageBlockWire = { image: createImageBlock(block.mimeType, block.data) };
+			if (hoistImages) {
+				content.push({ text: "(see attached image)" });
+				hoistedImages.push(image);
+			} else {
+				content.push(image);
+			}
+		} else if (block.type === "video") {
+			content.push({ text: NON_VIDEO_MODEL_PLACEHOLDER });
+		} else {
+			content.push({ text: block.text.toWellFormed() });
+		}
+	}
+	return {
+		toolResult: {
+			toolUseId: normalizeToolCallId(message.toolCallId),
+			content,
+			status: message.isError ? "error" : "success",
+		},
+	};
+}
+
 function convertMessages(
 	context: Context,
 	model: Model<"bedrock-converse-stream">,
@@ -910,42 +949,20 @@ function convertMessages(
 			case "toolResult": {
 				// Collect all consecutive toolResult messages into a single user message —
 				// Bedrock requires all tool results to be in one message.
-				const toolResults: ToolResultBlockWire[] = [];
-				toolResults.push({
-					toolResult: {
-						toolUseId: normalizeToolCallId(m.toolCallId),
-						content: m.content.map(c =>
-							c.type === "image"
-								? { image: createImageBlock(c.mimeType, c.data) }
-								: c.type === "video"
-									? { text: NON_VIDEO_MODEL_PLACEHOLDER }
-									: { text: c.text.toWellFormed() },
-						),
-						status: m.isError ? "error" : "success",
-					},
-				});
+				const contentBlocks: UserContent[] = [];
+				const hoistedImages: ImageBlockWire[] = [];
+				contentBlocks.push(buildToolResultBlock(m, model, hoistedImages));
 
 				let j = i + 1;
 				while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 					const nextMsg = transformedMessages[j] as ToolResultMessage;
-					toolResults.push({
-						toolResult: {
-							toolUseId: normalizeToolCallId(nextMsg.toolCallId),
-							content: nextMsg.content.map(c =>
-								c.type === "image"
-									? { image: createImageBlock(c.mimeType, c.data) }
-									: c.type === "video"
-										? { text: NON_VIDEO_MODEL_PLACEHOLDER }
-										: { text: c.text.toWellFormed() },
-							),
-							status: nextMsg.isError ? "error" : "success",
-						},
-					});
+					contentBlocks.push(buildToolResultBlock(nextMsg, model, hoistedImages));
 					j++;
 				}
 				i = j - 1;
 
-				result.push({ role: "user", content: toolResults });
+				contentBlocks.push(...hoistedImages);
+				result.push({ role: "user", content: contentBlocks });
 				break;
 			}
 			default:
