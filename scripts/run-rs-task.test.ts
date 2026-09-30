@@ -49,7 +49,10 @@ describe("Rust gate commands", () => {
 			const manifests = RUST_TASK_COMMANDS[task]
 				.filter(command => command.includes("--manifest-path"))
 				.map(command => command[command.indexOf("--manifest-path") + 1]);
-			expect(manifests).toEqual(["natives/vendor/brush-core/Cargo.toml", "natives/vendor/brush-builtins/Cargo.toml"]);
+			expect(manifests).toEqual([
+				"natives/vendor/brush-core/Cargo.toml",
+				"natives/vendor/brush-builtins/Cargo.toml",
+			]);
 			for (const command of RUST_TASK_COMMANDS[task].filter(entry => entry.includes("--manifest-path"))) {
 				expect(command.slice(command.indexOf("--") + 1).join(" ")).toContain("-D clippy::disallowed_methods");
 			}
