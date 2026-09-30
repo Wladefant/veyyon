@@ -9,6 +9,7 @@
 - The models.dev overlay drops its parsed `api.json` 30 seconds after the last provider reads it and reads `models-dev.json` again on the next use, which cut the idle heap after a model refresh from 68.7 MiB to 59.7 MiB and its live objects from 752,441 to 595,112 (median of 3 runs).
 - Model id classification no longer keeps a process-lifetime table from each id to its answer, which cut the idle heap of an interactive session from 66.8 MiB to 63.6 MiB (median of 3 runs) and stops each newly seen model id from growing the heap.
 - Models whose resolved compat records are equal share one frozen record, which cut the retained heap of a full catalog build from 4.41 MiB to 2.69 MiB and the idle heap of an interactive session from 43.8 MiB to 41.5 MiB (median of 3 runs).
+- GitLab Duo workflow discovery parses the available-models answer without Zod, and `@veyyon/catalog` no longer depends on `zod`; every answer resolves to the same models.
 
 ### Fixed
 
