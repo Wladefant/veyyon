@@ -1,28 +1,18 @@
+import { createHash } from "node:crypto";
 import { THINKING_EFFORTS } from "@veyyon/catalog/effort";
 import type { AnthropicCompat, CursorCompat, DevinCompat, OpenAICompat } from "@veyyon/catalog/types";
+import { VERSION } from "@veyyon/utils/dirs";
 import { scope, type Traversal, type Type } from "arktype";
-
-/**
- * Rejects the first key in `keys` whose value is the empty string, in list
- * order, with the message `<key> a non-empty string`. A key that is absent or
- * holds a non-string is left to the object schema.
- */
-function rejectEmptyStrings<T extends object>(value: T, ctx: Traversal, keys: readonly (keyof T & string)[]): boolean {
-	for (const key of keys) {
-		const field: unknown = value[key];
-		if (typeof field === "string" && field.length === 0) return ctx.mustBe(`${key} a non-empty string`);
-	}
-	return true;
-}
-
-const MODEL_DEFINITION_NON_EMPTY_KEYS = ["id", "name", "baseUrl", "contextPromotionTarget", "compactionModel"] as const;
-const MODEL_OVERRIDE_NON_EMPTY_KEYS = ["name", "contextPromotionTarget", "compactionModel"] as const;
-const PROVIDER_CONFIG_NON_EMPTY_KEYS = ["baseUrl", "apiKey"] as const;
 
 // Schema construction is deferred behind modelsConfigSchemas(): even with the
 // jitless scope below (~65% cheaper than default ArkType codegen), building
 // this schema graph costs ~19ms of import time, yet it is only needed when a
 // models config file actually loads. Built once on first use.
+//
+// Everything the schemas accept and output is defined inside this function, so
+// its source text, with the effort ladder it reads, identifies the validator:
+// `modelsConfigSchemaFingerprint` hashes it, and a models config accepted under
+// one fingerprint is served from its snapshot until either one changes.
 function buildModelsConfigSchemas() {
 	// Config schemas validate at most a handful of times per process (on config
 	// load), so the eager JIT codegen ArkType runs at definition time is pure
@@ -30,6 +20,33 @@ function buildModelsConfigSchemas() {
 	// interpreted traversal — ~65% cheaper to construct, validation correctness
 	// unchanged. (No `name`: duplicate module instances would collide.)
 	const { type } = scope({}, { jitless: true });
+
+	/**
+	 * Rejects the first key in `keys` whose value is the empty string, in list
+	 * order, with the message `<key> a non-empty string`. A key that is absent or
+	 * holds a non-string is left to the object schema.
+	 */
+	function rejectEmptyStrings<T extends object>(
+		value: T,
+		ctx: Traversal,
+		keys: readonly (keyof T & string)[],
+	): boolean {
+		for (const key of keys) {
+			const field: unknown = value[key];
+			if (typeof field === "string" && field.length === 0) return ctx.mustBe(`${key} a non-empty string`);
+		}
+		return true;
+	}
+
+	const MODEL_DEFINITION_NON_EMPTY_KEYS = [
+		"id",
+		"name",
+		"baseUrl",
+		"contextPromotionTarget",
+		"compactionModel",
+	] as const;
+	const MODEL_OVERRIDE_NON_EMPTY_KEYS = ["name", "contextPromotionTarget", "compactionModel"] as const;
+	const PROVIDER_CONFIG_NON_EMPTY_KEYS = ["baseUrl", "apiKey"] as const;
 
 	const OpenRouterRoutingSchema = type({
 		"only?": "string[]",
@@ -440,4 +457,25 @@ let schemasCache: ModelsConfigSchemas | undefined;
 export function modelsConfigSchemas(): ModelsConfigSchemas {
 	schemasCache ??= buildModelsConfigSchemas();
 	return schemasCache;
+}
+
+let schemaFingerprint: string | undefined;
+
+/**
+ * Identity of the models-config validator without building it: a digest of the product version,
+ * the ArkType release in the `$ark` registry the `arktype` import installs, the effort ladder the
+ * thinking pipe orders by, and the builder's source text.
+ */
+export function modelsConfigSchemaFingerprint(): string {
+	const arkVersion = (globalThis as { $ark?: { version?: unknown } }).$ark?.version;
+	schemaFingerprint ??= createHash("sha256")
+		.update(VERSION)
+		.update("\0")
+		.update(typeof arkVersion === "string" ? arkVersion : "")
+		.update("\0")
+		.update(THINKING_EFFORTS.join(","))
+		.update("\0")
+		.update(buildModelsConfigSchemas.toString())
+		.digest("hex");
+	return schemaFingerprint;
 }
