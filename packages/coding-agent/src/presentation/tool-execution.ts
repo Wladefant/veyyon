@@ -537,6 +537,14 @@ export class ToolExecutionProducer {
 	}
 
 	/**
+	 * Forget the built block. Nothing changed, so no listener hears of it; the next read builds the
+	 * same block from the same parameters.
+	 */
+	releaseBlock(): void {
+		this.#currentBlock = undefined;
+	}
+
+	/**
 	 * The card's presentation policies for `context`. They are the policies the block for `context`
 	 * carries, resolved without building its views, so a card deciding whether to animate, freeze or
 	 * give way to the next call does not project a view nobody draws.

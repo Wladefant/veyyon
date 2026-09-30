@@ -9,7 +9,16 @@ import type { Model } from "@veyyon/ai";
 // file is on `config/settings`'s path through the settings schema, which ~530 test files import.
 import { Effort, THINKING_EFFORTS } from "@veyyon/catalog/effort";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@veyyon/catalog/model-thinking";
-import { AUTO_THINKING, type ConfiguredThinkingLevel } from "./constants";
+import {
+	AUTO_THINKING,
+	CONFIGURED_THINKING_LEVELS,
+	type ConfiguredThinkingLevel,
+	getOwnSelector,
+	parseConfiguredThinkingLevel,
+	parseThinkingLevel,
+} from "./constants";
+
+export { parseConfiguredThinkingLevel, parseThinkingLevel };
 
 /**
  * Metadata used to render thinking selector values in the coding-agent UI.
@@ -59,40 +68,11 @@ const EFFORT_BY_SELECTOR: Readonly<Record<string, Effort>> = {
 	[Effort.XHigh]: Effort.XHigh,
 	[Effort.Max]: Effort.Max,
 };
-const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
-	[ThinkingLevel.Inherit]: ThinkingLevel.Inherit,
-	[ThinkingLevel.Off]: ThinkingLevel.Off,
-	[ThinkingLevel.Minimal]: ThinkingLevel.Minimal,
-	[ThinkingLevel.Low]: ThinkingLevel.Low,
-	[ThinkingLevel.Medium]: ThinkingLevel.Medium,
-	[ThinkingLevel.High]: ThinkingLevel.High,
-	[ThinkingLevel.XHigh]: ThinkingLevel.XHigh,
-	[ThinkingLevel.Max]: ThinkingLevel.Max,
-};
-
-function getOwnSelector<T>(selectors: Readonly<Record<string, T>>, value: string | null | undefined): T | undefined {
-	if (value === undefined || value === null) return undefined;
-	if (Object.hasOwn(selectors, value)) return selectors[value];
-	// Accept unambiguous abbreviations (`xhi` → xhigh, `med` → medium) so every
-	// selector surface (`--thinking`, `:suffix`, role values) parses alike.
-	// Two-character minimum keeps single letters (`m`) from guessing.
-	if (value.length < 2) return undefined;
-	const matches = Object.keys(selectors).filter(selector => selector.startsWith(value));
-	return matches.length === 1 ? selectors[matches[0]] : undefined;
-}
-
 /**
  * Parses a provider-facing effort value. Accepts unambiguous abbreviations.
  */
 export function parseEffort(value: string | null | undefined): Effort | undefined {
 	return getOwnSelector(EFFORT_BY_SELECTOR, value);
-}
-
-/**
- * Parses an agent-local thinking selector. Accepts unambiguous abbreviations.
- */
-export function parseThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
-	return getOwnSelector(THINKING_LEVEL_BY_SELECTOR, value);
 }
 
 /**
@@ -141,7 +121,7 @@ export function resolveThinkingLevelForModel(
  * {@link ThinkingLevel}, so provider mapping/clamping keeps seeing concrete
  * efforts. The session resolves `auto` to a concrete effort each turn.
  */
-export { AUTO_THINKING, type ConfiguredThinkingLevel };
+export { AUTO_THINKING, CONFIGURED_THINKING_LEVELS, type ConfiguredThinkingLevel };
 
 /** Maps the session-level `auto` sentinel to `undefined`; concrete levels pass through. */
 export function concreteThinkingLevel(level: ConfiguredThinkingLevel | undefined): ThinkingLevel | undefined {
@@ -161,16 +141,6 @@ const AUTO_THINKING_METADATA: ConfiguredThinkingLevelMetadata = {
 	description: "Auto-detect per prompt (low–xhigh)",
 };
 
-/**
- * Parses a configured thinking selector, accepting `auto` in addition to every
- * value {@link parseThinkingLevel} accepts. {@link parseThinkingLevel} itself
- * stays strict so model-suffix parsing (`model:high`) keeps rejecting `auto`.
- */
-export function parseConfiguredThinkingLevel(value: string | null | undefined): ConfiguredThinkingLevel | undefined {
-	if (value === AUTO_THINKING) return AUTO_THINKING;
-	return parseThinkingLevel(value);
-}
-
 /** Returns display metadata for a configured selector, including `auto`. */
 export function getConfiguredThinkingLevelMetadata(level: ConfiguredThinkingLevel): ConfiguredThinkingLevelMetadata {
 	return level === AUTO_THINKING ? AUTO_THINKING_METADATA : getThinkingLevelMetadata(level);
@@ -180,19 +150,6 @@ export function getConfiguredThinkingLevelMetadata(level: ConfiguredThinkingLeve
 export function hasConfigurableThinkingEffort(model: Model | undefined): model is Model {
 	return model?.reasoning === true && getSupportedEfforts(model).length > 0;
 }
-
-/**
- * The complete configuration vocabulary.
- *
- * Model pickers narrow this vocabulary to the variants the active model
- * actually exposes. This follows OpenCode's variant contract: one mechanism,
- * model-specific valid names, and no silently clamped choices.
- */
-export const CONFIGURED_THINKING_LEVELS: readonly ConfiguredThinkingLevel[] = [
-	ThinkingLevel.Off,
-	AUTO_THINKING,
-	...THINKING_EFFORTS,
-];
 
 /**
  * The choices ONE model accepts, in cycle order.

@@ -7,6 +7,7 @@ import type {
 	ToolTier,
 } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
+import { lazy } from "@veyyon/utils/abortable";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import * as prompt from "@veyyon/utils/prompt";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -65,19 +66,21 @@ import type { ReadContext, ReadToolDetails } from "./read-types";
 export { summarizeFailureReport } from "./read-summary";
 export type { ReadToolDetails } from "./read-types";
 
-const readSchema = type({
-	path: type("string").describe(
-		"Local path, internal URI (e.g. memory://, skill://), or URL. Inline selectors are supported.",
-	),
-	"depth?": type("number.integer > 0").describe(
-		"Directory listings only: recursion depth. Omitted lists the top level with per-subdirectory entry counts; 2 recurses one level.",
-	),
-	"limit?": type("number.integer > 0").describe(
-		"Directory listings only: max entries returned; omitted entries are reported with the limit and how to see more.",
-	),
-});
+const readSchema = lazy(() =>
+	type({
+		path: type("string").describe(
+			"Local path, internal URI (e.g. memory://, skill://), or URL. Inline selectors are supported.",
+		),
+		"depth?": type("number.integer > 0").describe(
+			"Directory listings only: recursion depth. Omitted lists the top level with per-subdirectory entry counts; 2 recurses one level.",
+		),
+		"limit?": type("number.integer > 0").describe(
+			"Directory listings only: max entries returned; omitted entries are reported with the limit and how to see more.",
+		),
+	}),
+);
 
-export type ReadToolInput = typeof readSchema.infer;
+export type ReadToolInput = typeof readSchema.value.infer;
 
 type ReadParams = ReadToolInput;
 
@@ -110,7 +113,7 @@ type InternalUrlRouting =
 	| { readonly kind: "promoted"; readonly readPath: string; readonly selector: string | undefined }
 	| { readonly kind: "not-internal" };
 
-export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
+export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDetails> {
 	readonly name = "read";
 	readonly approval = (args: unknown): ToolTier =>
 		pathTargetsSsh(String((args as { path?: unknown }).path ?? "")) ? "exec" : "read";
@@ -122,7 +125,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly label = "Read";
 	readonly loadMode = "essential";
 	readonly description: string;
-	readonly parameters = readSchema;
+	get parameters(): typeof readSchema.value {
+		return readSchema.value;
+	}
 	readonly strict = true;
 
 	readonly #ctx: ReadContext;

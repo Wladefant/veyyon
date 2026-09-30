@@ -1127,6 +1127,20 @@ export class Markdown implements Component {
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
 	}
+
+	releaseRenderCache(): void {
+		this.invalidate();
+		// Every field below is derived from #text and rebuilt by the next render: a
+		// full lex re-freezes the stable prefix, and the row caches refill as rows render.
+		this.#streamPrefixText = undefined;
+		this.#streamPrefixTokens = undefined;
+		this.#streamPrefixLineCache = undefined;
+		this.#streamPrefixSource = undefined;
+		this.#normalizedCleanHead = undefined;
+		this.#streamingDiffLineCache = undefined;
+		this.#openFenceRowCache = undefined;
+	}
+
 	get transientRenderCache(): boolean {
 		return this.#transientRenderCache;
 	}

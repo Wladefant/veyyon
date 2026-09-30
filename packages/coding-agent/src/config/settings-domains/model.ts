@@ -1,5 +1,5 @@
 import { unsetNumberOption } from "@veyyon/kernel/settings/optional-number";
-import { CONFIGURED_THINKING_LEVELS } from "../../thinking";
+import { CONFIGURED_THINKING_LEVELS } from "../../thinking/constants";
 import {
 	SERVICE_TIER_ANTHROPIC_OPTIONS,
 	SERVICE_TIER_ANTHROPIC_VALUES,

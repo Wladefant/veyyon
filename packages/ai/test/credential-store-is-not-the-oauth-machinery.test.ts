@@ -118,12 +118,10 @@ const ROWS_CEILING = 8;
  * this reach, computed their doubling inline and now take it from that owner. The leaf imports nothing,
  * so this closure gained a name and no edge.
  *
- * RE-MEASURED 2026-09-29 at 47. The one new module is `shared-project-providers.ts`, a zero-import leaf
- * that owns which providers' accounts share one project id. The credential row helpers read it so an
- * Antigravity login naming no account is never keyed on the shared project (which collapsed every
- * account after the first into one row), and `usage.ts` re-exports it for the usage surfaces. It replaces
- * a second hand-synced copy of the same membership. The leaf imports nothing, so this closure gained a
- * name and no edge.
+ * RE-MEASURED 2026-09-29 at 47. The one new module is `@veyyon/utils/log-file`, the rotating profile log
+ * that replaced `winston` and `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on this reach,
+ * writes through it, and its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already
+ * reached, so this closure gained a name and no edge.
  */
 const STORE_CEILING = 47;
 

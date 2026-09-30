@@ -250,28 +250,33 @@ for (const layout of LAYOUTS) {
 				for (const { owner, active } of crossProfilePairs()) {
 					activate(active);
 					const source = seededFor(owner);
-					const requestRelaunch = vi.fn();
-					const shutdown = vi.fn(async () => {});
-					const handleResumeSession = vi.fn(async () => {});
+					const calls: string[] = [];
+					let relaunch: { argv: string[]; env: Record<string, string> } | undefined;
 					const ctx = {
 						editor: { setText: vi.fn() },
 						sessionManager: { getCwd: () => launchCwd, getSessionDir: () => launchCwd },
-						requestRelaunch,
-						shutdown,
-						handleResumeSession,
+						requestRelaunch: (spec: { argv: string[]; env: Record<string, string> }) => {
+							calls.push("relaunch");
+							relaunch = spec;
+						},
+						shutdown: async () => {
+							calls.push("shutdown");
+						},
+						handleResumeSession: async () => {
+							calls.push("resume in place");
+						},
 						showStatus: vi.fn(),
-						showError: vi.fn(),
+						showError: (message: string) => {
+							calls.push(`error: ${message}`);
+						},
 					} as unknown as InteractiveModeContext;
 
 					await executeBuiltinSlashCommand(`/resume ${source.id}`, { ctx });
 
 					const label = `${active} running /resume for ${owner}'s session`;
-					expect(handleResumeSession, label).not.toHaveBeenCalled();
-					expect(requestRelaunch, label).toHaveBeenCalledTimes(1);
-					const [spec] = requestRelaunch.mock.calls[0] ?? [];
-					expect(spec?.argv.slice(-2), label).toEqual(["--resume", source.id]);
-					expect(spec?.env, label).toEqual({ VEYYON_PROFILE: owner });
-					expect(shutdown, label).toHaveBeenCalledTimes(1);
+					expect(calls, label).toEqual(["relaunch", "shutdown"]);
+					expect(relaunch?.argv.slice(-2), label).toEqual(["--resume", source.id]);
+					expect(relaunch?.env, label).toEqual({ VEYYON_PROFILE: owner });
 				}
 			});
 		});

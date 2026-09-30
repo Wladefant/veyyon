@@ -109,8 +109,6 @@
 			"typescript": "^7.0.2",
 			"vite": "^8.1.4",
 			"vite-plugin-solid": "^2.11.12",
-			"winston": "^3.19.0",
-			"winston-daily-rotate-file": "^5.0.0",
 			"yaml": "^2.9.0",
 			"zod": "^4",
 			"@veyyon/stats": "1.5.5",

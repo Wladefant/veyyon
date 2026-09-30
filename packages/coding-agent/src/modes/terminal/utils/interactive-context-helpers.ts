@@ -39,3 +39,20 @@ export function createAssistantMessageComponent(
 	);
 	return component;
 }
+
+/** The slice {@link focusEditorSlot} reads. */
+export type EditorSlotContext = Pick<InteractiveModeContext, "editor" | "editorContainer" | "ui">;
+
+/**
+ * Restore keyboard focus to whatever currently owns the editor slot. The
+ * slot can hold the editor itself or a hook selector/input/editor pushed
+ * in by `ExtensionUiController` — e.g. an approval prompt that fired while
+ * a fullscreen overlay was up. `overlayHandle.hide()` restores focus to
+ * the component focused when the overlay opened, which is stale in that
+ * case (the editor was swapped out): keys land on a hidden editor and the
+ * visible prompt receives nothing (issue #3349). Call this after the
+ * overlay hides to re-target focus at the visible slot owner.
+ */
+export function focusEditorSlot(ctx: EditorSlotContext): void {
+	ctx.ui.setFocus(ctx.editorContainer.children[0] ?? ctx.editor);
+}
