@@ -1316,8 +1316,8 @@ export interface XaiModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions("xai", "https://api.x.ai/v1", config);
+export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-responses"> {
+	return createSimpleOpenAIResponsesOptions("xai", "https://api.x.ai/v1", config);
 }
 
 export interface XaiOAuthModelManagerConfig {
@@ -1412,7 +1412,7 @@ const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as c
 function withXaiOAuthCompatDefaults(model: ModelSpec<"openai-responses">): ModelSpec<"openai-responses"> {
 	const compat = {
 		...(model.compat ?? {}),
-		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? false,
+		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? true,
 		filterReasoningHistory: model.compat?.filterReasoningHistory ?? true,
 		supportsImageDetailOriginal: model.compat?.supportsImageDetailOriginal ?? false,
 		omitReasoningEffort: model.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(model.id),
@@ -1455,7 +1455,7 @@ function mergeCuratedIntoModel(
 	const compat = {
 		...(base.compat ?? {}),
 		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
-		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? false,
+		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? true,
 		filterReasoningHistory: base.compat?.filterReasoningHistory ?? true,
 		supportsImageDetailOriginal: base.compat?.supportsImageDetailOriginal ?? false,
 		omitReasoningEffort: !effortCapable,
@@ -5098,7 +5098,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		defaultContextWindow: 131072,
 	}),
 	// --- xAI ---
-	openAiCompletionsDescriptor("xai", "xai", "https://api.x.ai/v1"),
+	simpleModelsDevDescriptor("xai", "xai", "openai-responses", "https://api.x.ai/v1"),
 	// --- OAuth twins: surfaces models.dev catalogs only under the API-key twin ---
 	// These exist so LIVE discovery rows pick up the declared reasoning surface;
 	// without them the twin knowledge sat only in the bundle generator, and a
