@@ -42,6 +42,7 @@ There are two different listing pipelines:
    - Reads a 4KB prefix plus, for `list`/`listAll` (which pass `withStatus`), a bounded 32 KiB tail in one `readTextSlices(...)` call per file, not the full JSONL file; when the prefix contains no user message in a larger file, one bounded escalated read of up to 1 MiB recovers the display fields.
    - Builds `SessionInfo` objects (`id`, `cwd`, `title`, `messageCount`, `firstMessage`, `allMessagesText`, timestamps, lifecycle status).
    - Uses prefix parsing plus marker counting for list text, and tail parsing for the final-message lifecycle status; later messages beyond the prefix may not be present in `allMessagesText`.
+   - Cuts `firstMessage` and `allMessagesText` to `SESSION_LIST_TEXT_CHARS` (4,096) characters, without splitting a surrogate pair, and copies the cut out of the scanned window so a row keeps no window alive. The directory's `.session-list-index.json` stores the same bounded rows; `SESSION_LIST_INDEX_VERSION` 2 discards an index written before the bound.
    - Sorts by `modified` descending.
 
 ### Metadata fallback behavior
