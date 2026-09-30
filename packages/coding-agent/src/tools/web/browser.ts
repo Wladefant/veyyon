@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
-import { isCancellation, prompt, stringifyJsonSafe, trimTrailingSlashes, untilAborted } from "@veyyon/utils";
+import { isCancellation, lazy, prompt, stringifyJsonSafe, trimTrailingSlashes, untilAborted } from "@veyyon/utils";
 import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "../../sdk";
@@ -29,35 +29,39 @@ export type { Observation, ObservationEntry } from "./browser/tab-protocol";
 
 const DEFAULT_TAB_NAME = "main";
 
-const appSchema = type({
-	"path?": type("string").describe("binary path to spawn"),
-	"cdp_url?": type("string").describe("existing cdp endpoint"),
-	"args?": type("string[]").describe("extra cli args"),
-	"target?": type("string").describe("substring to pick a window"),
-});
+const appSchema = lazy(() =>
+	type({
+		"path?": type("string").describe("binary path to spawn"),
+		"cdp_url?": type("string").describe("existing cdp endpoint"),
+		"args?": type("string[]").describe("extra cli args"),
+		"target?": type("string").describe("substring to pick a window"),
+	}),
+);
 
-const browserSchema = type({
-	action: type("'open' | 'close' | 'run'").describe("operation"),
-	"name?": type("string").describe("tab id (default 'main')"),
-	"url?": type("string").describe("url to open"),
-	"app?": appSchema,
-	"viewport?": {
-		width: "number",
-		height: "number",
-		"scale?": "number",
-	},
-	"wait_until?": type("'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'").describe(
-		"navigation wait condition",
-	),
-	"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
-	"code?": type("string").describe("js body to run in tab"),
-	"timeout?": type("number").describe(describeTimeoutParam("browser")),
-	"all?": type("boolean").describe("close every tab"),
-	"kill?": type("boolean").describe("also kill spawned-app browsers"),
-});
+const browserSchema = lazy(() =>
+	type({
+		action: type("'open' | 'close' | 'run'").describe("operation"),
+		"name?": type("string").describe("tab id (default 'main')"),
+		"url?": type("string").describe("url to open"),
+		"app?": appSchema.value,
+		"viewport?": {
+			width: "number",
+			height: "number",
+			"scale?": "number",
+		},
+		"wait_until?": type("'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'").describe(
+			"navigation wait condition",
+		),
+		"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
+		"code?": type("string").describe("js body to run in tab"),
+		"timeout?": type("number").describe(describeTimeoutParam("browser")),
+		"all?": type("boolean").describe("close every tab"),
+		"kill?": type("boolean").describe("also kill spawned-app browsers"),
+	}),
+);
 
 /** Input schema for the browser tool. */
-export type BrowserParams = typeof browserSchema.infer;
+export type BrowserParams = typeof browserSchema.value.infer;
 
 /** Details describing a browser tool execution result (for renderers + transcript). */
 export interface BrowserToolDetails {
@@ -97,7 +101,7 @@ function resolveBrowserKind(params: BrowserParams, session: ToolSession): Browse
  * - `close` → release a named tab (or all tabs); dispose browser when refcount hits 0.
  * - `run`   → execute JS code against an existing tab with `page`/`browser`/`tab` helpers in scope.
  */
-export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolDetails> {
+export class BrowserTool implements AgentTool<typeof browserSchema.value, BrowserToolDetails> {
 	readonly name = "browser";
 	readonly approval = "exec" as const;
 	readonly formatApprovalDetails = (args: unknown): string[] => {
@@ -116,7 +120,9 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	readonly label = "Browser";
 	readonly loadMode = "discoverable";
 	readonly summary = "Control a headless browser to navigate and interact with web pages";
-	readonly parameters = browserSchema;
+	get parameters(): typeof browserSchema.value {
+		return browserSchema.value;
+	}
 	readonly strict = true;
 	/**
 	 * Every action reads or moves one shared tab table, and `run` writes to a
@@ -126,7 +132,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	 */
 	readonly concurrency = "exclusive";
 
-	readonly examples: readonly ToolExample<typeof browserSchema.infer>[] = [
+	readonly examples: readonly ToolExample<typeof browserSchema.value.infer>[] = [
 		{
 			caption: "Open a tab",
 			call: { action: "open", name: "docs", url: "https://example.com" },

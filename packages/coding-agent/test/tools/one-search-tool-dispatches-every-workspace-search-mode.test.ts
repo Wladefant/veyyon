@@ -142,7 +142,7 @@ describe("one search tool dispatches every workspace search mode", () => {
 	// field set out of the schema at run time and drives every (mode, field) pair: a new field
 	// with no sample value, or a mode that starts accepting one it did not, goes red here.
 	it("accepts exactly the fields its mode owns, across every field the schema declares", async () => {
-		const declaredFields = searchSchema.props
+		const declaredFields = searchSchema.value.props
 			.map(prop => String(prop.key))
 			.filter(name => name !== "type" && name !== "input");
 		expect(declaredFields.slice().sort()).toEqual(Object.keys(FIELD_SAMPLES).sort());

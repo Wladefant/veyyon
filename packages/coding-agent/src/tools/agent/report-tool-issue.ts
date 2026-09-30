@@ -411,6 +411,7 @@ export function createReportToolIssueTool(session: ToolSession, activeBuiltinNam
 	// snapshot; mid-session drift (extensions registering later, etc.) is caught
 	// by the silent-drop guard below.
 	const allowedToolNames = new Set(activeBuiltinNames);
+	let parameters: ReportToolIssueParamsSchema | undefined;
 
 	return {
 		name: "report_tool_issue",
@@ -418,7 +419,10 @@ export function createReportToolIssueTool(session: ToolSession, activeBuiltinNam
 		strict: false,
 		approval: "write",
 		description: "Report unexpected tool behavior for automated QA tracking.",
-		parameters: reportToolIssueParams(activeBuiltinNames),
+		get parameters(): ReportToolIssueParamsSchema {
+			parameters ??= reportToolIssueParams(activeBuiltinNames);
+			return parameters;
+		},
 		intent: "omit",
 		async execute(_toolCallId, rawParams) {
 			// Save is unconditional: the row lives in this profile's local

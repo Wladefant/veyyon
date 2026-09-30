@@ -128,6 +128,7 @@
 - A kept-alive spawned agent's session options and a parked agent's reviver hold only the run fields they read, and each progress snapshot copies its tail lines out of the streamed text, so a finished agent no longer keeps its run's assistant text, the spawning tool call's progress callback and abort signal, or the streamed message a tail line was cut from; after five turns spawning four agents each and the 20 agents parked, heap and extra memory is 61.2 MiB instead of 64.2 MiB and live objects 547,990 instead of 549,635 (median of three).
 - The CPU model the system prompt shows is copied through `detachedString` from `@veyyon/utils`; no user-visible change.
 - A session whose tools, commands and extensions are all first-party no longer evaluates Zod: the `search` tool declares its parameters with ArkType, which lists its `type` values as `files`, `structure`, `text`, and the command, custom-tool and extension loaders read `api.zod` from the package namespace only for author code, cutting the idle heap and extra memory of the compiled binary from 83.7 MiB to 81.9 MiB and live objects from 546,500 to 528,700 (median of five).
+- Built-in tools build their ArkType parameter schemas on the first read of `parameters` instead of when their modules load, and session creation reads no inactive tool's parameters for discovery keys or prompt metadata, so a default session registers 834 schema nodes instead of 1,841 and the compiled binary's idle heap and extra memory drop from 75.9 MiB to 72.2 MiB, live objects from 496,323 to 457,494 and RSS after a full collection from 292 MiB to 289 MiB (median of five).
 
 ### Fixed
 
@@ -179,6 +180,7 @@
 - Turning Settings → Providers → Import Other Tools' Config on or off applies to the next discovery load in the running session and leaves `disabledProviders` unchanged, instead of adding or removing a provider named `importForeignConfig` there and taking effect only in the next session.
 - Turning Settings → Appearance → Show Inline Images on or off redraws the transcript under the new value, instead of leaving the images on cards already drawn.
 - Closing `/settings`, flipping an appearance toggle there or hovering a status line preset keeps the configured `statusLine.segmentOptions` on the status line, instead of resetting them to the preset's until the next unrelated resync.
+- `@veyyon/coding-agent/export/html` exports `buildSessionData` and `collectSubSessions` again, which moving them to `export/session-data` had dropped from that entry point.
 
 ### Removed
 

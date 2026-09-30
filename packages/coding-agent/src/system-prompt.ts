@@ -480,8 +480,14 @@ export interface SystemPromptToolMetadata {
 	description: string;
 	/** Tool name the model sees on the provider wire. Defaults to the internal tool name. */
 	wireName?: string;
-	/** Tool parameters schema (Zod or JSON Schema), fed to the verbose inventory renderer. */
-	parameters?: TSchema;
+	/**
+	 * Tool parameters schema (Zod or JSON Schema), fed to the verbose inventory renderer. Metadata from
+	 * {@link buildSystemPromptToolMetadata} reads the tool's `parameters` on the first read of this
+	 * field: a tool builds its ArkType schema on that read, ArkType registers every node it builds for
+	 * the life of the process, and the inventory renders only the active tools, and none in
+	 * provider-native list mode.
+	 */
+	readonly parameters?: TSchema;
 	/** Illustrative examples rendered into the verbose inventory. */
 	examples?: readonly ToolExample[];
 }
@@ -503,7 +509,9 @@ export function buildSystemPromptToolMetadata(
 					label: override?.label ?? (typeof toolRecord.label === "string" ? toolRecord.label : ""),
 					description:
 						override?.description ?? (typeof toolRecord.description === "string" ? toolRecord.description : ""),
-					parameters: override?.parameters ?? toolRecord.parameters,
+					get parameters(): TSchema | undefined {
+						return override?.parameters ?? toolRecord.parameters;
+					},
 					examples: override?.examples ?? toolRecord.examples,
 					wireName,
 				},

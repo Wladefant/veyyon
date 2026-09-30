@@ -29,6 +29,7 @@
 - The Google, Cloud Code Assist, MCP and Moonshot normalizers walk a `properties` or definitions map by entry instead of copying their options for every key, and Cloud Code Assist's nullable pass walks each property subtree once instead of twice per nesting level, cutting normalization of the 25 built-in tool schemas by 13% to 23% and of a 16-level nested schema for Cloud Code Assist from 62.7 ms to 0.1 ms.
 - The JSON Schema value validator walks one instance path it pushes and pops instead of copying the path into every child, applies each keyword group in its own step, and lists an object's keys and builds its type list only when a keyword reads them, cutting validation of a 60-entry tool argument from 45 µs to 22 µs with identical issues across 600,000 generated schemas and values.
 - `zodToWireSchema` loads Zod's core converter on the first Zod schema it converts and `utils/schema/wire.ts` imports Zod for types only, so a process whose tools are all ArkType never evaluates Zod.
+- `usageWireSchemas` from `@veyyon/ai/usage/report-wire` is a `Lazy` holder read through `.value` instead of a function, and the Gemini CLI credentials validator is built on the first credentials read instead of when the provider module loads.
 
 ### Fixed
 

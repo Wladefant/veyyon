@@ -44,12 +44,12 @@ export * from "./snapshot-details";
 export * from "./streaming";
 
 type TInput =
-	| typeof replaceEditSchema
-	| typeof patchEditSchema
-	| typeof hashlineEditParamsSchema
-	| typeof applyPatchSchema;
+	| typeof replaceEditSchema.value
+	| typeof patchEditSchema.value
+	| typeof hashlineEditParamsSchema.value
+	| typeof applyPatchSchema.value;
 
-type HashlineParams = typeof hashlineEditParamsSchema.infer;
+type HashlineParams = typeof hashlineEditParamsSchema.value.infer;
 
 type EditParams = ReplaceParams | PatchParams | HashlineParams | ApplyPatchParams;
 
@@ -630,7 +630,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 		return {
 			patch: {
 				description: () => prompt.render(toolsPrompts["tools/patch"].text),
-				parameters: patchEditSchema,
+				get parameters() {
+					return patchEditSchema.value;
+				},
 				examples: [
 					{
 						caption: "Create",
@@ -694,7 +696,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 			},
 			apply_patch: {
 				description: () => prompt.render(toolsPrompts["tools/apply-patch"].text),
-				parameters: applyPatchSchema,
+				get parameters() {
+					return applyPatchSchema.value;
+				},
 				examples: [
 					{
 						caption: "Apply a combined patch file",
@@ -734,7 +738,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 			},
 			hashline: {
 				description: () => prompt.render(HASHLINE_PROMPTS.prompt.text),
-				parameters: hashlineEditParamsSchema,
+				get parameters() {
+					return hashlineEditParamsSchema.value;
+				},
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -755,7 +761,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 			},
 			replace: {
 				description: () => prompt.render(toolsPrompts["tools/replace"].text),
-				parameters: replaceEditSchema,
+				get parameters() {
+					return replaceEditSchema.value;
+				},
 				execute: (
 					tool: EditTool,
 					params: EditParams,

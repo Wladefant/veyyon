@@ -34,7 +34,7 @@ import {
 import { MULTI_FILE_PER_FILE_MATCHES } from "@veyyon/coding-agent/tools/search/text-search";
 import { removeWithRetries } from "@veyyon/utils";
 
-const SCHEMA_FIELDS = searchSchema.props.map(prop => String(prop.key));
+const SCHEMA_FIELDS = searchSchema.value.props.map(prop => String(prop.key));
 
 /** One call per search type that reaches a limit or pagination notice. */
 const SCENARIOS: Record<SearchType, { callId: string; args: Record<string, unknown> }> = {
