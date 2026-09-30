@@ -29,6 +29,7 @@
 
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "./atomic-write";
 import { getLogsDir } from "./dirs";
@@ -36,6 +37,12 @@ import { isMissingPath } from "./fs-error";
 import * as logger from "./logger";
 import { getProcessStartIdentity, isProcessAlive, isToolCallProcessAlive } from "./process-liveness";
 import { errorMessage } from "./type-guards";
+
+const startupSmol =
+	process.execArgv.includes("--smol") ||
+	process.argv.includes("--smol") ||
+	process.env.BUN_OPTIONS?.includes("--smol") === true;
+const startupForceRAMSize = process.env.BUN_JSC_forceRAMSize || undefined;
 
 /** What a session is doing, from the outside. */
 export type SessionPhase = "provider" | "tool" | "compaction" | "idle";
@@ -90,6 +97,33 @@ export interface SessionHeartbeat {
 	activeLanes: number;
 	/** Spawned sessions in this process. */
 	lanes: number;
+	/**
+	 * Resident set size of the writing process when this file was written. A
+	 * process the operating system kills for want of memory leaves no trace of
+	 * why; the last reading beside `freeMemBytes` is what separates that from a
+	 * console or terminal closing under it (veyyon#73). Absent in files an older
+	 * build wrote.
+	 */
+	rssBytes?: number;
+	/** Free physical memory on the host when this file was written. */
+	freeMemBytes?: number;
+	/**
+	 * Total size of the allocated JavaScript heap in bytes when this file was written.
+	 * What separates host memory pressure from a per-process JSC heap ceiling (D04 abort).
+	 */
+	heapTotal?: number;
+	/**
+	 * Memory actively used by JavaScript objects in bytes when this file was written.
+	 */
+	heapUsed?: number;
+	/**
+	 * Memory allocated outside JavaScript that the engine is tracking.
+	 */
+	external?: number;
+	/** Whether `--smol` was active at startup. */
+	smol?: boolean;
+	/** Value of `BUN_JSC_forceRAMSize` at startup, if set. */
+	forceRAMSize?: string;
 }
 
 interface Participant {
@@ -139,6 +173,7 @@ function snapshot(): SessionHeartbeat | undefined {
 		if (participant.phase !== "idle") activeLanes++;
 	}
 	startIdentity ??= getProcessStartIdentity(process.pid);
+	const mem = process.memoryUsage();
 	return {
 		pid: process.pid,
 		startIdentity,
@@ -148,6 +183,13 @@ function snapshot(): SessionHeartbeat | undefined {
 		heartbeatAt: new Date().toISOString(),
 		activeLanes,
 		lanes,
+		rssBytes: mem.rss,
+		freeMemBytes: os.freemem(),
+		heapTotal: mem.heapTotal,
+		heapUsed: mem.heapUsed,
+		external: mem.external,
+		...(startupSmol ? { smol: true } : {}),
+		...(startupForceRAMSize !== undefined ? { forceRAMSize: startupForceRAMSize } : {}),
 	};
 }
 
@@ -276,6 +318,13 @@ function readHeartbeat(file: string): SessionHeartbeat | undefined {
 		if (typeof beat.startIdentity !== "string") beat.startIdentity = null;
 		if (typeof beat.activeLanes !== "number") beat.activeLanes = 0;
 		if (typeof beat.lanes !== "number") beat.lanes = 0;
+		if (typeof beat.rssBytes !== "number") delete beat.rssBytes;
+		if (typeof beat.freeMemBytes !== "number") delete beat.freeMemBytes;
+		if (typeof beat.heapTotal !== "number") delete beat.heapTotal;
+		if (typeof beat.heapUsed !== "number") delete beat.heapUsed;
+		if (typeof beat.external !== "number") delete beat.external;
+		if (typeof beat.smol !== "boolean") delete beat.smol;
+		if (typeof beat.forceRAMSize !== "string") delete beat.forceRAMSize;
 		return beat as SessionHeartbeat;
 	} catch {
 		// Atomic publication means a torn file is not ours to explain.
@@ -325,6 +374,13 @@ export function reportSilentDeaths(): SessionHeartbeat[] {
 					heartbeatAt: beat.heartbeatAt,
 					activeLanes: beat.activeLanes,
 					lanes: beat.lanes,
+					rssBytes: beat.rssBytes,
+					freeMemBytes: beat.freeMemBytes,
+					heapTotal: beat.heapTotal,
+					heapUsed: beat.heapUsed,
+					external: beat.external,
+					smol: beat.smol,
+					forceRAMSize: beat.forceRAMSize,
 				});
 			} catch (error) {
 				// Keep the evidence for a launch that can log it.
