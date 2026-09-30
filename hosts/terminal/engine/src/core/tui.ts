@@ -3204,6 +3204,12 @@ export class TUI extends Container {
 		this.#emitAltFrame(window, width, height, view.altCaret ?? undefined);
 		this.#previousWindow = window;
 		this.#previousFrameLength = frameLength;
+		// The geometry this frame was composed at. Left unrecorded, every later
+		// frame reads the resize again and replays the whole history, and a replay
+		// that commits rows requests the compaction frame that replays it again.
+		// Exit to the normal screen compares against #altEnterWidth instead.
+		this.#previousWidth = width;
+		this.#previousHeight = height;
 		// The rows the tape does not hold yet. Kept so exit can replay the whole
 		// transcript (tape + tail) onto the normal screen, since on this surface
 		// the terminal has never seen any of it.

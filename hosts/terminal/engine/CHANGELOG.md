@@ -25,6 +25,7 @@
 ### Fixed
 
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
+- After a resize under the `alt-arrows` scroll transport, the engine replays the transcript once instead of on every later frame, so a resumed 600-turn session at rest spends 0.06 CPU seconds per 10 seconds after a resize instead of 6.85 (median of three).
 
 ## [1.5.4] - 2026-09-24
 
