@@ -4955,13 +4955,31 @@ function resolveGoogleVertexApi(modelId: string, raw: ModelsDevModel): { api: Ap
 	return { api: "google-vertex", baseUrl: GOOGLE_VERTEX_BASE_URL };
 }
 
+const BEDROCK_RUNTIME_RESOLUTION = {
+	api: "bedrock-converse-stream",
+	baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+} as const;
+const BEDROCK_MANTLE_RESPONSES_RESOLUTION = {
+	api: "openai-responses",
+	baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+} as const;
+const BEDROCK_MANTLE_OPENAI_MODEL_IDS: Record<string, true> = {
+	"openai.gpt-5.4": true,
+	"openai.gpt-5.5": true,
+	"openai.gpt-5.6-luna": true,
+	"openai.gpt-5.6-sol": true,
+	"openai.gpt-5.6-terra": true,
+};
+
 const MODELS_DEV_PROVIDER_DESCRIPTORS_BEDROCK: readonly ModelsDevProviderDescriptor[] = [
 	// --- Amazon Bedrock ---
 	{
 		modelsDevKey: "amazon-bedrock",
 		providerId: "amazon-bedrock",
-		api: "bedrock-converse-stream",
-		baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+		api: BEDROCK_RUNTIME_RESOLUTION.api,
+		baseUrl: BEDROCK_RUNTIME_RESOLUTION.baseUrl,
+		resolveApi: modelId =>
+			BEDROCK_MANTLE_OPENAI_MODEL_IDS[modelId] ? BEDROCK_MANTLE_RESPONSES_RESOLUTION : BEDROCK_RUNTIME_RESOLUTION,
 		filterModel: (id, m) => {
 			if (m.tool_call !== true) return false;
 			if (id.startsWith("ai21.jamba")) return false;

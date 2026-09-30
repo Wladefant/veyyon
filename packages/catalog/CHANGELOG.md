@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed Amazon Bedrock GPT models to route through Responses.
 - Fixed GitHub Copilot `mai-code-1-flash-picker` (and other `mai-*` models) to route through the `/responses` endpoint instead of `/chat/completions`, which returned 400 unsupported_api_for_model.
 - Loading the provider catalog no longer evaluates arktype: `chatgpt-web` discovery checks its daemon's JSON with `isRecord` instead of four all-`unknown` schemas.
 - `COMMAND_CODE_COSTS` uses plain string keys instead of computed `["…"]` keys, which Biome's `useLiteralKeys` rule rejected; no behavior change.
