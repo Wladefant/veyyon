@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed Bedrock Converse resending unsigned reasoning content on the request path for non-Claude reasoning models (Amazon Nova and any model addressed via an opaque application-inference-profile ARN) by demoting unsigned thinking blocks to plain text.
 - Fixed Anthropic stream hangs when broken keep-alive leaves the HTTP connection open after the terminal `message_stop` envelope.
 - Fixed `ANTHROPIC_BASE_URL` being ignored for Anthropic chat requests and forwarded `ANTHROPIC_CUSTOM_HEADERS` to non-official gateways.
 - Added `isStreamEnvelopeErrorText` to error flags so loop-level salvage can recognize Anthropic stream-envelope truncation errors and recover completed tool calls.
