@@ -93,6 +93,7 @@ describe("Provider Video Handling Sweep", () => {
 			"transform-messages.ts",
 			"error-message.ts",
 			"cursor-liveness.ts",
+			"gateway-schema-type.ts", // ArkType `type` parser for the gateway request schemas; no message content.
 		]);
 
 		const uncovered = tsFiles.filter(file => !testedOrAccountedFor.has(file));
