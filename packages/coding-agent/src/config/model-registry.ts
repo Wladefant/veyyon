@@ -2397,6 +2397,22 @@ export class ModelRegistry {
 		return models;
 	}
 
+	/**
+	 * The models of every provider whose name equals `provider` ignoring case,
+	 * in {@link getAll} order. Builds those providers only, so a lookup that
+	 * names its provider does not build the rest of the catalog.
+	 */
+	getProviderModels(provider: string): Model<Api>[] {
+		const lower = provider.toLowerCase();
+		if (this.#models !== undefined) return this.#models.filter(model => model.provider.toLowerCase() === lower);
+		const models: Model<Api>[] = [];
+		for (const known of this.#getKnownProviders()) {
+			if (known.toLowerCase() !== lower) continue;
+			for (const model of this.#getProviderModels(known)) models.push(model);
+		}
+		return models;
+	}
+
 	getAvailable(): Model<Api>[] {
 		const isAvailable = this.#createAvailabilityCheck();
 		if (this.#models !== undefined) return this.#models.filter(model => isAvailable(model.provider));
