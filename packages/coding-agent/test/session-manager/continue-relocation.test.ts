@@ -197,7 +197,12 @@ describe("SessionManager.continueRecent relocation", () => {
 
 		// The re-root below is taken only when all three hold. Each is asserted on its own so a
 		// failure names the fact that gave way instead of only reporting the path it produced.
-		expect(await readTerminalBreadcrumbEntry()).toEqual({ cwd: cwdA, sessionFile: oldFile });
+		expect(await readTerminalBreadcrumbEntry()).toEqual({
+			cwd: cwdA,
+			sessionFile: oldFile,
+			exists: true,
+			fresh: false,
+		});
 		expect(pathStateSync(cwdA)).toBe("absent");
 		expect(await findMostRecentSession(explicitSessionDir)).toBe(oldFile);
 
