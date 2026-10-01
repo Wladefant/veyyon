@@ -34,7 +34,6 @@ import { buildArgotGate, expandToolArguments } from "./argot-wire";
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
-import { measureContextGauge } from "./config/compaction-strategy";
 import { resolveDialect } from "./config/dialect-format";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { ModelRegistry } from "./config/model-registry";
@@ -77,7 +76,6 @@ import { AgentSession } from "./session/agent-session";
 import { discoverAuthStorage } from "./session/auth-broker-config";
 import { sessionCpuExecHooks } from "./session/cpu-limit";
 import { convertToLlm, LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "./session/messages";
-import { computeNonMessageBreakdown } from "./session/non-message-tokens";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
 import { StartupModelSelection } from "./session/startup-model";
 import { wrapSteeringForModel } from "./session/steering-envelope";
@@ -235,7 +233,7 @@ import {
 	loadStartupCustomCommands,
 	loadStartupExtensions,
 } from "./session/startup-extensions";
-import { armLaunchArgot, recordNewSessionStart } from "./session/startup-records";
+import { armLaunchArgot, measureAtRestLaunch, recordNewSessionStart } from "./session/startup-records";
 import { buildAdvisorTools, createSessionToolSession } from "./session/tool-session";
 
 let sshCleanupRegistered = false;
@@ -1517,38 +1515,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 		hasSession = true;
 		secretRuntime.attachSession(session);
-		// Record the at-rest launch facts the moment they exist, not when the
-		// status row first renders. The launch card reads the file on every
-		// render and repaints when a record lands, so on a cold launch — no
-		// recording from a previous session — the hero's model name and provider
-		// and the context gauge arrive with the session rather than with the
-		// mounted row, and the next launch states them from the first frame.
-		// The row re-records the same decision on its own renders against the
-		// same gauge; a record that changes nothing does not write.
-		//
-		// A spawned agent records nothing. The card describes the top-level
-		// session a launch opens. A spawned agent can run the default model
-		// with its own system prompt, tools and effort, and filing its reading
-		// would hand the next launch a gauge and a rung measured on a prompt
-		// that launch never builds.
+		// The launch card describes the top-level session a launch opens; a spawned agent records nothing.
 		if (agentKind === "main") {
-			const atRestUsage = session.getContextUsage();
-			const atRest = measureContextGauge(
-				atRestUsage?.tokens ?? null,
-				atRestUsage?.contextWindow ?? session.model?.contextWindow ?? 0,
-				session.autoCompactionEnabled ? settings.getGroup("compaction") : undefined,
-			);
-			void recordRestLaunchFacts(
-				{
-					model: session.state.model,
-					thinkingLevel: session.state.thinkingLevel ?? null,
-					isAutoThinking: session.isAutoThinking,
-					messageCount: session.messages?.length ?? 0,
-					systemContextTokens: computeNonMessageBreakdown(session).systemContextTokens,
-				},
-				atRest.contextPercent,
-				atRest.contextLimit,
-			);
+			const atRest = measureAtRestLaunch(session, settings);
+			void recordRestLaunchFacts(atRest, atRest.contextPercent, atRest.contextLimit);
 		}
 
 		armLaunchArgot({
