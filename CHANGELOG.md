@@ -301,6 +301,7 @@
 - `RotatingLogFile` writes a gzipped generation through `atomicWriteFileWith`, staged as the hidden `.<file>.gz.<pid>.<n>.tmp` sibling, and deletes one that a process which exited mid-copy left for a minute.
 - `stallSampler` checks inspector profile payloads with the shared `isRecord`; no user-visible change.
 - `@veyyon/utils/prompt` loads the Handlebars parser and compiler through `@veyyon/utils/prompt-handlebars` on the first template no build precompiled, so a process that renders only precompiled templates evaluates the Handlebars runtime alone.
+- `prompt.format` returns text it rewrites no line of as a cut of its input, without the blank lines at its end, instead of a joined copy; creating an idle main session copies 188,952 fewer characters (347,436 bytes over 65 calls), and a prompt with no mustache holds one buffer for its template and its render.
 
 ### Removed
 
