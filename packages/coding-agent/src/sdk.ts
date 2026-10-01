@@ -1525,23 +1525,31 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// mounted row, and the next launch states them from the first frame.
 		// The row re-records the same decision on its own renders against the
 		// same gauge; a record that changes nothing does not write.
-		const atRestUsage = session.getContextUsage();
-		const atRest = measureContextGauge(
-			atRestUsage?.tokens ?? null,
-			atRestUsage?.contextWindow ?? session.model?.contextWindow ?? 0,
-			session.autoCompactionEnabled ? settings.getGroup("compaction") : undefined,
-		);
-		void recordRestLaunchFacts(
-			{
-				model: session.state.model,
-				thinkingLevel: session.state.thinkingLevel ?? null,
-				isAutoThinking: session.isAutoThinking,
-				messageCount: session.messages?.length ?? 0,
-				systemContextTokens: computeNonMessageBreakdown(session).systemContextTokens,
-			},
-			atRest.contextPercent,
-			atRest.contextLimit,
-		);
+		//
+		// A spawned agent records nothing. The card describes the top-level
+		// session a launch opens. A spawned agent can run the default model
+		// with its own system prompt, tools and effort, and filing its reading
+		// would hand the next launch a gauge and a rung measured on a prompt
+		// that launch never builds.
+		if (agentKind === "main") {
+			const atRestUsage = session.getContextUsage();
+			const atRest = measureContextGauge(
+				atRestUsage?.tokens ?? null,
+				atRestUsage?.contextWindow ?? session.model?.contextWindow ?? 0,
+				session.autoCompactionEnabled ? settings.getGroup("compaction") : undefined,
+			);
+			void recordRestLaunchFacts(
+				{
+					model: session.state.model,
+					thinkingLevel: session.state.thinkingLevel ?? null,
+					isAutoThinking: session.isAutoThinking,
+					messageCount: session.messages?.length ?? 0,
+					systemContextTokens: computeNonMessageBreakdown(session).systemContextTokens,
+				},
+				atRest.contextPercent,
+				atRest.contextLimit,
+			);
+		}
 
 		armLaunchArgot({
 			argot,
