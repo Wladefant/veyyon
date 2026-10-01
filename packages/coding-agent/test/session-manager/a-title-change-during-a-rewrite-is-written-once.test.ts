@@ -147,8 +147,8 @@ describe("a title change during a rewrite is written once", () => {
 
 				// The publish in progress is the one the case names, so the case is not proving the other one. A
 				// queued rewrite plans after the title change, which revises the header line, so it keeps no prefix.
-				const first = when === "none" ? undefined : when === "queued" ? "whole" : publish;
-				expect(storage.publishes[0]).toBe(first);
+				const first: Publish | undefined = when === "none" ? undefined : when === "queued" ? "whole" : publish;
+				expect(storage.publishes.at(0)).toBe(first);
 				const lines = fileLines(file);
 				expect(lines[0]).toMatchObject({ type: "title", title: TITLE });
 				const titles = lines.filter(line => line.type === TITLE_CHANGE_ENTRY_TYPE).map(line => line.title);
