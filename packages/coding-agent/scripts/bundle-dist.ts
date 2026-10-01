@@ -3,7 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { formatBytes, isEnoent } from "@veyyon/utils";
-import { buildDocsIndexPayload } from "./generate-docs-index";
+import { buildPayloadDefines } from "./generate-docs-index";
 
 const packageDir = path.join(import.meta.dir, "..");
 const outDir = path.join(packageDir, "dist");
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
 			naming: { asset: "[name].[ext]" },
 			define: {
 				"process.env.VEYYON_BUNDLED": JSON.stringify("true"),
-				"process.env.VEYYON_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
+				...(await buildPayloadDefines()),
 			},
 			minify: {
 				whitespace: true,

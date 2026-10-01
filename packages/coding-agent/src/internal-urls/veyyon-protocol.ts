@@ -9,8 +9,23 @@
  *
  */
 import * as path from "node:path";
-import { getDocFilenames, getEmbeddedDoc } from "./docs-index";
+import type * as docsIndexModule from "./docs-index";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
+
+/**
+ * `./docs-index`, loaded on the first `veyyon://` resolve or completion.
+ *
+ * A compiled binary replaces the module's payload read with a 1.4 MB string literal, and a module on
+ * the startup graph costs its chunk whether or not a function in it runs: statically linked into a
+ * bytecode binary that never calls it, the module measured 1.58 MiB of heap and 11 MiB of RSS. The
+ * router registers this handler for every session, so the import is the boundary that keeps the
+ * payload's chunk unlinked until a `veyyon://` URL is resolved.
+ */
+let docsIndex: Promise<typeof docsIndexModule> | undefined;
+function loadDocsIndex(): Promise<typeof docsIndexModule> {
+	docsIndex ??= import("./docs-index");
+	return docsIndex;
+}
 
 /**
  * Handler for veyyon:// URLs.
@@ -35,6 +50,7 @@ export class VeyyonProtocolHandler implements ProtocolHandler {
 	}
 
 	async complete(): Promise<UrlCompletion[]> {
+		const { getDocFilenames } = await loadDocsIndex();
 		return getDocFilenames().map(value => ({ value }));
 	}
 
@@ -55,6 +71,7 @@ export class VeyyonProtocolHandler implements ProtocolHandler {
 			return listDocs(url);
 		}
 
+		const { getDocFilenames, getEmbeddedDoc } = await loadDocsIndex();
 		const content = (await getEmbeddedDoc(docPath)) ?? (await readByBasename(docPath));
 		if (content === undefined) {
 			const lookup = docPath.replace(/\.md$/, "");
@@ -78,6 +95,7 @@ export class VeyyonProtocolHandler implements ProtocolHandler {
 }
 
 async function listDocs(url: InternalUrl): Promise<InternalResource> {
+	const { getDocFilenames } = await loadDocsIndex();
 	const filenames = getDocFilenames();
 	if (filenames.length === 0) {
 		throw new Error("No documentation files found");
@@ -107,6 +125,7 @@ async function listDocs(url: InternalUrl): Promise<InternalResource> {
  * through to the suggestion list, which names both.
  */
 async function readByBasename(docPath: string): Promise<string | undefined> {
+	const { getDocFilenames, getEmbeddedDoc } = await loadDocsIndex();
 	const wanted = docPath.split("/").at(-1);
 	const matches = getDocFilenames().filter(f => f.split("/").at(-1) === wanted);
 	return matches.length === 1 && matches[0] !== docPath ? await getEmbeddedDoc(matches[0]) : undefined;

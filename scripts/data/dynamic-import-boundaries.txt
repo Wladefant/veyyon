@@ -54,6 +54,7 @@ packages/coding-agent/src/extensibility/custom-commands/loader.ts
 packages/coding-agent/src/extensibility/custom-tools/loader.ts
 packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts
 packages/coding-agent/src/extensibility/plugins/marketplace-auto-update.ts
+packages/coding-agent/src/internal-urls/veyyon-protocol.ts
 packages/coding-agent/src/main.ts
 packages/coding-agent/src/memory/mnemopi/backend.ts
 packages/coding-agent/src/memory/mnemopi/state.ts
