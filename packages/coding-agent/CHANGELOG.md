@@ -11,6 +11,7 @@
 
 ### Changed
 
+- The compiled binary holds one copy of Zod instead of two, because the schema converter no longer `require`s a CommonJS copy beside the one the package barrel hands to extensions; the binary is 2.3 MiB smaller and an idle session holds 3 MiB less RSS after collection (270 to 267 MiB, median of five).
 - The resolved model stage (`resolved-models.json`) stores each distinct compat record once and each model an index into that table, so on a profile with 5,646 models the file is 0.81 MB instead of 2.10 MB and a launch restores the model registry in 10.2 ms instead of 22.2 ms, with 4.5 MiB less RSS growth (median of 11); a stage written by an earlier release is rebuilt once.
 - 261 class members that read no instance state are module functions and constants instead of `#private` members; JSC copies every private name of a class into each function its body creates, so with the 73 moved in the other packages the binary shrinks by 815 KiB and an idle session holds 580 KiB less RSS after the idle trim (median of five).
 - The isolation runner loads the commit message generator, its model helper and the commit prompts on the first AI-written isolation commit instead of when the task tool loads, so an idle session holds 390 fewer live objects and 0.10 MiB less heap (median of five) and a source session evaluates 16 fewer modules.

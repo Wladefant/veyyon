@@ -1,11 +1,17 @@
 /**
- * The static import graph of a module: every file a Bun process evaluates when
- * it imports that entry, with `await import(...)` treated as a cut.
+ * The static import graph of a module: every file a Bun process loads when it
+ * imports that entry, with `await import(...)` treated as a cut.
  *
  * Evaluation at startup is decided by static reachability — a dynamic import
  * evaluates nothing until it is called — so walking `import` statements answers
  * "does this load when the CLI starts" without running the CLI, and without a
  * loader plugin that would have to re-parse third-party CommonJS.
+ *
+ * A `require("x")` is an edge too, even inside a function body that has not run.
+ * The compiled binary's bundler places a required module in the chunk of the
+ * module that requires it, so the binary loads and parses that code at startup
+ * whether or not the call ever happens; only `await import(...)` moves code into
+ * a chunk of its own.
  */
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -134,9 +140,9 @@ function packageOfNodeModulePath(path: string): string {
 }
 
 /**
- * Walk `entry`'s static imports. `import type` is erased by the transpiler, so a
- * type-only edge never enters the graph — which is the point: it costs nothing
- * at run time.
+ * Walk `entry`'s static imports and `require` calls. `import type` is erased by
+ * the transpiler, so a type-only edge never enters the graph — which is the
+ * point: it costs nothing at run time.
  */
 export function buildStartupImportGraph(repoRoot: string, entry: string): StartupImportGraph {
 	const packages = workspacePackages(repoRoot);
@@ -172,7 +178,7 @@ export function buildStartupImportGraph(repoRoot: string, entry: string): Startu
 			pathTyped.add(match[2]!);
 		}
 		for (const imported of imports) {
-			if (imported.kind !== "import-statement") continue;
+			if (imported.kind !== "import-statement" && imported.kind !== "require-call") continue;
 			const spec = imported.path;
 			if (spec === "bun" || spec.startsWith("node:") || spec.startsWith("bun:")) continue;
 			let resolved: string | undefined;

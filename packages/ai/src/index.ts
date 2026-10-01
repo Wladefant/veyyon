@@ -3,6 +3,9 @@
 // consumer of `AuthStorage` from this package already arrives. Without it the registry refuses to
 // answer rather than reporting no usage for everything -- see `usage/registry.ts`.
 import "./usage/defaults";
+// The barrel hands out Zod (`z` below), so it installs the converter `zodToWireSchema` uses for a
+// schema that has no `toJSONSchema` method of its own (`zod/mini`).
+import "./utils/schema/zod-core";
 
 export { type Type, type } from "arktype";
 export { type ZodType, z } from "zod/v4";
