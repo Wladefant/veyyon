@@ -184,65 +184,6 @@ export class TtsrManager {
 		return gap >= (rule?.repeatGap ?? this.#settings.repeatGap);
 	}
 
-	#buildScope(rule: Rule): TtsrScope {
-		if (!rule.scope || rule.scope.length === 0) {
-			return {
-				allowText: DEFAULT_SCOPE.allowText,
-				allowThinking: DEFAULT_SCOPE.allowThinking,
-				allowAnyTool: DEFAULT_SCOPE.allowAnyTool,
-				toolScopes: DEFAULT_SCOPE.toolScopes,
-			};
-		}
-
-		const scope: TtsrScope = {
-			allowText: false,
-			allowThinking: false,
-			allowAnyTool: false,
-			toolScopes: [],
-		};
-
-		for (const rawToken of rule.scope) {
-			const token = rawToken.trim();
-			const normalizedToken = token.toLowerCase();
-			if (token.length === 0) {
-				continue;
-			}
-
-			if (normalizedToken === "text") {
-				scope.allowText = true;
-				continue;
-			}
-
-			if (normalizedToken === "thinking") {
-				scope.allowThinking = true;
-				continue;
-			}
-
-			if (normalizedToken === "tool" || normalizedToken === "toolcall") {
-				scope.allowAnyTool = true;
-				continue;
-			}
-
-			const toolScope = parseToolScopeToken(token);
-			if (!toolScope) {
-				logger.warn("TTSR scope token is invalid, skipping token", {
-					ruleName: rule.name,
-					token: rawToken,
-				});
-				continue;
-			}
-
-			if (!toolScope.toolName && !toolScope.pathGlob) {
-				scope.allowAnyTool = true;
-				continue;
-			}
-
-			scope.toolScopes.push(toolScope);
-		}
-
-		return scope;
-	}
-
 	#bufferKey(context: TtsrMatchContext): string {
 		if (context.streamKey && context.streamKey.trim().length > 0) {
 			return context.streamKey;
@@ -360,10 +301,7 @@ export class TtsrManager {
 		}
 
 		const conditions = compileConditions(rule);
-		const astConditions =
-			rule.astCondition && rule.astCondition.length > 0
-				? rule.astCondition.map(pattern => pattern.trim()).filter(p => p.length > 0)
-				: [];
+		const astConditions = trimAstConditions(rule.astCondition);
 		if (conditions.length === 0 && astConditions.length === 0) {
 			// LOUD, because it is indistinguishable from a rule that simply never matches: a rule with
 			// no trigger is registered by the provider, listed by `/rules`, and silently never monitored.
@@ -378,7 +316,7 @@ export class TtsrManager {
 			return false;
 		}
 
-		const scope = this.#buildScope(rule);
+		const scope = buildScope(rule);
 		if (!hasReachableScope(scope)) {
 			logger.warn("TTSR scope excludes all streams, skipping rule", {
 				ruleName: rule.name,
@@ -793,46 +731,134 @@ export class TtsrManager {
 	}
 }
 
+/**
+ * Compiled forms of frozen rule lists, keyed by the list. The bundled rules' lists are parsed once
+ * per process and frozen, so every session's TTSR manager shares one compiled copy of each; a list
+ * that is not frozen, such as one read from a rule file for this session, compiles per rule.
+ */
+const COMPILED_CONDITIONS = new WeakMap<readonly string[], RegExp[]>();
+const TRIMMED_AST_CONDITIONS = new WeakMap<readonly string[], string[]>();
+const COMPILED_SCOPES = new WeakMap<readonly string[], TtsrScope>();
+const COMPILED_PATH_GLOBS = new WeakMap<readonly string[], Bun.Glob[] | undefined>();
+
+/** `compile()` for `list`, computed once per frozen list and shared by every caller. */
+function compiledFor<T>(cache: WeakMap<readonly string[], T>, list: readonly string[], compile: () => T): T {
+	if (!Object.isFrozen(list)) return compile();
+	if (cache.has(list)) return cache.get(list) as T;
+	const compiled = compile();
+	cache.set(list, compiled);
+	return compiled;
+}
+
 function compileConditions(rule: Rule): RegExp[] {
-	if (!rule.condition || rule.condition.length === 0) {
+	const patterns = rule.condition;
+	if (!patterns || patterns.length === 0) {
 		return [];
 	}
-	const compiled: RegExp[] = [];
-	for (const pattern of rule.condition) {
-		if (pattern.trim().length === 0) {
-			// `new RegExp("")` matches EVERY stream, so a blank condition compiled into a catch-all:
-			// a rule whose frontmatter said `condition: ""` fired on every delta rather than never,
-			// which is the loudest possible reading of the quietest possible mistake. `astCondition`
-			// has always filtered blanks; this is the same rule for the same reason, in one place.
-			logger.warn("TTSR condition is blank, skipping condition", { ruleName: rule.name });
-			continue;
+	return compiledFor(COMPILED_CONDITIONS, patterns, () => {
+		const compiled: RegExp[] = [];
+		for (const pattern of patterns) {
+			if (pattern.trim().length === 0) {
+				// `new RegExp("")` matches EVERY stream, so a blank condition compiled into a catch-all:
+				// a rule whose frontmatter said `condition: ""` fired on every delta rather than never,
+				// which is the loudest possible reading of the quietest possible mistake. `astCondition`
+				// has always filtered blanks; this is the same rule for the same reason, in one place.
+				logger.warn("TTSR condition is blank, skipping condition", { ruleName: rule.name });
+				continue;
+			}
+			try {
+				compiled.push(new RegExp(pattern));
+			} catch (error) {
+				logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
+					ruleName: rule.name,
+					pattern,
+					error: errorMessage(error),
+				});
+			}
 		}
-		try {
-			compiled.push(new RegExp(pattern));
-		} catch (error) {
-			logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
-				ruleName: rule.name,
-				pattern,
-				error: errorMessage(error),
-			});
-		}
-	}
+		return compiled;
+	});
+}
 
-	return compiled;
+function trimAstConditions(patterns: Rule["astCondition"]): string[] {
+	if (!patterns || patterns.length === 0) {
+		return [];
+	}
+	return compiledFor(TRIMMED_AST_CONDITIONS, patterns, () =>
+		patterns.map(pattern => pattern.trim()).filter(p => p.length > 0),
+	);
 }
 
 function compileGlobalPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
 	if (!globs || globs.length === 0) {
 		return undefined;
 	}
+	return compiledFor(COMPILED_PATH_GLOBS, globs, () => {
+		const compiled: Bun.Glob[] = [];
+		for (const raw of globs) {
+			const glob = raw.trim();
+			if (glob.length === 0) continue;
+			compiled.push(new Bun.Glob(glob));
+		}
+		return compiled.length > 0 ? compiled : undefined;
+	});
+}
 
-	const compiled: Bun.Glob[] = [];
-	for (const raw of globs) {
-		const glob = raw.trim();
-		if (glob.length === 0) continue;
-		compiled.push(new Bun.Glob(glob));
+/** The streams a rule may match in, from its `scope` tokens; no tokens is {@link DEFAULT_SCOPE}. */
+function buildScope(rule: Rule): TtsrScope {
+	const tokens = rule.scope;
+	if (!tokens || tokens.length === 0) {
+		return DEFAULT_SCOPE;
 	}
-	return compiled.length > 0 ? compiled : undefined;
+	return compiledFor(COMPILED_SCOPES, tokens, () => {
+		const scope: TtsrScope = {
+			allowText: false,
+			allowThinking: false,
+			allowAnyTool: false,
+			toolScopes: [],
+		};
+
+		for (const rawToken of tokens) {
+			const token = rawToken.trim();
+			const normalizedToken = token.toLowerCase();
+			if (token.length === 0) {
+				continue;
+			}
+
+			if (normalizedToken === "text") {
+				scope.allowText = true;
+				continue;
+			}
+
+			if (normalizedToken === "thinking") {
+				scope.allowThinking = true;
+				continue;
+			}
+
+			if (normalizedToken === "tool" || normalizedToken === "toolcall") {
+				scope.allowAnyTool = true;
+				continue;
+			}
+
+			const toolScope = parseToolScopeToken(token);
+			if (!toolScope) {
+				logger.warn("TTSR scope token is invalid, skipping token", {
+					ruleName: rule.name,
+					token: rawToken,
+				});
+				continue;
+			}
+
+			if (!toolScope.toolName && !toolScope.pathGlob) {
+				scope.allowAnyTool = true;
+				continue;
+			}
+
+			scope.toolScopes.push(toolScope);
+		}
+
+		return scope;
+	});
 }
 
 function parseToolScopeToken(token: string): ToolScope | undefined {
