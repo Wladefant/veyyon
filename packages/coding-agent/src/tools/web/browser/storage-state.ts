@@ -108,17 +108,30 @@ export async function readStorageStateFile(file: string): Promise<StorageState> 
 	return parseStorageState(raw, file);
 }
 
-/** Write `state` to `file`, readable and writable by its owner alone: it holds live session cookies. */
+/**
+ * Write `state` to `file`, readable and writable by its owner alone: it holds live session cookies.
+ * The cookies go to a sibling file created 0600 and are renamed over `file`, so a crash or a full disk
+ * mid-write leaves the previous state file intact rather than a truncated one, and no moment exists
+ * when `file` is readable with looser permissions than 0600.
+ */
 export async function writeStorageStateFile(file: string, state: StorageState): Promise<void> {
 	await fs.promises.mkdir(path.dirname(file), { recursive: true });
-	// The open's mode applies only to a file it creates: an existing file is narrowed through the same
-	// handle, after the truncation and before the cookies are written.
-	const handle = await fs.promises.open(file, "w", 0o600);
+	const staging = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
 	try {
-		await handle.chmod(0o600);
-		await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`);
-	} finally {
-		await handle.close();
+		const handle = await fs.promises.open(staging, "wx", 0o600);
+		try {
+			await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`);
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await fs.promises.rename(staging, file);
+	} catch (error) {
+		await bestEffort(
+			fs.promises.rm(staging, { force: true }),
+			"a staging file that cannot be removed must not hide the write error it follows",
+		);
+		throw error;
 	}
 }
 
