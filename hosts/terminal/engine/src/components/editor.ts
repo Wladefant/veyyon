@@ -693,26 +693,41 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	}
 
 	/**
-	 * Add a prompt to history for up/down arrow navigation.
-	 * Called after successful submission.
+	 * Add a prompt to history for up/down arrow navigation and record it in the
+	 * history database. Called after successful submission.
 	 */
 	addToHistory(text: string): void {
-		const trimmed = text.trim();
-		if (!trimmed) return;
-		// Don't add consecutive duplicates
-		if (this.#history.length > 0 && this.#history[0] === trimmed) return;
-		this.#history.unshift(trimmed);
-		// Limit history size
-		if (this.#history.length > 100) {
-			this.#history.pop();
-		}
-
+		const trimmed = this.#pushHistory(text);
+		if (trimmed === undefined) return;
 		const stor = this.#historyStorage;
 		if (stor) {
 			stor.add(trimmed, getProjectDir()).catch(error => {
 				logger.error("HistoryStorage add failed", { error: String(error) });
 			});
 		}
+	}
+
+	/**
+	 * Add a prompt to history for up/down arrow navigation without recording it
+	 * in the history database. For prompts replayed from a session transcript:
+	 * the database recorded each one when it was submitted.
+	 */
+	seedHistory(text: string): void {
+		this.#pushHistory(text);
+	}
+
+	/** Put `text` at the head of the navigation ring; the trimmed prompt, or undefined when nothing was added. */
+	#pushHistory(text: string): string | undefined {
+		const trimmed = text.trim();
+		if (!trimmed) return undefined;
+		// Don't add consecutive duplicates
+		if (this.#history.length > 0 && this.#history[0] === trimmed) return undefined;
+		this.#history.unshift(trimmed);
+		// Limit history size
+		if (this.#history.length > 100) {
+			this.#history.pop();
+		}
+		return trimmed;
 	}
 
 	#isEditorEmpty(): boolean {

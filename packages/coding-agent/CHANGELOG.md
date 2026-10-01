@@ -140,6 +140,7 @@
 ### Fixed
 
 - Dismissing the welcome card on a resumed session reports the card's rows as dropped from native scrollback instead of unmounting them unreported, so the first turn no longer replays the transcript: on a resumed 600-turn session its peak resident memory is 492 MiB instead of 527 MiB, its CPU time 0.48 s instead of 0.68 s, and its largest erasing frame 57 rows instead of 31,635 (median of five).
+- Resuming a session or rebuilding the transcript puts its earlier prompts in the up/down history ring without writing them to the prompt history database again, so resuming a 600-turn session adds 0 rows to `history.db` instead of 600 (median of seven).
 - A models.yml at a path other than the default one, rejected by a check after the schema (a missing `apiKey`, a retired key), names the file that was read in its error instead of the default models.yml path.
 - A language server error reaches the `lsp` tool's result once as `LSP error: <message>` instead of `LSP error: LSP error: <message>`, and `rename_file` drops a server that answers `workspace/willRenameFiles` with the JSON-RPC `MethodNotFound` code whatever its message says, instead of listing it as a server note.
 - A settings file with `defaultThinkingLevel: off` starts sessions with thinking off instead of at `high`.
