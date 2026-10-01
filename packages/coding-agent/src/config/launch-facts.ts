@@ -39,9 +39,9 @@ import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
 import { detectTerminalId } from "@veyyon/utils/terminal-emulator";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import { isSettingsInitialized, settings } from "../config/settings-instance";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking/constants";
 import type { GitStatusSummary } from "../utils/git";
+import { isSettingsInitialized, settings } from "./settings-instance";
 
 /**
  * The levels a recorded effort may hold, from the two modules that own them.

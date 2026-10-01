@@ -15,6 +15,7 @@
 ### Changed
 
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- `launch-facts` moved from `modes/` to `config/`, so the session reads its record of the project at rest without an allow-list entry in the session-does-not-import-the-UI gate ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The bundled `/review` command fetches a pull request diff through the GitHub fetch module directly, so a launch no longer loads the `github` tool and its push guards ([#178](https://github.com/Wladefant/veyyon/pull/178)).
 - Extracted the `agent.maxConcurrency` reload and spawn semaphore resize logic from `AgentSession` into `MaxConcurrencyRuntime`; no user-facing change.
 - `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their content carries a generator marker ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).

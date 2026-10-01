@@ -27,8 +27,8 @@ import type {
 	StatusUsageStats,
 } from "@veyyon/wire/presentation";
 import { measureContextGauge } from "../config/compaction-strategy";
+import { recordedRestingGauge, recordRestLaunchFacts } from "../config/launch-facts";
 import { settings } from "../config/settings-instance";
-import { recordedRestingGauge, recordRestLaunchFacts } from "../modes/launch-facts";
 import { accountDisplayLabel, accountsForProvider, buildAccountInventory } from "../session/account-inventory";
 import type { AgentSession } from "../session/agent-session";
 import {

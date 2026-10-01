@@ -20,9 +20,9 @@
 import { afterEach, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import * as os from "node:os";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
+import { resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { isSettingPath, settingsSchemaPaths } from "@veyyon/coding-agent/config/settings-schema";
-import { resetLaunchFactsForTest } from "@veyyon/coding-agent/modes/launch-facts";
 import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
 import { STATUS_LINE_PRESETS } from "@veyyon/coding-agent/modes/terminal/components/status-line/presets";
 import { statusLineSettingsFromConfig } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
