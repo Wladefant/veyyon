@@ -3451,14 +3451,19 @@ class CodexWebSocketConnection {
 	}
 
 	close(reason = "done"): void {
-		if (
-			this.#socket &&
-			(this.#socket.readyState === WebSocket.OPEN || this.#socket.readyState === WebSocket.CONNECTING)
-		) {
-			this.#socket.close(1000, reason);
-		}
+		const socket = this.#socket;
 		this.#socket = null;
 		this.#stopHeartbeat();
+		if (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING)) return;
+		try {
+			socket.close(1000, reason);
+		} catch (error) {
+			CODEX_DEBUG &&
+				logger.debug("[codex] codex websocket close failed", {
+					error: error instanceof Error ? error.message : String(error),
+					reason,
+				});
+		}
 	}
 
 	async connect(signal?: AbortSignal): Promise<void> {
@@ -3486,12 +3491,12 @@ class CodexWebSocketConnection {
 			if (signal) signal.removeEventListener("abort", onAbort);
 		};
 		const onAbort = () => {
-			socket.close(1000, "aborted");
 			if (!settled) {
 				settled = true;
 				clearPending();
-				reject(new CodexWebSocketTransportError(`request was aborted`));
+				reject(new CodexWebSocketTransportError(`request was aborted`, { cause: signal?.reason }));
 			}
+			this.close("aborted");
 		};
 		if (signal) {
 			if (signal.aborted) {
@@ -3502,7 +3507,7 @@ class CodexWebSocketConnection {
 		}
 		if (!settled) {
 			timeout = setTimeout(() => {
-				socket.close(1000, "connect-timeout");
+				this.close("connect-timeout");
 				if (!settled) {
 					settled = true;
 					clearPending();
@@ -3598,7 +3603,7 @@ class CodexWebSocketConnection {
 			throw new CodexWebSocketTransportError(`websocket request already in progress`);
 		}
 		if (signal?.aborted) {
-			throw new CodexWebSocketTransportError(`request was aborted`);
+			throw new CodexWebSocketTransportError(`request was aborted`, { cause: signal.reason });
 		}
 		this.#activeRequest = true;
 		this.#streamObserver = onSseEvent;
@@ -3614,8 +3619,8 @@ class CodexWebSocketConnection {
 		// the death signal instead of writing into a dead socket.
 		this.#dropStaleFrames();
 		const onAbort = () => {
+			this.#push(new CodexWebSocketTransportError(`request was aborted`, { cause: signal?.reason }));
 			this.close("aborted");
-			this.#push(new CodexWebSocketTransportError(`request was aborted`));
 		};
 		if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
@@ -3637,6 +3642,11 @@ class CodexWebSocketConnection {
 			// Re-check liveness: the debug-session await above can outlive the socket.
 			const socket = this.#socket;
 			if (!socket || socket.readyState !== WebSocket.OPEN) {
+				if (signal?.aborted) {
+					throw new CodexWebSocketTransportError(`websocket connection is unavailable`, {
+						cause: signal.reason,
+					});
+				}
 				throw new CodexWebSocketTransportError(`websocket connection is unavailable`);
 			}
 			try {
@@ -4054,11 +4064,15 @@ async function openCodexSseEventStream(
 	// stall stops being retryable and the failure surfaces.
 	let clearPreResponseTimeout: (() => void) | undefined;
 	const fetchAttempt: FetchImpl = async (input, init) => {
+		let response: Response | undefined;
 		try {
-			return await (fetchOverride ?? fetch)(input, init);
+			response = await (fetchOverride ?? fetch)(input, init);
+			return response;
 		} finally {
-			clearPreResponseTimeout?.();
-			clearPreResponseTimeout = undefined;
+			if (!response || response.ok) {
+				clearPreResponseTimeout?.();
+				clearPreResponseTimeout = undefined;
+			}
 		}
 	};
 	let response: Response;
@@ -4068,6 +4082,7 @@ async function openCodexSseEventStream(
 			headers,
 			signal,
 			prepareInit: async () => {
+				clearPreResponseTimeout?.();
 				const bodyJson = await serializeBody();
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
@@ -4086,8 +4101,9 @@ async function openCodexSseEventStream(
 			fetch: fetchAttempt,
 			timeout: false,
 		});
-	} finally {
+	} catch (error) {
 		clearPreResponseTimeout?.();
+		throw error;
 	}
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex response", {
@@ -4098,7 +4114,11 @@ async function openCodexSseEventStream(
 			cfRay: response.headers.get("cf-ray") || null,
 		});
 	if (!response.ok) {
-		throw await CodexApiError.fromResponse(response);
+		try {
+			throw await CodexApiError.fromResponse(response);
+		} finally {
+			clearPreResponseTimeout?.();
+		}
 	}
 	updateCodexSessionMetadataFromHeaders(state, response.headers);
 	if (!response.body) {
