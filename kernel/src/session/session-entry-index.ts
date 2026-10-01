@@ -55,13 +55,12 @@ function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {
 
 /**
  * Maintains the derived views over a session's entry list: id lookup, the
- * parent→children adjacency, the resolved label map, the active leaf, and the
- * running usage totals. Kept in lockstep with the manager's `#entries` so reads
- * stay O(1)/O(children) instead of rescanning the whole journal.
+ * resolved label map, the active leaf, and the running usage totals. Kept in
+ * lockstep with the manager's `#entries` so reads stay O(1) instead of
+ * rescanning the whole journal.
  */
 export class SessionEntryIndex {
 	#entriesById = new Map<string, SessionEntry>();
-	#children = new Map<string | null, SessionEntry[]>();
 	#labels = new Map<string, string>();
 	#leaf: string | null = null;
 	#usage = emptyUsageStatistics();
@@ -76,7 +75,6 @@ export class SessionEntryIndex {
 
 	clear(): void {
 		this.#entriesById.clear();
-		this.#children.clear();
 		this.#labels.clear();
 		this.#leaf = null;
 		this.#leafPath = undefined;
@@ -99,10 +97,6 @@ export class SessionEntryIndex {
 		this.#leaf = entry.id;
 		leafPath?.push(entry);
 		this.#leafPath = leafPath;
-
-		const bucket = this.#children.get(entry.parentId);
-		if (bucket) bucket.push(entry);
-		else this.#children.set(entry.parentId, [entry]);
 
 		if (entry.type === "label") {
 			if (entry.label) this.#labels.set(entry.targetId, entry.label);
@@ -139,10 +133,6 @@ export class SessionEntryIndex {
 	setLeaf(id: string | null): void {
 		if (id !== this.#leaf) this.#leafPath = undefined;
 		this.#leaf = id;
-	}
-
-	childrenOf(parentId: string): SessionEntry[] {
-		return [...(this.#children.get(parentId) ?? [])];
 	}
 
 	labelFor(id: string): string | undefined {
