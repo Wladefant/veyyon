@@ -17,7 +17,10 @@ export type RearmSchedule = (cb: () => void, ms: number) => RearmedTimeout;
  * MEASURED on Bun 1.4.0, an idle process holding 600,000 objects and ticking every 250ms: a new
  * `setTimeout` per tick kept Bun's GC timer collecting, 2,762 wakeups of the collector's helper
  * threads and 32ms of CPU over 30s, and the same tick re-armed with `refresh()` measured 327
- * wakeups and 11ms.
+ * wakeups and 11ms. On the linux-x64 binary of an idle interactive session, re-arming the loop
+ * watchdog and the idle trim this way moved the process from about 4,000 thread wakeups per 30s to
+ * about 3,600, about 2,750 of them still the collector's helpers: the tick itself moves the heap,
+ * which `ActivitySignal` addresses by parking the tick at rest.
  *
  * A call with a different delay, or after `cancel()`, arms a new timeout: a cleared timeout does
  * not fire again on `refresh()`.

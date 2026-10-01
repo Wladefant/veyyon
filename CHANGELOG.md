@@ -314,6 +314,7 @@
 - `prompt.format` returns text it rewrites no line of as a cut of its input, without the blank lines at its end, instead of a joined copy; creating an idle main session copies 188,952 fewer characters (347,436 bytes over 65 calls), and a prompt with no mustache holds one buffer for its template and its render.
 - `LoopWatchdog` and `IdleTrim` re-arm one timeout per `start()` through `rearmingTimeout` instead of creating a timeout, a handle object and two closures on every tick.
 - While a host is attached to its activity signal, `LoopWatchdog` arms no tick after 10 seconds of ticks without a block or busy CPU, `IdleTrim` arms no window after the window that follows a trim, and `stallSampler` samples once a second, until the host reports work.
+- The `rearmingTimeout` documentation records its measured effect on an idle interactive session of the linux-x64 binary; no user-visible change.
 
 ### Removed
 
