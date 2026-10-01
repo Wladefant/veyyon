@@ -146,6 +146,7 @@
 - The at-rest reading a top-level session files for the next launch is measured by `measureAtRestLaunch` in `session/startup-records.ts` instead of inline in `createAgentSession`; no user-visible change.
 - The 98 bundled themes and the two root themes are embedded as files and the one a run asks for is read and parsed on demand, instead of every theme's JSON text held as a module string, so the binary shrinks by 240 KiB and an idle session holds 47.29 MiB of heap and extra memory instead of 47.76 MiB and 134.3 MiB of anonymous resident memory instead of 136.2 MiB (median of eight).
 - A context file in which no `@` import resolves is kept as the string discovery read instead of a copy rebuilt from its segments, so a session in a project whose AGENTS.md is 48,191 characters holds 94 KiB of whole-text copies of it instead of 282 KiB.
+- An ArkType union in a jitless scope, as the CLI configures every scope, builds its discriminant, which only a compiled validator reads, on first read instead of at construction, and a union in any scope serializes it on first read, so a session start discriminates no union instead of 275, the compiled binary's `warm:arktype` startup phase takes 25.3 ms instead of 27.6 ms (median of 25), and an idle session holds 36.09 MiB of heap and extra memory instead of 36.38 MiB and 395,674 live objects instead of 398,201 (median of five).
 
 ### Fixed
 

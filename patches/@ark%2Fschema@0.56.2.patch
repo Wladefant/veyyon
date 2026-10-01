@@ -147,3 +147,50 @@ index 2176434a7d04020337a07f88304c6d4590f44b3c..0bd018a82f6989e89a39d5604a4e5391
      to(def) {
          return this.$.finalize(this.toNode(this.$.parseDefinition(def)));
      }
+diff --git a/out/roots/union.js b/out/roots/union.js
+index acdf9999973f33608a2c17333143dd517954283a..c5059ff3074ff010ff226bb0b019969ece5866fb 100644
+--- a/out/roots/union.js
++++ b/out/roots/union.js
+@@ -121,6 +121,14 @@ const implementation = implementNode({
+     }
+ });
+ export class UnionNode extends BaseRoot {
++    constructor(attachments, $) {
++        super(attachments, $);
++        // a compiling scope builds the discriminant with the node, because building it adds the
++        // case nodes to referencesById, which a parent copies when it is constructed and the
++        // precompiler binds; a jitless scope never reads it, so it is built on first read (veyyon patch)
++        if (!this.$.resolvedConfig.jitless)
++            this.discriminant;
++    }
+     isBoolean = this.branches.length === 2 &&
+         this.branches[0].hasUnit(false) &&
+         this.branches[1].hasUnit(true);
+@@ -142,8 +150,12 @@ export class UnionNode extends BaseRoot {
+         return branchGroups;
+     }
+     unitBranches = this.branches.filter((n) => n.rawIn.hasKind("unit"));
+-    discriminant = this.discriminate();
+-    discriminantJson = this.discriminant ? discriminantToJson(this.discriminant) : null;
++    get discriminant() {
++        return this.cacheGetter("discriminant", this.discriminate());
++    }
++    get discriminantJson() {
++        return this.cacheGetter("discriminantJson", this.discriminant ? discriminantToJson(this.discriminant) : null);
++    }
+     expression = this.distribute(n => n.nestableExpression, expressBranches);
+     createBranchedOptimisticRootApply() {
+         return (data, onFail) => {
+@@ -209,7 +221,11 @@ export class UnionNode extends BaseRoot {
+         return unset;
+     };
+     compile(js) {
+-        if (!this.discriminant ||
++        // a jitless node compiled by a compiling scope that references it was built without its
++        // discriminant, whose case nodes are then missing from the references the precompiler
++        // bound, so it compiles the branches as a jitless traversal walks them (veyyon patch)
++        if (this.$.resolvedConfig.jitless ||
++            !this.discriminant ||
+             // if we have a union of two units like `boolean`, the
+             // undiscriminated compilation will be just as fast
+             (this.unitBranches.length === this.branches.length &&
