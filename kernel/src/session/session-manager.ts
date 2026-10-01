@@ -338,7 +338,7 @@ function nextSessionSequence(entries: readonly SessionEntry[]): number {
  * cannot truncate the prior good file.
  */
 export class SessionManager {
-	#cwd: string;
+	#absoluteCwd = "";
 	#sessionDir: string;
 	readonly #persist: boolean;
 	readonly #storage: SessionStorage;
@@ -509,10 +509,8 @@ export class SessionManager {
 		operatorNotices?: OperatorNotices,
 		instrumentation?: InstrumentationLevel,
 	) {
-		// The session cwd is the single authority every tool resolves against, so it
-		// must be absolute from the start; a relative seed would make later
-		// `path.resolve(this.#cwd, target)` fall back to the OS process dir.
-		this.#cwd = path.resolve(cwd);
+		// The `#cwd` setter resolves the seed, so the field is absolute from the start.
+		this.#cwd = cwd;
 		this.#sessionDir = sessionDir;
 		this.#sessionDirPinned = sessionDirPinned;
 		this.#persist = persist;
@@ -1666,10 +1664,9 @@ export class SessionManager {
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 
-		// Resolved like every other write to this field. A snapshot normally round-trips a value that
-		// was already absolute, but it is plain data a caller can build, and this is the one assignment
-		// here that takes a cwd from outside the class.
-		this.#cwd = path.resolve(snapshot.cwd);
+		// A snapshot is plain data a caller can build; the `#cwd` setter resolves it like every other
+		// write to the field.
+		this.#cwd = snapshot.cwd;
 		this.#sessionDir = snapshot.sessionDir;
 		this.#sessionFile = snapshot.sessionFile;
 		this.#fileIsCurrent = snapshot.onDisk;
@@ -1727,7 +1724,7 @@ export class SessionManager {
 			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
-			if (headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryExists(headerCwd))) {
+			if (headerCwd && headerCwd !== this.#cwd && (await directoryExists(headerCwd))) {
 				adoptedCwd = headerCwd;
 			}
 		}
@@ -1877,10 +1874,7 @@ export class SessionManager {
 		// resolve.)
 		const resolvedCwd = path.resolve(this.#cwd, newCwd);
 		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
-		if (
-			resolvedCwd === path.resolve(this.#cwd) &&
-			(!resolvedTargetDir || resolvedTargetDir === path.resolve(this.#sessionDir))
-		) {
+		if (resolvedCwd === this.#cwd && (!resolvedTargetDir || resolvedTargetDir === path.resolve(this.#sessionDir))) {
 			return;
 		}
 
@@ -2137,21 +2131,33 @@ export class SessionManager {
 	}
 
 	/**
-	 * The session's working directory, ALWAYS as an absolute path.
+	 * The session cwd. Every write resolves the value, so the field is absolute from the constructor
+	 * on and no assignment in this class can store a relative one.
 	 *
-	 * The constructor resolves its seed, but nothing kept the field resolved after that, and every
-	 * caller in the process reads the cwd through here: the two `ToolSession.cwd` getters in `sdk.ts`
-	 * return this directly, so a relative value reached every tool at once. It surfaced as `set_cwd`
-	 * answering `Session cwd is now . (previously .)` on a successful re-root, which tells the model
-	 * nothing and reads as a failure, and it is the harmless-looking half of a worse one: a relative
-	 * cwd makes `resolveToCwd(target, session.cwd)` rebase silently on `process.cwd()`, so the tools
+	 * The session cwd is the single authority every tool resolves against: the two `ToolSession.cwd`
+	 * getters in `sdk.ts` return {@link getCwd} directly, so a relative value would reach every tool at
+	 * once. A relative cwd makes `set_cwd` answer `Session cwd is now . (previously .)` on a successful
+	 * re-root, and makes `resolveToCwd(target, session.cwd)` rebase on `process.cwd()`, so the tools
 	 * and the session disagree about where the session is the moment those two differ.
-	 *
-	 * Resolved on the way OUT as well as on the way in, so no assignment anywhere in this class can
-	 * reintroduce it. `path.resolve` on an already-absolute path is a normalization, not a change.
+	 */
+	get #cwd(): string {
+		return this.#absoluteCwd;
+	}
+
+	set #cwd(cwd: string) {
+		const resolved = path.resolve(cwd);
+		// An already resolved value is kept as given, so the header, the cwd listeners and the value
+		// `setCwd` returns share the one string the field holds.
+		this.#absoluteCwd = resolved === cwd ? cwd : resolved;
+	}
+
+	/**
+	 * The session's working directory, ALWAYS as an absolute path. Every read returns the one string
+	 * the session holds, so a transcript row or a tool that keeps the cwd shares it rather than
+	 * holding its own copy.
 	 */
 	getCwd(): string {
-		return path.resolve(this.#cwd);
+		return this.#cwd;
 	}
 
 	/**
@@ -2220,21 +2226,13 @@ export class SessionManager {
 			}
 		}
 
-		// `resolvedCwd`, not `this.#cwd`. Both sides of the comparison are resolved, so returning the
-		// raw field here was the one path that could hand a caller a relative cwd it had just proved
-		// was the same directory: `set_cwd /abs/path/keyhog` on a session whose field held `.` matched,
-		// took this branch, and answered `Session cwd is . `, which is false twice over and reads as a
-		// failed call. The declared contract is "returns the resolved absolute path" and this is the
-		// same directory either way, so there is nothing to weigh.
-		if (resolvedCwd === path.resolve(this.#cwd)) {
-			// The field is normalized, but the header is deliberately left alone: this branch is the
-			// no-move case, so there is no change to persist, and the header does not exist yet on a
-			// manager that has not been initialized.
-			this.#cwd = resolvedCwd;
-			return resolvedCwd;
-		}
+		// The field is always resolved, so a target naming the current directory, relative or not,
+		// matches here and the call reports the absolute path it already holds. The header is left
+		// alone: this is the no-move case, so there is no change to persist, and the header does not
+		// exist yet on a manager that has not been initialized.
+		if (resolvedCwd === this.#cwd) return this.#cwd;
 
-		const previous = path.resolve(this.#cwd);
+		const previous = this.#cwd;
 		const previousHeaderCwd = this.#header.cwd;
 		const previousForceFileCreation = this.#forceFileCreation;
 		const previousFileIsCurrent = this.#fileIsCurrent;
@@ -2265,8 +2263,8 @@ export class SessionManager {
 			throw error;
 		}
 
-		this.#notifyCwdListeners(previous, resolvedCwd);
-		return resolvedCwd;
+		this.#notifyCwdListeners(previous, this.#cwd);
+		return this.#cwd;
 	}
 
 	getUsageStatistics(): UsageStatistics {

@@ -242,6 +242,7 @@
 - The error a cold entry's failed read-back raises formats its cause with `errorMessage` from `@veyyon/utils`; no user-visible change.
 - A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
 - `getEffectiveSnapshot` resolves every declared setting without memoizing it, so a store keeps cached values only for paths its session reads, which cut the heap a live spawned session retains from 315.4 KiB to 277.0 KiB (median of 3 runs over 20 sessions).
+- `SessionManager.getCwd` returns the absolute cwd the session holds instead of resolving a new copy on every read, so the transcript rows of a resumed 600-turn session share one path string instead of holding 1,599 copies, which cut its heap and extra memory from 123,876 KiB to 123,672 KiB and its live strings from 135,858 to 134,281 (median of five); every returned value is unchanged.
 - 12 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The extraction client waits between fallback models through `scheduler.wait` from `node:timers/promises`, the wait its rate-limit retries use; the delay is unchanged.

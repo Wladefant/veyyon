@@ -36,6 +36,7 @@
 - The error a cold entry's failed read-back raises formats its cause with `errorMessage` from `@veyyon/utils`; no user-visible change.
 - A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
 - `getEffectiveSnapshot` resolves every declared setting without memoizing it, so a store keeps cached values only for paths its session reads, which cut the heap a live spawned session retains from 315.4 KiB to 277.0 KiB (median of 3 runs over 20 sessions).
+- `SessionManager.getCwd` returns the absolute cwd the session holds instead of resolving a new copy on every read, so the transcript rows of a resumed 600-turn session share one path string instead of holding 1,599 copies, which cut its heap and extra memory from 123,876 KiB to 123,672 KiB and its live strings from 135,858 to 134,281 (median of five); every returned value is unchanged.
 
 ### Fixed
 
