@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed Anthropic requests with thinking enabled failing on models whose output ceiling cannot fit the thinking budget by shrinking the budget below the ceiling and disabling thinking when its minimum cannot fit ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Anthropic adaptive-only models omitting the effort beta header on direct forced tool choice requests and injected SDK clients by checking forced tool choices and merging effort beta into per-request headers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved enum keys inside object-valued defaults during Google schema normalization ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Cloud Code Assist Gemini 3.6/3.7 Flash requests at `minimal` now send `thinkingLevel: LOW` on the aliased `-low` SKU instead of `MINIMAL`, which the API rejects with HTTP 400.
