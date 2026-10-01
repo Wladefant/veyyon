@@ -114480,7 +114480,16 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 500000,
-			"maxTokens": 500000
+			"maxTokens": 500000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
 		},
 		"grok-beta": {
 			"id": "grok-beta",

@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed `xai/grok-4.7` shipping without its effort ladder: it is on the effort-capable Grok allowlist, so the bundled row now bakes the declared low/medium/high/xhigh tiers.
 - Fixed LiteLLM discovery leaking a colliding bundled model's provider-specific transport onto custom endpoints: a discovered alias matching a bundled model no longer inherits that model's wire-id transform or tool-schema flavor.
 - Fixed `opencode-go/muse-spark-1.2` (and `muse-spark-1.2-contributor`) failing every tool-call turn with `OpenAI completions stream closed before a finish_reason was received` by routing them to the Responses API.
 - Fixed GitHub Copilot `grok-4.6` to route through the Responses API (`/responses`) instead of `/chat/completions`, which returned 400 unsupported_api_for_model.
