@@ -286,6 +286,7 @@
 
 ### Fixed
 
+- Dismissing the welcome card on a resumed session reports the card's rows as dropped from native scrollback instead of unmounting them unreported, so the first turn no longer replays the transcript: on a resumed 600-turn session its peak resident memory is 492 MiB instead of 527 MiB, its CPU time 0.48 s instead of 0.68 s, and its largest erasing frame 57 rows instead of 31,635 (median of five).
 - A models.yml at a path other than the default one, rejected by a check after the schema (a missing `apiKey`, a retired key), names the file that was read in its error instead of the default models.yml path.
 - A language server error reaches the `lsp` tool's result once as `LSP error: <message>` instead of `LSP error: LSP error: <message>`, and `rename_file` drops a server that answers `workspace/willRenameFiles` with the JSON-RPC `MethodNotFound` code whatever its message says, instead of listing it as a server note.
 - A settings file with `defaultThinkingLevel: off` starts sessions with thinking off instead of at `high`.
@@ -364,6 +365,7 @@
 - Job, task and eval durations and `web_search` source ages in the HTML export and web transcript print through `formatDuration` and `formatAge` from `@veyyon/utils`, so `65000` reads `1m5s` and an age of 30 seconds reads `just now`, as in the terminal.
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - After a resize under the `alt-arrows` scroll transport, the engine replays the transcript once instead of on every later frame, so a resumed 600-turn session at rest spends 0.06 CPU seconds per 10 seconds after a resize instead of 6.85 (median of three).
+- A frame in which two or more root children report rows dropped from native scrollback splices each child's rows out of the committed record at that child's own start, from the last child back, instead of splicing their sum at the topmost child's start, so the record no longer diverges from the terminal and forces a transcript replay on the next frame.
 - The default profile ignores an inherited `VEYYON_CODING_AGENT_DIR` equal to any profile's agent dir, so `/profile default` or `/resume` of a default-profile session from a named profile no longer runs the default profile in the named profile's agent dir.
 - A veyyon process started by another veyyon process under a different profile drops the variables the parent set from its own `.env` files, recorded in `VEYYON_DOTENV_ORIGIN`, and applies its own profile's `.env` layers instead of running on the parent profile's credentials.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
