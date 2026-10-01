@@ -26,6 +26,7 @@
 - `releaseEmbeddedModulePages()` unmaps the clean resident pages of the running executable's `.bun` section on Linux and returns the bytes released; a later read faults the same bytes back in from the page cache, and on other platforms the call returns 0.
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
+- `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
 - `@veyyon/utils/prompt` exports `renderSequence(templates, context, options)`, which returns what `render` returns for the joined templates and renders each precompiled template on its own when no boundary changes the bytes, so the joined text is not parsed.
@@ -288,6 +289,7 @@
 ### Fixed
 
 - Dismissing the welcome card on a resumed session reports the card's rows as dropped from native scrollback instead of unmounting them unreported, so the first turn no longer replays the transcript: on a resumed 600-turn session its peak resident memory is 492 MiB instead of 527 MiB, its CPU time 0.48 s instead of 0.68 s, and its largest erasing frame 57 rows instead of 31,635 (median of five).
+- Resuming a session or rebuilding the transcript puts its earlier prompts in the up/down history ring without writing them to the prompt history database again, so resuming a 600-turn session adds 0 rows to `history.db` instead of 600 (median of seven).
 - A models.yml at a path other than the default one, rejected by a check after the schema (a missing `apiKey`, a retired key), names the file that was read in its error instead of the default models.yml path.
 - A language server error reaches the `lsp` tool's result once as `LSP error: <message>` instead of `LSP error: LSP error: <message>`, and `rename_file` drops a server that answers `workspace/willRenameFiles` with the JSON-RPC `MethodNotFound` code whatever its message says, instead of listing it as a server note.
 - A settings file with `defaultThinkingLevel: off` starts sessions with thinking off instead of at `high`.
