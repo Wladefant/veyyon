@@ -15,6 +15,7 @@
 - A discovered model's reference resolver builds the index of every bundled provider's models on the first id its own provider's references miss instead of when the provider's model manager options are created, so a launch holding only a GitHub Copilot credential builds 566 model specs from 3 providers instead of 4,560 from 59 and settles at 28.96 MiB of heap instead of 30.36 MiB (median of 5).
 - The Xiaomi Token Plan model managers read the `xiaomi` provider's bundled models on the first model a discovery returns instead of when their options are created, so a launch holding a Token Plan credential builds no `xiaomi` model.
 - A read of one bundled provider parses that provider's object out of `models.json` instead of the whole 2.3 MB catalog, and listing providers parses none of it, which cut the heap of a default-role launch 3 seconds after start from 46.70 MiB to 44.47 MiB, its live objects from 418,889 to 371,624 and `createAgentSession` from 69.7 ms to 63.5 ms (median of 5 and 11 runs).
+- A custom or discovered model's bundled reference lookup scans the model ids out of `models.json` and parses only the models the id reaches instead of the whole catalog, which cut a custom-model launch's time to a ready session from 217.2 ms to 206.6 ms and its idle heap from 36.21 MiB to 33.71 MiB and live objects from 399,664 to 350,968 (median of 11 and 5 runs).
 
 ### Fixed
 

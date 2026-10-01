@@ -1,11 +1,13 @@
 /**
- * Where each provider's object sits in `models.json`, found without parsing the document.
+ * Where each provider's object, and each model's object inside it, sits in `models.json`, found
+ * without parsing the document.
  *
  * The generator writes the catalog as `JSON.stringify(models, null, "\t")`. In that layout a
  * provider's key is the only line that starts with exactly one tab and a quote, and the provider's
  * closing brace is the first line after it that is exactly one tab and `}`: every line inside a
- * provider starts with at least two tabs, and a JSON string holds no raw newline. One `indexOf` per
- * provider finds the brace, so a reader parses the provider it needs rather than the whole catalog.
+ * provider starts with at least two tabs, and a JSON string holds no raw newline. A model is the same
+ * shape one level deeper, two tabs. One `indexOf` per object finds its brace, so a reader parses the
+ * provider or the model it needs rather than the whole catalog.
  */
 
 /** The byte range `[start, end)` of one provider's object, braces included. */
@@ -24,6 +26,20 @@ const COMMA = 0x2c;
 const OPEN_BRACE = 0x7b;
 const CLOSE_BRACE = 0x7d;
 const PROVIDER_CLOSE_LINE = "\n\t}";
+const MODEL_CLOSE_LINE = "\n\t\t}";
+/** A key JSON.parse moves ahead of every other key of its object: a canonical array index. */
+const ARRAY_INDEX_KEY = /^(?:0|[1-9][0-9]*)$/;
+
+/**
+ * Every bundled model's key and the byte range `[start, end)` of its object, braces included, in the
+ * order a whole-document parse enumerates them: providers in `spans` order, models in document order.
+ * Parallel arrays, one slot per model.
+ */
+export interface CatalogModelSpans {
+	readonly ids: readonly string[];
+	readonly starts: readonly number[];
+	readonly ends: readonly number[];
+}
 
 /**
  * The span of every provider's object in `bytes`, in document order, or `null` when `bytes` is not
@@ -62,6 +78,81 @@ export function indexCatalogSpans(bytes: Buffer): Map<string, CatalogSpan> | nul
 		}
 		return bytes[end] === NEWLINE && bytes[end + 1] === CLOSE_BRACE && isDocumentEnd(bytes, end + 2) ? spans : null;
 	}
+}
+
+/**
+ * The key and span of every model in the providers of `spans`, or `null` when a provider is not in the
+ * generator's layout or its enumeration order would differ from a parse of the document: a repeated
+ * model key (the parse keeps the last) or a key that is an array index (the parse moves it first).
+ * The same holds for a provider key, so `null` also covers an array-index provider.
+ */
+export function indexCatalogModelSpans(
+	bytes: Buffer,
+	spans: ReadonlyMap<string, CatalogSpan>,
+): CatalogModelSpans | null {
+	const ids: string[] = [];
+	const starts: number[] = [];
+	const ends: number[] = [];
+	const seen = new Set<string>();
+	for (const [provider, span] of spans) {
+		if (ARRAY_INDEX_KEY.test(provider)) return null;
+		if (bytes[span.start + 1] === CLOSE_BRACE) continue;
+		seen.clear();
+		// `line` is the offset of the newline that opens a model's key line.
+		let line = span.start + 1;
+		for (;;) {
+			if (
+				bytes[line] !== NEWLINE ||
+				bytes[line + 1] !== TAB ||
+				bytes[line + 2] !== TAB ||
+				bytes[line + 3] !== QUOTE
+			) {
+				return null;
+			}
+			const keyStart = line + 3;
+			const keyEnd = closingQuote(bytes, keyStart + 1);
+			if (keyEnd < 0) return null;
+			if (bytes[keyEnd + 1] !== COLON || bytes[keyEnd + 2] !== SPACE || bytes[keyEnd + 3] !== OPEN_BRACE)
+				return null;
+			const id = keyText(bytes, keyStart, keyEnd);
+			if (seen.has(id) || ARRAY_INDEX_KEY.test(id)) return null;
+			seen.add(id);
+			const start = keyEnd + 3;
+			let end: number;
+			if (bytes[start + 1] === CLOSE_BRACE) {
+				end = start + 2;
+			} else if (bytes[start + 1] === NEWLINE) {
+				const close = bytes.indexOf(MODEL_CLOSE_LINE, start);
+				if (close < 0) return null;
+				end = close + MODEL_CLOSE_LINE.length;
+			} else {
+				return null;
+			}
+			ids.push(id);
+			starts.push(start);
+			ends.push(end);
+			if (bytes[end] === COMMA) {
+				line = end + 1;
+				continue;
+			}
+			if (
+				end + PROVIDER_CLOSE_LINE.length !== span.end ||
+				bytes.toString("latin1", end, span.end) !== PROVIDER_CLOSE_LINE
+			) {
+				return null;
+			}
+			break;
+		}
+	}
+	return { ids, starts, ends };
+}
+
+/** The string the JSON key literal `[quote, closing]` decodes to, read without a parse when it holds no escape. */
+function keyText(bytes: Buffer, quote: number, closing: number): string {
+	for (let i = quote + 1; i < closing; i++) {
+		if (bytes[i] === BACKSLASH) return JSON.parse(bytes.toString("utf8", quote, closing + 1)) as string;
+	}
+	return bytes.toString("utf8", quote + 1, closing);
 }
 
 /** The offset of the quote that closes the JSON string whose body starts at `from`, or -1. */

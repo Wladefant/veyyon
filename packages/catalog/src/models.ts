@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildModel } from "./build";
-import { type CatalogSpan, indexCatalogSpans } from "./catalog-spans";
+import { type CatalogSpan, indexCatalogModelSpans, indexCatalogSpans } from "./catalog-spans";
 import type { ModelReferenceCandidate } from "./identity/reference";
 import modelsJsonAsset from "./models.json" with { type: "file" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
@@ -54,6 +54,7 @@ let parsedModels: BundledModelsJson | undefined;
  */
 let catalogRead: { bytes: Buffer; spans: ReadonlyMap<string, CatalogSpan> | null } | undefined;
 let bundledProviderNames: readonly GeneratedProvider[] | undefined;
+let bundledModelKeys: BundledModelKeys | undefined;
 let releaseTimer: NodeJS.Timeout | undefined;
 const releaseListeners: Array<() => void> = [];
 
@@ -246,6 +247,52 @@ export function* iterateBundledModelMetadata(): IterableIterator<ModelReferenceC
 			yield spec;
 		}
 	}
+}
+
+/**
+ * The bundled models' ids with a reader for each one's reference record, for a lookup that reads the
+ * records its keys reach rather than every spec.
+ */
+export interface BundledModelKeys {
+	/** Every bundled model id, in the order {@link iterateBundledModelMetadata} yields the records. */
+	readonly ids: readonly string[];
+	/** The record {@link iterateBundledModelMetadata} yields for `ids[ordinal]`, read on each call. */
+	readonly candidateAt: (ordinal: number) => ModelReferenceCandidate;
+}
+
+/**
+ * The bundled model ids and their record reader, held until the current task ends, like the catalog
+ * bytes. With no parsed catalog held and no snapshot store, the ids come from a scan of the catalog
+ * bytes and a record is a parse of that model's span, so a lookup parses the models it reaches and
+ * nothing else. Otherwise both come from the records {@link iterateBundledModelMetadata} yields.
+ */
+export function readBundledModelKeys(): BundledModelKeys {
+	if (bundledModelKeys === undefined) {
+		bundledModelKeys = scanBundledModelKeys();
+		queueMicrotask(releaseBundledModelKeys);
+	}
+	return bundledModelKeys;
+}
+
+function releaseBundledModelKeys(): void {
+	bundledModelKeys = undefined;
+}
+
+function scanBundledModelKeys(): BundledModelKeys {
+	if (snapshotStore === undefined && parsedModels === undefined) {
+		const { bytes, spans } = readCatalog();
+		const models = spans === null ? null : indexCatalogModelSpans(bytes, spans);
+		if (models !== null) {
+			const { ids, starts, ends } = models;
+			return {
+				ids,
+				candidateAt: ordinal =>
+					JSON.parse(bytes.toString("utf8", starts[ordinal], ends[ordinal])) as ModelSpec<Api>,
+			};
+		}
+	}
+	const records = Array.from(iterateBundledModelMetadata());
+	return { ids: records.map(record => record.id), candidateAt: ordinal => records[ordinal] };
 }
 
 /**

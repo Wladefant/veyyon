@@ -8,8 +8,8 @@
  * 1.2 MiB of the heap of every idle session.
  *
  * Class closed: a release that is never armed, one that fires before its window, a window that does
- * not slide with a read, a release that keeps derived data holding the specs (the metadata reference
- * index), a timer that keeps the process running, a provider list that parses the catalog again
+ * not slide with a read, a release that keeps derived data holding the specs (the model keys and the
+ * reference lookup over them), a timer that keeps the process running, a provider list that parses the catalog again
  * after the release, and a re-read that returns a different catalog. Every export of `models.ts` and
  * `identity/bundled.ts` is classified below as a reader or not: the fixture runs every reader inside
  * the first window, and a new export fails the classification until it is placed.
@@ -43,6 +43,7 @@ const READERS = [
 	"getBundledModels",
 	"getBundledProviders",
 	"iterateBundledModelMetadata",
+	"readBundledModelKeys",
 	"resolveBundledModelReference",
 ];
 
