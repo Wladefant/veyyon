@@ -10,6 +10,7 @@
 
 ### Added
 
+- `IdleTrim` accepts `release`, which runs on the first quiet sampling window after a busy one and again after each trim; a `release` that throws is not called again and the trim continues.
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
 - `@veyyon/utils/prompt` exports `renderSequence(templates, context, options)`, which returns what `render` returns for the joined templates and renders each precompiled template on its own when no boundary changes the bytes, so the joined text is not parsed.

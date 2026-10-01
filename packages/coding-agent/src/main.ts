@@ -37,7 +37,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@veyyon/utils";
-import { IdleTrim, trimEngine } from "@veyyon/utils/idle-trim";
+import { IdleTrim } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
 import {
 	type Args,
@@ -376,16 +376,12 @@ function resumeStartupWatchdog(): void {
 }
 
 /**
- * Once a root command has been quiet (see `IdleTrim`): discards compiled code, returns free malloc
- * pages, and unmaps the resident pages of the binary's embedded module graph, which loading every
- * module left mapped.
+ * Once a root command goes quiet (see `IdleTrim`): unmaps the resident pages of the binary's embedded
+ * module graph, which loading every module left mapped, on the first quiet window after work and
+ * after each trim. After a longer quiet stretch, the trim discards compiled code and returns free
+ * malloc pages.
  */
-const idleTrim = new IdleTrim({
-	trim: () => {
-		trimEngine();
-		releaseEmbeddedModulePages();
-	},
-});
+const idleTrim = new IdleTrim({ release: releaseEmbeddedModulePages });
 
 export interface InteractiveModeNotify {
 	kind: "warn" | "error" | "info";
