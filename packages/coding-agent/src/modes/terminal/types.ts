@@ -353,8 +353,14 @@ export interface InteractiveModeContext {
 		options?: { imageLinks?: readonly (string | undefined)[] },
 	): void;
 	isKnownSlashCommand(text: string): boolean;
-	addMessageToChat(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[];
-	renderSessionContext(sessionContext: SessionContext, options?: { updateFooter?: boolean }): void;
+	addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
+	): Component[];
+	renderSessionContext(
+		sessionContext: SessionContext,
+		options?: { updateFooter?: boolean; populateHistory?: boolean },
+	): void;
 	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
