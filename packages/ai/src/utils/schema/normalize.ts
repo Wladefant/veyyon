@@ -56,6 +56,32 @@ export interface NormalizeSchemaOptions {
 	rejectResidualIncompatibilities?: ReadonlyArray<ResidualSchemaIncompatibility>;
 	validateAndFallback?: { fallback: unknown };
 }
+interface NormalizeSchemaWalkOptions extends NormalizeSchemaOptions {
+	isSubschema?: boolean;
+	insideSchemaMap?: boolean;
+}
+
+const SUBSCHEMA_VALUE_KEYS: Record<string, true> = {
+	additionalProperties: true,
+	contains: true,
+	contentSchema: true,
+	else: true,
+	if: true,
+	items: true,
+	not: true,
+	propertyNames: true,
+	// biome-ignore lint/suspicious/noThenProperty: JSON Schema subschema keyword
+	then: true,
+	unevaluatedItems: true,
+	unevaluatedProperties: true,
+};
+
+const SUBSCHEMA_ARRAY_KEYS: Record<string, true> = {
+	anyOf: true,
+	oneOf: true,
+	allOf: true,
+	prefixItems: true,
+};
 
 interface ResidualIncompatibilityChecks {
 	typeArray: boolean;
@@ -226,7 +252,7 @@ function applyDescriptionSpill(
 	spillToDescription(result, spill, lift.format ?? "spill");
 }
 
-function normalizeSchemaNode(value: unknown, options: NormalizeSchemaOptions): unknown {
+function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions): unknown {
 	if (Array.isArray(value)) {
 		if (!enter(value)) return [];
 		try {
@@ -253,12 +279,18 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaOptions): u
  * definition names, never keywords, so only the schemas under them are
  * normalized: a property named `const` or `nullable` stays a property.
  */
-function normalizeSchemaMap(map: JsonObject, options: NormalizeSchemaOptions): JsonObject {
+function normalizeSchemaMap(map: JsonObject, options: NormalizeSchemaWalkOptions): JsonObject {
 	if (!enter(map)) return {};
 	try {
 		const result: JsonObject = {};
 		for (const name in map) {
-			if (Object.hasOwn(map, name)) result[name] = normalizeSchemaNode(map[name], options);
+			if (Object.hasOwn(map, name)) {
+				result[name] = normalizeSchemaNode(map[name], {
+					...options,
+					isSubschema: true,
+					insideSchemaMap: false,
+				});
+			}
 		}
 		return result;
 	} finally {
@@ -266,7 +298,7 @@ function normalizeSchemaMap(map: JsonObject, options: NormalizeSchemaOptions): J
 	}
 }
 
-function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaOptions): unknown {
+function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWalkOptions): unknown {
 	const obj = applyParentLevelRewrites(value, options);
 	const combiner = constUnionCombiner(obj);
 	const result: JsonObject = {};
@@ -288,10 +320,14 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaOp
 			constValue = entry;
 			continue;
 		}
+		const isSubschema =
+			options.insideSchemaMap ||
+			Object.hasOwn(SUBSCHEMA_VALUE_KEYS, key) ||
+			Object.hasOwn(SUBSCHEMA_ARRAY_KEYS, key);
 		result[key] =
 			SCHEMA_MAP_KEYWORDS.has(key) && isRecord(entry)
-				? normalizeSchemaMap(entry, options)
-				: normalizeSchemaNode(entry, options);
+				? normalizeSchemaMap(entry, { ...options, isSubschema: true, insideSchemaMap: true })
+				: normalizeSchemaNode(entry, { ...options, isSubschema, insideSchemaMap: false });
 	}
 	if (combiner === undefined) {
 		settleNodeType(result, constValue, options);
@@ -400,7 +436,7 @@ function settleObjectShape(result: JsonObject, options: NormalizeSchemaOptions):
 	if (options.ensureObjectProperties && !outHasOwn(result, "properties")) result.properties = {};
 }
 
-function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaOptions): JsonObject {
+function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaWalkOptions): JsonObject {
 	let current = schema;
 	for (const combiner of JSON_SCHEMA_COMBINERS) {
 		if (options.mergeObjectCombiners) current = mergeObjectCombinerVariants(current, combiner);
@@ -409,7 +445,7 @@ function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaOpt
 	}
 	if (options.foldOneOfIntoAnyOf) current = foldOneOfIntoAnyOf(current);
 	if (options.dropNonScalarEnum) current = dropNonScalarEnumForMfjs(current);
-	if (options.stringEnumsOnly) current = dropNonStringEnumForGoogle(current);
+	if (options.stringEnumsOnly && options.isSubschema !== false) current = dropNonStringEnumForGoogle(current);
 	return current;
 }
 
@@ -953,7 +989,7 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 	const detoxified = decontaminateZodInstance(value);
 	const upgraded = upgradeJsonSchemaTo202012(detoxified);
 	const dereferenced = dereferenceJsonSchema(upgraded);
-	let normalized = normalizeSchemaNode(dereferenced, options);
+	let normalized = normalizeSchemaNode(dereferenced, { ...options, isSubschema: true });
 	if (options.stripResidualCombinersFixpoint) {
 		normalized = stripResidualCombiners(normalized);
 	}
