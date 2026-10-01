@@ -112,23 +112,26 @@ afterEach(() => {
 });
 
 describe("a transcript replay records no prompt history", () => {
-	it.each(Object.keys(REPLAYS))("%s puts the replayed prompts on the up-arrow and none in the database", async name => {
-		const storage = HistoryStorage.open(path.join(tempDir!.path(), "history.db"));
-		const editor = new CustomEditor(getEditorTheme());
-		editor.setHistoryStorage(storage);
-		const { helpers } = fixture(editor);
+	it.each(Object.keys(REPLAYS))(
+		"%s puts the replayed prompts on the up-arrow and none in the database",
+		async name => {
+			const storage = HistoryStorage.open(path.join(tempDir!.path(), "history.db"));
+			const editor = new CustomEditor(getEditorTheme());
+			editor.setHistoryStorage(storage);
+			const { helpers } = fixture(editor);
 
-		REPLAYS[name]!(helpers);
-		editor.addToHistory("typed prompt");
-		// The drain writes in submission order, so this write lands after every earlier add.
-		await storage.add("flush marker");
+			REPLAYS[name]!(helpers);
+			editor.addToHistory("typed prompt");
+			// The drain writes in submission order, so this write lands after every earlier add.
+			await storage.add("flush marker");
 
-		expect(storage.getRecent(100).map(entry => entry.prompt)).toEqual(["flush marker", "typed prompt"]);
-		const recalled: string[] = [];
-		for (let i = 0; i < 4; i++) {
-			editor.handleInput(UP);
-			recalled.push(editor.getText());
-		}
-		expect(recalled).toEqual(["typed prompt", "third prompt", "second prompt", "first prompt"]);
-	});
+			expect(storage.getRecent(100).map(entry => entry.prompt)).toEqual(["flush marker", "typed prompt"]);
+			const recalled: string[] = [];
+			for (let i = 0; i < 4; i++) {
+				editor.handleInput(UP);
+				recalled.push(editor.getText());
+			}
+			expect(recalled).toEqual(["typed prompt", "third prompt", "second prompt", "first prompt"]);
+		},
+	);
 });
