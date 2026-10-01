@@ -71,7 +71,7 @@ export class FencedThinkingScanner {
 			if (nl === -1) break;
 			const line = this.#buffer.slice(0, nl);
 			if (!this.#inner) {
-				const close = this.#closeRest(line);
+				const close = closeRest(line);
 				if (close !== undefined) {
 					// Closer bytes are always held, so #emitted is 0 and nothing leaked.
 					const rest = close + this.#buffer.slice(nl); // keep the newline with the reply
@@ -96,68 +96,24 @@ export class FencedThinkingScanner {
 		}
 
 		if (final) {
-			const close = this.#closeRestFinal(tail);
+			const close = closeRestFinal(tail);
 			if (close !== undefined) {
 				this.#reset();
 				return { thinking, closed: true, rest: close };
 			}
 		} else {
-			const close = this.#closeRestStreamingTail(tail);
+			const close = closeRestStreamingTail(tail);
 			if (close !== undefined) {
 				this.#reset();
 				return { thinking, closed: true, rest: close };
 			}
-			if (this.#mustHold(tail)) return { thinking, closed: false, rest: "" };
+			if (mustHold(tail)) return { thinking, closed: false, rest: "" };
 		}
 		// Either final (flush the remainder) or a line that can no longer be a fence.
 		thinking += tail.slice(this.#emitted);
 		if (final) this.#reset();
 		else this.#emitted = tail.length;
 		return { thinking, closed: false, rest: "" };
-	}
-
-	/**
-	 * Complete line close test. A bare backtick fence closes thinking; a
-	 * language-token fence line opens an inner block; prose-like remainder is the
-	 * inline visible reply.
-	 */
-	#closeRest(line: string): string | undefined {
-		const m = BACKTICK_LEAD.exec(line);
-		if (!m || m[1]!.length < 3) return undefined;
-		const rest = m[2]!;
-		if (rest === "" || rest.trim() === "") return ""; // bare close (only whitespace)
-		if (LANG_TOKEN.test(rest)) return undefined; // language-tagged inner opener
-		return rest;
-	}
-
-	/** Final tail close test: EOF disambiguates any top-level backtick run as the closer. */
-	#closeRestFinal(tail: string): string | undefined {
-		const m = BACKTICK_LEAD.exec(tail);
-		if (!m || m[1]!.length < 3) return undefined;
-		const rest = m[2]!;
-		return rest.trim() === "" ? "" : rest;
-	}
-
-	/** Streaming tail close test: only a prose-like inline reply resolves the close. */
-	#closeRestStreamingTail(tail: string): string | undefined {
-		const m = BACKTICK_LEAD.exec(tail);
-		if (!m || m[1]!.length < 3) return undefined;
-		const rest = m[2]!;
-		if (rest === "" || rest.trim() === "" || LANG_TOKEN.test(rest)) return undefined;
-		return rest;
-	}
-
-	/** Whether a top-level trailing partial is still undecided and must be held. */
-	#mustHold(tail: string): boolean {
-		const m = BACKTICK_LEAD.exec(tail);
-		if (!m) return false;
-		const ticks = m[1]!.length;
-		const rest = m[2]!;
-		// A growing backtick run could still reach a fence. A complete run plus
-		// a language-token prefix is also undecided until a newline confirms an
-		// inner opener or a non-token character confirms an inline close.
-		if (rest === "" || rest.trim() === "") return ticks >= 1 || /^ {0,3}$/.test(tail);
-		return ticks >= 3 && LANG_TOKEN.test(rest);
 	}
 
 	#reset(): void {
@@ -173,7 +129,7 @@ export class FencedThinkingScanner {
 		const run = fence[1]!;
 		const info = fence[2]!.trim();
 		if (!this.#inner) {
-			// A top-level closer was already handled by #closeRest, so this opens a
+			// A top-level closer was already handled by closeRest, so this opens a
 			// nested code block (tilde fence, or backtick fence with a language token).
 			this.#inner = run;
 		} else if (run[0] === this.#inner[0] && run.length >= this.#inner.length && info === "") {
@@ -181,4 +137,48 @@ export class FencedThinkingScanner {
 			this.#inner = "";
 		}
 	}
+}
+
+/**
+ * Complete line close test. A bare backtick fence closes thinking; a
+ * language-token fence line opens an inner block; prose-like remainder is the
+ * inline visible reply.
+ */
+function closeRest(line: string): string | undefined {
+	const m = BACKTICK_LEAD.exec(line);
+	if (!m || m[1]!.length < 3) return undefined;
+	const rest = m[2]!;
+	if (rest === "" || rest.trim() === "") return ""; // bare close (only whitespace)
+	if (LANG_TOKEN.test(rest)) return undefined; // language-tagged inner opener
+	return rest;
+}
+
+/** Final tail close test: EOF disambiguates any top-level backtick run as the closer. */
+function closeRestFinal(tail: string): string | undefined {
+	const m = BACKTICK_LEAD.exec(tail);
+	if (!m || m[1]!.length < 3) return undefined;
+	const rest = m[2]!;
+	return rest.trim() === "" ? "" : rest;
+}
+
+/** Streaming tail close test: only a prose-like inline reply resolves the close. */
+function closeRestStreamingTail(tail: string): string | undefined {
+	const m = BACKTICK_LEAD.exec(tail);
+	if (!m || m[1]!.length < 3) return undefined;
+	const rest = m[2]!;
+	if (rest === "" || rest.trim() === "" || LANG_TOKEN.test(rest)) return undefined;
+	return rest;
+}
+
+/** Whether a top-level trailing partial is still undecided and must be held. */
+function mustHold(tail: string): boolean {
+	const m = BACKTICK_LEAD.exec(tail);
+	if (!m) return false;
+	const ticks = m[1]!.length;
+	const rest = m[2]!;
+	// A growing backtick run could still reach a fence. A complete run plus
+	// a language-token prefix is also undecided until a newline confirms an
+	// inner opener or a non-token character confirms an inline close.
+	if (rest === "" || rest.trim() === "") return ticks >= 1 || /^ {0,3}$/.test(tail);
+	return ticks >= 3 && LANG_TOKEN.test(rest);
 }

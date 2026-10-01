@@ -114,6 +114,7 @@ export class UiHelpers {
 					message,
 					ctx.viewSession.sessionManager.putBlobSync.bind(ctx.viewSession.sessionManager),
 				),
+
 			onInheritDisplaceableTodo: component => {
 				ctx.eventController?.inheritDisplaceableTodo(component);
 			},

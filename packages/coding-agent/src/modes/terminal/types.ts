@@ -309,7 +309,10 @@ export interface InteractiveModeContext {
 	updatePendingMessagesDisplay(): void;
 	/** Recompute the composer's contextual shortcut chips from current draft/busy/queue state and repaint. */
 	refreshComposerShortcuts(): void;
-	/** Remove the startup welcome card; the first real keystroke ends the hero moment. Idempotent. */
+	/**
+	 * The first real keystroke: remove the startup welcome card, and take the at-rest reading the
+	 * launch held once the frame that draws the edit is committed. Idempotent.
+	 */
 	dismissWelcome(): void;
 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void;
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void>;

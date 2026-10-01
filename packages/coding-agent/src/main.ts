@@ -39,7 +39,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@veyyon/utils";
-import { IdleTrim, trimEngine } from "@veyyon/utils/idle-trim";
+import { IdleTrim } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
 import {
 	type Args,
@@ -379,16 +379,12 @@ function resumeStartupWatchdog(): void {
 }
 
 /**
- * Once a root command has been quiet (see `IdleTrim`): discards compiled code, returns free malloc
- * pages, and unmaps the resident pages of the binary's embedded module graph, which loading every
- * module left mapped.
+ * Once a root command goes quiet (see `IdleTrim`): unmaps the resident pages of the binary's embedded
+ * module graph, which loading every module left mapped, on the first quiet window after work and
+ * after each trim. After a longer quiet stretch, the trim discards compiled code and returns free
+ * malloc pages.
  */
-const idleTrim = new IdleTrim({
-	trim: () => {
-		trimEngine();
-		releaseEmbeddedModulePages();
-	},
-});
+const idleTrim = new IdleTrim({ release: releaseEmbeddedModulePages });
 
 export interface InteractiveModeNotify {
 	kind: "warn" | "error" | "info";
@@ -654,6 +650,8 @@ function showStartupNotifications(mode: InteractiveMode, notifs: readonly (Inter
 
 /** Send a startup prompt, showing a failure in the transcript instead of ending the launch. */
 async function promptAtStartup(mode: InteractiveMode, send: () => Promise<boolean>): Promise<void> {
+	// A prompt leaves rest: take the held reading before the prompt appends its message.
+	mode.takeAtRestReading();
 	try {
 		using _keepalive = new EventLoopKeepalive();
 		await send();
@@ -2319,7 +2317,10 @@ async function runSessionLaunch(
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
-	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
+	const created = await createSession(
+		{ ...sessionOptions, ...shared, deferAtRestReading: launch.isInteractive },
+		launch.isInteractive,
+	);
 	const { session } = created;
 	// Publish the in-process native capability before interactive commands can
 	// activate an external adapter. This starts no poller or socket; an

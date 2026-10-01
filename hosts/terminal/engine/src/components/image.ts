@@ -35,12 +35,17 @@ export interface ImageOptions {
 	 */
 	imageKey?: string;
 	/**
-	 * Called when the picture's on-screen state changes: the cause it fell back
-	 * to text, or `undefined` once it draws as a graphic. The budget and the
-	 * terminal decide this inside {@link Image.render}, so a caller that has to
+	 * Receives the picture's on-screen state each time it changes: the cause it
+	 * fell back to text, or `undefined` once it draws as a graphic. The budget and
+	 * the terminal decide this inside {@link Image.render}, so a caller that has to
 	 * state whether the picture reached the screen learns it here.
 	 */
-	onDisplayed?: (fallback: ImageFallbackReason | undefined) => void;
+	displayListener?: ImageDisplayListener;
+}
+
+/** Receives an {@link Image}'s on-screen state; an object, so a caller keeps no closure per picture. */
+export interface ImageDisplayListener {
+	imageDisplayed(fallback: ImageFallbackReason | undefined): void;
 }
 
 // `ImageBudget` is engine state and lives in `../core/image-budget`; it is re-exported here because
@@ -174,7 +179,7 @@ export class Image implements Component {
 		// to decide over and over whether anything moved.
 		if (fallback !== this.#reportedFallback) {
 			this.#reportedFallback = fallback;
-			this.#options.onDisplayed?.(fallback);
+			this.#options.displayListener?.imageDisplayed(fallback);
 		}
 
 		this.#cachedLines = lines;

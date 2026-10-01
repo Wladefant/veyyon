@@ -377,18 +377,7 @@ interface CursorToolResultEntry {
 }
 
 export class Agent {
-	#state: AgentState = {
-		systemPrompt: [],
-		model: getBundledModel("google", "gemini-2.5-flash-lite-preview-06-17"),
-		thinkingLevel: undefined,
-		disableReasoning: false,
-		tools: [],
-		messages: [],
-		isStreaming: false,
-		streamMessage: null,
-		pendingToolCalls: new Set<string>(),
-		error: undefined,
-	};
+	#state: AgentState;
 
 	#listeners = new Set<(e: AgentEvent) => void>();
 	#abortController?: AbortController;
@@ -473,7 +462,21 @@ export class Agent {
 	hasIrcInterrupts?: AgentLoopConfig["hasIrcInterrupts"];
 
 	constructor(opts: AgentOptions = {}) {
-		this.#state = { ...this.#state, ...opts.initialState };
+		// The fallback model is read only when the caller names none: reading it builds the whole Google
+		// provider's model list, which a session that brings its own model never uses.
+		this.#state = {
+			systemPrompt: [],
+			model: opts.initialState?.model ?? getBundledModel("google", "gemini-2.5-flash-lite-preview-06-17"),
+			thinkingLevel: undefined,
+			disableReasoning: false,
+			tools: [],
+			messages: [],
+			isStreaming: false,
+			streamMessage: null,
+			pendingToolCalls: new Set<string>(),
+			error: undefined,
+			...opts.initialState,
+		};
 		internPromptParts(this.#state.systemPrompt);
 		if (opts.initialState?.messages) this.#state.messages = opts.initialState.messages.slice();
 		if (opts.initialState?.pendingToolCalls)
@@ -999,28 +1002,14 @@ export class Agent {
 		return this.#abortController?.signal.aborted === true && this.#state.isStreaming;
 	}
 
-	/**
-	 * Take from `queue` what `mode` allows — the first message, or all of them — and return the
-	 * taken messages with what remains. The queue is never mutated in place.
-	 */
-	static #dequeue(
-		queue: AgentMessage[],
-		mode: "all" | "one-at-a-time",
-	): { taken: AgentMessage[]; remaining: AgentMessage[] } {
-		if (mode === "one-at-a-time") {
-			return queue.length > 0 ? { taken: [queue[0]], remaining: queue.slice(1) } : { taken: [], remaining: queue };
-		}
-		return { taken: queue.slice(), remaining: [] };
-	}
-
 	#dequeueSteeringMessages(): AgentMessage[] {
-		const { taken, remaining } = Agent.#dequeue(this.#steeringQueue, this.#steeringMode);
+		const { taken, remaining } = dequeue(this.#steeringQueue, this.#steeringMode);
 		this.#steeringQueue = remaining;
 		return taken;
 	}
 
 	#dequeueFollowUpMessages(): AgentMessage[] {
-		const { taken, remaining } = Agent.#dequeue(this.#followUpQueue, this.#followUpMode);
+		const { taken, remaining } = dequeue(this.#followUpQueue, this.#followUpMode);
 		this.#followUpQueue = remaining;
 		return taken;
 	}
@@ -1476,4 +1465,18 @@ export class Agent {
 			this.#emit({ type: "message_end", message: toolResult });
 		}
 	}
+}
+
+/**
+ * Take from `queue` what `mode` allows — the first message, or all of them — and return the
+ * taken messages with what remains. The queue is never mutated in place.
+ */
+function dequeue(
+	queue: AgentMessage[],
+	mode: "all" | "one-at-a-time",
+): { taken: AgentMessage[]; remaining: AgentMessage[] } {
+	if (mode === "one-at-a-time") {
+		return queue.length > 0 ? { taken: [queue[0]], remaining: queue.slice(1) } : { taken: [], remaining: queue };
+	}
+	return { taken: queue.slice(), remaining: [] };
 }

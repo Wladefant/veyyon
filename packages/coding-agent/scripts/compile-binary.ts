@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { buildDocsIndexPayload } from "./generate-docs-index";
+import { buildPayloadDefines } from "./generate-docs-index";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { createPrecompiledPromptPlugin } from "./precompiled-prompts";
 
@@ -152,7 +152,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			define: {
 				"process.env.VEYYON_COMPILED": JSON.stringify("true"),
 				"process.env.VEYYON_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
-				"process.env.VEYYON_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
+				...(await buildPayloadDefines()),
 				"process.env.VEYYON_BUILD_TAG": JSON.stringify(buildTag ?? ""),
 				"process.env.VEYYON_BUILD_LOCAL": JSON.stringify(buildTag ? "true" : "false"),
 			},

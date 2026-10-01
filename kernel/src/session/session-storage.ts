@@ -604,12 +604,12 @@ export class FileSessionStorage implements SessionStorage {
 
 	async writeTextAtomic(fpath: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void> {
 		const dir = path.resolve(fpath, "..");
-		const tempPath = this.#stagingPath(fpath);
+		const tempPath = stagingPath(fpath);
 		await fs.promises.mkdir(dir, { recursive: true });
 		try {
 			await writeChunks(tempPath, body);
 		} catch (err) {
-			this.#discardTemp(tempPath, fpath);
+			discardTemp(tempPath, fpath);
 			throw toError(err);
 		}
 		this.#publishStaged(tempPath, fpath, options);
@@ -626,7 +626,7 @@ export class FileSessionStorage implements SessionStorage {
 		tail: SessionFileBody,
 		options?: WriteTextAtomicOptions,
 	): Promise<void> {
-		const tempPath = this.#stagingPath(fpath);
+		const tempPath = stagingPath(fpath);
 		try {
 			await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
 			const handle = await fs.promises.open(tempPath, "r+");
@@ -651,15 +651,10 @@ export class FileSessionStorage implements SessionStorage {
 				await handle.close();
 			}
 		} catch (err) {
-			this.#discardTemp(tempPath, fpath);
+			discardTemp(tempPath, fpath);
 			throw toError(err);
 		}
 		this.#publishStaged(tempPath, fpath, options);
-	}
-
-	/** A temp path beside `fpath`, so the publish is a rename within one directory. */
-	#stagingPath(fpath: string): string {
-		return path.join(path.resolve(fpath, ".."), `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
 	}
 
 	/** Make a fully written temp file the file at `fpath`, or discard it. */
@@ -669,7 +664,7 @@ export class FileSessionStorage implements SessionStorage {
 		// publish a fresh body between the check and the rename, and this stale
 		// staged body would overwrite it. Sync rename closes that window.
 		if (options?.commitGuard && !options.commitGuard()) {
-			this.#discardTemp(tempPath, fpath);
+			discardTemp(tempPath, fpath);
 			return;
 		}
 		try {
@@ -677,13 +672,13 @@ export class FileSessionStorage implements SessionStorage {
 			return;
 		} catch (err) {
 			if (!hasFsCode(err, "EPERM")) {
-				this.#discardTemp(tempPath, fpath);
+				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
 			try {
 				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard);
 			} catch (fallbackErr) {
-				this.#discardTemp(tempPath, fpath);
+				discardTemp(tempPath, fpath);
 				throw fallbackErr;
 			}
 		}
@@ -696,20 +691,6 @@ export class FileSessionStorage implements SessionStorage {
 	 */
 	renameSync(source: string, target: string): void {
 		fs.renameSync(source, target);
-	}
-
-	#discardTemp(tempPath: string, targetPath: string): void {
-		try {
-			fs.unlinkSync(tempPath);
-		} catch (err) {
-			if (!isEnoent(err)) {
-				logger.warn("Failed to remove session rewrite temp file", {
-					sessionFile: targetPath,
-					tempPath,
-					error: toError(err).message,
-				});
-			}
-		}
 	}
 
 	#replaceSessionFileAfterEpermSync(
@@ -725,7 +706,7 @@ export class FileSessionStorage implements SessionStorage {
 		} catch (moveAsideError) {
 			if (isEnoent(moveAsideError)) {
 				if (commitGuard && !commitGuard()) {
-					this.#discardTemp(tempPath, targetPath);
+					discardTemp(tempPath, targetPath);
 					return;
 				}
 				this.renameSync(tempPath, targetPath);
@@ -747,7 +728,7 @@ export class FileSessionStorage implements SessionStorage {
 					error: toError(restoreErr).message,
 				});
 			}
-			this.#discardTemp(tempPath, targetPath);
+			discardTemp(tempPath, targetPath);
 			return;
 		}
 		try {
@@ -865,6 +846,25 @@ export class FileSessionStorage implements SessionStorage {
 					cause: error,
 				},
 			);
+		}
+	}
+}
+
+/** A temp path beside `fpath`, so the publish is a rename within one directory. */
+function stagingPath(fpath: string): string {
+	return path.join(path.resolve(fpath, ".."), `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+}
+
+function discardTemp(tempPath: string, targetPath: string): void {
+	try {
+		fs.unlinkSync(tempPath);
+	} catch (err) {
+		if (!isEnoent(err)) {
+			logger.warn("Failed to remove session rewrite temp file", {
+				sessionFile: targetPath,
+				tempPath,
+				error: toError(err).message,
+			});
 		}
 	}
 }

@@ -29,6 +29,7 @@
 - `wrapTextWithAnsi` reads the words of a line as slices of it instead of copying each into its own buffer, which cuts wrapping a line wider than its target by 50 to 66% (a line of 40 to 100 words from 8.6 µs to 3.0 µs) and the first render of a 13,470-entry transcript at 120 columns from 291 ms to 234 ms, with identical rows.
 - `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth` and `extractSegments` return a result whose characters all fit in Latin-1 as a one-byte string instead of a two-byte one, which moves 2.9M characters of a rendered 13,470-entry transcript to one byte each and cuts the heap the render holds from 47.1 MiB to 44.4 MiB.
 - The addon runs its async exports on a Tokio runtime of at most four scheduler workers on every platform instead of napi-rs's default of one per CPU, which cuts an idle `vey` on a 32-thread host from 54 threads to 26 and the anonymous memory the addon's load and first async call add from 3.6 MiB to 3.1 MiB.
+- The first launch of a version inflates the embedded addon archive into one buffer sized from the addon metadata instead of 16 KiB chunks joined by a copy, which cuts that launch on linux-x64 from 575 ms to 485 ms to a ready status line and its peak resident memory from 449 MiB to 305 MiB (median of seven).
 
 ## [1.5.5] - 2026-09-25
 

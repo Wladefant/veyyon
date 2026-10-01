@@ -542,102 +542,6 @@ export class Patcher {
 		return this.snapshots.record(canonicalPath, normalized);
 	}
 
-	/**
-	 * Reject an anchored edit that references a line the read which minted
-	 * `expected` never displayed. `matchedSnapshot` is the store version whose
-	 * text equals the live normalized content — the exact snapshot the model
-	 * anchored against. Absent means no provenance was recorded (the tag was
-	 * externally minted or aged out), so the edit applies as before. Only runs
-	 * on the no-drift path, where anchor line numbers index the tagged content
-	 * 1:1.
-	 *
-	 * The rejection inlines the actual file content at the unseen anchor lines
-	 * (from `matchedSnapshot.text`, which by definition equals the live
-	 * normalized content) so the model can verify what it was about to touch.
-	 * When the reveal covers EVERY unseen anchor line in full width
-	 * (`truncated === false`) those lines also merge into the snapshot's
-	 * seen-line set, so a straight retry with the same `[path#tag]` header
-	 * succeeds without a follow-up range read — the content the model
-	 * received in the error IS proof it has now seen those lines. When the
-	 * anchor range exceeds {@link SEEN_LINE_REVEAL_CAP} lines OR any
-	 * revealed line exceeds {@link SEEN_LINE_REVEAL_MAX_COLUMNS} characters
-	 * (`truncated === true`), NO lines merge: the message keeps the
-	 * range-re-read guidance intact and the model cannot piecewise-reveal
-	 * its way past the guard across multiple retries
-	 * (over-cap retry → tail reveal → next retry applies), nor coax the tool
-	 * into dumping a minified megabyte-wide line into the error preview.
-	 *
-	 * One anchor is exempt: a PURE INSERTION beside a line the producer displayed
-	 * but CLIPPED at its column cap. `INS.PRE` / `INS.POST` read an anchor as a
-	 * place and leave its bytes byte-identical, the position is what the content
-	 * tag certifies, and the model saw the line number plus a leading prefix, so
-	 * it can identify the row. Refusing that asked for a megabyte-wide line to be
-	 * pulled into context in order to add a line next to it, and the named remedy
-	 * (`:raw`) was the only way through. Every destructive form on a clipped line
-	 * stays refused, because those rewrite bytes nobody read; and a line never
-	 * rendered AT ALL — elided body, folded summary row, outside the read range —
-	 * stays refused for every form including an insertion, since without even a
-	 * prefix there is nothing to identify.
-	 */
-	#assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
-		const seen = matchedSnapshot?.seenLines;
-		if (!seen || seen.size === 0) return;
-		const clipped = matchedSnapshot?.clippedLines;
-		const rewritten = collectRewrittenAnchorLines(section.edits);
-		const unseen = section
-			.collectAnchorLines()
-			.filter(line => !seen.has(line) && !(clipped?.has(line) === true && !rewritten.has(line)));
-		if (unseen.length === 0) return;
-		const sourceLines = matchedSnapshot?.text.split("\n") ?? [];
-		const revealed: RevealedLine[] = [];
-		const revealCount = Math.min(unseen.length, SEEN_LINE_REVEAL_CAP);
-		let columnTruncated = false;
-		for (let i = 0; i < revealCount; i++) {
-			const line = unseen[i];
-			// Out-of-range anchors are caught by parse/apply with a better
-			// message; skip them here so they never join the revealed set.
-			if (line < 1 || line > sourceLines.length) continue;
-			const source = sourceLines[line - 1] ?? "";
-			// Cut by code point so a wide line never reveals a lone surrogate.
-			const clipped =
-				source.length > SEEN_LINE_REVEAL_MAX_COLUMNS ? truncate(source, SEEN_LINE_REVEAL_MAX_COLUMNS, "") : source;
-			if (clipped === source) {
-				revealed.push({ line, text: source });
-			} else {
-				revealed.push({ line, text: `${clipped}…` });
-				columnTruncated = true;
-			}
-		}
-		const overCap = unseen.length > revealed.length;
-		// Whether ANY unseen line is too wide, not just one inside the reveal.
-		// `columnTruncated` above only sees the first `SEEN_LINE_REVEAL_CAP`, so a
-		// wide line past that index left `columnClipped` false, the message named
-		// a plain ranged re-read, and running it re-clipped that line and the
-		// retry was rejected again. The scan is a length check over at most a few
-		// hundred already-in-memory strings.
-		const anyUnseenTooWide =
-			columnTruncated || unseen.some(line => (sourceLines[line - 1]?.length ?? 0) > SEEN_LINE_REVEAL_MAX_COLUMNS);
-		const truncated = overCap || anyUnseenTooWide;
-		// Only merge when the reveal covered every unseen anchor line in full
-		// width. A prefix-truncated reveal would let the model split a blind
-		// edit into <=cap-line retries and land it without ever running the
-		// required range re-read; a column-clipped reveal would leave part of
-		// each line unseen while the model receives an "ok to retry" signal.
-		if (!truncated) {
-			for (const { line } of revealed) seen.add(line);
-		}
-		// `columnClipped` wins over `overCap` in the message, because `:raw` clears
-		// both and a plain ranged read clears only the second. See
-		// `UnseenLinesReveal`.
-		throw new Error(
-			unseenLinesMessage(section.path, unseen, expected, {
-				lines: revealed,
-				truncated,
-				overCap,
-				columnClipped: anyUnseenTooWide,
-			}),
-		);
-	}
 	#mismatchError(
 		section: PatchSection,
 		canonicalPath: string,
@@ -707,7 +611,7 @@ export class Patcher {
 			// The line numbers in `edits` index the exact content the tag names.
 			// Reject any anchor the read never displayed: editing lines the model
 			// has not seen is the off-by-memory mistake that mangles files.
-			if (expected !== undefined) this.#assertSeenLines(section, expected, matchedSnapshot);
+			if (expected !== undefined) assertSeenLines(section, expected, matchedSnapshot);
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings(blockResolutions.length > 0 ? { ...result, blockResolutions } : result);
 		}
@@ -731,4 +635,101 @@ export class Patcher {
 		const hashRecognized = this.snapshots.byHash(canonicalPath, expected) !== null;
 		throw this.#mismatchError(section, canonicalPath, normalized, expected, hashRecognized);
 	}
+}
+
+/**
+ * Reject an anchored edit that references a line the read which minted
+ * `expected` never displayed. `matchedSnapshot` is the store version whose
+ * text equals the live normalized content — the exact snapshot the model
+ * anchored against. Absent means no provenance was recorded (the tag was
+ * externally minted or aged out), so the edit applies as before. Only runs
+ * on the no-drift path, where anchor line numbers index the tagged content
+ * 1:1.
+ *
+ * The rejection inlines the actual file content at the unseen anchor lines
+ * (from `matchedSnapshot.text`, which by definition equals the live
+ * normalized content) so the model can verify what it was about to touch.
+ * When the reveal covers EVERY unseen anchor line in full width
+ * (`truncated === false`) those lines also merge into the snapshot's
+ * seen-line set, so a straight retry with the same `[path#tag]` header
+ * succeeds without a follow-up range read — the content the model
+ * received in the error IS proof it has now seen those lines. When the
+ * anchor range exceeds {@link SEEN_LINE_REVEAL_CAP} lines OR any
+ * revealed line exceeds {@link SEEN_LINE_REVEAL_MAX_COLUMNS} characters
+ * (`truncated === true`), NO lines merge: the message keeps the
+ * range-re-read guidance intact and the model cannot piecewise-reveal
+ * its way past the guard across multiple retries
+ * (over-cap retry → tail reveal → next retry applies), nor coax the tool
+ * into dumping a minified megabyte-wide line into the error preview.
+ *
+ * One anchor is exempt: a PURE INSERTION beside a line the producer displayed
+ * but CLIPPED at its column cap. `INS.PRE` / `INS.POST` read an anchor as a
+ * place and leave its bytes byte-identical, the position is what the content
+ * tag certifies, and the model saw the line number plus a leading prefix, so
+ * it can identify the row. Refusing that asked for a megabyte-wide line to be
+ * pulled into context in order to add a line next to it, and the named remedy
+ * (`:raw`) was the only way through. Every destructive form on a clipped line
+ * stays refused, because those rewrite bytes nobody read; and a line never
+ * rendered AT ALL — elided body, folded summary row, outside the read range —
+ * stays refused for every form including an insertion, since without even a
+ * prefix there is nothing to identify.
+ */
+function assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
+	const seen = matchedSnapshot?.seenLines;
+	if (!seen || seen.size === 0) return;
+	const clipped = matchedSnapshot?.clippedLines;
+	const rewritten = collectRewrittenAnchorLines(section.edits);
+	const unseen = section
+		.collectAnchorLines()
+		.filter(line => !seen.has(line) && !(clipped?.has(line) === true && !rewritten.has(line)));
+	if (unseen.length === 0) return;
+	const sourceLines = matchedSnapshot?.text.split("\n") ?? [];
+	const revealed: RevealedLine[] = [];
+	const revealCount = Math.min(unseen.length, SEEN_LINE_REVEAL_CAP);
+	let columnTruncated = false;
+	for (let i = 0; i < revealCount; i++) {
+		const line = unseen[i];
+		// Out-of-range anchors are caught by parse/apply with a better
+		// message; skip them here so they never join the revealed set.
+		if (line < 1 || line > sourceLines.length) continue;
+		const source = sourceLines[line - 1] ?? "";
+		// Cut by code point so a wide line never reveals a lone surrogate.
+		const clipped =
+			source.length > SEEN_LINE_REVEAL_MAX_COLUMNS ? truncate(source, SEEN_LINE_REVEAL_MAX_COLUMNS, "") : source;
+		if (clipped === source) {
+			revealed.push({ line, text: source });
+		} else {
+			revealed.push({ line, text: `${clipped}…` });
+			columnTruncated = true;
+		}
+	}
+	const overCap = unseen.length > revealed.length;
+	// Whether ANY unseen line is too wide, not just one inside the reveal.
+	// `columnTruncated` above only sees the first `SEEN_LINE_REVEAL_CAP`, so a
+	// wide line past that index left `columnClipped` false, the message named
+	// a plain ranged re-read, and running it re-clipped that line and the
+	// retry was rejected again. The scan is a length check over at most a few
+	// hundred already-in-memory strings.
+	const anyUnseenTooWide =
+		columnTruncated || unseen.some(line => (sourceLines[line - 1]?.length ?? 0) > SEEN_LINE_REVEAL_MAX_COLUMNS);
+	const truncated = overCap || anyUnseenTooWide;
+	// Only merge when the reveal covered every unseen anchor line in full
+	// width. A prefix-truncated reveal would let the model split a blind
+	// edit into <=cap-line retries and land it without ever running the
+	// required range re-read; a column-clipped reveal would leave part of
+	// each line unseen while the model receives an "ok to retry" signal.
+	if (!truncated) {
+		for (const { line } of revealed) seen.add(line);
+	}
+	// `columnClipped` wins over `overCap` in the message, because `:raw` clears
+	// both and a plain ranged read clears only the second. See
+	// `UnseenLinesReveal`.
+	throw new Error(
+		unseenLinesMessage(section.path, unseen, expected, {
+			lines: revealed,
+			truncated,
+			overCap,
+			columnClipped: anyUnseenTooWide,
+		}),
+	);
 }

@@ -154,13 +154,13 @@ class BoundedJsonWalk {
 			if (index < frame.values.length) {
 				if (frame.keys !== undefined) this.#mapKey(frame, frame.keys, index);
 				const value = this.#enter(frame.values[index], frame.depth + 1);
-				if (value !== ENTERED) this.#settle(frame, value);
+				if (value !== ENTERED) settle(frame, value);
 				continue;
 			}
 			stack.pop();
-			const result = this.#finish(frame);
+			const result = finish(frame);
 			if (stack.length === 0) return result;
-			this.#settle(stack[stack.length - 1], result);
+			settle(stack[stack.length - 1], result);
 		}
 	}
 
@@ -244,26 +244,6 @@ class BoundedJsonWalk {
 		frame.mappedKeys[index] = mapped;
 	}
 
-	/** Record what the child at the frame's cursor mapped to, and advance the cursor. */
-	#settle(frame: JsonWalkFrame, value: unknown): void {
-		const index = frame.next++;
-		if (value === frame.values[index]) return;
-		frame.mappedValues ??= frame.values.slice();
-		frame.mappedValues[index] = value;
-	}
-
-	#finish(frame: JsonWalkFrame): unknown {
-		let result: unknown = frame.source;
-		if (frame.keys === undefined) {
-			if (frame.mappedValues !== undefined) result = rebuiltArray(frame, frame.mappedValues);
-		} else if (frame.mappedKeys !== undefined || frame.mappedValues !== undefined) {
-			result = rebuiltRecord(frame, frame.mappedKeys ?? frame.keys, frame.mappedValues ?? frame.values);
-		}
-		frame.memo.done = true;
-		frame.memo.result = result;
-		return result;
-	}
-
 	#mapString(input: string): string {
 		if (!isWellFormedUtf16(input)) {
 			refuse("input-utf16", "Refusing ill-formed UTF-16 in JSON transformation data.");
@@ -287,6 +267,26 @@ class BoundedJsonWalk {
 		}
 		return output;
 	}
+}
+
+/** Record what the child at the frame's cursor mapped to, and advance the cursor. */
+function settle(frame: JsonWalkFrame, value: unknown): void {
+	const index = frame.next++;
+	if (value === frame.values[index]) return;
+	frame.mappedValues ??= frame.values.slice();
+	frame.mappedValues[index] = value;
+}
+
+function finish(frame: JsonWalkFrame): unknown {
+	let result: unknown = frame.source;
+	if (frame.keys === undefined) {
+		if (frame.mappedValues !== undefined) result = rebuiltArray(frame, frame.mappedValues);
+	} else if (frame.mappedKeys !== undefined || frame.mappedValues !== undefined) {
+		result = rebuiltRecord(frame, frame.mappedKeys ?? frame.keys, frame.mappedValues ?? frame.values);
+	}
+	frame.memo.done = true;
+	frame.memo.result = result;
+	return result;
 }
 
 function openFrame(

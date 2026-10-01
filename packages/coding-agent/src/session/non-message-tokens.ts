@@ -139,6 +139,7 @@ interface NonMessageTokenCache {
 	skillsRef: readonly Skill[];
 	prune: boolean;
 	tokens: number | undefined;
+	systemContextTokens: number | undefined;
 	breakdown:
 		| {
 				skillsTokens: number;
@@ -169,7 +170,15 @@ function nonMessageTokenCacheEntry(session: AgentSession): NonMessageTokenCache 
 	) {
 		return entry;
 	}
-	entry = { systemPromptRef, toolsRef, skillsRef, prune, tokens: undefined, breakdown: undefined };
+	entry = {
+		systemPromptRef,
+		toolsRef,
+		skillsRef,
+		prune,
+		tokens: undefined,
+		systemContextTokens: undefined,
+		breakdown: undefined,
+	};
 	nonMessageTokenCache.set(session, entry);
 	return entry;
 }
@@ -183,6 +192,19 @@ export function computeNonMessageTokens(session: AgentSession): number {
 	entry.tokens = tokens;
 	return tokens;
 }
+
+/**
+ * Tokens of the system context: every system-prompt part after the first. Reads no tool schema, so a
+ * caller that needs only this number does not build every tool's ArkType schema to get it.
+ */
+export function computeSystemContextTokens(session: AgentSession): number {
+	const entry = nonMessageTokenCacheEntry(session);
+	if (entry.systemContextTokens !== undefined) return entry.systemContextTokens;
+	const systemContextTokens = countTokens((session.systemPrompt ?? EMPTY_STRING_PARTS).slice(1));
+	entry.systemContextTokens = systemContextTokens;
+	return systemContextTokens;
+}
+
 /**
  * Shared helper for the four non-message token totals used by
  * `computeContextBreakdown` (/context panel). Keep this category split stable:
@@ -200,9 +222,38 @@ export function computeNonMessageBreakdown(session: AgentSession): {
 	const skillsTokens = estimateSkillsTokens(session.skills ?? EMPTY_SKILLS);
 	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? EMPTY_TOOLS, entry.prune);
 	const systemPromptParts = session.systemPrompt ?? EMPTY_STRING_PARTS;
-	const systemContextTokens = countTokens(systemPromptParts.slice(1));
+	const systemContextTokens = computeSystemContextTokens(session);
 	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts[0] ?? "") - skillsTokens);
 	const breakdown = { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens };
 	entry.breakdown = breakdown;
 	return breakdown;
+}
+
+/**
+ * Top-level sessions whose at-rest reading waits until the session leaves rest.
+ *
+ * The first non-message reading of a process builds the ArkType schema of every active tool to
+ * estimate the tool half: about 20 ms of a cold launch and 3.4 MiB of heap for the built-in tools.
+ * The interactive host creates its session with the reading deferred and takes it when the composer
+ * is first edited or a prompt is submitted, so neither the first frame nor a session left idle pays
+ * for schemas only a prompt needs. Until then the status row
+ * draws the resting gauge the last launch recorded instead of measuring. Compaction and `/context`
+ * read through {@link computeNonMessageTokens} and {@link computeNonMessageBreakdown}, which always
+ * measure.
+ */
+const deferredAtRestReadings = new WeakSet<AgentSession>();
+
+/** Hold `session`'s at-rest reading until {@link releaseAtRestReading}. */
+export function deferAtRestReading(session: AgentSession): void {
+	deferredAtRestReadings.add(session);
+}
+
+/** Whether `session`'s at-rest reading is still held. */
+export function isAtRestReadingDeferred(session: AgentSession): boolean {
+	return deferredAtRestReadings.has(session);
+}
+
+/** End the hold {@link deferAtRestReading} placed on `session`. */
+export function releaseAtRestReading(session: AgentSession): void {
+	deferredAtRestReadings.delete(session);
 }

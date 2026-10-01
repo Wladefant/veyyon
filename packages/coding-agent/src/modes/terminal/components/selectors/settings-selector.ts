@@ -487,35 +487,27 @@ class CompactionThresholdSubmenu extends MouseRoutedSubmenu {
 		this.#showModes();
 	}
 
-	#currentRaw(): string {
-		return String(settings.get("compaction.threshold") ?? AUTO_COMPACTION_THRESHOLD);
-	}
-
-	#marker(active: boolean): string {
-		return active ? `${theme.fg("success", theme.status.enabled)} ` : "  ";
-	}
-
 	#showModes(): void {
 		this.clear();
 		this.#selectList = undefined;
 
-		const raw = this.#currentRaw();
+		const raw = currentRaw();
 		const { mode, invalidRaw } = thresholdModeOf(raw);
 		const current = theme.fg("dim", `(current: ${formatThresholdShort(raw)})`);
 		const items: SelectItem[] = [
 			{
 				value: "auto",
-				label: `${this.#marker(mode === "auto")}Auto`,
+				label: `${marker(mode === "auto")}Auto`,
 				description: "The model's context window minus the reserve",
 			},
 			{
 				value: "percent",
-				label: `${this.#marker(mode === "percent")}Percent${mode === "percent" ? ` ${current}` : ""}`,
+				label: `${marker(mode === "percent")}Percent${mode === "percent" ? ` ${current}` : ""}`,
 				description: "Scales with each model's window",
 			},
 			{
 				value: "tokens",
-				label: `${this.#marker(mode === "tokens")}Tokens${mode === "tokens" ? ` ${current}` : ""}`,
+				label: `${marker(mode === "tokens")}Tokens${mode === "tokens" ? ` ${current}` : ""}`,
 				description: "The same trigger on every model",
 			},
 		];
@@ -566,19 +558,19 @@ class CompactionThresholdSubmenu extends MouseRoutedSubmenu {
 				? "Compact once the context passes this share of the model's window. Follows the window when you switch models."
 				: "Compact once the context passes this many tokens, on every model. Larger than the window compacts at the window's edge instead.";
 
-		const raw = this.#currentRaw();
+		const raw = currentRaw();
 		const presets = this.options.filter(option =>
 			mode === "percent" ? option.value.endsWith("%") : /^[0-9_]+$/.test(option.value),
 		);
 		const items: SelectItem[] = presets.map(option => ({
 			value: option.value,
-			label: `${this.#marker(option.value === raw)}${option.label}`,
+			label: `${marker(option.value === raw)}${option.label}`,
 			...(option.description !== undefined ? { description: option.description } : {}),
 		}));
 		if (thresholdModeOf(raw).mode === mode && !presets.some(option => option.value === raw)) {
 			items.unshift({
 				value: raw,
-				label: `${this.#marker(true)}${formatThresholdShort(raw)} ${theme.fg("dim", "(custom)")}`,
+				label: `${marker(true)}${formatThresholdShort(raw)} ${theme.fg("dim", "(custom)")}`,
 				description: "Set by hand; not one of the presets",
 			});
 		}
@@ -615,7 +607,7 @@ class CompactionThresholdSubmenu extends MouseRoutedSubmenu {
 	#showCustomInput(mode: "percent" | "tokens"): void {
 		this.clear();
 		this.#selectList = undefined;
-		const raw = this.#currentRaw();
+		const raw = currentRaw();
 		const input = new TextInputSubmenu(
 			mode === "percent" ? "Custom Percent" : "Custom Token Amount",
 			mode === "percent"
@@ -623,7 +615,7 @@ class CompactionThresholdSubmenu extends MouseRoutedSubmenu {
 				: "A positive token amount, e.g. 170000. Underscores are fine (170_000).",
 			thresholdModeOf(raw).mode === mode ? raw : "",
 			value => {
-				this.#persist(this.#validateCustom(mode, value));
+				this.#persist(validateCustom(mode, value));
 				this.requestRender?.();
 			},
 			() => {
@@ -632,22 +624,6 @@ class CompactionThresholdSubmenu extends MouseRoutedSubmenu {
 			},
 		);
 		this.addChild(input);
-	}
-
-	#validateCustom(mode: "percent" | "tokens", value: string): string {
-		const text = value.trim();
-		if (mode === "percent") {
-			const percent = Number(text.replace(/%$/, "").trim());
-			if (!Number.isInteger(percent) || percent < 1 || percent > 99) {
-				throw new Error(`"${value}" is not a whole percent from 1 to 99.`);
-			}
-			return `${percent}%`;
-		}
-		const tokens = Number(text.replace(/_/g, ""));
-		if (!Number.isInteger(tokens) || tokens <= 0) {
-			throw new Error(`"${value}" is not a positive token amount (e.g. 170000).`);
-		}
-		return String(tokens);
 	}
 
 	#persist(value: string): void {
@@ -660,6 +636,30 @@ class CompactionThresholdSubmenu extends MouseRoutedSubmenu {
 	mouseTarget(): SelectList | undefined {
 		return this.#selectList;
 	}
+}
+
+function currentRaw(): string {
+	return String(settings.get("compaction.threshold") ?? AUTO_COMPACTION_THRESHOLD);
+}
+
+function marker(active: boolean): string {
+	return active ? `${theme.fg("success", theme.status.enabled)} ` : "  ";
+}
+
+function validateCustom(mode: "percent" | "tokens", value: string): string {
+	const text = value.trim();
+	if (mode === "percent") {
+		const percent = Number(text.replace(/%$/, "").trim());
+		if (!Number.isInteger(percent) || percent < 1 || percent > 99) {
+			throw new Error(`"${value}" is not a whole percent from 1 to 99.`);
+		}
+		return `${percent}%`;
+	}
+	const tokens = Number(text.replace(/_/g, ""));
+	if (!Number.isInteger(tokens) || tokens <= 0) {
+		throw new Error(`"${value}" is not a positive token amount (e.g. 170000).`);
+	}
+	return String(tokens);
 }
 
 class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
@@ -677,11 +677,6 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 
 	#limits(): Record<string, number> {
 		return normalizeProviderMaxInFlightRequests(settings.get(PROVIDER_LIMITS_PATH));
-	}
-
-	/** The profile's own limits: what an edit here writes back, never an override's entries. */
-	#profileLimits(): Record<string, number> {
-		return normalizeProviderMaxInFlightRequests(profileWritableRecord(PROVIDER_LIMITS_PATH));
 	}
 
 	#providerIds(): string[] {
@@ -707,7 +702,7 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 			return { value: provider, label: provider, description: shown };
 		});
 		const clearItem: SelectItem[] =
-			Object.keys(this.#profileLimits()).length === 0
+			Object.keys(profileLimits()).length === 0
 				? []
 				: [
 						{
@@ -742,7 +737,7 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 	}
 
 	#showProviderEditor(provider: string): void {
-		const limits = this.#profileLimits();
+		const limits = profileLimits();
 		this.clear();
 		this.#selectList = undefined;
 		this.addChild(
@@ -777,6 +772,11 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 	mouseTarget(): SelectList | undefined {
 		return this.#selectList;
 	}
+}
+
+/** The profile's own limits: what an edit here writes back, never an override's entries. */
+function profileLimits(): Record<string, number> {
+	return normalizeProviderMaxInFlightRequests(profileWritableRecord(PROVIDER_LIMITS_PATH));
 }
 
 export function barePickerSelector(raw: string | undefined, models: ReadonlyArray<Model<Api>>): string | undefined {
@@ -996,23 +996,17 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 	}
 
 	#disabled(): Set<string> {
-		return this.#nameSet("ttsr.disabledRules");
+		return nameSet("ttsr.disabledRules");
 	}
 
 	#enabledExperiments(): Set<string> {
-		return this.#nameSet("ttsr.experimentalRules");
-	}
-
-	#nameSet(path: "ttsr.disabledRules" | "ttsr.experimentalRules"): Set<string> {
-		const stored = settings.get(path);
-		const names = Array.isArray(stored) ? stored : [];
-		return new Set(names.map(name => String(name).trim()).filter(name => name.length > 0));
+		return nameSet("ttsr.experimentalRules");
 	}
 
 	#toggle(name: string): void {
 		const isExp = this.#rules.find(candidate => candidate.name === name)?.experimental === true;
 		const path = isExp ? "ttsr.experimentalRules" : "ttsr.disabledRules";
-		const set = this.#nameSet(path);
+		const set = nameSet(path);
 		if (set.has(name)) set.delete(name);
 		else set.add(name);
 		settings.set(path, Array.from(set).sort());
@@ -1029,12 +1023,6 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 		return "inert";
 	}
 
-	#isOff(rule: Rule, disabled: ReadonlySet<string>, experiments: ReadonlySet<string>, builtinOff: boolean): boolean {
-		if (disabled.has(rule.name)) return true;
-		if (builtinOff && rule._source?.provider === BUILTIN_DEFAULTS_PROVIDER_ID) return true;
-		return rule.experimental === true && !experiments.has(rule.name);
-	}
-
 	#sections(): { label: string; rules: Rule[] }[] {
 		const sections: { label: string; rules: Rule[] }[] = [];
 		for (const rule of this.#rules) {
@@ -1044,30 +1032,6 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 			else sections.push({ label, rules: [rule] });
 		}
 		return sections;
-	}
-
-	#sectionSummary(rules: readonly Rule[], off: number): string {
-		const total = formatCount("rule", rules.length);
-		if (off === 0) return `${total} · ${theme.fg("success", "all on")}`;
-		if (off === rules.length) return `${total} · ${theme.fg("dim", "all off")}`;
-		return `${total} · ${theme.fg("dim", `${off} off`)}`;
-	}
-
-	#warningComponent(builtinOff: boolean): Component | undefined {
-		const warnings: Component[] = [];
-		if (settings.get("ttsr.enabled") !== true) {
-			warnings.push(new Text(theme.fg("warning", "  Rule matching is off (Stream Interrupts → TTSR)."), 0, 0));
-		}
-		if (builtinOff) {
-			warnings.push(new Text(theme.fg("warning", "  Built-in rules are off, so every bundled rule is."), 0, 0));
-		}
-		if (warnings.length === 0) return undefined;
-		const container = new Container();
-		for (let i = 0; i < warnings.length; i++) {
-			if (i > 0) container.addChild(new Spacer(1));
-			container.addChild(warnings[i]!);
-		}
-		return container;
 	}
 
 	#show(): void {
@@ -1102,7 +1066,7 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 			this.renderSubmenuFrame({
 				title: "Rules",
 				description: "Rules by section. Enter opens one.",
-				headerExtra: this.#warningComponent(builtinOff),
+				headerExtra: warningComponent(builtinOff),
 				body: container,
 				footerHint: "  Esc to go back",
 			});
@@ -1110,11 +1074,11 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 		}
 
 		const items: SelectItem[] = sections.map(section => {
-			const off = section.rules.filter(rule => this.#isOff(rule, disabled, experiments, builtinOff)).length;
+			const off = section.rules.filter(rule => isOff(rule, disabled, experiments, builtinOff)).length;
 			return {
 				value: section.label,
 				label: section.label,
-				description: this.#sectionSummary(section.rules, off),
+				description: sectionSummary(section.rules, off),
 			};
 		});
 
@@ -1137,7 +1101,7 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 		this.renderSubmenuFrame({
 			title: "Rules",
 			description: "Rules by section. Enter opens one.",
-			headerExtra: this.#warningComponent(builtinOff),
+			headerExtra: warningComponent(builtinOff),
 			body: selectList,
 			footerHint: `  Enter to open${filterHint} · Esc to go back`,
 		});
@@ -1155,7 +1119,7 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 		const disabled = this.#disabled();
 		const experiments = this.#enabledExperiments();
 		const items: SelectItem[] = section.rules.map(rule => {
-			const state = this.#isOff(rule, disabled, experiments, builtinOff)
+			const state = isOff(rule, disabled, experiments, builtinOff)
 				? theme.fg("dim", "off")
 				: theme.fg("success", "on");
 			const detail = rule.description ? ` · ${collapseWhitespace(rule.description)}` : "";
@@ -1183,7 +1147,7 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 		this.renderSubmenuFrame({
 			title: "Rules",
 			description: `${label} — Enter turns a rule off, or back on.`,
-			headerExtra: this.#warningComponent(builtinOff),
+			headerExtra: warningComponent(builtinOff),
 			body: selectList,
 			footerHint: `  Enter to toggle${filterHint} · Esc for sections`,
 		});
@@ -1192,6 +1156,47 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 	mouseTarget(): SelectList | undefined {
 		return this.#selectList;
 	}
+}
+
+function nameSet(path: "ttsr.disabledRules" | "ttsr.experimentalRules"): Set<string> {
+	const stored = settings.get(path);
+	const names = Array.isArray(stored) ? stored : [];
+	return new Set(names.map(name => String(name).trim()).filter(name => name.length > 0));
+}
+
+function isOff(
+	rule: Rule,
+	disabled: ReadonlySet<string>,
+	experiments: ReadonlySet<string>,
+	builtinOff: boolean,
+): boolean {
+	if (disabled.has(rule.name)) return true;
+	if (builtinOff && rule._source?.provider === BUILTIN_DEFAULTS_PROVIDER_ID) return true;
+	return rule.experimental === true && !experiments.has(rule.name);
+}
+
+function sectionSummary(rules: readonly Rule[], off: number): string {
+	const total = formatCount("rule", rules.length);
+	if (off === 0) return `${total} · ${theme.fg("success", "all on")}`;
+	if (off === rules.length) return `${total} · ${theme.fg("dim", "all off")}`;
+	return `${total} · ${theme.fg("dim", `${off} off`)}`;
+}
+
+function warningComponent(builtinOff: boolean): Component | undefined {
+	const warnings: Component[] = [];
+	if (settings.get("ttsr.enabled") !== true) {
+		warnings.push(new Text(theme.fg("warning", "  Rule matching is off (Stream Interrupts → TTSR)."), 0, 0));
+	}
+	if (builtinOff) {
+		warnings.push(new Text(theme.fg("warning", "  Built-in rules are off, so every bundled rule is."), 0, 0));
+	}
+	if (warnings.length === 0) return undefined;
+	const container = new Container();
+	for (let i = 0; i < warnings.length; i++) {
+		if (i > 0) container.addChild(new Spacer(1));
+		container.addChild(warnings[i]!);
+	}
+	return container;
 }
 
 const AGENT_ROW_OFFERED = "\u0000agent-offered";
@@ -1440,55 +1445,8 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 		this.onChange("agent.agents");
 	}
 
-	#modelSummary(agent: AgentDefinition, depth = 0): string {
-		// `taskDepth` is the depth a SPAWN runs at, and a lane page describes exactly
-		// one: the agent's own page is a direct child (depth 1), each level down is
-		// one deeper. Passing it is what makes the badge name the lane that decided
-		// rather than the table.
-		const resolved = resolveAgentModel({
-			settings,
-			agentName: agent.name,
-			agentModel: agent.model,
-			taskDepth: depth + 1,
-		});
-		if (resolved.unresolved) return theme.fg("error", `${resolved.unresolved.value} matches no model`);
-		const pattern = resolved.patterns[0];
-		if (!pattern) return theme.fg("dim", "no model resolved");
-		const fallbacks = resolved.patterns.length - 1;
-		const summary = formatModelSummaryWithFallbacks(pattern, fallbacks, true);
-		return resolved.source === "default"
-			? theme.fg("dim", `default · ${summary}`)
-			: `${summary} ${theme.fg("dim", `· ${agentModelSourceLabel(resolved.source, agent.name, resolved.depth)}`)}`;
-	}
-
-	/**
-	 * One lane's Model row: what it stores, or the level it inherits from.
-	 *
-	 * The stored value rather than the resolved one, because this row EDITS the
-	 * stored value — a row showing a resolved answer it does not own is how a
-	 * screen comes to look configured when it has not been.
-	 */
-	#laneModelSummary(lane: AgentLaneSettings, depth: number): string {
-		const chain = lane.model;
-		if (chain === undefined || (Array.isArray(chain) ? chain.length === 0 : chain.trim().length === 0)) {
-			return theme.fg("dim", depth === 0 ? "default · the default model role" : "inherit · the level above");
-		}
-		const entries = Array.isArray(chain) ? chain : [chain];
-		const head = entries[0] ?? "";
-		const fallbacks = entries.length - 1;
-		return formatModelSummaryWithFallbacks(head, fallbacks, true);
-	}
-
-	/** One lane's Effort row, on the same stored-not-resolved rule as the model. */
-	#laneEffortSummary(lane: AgentLaneSettings, depth: number): string {
-		const level = lane.thinkingLevel?.trim() ?? "";
-		return level.length > 0
-			? level
-			: theme.fg("dim", depth === 0 ? "default · the default effort" : "inherit · the level above");
-	}
-
 	#runsSummary(agent: AgentDefinition, depth = 0): string {
-		const model = this.#modelSummary(agent, depth);
+		const model = modelSummary(agent, depth);
 		const head = resolveAgentModel({
 			settings,
 			agentName: agent.name,
@@ -1547,7 +1505,7 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 		// agent at once is what made "I changed the model" and "my agents
 		// changed model" one event.
 		const items: SelectItem[] = this.#agents.map(agent => {
-			const shown = `${AGENT_ENABLE_STATE_LABEL[agentEnableState(agent, this.#row(agent.name).enabled)]} · ${this.#modelSummary(agent)}`;
+			const shown = `${AGENT_ENABLE_STATE_LABEL[agentEnableState(agent, this.#row(agent.name).enabled)]} · ${modelSummary(agent)}`;
 			const source = recordEntrySource(AGENTS_PATH, agent.name);
 			if (isOverrideSource(source)) {
 				return {
@@ -1670,14 +1628,14 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 			...(shared
 				? []
 				: [
-						{ value: AGENT_ROW_MODEL, label: "Model", description: this.#laneModelSummary(lane, depth) },
-						{ value: AGENT_ROW_EFFORT, label: "Effort", description: this.#laneEffortSummary(lane, depth) },
+						{ value: AGENT_ROW_MODEL, label: "Model", description: laneModelSummary(lane, depth) },
+						{ value: AGENT_ROW_EFFORT, label: "Effort", description: laneEffortSummary(lane, depth) },
 					]),
 			{
 				value: AGENT_ROW_NESTED,
 				label: "Agents",
 				description: spawnAllowed
-					? this.#laneModelSummary(child, depth + 1)
+					? laneModelSummary(child, depth + 1)
 					: theme.fg("dim", "off · may not spawn agents"),
 			},
 		];
@@ -1860,6 +1818,53 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 	}
 }
 
+function modelSummary(agent: AgentDefinition, depth = 0): string {
+	// `taskDepth` is the depth a SPAWN runs at, and a lane page describes exactly
+	// one: the agent's own page is a direct child (depth 1), each level down is
+	// one deeper. Passing it is what makes the badge name the lane that decided
+	// rather than the table.
+	const resolved = resolveAgentModel({
+		settings,
+		agentName: agent.name,
+		agentModel: agent.model,
+		taskDepth: depth + 1,
+	});
+	if (resolved.unresolved) return theme.fg("error", `${resolved.unresolved.value} matches no model`);
+	const pattern = resolved.patterns[0];
+	if (!pattern) return theme.fg("dim", "no model resolved");
+	const fallbacks = resolved.patterns.length - 1;
+	const summary = formatModelSummaryWithFallbacks(pattern, fallbacks, true);
+	return resolved.source === "default"
+		? theme.fg("dim", `default · ${summary}`)
+		: `${summary} ${theme.fg("dim", `· ${agentModelSourceLabel(resolved.source, agent.name, resolved.depth)}`)}`;
+}
+
+/**
+ * One lane's Model row: what it stores, or the level it inherits from.
+ *
+ * The stored value rather than the resolved one, because this row EDITS the
+ * stored value — a row showing a resolved answer it does not own is how a
+ * screen comes to look configured when it has not been.
+ */
+function laneModelSummary(lane: AgentLaneSettings, depth: number): string {
+	const chain = lane.model;
+	if (chain === undefined || (Array.isArray(chain) ? chain.length === 0 : chain.trim().length === 0)) {
+		return theme.fg("dim", depth === 0 ? "default · the default model role" : "inherit · the level above");
+	}
+	const entries = Array.isArray(chain) ? chain : [chain];
+	const head = entries[0] ?? "";
+	const fallbacks = entries.length - 1;
+	return formatModelSummaryWithFallbacks(head, fallbacks, true);
+}
+
+/** One lane's Effort row, on the same stored-not-resolved rule as the model. */
+function laneEffortSummary(lane: AgentLaneSettings, depth: number): string {
+	const level = lane.thinkingLevel?.trim() ?? "";
+	return level.length > 0
+		? level
+		: theme.fg("dim", depth === 0 ? "default · the default effort" : "inherit · the level above");
+}
+
 const ADD_EFFORT_ROW = "\u0000add-effort-row";
 const CHAIN_ENTRY_PREFIX = "\u0000chain-entry:";
 const CHAIN_ADD_ROW = "\u0000chain-add-row";
@@ -1899,12 +1904,6 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 		);
 	}
 
-	/** The override layer that supplies `key`, or `undefined` when the profile row is the one in effect. */
-	#overrideSource(key: string): SettingSource | undefined {
-		const source = recordEntrySource(DEFAULT_EFFORT_PATH, key);
-		return isOverrideSource(source) ? source : undefined;
-	}
-
 	#showRows(): void {
 		this.clear();
 		this.#selectList = undefined;
@@ -1914,7 +1913,7 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 		);
 		const items: SelectItem[] = keys.map(key => {
 			const label = key === ANY_MODEL_EFFORT_KEY ? "any model" : key;
-			const source = this.#overrideSource(key);
+			const source = overrideSource(key);
 			if (source) {
 				return {
 					value: key,
@@ -1926,7 +1925,7 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 			return { value: key, label, description: rows[key] ?? "" };
 		});
 		items.push({ value: ADD_EFFORT_ROW, label: "Add a model…", description: "pick a model, then its effort" });
-		const anySource = this.#overrideSource(ANY_MODEL_EFFORT_KEY);
+		const anySource = overrideSource(ANY_MODEL_EFFORT_KEY);
 		items.push({
 			value: ANY_MODEL_EFFORT_KEY,
 			label: rows[ANY_MODEL_EFFORT_KEY] === undefined ? "Set the any-model effort…" : "Change the any-model effort…",
@@ -1970,7 +1969,7 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 			{
 				onPick: model => {
 					const key = `${model.provider}/${model.id}`;
-					if (this.#overrideSource(key)) this.#showRows();
+					if (overrideSource(key)) this.#showRows();
 					else this.#showEffortPicker(key, model);
 					this.requestRender?.();
 				},
@@ -2011,7 +2010,7 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 	#removeSelectedRow(): void {
 		const selected = this.#selectList?.getSelectedItem?.();
 		const key = selected?.value;
-		if (!key || key === ADD_EFFORT_ROW || this.#overrideSource(key)) return;
+		if (!key || key === ADD_EFFORT_ROW || overrideSource(key)) return;
 		const rows = this.#profileRows();
 		if (rows[key] === undefined) return;
 		delete rows[key];
@@ -2029,6 +2028,12 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 		if (handleRowDeleteKey(data, this.#selectList, () => this.#removeSelectedRow())) return;
 		super.handleInput(data);
 	}
+}
+
+/** The override layer that supplies `key`, or `undefined` when the profile row is the one in effect. */
+function overrideSource(key: string): SettingSource | undefined {
+	const source = recordEntrySource(DEFAULT_EFFORT_PATH, key);
+	return isOverrideSource(source) ? source : undefined;
 }
 
 /**
@@ -2978,7 +2983,7 @@ export class SettingsSelectorComponent implements Component {
 
 		this.#searchMatchCount = total;
 		const matchedOrder = tabResults.map(r => r.tab);
-		this.#tabBar.setTabs(this.#buildSearchTabs(counts, matchedOrder));
+		this.#tabBar.setTabs(buildSearchTabs(counts, matchedOrder));
 		this.#searchList.setItems(items);
 	}
 
@@ -3006,33 +3011,6 @@ export class SettingsSelectorComponent implements Component {
 				this.#currentList?.activateSelected();
 			}
 		}
-	}
-
-	#buildSearchTabs(counts: Map<SettingTab, number>, matchedTabOrder: readonly SettingTab[]): Tab[] {
-		const matched: Tab[] = [];
-		const empty: Tab[] = [];
-		const matchedIds = new Set<SettingTab>(matchedTabOrder);
-		for (const id of matchedTabOrder) {
-			const meta = TAB_METADATA[id];
-			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
-			const count = counts.get(id) ?? 0;
-			if (count > 0) {
-				matched.push({ id, label: `${icon} ${meta.label} (${count})`, short: `${icon} ${count}` });
-			}
-		}
-		for (const id of SETTING_TABS) {
-			if (matchedIds.has(id)) continue;
-			const meta = TAB_METADATA[id];
-			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
-			empty.push({ id, label: `${icon} ${meta.label}`, short: icon, muted: true });
-		}
-		empty.push({
-			id: "plugins",
-			label: withIcon(theme.icon.package, "Plugins"),
-			short: theme.icon.package,
-			muted: true,
-		});
-		return matched.concat(empty);
 	}
 
 	#syncTabBarToSelection(item: SettingItem | undefined): void {
@@ -3095,7 +3073,7 @@ export class SettingsSelectorComponent implements Component {
 			return null;
 		}
 
-		const currentValue = this.#getCurrentValue(def);
+		const currentValue = getCurrentValue(def);
 		const handler = handlerFor(def);
 		if (!handler) {
 			throw new Error(`Unhandled setting kind: ${def.type}`);
@@ -3126,12 +3104,6 @@ export class SettingsSelectorComponent implements Component {
 			item.submenu = (cv, done) => handler.createSubmenu!(this, def, cv, done);
 		}
 		return item;
-	}
-
-	#getCurrentValue(def: SettingDef): unknown {
-		if (def.type === "defaultModel") return settings.getPersistedModelRole(DEFAULT_MODEL_SLOT);
-		if (def.type === "advisorModel") return settings.getModelRole(ADVISOR_MODEL_SLOT);
-		return settings.get(def.path);
 	}
 
 	getSubmenuCurrentValue(path: SettingPath, value: unknown): string {
@@ -3213,7 +3185,7 @@ export class SettingsSelectorComponent implements Component {
 			options,
 			currentValue,
 			value => {
-				this.#setSettingValue(def.path, value);
+				setSettingValue(def.path, value);
 				this.callbacks.onChange(def.path, value);
 				done(value);
 			},
@@ -3245,12 +3217,9 @@ export class SettingsSelectorComponent implements Component {
 		return new TextInputSubmenu(
 			def.label,
 			note ? `${note} ${def.description ?? def.label}` : def.description,
-			this.#formatTextInputEditValue(
-				def.path,
-				recordValued ? profileWritableRecord(def.path) : settings.get(def.path),
-			),
+			formatTextInputEditValue(def.path, recordValued ? profileWritableRecord(def.path) : settings.get(def.path)),
 			value => {
-				this.#setSettingValue(def.path, value);
+				setSettingValue(def.path, value);
 				this.callbacks.onChange(def.path, settings.get(def.path));
 				wrappedDone(this.formatTextInputValue(def.path, settings.get(def.path)));
 			},
@@ -3282,7 +3251,7 @@ export class SettingsSelectorComponent implements Component {
 		factory: (ctx: { registry: ModelRegistry; models: ReadonlyArray<Model> }) => Container,
 	): Container {
 		const ctx = this.#requireModelPickerContext();
-		return ctx ? factory(ctx) : this.#modelPickerFallback(done);
+		return ctx ? factory(ctx) : modelPickerFallback(done);
 	}
 
 	formatModelSelectorValue(value: unknown): string {
@@ -3492,19 +3461,6 @@ export class SettingsSelectorComponent implements Component {
 		);
 	}
 
-	#modelPickerFallback(done: (value?: string) => void): Container {
-		class FallbackContainer extends Container {
-			handleInput(data: string): void {
-				if (matchesKey(data, "escape") || data === "\x1b") done();
-			}
-		}
-		const fallback = new FallbackContainer();
-		fallback.addChild(new Text(theme.fg("warning", MODEL_CATALOG_UNAVAILABLE), 0, 0));
-		fallback.addChild(new Spacer(1));
-		fallback.addChild(new Text(theme.fg("dim", "  Esc to go back"), 0, 0));
-		return fallback;
-	}
-
 	#createRoleModelInput(
 		role: string | undefined,
 		settingId: SettingPath | undefined,
@@ -3572,67 +3528,7 @@ export class SettingsSelectorComponent implements Component {
 			const count = Object.keys(value).length;
 			return count === 0 ? "None" : `${count} ${count === 1 ? "tool" : "tools"}`;
 		}
-		return this.#formatTextInputEditValue(path, value);
-	}
-
-	#formatTextInputEditValue(_path: SettingPath, value: unknown): string {
-		if (value === undefined || value === null) return "";
-		if (Array.isArray(value)) {
-			return value.every(item => typeof item === "string") ? value.join(", ") : JSON.stringify(value);
-		}
-		if (typeof value === "object") return JSON.stringify(value);
-		return String(value);
-	}
-
-	#setSettingValue(path: SettingPath, value: string): void {
-		const currentValue = settings.get(path);
-		const schemaType = getType(path);
-		if (isUnsetNumberPath(path) && value === UNSET_NUMBER_OPTION_VALUE) {
-			settings.unset(path);
-		} else if (schemaType === "record") {
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(value || "{}");
-			} catch {
-				throw new Error(`Invalid record JSON for ${path}`);
-			}
-			if (!isRecord(parsed)) {
-				throw new Error(`Invalid record JSON for ${path}`);
-			}
-			if (path === "providers.maxInFlightRequests") {
-				parsed = validateProviderMaxInFlightRequests(parsed);
-			}
-			settings.set(path, parsed as never);
-		} else if (schemaType === "array") {
-			const trimmed = value.trim();
-			let arr: unknown[];
-			if (trimmed === "") {
-				arr = [];
-			} else if (trimmed.startsWith("[")) {
-				let json: unknown;
-				try {
-					json = JSON.parse(trimmed);
-				} catch {
-					throw new Error(`Invalid JSON array for ${path}`);
-				}
-				if (!Array.isArray(json)) throw new Error(`Expected a JSON array for ${path}`);
-				arr = json;
-			} else {
-				arr = trimmed
-					.split(",")
-					.map(entry => entry.trim())
-					.filter(entry => entry.length > 0);
-			}
-			settings.set(path, arr as never);
-		} else if (schemaType === "number") {
-			const next = parseNumberSetting(path, value);
-			if (next === UNSET_NUMBER_INPUT) settings.unset(path);
-			else settings.set(path, next as never);
-		} else if (typeof currentValue === "boolean") {
-			settings.set(path, (value === "true") as never);
-		} else {
-			settings.set(path, value as never);
-		}
+		return formatTextInputEditValue(path, value);
 	}
 
 	#showSettingsTab(tabId: SettingTab): void {
@@ -3901,5 +3797,111 @@ export class SettingsSelectorComponent implements Component {
 		this.#searchInput.handleInput(data);
 		const value = this.#searchInput.getValue();
 		if (value !== this.#searchQuery) this.#setSearchQuery(value);
+	}
+}
+
+function buildSearchTabs(counts: Map<SettingTab, number>, matchedTabOrder: readonly SettingTab[]): Tab[] {
+	const matched: Tab[] = [];
+	const empty: Tab[] = [];
+	const matchedIds = new Set<SettingTab>(matchedTabOrder);
+	for (const id of matchedTabOrder) {
+		const meta = TAB_METADATA[id];
+		const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
+		const count = counts.get(id) ?? 0;
+		if (count > 0) {
+			matched.push({ id, label: `${icon} ${meta.label} (${count})`, short: `${icon} ${count}` });
+		}
+	}
+	for (const id of SETTING_TABS) {
+		if (matchedIds.has(id)) continue;
+		const meta = TAB_METADATA[id];
+		const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
+		empty.push({ id, label: `${icon} ${meta.label}`, short: icon, muted: true });
+	}
+	empty.push({
+		id: "plugins",
+		label: withIcon(theme.icon.package, "Plugins"),
+		short: theme.icon.package,
+		muted: true,
+	});
+	return matched.concat(empty);
+}
+
+function getCurrentValue(def: SettingDef): unknown {
+	if (def.type === "defaultModel") return settings.getPersistedModelRole(DEFAULT_MODEL_SLOT);
+	if (def.type === "advisorModel") return settings.getModelRole(ADVISOR_MODEL_SLOT);
+	return settings.get(def.path);
+}
+
+function modelPickerFallback(done: (value?: string) => void): Container {
+	class FallbackContainer extends Container {
+		handleInput(data: string): void {
+			if (matchesKey(data, "escape") || data === "\x1b") done();
+		}
+	}
+	const fallback = new FallbackContainer();
+	fallback.addChild(new Text(theme.fg("warning", MODEL_CATALOG_UNAVAILABLE), 0, 0));
+	fallback.addChild(new Spacer(1));
+	fallback.addChild(new Text(theme.fg("dim", "  Esc to go back"), 0, 0));
+	return fallback;
+}
+
+function formatTextInputEditValue(_path: SettingPath, value: unknown): string {
+	if (value === undefined || value === null) return "";
+	if (Array.isArray(value)) {
+		return value.every(item => typeof item === "string") ? value.join(", ") : JSON.stringify(value);
+	}
+	if (typeof value === "object") return JSON.stringify(value);
+	return String(value);
+}
+
+function setSettingValue(path: SettingPath, value: string): void {
+	const currentValue = settings.get(path);
+	const schemaType = getType(path);
+	if (isUnsetNumberPath(path) && value === UNSET_NUMBER_OPTION_VALUE) {
+		settings.unset(path);
+	} else if (schemaType === "record") {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(value || "{}");
+		} catch {
+			throw new Error(`Invalid record JSON for ${path}`);
+		}
+		if (!isRecord(parsed)) {
+			throw new Error(`Invalid record JSON for ${path}`);
+		}
+		if (path === "providers.maxInFlightRequests") {
+			parsed = validateProviderMaxInFlightRequests(parsed);
+		}
+		settings.set(path, parsed as never);
+	} else if (schemaType === "array") {
+		const trimmed = value.trim();
+		let arr: unknown[];
+		if (trimmed === "") {
+			arr = [];
+		} else if (trimmed.startsWith("[")) {
+			let json: unknown;
+			try {
+				json = JSON.parse(trimmed);
+			} catch {
+				throw new Error(`Invalid JSON array for ${path}`);
+			}
+			if (!Array.isArray(json)) throw new Error(`Expected a JSON array for ${path}`);
+			arr = json;
+		} else {
+			arr = trimmed
+				.split(",")
+				.map(entry => entry.trim())
+				.filter(entry => entry.length > 0);
+		}
+		settings.set(path, arr as never);
+	} else if (schemaType === "number") {
+		const next = parseNumberSetting(path, value);
+		if (next === UNSET_NUMBER_INPUT) settings.unset(path);
+		else settings.set(path, next as never);
+	} else if (typeof currentValue === "boolean") {
+		settings.set(path, (value === "true") as never);
+	} else {
+		settings.set(path, value as never);
 	}
 }

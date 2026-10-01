@@ -287,16 +287,9 @@ export class QueryCache {
 			this.#insertTimes.delete(key);
 			this.#insertTimes.set(key, insertTime);
 		}
-		this.#touchMap(this.#tier1, key);
-		this.#touchMap(this.#tier23, key);
-		this.#touchMap(this.#tier4, key);
-	}
-
-	#touchMap<V>(map: Map<string, V>, key: string): void {
-		const value = map.get(key);
-		if (value === undefined && !map.has(key)) return;
-		map.delete(key);
-		map.set(key, value as V);
+		touchMap(this.#tier1, key);
+		touchMap(this.#tier23, key);
+		touchMap(this.#tier4, key);
 	}
 
 	#isExpired(key: string, now: number): boolean {
@@ -361,4 +354,11 @@ export class QueryCache {
 			// Match Python's best-effort persistence behavior.
 		}
 	}
+}
+
+function touchMap<V>(map: Map<string, V>, key: string): void {
+	const value = map.get(key);
+	if (value === undefined && !map.has(key)) return;
+	map.delete(key);
+	map.set(key, value as V);
 }

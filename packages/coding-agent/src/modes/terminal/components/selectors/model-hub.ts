@@ -721,13 +721,6 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	#formatDiscoveryAge(fetchedAt: number | undefined): string | undefined {
-		if (!fetchedAt) return undefined;
-		const ageMs = Math.max(0, Date.now() - fetchedAt);
-		if (ageMs < 60_000) return "less than a minute ago";
-		return `${Math.round(ageMs / 60_000)}m ago`;
-	}
-
 	#emptyStateMessage(): string | undefined {
 		if (this.#configError) return `  ${this.#configError}`;
 		const entry = this.#activeEntry();
@@ -739,7 +732,7 @@ export class ModelHubComponent implements Component {
 		const providerId = entry.providerId ?? "";
 		const state = this.#registry.getProviderDiscoveryState(providerId);
 		if (!state) return undefined;
-		const age = this.#formatDiscoveryAge(state.fetchedAt);
+		const age = formatDiscoveryAge(state.fetchedAt);
 		switch (state.status) {
 			case "cached":
 				return age
@@ -789,7 +782,7 @@ export class ModelHubComponent implements Component {
 		const current = this.#roles[role];
 		let level: ConfiguredThinkingLevel = ThinkingLevel.Inherit;
 		if (current) {
-			const supported = this.#thinkingOptionsFor(item.model);
+			const supported = thinkingOptionsFor(item.model);
 			level = supported.includes(current.thinkingLevel) ? current.thinkingLevel : ThinkingLevel.Inherit;
 		}
 		this.#callbacks.onAssign(item.model, role, level, item.selector);
@@ -801,10 +794,6 @@ export class ModelHubComponent implements Component {
 		if (!this.#roles[role]) return;
 		this.#callbacks.onUnassign(role);
 		this.#refreshAfterMutation();
-	}
-
-	#thinkingOptionsFor(model: Model): ConfiguredThinkingLevel[] {
-		return [ThinkingLevel.Inherit, ...configuredThinkingLevelsForModel(model)];
 	}
 
 	#openRoleStrip(item: ModelBrowserItem): void {
@@ -840,7 +829,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	#openThinkingStrip(item: ModelBrowserItem, role: string, returnToRoles: boolean): void {
-		const options = this.#thinkingOptionsFor(item.model);
+		const options = thinkingOptionsFor(item.model);
 		const current = this.#roles[role]?.thinkingLevel ?? ThinkingLevel.Inherit;
 		const chips: StripChip[] = options.map(level => {
 			const label = getConfiguredThinkingLevelMetadata(level).label;
@@ -1645,12 +1634,6 @@ export class ModelHubComponent implements Component {
 		return truncateToWidth(theme.fg("muted", ` ${text}`), width);
 	}
 
-	/** Clamp a roles row to `width`; the bg band is reserved for mouse hover. */
-	#finishRolesRow(line: string, width: number, hoverStrength: number): string {
-		if (hoverStrength > 0) return hoverBandAt(line, width, hoverStrength);
-		return truncateToWidth(line, width);
-	}
-
 	/** Move the sidebar band, telling the fade so the row left behind travels out. */
 	#setSidebarHover(index: number | null): void {
 		this.#sidebarHover = index;
@@ -1732,7 +1715,7 @@ export class ModelHubComponent implements Component {
 			if (rowDef.kind === "newRole" || rowDef.kind === "newFallback") {
 				const label = rowDef.kind === "newRole" ? "+ New role…" : "+ New fallback…";
 				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", label)}`;
-				line = this.#finishRolesRow(line, width, hoverStrength);
+				line = finishRolesRow(line, width, hoverStrength);
 				rowLines.push(line);
 				continue;
 			}
@@ -1743,7 +1726,7 @@ export class ModelHubComponent implements Component {
 				const tail = key.slice(slash + 1);
 				const keyStyled = theme.fg("dim", key.slice(0, slash + 1)) + (selected ? theme.fg("accent", tail) : tail);
 				let line = ` ${cursor} ${theme.fg("dim", theme.status.shadowed)} ${keyStyled}`;
-				line = this.#finishRolesRow(line, width, hoverStrength);
+				line = finishRolesRow(line, width, hoverStrength);
 				rowLines.push(line);
 				continue;
 			}
@@ -1752,7 +1735,7 @@ export class ModelHubComponent implements Component {
 				const branch = theme.fg("dim", `${"".padEnd(tagWidth + 3)}↳`);
 				const selector = selected ? theme.fg("accent", rowDef.selector) : theme.fg("muted", rowDef.selector);
 				let line = ` ${cursor} ${branch} ${selector}`;
-				line = this.#finishRolesRow(line, width, hoverStrength);
+				line = finishRolesRow(line, width, hoverStrength);
 				rowLines.push(line);
 				continue;
 			}
@@ -1794,7 +1777,7 @@ export class ModelHubComponent implements Component {
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
 				line = `${line}${" ".repeat(width - lineWidth - rightWidth - 1)}${right}`;
 			}
-			line = this.#finishRolesRow(line, width, hoverStrength);
+			line = finishRolesRow(line, width, hoverStrength);
 			rowLines.push(line);
 		}
 
@@ -2133,4 +2116,21 @@ export class ModelHubComponent implements Component {
 		this.#stripRow = this.#contentRowStart + splitRows;
 		return shell.lines;
 	}
+}
+
+function formatDiscoveryAge(fetchedAt: number | undefined): string | undefined {
+	if (!fetchedAt) return undefined;
+	const ageMs = Math.max(0, Date.now() - fetchedAt);
+	if (ageMs < 60_000) return "less than a minute ago";
+	return `${Math.round(ageMs / 60_000)}m ago`;
+}
+
+function thinkingOptionsFor(model: Model): ConfiguredThinkingLevel[] {
+	return [ThinkingLevel.Inherit, ...configuredThinkingLevelsForModel(model)];
+}
+
+/** Clamp a roles row to `width`; the bg band is reserved for mouse hover. */
+function finishRolesRow(line: string, width: number, hoverStrength: number): string {
+	if (hoverStrength > 0) return hoverBandAt(line, width, hoverStrength);
+	return truncateToWidth(line, width);
 }

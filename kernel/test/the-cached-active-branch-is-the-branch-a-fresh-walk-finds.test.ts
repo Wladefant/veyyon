@@ -105,7 +105,6 @@ const DRIVEN_METHODS = ["clear", "insert", "rebuild", "setLeaf"];
 
 /** Methods that read the index and change nothing a later read observes. */
 const READ_METHODS = [
-	"childrenOf",
 	"entriesById",
 	"get",
 	"has",

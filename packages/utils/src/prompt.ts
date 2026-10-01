@@ -182,6 +182,10 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 	const lines = content.split("\n");
 	const result: string[] = new Array(lines.length);
 	let n = 0; // logical length of `result` (pops are n--)
+	// True while `result[0..n)` is `lines[0..n)` unchanged: no line rewritten, skipped or moved.
+	// When it holds at the end, the output is the input cut after its last kept line, and a cut
+	// shares the input's buffer where a join would build a second copy of the text.
+	let unchanged = true;
 	let inCodeBlock = false;
 
 	const htmlCommentState: HtmlCommentState = { inHtmlComment: false };
@@ -207,11 +211,13 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 
 		if ((first === 96 /* ` */ || first === 126) /* ~ */ && (line.startsWith("```", s) || line.startsWith("~~~", s))) {
 			inCodeBlock = !inCodeBlock;
+			unchanged &&= n === i && line === raw;
 			result[n++] = line;
 			continue;
 		}
 
 		if (inCodeBlock) {
+			unchanged &&= n === i && line === raw;
 			result[n++] = line;
 			continue;
 		}
@@ -273,10 +279,19 @@ export function format(content: string, options: PromptFormatOptions = {}): stri
 			while (n > 0 && result[n - 1].length === 0) n--;
 		}
 
+		unchanged &&= n === i && line === raw;
 		result[n++] = line;
 	}
 
 	while (n > 0 && result[n - 1].length === 0) n--;
+	// Only blank lines after the last kept one were dropped, so the cut holds nothing more than
+	// that trailing whitespace.
+	if (unchanged) {
+		if (n === lines.length) return content;
+		let end = n - 1;
+		for (let k = 0; k < n; k++) end += lines[k].length;
+		return content.slice(0, Math.max(end, 0));
+	}
 	result.length = n;
 
 	return result.join("\n");

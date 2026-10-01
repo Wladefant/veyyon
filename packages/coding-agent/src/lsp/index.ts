@@ -2000,7 +2000,7 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 		const [serverName, serverConfig] = serverInfo;
 		try {
 			const query = await this.#openFileQuery(params, serverName, serverConfig, resolvedFile, signal);
-			return await this.#runFileAction(params, query, serverName);
+			return await runFileAction(params, query, serverName);
 		} catch (err) {
 			if (err instanceof ToolError) throw err;
 			if (err instanceof ToolAbortError || signal.aborted) {
@@ -2057,58 +2057,6 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 			await waitForProjectLoaded(client, signal);
 		}
 		return { client, serverConfig, file, uri: fileToUri(file), position, cwd: this.session.cwd, signal };
-	}
-
-	/** Runs a file-bound action against its opened file and reports what the server answered. */
-	async #runFileAction(
-		params: LspParams,
-		query: FileQuery,
-		serverName: string,
-	): Promise<AgentToolResult<LspToolDetails>> {
-		const { action } = params;
-		let report: ActionReport;
-		switch (action) {
-			case "definition":
-			case "type_definition":
-			case "implementation":
-				report = await locateAt(query, LOCATION_LOOKUPS[action]);
-				break;
-			case "incoming_calls":
-			case "outgoing_calls":
-				report = await callsAt(query, CALL_DIRECTIONS[action]);
-				break;
-			case "references":
-				report = await findReferences(query);
-				break;
-			case "hover":
-				report = await hoverAt(query);
-				break;
-			case "code_actions":
-				report = await codeActionsAt(query, params.query, params.apply);
-				break;
-			case "symbols":
-				report = await documentSymbols(query);
-				break;
-			case "rename":
-				if (!params.new_name) {
-					return {
-						content: [{ type: "text", text: "Error: new_name parameter required for rename" }],
-						details: { action, serverName, success: false },
-					};
-				}
-				report = await renameAt(query, params.new_name, params.apply);
-				break;
-			case "reload":
-				report = { output: await reloadServer(query.client, serverName, query.signal) };
-				break;
-			default:
-				report = { output: `Unknown action: ${action}` };
-		}
-		return {
-			content: [{ type: "text", text: report.output }],
-			details: { serverName, action, success: true, request: params },
-			...(report.useless ? { useless: true } : {}),
-		};
 	}
 
 	/** `status`: the servers configured for this project and which of them have started. */
@@ -2874,4 +2822,56 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 			details: { action, serverName: servers.map(([name]) => name).join(", "), success: true, request: params },
 		};
 	}
+}
+
+/** Runs a file-bound action against its opened file and reports what the server answered. */
+async function runFileAction(
+	params: LspParams,
+	query: FileQuery,
+	serverName: string,
+): Promise<AgentToolResult<LspToolDetails>> {
+	const { action } = params;
+	let report: ActionReport;
+	switch (action) {
+		case "definition":
+		case "type_definition":
+		case "implementation":
+			report = await locateAt(query, LOCATION_LOOKUPS[action]);
+			break;
+		case "incoming_calls":
+		case "outgoing_calls":
+			report = await callsAt(query, CALL_DIRECTIONS[action]);
+			break;
+		case "references":
+			report = await findReferences(query);
+			break;
+		case "hover":
+			report = await hoverAt(query);
+			break;
+		case "code_actions":
+			report = await codeActionsAt(query, params.query, params.apply);
+			break;
+		case "symbols":
+			report = await documentSymbols(query);
+			break;
+		case "rename":
+			if (!params.new_name) {
+				return {
+					content: [{ type: "text", text: "Error: new_name parameter required for rename" }],
+					details: { action, serverName, success: false },
+				};
+			}
+			report = await renameAt(query, params.new_name, params.apply);
+			break;
+		case "reload":
+			report = { output: await reloadServer(query.client, serverName, query.signal) };
+			break;
+		default:
+			report = { output: `Unknown action: ${action}` };
+	}
+	return {
+		content: [{ type: "text", text: report.output }],
+		details: { serverName, action, success: true, request: params },
+		...(report.useless ? { useless: true } : {}),
+	};
 }

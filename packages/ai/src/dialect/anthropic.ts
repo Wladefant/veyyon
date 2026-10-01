@@ -146,12 +146,12 @@ export class AnthropicInbandScanner implements InbandScanner {
 	#consumeOutside(final: boolean, events: InbandScanEvent[]): boolean {
 		const tagStart = this.#buffer.indexOf("<");
 		if (tagStart === -1) {
-			this.#emitText(this.#buffer, events);
+			emitText(this.#buffer, events);
 			this.#buffer = "";
 			return false;
 		}
 		if (tagStart > 0) {
-			this.#emitText(this.#buffer.slice(0, tagStart), events);
+			emitText(this.#buffer.slice(0, tagStart), events);
 			this.#buffer = this.#buffer.slice(tagStart);
 			return true;
 		}
@@ -159,7 +159,7 @@ export class AnthropicInbandScanner implements InbandScanner {
 		const tag = this.#peekTag(final, this.#relevantPrefixes());
 		if (tag === "partial") return false;
 		if (!tag) {
-			this.#emitText(this.#buffer[0]!, events);
+			emitText(this.#buffer[0]!, events);
 			this.#buffer = this.#buffer.slice(1);
 			return true;
 		}
@@ -184,7 +184,7 @@ export class AnthropicInbandScanner implements InbandScanner {
 			return true;
 		}
 
-		this.#emitText(this.#buffer[0]!, events);
+		emitText(this.#buffer[0]!, events);
 		this.#buffer = this.#buffer.slice(1);
 		return true;
 	}
@@ -485,10 +485,10 @@ export class AnthropicInbandScanner implements InbandScanner {
 	#relevantPrefixes(): readonly string[] {
 		return this.#parseThinking ? this.#allTagPrefixes : this.#baseTagPrefixes;
 	}
+}
 
-	#emitText(text: string, events: InbandScanEvent[]): void {
-		if (text.length > 0) events.push({ type: "text", text });
-	}
+function emitText(text: string, events: InbandScanEvent[]): void {
+	if (text.length > 0) events.push({ type: "text", text });
 }
 
 const ALL_TAG_PREFIXES = [...BASE_TAG_PREFIXES, ...ANTHROPIC_THINKING_TAG_PREFIXES] as const;

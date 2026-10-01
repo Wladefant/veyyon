@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildModel } from "./build";
+import { type CatalogSpan, indexCatalogModelSpans, indexCatalogSpans } from "./catalog-spans";
 import type { ModelReferenceCandidate } from "./identity/reference";
 import modelsJsonAsset from "./models.json" with { type: "file" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
@@ -31,7 +32,9 @@ export type GeneratedProvider = Extract<keyof BundledModelsJson, string>;
 // `/$bunfs/` in a compiled binary, and relative to the bundle in `dist/cli.js`.
 // The catalog is read when a consumer needs it and released after, where a
 // text import holds the 2.2 MB document on the heap for the life of the process.
-// The json import is typed as the literal document; one cast pins it to the path.
+// A read of one provider parses that provider's span of the file, not the
+// document. The json import is typed as the literal document; one cast pins it
+// to the path.
 const modelsPath = path.resolve(import.meta.dirname, modelsJsonAsset as unknown as string);
 
 /**
@@ -45,14 +48,21 @@ const ENRICHED_REGISTRY_FORMAT_VERSION = 5;
 let fullRegistry: Map<string, Map<string, Model<Api>>> | undefined;
 const lazyProviderModels: Map<string, Map<string, Model<Api>>> = new Map();
 let parsedModels: BundledModelsJson | undefined;
+/**
+ * The catalog's bytes and where each provider's object sits in them (`null` when the file is not in
+ * the generator's layout), held until the current task ends: a burst of provider reads in one task
+ * reads the file once, and nothing holds the bytes past it.
+ */
+let catalogRead: { bytes: Buffer; spans: ReadonlyMap<string, CatalogSpan> | null } | undefined;
 let bundledProviderNames: readonly GeneratedProvider[] | undefined;
+let bundledModelKeys: BundledModelKeys | undefined;
 let releaseTimer: NodeJS.Timeout | undefined;
 const releaseListeners: Array<() => void> = [];
 
 /**
- * How long the parsed catalog stays in memory past its last read. A launch or a registry build reads
- * it in one burst; past the burst it is about 3 MiB of objects that only a provider not yet built
- * reads again, and `models.json` holds the same bytes for that read.
+ * How long the parsed catalog stays in memory past its last read. A whole-catalog reader parses it
+ * in one burst; past the burst it is about 4.5 MiB of objects that only another whole-catalog
+ * reader asks for again, and `models.json` holds the same bytes for that read.
  */
 const PARSED_CATALOG_HOLD_MS = 30_000;
 let catalogDigest: string | undefined;
@@ -106,14 +116,34 @@ function releaseParsedModels(): void {
 
 /** The parsed catalog, held for {@link PARSED_CATALOG_HOLD_MS} past this read. */
 function getParsedModels(): BundledModelsJson {
-	if (!parsedModels) {
-		parsedModels = JSON.parse(readFileSync(modelsPath, "utf8")) as BundledModelsJson;
-		bundledProviderNames ??= Object.keys(parsedModels);
-	}
+	parsedModels ??= JSON.parse((catalogRead?.bytes ?? readFileSync(modelsPath)).toString("utf8")) as BundledModelsJson;
 	clearTimeout(releaseTimer);
 	releaseTimer = setTimeout(releaseParsedModels, PARSED_CATALOG_HOLD_MS);
 	releaseTimer.unref();
 	return parsedModels;
+}
+
+function readCatalog(): { bytes: Buffer; spans: ReadonlyMap<string, CatalogSpan> | null } {
+	if (catalogRead === undefined) {
+		const bytes = readFileSync(modelsPath);
+		catalogRead = { bytes, spans: indexCatalogSpans(bytes) };
+		queueMicrotask(releaseCatalogRead);
+	}
+	return catalogRead;
+}
+
+function releaseCatalogRead(): void {
+	catalogRead = undefined;
+}
+
+/** One provider's specs: from the held parse when there is one, else from a parse of that provider's span. */
+function readProviderSpecs(provider: string): BundledProviderModels | undefined {
+	if (parsedModels !== undefined) return getParsedModels()[provider];
+	const { bytes, spans } = readCatalog();
+	if (spans === null) return getParsedModels()[provider];
+	const span = spans.get(provider);
+	if (span === undefined) return undefined;
+	return JSON.parse(bytes.toString("utf8", span.start, span.end)) as BundledProviderModels;
 }
 
 function restoreFullRegistryFromSnapshotIfAvailable(): Map<string, Map<string, Model<Api>>> | null {
@@ -161,8 +191,7 @@ function getProviderModelMap(provider: GeneratedProvider): Map<string, Model<Api
 	if (providerModels !== undefined) {
 		return providerModels;
 	}
-	const parsed = getParsedModels();
-	const providerSpecs = parsed[provider];
+	const providerSpecs = readProviderSpecs(provider);
 	if (!providerSpecs) return undefined;
 	providerModels = new Map<string, Model<Api>>();
 	for (const [id, model] of Object.entries(providerSpecs)) {
@@ -184,8 +213,12 @@ export function getBundledProviders(): GeneratedProvider[] {
 			return Array.from(full.keys()) as GeneratedProvider[];
 		}
 	}
-	// The provider list outlives the parsed catalog, so listing providers never parses it again.
-	return (bundledProviderNames ?? Object.keys(getParsedModels())).slice();
+	// The provider list outlives the parsed catalog, so listing providers never reads the catalog again.
+	if (bundledProviderNames === undefined) {
+		const spans = parsedModels === undefined ? readCatalog().spans : null;
+		bundledProviderNames = spans === null ? Object.keys(getParsedModels()) : Array.from(spans.keys());
+	}
+	return bundledProviderNames.slice();
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
@@ -215,6 +248,52 @@ export function* iterateBundledModelMetadata(): IterableIterator<ModelReferenceC
 			yield spec;
 		}
 	}
+}
+
+/**
+ * The bundled models' ids with a reader for each one's reference record, for a lookup that reads the
+ * records its keys reach rather than every spec.
+ */
+export interface BundledModelKeys {
+	/** Every bundled model id, in the order {@link iterateBundledModelMetadata} yields the records. */
+	readonly ids: readonly string[];
+	/** The record {@link iterateBundledModelMetadata} yields for `ids[ordinal]`, read on each call. */
+	readonly candidateAt: (ordinal: number) => ModelReferenceCandidate;
+}
+
+/**
+ * The bundled model ids and their record reader, held until the current task ends, like the catalog
+ * bytes. With no parsed catalog held and no snapshot store, the ids come from a scan of the catalog
+ * bytes and a record is a parse of that model's span, so a lookup parses the models it reaches and
+ * nothing else. Otherwise both come from the records {@link iterateBundledModelMetadata} yields.
+ */
+export function readBundledModelKeys(): BundledModelKeys {
+	if (bundledModelKeys === undefined) {
+		bundledModelKeys = scanBundledModelKeys();
+		queueMicrotask(releaseBundledModelKeys);
+	}
+	return bundledModelKeys;
+}
+
+function releaseBundledModelKeys(): void {
+	bundledModelKeys = undefined;
+}
+
+function scanBundledModelKeys(): BundledModelKeys {
+	if (snapshotStore === undefined && parsedModels === undefined) {
+		const { bytes, spans } = readCatalog();
+		const models = spans === null ? null : indexCatalogModelSpans(bytes, spans);
+		if (models !== null) {
+			const { ids, starts, ends } = models;
+			return {
+				ids,
+				candidateAt: ordinal =>
+					JSON.parse(bytes.toString("utf8", starts[ordinal], ends[ordinal])) as ModelSpec<Api>,
+			};
+		}
+	}
+	const records = Array.from(iterateBundledModelMetadata());
+	return { ids: records.map(record => record.id), candidateAt: ordinal => records[ordinal] };
 }
 
 /**

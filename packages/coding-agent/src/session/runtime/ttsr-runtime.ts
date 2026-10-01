@@ -162,7 +162,7 @@ export class TtsrRuntime {
 		} else if (assistantEvent.type === "thinking_delta") {
 			matchContext = { source: "thinking" };
 		} else if (assistantEvent.type === "toolcall_delta") {
-			streamingToolCall = this.#getStreamingToolCallBlock(message, assistantEvent.contentIndex);
+			streamingToolCall = getStreamingToolCallBlock(message, assistantEvent.contentIndex);
 			matchContext = this.#getToolMatchContext(streamingToolCall, assistantEvent.contentIndex);
 		}
 		if (!matchContext || !("delta" in assistantEvent)) return false;
@@ -182,7 +182,7 @@ export class TtsrRuntime {
 
 	/** Record delivery of a persisted `ttsr-injection` custom message. */
 	onInjectionPersisted(details: unknown): void {
-		this.#markInjected(this.#extractRuleNames(details));
+		this.#markInjected(extractRuleNames(details));
 	}
 
 	/**
@@ -276,12 +276,6 @@ export class TtsrRuntime {
 		this.#resumeResolve = resolve;
 	}
 
-	#formatAbortReason(rules: Rule[]): string {
-		const label = rules.length === 1 ? "rule" : "rules";
-		const ruleNames = rules.map(rule => rule.name).join(", ");
-		return `TTSR matched ${label}: ${ruleNames}`;
-	}
-
 	/**
 	 * Resolve a rule body's template against the live session, for either delivery path.
 	 *
@@ -369,16 +363,11 @@ export class TtsrRuntime {
 	 */
 	#displayRulePath(rulePath: string): string {
 		const cwd = this.#host.sessionStore.getCwd();
-		const cwdRel = relativePathWithinRoot(cwd, rulePath) ?? this.#displayPathWithinRoot(cwd, rulePath);
+		const cwdRel = relativePathWithinRoot(cwd, rulePath) ?? displayPathWithinRoot(cwd, rulePath);
 		if (cwdRel) return cwdRel;
 		const homeRel = relativePathWithinRoot(os.homedir(), rulePath);
 		if (homeRel) return `~/${homeRel}`;
 		return rulePath;
-	}
-
-	#displayPathWithinRoot(root: string, candidate: string): string | null {
-		const relative = path.relative(path.resolve(root), path.resolve(candidate));
-		return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : null;
 	}
 
 	#addPendingInjections(rules: Rule[]): void {
@@ -388,15 +377,6 @@ export class TtsrRuntime {
 			this.#pendingInjections.push(rule);
 			seen.add(rule.name);
 		}
-	}
-
-	/** Tool-call id whose argument deltas triggered a TTSR match, when known. */
-	#extractToolCallId(matchContext: TtsrMatchContext): string | undefined {
-		if (matchContext.source !== "tool") return undefined;
-		const key = matchContext.streamKey;
-		if (typeof key !== "string" || !key.startsWith("toolcall:")) return undefined;
-		const id = key.slice("toolcall:".length);
-		return id.length > 0 ? id : undefined;
 	}
 
 	#addPerToolInjections(toolCallId: string, rules: Rule[]): void {
@@ -455,13 +435,6 @@ export class TtsrRuntime {
 		this.#perToolInjections.clear();
 		this.#pendingToolReminders = [];
 		this.#manager?.releaseInjectedByNames([...undelivered]);
-	}
-
-	#extractRuleNames(details: unknown): string[] {
-		if (!isRecord(details)) return [];
-		const rules = details.rules;
-		if (!Array.isArray(rules)) return [];
-		return rules.filter((ruleName): ruleName is string => typeof ruleName === "string");
 	}
 
 	#markInjected(ruleNames: string[]): void {
@@ -551,25 +524,6 @@ export class TtsrRuntime {
 				this.resolveResume();
 			},
 		});
-	}
-
-	/** Extract the tool-call block a `toolcall_delta` event refers to, if present. */
-	#getStreamingToolCallBlock(message: AgentMessage, contentIndex: number): ToolCall | undefined {
-		if (message.role !== "assistant") {
-			return undefined;
-		}
-
-		const content = message.content;
-		if (!Array.isArray(content) || contentIndex < 0 || contentIndex >= content.length) {
-			return undefined;
-		}
-
-		const block = content[contentIndex];
-		if (!block || typeof block !== "object" || block.type !== "toolCall") {
-			return undefined;
-		}
-
-		return block;
 	}
 
 	/** Build TTSR match context for tool call argument deltas. */
@@ -720,7 +674,7 @@ export class TtsrRuntime {
 		// Decide first: a non-interrupting tool-source match attaches to the
 		// specific tool call's result instead of driving a loop-wide follow-up.
 		const shouldInterrupt = this.#shouldInterruptForMatch(matches, matchContext);
-		const matchedToolId = this.#extractToolCallId(matchContext);
+		const matchedToolId = extractToolCallId(matchContext);
 		const perToolId = shouldInterrupt ? undefined : matchedToolId;
 		if (perToolId) {
 			this.#addPerToolInjections(perToolId, matches);
@@ -737,7 +691,7 @@ export class TtsrRuntime {
 		// Abort the stream immediately — do not gate on extension callbacks
 		this.#abortPending = true;
 		this.#ensureResumePromise();
-		const abortReason = this.#formatAbortReason(matches);
+		const abortReason = formatAbortReason(matches);
 		this.#host.agent.abort(
 			matchedToolId
 				? createToolScopedAbortReason(
@@ -863,4 +817,50 @@ export class TtsrRuntime {
 
 		return Array.from(candidates);
 	}
+}
+
+function formatAbortReason(rules: Rule[]): string {
+	const label = rules.length === 1 ? "rule" : "rules";
+	const ruleNames = rules.map(rule => rule.name).join(", ");
+	return `TTSR matched ${label}: ${ruleNames}`;
+}
+
+function displayPathWithinRoot(root: string, candidate: string): string | null {
+	const relative = path.relative(path.resolve(root), path.resolve(candidate));
+	return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : null;
+}
+
+/** Tool-call id whose argument deltas triggered a TTSR match, when known. */
+function extractToolCallId(matchContext: TtsrMatchContext): string | undefined {
+	if (matchContext.source !== "tool") return undefined;
+	const key = matchContext.streamKey;
+	if (typeof key !== "string" || !key.startsWith("toolcall:")) return undefined;
+	const id = key.slice("toolcall:".length);
+	return id.length > 0 ? id : undefined;
+}
+
+function extractRuleNames(details: unknown): string[] {
+	if (!isRecord(details)) return [];
+	const rules = details.rules;
+	if (!Array.isArray(rules)) return [];
+	return rules.filter((ruleName): ruleName is string => typeof ruleName === "string");
+}
+
+/** Extract the tool-call block a `toolcall_delta` event refers to, if present. */
+function getStreamingToolCallBlock(message: AgentMessage, contentIndex: number): ToolCall | undefined {
+	if (message.role !== "assistant") {
+		return undefined;
+	}
+
+	const content = message.content;
+	if (!Array.isArray(content) || contentIndex < 0 || contentIndex >= content.length) {
+		return undefined;
+	}
+
+	const block = content[contentIndex];
+	if (!block || typeof block !== "object" || block.type !== "toolCall") {
+		return undefined;
+	}
+
+	return block;
 }

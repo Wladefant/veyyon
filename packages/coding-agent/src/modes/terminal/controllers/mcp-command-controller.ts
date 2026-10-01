@@ -392,7 +392,7 @@ export class MCPCommandController {
 									stripSameOriginResource: oauthResourceIsFallback,
 								},
 							);
-							finalConfig = this.#persistOAuthResult(finalConfig, oauthResult, {
+							finalConfig = persistOAuthResult(finalConfig, oauthResult, {
 								tokenUrl: oauth.tokenUrl,
 								resource: oauthResource,
 								stripSameOriginResource: oauthResourceIsFallback,
@@ -693,45 +693,6 @@ export class MCPCommandController {
 	}
 
 	/**
-	 * Fold a completed OAuth flow back into a server config. Owns the
-	 * persistence policy in one place: the auth block records the credential
-	 * pointer plus refresh material, the oauth block echoes the client id for
-	 * pre-auth reuse, and only a user-supplied client secret is ever written —
-	 * DCR-issued secrets stay embedded in the stored credential so they cannot
-	 * leak into (possibly shared/committed) config files.
-	 */
-	#persistOAuthResult(
-		config: MCPServerConfig,
-		result: OAuthFlowResult,
-		opts: {
-			tokenUrl: string;
-			resource?: string;
-			stripSameOriginResource?: boolean;
-			clientId?: string;
-			userClientSecret?: string;
-		},
-	): MCPServerConfig {
-		const clientId = result.clientId ?? opts.clientId ?? config.oauth?.clientId;
-		const resource =
-			result.resource ?? (opts.stripSameOriginResource ? undefined : opts.resource) ?? config.auth?.resource;
-		return {
-			...config,
-			auth: {
-				type: "oauth",
-				credentialId: result.credentialId,
-				tokenUrl: opts.tokenUrl,
-				clientId,
-				clientSecret: opts.userClientSecret,
-				resource,
-			},
-			oauth: {
-				...config.oauth,
-				clientId,
-			},
-		};
-	}
-
-	/**
 	 * Test connection to an MCP server.
 	 * Throws an error if connection fails (used for auto-detection).
 	 */
@@ -752,32 +713,9 @@ export class MCPCommandController {
 	}
 
 	/**
-	 * Find `name` in the one MCP config file `/mcp` owns: the active profile's
-	 * `<agentDir>/mcp.json`.
-	 *
-	 * Three working-tree candidates used to sit behind that file —
-	 * `<cwd>/.veyyon/mcp.json`, `<cwd>/mcp.json` and `<cwd>/.mcp.json`, matching
-	 * the since-deleted project-scope discovery providers. Nothing loads them at
-	 * boot any more, but this function still resolved them, so `/mcp test` and
-	 * `/mcp reauth` would have CONNECTED to a server a repository declared and
-	 * `/mcp enable` would have written `enabled: true` into a repository file.
-	 * Operator-initiated is not consent: typing `/mcp test` is not agreement to
-	 * reach a server the operator never configured.
-	 */
-	async #findConfiguredServer(
-		name: string,
-	): Promise<{ filePath: string; scope: "user"; config: MCPServerConfig } | null> {
-		const userPath = getMCPConfigPath("user", getProjectDir());
-		const userConfig = await readMCPConfigFile(userPath);
-		const config = userConfig.mcpServers?.[name];
-		if (!config) return null;
-		return { filePath: userPath, scope: "user", config };
-	}
-
-	/**
 	 * Resolve a server for an auth/test operation.
 	 *
-	 * Unlike {@link #findConfiguredServer} (which only reads writable Veyyon config
+	 * Unlike {@link findConfiguredServer} (which only reads writable Veyyon config
 	 * files), this also recognizes runtime-discovered servers that `/mcp list`
 	 * surfaces but that live in no writable config — e.g. servers from a Claude
 	 * Code marketplace plugin (`cloudflare:cloudflare-api`), `.cursor/mcp.json`,
@@ -796,7 +734,7 @@ export class MCPCommandController {
 		config: MCPServerConfig;
 		discovered: boolean;
 	} | null> {
-		const found = await this.#findConfiguredServer(name);
+		const found = await findConfiguredServer(name);
 		if (found) return { ...found, discovered: false };
 
 		const config = this.ctx.mcpManager?.getServerConfig(name);
@@ -809,12 +747,6 @@ export class MCPCommandController {
 			config,
 			discovered: true,
 		};
-	}
-
-	#stripOAuthAuth(config: MCPServerConfig): MCPServerConfig {
-		const next = { ...config } as MCPServerConfig & { auth?: MCPAuthConfig };
-		delete next.auth;
-		return next;
 	}
 
 	async #resolveOAuthEndpointsFromServer(config: MCPServerConfig): Promise<OAuthEndpoints> {
@@ -837,7 +769,7 @@ export class MCPCommandController {
 		let connectionSucceeded = false;
 		let connectionError: Error | undefined;
 		try {
-			await this.#handleTestConnection(this.#stripOAuthAuth(config), { oauth: false });
+			await this.#handleTestConnection(stripOAuthAuth(config), { oauth: false });
 			connectionSucceeded = true;
 		} catch (error) {
 			connectionError = error as Error;
@@ -1277,7 +1209,7 @@ export class MCPCommandController {
 		}
 
 		try {
-			const found = await this.#findConfiguredServer(name);
+			const found = await findConfiguredServer(name);
 			if (!found) {
 				// Check if this is a discovered server from a third-party config
 				const userConfigPath = getMCPConfigPath("user", getProjectDir());
@@ -1422,7 +1354,7 @@ export class MCPCommandController {
 				return;
 			}
 
-			const updated = this.#stripOAuthAuth(found.config);
+			const updated = stripOAuthAuth(found.config);
 			await updateMCPServer(found.filePath, name, updated);
 			await this.#reloadMCP();
 
@@ -1454,7 +1386,7 @@ export class MCPCommandController {
 
 			const currentAuth = (found.config as MCPServerConfig & { auth?: MCPAuthConfig }).auth;
 			const authStorage = this.ctx.session.modelRegistry.authStorage;
-			const baseConfig = this.#stripOAuthAuth(found.config);
+			const baseConfig = stripOAuthAuth(found.config);
 			// The connect guard is the enforcement point and names the field and the variable in the
 			// refusal the operator sees, so reporting here would say it twice.
 			const refusedAtConnect = unresolvedRefusedDownstream(
@@ -1519,7 +1451,7 @@ export class MCPCommandController {
 			// skip the write-back so a committed project mcp.json stays clean.
 			const urlKeyedId = serverUrl ? mcpOAuthCredentialId(serverUrl) : undefined;
 			if (currentAuth || oauthResult.credentialId !== urlKeyedId) {
-				const updated = this.#persistOAuthResult(baseConfig, oauthResult, {
+				const updated = persistOAuthResult(baseConfig, oauthResult, {
 					tokenUrl: oauth.tokenUrl,
 					clientId: oauth.clientId,
 					userClientSecret,
@@ -1851,28 +1783,6 @@ export class MCPCommandController {
 		return true;
 	}
 
-	async #waitForSmitheryCliApiKey(sessionId: string, signal: AbortSignal): Promise<string> {
-		const pollIntervalMs = 2_000;
-		const timeoutMs = 300_000;
-		const startedAt = Date.now();
-
-		while (!signal.aborted) {
-			if (Date.now() - startedAt >= timeoutMs) {
-				throw new Error("Smithery authorization timed out after 5 minutes.");
-			}
-			const response = await pollSmitheryCliAuthSession(sessionId, signal);
-			if (response.status === "success" && response.apiKey) {
-				return response.apiKey;
-			}
-			if (response.status === "error") {
-				throw new Error(response.message ?? "Smithery authorization failed.");
-			}
-			await Bun.sleep(pollIntervalMs);
-		}
-
-		throw new Error("Smithery authorization cancelled.");
-	}
-
 	async #handleSmitheryBrowserLogin(): Promise<boolean> {
 		const session = await createSmitheryCliAuthSession();
 		const fallbackLoginUrl = getSmitheryLoginUrl();
@@ -1893,7 +1803,7 @@ export class MCPCommandController {
 			// URL is already shown above.
 		}
 
-		const apiKey = await this.#waitForSmitheryCliApiKey(session.sessionId, new AbortController().signal);
+		const apiKey = await waitForSmitheryCliApiKey(session.sessionId, new AbortController().signal);
 		await this.#validateSmitheryApiKey(apiKey);
 		await saveSmitheryApiKey(apiKey);
 		this.ctx.showStatus("Smithery API key saved.");
@@ -1917,17 +1827,6 @@ export class MCPCommandController {
 		}
 	}
 
-	#getSmitheryErrorStatus(error: unknown): number | undefined {
-		if (error instanceof SmitheryRegistryError) {
-			return error.status;
-		}
-		return undefined;
-	}
-
-	#toSmitheryAuthReason(status: number): string {
-		return status === 429 ? "rate limited by Smithery" : "forbidden/unauthorized with Smithery";
-	}
-
 	async #requireSmitheryApiKey(reason: string): Promise<string> {
 		let apiKey = await getSmitheryApiKey();
 		if (apiKey) return apiKey;
@@ -1949,11 +1848,11 @@ export class MCPCommandController {
 		try {
 			return await operation(apiKey);
 		} catch (error) {
-			const status = this.#getSmitheryErrorStatus(error);
+			const status = getSmitheryErrorStatus(error);
 			if (status === undefined || ![401, 403, 429].includes(status)) {
 				throw error;
 			}
-			const loggedIn = await this.#promptSmitheryLogin(this.#toSmitheryAuthReason(status));
+			const loggedIn = await this.#promptSmitheryLogin(toSmitheryAuthReason(status));
 			if (!loggedIn) {
 				throw error;
 			}
@@ -1972,18 +1871,6 @@ export class MCPCommandController {
 	async #handleSmitheryLogout(): Promise<void> {
 		const removed = await clearSmitheryApiKey();
 		this.ctx.showStatus(removed ? "Smithery API key removed." : "No cached Smithery API key found.");
-	}
-
-	async #nextAvailableServerName(baseName: string): Promise<string> {
-		const filePath = getMCPConfigPath("user", getProjectDir());
-		const config = await readMCPConfigFile(filePath);
-		const existingNames = new Set(Object.keys(config.mcpServers ?? {}));
-		if (!existingNames.has(baseName)) return baseName;
-		for (let i = 2; i <= 999; i++) {
-			const candidate = `${baseName}-${i}`;
-			if (!existingNames.has(candidate)) return candidate;
-		}
-		return `${baseName}-${Date.now()}`;
 	}
 
 	async #promptDeploymentServerName(defaultName: string): Promise<string | null> {
@@ -2028,26 +1915,6 @@ export class MCPCommandController {
 		return values;
 	}
 
-	#applyRegistryInputOverrides(config: MCPServerConfig, values: Record<string, string>): MCPServerConfig {
-		if (Object.keys(values).length === 0) return config;
-		if (config.type !== "stdio") {
-			return config;
-		}
-		const args = [...(config.args ?? [])];
-		const configJson = JSON.stringify(values);
-		const index = args.indexOf("--config");
-		if (index >= 0) {
-			if (index + 1 < args.length) {
-				args[index + 1] = configJson;
-			} else {
-				args.push(configJson);
-			}
-		} else {
-			args.push("--config", configJson);
-		}
-		return { ...config, args };
-	}
-
 	async #pickRegistryResult(results: SmitherySearchResult[], keyword: string): Promise<SmitherySearchResult | null> {
 		const options = results.map((result, index) => {
 			const label = `${index + 1}. ${result.display.displayName} (${result.display.transport}, uses ${result.display.useCount})`;
@@ -2063,7 +1930,7 @@ export class MCPCommandController {
 
 	async #deployRegistryResult(result: SmitherySearchResult): Promise<void> {
 		const baseName = toConfigName(result.name);
-		const defaultName = await this.#nextAvailableServerName(baseName);
+		const defaultName = await nextAvailableServerName(baseName);
 		const serverName = await this.#promptDeploymentServerName(defaultName);
 		if (!serverName) {
 			this.ctx.showStatus("MCP deploy cancelled.");
@@ -2074,7 +1941,7 @@ export class MCPCommandController {
 			this.ctx.showStatus("MCP deploy cancelled.");
 			return;
 		}
-		const config = this.#applyRegistryInputOverrides(result.config, inputValues);
+		const config = applyRegistryInputOverrides(result.config, inputValues);
 		await this.#handleWizardComplete(serverName, config);
 	}
 
@@ -2130,4 +1997,137 @@ export class MCPCommandController {
 	#showMessage(text: string): void {
 		showCommandMessage(this.ctx, text);
 	}
+}
+
+/**
+ * Fold a completed OAuth flow back into a server config. Owns the
+ * persistence policy in one place: the auth block records the credential
+ * pointer plus refresh material, the oauth block echoes the client id for
+ * pre-auth reuse, and only a user-supplied client secret is ever written —
+ * DCR-issued secrets stay embedded in the stored credential so they cannot
+ * leak into (possibly shared/committed) config files.
+ */
+function persistOAuthResult(
+	config: MCPServerConfig,
+	result: OAuthFlowResult,
+	opts: {
+		tokenUrl: string;
+		resource?: string;
+		stripSameOriginResource?: boolean;
+		clientId?: string;
+		userClientSecret?: string;
+	},
+): MCPServerConfig {
+	const clientId = result.clientId ?? opts.clientId ?? config.oauth?.clientId;
+	const resource =
+		result.resource ?? (opts.stripSameOriginResource ? undefined : opts.resource) ?? config.auth?.resource;
+	return {
+		...config,
+		auth: {
+			type: "oauth",
+			credentialId: result.credentialId,
+			tokenUrl: opts.tokenUrl,
+			clientId,
+			clientSecret: opts.userClientSecret,
+			resource,
+		},
+		oauth: {
+			...config.oauth,
+			clientId,
+		},
+	};
+}
+
+/**
+ * Find `name` in the one MCP config file `/mcp` owns: the active profile's
+ * `<agentDir>/mcp.json`.
+ *
+ * Three working-tree candidates used to sit behind that file —
+ * `<cwd>/.veyyon/mcp.json`, `<cwd>/mcp.json` and `<cwd>/.mcp.json`, matching
+ * the since-deleted project-scope discovery providers. Nothing loads them at
+ * boot any more, but this function still resolved them, so `/mcp test` and
+ * `/mcp reauth` would have CONNECTED to a server a repository declared and
+ * `/mcp enable` would have written `enabled: true` into a repository file.
+ * Operator-initiated is not consent: typing `/mcp test` is not agreement to
+ * reach a server the operator never configured.
+ */
+async function findConfiguredServer(
+	name: string,
+): Promise<{ filePath: string; scope: "user"; config: MCPServerConfig } | null> {
+	const userPath = getMCPConfigPath("user", getProjectDir());
+	const userConfig = await readMCPConfigFile(userPath);
+	const config = userConfig.mcpServers?.[name];
+	if (!config) return null;
+	return { filePath: userPath, scope: "user", config };
+}
+
+function stripOAuthAuth(config: MCPServerConfig): MCPServerConfig {
+	const next = { ...config } as MCPServerConfig & { auth?: MCPAuthConfig };
+	delete next.auth;
+	return next;
+}
+
+async function waitForSmitheryCliApiKey(sessionId: string, signal: AbortSignal): Promise<string> {
+	const pollIntervalMs = 2_000;
+	const timeoutMs = 300_000;
+	const startedAt = Date.now();
+
+	while (!signal.aborted) {
+		if (Date.now() - startedAt >= timeoutMs) {
+			throw new Error("Smithery authorization timed out after 5 minutes.");
+		}
+		const response = await pollSmitheryCliAuthSession(sessionId, signal);
+		if (response.status === "success" && response.apiKey) {
+			return response.apiKey;
+		}
+		if (response.status === "error") {
+			throw new Error(response.message ?? "Smithery authorization failed.");
+		}
+		await Bun.sleep(pollIntervalMs);
+	}
+
+	throw new Error("Smithery authorization cancelled.");
+}
+
+function getSmitheryErrorStatus(error: unknown): number | undefined {
+	if (error instanceof SmitheryRegistryError) {
+		return error.status;
+	}
+	return undefined;
+}
+
+function toSmitheryAuthReason(status: number): string {
+	return status === 429 ? "rate limited by Smithery" : "forbidden/unauthorized with Smithery";
+}
+
+async function nextAvailableServerName(baseName: string): Promise<string> {
+	const filePath = getMCPConfigPath("user", getProjectDir());
+	const config = await readMCPConfigFile(filePath);
+	const existingNames = new Set(Object.keys(config.mcpServers ?? {}));
+	if (!existingNames.has(baseName)) return baseName;
+	for (let i = 2; i <= 999; i++) {
+		const candidate = `${baseName}-${i}`;
+		if (!existingNames.has(candidate)) return candidate;
+	}
+	return `${baseName}-${Date.now()}`;
+}
+
+function applyRegistryInputOverrides(config: MCPServerConfig, values: Record<string, string>): MCPServerConfig {
+	if (Object.keys(values).length === 0) return config;
+	if (config.type !== "stdio") {
+		return config;
+	}
+	const args = [...(config.args ?? [])];
+	const configJson = JSON.stringify(values);
+	const index = args.indexOf("--config");
+	if (index >= 0) {
+		if (index + 1 < args.length) {
+			args[index + 1] = configJson;
+		} else {
+			args.push(configJson);
+		}
+	} else {
+		args.push("--config", configJson);
+	}
+	return { ...config, args };
 }

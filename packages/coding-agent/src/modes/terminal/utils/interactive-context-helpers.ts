@@ -26,7 +26,7 @@ export function createAssistantMessageComponent(
 	ctx: AssistantMessageComponentContext,
 	message?: AssistantMessageView,
 ): AssistantMessageComponent {
-	const component: AssistantMessageComponent = new AssistantMessageComponent(
+	return new AssistantMessageComponent(
 		message,
 		ctx.effectiveHideThinkingBlock,
 		() => ctx.ui.requestRender(),
@@ -35,9 +35,8 @@ export function createAssistantMessageComponent(
 		ctx.proseOnlyThinking,
 		// Scoped repaint for the streaming shimmer ticker: this placeholder is the
 		// live-streaming component, so keep its 30fps flow off the full-tree path (#4377).
-		() => ctx.ui.requestComponentRender(component),
+		ctx.ui,
 	);
-	return component;
 }
 
 /** The slice {@link focusEditorSlot} reads. */
