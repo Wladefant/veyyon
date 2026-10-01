@@ -26,6 +26,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Fixed authoritative providers (e.g. `openai-codex`) refreshing expired OAuth credentials when a fresh cache exists, preventing unsupported bundled models from remaining selectable ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `/provider`, `/account`, `/usage` and `veyyon usage` show each Antigravity account's own limits instead of the first account's for every login, list a second account that shares the project id instead of hiding it as covered, and word and draw Antigravity windows by what is left, in every usage renderer including the non-TUI `/usage` text ([#102](https://github.com/Wladefant/veyyon/issues/102)).
 - Fixed PowerShell completions throwing duplicate key parser errors when commands define case-sensitive flags (e.g. grep -c vs -C): flag tables and runtime completer state now use ordinal hashtables so distinct flag casing and tooltips are preserved ([#195](https://github.com/Wladefant/veyyon/issues/195)).
 - Fixed an agent woken by an IRC message missing from the terminal Agents block while the status badge counted it as running: the block now follows the agent registry for a spawn it reported, listing it while the woken turn runs and dropping it when the turn ends ([#87](https://github.com/Wladefant/veyyon/issues/87))
