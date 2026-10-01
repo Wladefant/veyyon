@@ -1368,12 +1368,21 @@ export class SessionManager {
 			return;
 		}
 
+		// The entry is in `#entries` already, so a whole-file publish that runs after this point writes
+		// it, and its title slot, with the rest. A publish in progress may have serialized its body
+		// before the entry arrived: marking it dirty makes it publish again, as an append landing
+		// inside the rewrite does. The task below then finds the file replaced since it was scheduled
+		// and writes nothing, since appending the line a publish wrote records the change twice.
+		if (this.#atomicRewriteFenceEpoch !== null && this.#atomicRewriteFenceEpoch === this.#diskEpoch) {
+			this.#atomicRewriteDirty = true;
+		}
 		const epoch = this.#diskEpoch;
+		const published = this.#publishedFileState;
 		const line = this.#lineFor(entry);
 		await this.#scheduleDiskWork(
 			async () => {
 				const sessionFile = this.#sessionFile;
-				if (!sessionFile) return;
+				if (!sessionFile || this.#publishedFileState !== published) return;
 				try {
 					await this.#appendWriter().append(line);
 					if (this.#publishedFileState !== null) {
