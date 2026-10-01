@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AuthStorage, FetchImpl } from "@veyyon/ai";
+import type { Api, AuthStorage, FetchImpl, Model } from "@veyyon/ai";
+import * as catalogModels from "@veyyon/catalog/models";
 import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import { searchCodex } from "@veyyon/coding-agent/tools/web/search/providers/codex";
 
@@ -585,5 +586,73 @@ describe("searchCodex model selection", () => {
 		const result = await searchCodex(makeSearchParams("image with sources", fetchMock));
 		expect(result.answer).toBeUndefined();
 		expect(result.sources).toEqual([{ title: "Docs", url: "https://example.com/docs" }]);
+	});
+
+	it("preserves a nested type:error code and message instead of Unknown error", async () => {
+		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
+		const sse = [
+			`data: ${JSON.stringify({
+				type: "error",
+				error: {
+					code: "unsupported_region",
+					message: "web_search is not available for this workspace's data residency region.",
+				},
+			})}`,
+			"",
+		].join("\n");
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+		await expect(searchCodex(makeSearchParams("nested error envelope", fetchMock))).rejects.toThrow(
+			"Codex error (unsupported_region): web_search is not available for this workspace's data residency region.",
+		);
+	});
+
+	it("preserves a structured response.failed error code and message", async () => {
+		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
+		const sse = [
+			`data: ${JSON.stringify({
+				type: "response.failed",
+				response: {
+					id: "resp_failed",
+					error: { code: "model_snapshot_unavailable", message: "The requested model snapshot is unavailable." },
+				},
+			})}`,
+			"",
+		].join("\n");
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+		await expect(searchCodex(makeSearchParams("structured failure", fetchMock))).rejects.toThrow(
+			"Codex request failed (model_snapshot_unavailable): The requested model snapshot is unavailable.",
+		);
+	});
+
+	it("sends required tool_choice when candidate model does not support named tool choice", async () => {
+		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
+		const bundled = catalogModels.getBundledModels("openai-codex");
+		const modified = bundled.map(m =>
+			m.id === "gpt-5.6-luna" ? { ...m, compat: { ...m.compat, supportsNamedToolChoice: false } } : m,
+		);
+		vi.spyOn(catalogModels, "getBundledModels").mockReturnValue(modified as Model<Api>[]);
+
+		const result = await searchCodex(makeSearchParams("tool choice test", mockCodexFetch("gpt-5.6-luna")));
+
+		expect(capturedRequest?.body?.tool_choice).toBe("required");
+		expect(result.model).toBe("gpt-5.6-luna");
+	});
+
+	it("sends named tool_choice when candidate model supports named tool choice", async () => {
+		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
+		const bundled = catalogModels.getBundledModels("openai-codex");
+		const modified = bundled.map(m =>
+			m.id === "gpt-5.6-luna" ? { ...m, compat: { ...m.compat, supportsNamedToolChoice: true } } : m,
+		);
+		vi.spyOn(catalogModels, "getBundledModels").mockReturnValue(modified as Model<Api>[]);
+
+		const result = await searchCodex(makeSearchParams("named tool choice test", mockCodexFetch("gpt-5.6-luna")));
+
+		expect(capturedRequest?.body?.tool_choice).toEqual({ type: "web_search" });
+		expect(result.model).toBe("gpt-5.6-luna");
 	});
 });
