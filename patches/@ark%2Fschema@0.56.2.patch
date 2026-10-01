@@ -24,3 +24,95 @@ index 19ad1869c46cf57bde4a09dcb6400ab2c83809e1..4f3df3198713856ad76dd49cc378f0f4
                  : l.hash < r.hash ? -1
                      : 1);
      return result;
+diff --git a/out/node.js b/out/node.js
+index 3ef69c277c81b348e2812f9ce538df9ddcf0adbf..b9d7e03a3bc2496871e2a69cf9b97e73351be8ec 100644
+--- a/out/node.js
++++ b/out/node.js
+@@ -13,12 +13,10 @@ export class BaseNode extends Callable {
+     allowsRequiresContext;
+     rootApplyStrategy;
+     contextFreeMorph;
+-    rootApply;
+     referencesById;
+     shallowReferences;
+     flatRefs;
+     flatMorphs;
+-    allows;
+     get shallowMorphs() {
+         return [];
+     }
+@@ -101,11 +99,28 @@ export class BaseNode extends Callable {
+                                 : "optimistic"
+                         : "contextual"
+                 : "contextual";
+-        this.rootApply = this.createRootApply();
+-        this.allows =
++        if (this.rootApplyStrategy === "optimistic")
++            this.contextFreeMorph = this.shallowMorphs[0];
++    }
++    // rootApply and allows are created on first read and cached on the node, so a node that is only
++    // ever traversed as a child of another holds neither closure (veyyon patch)
++    get rootApply() {
++        return this.cacheGetter("rootApply", this.createRootApply());
++    }
++    get allows() {
++        return (this.allows =
+             this.allowsRequiresContext ?
+                 data => this.traverseAllows(data, new Traversal(data, this.$.resolvedConfig))
+-                : data => this.traverseAllows(data);
++                : data => this.traverseAllows(data));
++    }
++    // a scope that compiles its nodes assigns the compiled traversal over allows
++    set allows(allows) {
++        Object.defineProperty(this, "allows", {
++            value: allows,
++            writable: true,
++            enumerable: true,
++            configurable: true
++        });
+     }
+     createRootApply() {
+         switch (this.rootApplyStrategy) {
+@@ -124,7 +139,6 @@ export class BaseNode extends Callable {
+                     return ctx.finalize(onFail);
+                 };
+             case "optimistic":
+-                this.contextFreeMorph = this.shallowMorphs[0];
+                 const clone = this.$.resolvedConfig.clone;
+                 return (data, onFail) => {
+                     if (this.allows(data)) {
+@@ -162,8 +176,11 @@ export class BaseNode extends Callable {
+     precedence = precedenceOfKind(this.kind);
+     precompilation;
+     // defined as an arrow function since it is often detached, e.g. when passing to tRPC
+-    // otherwise, would run into issues with this binding
+-    assert = (data, pipedFromCtx) => this(data, pipedFromCtx, errors => errors.throw());
++    // otherwise, would run into issues with this binding; created on first read and cached
++    // on the node so a node that is never asserted holds no closure (veyyon patch)
++    get assert() {
++        return this.cacheGetter("assert", (data, pipedFromCtx) => this(data, pipedFromCtx, errors => errors.throw()));
++    }
+     traverse(data, pipedFromCtx) {
+         return this(data, pipedFromCtx, null);
+     }
+diff --git a/out/roots/root.js b/out/roots/root.js
+index 2176434a7d04020337a07f88304c6d4590f44b3c..0bd018a82f6989e89a39d5604a4e5391f04a0645 100644
+--- a/out/roots/root.js
++++ b/out/roots/root.js
+@@ -275,9 +275,13 @@ export class BaseRoot extends BaseNode {
+         })), this);
+         return this.$.finalize(result);
+     }
+-    pipe = Object.assign(this._pipe.bind(this), {
+-        try: this.tryPipe.bind(this)
+-    });
++    // created on first read and cached on the node so a root that is never piped holds no bound
++    // functions (veyyon patch)
++    get pipe() {
++        return this.cacheGetter("pipe", Object.assign(this._pipe.bind(this), {
++            try: this.tryPipe.bind(this)
++        }));
++    }
+     to(def) {
+         return this.$.finalize(this.toNode(this.$.parseDefinition(def)));
+     }
