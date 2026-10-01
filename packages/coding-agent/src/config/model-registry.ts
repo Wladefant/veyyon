@@ -828,14 +828,30 @@ function getDisabledProviderIdsFromSettings(): Set<string> {
  * state produced under retired rules — the same discipline as
  * `CACHE_SCHEMA_VERSION` in `@veyyon/catalog/model-cache`.
  */
-const REGISTRY_SNAPSHOT_VERSION = 9;
+const REGISTRY_SNAPSHOT_VERSION = 10;
 
-interface StaticModelStage {
+/** The resolved layers `#loadModels` hands the writer, before compat is tabled. */
+interface StaticModelLayers {
 	createdAt: number;
 	// Persisted as an array: JSON.stringify turns a Set into `{}` and the
 	// reader's Array.isArray guard would then reject every restore.
 	cachedStandard: { models: Model<Api>[]; authoritativeFreshProviders: string[] };
 	cachedDiscoveries: Model<Api>[];
+	discoveryStates: ProviderDiscoveryState[];
+}
+
+/** A resolved model as the stage stores it: `compat` is an index into the stage's `compats`. */
+type StagedModel = Omit<Model<Api>, "compat"> & { compat?: number };
+
+interface StaticModelStage {
+	createdAt: number;
+	/**
+	 * Each distinct compat record once. The layers resolve thousands of models over a few dozen
+	 * records, and a copy per model was 64% of the file and of the text parsed at every launch.
+	 */
+	compats: Model<Api>["compat"][];
+	cachedStandard: { models: StagedModel[]; authoritativeFreshProviders: string[] };
+	cachedDiscoveries: StagedModel[];
 	discoveryStates: ProviderDiscoveryState[];
 }
 
@@ -1254,8 +1270,10 @@ export class ModelRegistry {
 				return null;
 			}
 			if (!isRecord(stage.cachedStandard)) return null;
-			const cachedStandard = snapshotModelArray(stage.cachedStandard.models);
-			const cachedDiscoveries = snapshotModelArray(stage.cachedDiscoveries);
+			const compats = snapshotCompatTable(stage.compats);
+			if (!compats) return null;
+			const cachedStandard = snapshotModelArray(stage.cachedStandard.models, compats);
+			const cachedDiscoveries = snapshotModelArray(stage.cachedDiscoveries, compats);
 			if (!cachedStandard || !cachedDiscoveries) return null;
 			if (!Array.isArray(stage.cachedStandard.authoritativeFreshProviders)) return null;
 			const authoritativeFreshProviders = stage.cachedStandard.authoritativeFreshProviders.filter(
@@ -1278,8 +1296,20 @@ export class ModelRegistry {
 		}
 	}
 
-	#writeStaticModelStage(fingerprint: string, stage: StaticModelStage): void {
+	#writeStaticModelStage(fingerprint: string, layers: StaticModelLayers): void {
 		try {
+			const compats: Model<Api>["compat"][] = [];
+			const compatIndex = new Map<Model<Api>["compat"], number>();
+			const stage: StaticModelStage = {
+				createdAt: layers.createdAt,
+				compats,
+				cachedStandard: {
+					models: stageModels(layers.cachedStandard.models, compats, compatIndex),
+					authoritativeFreshProviders: layers.cachedStandard.authoritativeFreshProviders,
+				},
+				cachedDiscoveries: stageModels(layers.cachedDiscoveries, compats, compatIndex),
+				discoveryStates: layers.discoveryStates,
+			};
 			writeJsonSnapshotSync(this.#staticModelStagePath(), fingerprint, stage);
 		} catch (error) {
 			logger.debug("Static model stage snapshot not written", { error: errorMessage(error) });
@@ -2712,13 +2742,44 @@ export class ModelRegistry {
 }
 
 /**
- * Validate an array of persisted model records shallowly and cast. The
- * snapshot's CRC-32 detects a payload other than the bytes this format's
- * writer produced; the guards reject invalid records even when an external
- * writer recomputed the checksum. Each record's compat is shared with every
- * live model whose compat is equal, as `buildModel` shares it.
+ * Copy each model for the stage with its compat record replaced by an index into `compats`,
+ * appending a record the first time it is seen. Records are matched by identity: `buildModel`
+ * shares equal records, and an equal record that was not shared costs one more table entry.
  */
-function snapshotModelArray(value: unknown): Model<Api>[] | null {
+function stageModels(
+	models: readonly Model<Api>[],
+	compats: Model<Api>["compat"][],
+	compatIndex: Map<Model<Api>["compat"], number>,
+): StagedModel[] {
+	return models.map(model => {
+		const compat = model.compat;
+		if (compat === undefined) return { ...model, compat: undefined };
+		let index = compatIndex.get(compat);
+		if (index === undefined) {
+			index = compats.length;
+			compats.push(compat);
+			compatIndex.set(compat, index);
+		}
+		return { ...model, compat: index };
+	});
+}
+
+/**
+ * Validate the stage's compat table and share each record with every live model whose compat
+ * is equal, as `buildModel` shares it. One call per distinct record rather than one per model.
+ */
+function snapshotCompatTable(value: unknown): Model<Api>["compat"][] | null {
+	if (!Array.isArray(value) || !value.every(isRecord)) return null;
+	return value.map(record => shareCompat(record as Model<Api>["compat"]));
+}
+
+/**
+ * Validate an array of persisted model records shallowly and resolve each compat index against
+ * `compats`. The snapshot's CRC-32 detects a payload other than the bytes this format's writer
+ * produced; the guards reject invalid records, and an index naming no table entry, even when an
+ * external writer recomputed the checksum.
+ */
+function snapshotModelArray(value: unknown, compats: readonly Model<Api>["compat"][]): Model<Api>[] | null {
 	if (!Array.isArray(value)) return null;
 	for (const entry of value) {
 		if (
@@ -2729,11 +2790,13 @@ function snapshotModelArray(value: unknown): Model<Api>[] | null {
 		) {
 			return null;
 		}
+		const index = entry.compat;
+		if (index === undefined) continue;
+		if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= compats.length) return null;
+		entry.compat = compats[index];
 	}
 	// Shape-checked above; the record contract itself is owned by the writer.
-	const models = value as Model<Api>[];
-	for (const model of models) model.compat = shareCompat(model.compat);
-	return models;
+	return value as Model<Api>[];
 }
 
 function snapshotDiscoveryStateArray(value: unknown): ProviderDiscoveryState[] | null {
