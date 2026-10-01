@@ -143,6 +143,7 @@
 - A rebuilt transcript allocates no closure per assistant turn or tool card beyond the function a tool's view draws through: rail frames, framed blocks and cached views are class instances, cards, producers and tool-result images report through listener objects, inline images share one theme, and an assistant turn repaints through its host, so a resumed 600-turn session holds 120,613 KiB of heap and extra memory instead of 123,380 KiB, 639,759 live objects instead of 702,893 and 385 MiB RSS instead of 389 MiB (median of five).
 - A tool card computes no edit preview once its call has a final result, and a transcript rebuilt from history sets each card's result before any preview starts, so resuming a 600-turn session whose 521 edits target files that still exist no longer reads and diffs each of them: the session settles in 625 ms instead of 1,773 ms with 1.50 s of CPU instead of 3.83 s (median of nine), and holds 116.5 MiB of heap and extra memory instead of 129.1 MiB and 383 MiB RSS after a full collection instead of 531 MiB (median of five).
 - The at-rest reading a top-level session files for the next launch is measured by `measureAtRestLaunch` in `session/startup-records.ts` instead of inline in `createAgentSession`; no user-visible change.
+- A context file in which no `@` import resolves is kept as the string discovery read instead of a copy rebuilt from its segments, so a session in a project whose AGENTS.md is 48,191 characters holds 94 KiB of whole-text copies of it instead of 282 KiB.
 
 ### Fixed
 
