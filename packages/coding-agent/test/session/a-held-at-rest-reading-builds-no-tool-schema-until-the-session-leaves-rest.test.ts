@@ -1,31 +1,35 @@
 /**
  * WHY: a top-level session measured its at-rest reading inside `createAgentSession`, and that
  * reading estimates the tool half of the prompt by building the ArkType schema of every active
- * tool: about 20 ms of a cold launch, all of it before the session's first frame, for schemas the
- * first request needs only once the user has typed something. The interactive host now creates its
- * session with the reading held (`deferAtRestReading`) and takes it after the first frame
- * (`recordAtRestLaunch`). The status row renders in between, so the hold is only worth anything if
- * no path of the row's render measures: the gauge draws the resting reading the last launch
- * recorded, and the row's own recorder files no gauge, since a recorded value drawn back is not a
- * measurement.
+ * tool: about 20 ms of a cold launch and 3.4 MiB of heap, all of it before the session's first
+ * frame, for schemas only a prompt needs. The interactive host creates its session with the reading
+ * held (`deferAtRestReading`) and takes it (`recordAtRestLaunch`) when the session leaves rest: once
+ * the frame that draws the composer's first edit is committed, or before a submitted prompt appends
+ * its message. A session left idle builds no schema at all. The status row renders while the reading
+ * is held, so the hold is only worth anything if no path of the row's render measures: the gauge
+ * draws the resting reading the last launch recorded, and the row's own recorder files no gauge,
+ * since a recorded value drawn back is not a measurement.
  *
- * THE CLASS: every read the real status row makes while the reading is held builds no tool schema,
- * observed as reads of each active tool's `parameters` through the same objects the estimate walks.
- * The suite renders the real `StatusLineComponent` over a real session, so a new read the row grows
- * is covered by the render rather than by a list of paths. The release arm is the positive control:
- * the same instrumentation sees the reads once the hold ends, so zero reads under the hold is the
- * guard and not a blind probe. Around it: the borrowed gauge is the recorded one for the default
- * role and the unknown for any other model, a session with a message measures as before, the
- * readings compaction and `/context` take measure whether or not the row is held, and a session
- * created without the hold measures during creation.
+ * THE CLASS: every read the real status row and the real interactive host make while the session is
+ * at rest builds no tool schema, observed as reads of each active tool's `parameters` through the
+ * same objects the estimate walks. The suite renders the real `StatusLineComponent` and commits real
+ * frames of a real `InteractiveMode` over a real session, so a new read either grows is covered by
+ * the render rather than by a list of paths. The release arms are the positive control: the same
+ * instrumentation sees the reads once the session leaves rest, so zero reads under the hold is the
+ * guard and not a blind probe. Around it: the edit takes the reading after its frame and not inside
+ * the keystroke, a submission takes it before its message lands, the borrowed gauge is the recorded
+ * one for the default role and the unknown for any other model, a session with a message measures
+ * as before, the readings compaction and `/context` take measure whether or not the row is held,
+ * and a session created without the hold measures during creation.
  *
- * WHAT THIS DOES NOT CATCH: the interactive host forgetting to release the hold after its first
- * frame. That wiring is in `runInteractiveMode` in `main.ts`, which this suite does not drive; a
- * missing release leaves the row on the recorded gauge until the first message. It also does not
- * prove the release lands after the first frame flushes rather than before it, which is a timing
- * property of the launch, measured by the startup A/B rather than asserted here.
+ * WHAT THIS DOES NOT CATCH: `runInteractiveMode` in `main.ts`, which this suite does not drive. It
+ * passes `deferAtRestReading` for an interactive launch and takes the reading before a startup
+ * prompt (`promptAtStartup`); dropping the first rebuilds the schemas during creation, measured by
+ * the startup A/B, and dropping the second leaves the launch's reading unrecorded until the first
+ * edit. It also does not prove the reading lands after the edit's frame is flushed to the terminal,
+ * only after the frame is committed.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -37,13 +41,15 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
 import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/modes/launch-facts";
 import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { StatusPresentationProducer } from "@veyyon/coding-agent/presentation/status-producer";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { CreateAgentSessionOptions } from "@veyyon/coding-agent/session/factory-options";
-import { computeNonMessageBreakdown } from "@veyyon/coding-agent/session/non-message-tokens";
+import { computeNonMessageBreakdown, isAtRestReadingDeferred } from "@veyyon/coding-agent/session/non-message-tokens";
 import { recordAtRestLaunch } from "@veyyon/coding-agent/session/startup-records";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
@@ -167,7 +173,7 @@ afterAll(() => {
 	removeSyncWithRetries(sharedDir);
 });
 
-describe("a held at-rest reading builds no tool schema before the first frame", () => {
+describe("a held at-rest reading builds no tool schema in the status row", () => {
 	it("renders the row without reading any tool's schema, drawing the recorded resting gauge", async () => {
 		const session = await create({ deferAtRestReading: true });
 		const reads = countSchemaReads(session);
@@ -250,5 +256,104 @@ describe("a held at-rest reading builds no tool schema before the first frame", 
 
 		expect(filed).not.toBeNull();
 		expect(filed).not.toBe(RECORDED_PERCENT);
+	});
+});
+
+describe("the interactive host holds the reading until the session leaves rest", () => {
+	const modes: InteractiveMode[] = [];
+	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+
+	beforeEach(() => {
+		// The host draws into a mocked terminal of fixed geometry; frames still compose and commit.
+		vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		savedGeometry = {
+			columns: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
+			rows: Object.getOwnPropertyDescriptor(process.stdout, "rows"),
+		};
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
+		if (typeof process.stdin.setRawMode === "function") {
+			vi.spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
+		}
+	});
+
+	afterEach(() => {
+		for (const mode of modes.splice(0)) mode.stop();
+		for (const key of ["columns", "rows"] as const) {
+			const descriptor = savedGeometry[key];
+			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
+			else delete (process.stdout as unknown as Record<string, unknown>)[key];
+		}
+		vi.restoreAllMocks();
+	});
+
+	/** A real interactive host over `session`, initialised. */
+	async function host(session: AgentSession): Promise<InteractiveMode> {
+		const mode = new InteractiveMode(session, "test", () => {}, [], undefined, new EventBus());
+		modes.push(mode);
+		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
+		await mode.init();
+		return mode;
+	}
+
+	/** Resolve once `mode` commits its next frame and the work that frame scheduled after itself ran. */
+	async function committedFrame(mode: InteractiveMode): Promise<void> {
+		const frame = Promise.withResolvers<void>();
+		const previous = mode.ui.onFrameComposed;
+		mode.ui.onFrameComposed = () => {
+			mode.ui.onFrameComposed = previous;
+			previous?.();
+			frame.resolve();
+		};
+		// Forced, so an unchanged screen still commits a frame rather than skipping it.
+		mode.ui.requestRender(true);
+		await frame.promise;
+		const turn = Promise.withResolvers<void>();
+		setImmediate(turn.resolve);
+		await turn.promise;
+	}
+
+	it("commits frames over an idle session without reading any tool's schema", async () => {
+		const session = await create({ deferAtRestReading: true });
+		const reads = countSchemaReads(session);
+		const mode = await host(session);
+
+		await committedFrame(mode);
+		await committedFrame(mode);
+
+		expect(reads.count).toBe(0);
+		expect(isAtRestReadingDeferred(session)).toBe(true);
+	});
+
+	it("takes the reading after the frame that draws the first edit, not inside the keystroke", async () => {
+		const session = await create({ deferAtRestReading: true });
+		const reads = countSchemaReads(session);
+		const mode = await host(session);
+		await committedFrame(mode);
+
+		mode.editor.handleInput("h");
+		expect(reads.count).toBe(0);
+		expect(isAtRestReadingDeferred(session)).toBe(true);
+
+		await committedFrame(mode);
+		expect(reads.count).toBeGreaterThan(0);
+		expect(isAtRestReadingDeferred(session)).toBe(false);
+		expect(readLaunchFacts().contextPercent).not.toBe(RECORDED_PERCENT);
+	});
+
+	it("takes the reading when a prompt is submitted with no edit before it", async () => {
+		const session = await create({ deferAtRestReading: true });
+		const reads = countSchemaReads(session);
+		const mode = await host(session);
+		await committedFrame(mode);
+
+		mode.startPendingSubmission({ text: "hello" });
+
+		expect(reads.count).toBeGreaterThan(0);
+		expect(isAtRestReadingDeferred(session)).toBe(false);
+		expect(readLaunchFacts().contextPercent).not.toBe(RECORDED_PERCENT);
 	});
 });

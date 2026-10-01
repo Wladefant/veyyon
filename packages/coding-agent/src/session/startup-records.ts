@@ -88,8 +88,8 @@ function measureAtRestLaunch(session: AgentSession, settings: Settings): AtRestL
  * on its own renders against the same gauge; a record that changes nothing does not write.
  *
  * The interactive host creates its session with the reading held (`deferAtRestReading`) and calls
- * this after the session's first frame, because the reading builds every tool's schema on a cold
- * process. This ends the hold, so the status row measures from its next render.
+ * this when the session leaves rest, at the first composer edit or prompt, because the reading builds
+ * every tool's schema. This ends the hold, so the status row measures from its next render.
  *
  * A spawned agent files nothing, so the caller records only a top-level session. The card describes
  * the top-level session a launch opens. A spawned agent can run the default model with its own system

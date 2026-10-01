@@ -268,8 +268,9 @@ export interface CreateAgentSessionOptions {
 	/**
 	 * Hold a top-level session's at-rest reading until the host calls `recordAtRestLaunch` from
 	 * `session/startup-records`, rather than measuring it during creation. The reading builds every
-	 * tool's schema on a cold process; the interactive host sets this and records the reading after
-	 * the session's first frame. Ignored for a spawned agent, which records no reading. Default: false.
+	 * tool's schema; the interactive host sets this and records the reading when the session leaves
+	 * rest, at the first composer edit or prompt. Ignored for a spawned agent, which records no reading.
+	 * Default: false.
 	 */
 	deferAtRestReading?: boolean;
 

@@ -230,12 +230,13 @@ export function computeNonMessageBreakdown(session: AgentSession): {
 }
 
 /**
- * Top-level sessions whose at-rest reading waits for the host's first frame.
+ * Top-level sessions whose at-rest reading waits until the session leaves rest.
  *
  * The first non-message reading of a process builds the ArkType schema of every active tool to
- * estimate the tool half, about 20 ms of a cold launch. The interactive host creates its session
- * with the reading deferred, paints the session's first frame, and then takes the reading, so the
- * frame does not wait on schemas the first request needs later anyway. Until then the status row
+ * estimate the tool half: about 20 ms of a cold launch and 3.4 MiB of heap for the built-in tools.
+ * The interactive host creates its session with the reading deferred and takes it when the composer
+ * is first edited or a prompt is submitted, so neither the first frame nor a session left idle pays
+ * for schemas only a prompt needs. Until then the status row
  * draws the resting gauge the last launch recorded instead of measuring. Compaction and `/context`
  * read through {@link computeNonMessageTokens} and {@link computeNonMessageBreakdown}, which always
  * measure.
@@ -247,7 +248,7 @@ export function deferAtRestReading(session: AgentSession): void {
 	deferredAtRestReadings.add(session);
 }
 
-/** Whether `session`'s at-rest reading is still held for the host's first frame. */
+/** Whether `session`'s at-rest reading is still held. */
 export function isAtRestReadingDeferred(session: AgentSession): boolean {
 	return deferredAtRestReadings.has(session);
 }

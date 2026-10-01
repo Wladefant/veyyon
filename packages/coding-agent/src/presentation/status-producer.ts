@@ -190,7 +190,7 @@ interface ContextUsageMemo {
 
 /**
  * Whether the gauge draws the resting reading the last launch recorded instead of measuring: the host
- * holds the session's at-rest reading for its first frame, and the session has no message yet.
+ * holds the session's at-rest reading until the session leaves rest, and the session has no message yet.
  */
 function drawsRecordedGauge(session: AgentSession): boolean {
 	return isAtRestReadingDeferred(session) && (session.messages?.length ?? 0) === 0;
