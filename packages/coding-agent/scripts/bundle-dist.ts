@@ -71,8 +71,7 @@ async function cleanBundleOutputs(): Promise<void> {
 	await Promise.all(
 		entries
 			.filter(
-				entry =>
-					entry === "cli.js" || entry === "models.json" || entry.endsWith(".node") || entry.endsWith(".js.map"),
+				entry => entry === "cli.js" || entry.endsWith(".json") || entry.endsWith(".node") || entry.endsWith(".js.map"),
 			)
 			.map(entry => fs.rm(path.join(outDir, entry), { force: true })),
 	);
@@ -94,8 +93,9 @@ async function main(): Promise<void> {
 			outdir: outDir,
 			target: "bun",
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
-			// `@veyyon/catalog/models` imports its catalog as a file and reads it on demand; the bundle
-			// copies it beside `cli.js` under its own name so `package.json` `files` can list it.
+			// `@veyyon/catalog/models` imports its catalog and `theme/` its bundled themes as files and
+			// reads them on demand; the bundle copies each beside `cli.js` under its own name so
+			// `package.json` `files` can list them as `dist/*.json`.
 			naming: { asset: "[name].[ext]" },
 			define: {
 				"process.env.VEYYON_BUNDLED": JSON.stringify("true"),
