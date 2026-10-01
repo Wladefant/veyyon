@@ -633,16 +633,11 @@ fn unbounded_tail<T: Read>(reader: &mut BufReader<T>, settings: &Settings) -> UR
 		},
 		_ => {},
 	}
-	#[cfg(not(target_os = "windows"))]
+	// A closed stdout must surface as an error, never as `process::exit`: this
+	// builtin runs inside the host process, so exiting here terminates the whole
+	// host (issue #73). A cancelled or timed-out run closes the reader while an
+	// upstream `tail` finishes and flushes.
 	writer.flush()?;
-
-	// SIGPIPE is not available on Windows.
-	#[cfg(target_os = "windows")]
-	writer.flush().inspect_err(|err| {
-		if err.kind() == ErrorKind::BrokenPipe {
-			std::process::exit(13);
-		}
-	})?;
 	Ok(())
 }
 
@@ -858,5 +853,59 @@ mod tests {
 		});
 
 		assert_ne!(code, 0, "broken pipe must surface as a non-zero exit, not a panic");
+	}
+
+	// `tail` runs inside the host process. On Windows its streaming path called
+	// `std::process::exit(13)` when the final flush hit a closed pipe, which
+	// killed the host with no log line whenever a timed-out or cancelled
+	// pipeline (`cmd | tail -N`) closed the reader first (issue #73). Reaching
+	// the assertion at all is the proof: a process exit here ends the test run.
+	// Every selection mode is swept because each reaches the same final flush.
+	// The suite does not cover other builtins; `bounded_tail_broken_pipe_*`
+	// covers the seekable path.
+	#[test]
+	fn unbounded_tail_broken_pipe_does_not_exit_the_host() {
+		use std::{
+			collections::HashMap,
+			ffi::OsString,
+			io::{self, ErrorKind, Write},
+			sync::{Arc, atomic::AtomicBool},
+		};
+
+		struct BrokenPipeWriter;
+		impl Write for BrokenPipeWriter {
+			fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+
+			fn flush(&mut self) -> io::Result<()> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+		}
+
+		let modes: [&[&str]; 5] =
+			[&["-n", "2"], &["-n", "+2"], &["-c", "5"], &["-c", "+3"], &["-n", "+1"]];
+		for mode in modes {
+			let io = veyyon_uutils_ctx::ScopeIo {
+				stdin:                 Box::new(Cursor::new(b"first\nsecond\nthird\n".to_vec())),
+				stdin_fd:              None,
+				stdin_is_search_input: false,
+				stdout:                Box::new(BrokenPipeWriter),
+				// The writer under test is a pipe that breaks, which is never a terminal.
+				stdout_is_terminal:    false,
+				stderr:                Box::new(io::sink()),
+				cwd:                   std::env::temp_dir(),
+				env:                   HashMap::new(),
+				cancel:                Arc::new(AtomicBool::new(false)),
+			};
+			let argv = std::iter::once("tail")
+				.chain(mode.iter().copied())
+				.map(OsString::from)
+				.collect();
+
+			let code = veyyon_uutils_ctx::scope(io, || crate::run(argv));
+
+			assert_ne!(code, 0, "`tail {}`: broken pipe must be a non-zero exit", mode.join(" "));
+		}
 	}
 }

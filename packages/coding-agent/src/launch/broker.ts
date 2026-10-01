@@ -8,6 +8,7 @@ import {
 	clamp,
 	clampLow,
 	errorMessage,
+	exponentialBackoffDelay,
 	isEexist,
 	isEnoent,
 	isProcessAlive,
@@ -341,7 +342,7 @@ function connectPort(host: string, port: number): Promise<boolean> {
 	return promise;
 }
 
-class DaemonBroker {
+export class DaemonBroker {
 	readonly #projectDir: string;
 	readonly #runtimeDir: string;
 	readonly #endpoint: string;
@@ -368,7 +369,7 @@ class DaemonBroker {
 	) {
 		this.#projectDir = projectDir;
 		this.#runtimeDir = runtimeDir;
-		this.#endpoint = daemonBrokerEndpoint(projectDir, runtimeDir);
+		this.#endpoint = daemonBrokerEndpoint(runtimeDir);
 		this.#token = token;
 		this.#idleGraceMs = Number.isFinite(idleGraceMs) && idleGraceMs >= 0 ? idleGraceMs : DEFAULT_IDLE_GRACE_MS;
 		this.#cleanupWaitMs =
@@ -913,7 +914,11 @@ class DaemonBroker {
 			record.consecutiveFailures = uptime >= 30_000 ? 0 : record.consecutiveFailures + 1;
 			record.snapshot.restartCount++;
 			record.snapshot.state = "restarting";
-			const delay = Math.min(1_000 * 2 ** Math.min(record.consecutiveFailures, 5), RESTART_MAX_DELAY_MS);
+			const delay = exponentialBackoffDelay(record.consecutiveFailures, {
+				baseMs: 1_000,
+				maxMs: RESTART_MAX_DELAY_MS,
+				jitter: 0,
+			});
 			record.log?.append(
 				`\n[daemon exited${exitCode === undefined ? "" : ` with code ${exitCode}`}; restarting in ${delay}ms]\n`,
 			);
@@ -1114,8 +1119,19 @@ class DaemonBroker {
 		record.snapshot.state = "stopping";
 		this.#persist(record);
 		const processRef = record.snapshot.pid === undefined ? null : processHandle(record.snapshot.pid);
-		if (processRef) await processRef.terminate({ group: true, gracefulMs: timeoutMs, timeoutMs: timeoutMs + 1_000 });
-		else record.pty?.kill();
+		if (processRef) {
+			try {
+				await processRef.terminate({ group: true, gracefulMs: timeoutMs, timeoutMs: timeoutMs + 1_000 });
+			} catch (error) {
+				logger.debug("Daemon process tree termination failed", {
+					name: record.snapshot.name,
+					pid: record.snapshot.pid,
+					error: errorMessage(error),
+				});
+			}
+		} else {
+			record.pty?.kill();
+		}
 		// Process.terminate kills the OS PID and its group, but for pipe-spawned
 		// daemons Bun's Subprocess streams may not close immediately, blocking the
 		// `Promise.all([stdout, stderr, process.exited])` settle path.  Kill the
@@ -1266,7 +1282,17 @@ class DaemonBroker {
 				const detached =
 					spec.detached && !wasTerminal && snapshot.state !== "stopping" && processRef?.status() === "running";
 				if (!detached && !wasTerminal) {
-					if (processRef) await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
+					if (processRef) {
+						try {
+							await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
+						} catch (error) {
+							logger.debug("Failed to terminate unmanaged daemon process during recovery", {
+								name: snapshot.name,
+								pid: snapshot.pid,
+								error: errorMessage(error),
+							});
+						}
+					}
 					snapshot.pid = undefined;
 					snapshot.state = "exited";
 					snapshot.exitedAt = Date.now();

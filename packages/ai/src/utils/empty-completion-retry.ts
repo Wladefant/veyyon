@@ -27,6 +27,7 @@
  */
 import { scheduler } from "node:timers/promises";
 import { discardAttemptUsage } from "@veyyon/catalog/models";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "../types";
 import { AssistantMessageEventStream } from "./event-stream";
 import { isPreResponseStallMessage, openStallLadderBudget, PRE_RESPONSE_STALL_ATTEMPTS } from "./first-event-budget";
@@ -191,7 +192,9 @@ export function withEmptyCompletionRetry<TApi extends Api, O extends EmptyComple
 			if (isRetryableEmpty || isRetryableStall) {
 				// A stalled attempt already spent the whole first-event deadline;
 				// the backoff that paces an empty completion adds nothing to it.
-				const delayMs = isRetryableStall ? 0 : EMPTY_COMPLETION_BASE_DELAY_MS * 2 ** emptyAttempt;
+				const delayMs = isRetryableStall
+					? 0
+					: exponentialBackoffDelay(emptyAttempt, { baseMs: EMPTY_COMPLETION_BASE_DELAY_MS, jitter: 0 });
 				try {
 					signal?.throwIfAborted();
 					if (options?.providerRetryWait) await options.providerRetryWait(delayMs, signal);

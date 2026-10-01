@@ -10,8 +10,8 @@ import type {
 import {
 	atomicWriteFilePreservingMode,
 	errorMessage,
+	lazy,
 	logger,
-	once,
 	pathExists,
 	prompt,
 	readPipeText,
@@ -19,6 +19,7 @@ import {
 	truncate,
 	untilAborted,
 } from "@veyyon/utils";
+import { isEnoent } from "@veyyon/utils/fs-error";
 import type { BunFile } from "bun";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
@@ -37,6 +38,7 @@ import {
 	FileChangeType,
 	getActiveClients,
 	getOrCreateClient,
+	LspResponseError,
 	type LspServerStatus,
 	notifySaved,
 	notifyWorkspaceWatchedFiles,
@@ -60,6 +62,9 @@ import {
 import { resolveFormatOptions } from "./format-options";
 import { detectLspmux } from "./lspmux";
 import {
+	type CallHierarchyIncomingCall,
+	type CallHierarchyItem,
+	type CallHierarchyOutgoingCall,
 	type CodeAction,
 	type CodeActionContext,
 	type Command,
@@ -74,7 +79,9 @@ import {
 	lspSchema,
 	type Position,
 	type PublishedDiagnostics,
+	type Range,
 	type ServerConfig,
+	SYMBOL_KIND_NAMES,
 	type SymbolInformation,
 	type TextEdit,
 	type WorkspaceEdit,
@@ -117,6 +124,8 @@ export const LSP_READONLY_ACTIONS: ReadonlySet<string> = new Set([
 	"definition",
 	"type_definition",
 	"implementation",
+	"incoming_calls",
+	"outgoing_calls",
 	"references",
 	"hover",
 	"symbols",
@@ -347,12 +356,36 @@ const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
 	"definition",
 	"type_definition",
 	"implementation",
+	"incoming_calls",
+	"outgoing_calls",
 	"references",
 	"rename",
 	"hover",
 ]);
 
+/**
+ * Actions a project-aware server answers for whatever identifier sits at the cursor. Without a `symbol`
+ * the column falls back to the line's first non-blank character, which is often a decorator, keyword or
+ * parameter, and the server answers plausibly for the wrong identifier.
+ */
+const SYMBOL_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([
+	"definition",
+	"references",
+	"rename",
+	"incoming_calls",
+	"outgoing_calls",
+]);
+
 const RUST_WORKSPACE_MARKERS = ["Cargo.toml", "rust-analyzer.toml"] as const;
+
+/** True when the server is rust-analyzer by name or by the command it runs. */
+function isRustAnalyzerServer(serverName: string, serverConfig: ServerConfig): boolean {
+	return (
+		serverName === "rust-analyzer" ||
+		path.basename(serverConfig.command) === "rust-analyzer" ||
+		(!!serverConfig.resolvedCommand && path.basename(serverConfig.resolvedCommand) === "rust-analyzer")
+	);
+}
 
 function hasRustWorkspaceAncestor(filePath: string): boolean {
 	let dir = path.dirname(filePath);
@@ -492,16 +525,32 @@ async function enumerateRenamePairs(
 	return { pairs, directory: true, exceeded: false };
 }
 
-/** True when an LSP error indicates the server doesn't implement the requested method. */
+/**
+ * True when an LSP error indicates the server doesn't implement the requested method: the JSON-RPC
+ * `MethodNotFound` code, or a server that reports the absence under another code by message.
+ */
 function isMethodNotFoundError(err: unknown): boolean {
+	if (err instanceof LspResponseError && err.code === -32601) return true;
 	if (!(err instanceof Error)) return false;
 	const msg = err.message.toLowerCase();
-	return (
-		msg.includes("method not found") ||
-		msg.includes("unhandled method") ||
-		msg.includes("not supported") ||
-		msg.includes("-32601")
-	);
+	return msg.includes("method not found") || msg.includes("unhandled method") || msg.includes("not supported");
+}
+
+/** A file-bound action's request context: the file's started server, the opened file and the resolved cursor. */
+interface FileQuery {
+	readonly client: LspClient;
+	readonly serverConfig: ServerConfig;
+	readonly file: string;
+	readonly uri: string;
+	readonly position: Position;
+	readonly cwd: string;
+	readonly signal: AbortSignal;
+}
+
+/** A file-bound action's text, and whether it is a bare empty lookup that compaction may elide. */
+interface ActionReport {
+	readonly output: string;
+	readonly useless?: true;
 }
 
 const LOCATION_LOOKUPS = {
@@ -512,13 +561,9 @@ const LOCATION_LOOKUPS = {
 
 /** `definition`, `type_definition` and `implementation`: one position request answered by a location list. */
 async function locateAt(
-	client: LspClient,
+	{ client, uri, position, cwd, signal }: FileQuery,
 	{ method, noun }: (typeof LOCATION_LOOKUPS)[keyof typeof LOCATION_LOOKUPS],
-	uri: string,
-	position: Position,
-	cwd: string,
-	signal: AbortSignal,
-): Promise<{ output: string; useless: boolean }> {
+): Promise<ActionReport> {
 	const result = (await sendRequest(client, method, { textDocument: { uri }, position }, signal)) as
 		| Location
 		| Location[]
@@ -528,7 +573,254 @@ async function locateAt(
 	const locations = normalizeLocationResult(result);
 	if (locations.length === 0) return { output: `No ${noun} found`, useless: true };
 	const lines = await Promise.all(locations.map(location => formatLocationWithContext(location, cwd)));
-	return { output: `Found ${locations.length} ${noun}(s):\n${lines.join("\n")}`, useless: false };
+	return { output: `Found ${locations.length} ${noun}(s):\n${lines.join("\n")}` };
+}
+
+/**
+ * The references to the symbol at the cursor. A project-aware server answers nothing, or only the queried
+ * declaration, until its index is loaded, so it is asked again up to `REFERENCES_RETRY_COUNT` times.
+ */
+async function queryReferences({ client, serverConfig, uri, position, signal }: FileQuery): Promise<Location[] | null> {
+	const projectAware = isProjectAwareLspServer(serverConfig);
+	for (let attempt = 0; ; attempt++) {
+		const result = (await sendRequest(
+			client,
+			"textDocument/references",
+			{ textDocument: { uri }, position, context: { includeDeclaration: true } },
+			signal,
+		)) as Location[] | null;
+		if (!projectAware || attempt === REFERENCES_RETRY_COUNT) return result;
+		if (result?.length && !isOnlyQueriedDeclaration(result, uri, position)) return result;
+		await waitForProjectLoaded(client, signal);
+		throwIfAborted(signal);
+		await untilAborted(signal, () => Bun.sleep(REFERENCES_RETRY_DELAY_MS));
+	}
+}
+
+/** `references`: every reference, the first `REFERENCE_CONTEXT_LIMIT` with the line either side. */
+async function findReferences(query: FileQuery): Promise<ActionReport> {
+	const references = await queryReferences(query);
+	if (!references || references.length === 0) return { output: "No references found", useless: true };
+	const lines = await Promise.all(
+		references.slice(0, REFERENCE_CONTEXT_LIMIT).map(location => formatLocationWithContext(location, query.cwd)),
+	);
+	if (references.length > REFERENCE_CONTEXT_LIMIT) {
+		lines.push(`  ... ${references.length - REFERENCE_CONTEXT_LIMIT} additional reference(s) shown without context`);
+		for (let i = REFERENCE_CONTEXT_LIMIT; i < references.length; i++) {
+			lines.push(`  ${formatLocation(references[i]!, query.cwd)}`);
+		}
+	}
+	return { output: `Found ${references.length} reference(s):\n${lines.join("\n")}` };
+}
+
+/** `hover`: the server's markup for the symbol at the cursor. An empty hover is an answer, not a useless lookup. */
+async function hoverAt({ client, uri, position, signal }: FileQuery): Promise<ActionReport> {
+	const result = (await sendRequest(
+		client,
+		"textDocument/hover",
+		{ textDocument: { uri }, position },
+		signal,
+	)) as Hover | null;
+	return { output: result?.contents ? extractHoverText(result.contents) : "No hover information" };
+}
+
+const CALL_DIRECTIONS = {
+	incoming_calls: { method: "callHierarchy/incomingCalls", noun: "caller", relation: "of" },
+	outgoing_calls: { method: "callHierarchy/outgoingCalls", noun: "callee", relation: "from" },
+} as const;
+
+type CallDirection = (typeof CALL_DIRECTIONS)[keyof typeof CALL_DIRECTIONS];
+
+/** A call hierarchy item as its row: its name, its kind, and where it is declared. */
+function formatCallItem(item: CallHierarchyItem, cwd: string): string {
+	const kind = SYMBOL_KIND_NAMES[item.kind] ?? "Symbol";
+	return `${item.name} (${kind}) at ${formatLocation({ uri: item.uri, range: item.selectionRange }, cwd)}`;
+}
+
+/**
+ * The lines of the files a call hierarchy answer cites, each file read once however many call sites
+ * it holds. A file that no longer exists reads as no lines, and its call sites as bare positions.
+ */
+function callSiteReader(): (uri: string) => Promise<readonly string[]> {
+	const files = new Map<string, Promise<readonly string[]>>();
+	return uri => {
+		let lines = files.get(uri);
+		if (!lines) {
+			lines = fs.promises.readFile(uriToFile(uri), "utf8").then(
+				text => text.split("\n"),
+				(error: unknown) => {
+					if (isEnoent(error)) return [];
+					throw error;
+				},
+			);
+			files.set(uri, lines);
+		}
+		return lines;
+	};
+}
+
+/** One call site as `line:col: source`, the source line as the file holds it. */
+function formatCallSite(range: Range, lines: readonly string[]): string {
+	const at = `${range.start.line + 1}:${range.start.character + 1}`;
+	const source = lines[range.start.line];
+	return source === undefined ? at : `${at}: ${source.trim()}`;
+}
+
+/**
+ * `incoming_calls` and `outgoing_calls`: the functions that call the symbol at the cursor, or the
+ * functions it calls, each with its call sites. The server resolves each call to its declaration,
+ * so a call through a re-export or an alias is attributed to the function it reaches, a comment or
+ * string naming the function is not a call, and each implementation of an interface method is its
+ * own item.
+ */
+async function callsAt(
+	{ client, uri, position, cwd, signal }: FileQuery,
+	{ method, noun, relation }: CallDirection,
+): Promise<ActionReport> {
+	const items = (await sendRequest(
+		client,
+		"textDocument/prepareCallHierarchy",
+		{ textDocument: { uri }, position },
+		signal,
+	)) as CallHierarchyItem[] | null;
+	if (!items || items.length === 0) return { output: "No callable symbol at this position", useless: true };
+
+	const readLines = callSiteReader();
+	const sections: string[] = [];
+	let total = 0;
+	for (const item of items) {
+		const calls = (await sendRequest(client, method, { item }, signal)) as
+			| (CallHierarchyIncomingCall | CallHierarchyOutgoingCall)[]
+			| null;
+		const subject = formatCallItem(item, cwd);
+		if (!calls || calls.length === 0) {
+			sections.push(`No ${noun}s ${relation} ${subject}`);
+			continue;
+		}
+		total += calls.length;
+		const rows = [`Found ${calls.length} ${noun}(s) ${relation} ${subject}:`];
+		for (const call of calls) {
+			// An incoming call's sites are in the caller; an outgoing call's are in the prepared item.
+			const [other, siteUri] = "from" in call ? [call.from, call.from.uri] : [call.to, item.uri];
+			rows.push(`  ${formatCallItem(other, cwd)}`);
+			const lines = await readLines(siteUri);
+			// A server may list one call site more than once (tsserver does for a method call); the
+			// repeat is the same position and is listed once.
+			const sites = new Set(call.fromRanges.map(range => formatCallSite(range, lines)));
+			for (const site of sites) rows.push(`    ${site}`);
+		}
+		sections.push(rows.join("\n"));
+	}
+	return total === 0 ? { output: sections.join("\n"), useless: true } : { output: sections.join("\n\n") };
+}
+
+/** One row per code action, numbered by the index `apply` selects it with. */
+function listCodeActions(actions: readonly (CodeAction | Command)[]): string {
+	return actions.map((action, index) => `  ${formatCodeAction(action, index)}`).join("\n");
+}
+
+/** `code_actions`: the actions offered at the cursor or, with `apply`, the one `selector` names applied. */
+async function codeActionsAt(
+	query: FileQuery,
+	selector: string | undefined,
+	apply: boolean | undefined,
+): Promise<ActionReport> {
+	const { client, uri, position, signal } = query;
+	const context: CodeActionContext = {
+		diagnostics: client.diagnostics.get(uri)?.diagnostics ?? [],
+		only: !apply && selector ? [selector] : undefined,
+		triggerKind: 1,
+	};
+	const actions = (await sendRequest(
+		client,
+		"textDocument/codeAction",
+		{ textDocument: { uri }, range: { start: position, end: position }, context },
+		signal,
+	)) as (CodeAction | Command)[] | null;
+	if (!actions || actions.length === 0) return { output: "No code actions available" };
+	if (apply === true && selector) return { output: await applySelectedCodeAction(query, actions, selector) };
+	return { output: `${actions.length} code action(s):\n${listCodeActions(actions)}` };
+}
+
+/**
+ * Applies the code action `selector` names, by index or by a case-insensitive title substring, resolving
+ * it first when it arrived without its edit, and reports the edits it wrote and the commands it ran.
+ */
+async function applySelectedCodeAction(
+	{ client, cwd, signal }: FileQuery,
+	actions: readonly (CodeAction | Command)[],
+	selector: string,
+): Promise<string> {
+	const needle = selector.trim();
+	if (needle.length === 0) return "Error: query parameter required when apply=true for code_actions";
+	const lowered = needle.toLowerCase();
+	const selected = /^\d+$/.test(needle)
+		? actions[Number.parseInt(needle, 10)]
+		: actions.find(action => action.title.toLowerCase().includes(lowered));
+	if (!selected) return `No code action matches "${needle}". Available actions:\n${listCodeActions(actions)}`;
+
+	const applied = await applyCodeAction(selected, {
+		resolveCodeAction: async action =>
+			(await sendRequest(client, "codeAction/resolve", action, signal)) as CodeAction,
+		applyWorkspaceEdit: async edit => applyWorkspaceEdit(edit, cwd),
+		executeCommand: async command => {
+			await sendRequest(
+				client,
+				"workspace/executeCommand",
+				{ command: command.command, arguments: command.arguments ?? [] },
+				signal,
+			);
+		},
+	});
+	if (!applied) return `Action "${selected.title}" has no workspace edit or command to apply`;
+
+	const lines = [`Applied "${applied.title}":`];
+	if (applied.edits.length > 0) {
+		lines.push("  Workspace edit:");
+		for (const edit of applied.edits) lines.push(`    ${edit}`);
+	}
+	if (applied.executedCommands.length > 0) {
+		lines.push("  Executed command(s):");
+		for (const command of applied.executedCommands) lines.push(`    ${command}`);
+	}
+	return lines.join("\n");
+}
+
+/** `symbols` for one file: its symbol tree, or its flat symbol list by line. */
+async function documentSymbols({ client, file, uri, cwd, signal }: FileQuery): Promise<ActionReport> {
+	const result = (await sendRequest(client, "textDocument/documentSymbol", { textDocument: { uri } }, signal)) as
+		| (DocumentSymbol | SymbolInformation)[]
+		| null;
+	if (!result || result.length === 0) return { output: "No symbols found", useless: true };
+	const lines =
+		"selectionRange" in result[0]
+			? (result as DocumentSymbol[]).flatMap(symbol => formatDocumentSymbol(symbol))
+			: (result as SymbolInformation[]).map(
+					symbol =>
+						`${symbolKindToIcon(symbol.kind)} ${symbol.name} @ line ${symbol.location.range.start.line + 1}`,
+				);
+	return { output: `Symbols in ${formatPathRelativeToCwd(file, cwd)}:\n${lines.join("\n")}` };
+}
+
+/** `rename`: the workspace edit renaming the symbol at the cursor, written unless `apply` is false. */
+async function renameAt(
+	{ client, uri, position, cwd, signal }: FileQuery,
+	newName: string,
+	apply: boolean | undefined,
+): Promise<ActionReport> {
+	const edit = (await sendRequest(
+		client,
+		"textDocument/rename",
+		{ textDocument: { uri }, position, newName },
+		signal,
+	)) as WorkspaceEdit | null;
+	if (!edit) return { output: "Rename returned no edits" };
+	if (apply === false) {
+		const preview = formatWorkspaceEdit(edit, cwd);
+		return { output: `Rename preview:\n${preview.map(line => `  ${line}`).join("\n")}` };
+	}
+	const applied = await applyWorkspaceEdit(edit, cwd);
+	return { output: `Applied rename:\n${applied.map(line => `  ${line}`).join("\n")}` };
 }
 
 async function reloadServer(client: LspClient, serverName: string, signal?: AbortSignal): Promise<string> {
@@ -1359,7 +1651,7 @@ async function runLspWritethrough(
 
 	let finalContent = content;
 	const writeContent = (value: string) => commitFileContentAtomic(dst, value, signal);
-	const getWritePromise = once(() => writeContent(finalContent));
+	const commitWrite = lazy(() => writeContent(finalContent));
 	let writeNotified = false;
 	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
 		if (writeNotified) return;
@@ -1378,7 +1670,7 @@ async function runLspWritethrough(
 		}
 	};
 	if (!enableFormat && !enableDiagnostics) {
-		await getWritePromise();
+		await commitWrite.value;
 		await notifyWriteCommitted();
 		return undefined;
 	}
@@ -1387,7 +1679,7 @@ async function runLspWritethrough(
 	const servers = getServersForFile(config, dst);
 
 	if (servers.length === 0) {
-		await getWritePromise();
+		await commitWrite.value;
 		await notifyWriteCommitted();
 		return undefined;
 	}
@@ -1441,7 +1733,7 @@ async function runLspWritethrough(
 				}
 
 				// 4. Write to disk
-				await getWritePromise();
+				await commitWrite.value;
 				await notifyWriteCommitted(operationSignal);
 			}
 
@@ -1470,7 +1762,7 @@ async function runLspWritethrough(
 				});
 			}
 		}
-		await getWritePromise();
+		await commitWrite.value;
 		// The write above committed even though the operation budget elapsed:
 		// announce it on the caller's signal — the dead `operationSignal` would
 		// abort the notify before it ever reaches the server.
@@ -1594,7 +1886,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 /**
  * LSP tool for language server protocol operations.
  */
-export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
+export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails> {
 	readonly name = "lsp";
 	readonly view = lspToolView;
 	readonly approval = (args: unknown): ToolApprovalDecision => {
@@ -1614,7 +1906,9 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 	readonly loadMode = "discoverable";
 	readonly summary = "Query LSP (language server) for diagnostics, hover info, and references";
 	readonly description: string;
-	readonly parameters = lspSchema;
+	get parameters(): typeof lspSchema.value {
+		return lspSchema.value;
+	}
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
@@ -1655,7 +1949,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 		callerSignal: AbortSignal | undefined,
 		timeoutSec: number,
 	): Promise<AgentToolResult<LspToolDetails>> {
-		const { action, file, line, symbol, query, new_name, apply } = params;
+		const { action, file } = params;
 		throwIfAborted(signal);
 
 		const config = getConfig(this.session.cwd);
@@ -1675,10 +1969,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 		}
 
 		// `*` means workspace scope for symbols/reload; other actions need a concrete file.
-		const isWorkspace = file === "*";
-		const requiresFile = !file && action !== "reload";
-
-		if (requiresFile) {
+		if (!file && action !== "reload") {
 			return {
 				content: [
 					{
@@ -1690,17 +1981,16 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 			};
 		}
 
-		const resolvedFile = file && !isWorkspace ? resolveToCwd(file, this.session.cwd) : null;
-		if (action === "symbols" && (isWorkspace || !resolvedFile)) {
+		const resolvedFile = file && file !== "*" ? resolveToCwd(file, this.session.cwd) : null;
+		if (action === "symbols" && !resolvedFile) {
 			return this.#workspaceSymbols(params, config, signal);
 		}
-
-		if (action === "reload" && (isWorkspace || !resolvedFile)) {
+		if (action === "reload" && !resolvedFile) {
 			return this.#workspaceReload(params, signal);
 		}
 
 		const serverInfo = resolvedFile ? getLspServerForFile(config, resolvedFile) : null;
-		if (!serverInfo) {
+		if (!resolvedFile || !serverInfo) {
 			return {
 				content: [{ type: "text", text: "No language server found for this action" }],
 				details: { action, success: false },
@@ -1708,317 +1998,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 		}
 
 		const [serverName, serverConfig] = serverInfo;
-
 		try {
-			const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
-			const targetFile = resolvedFile;
-			const isRustAnalyzerServer =
-				serverName === "rust-analyzer" ||
-				path.basename(serverConfig.command) === "rust-analyzer" ||
-				(serverConfig.resolvedCommand ? path.basename(serverConfig.resolvedCommand) === "rust-analyzer" : false);
-			const needsProjectIndex =
-				targetFile !== null && PROJECT_INDEXED_ACTIONS.has(action) && isProjectAwareLspServer(serverConfig);
-			const rustWorkspaceWait =
-				needsProjectIndex && isRustAnalyzerServer && targetFile !== null && hasRustWorkspaceAncestor(targetFile);
-
-			if (targetFile) {
-				await ensureFileOpen(client, targetFile, signal);
-			}
-			if (rustWorkspaceWait) {
-				await waitForProjectLoaded(client, signal);
-			}
-
-			// For project-aware servers, references/rename/definition without a `symbol`
-			// silently falls back to the first non-whitespace column on the line, which
-			// frequently points at the wrong identifier (decorator, keyword, parameter)
-			// and the server returns plausible-looking but unrelated results. Require
-			// `symbol` explicitly so callers cannot accidentally trigger that fallback.
-			if (
-				targetFile &&
-				line !== undefined &&
-				!symbol &&
-				(action === "references" || action === "rename" || action === "definition") &&
-				isProjectAwareLspServer(serverConfig)
-			) {
-				throw new ToolError(
-					`symbol is required for project-aware ${action}; pass symbol=<name>, optionally symbol#N for repeated occurrences`,
-				);
-			}
-			const uri = targetFile ? fileToUri(targetFile) : "";
-			const resolvedLine = line ?? 1;
-			const resolvedCharacter = targetFile ? await resolveSymbolColumn(targetFile, resolvedLine, symbol) : 0;
-			const position = { line: resolvedLine - 1, character: resolvedCharacter };
-
-			let output: string;
-			// Set on bare empty-lookup outcomes (no definition/references/…): the
-			// result carries no information once consumed, so compaction may elide
-			// it. Clean diagnostics runs are NOT useless — they are verification
-			// evidence.
-			let useless = false;
-
-			if (needsProjectIndex && !isRustAnalyzerServer) {
-				await waitForProjectLoaded(client, signal);
-			}
-
-			switch (action) {
-				// =====================================================================
-				// Standard LSP Operations
-				// =====================================================================
-
-				case "definition":
-				case "type_definition":
-				case "implementation": {
-					({ output, useless } = await locateAt(
-						client,
-						LOCATION_LOOKUPS[action],
-						uri,
-						position,
-						this.session.cwd,
-						signal,
-					));
-					break;
-				}
-
-				case "references": {
-					let result: Location[] | null = null;
-					for (let attempt = 0; attempt <= REFERENCES_RETRY_COUNT; attempt++) {
-						result = (await sendRequest(
-							client,
-							"textDocument/references",
-							{
-								textDocument: { uri },
-								position,
-								context: { includeDeclaration: true },
-							},
-							signal,
-						)) as Location[] | null;
-
-						const locations = result ?? [];
-						if (!isProjectAwareLspServer(serverConfig) || attempt === REFERENCES_RETRY_COUNT) {
-							break;
-						}
-						if (locations.length > 0 && !isOnlyQueriedDeclaration(locations, uri, position)) {
-							break;
-						}
-
-						await waitForProjectLoaded(client, signal);
-						throwIfAborted(signal);
-						await untilAborted(signal, () => Bun.sleep(REFERENCES_RETRY_DELAY_MS));
-					}
-
-					if (!result || result.length === 0) {
-						output = "No references found";
-						useless = true;
-					} else {
-						const contextualReferences = result.slice(0, REFERENCE_CONTEXT_LIMIT);
-						const plainReferences = result.slice(REFERENCE_CONTEXT_LIMIT);
-						const contextualLines = await Promise.all(
-							contextualReferences.map(location => formatLocationWithContext(location, this.session.cwd)),
-						);
-						const plainLines = plainReferences.map(location => `  ${formatLocation(location, this.session.cwd)}`);
-						const lines = plainLines.length
-							? [
-									...contextualLines,
-									`  ... ${plainLines.length} additional reference(s) shown without context`,
-									...plainLines,
-								]
-							: contextualLines;
-						output = `Found ${result.length} reference(s):\n${lines.join("\n")}`;
-					}
-					break;
-				}
-
-				case "hover": {
-					const result = (await sendRequest(
-						client,
-						"textDocument/hover",
-						{
-							textDocument: { uri },
-							position,
-						},
-						signal,
-					)) as Hover | null;
-
-					if (!result?.contents) {
-						output = "No hover information";
-					} else {
-						output = extractHoverText(result.contents);
-					}
-					break;
-				}
-
-				case "code_actions": {
-					const diagnostics = client.diagnostics.get(uri)?.diagnostics ?? [];
-					const context: CodeActionContext = {
-						diagnostics,
-						only: !apply && query ? [query] : undefined,
-						triggerKind: 1,
-					};
-
-					const result = (await sendRequest(
-						client,
-						"textDocument/codeAction",
-						{
-							textDocument: { uri },
-							range: { start: position, end: position },
-							context,
-						},
-						signal,
-					)) as (CodeAction | Command)[] | null;
-
-					if (!result || result.length === 0) {
-						output = "No code actions available";
-						break;
-					}
-
-					if (apply === true && query) {
-						const normalizedQuery = query.trim();
-						if (normalizedQuery.length === 0) {
-							output = "Error: query parameter required when apply=true for code_actions";
-							break;
-						}
-						const parsedIndex = /^\d+$/.test(normalizedQuery) ? Number.parseInt(normalizedQuery, 10) : null;
-						const selectedAction =
-							parsedIndex !== null
-								? result[parsedIndex]
-								: result.find(actionItem =>
-										actionItem.title.toLowerCase().includes(normalizedQuery.toLowerCase()),
-									);
-
-						if (!selectedAction) {
-							const actionLines = result.map((actionItem, index) => `  ${formatCodeAction(actionItem, index)}`);
-							output = `No code action matches "${normalizedQuery}". Available actions:\n${actionLines.join("\n")}`;
-							break;
-						}
-
-						const appliedAction = await applyCodeAction(selectedAction, {
-							resolveCodeAction: async actionItem =>
-								(await sendRequest(client, "codeAction/resolve", actionItem, signal)) as CodeAction,
-							applyWorkspaceEdit: async edit => applyWorkspaceEdit(edit, this.session.cwd),
-							executeCommand: async commandItem => {
-								await sendRequest(
-									client,
-									"workspace/executeCommand",
-									{
-										command: commandItem.command,
-										arguments: commandItem.arguments ?? [],
-									},
-									signal,
-								);
-							},
-						});
-
-						if (!appliedAction) {
-							output = `Action "${selectedAction.title}" has no workspace edit or command to apply`;
-							break;
-						}
-
-						const summaryLines: string[] = [];
-						if (appliedAction.edits.length > 0) {
-							summaryLines.push("  Workspace edit:");
-							const editLines = appliedAction.edits.map(item => `    ${item}`);
-							for (let li = 0; li < editLines.length; li++) summaryLines.push(editLines[li]!);
-						}
-						if (appliedAction.executedCommands.length > 0) {
-							summaryLines.push("  Executed command(s):");
-							const cmdLines = appliedAction.executedCommands.map(commandName => `    ${commandName}`);
-							for (let li = 0; li < cmdLines.length; li++) summaryLines.push(cmdLines[li]!);
-						}
-
-						output = `Applied "${appliedAction.title}":\n${summaryLines.join("\n")}`;
-						break;
-					}
-
-					const actionLines = result.map((actionItem, index) => `  ${formatCodeAction(actionItem, index)}`);
-					output = `${result.length} code action(s):\n${actionLines.join("\n")}`;
-					break;
-				}
-				case "symbols": {
-					if (!targetFile) {
-						output = "Error: file parameter required for document symbols";
-						break;
-					}
-					// File-based document symbols
-					const result = (await sendRequest(
-						client,
-						"textDocument/documentSymbol",
-						{
-							textDocument: { uri },
-						},
-						signal,
-					)) as (DocumentSymbol | SymbolInformation)[] | null;
-
-					if (!result || result.length === 0) {
-						output = "No symbols found";
-						useless = true;
-					} else {
-						const relPath = formatPathRelativeToCwd(targetFile, this.session.cwd);
-						if ("selectionRange" in result[0]) {
-							const lines = (result as DocumentSymbol[]).flatMap(s => formatDocumentSymbol(s));
-							output = `Symbols in ${relPath}:\n${lines.join("\n")}`;
-						} else {
-							const lines = (result as SymbolInformation[]).map(s => {
-								const line = s.location.range.start.line + 1;
-								const icon = symbolKindToIcon(s.kind);
-								return `${icon} ${s.name} @ line ${line}`;
-							});
-							output = `Symbols in ${relPath}:\n${lines.join("\n")}`;
-						}
-					}
-					break;
-				}
-
-				case "rename": {
-					if (!new_name) {
-						return {
-							content: [{ type: "text", text: "Error: new_name parameter required for rename" }],
-							details: { action, serverName, success: false },
-						};
-					}
-
-					const result = (await sendRequest(
-						client,
-						"textDocument/rename",
-						{
-							textDocument: { uri },
-							position,
-							newName: new_name,
-						},
-						signal,
-					)) as WorkspaceEdit | null;
-
-					if (!result) {
-						output = "Rename returned no edits";
-					} else {
-						const shouldApply = apply !== false;
-						if (shouldApply) {
-							const applied = await applyWorkspaceEdit(result, this.session.cwd);
-							output = `Applied rename:\n${applied.map(a => `  ${a}`).join("\n")}`;
-						} else {
-							const preview = formatWorkspaceEdit(result, this.session.cwd);
-							output = `Rename preview:\n${preview.map(p => `  ${p}`).join("\n")}`;
-						}
-					}
-					break;
-				}
-
-				case "reload": {
-					output = await reloadServer(client, serverName, signal);
-					break;
-				}
-
-				default:
-					output = `Unknown action: ${action}`;
-			}
-
-			return {
-				content: [{ type: "text", text: output }],
-				details: { serverName, action, success: true, request: params },
-				...(useless ? { useless: true } : {}),
-			};
+			const query = await this.#openFileQuery(params, serverName, serverConfig, resolvedFile, signal);
+			return await this.#runFileAction(params, query, serverName);
 		} catch (err) {
 			if (err instanceof ToolError) throw err;
-			if (err instanceof ToolAbortError || signal?.aborted) {
+			if (err instanceof ToolAbortError || signal.aborted) {
 				// Distinguish a wall-clock timeout from a caller cancel:
 				// callerSignal aborting → real cancel (re-throw ToolAbortError);
 				// timeoutSignal aborting without callerSignal → emit a ToolError naming the
@@ -2030,12 +2015,100 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 				}
 				throw new ToolAbortError();
 			}
-			const errorText = errorMessage(err);
 			return {
-				content: [{ type: "text", text: `LSP error: ${errorText}` }],
+				content: [{ type: "text", text: `LSP error: ${errorMessage(err)}` }],
 				details: { serverName, action, success: false, request: params },
 			};
 		}
+	}
+
+	/**
+	 * Starts the server for `file`, opens the file, waits for the project where the action reads the
+	 * server's index, and resolves the cursor from `line` and `symbol`.
+	 */
+	async #openFileQuery(
+		params: LspParams,
+		serverName: string,
+		serverConfig: ServerConfig,
+		file: string,
+		signal: AbortSignal,
+	): Promise<FileQuery> {
+		const { action, line, symbol } = params;
+		const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
+		const projectAware = isProjectAwareLspServer(serverConfig);
+		const needsProjectIndex = projectAware && PROJECT_INDEXED_ACTIONS.has(action);
+		const rustAnalyzer = isRustAnalyzerServer(serverName, serverConfig);
+
+		// rust-analyzer loads a Cargo workspace only once one of its files is open, so it waits after the open.
+		await ensureFileOpen(client, file, signal);
+		if (needsProjectIndex && rustAnalyzer && hasRustWorkspaceAncestor(file)) {
+			await waitForProjectLoaded(client, signal);
+		}
+
+		if (line !== undefined && !symbol && projectAware && SYMBOL_REQUIRED_ACTIONS.has(action)) {
+			throw new ToolError(
+				`symbol is required for project-aware ${action}; pass symbol=<name>, optionally symbol#N for repeated occurrences`,
+			);
+		}
+		const resolvedLine = line ?? 1;
+		const position = { line: resolvedLine - 1, character: await resolveSymbolColumn(file, resolvedLine, symbol) };
+
+		if (needsProjectIndex && !rustAnalyzer) {
+			await waitForProjectLoaded(client, signal);
+		}
+		return { client, serverConfig, file, uri: fileToUri(file), position, cwd: this.session.cwd, signal };
+	}
+
+	/** Runs a file-bound action against its opened file and reports what the server answered. */
+	async #runFileAction(
+		params: LspParams,
+		query: FileQuery,
+		serverName: string,
+	): Promise<AgentToolResult<LspToolDetails>> {
+		const { action } = params;
+		let report: ActionReport;
+		switch (action) {
+			case "definition":
+			case "type_definition":
+			case "implementation":
+				report = await locateAt(query, LOCATION_LOOKUPS[action]);
+				break;
+			case "incoming_calls":
+			case "outgoing_calls":
+				report = await callsAt(query, CALL_DIRECTIONS[action]);
+				break;
+			case "references":
+				report = await findReferences(query);
+				break;
+			case "hover":
+				report = await hoverAt(query);
+				break;
+			case "code_actions":
+				report = await codeActionsAt(query, params.query, params.apply);
+				break;
+			case "symbols":
+				report = await documentSymbols(query);
+				break;
+			case "rename":
+				if (!params.new_name) {
+					return {
+						content: [{ type: "text", text: "Error: new_name parameter required for rename" }],
+						details: { action, serverName, success: false },
+					};
+				}
+				report = await renameAt(query, params.new_name, params.apply);
+				break;
+			case "reload":
+				report = { output: await reloadServer(query.client, serverName, query.signal) };
+				break;
+			default:
+				report = { output: `Unknown action: ${action}` };
+		}
+		return {
+			content: [{ type: "text", text: report.output }],
+			details: { serverName, action, success: true, request: params },
+			...(report.useless ? { useless: true } : {}),
+		};
 	}
 
 	/** `status`: the servers configured for this project and which of them have started. */

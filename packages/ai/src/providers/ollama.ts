@@ -549,7 +549,8 @@ const streamOllamaOnce = (
 				method: "POST",
 				url: `${baseUrl}/api/chat`,
 			};
-			wireBodyJson = JSON.stringify(body);
+			const bodyJson = JSON.stringify(body);
+			wireBodyJson = bodyJson;
 			// Direct callers that bypass `register-builtins` (which installs
 			// the iterator-level watchdog) need a pre-response timer alongside
 			// `timeout: false`; otherwise an Ollama server that accepts the
@@ -571,7 +572,7 @@ const streamOllamaOnce = (
 						Authorization: `Bearer ${apiKey}`,
 						"Content-Type": "application/json",
 					},
-					body: JSON.stringify(body),
+					body: bodyJson,
 					signal: watchdog.signal,
 					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 					maxDelayMs: options.maxRetryDelayMs,

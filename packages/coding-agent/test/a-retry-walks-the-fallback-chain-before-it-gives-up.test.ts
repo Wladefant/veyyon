@@ -1,3 +1,8 @@
+/**
+ * A failed turn walks `retry.fallbackChains` before the retry gives up.
+ *
+ * Subject: `session/runtime/retry-fallback.ts`, driven through `AgentSession`.
+ */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
@@ -578,6 +583,90 @@ describe("AgentSession retry fallback", () => {
 		expect(requestedModels).toEqual([`${primaryModel.provider}/${primaryModel.id}`]);
 		expect(fallbackAppliedEvents).toEqual([]);
 		expect(getLastAssistantMessage(session).stopReason).toBe("error");
+	});
+
+	/**
+	 * A chain switch re-sends the failed turn on another model, so it is a replay. The same hard
+	 * error on the same batch switches when no call in it ran, and surfaces without a switch once a
+	 * call carries a real result, because re-sending that batch could apply the call twice.
+	 */
+	it("switches models on a hard error only while no call in the failed batch has run", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+		const primary = `${primaryModel.provider}/${primaryModel.id}`;
+		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
+
+		const hardErrorOnBatch = async (callRan: boolean) => {
+			const mock = createMockModel();
+			const requestedModels: string[] = [];
+			const switches: string[] = [];
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.provider === primaryModel.provider) {
+						mock.push({
+							content: [
+								{ type: "toolCall", id: "tc-write", name: "write", arguments: { path: "doc/report.md" } },
+							],
+							stopReason: "error",
+							errorMessage: "unrecoverable model quirk",
+						});
+					} else {
+						mock.push({ content: ["Recovered on fallback"] });
+					}
+					return mock.stream(model, context, options);
+				},
+			});
+			if (callRan) {
+				agent.appendMessage({
+					role: "toolResult",
+					toolCallId: "tc-write",
+					toolName: "write",
+					content: [{ type: "text", text: "wrote doc/report.md" }],
+					isError: false,
+					timestamp: Date.now(),
+				});
+			}
+			const run = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 5,
+					"retry.fallbackChains": { "anthropic/*": [fallback] },
+				}),
+				modelRegistry,
+			});
+			run.subscribe(event => {
+				if (event.type === "retry_fallback_applied") switches.push(`${event.from} -> ${event.to}`);
+			});
+			try {
+				await run.prompt("Write the report");
+				await run.waitForIdle();
+				// The failed batch's never-ran placeholders follow its assistant turn, so read that turn.
+				const turn = run.messages.findLast(message => message.role === "assistant");
+				return { requestedModels, switches, stopReason: turn?.role === "assistant" ? turn.stopReason : undefined };
+			} finally {
+				await run.dispose();
+			}
+		};
+
+		expect(await hardErrorOnBatch(false)).toEqual({
+			requestedModels: [primary, fallback],
+			switches: [`${primary} -> ${fallback}`],
+			stopReason: "stop",
+		});
+		modelRegistry.clearSuppressedSelectors();
+		expect(await hardErrorOnBatch(true)).toEqual({
+			requestedModels: [primary],
+			switches: [],
+			stopReason: "error",
+		});
 	});
 
 	it("substitutes the failing model id into provider-wildcard chain entries", async () => {
@@ -2288,5 +2377,129 @@ describe("AgentSession retry fallback", () => {
 		const firstFallback = requestedModels.indexOf(`${fallbackModel.provider}/${fallbackModel.id}`);
 		expect(firstFallback).toBeGreaterThanOrEqual(0);
 		expect(requestedModels.slice(firstFallback)).not.toContain(`${primaryModel.provider}/${primaryModel.id}`);
+	});
+	it("reaches the provider and closes the saga when the failed assistant tail was recreated mid-retry", async () => {
+		// Issue #5382: a context rebuild can recreate the failed turn's message
+		// object between settle and retry (fresh identity, same failed tail), so
+		// the identity-keyed removal misses (`agent active context assistant
+		// removal missed ... lastRole=assistant lastStopReason=error`). The
+		// scheduled continue() then rejected the assistant tail locally before
+		// any provider request, auto_retry_end never fired, and the in-flight
+		// prompt() hung forever behind the pending retryPromise.
+		const model = getBundledModel("openai", "gpt-4o-mini");
+		if (!model) {
+			throw new Error("Expected bundled OpenAI test model to exist");
+		}
+
+		const errorMessage = "Provider returned error finish_reason";
+		const mock = createMockModel({
+			responses: [
+				{ content: ["partial output before gateway error"], stopReason: "error", errorMessage },
+				{ content: ["Recovered after tail rebuild"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		// Recreate the failed tail with a fresh object identity while the retry is
+		// being scheduled, reproducing the removal-miss state from the issue.
+		session.subscribe(event => {
+			if (event.type !== "auto_retry_start") return;
+			const messages = agent.state.messages;
+			const tail = messages.at(-1);
+			if (tail?.role !== "assistant" || tail.stopReason !== "error") return;
+			agent.replaceMessages([...messages.slice(0, -1), { ...tail, timestamp: tail.timestamp + 1 }]);
+		});
+
+		const outcome = await Promise.race([
+			session.prompt("recover after the failed tail is rebuilt").then(() => "completed" as const),
+			scheduler.wait(3_000).then(() => "stuck" as const),
+		]);
+
+		expect(outcome).toBe("completed");
+		expect(mock.calls).toHaveLength(2);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryEndEvents).toEqual([expect.objectContaining({ success: true, attempt: 1 })]);
+		expect(session.isRetrying).toBe(false);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+	it("closes the retry saga and emits auto_retry_end when scheduled continuation fails locally", async () => {
+		const model = getBundledModel("openai", "gpt-4o-mini");
+		if (!model) {
+			throw new Error("Expected bundled OpenAI test model to exist");
+		}
+
+		const errorMessage = "Provider returned error finish_reason";
+		const mock = createMockModel({
+			responses: [{ content: ["partial output before error"], stopReason: "error", errorMessage }],
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		vi.spyOn(agent, "continue").mockRejectedValueOnce(new Error("Local continuation failure"));
+
+		const outcome = await Promise.race([
+			session.prompt("prompt that encounters a local continuation error").then(() => "completed" as const),
+			scheduler.wait(3_000).then(() => "stuck" as const),
+		]);
+
+		expect(outcome).toBe("completed");
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryEndEvents).toEqual([
+			expect.objectContaining({
+				success: false,
+				attempt: 1,
+				finalError: expect.stringContaining("Local continuation failure"),
+			}),
+		]);
+		expect(session.isRetrying).toBe(false);
 	});
 });

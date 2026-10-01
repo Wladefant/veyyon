@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { errorMessage, formatCount, truncate } from "@veyyon/utils";
+import { errorMessage, formatCount, lazy, truncate } from "@veyyon/utils";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { TextBlockView, ViewSpan, ViewTone } from "@veyyon/view";
@@ -13,13 +13,13 @@ import {
 	ensureNumericMetricMap,
 	formatNum,
 	formatPercentChange,
-	gitStatusPorcelain,
-	gitWorkDirPrefix,
 	isBetter,
 	mergeAsi,
 	pathMatchesSpec,
+	readWorkDirStatus,
 	resolveActiveBranchSession,
 	sanitizeAsi,
+	type WorkDirStatus,
 } from "../helpers";
 import {
 	buildExperimentState,
@@ -46,33 +46,37 @@ function truncateAsiValue(value: ASIData[string]): string {
 	return truncate(text, 120, "...");
 }
 
-const logExperimentSchema = type({
-	metric: type("number").describe("primary metric value"),
-	status: type("'keep'|'discard'|'crash'|'checks_failed'").describe("run outcome"),
-	description: type("string").describe("short run description"),
-	"metrics?": type({ "[string]": "number" }).describe("secondary metrics"),
-	"asi?": type({ "[string]": "unknown" }).describe("free-form structured metadata"),
-	"commit?": type("string").describe("override recorded commit hash"),
-	"justification?": type("string").describe("required when keeping a scope-deviating run"),
-	"arm?": type("string").describe("candidate arm this result came from, when breadth > 1"),
-	"certified_by?": type("string").describe("arm or `director` that certified this result"),
-	"flag_runs?": type({
-		run_id: type("number.integer").describe("run id to flag"),
-		reason: type("string").describe("why this run is suspect"),
-	})
-		.array()
-		.describe("flag earlier runs as suspect"),
-});
+const logExperimentSchema = lazy(() =>
+	type({
+		metric: type("number").describe("primary metric value"),
+		status: type("'keep'|'discard'|'crash'|'checks_failed'").describe("run outcome"),
+		description: type("string").describe("short run description"),
+		"metrics?": type({ "[string]": "number" }).describe("secondary metrics"),
+		"asi?": type({ "[string]": "unknown" }).describe("free-form structured metadata"),
+		"commit?": type("string").describe("override recorded commit hash"),
+		"justification?": type("string").describe("required when keeping a scope-deviating run"),
+		"arm?": type("string").describe("candidate arm this result came from, when breadth > 1"),
+		"certified_by?": type("string").describe("arm or `director` that certified this result"),
+		"flag_runs?": type({
+			run_id: type("number.integer").describe("run id to flag"),
+			reason: type("string").describe("why this run is suspect"),
+		})
+			.array()
+			.describe("flag earlier runs as suspect"),
+	}),
+);
 
 export function createLogExperimentTool(
 	options: AutoresearchToolFactoryOptions,
-): ToolDefinition<typeof logExperimentSchema, LogDetails> {
+): ToolDefinition<typeof logExperimentSchema.value, LogDetails> {
 	return {
 		name: "log_experiment",
 		label: "Log Experiment",
 		description:
 			"Log the result of the latest run_experiment. Records the metric, optional ASI metadata, modified paths, and scope deviations. On `keep`, modified files are committed; on `discard`/`crash`/`checks_failed`, the worktree is reverted. Pass `flag_runs` to mark earlier runs as suspect; flagged runs are excluded from baseline and best-metric math.",
-		parameters: logExperimentSchema,
+		get parameters() {
+			return logExperimentSchema.value;
+		},
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
@@ -106,8 +110,7 @@ export function createLogExperimentTool(
 				// can't tell user dirt apart from agent edits, so we keep the (lossy)
 				// preRunDirtyPaths filter.
 				if (onAutoresearchBranch) {
-					const statusText = await gitStatusPorcelain(ctx.cwd);
-					const workDirPrefix = await gitWorkDirPrefix(ctx.cwd);
+					const { statusText, workDirPrefix } = await readWorkDirStatus(ctx.cwd);
 					allModified = parseWorkDirDirtyPaths(statusText, workDirPrefix);
 				} else {
 					const { modifiedTracked, modifiedUntracked } = await detectModifiedPaths(
@@ -429,15 +432,13 @@ async function revertFailedExperiment(
 	// A status this cannot read used to parse as "no dirty paths", so the revert reported "nothing to
 	// revert" and returned success while the experiment's changes stayed in the tree -- the one outcome a
 	// discard must never produce. The caller surfaces this error to the agent instead.
-	let statusText: string;
-	let workDirPrefix: string;
+	let status: WorkDirStatus;
 	try {
-		statusText = await gitStatusPorcelain(cwd);
-		workDirPrefix = await gitWorkDirPrefix(cwd);
+		status = await readWorkDirStatus(cwd);
 	} catch (err) {
 		return { error: `git status failed, so nothing was reverted: ${errorMessage(err)}` };
 	}
-	const { tracked, untracked } = computeRunModifiedPaths(preRunDirtyPaths, statusText, workDirPrefix);
+	const { tracked, untracked } = computeRunModifiedPaths(preRunDirtyPaths, status.statusText, status.workDirPrefix);
 	const total = tracked.length + untracked.length;
 	if (total === 0) return { note: "nothing to revert" };
 	if (tracked.length > 0) {
@@ -467,8 +468,7 @@ async function detectModifiedPaths(
 	cwd: string,
 	preRunDirtyPaths: string[],
 ): Promise<{ modifiedTracked: string[]; modifiedUntracked: string[] }> {
-	const statusText = await gitStatusPorcelain(cwd);
-	const workDirPrefix = await gitWorkDirPrefix(cwd);
+	const { statusText, workDirPrefix } = await readWorkDirStatus(cwd);
 	const { tracked, untracked } = computeRunModifiedPaths(preRunDirtyPaths, statusText, workDirPrefix);
 	return { modifiedTracked: tracked, modifiedUntracked: untracked };
 }

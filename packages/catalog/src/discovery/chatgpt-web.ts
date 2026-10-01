@@ -59,9 +59,8 @@
  * which is exactly why a redirect here means the base URL is not the daemon.
  */
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
-import { errorMessage } from "@veyyon/utils/type-guards";
+import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
-import { type } from "arktype";
 import { Effort } from "../effort";
 import { CHATGPT_WEB_LOCAL_ENDPOINT } from "../provider-endpoints";
 import type { FetchImpl, ModelSpec, ThinkingConfig } from "../types";
@@ -83,32 +82,6 @@ const HEALTH_PATH = "/healthz";
  * `full` is the only one in which a browser turn can call a local tool.
  */
 export type ChatGptWebDaemonMode = "browser-only" | "full";
-
-const healthSchema = type({
-	"service?": "unknown",
-	"mode?": "unknown",
-	"accepting_turns?": "unknown",
-});
-
-const reasoningLevelSchema = type({
-	"effort?": "unknown",
-	"description?": "unknown",
-});
-
-const modelEntrySchema = type({
-	"slug?": "unknown",
-	"display_name?": "unknown",
-	"description?": "unknown",
-	"context_window?": "unknown",
-	"default_reasoning_level?": "unknown",
-	"supported_reasoning_levels?": "unknown",
-	"input_modalities?": "unknown",
-	"priority?": "unknown",
-});
-
-const modelsResponseSchema = type({
-	"models?": "unknown[]",
-});
 
 /** Fetch options for local `codex-chatgpt-web` model discovery. */
 export interface ChatGptWebModelDiscoveryOptions {
@@ -313,15 +286,15 @@ export async function fetchChatGptWebModels(
 			return null;
 		}
 
-		const parsed = modelsResponseSchema(payload);
-		if (parsed instanceof type.errors || !Array.isArray(parsed.models)) {
+		const models = isRecord(payload) ? payload.models : undefined;
+		if (!Array.isArray(models)) {
 			report("payload", modelsUrl, "response holds no codex model list this reader recognizes");
 			return null;
 		}
 
 		const providerId = options.providerId ?? CHATGPT_WEB_PROVIDER_ID;
 		const ranked: { model: ModelSpec<"openai-codex-responses">; priority: number }[] = [];
-		for (const entry of parsed.models) {
+		for (const entry of models) {
 			const model = normalizeEntry(entry, baseUrl, providerId, mode);
 			if (model) ranked.push(model);
 		}
@@ -400,8 +373,8 @@ async function probeDaemonMode(
 	} catch {
 		return undefined;
 	}
-	const parsed = healthSchema(payload);
-	if (parsed instanceof type.errors) return undefined;
+	if (!isRecord(payload)) return undefined;
+	const parsed = payload;
 	if (parsed.service !== "codex-chatgpt-web") return undefined;
 	if (parsed.mode === "full") return "full";
 	if (parsed.mode === "browser-only") return "browser-only";
@@ -414,14 +387,14 @@ function normalizeEntry(
 	providerId: string,
 	mode: ChatGptWebDaemonMode | undefined,
 ): { model: ModelSpec<"openai-codex-responses">; priority: number } | null {
-	const parsed = modelEntrySchema(entry);
-	if (parsed instanceof type.errors) return null;
+	if (!isRecord(entry)) return null;
+	const parsed = entry;
 
 	const slug = nonEmptyString(parsed.slug);
 	// The one filter that keeps the official provider intact: a native Codex row
 	// belongs to `openai-codex` on OpenAI's host and must never be republished
 	// here under a loopback base URL.
-	if (!slug || !slug.startsWith(CHATGPT_WEB_MODEL_ID_PREFIX)) return null;
+	if (!slug?.startsWith(CHATGPT_WEB_MODEL_ID_PREFIX)) return null;
 
 	const thinking = resolveThinking(parsed.default_reasoning_level, parsed.supported_reasoning_levels);
 	const priority =
@@ -481,8 +454,8 @@ function resolveThinking(defaultLevel: unknown, supportedLevels: unknown): Think
 	const efforts: Effort[] = [];
 	if (Array.isArray(supportedLevels)) {
 		for (const level of supportedLevels) {
-			const parsed = reasoningLevelSchema(level);
-			if (parsed instanceof type.errors) continue;
+			if (!isRecord(level)) continue;
+			const parsed = level;
 			const wire = nonEmptyString(parsed.effort);
 			const effort = wire ? toEffort(wire.toLowerCase()) : undefined;
 			if (effort && !efforts.includes(effort)) efforts.push(effort);

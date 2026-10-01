@@ -49,6 +49,11 @@ pub enum ErrorKind {
 	#[error("failed to send signal to process")]
 	FailedToSendSignal,
 
+	/// A signal was refused because its target includes the shell host or one
+	/// of the host's ancestors.
+	#[error("refusing to signal {0}: the target includes this shell's host process or an ancestor of it")]
+	ProtectedSignalTarget(i32),
+
 	/// An attempt was made to assign a value to a special parameter.
 	#[error("cannot assign in this way")]
 	CannotAssignToSpecialParameter,

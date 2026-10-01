@@ -317,4 +317,68 @@ describe("the terminal output guard", () => {
 			"tty-error\ntty-stderr-write\ntty-native\n",
 		);
 	});
+
+	it("captures what an aborting runtime writes, and gives that stderr back on restore", async () => {
+		const redirectPath = path.join(tempDir(), "redirect.log");
+		const { stderr, report } = await runProbe(
+			[
+				`fs.writeSync(2, "before\\n");`,
+				`const gateResult = suppressTerminalStderr();`,
+				`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
+				`const secondSuppress = suppressTerminalStderr({ force: true, redirectPath });`,
+				`const suppressedWhileActive = isTerminalStderrSuppressed();`,
+				`nativeWrite("native-while-active\\n");`,
+				`restoreTerminalStderr();`,
+				`nativeWrite("native-after-restore\\n");`,
+				`process.stdout.write("REPORT:" + JSON.stringify({ gateResult, forced, secondSuppress, suppressedWhileActive, suppressedAfterRestore: isTerminalStderrSuppressed() }));`,
+			],
+			[redirectPath],
+		);
+		const redirect = fs.existsSync(redirectPath) ? fs.readFileSync(redirectPath, "utf8") : undefined;
+
+		expect(report.gateResult).toBe(false);
+		if (!report.forced) {
+			expect(stderr).toContain("native-while-active");
+			expect(redirect).toBeUndefined();
+			return;
+		}
+
+		// THE CONTRACT veyyon#73 TURNS ON, and it is the same sentence on every
+		// platform: a trace written the way a dying runtime writes it is in the
+		// redirect target and not on the terminal that is about to close.
+		expect(redirect).toContain("native-while-active");
+		expect(stderr).not.toContain("native-while-active");
+
+		// And the guard gives that stderr back, so a crash report printed after
+		// the TUI has released the terminal still reaches the person watching.
+		expect(stderr).toContain("native-after-restore");
+		expect(redirect).not.toContain("native-after-restore");
+	});
+
+	it("allows rotation to rename and unlink the active capture", async () => {
+		const redirectPath = path.join(tempDir(), "redirect.log");
+		const { stderr, report } = await runProbe(
+			[
+				`const gateResult = suppressTerminalStderr();`,
+				`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
+				`const secondSuppress = forced;`,
+				`const suppressedWhileActive = isTerminalStderrSuppressed();`,
+				`if (!forced) throw new Error("native capture unavailable");`,
+				`nativeWrite("before-rotation\\n");`,
+				`fs.renameSync(redirectPath, redirectPath + ".rotated");`,
+				`nativeWrite("after-rename\\n");`,
+				`const captured = fs.readFileSync(redirectPath + ".rotated", "utf8");`,
+				`fs.unlinkSync(redirectPath + ".rotated");`,
+				`nativeWrite("after-unlink\\n");`,
+				`restoreTerminalStderr();`,
+				`fs.writeFileSync(redirectPath, captured);`,
+				`process.stdout.write("REPORT:" + JSON.stringify({ gateResult, forced, secondSuppress, suppressedWhileActive, suppressedAfterRestore: isTerminalStderrSuppressed() }));`,
+			],
+			[redirectPath],
+		);
+		const redirect = fs.existsSync(redirectPath) ? fs.readFileSync(redirectPath, "utf8") : undefined;
+		expect(report.suppressedAfterRestore).toBe(false);
+		expect(redirect).toBe("before-rotation\nafter-rename\n");
+		expect(stderr).toBe("");
+	});
 });

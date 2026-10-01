@@ -16,20 +16,30 @@
  *                 but the call had returned, so nothing is abandoned.
  * - `clean-exit`  enter the tool call and dispose normally. The exit record is
  *                 the account of this one; no crash may be reported for it.
+ * - `provider`    start a prompt whose provider never answers, beside a spawned
+ *                 lane doing the same, print `ready`, hang. No tool call is in
+ *                 flight: the fourth death of veyyon#73.
  * - `report`      construct a session, which sweeps markers into the log, and exit.
+ *
+ * Every arm that hangs prints `ready` only once the heartbeat on disk shows the
+ * phase it reached, because that file is written asynchronously.
  *
  * `argv[3]` is the directory for the session's auth database.
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { getLogsDir } from "@veyyon/utils/dirs";
+import type { SessionHeartbeat } from "@veyyon/utils/session-heartbeat";
 
 const mode = process.argv[2];
 const stateDir = process.argv[3];
@@ -52,11 +62,54 @@ const pendingAssistant: AssistantMessage = {
 	timestamp: Date.now(),
 };
 
+/**
+ * Resolve once this process's heartbeat on disk satisfies `accept`. Polled
+ * because the write is fire-and-forget by design and exposes no promise.
+ */
+async function heartbeatReaches(accept: (beat: SessionHeartbeat) => boolean): Promise<void> {
+	const file = path.join(getLogsDir(), "heartbeat", `${process.pid}.json`);
+	const deadline = Date.now() + 20_000;
+	for (;;) {
+		try {
+			if (accept(JSON.parse(fs.readFileSync(file, "utf8")) as SessionHeartbeat)) return;
+		} catch {}
+		if (Date.now() > deadline) throw new Error(`heartbeat never reached the expected phase: ${file}`);
+		await Bun.sleep(20);
+	}
+}
+
 async function run(): Promise<void> {
 	const authStorage = await AuthStorage.create(path.join(stateDir, "auth.db"));
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!model) throw new Error("Expected built-in anthropic model to exist");
+
+	if (mode === "provider") {
+		// A provider that never answers: the session stays inside its turn.
+		const silentProvider = () => new AssistantMessageEventStream();
+		const startSession = (isSpawned: boolean) => {
+			const session = new AgentSession({
+				agent: new Agent({
+					initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+					convertToLlm,
+					streamFn: silentProvider,
+				}),
+				sessionManager: SessionManager.inMemory(stateDir),
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry: new ModelRegistry(authStorage),
+				isSpawned,
+			});
+			void session.prompt("Hello");
+			return session;
+		};
+		const main = startSession(false);
+		startSession(true);
+		await heartbeatReaches(beat => beat.phase === "provider" && beat.activeLanes === 1);
+		process.stdout.write(`ready ${main.sessionManager.getSessionId()}\n`);
+		setInterval(() => {}, 1000);
+		return;
+	}
+
 	const sessionManager = SessionManager.inMemory(stateDir);
 	const agent = new Agent({
 		initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -148,6 +201,9 @@ async function run(): Promise<void> {
 		return;
 	}
 
+	await heartbeatReaches(
+		beat => beat.phase === (mode === "complete" || mode === "change-id-complete" ? "idle" : "tool"),
+	);
 	process.stdout.write(`ready ${sessionManager.getSessionId()}\n`);
 	// Hold the process open for the parent's kill. An interval rather than a long
 	// timer so the event loop has work on every platform's scheduler.

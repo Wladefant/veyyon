@@ -6,7 +6,9 @@ maps the *flow* (input → component tree → render); this doc explains the
 **render contract, why it is shaped this way, and the invariants you must not
 violate**. Scope is the core engine only:
 
-- [`hosts/terminal/engine/src/core/tui.ts`](../../hosts/terminal/engine/src/core/tui.ts): frame pipeline, commit ledger, window math, emitters, cursor placement.
+- [`hosts/terminal/engine/src/core/tui.ts`](../../hosts/terminal/engine/src/core/tui.ts): frame pipeline, commit ledger, window math, paint emission, cursor placement.
+- [`hosts/terminal/engine/src/core/paint-sequences.ts`](../../hosts/terminal/engine/src/core/paint-sequences.ts): the escape sequence each paint writes (scroll append, window diff, seam and home rewrites, full-paint replay, alternate-screen frame), built from the rows it is given and holding no engine state.
+- [`hosts/terminal/engine/src/core/frame-plan.ts`](../../hosts/terminal/engine/src/core/frame-plan.ts): the records one frame phase returns to the next (render intent, transition, prefix reconciliation, window plan, assembled window).
 - [`hosts/terminal/engine/src/core/renderer.ts`](../../hosts/terminal/engine/src/core/renderer.ts): per-row frame preparation — SGR coalescing, line fitting, committed-prefix resync, cursor-marker extraction.
 - [`hosts/terminal/engine/src/core/component-types.ts`](../../hosts/terminal/engine/src/core/component-types.ts): `Component`, the native-scrollback seam interfaces and their accessors.
 - [`hosts/terminal/engine/src/core/overlay.ts`](../../hosts/terminal/engine/src/core/overlay.ts), [`core/scroll.ts`](../../hosts/terminal/engine/src/core/scroll.ts), [`core/cursor.ts`](../../hosts/terminal/engine/src/core/cursor.ts), [`core/image-budget.ts`](../../hosts/terminal/engine/src/core/image-budget.ts), [`core/container.ts`](../../hosts/terminal/engine/src/core/container.ts), [`core/terminal-session.ts`](../../hosts/terminal/engine/src/core/terminal-session.ts), [`core/mouse-routing.ts`](../../hosts/terminal/engine/src/core/mouse-routing.ts): the sibling modules the pipeline calls. `hosts/terminal/engine/src/tui.ts` is a barrel over them and holds no logic.
@@ -125,9 +127,11 @@ scrolled reader could be looking at.
 3. Classify: **fullPaint** (first paint, `clearScrollback` session replace, a
    geometry change on a terminal that does not repaint resizes in place, or
    the divergence rebuild) or **update**. `resizeRepaintsInPlace()` is what
-   excuses a terminal from the geometry rebuild: multiplexer panes, and
-   terminals that re-report their size on alt-screen toggles (Warp, or
-   `VEYYON_TUI_RESIZE_IN_PLACE=1`).
+   excuses a terminal from the geometry rebuild: multiplexer panes, terminals
+   that re-report their size on alt-screen toggles (Warp, or
+   `VEYYON_TUI_RESIZE_IN_PLACE=1`), and a host that owns the grid
+   (`Terminal.hostOwnsGridOnResize`: conhost reprints its own viewport, so an
+   in-place repaint lands on a screen nobody is looking at).
 4. Window math as in §1. Two special rules:
    - **Commits freeze** (`C' = C`) while an overlay is visible, and on a
      geometry frame: composited rows must never enter history, and a resizing
@@ -205,6 +209,11 @@ boundary rises past them (§1). Adjacent engine hooks components may implement:
   the last read, letting the engine skip marker extraction, line preparation,
   and the committed-prefix audit for that prefix. Reading consumes the report
   (the baseline re-bases), so out-of-band `render()` calls can only lower it.
+- `releaseRenderCache()` (`Component`, optional): drop the rows memoized for
+  the next render once the component's rows have left the frame for native
+  scrollback. It is idempotent, and a later `render()` rebuilds the same bytes
+  from source. `Container` forwards it to its children; `Box`, `Markdown`,
+  `Text`, `TruncatedText` and `Image` implement it.
 
 `TranscriptContainer` implements the seam for the coding agent. The live region
 is anchored at the first still-mutating block
@@ -226,6 +235,18 @@ committed keeps rendering normally, so late results, post-finalize re-layouts
 and expand toggles stay visible; a post-finalize mutation bumps
 `getTranscriptBlockVersion()` precisely so the render happens and the audit can
 see it.
+
+Once the engine reports rows committed, `TranscriptContainer` compacts the
+committed prefix: it drops leading blocks from its render output while they
+end at or above `committedRows` minus the rows it keeps in hand for a shrink.
+A block qualifies when it is finalized and its previous frame rendered it
+finalized at the same `getTranscriptBlockVersion()`, or, on a component-scoped
+frame, when it was carried whole and is still settled at the version it last
+rendered. When the first kept block's separator reaches past the drop ceiling,
+the drop backs off to the previous block that holds rows instead of
+abandoning the drop. Every dropped block receives `releaseRenderCache?.()`,
+so a resting transcript holds about a screen of rows plus the uncommitted
+tail; a replay renders the dropped blocks again from their source.
 
 ---
 
@@ -418,7 +439,7 @@ terminal and one seed is not verified.
 
 ### What proves a split of the engine changed no bytes
 
-`tui.ts` was 5415 lines and is now ten modules under `hosts/terminal/engine/src/core/`.
+`tui.ts` was 5415 lines and is now twelve modules under `hosts/terminal/engine/src/core/`.
 The evidence that the move emitted the same bytes is the corpus already here:
 `render-regressions.test.ts` and `render-stress-oracles.test.ts` assert exact
 emitted ANSI against a `VirtualTerminal`, and they passed against the split
@@ -516,7 +537,7 @@ the block knows a picture it already drew is gone.
 | `VEYYON_HARDWARE_CURSOR=1` | Show the real hardware cursor instead of a rendered one. |
 | `VEYYON_NOTIFICATIONS=off\|0\|false` | Suppress terminal notifications. |
 | `VEYYON_DEBUG_REDRAW=1` | Log the chosen render intent + ledger state per frame to the debug log. |
-| `VEYYON_TUI_RESIZE_IN_PLACE=1\|0` | Force resize to repaint in place (no alt-screen borrow, no ED3 rewrap) on / off. Default-on for terminals that re-report size on alt-screen toggles (Warp). |
+| `VEYYON_TUI_RESIZE_IN_PLACE=1\|0` | Force resize to repaint in place (no alt-screen borrow, no ED3 rewrap) on / off. Default-on for terminals that re-report size on alt-screen toggles (Warp). `1` also overrides the host-owned-grid exclusion (ConPTY), which is the escape hatch back to the pre-ConPTY path. |
 
 Removed with the old engine: `VEYYON_TUI_ED3_SAFE` (no ED3-risk lever exists),
 `VEYYON_CLEAR_ON_SHRINK` (shrinks always clear exactly), `VEYYON_TUI_DEBUG` (per-render
@@ -562,12 +583,16 @@ bottom.
 - **The scroll tape**: the composed frame is NOT the scroll-back source. A
   virtualized root (the coding agent's `TranscriptContainer`) drops rows from
   its render output once the engine reports them committed, which holds the
-  frame near the viewport height however long the session runs. Every prepared
-  row the engine lets scroll off is therefore recorded on `#scrollTape`
-  (`scrollTapeRows`, bounded by `setScrollTapeCap`, default 20k rows), the
-  engine's own mirror of terminal scrollback. The **scroll space** is the tape
-  followed by the frame's uncommitted rows; the frame's row 0 sits at
-  `tape.length − committedRows`, because those rows are on both.
+  frame near the viewport height however long the session runs. While scroll
+  isolation is on, every prepared row the engine lets scroll off is therefore
+  recorded on `#scrollTape` (`scrollTapeRows`, bounded by `setScrollTapeCap`,
+  default 20k rows), the engine's own mirror of terminal scrollback. With
+  isolation off nothing reads the tape, so it only counts the rows
+  (`scrolledOffRows`) and keeps none; enabling isolation after the first paint
+  replays the history, as `resetDisplay` does, so the tape records it. The
+  **scroll space** is the tape followed by the frame's uncommitted rows; the
+  frame's row 0 sits at `tape.length − committedRows`, because those rows are
+  on both.
 - **Frozen view**: wheel-up anchors `#virtualScrollTop` in scroll-space rows.
   On the first frozen frame the engine snapshots the whole scroll space, so
   nothing under the reader can move: a quiet frame still compacts, and a
@@ -595,7 +620,8 @@ bottom.
   active so clicks never leak raw SGR bytes into the focused component. The
   tracking set is re-armed after alt-screen exits and torn down on stop.
 - **Capture gate**: tracking arms while anything sits above the window — the
-  frame overflows the viewport, **or** the tape is non-empty. Gating on frame
+  frame overflows the viewport, **or** a row has scrolled off
+  (`scrolledOffRows`, counted whether or not the tape records rows). Gating on frame
   overflow alone (`d79cb7ee`, which traded it for drag-select on short screens)
   is what broke the model in practice: with a virtualized transcript the frame
   trims back to about the viewport on every quiet frame, so the gate closed,
@@ -691,4 +717,4 @@ thumb) and the attributes the terminal presents, through
 `VirtualTerminal#getViewportRowFaintColumns`. A byte assertion alone would still
 pass if a later reset in the same row cancelled the dim.
 
-*Verified against `46980a2485` on 2026-09-11.*
+*Verified against `9a035acb63` on 2026-09-30.*

@@ -402,12 +402,11 @@ type AnthropicProviderSessionState = ProviderSessionState & {
 	strictToolsDisabled: boolean;
 	fastModeDisabled: boolean;
 	/**
-	 * Runtime-learned: this endpoint returned `400 Invalid signature in
-	 * thinking block` for a replayed unsigned thinking block, so it must be
-	 * treated as a signing proxy from now on. All subsequent requests demote
-	 * unsigned thinking to text for this (baseUrl, modelId), same behavior as
-	 * an explicit `compat.replayUnsignedThinking: false`. Cleared on session
-	 * close.
+	 * Runtime-learned: this endpoint rejected a replayed unsigned thinking
+	 * block, so it must be treated as a signing proxy from now on. All
+	 * subsequent requests demote unsigned thinking to text for this (baseUrl,
+	 * modelId), same behavior as an explicit
+	 * `compat.replayUnsignedThinking: false`. Cleared on session close.
 	 */
 	replayUnsignedThinkingDisabled: boolean;
 	/**
@@ -1299,7 +1298,14 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 		}
 	}
 	if (wire.directEndpoint) {
-		return normalizeAnthropicBaseUrl(model.baseUrl) ?? ANTHROPIC_API_ENDPOINT;
+		const configured = normalizeAnthropicBaseUrl(model.baseUrl);
+		// An explicitly configured non-official baseUrl (e.g. a models.yml provider
+		// override) is more specific than the generic env fallback and wins.
+		if (configured && !isOfficialAnthropicApiUrl(configured)) return configured;
+		// Otherwise ANTHROPIC_BASE_URL routes chat through an enterprise gateway
+		// (docs/environment-variables.md), ahead of the official default. The
+		// Foundry redirect is already handled above.
+		return normalizeAnthropicBaseUrl($env.ANTHROPIC_BASE_URL) ?? configured ?? ANTHROPIC_API_ENDPOINT;
 	}
 	return normalizeAnthropicBaseUrl(model.baseUrl);
 }
@@ -1340,9 +1346,12 @@ export function resolveAnthropicCustomHeadersForBaseUrl(
 	return parseAnthropicCustomHeaders($env.ANTHROPIC_CUSTOM_HEADERS);
 }
 
-function resolveAnthropicCustomHeaders(model: Model<"anthropic-messages">): Record<string, string> | undefined {
+function resolveAnthropicCustomHeaders(
+	model: Model<"anthropic-messages">,
+	baseUrl: string | undefined,
+): Record<string, string> | undefined {
 	if (!anthropicWire(model).directEndpoint) return undefined;
-	return resolveAnthropicCustomHeadersForBaseUrl(model.baseUrl);
+	return resolveAnthropicCustomHeadersForBaseUrl(baseUrl);
 }
 
 function resolvePemValue(value: string | undefined, name: string): string | undefined {
@@ -1859,19 +1868,28 @@ function calculateFallbackTurnCost(
 }
 
 /**
- * Detects the Anthropic `400 Invalid `signature` in `thinking` block` failure
- * a signing proxy returns when a stripped/unsigned prior thinking block is
- * replayed as `signature: ""`. Exported for the compat tests.
+ * Detects the two shapes a signature-enforcing endpoint uses to reject a
+ * replayed unsigned thinking block (sent as `signature: ""`):
+ *
+ * - Anthropic and Anthropic-fronting proxies: `400 Invalid `signature` in
+ *   `thinking` block`.
+ * - Bedrock-backed proxies: the empty string fails schema validation before
+ *   signature checking, so it comes back as `ValidationException: The model
+ *   returned the following errors: messages.N.content.M.thinking.signature:
+ *   Field required`.
+ *
+ * Exported for the compat tests.
  */
 const INVALID_THINKING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?(?:\s+block)?/i;
+const MISSING_THINKING_SIGNATURE_PATTERN = /thinking\.signature\b[^"\n]{0,32}\brequired\b/i;
+
 export function isInvalidThinkingSignatureError(message: string): boolean {
-	return INVALID_THINKING_SIGNATURE_PATTERN.test(message);
+	return INVALID_THINKING_SIGNATURE_PATTERN.test(message) || MISSING_THINKING_SIGNATURE_PATTERN.test(message);
 }
 
 /**
- * Prepend a pointed remediation to Anthropic's `Invalid signature in thinking
- * block` 400 when the model looks like an unmarked custom signing proxy
- * (opaque baseUrl, `spec.reasoning: true`, no explicit
+ * Prepend a pointed remediation to a thinking-signature rejection 400 when the
+ * model looks like an unmarked custom signing proxy
  * `compat.replayUnsignedThinking` override). The default is native replay for
  * the 3p reasoning majority (#2005); this hint turns the misconfigured-proxy
  * case into a one-line fix instead of a silent retry loop (#4297).
@@ -2415,7 +2433,7 @@ async function handleAnthropicFeatureFallbackError(
 		isInvalidThinkingSignatureError(errorMessage(streamFailure))
 	) {
 		logger.warn(
-			"anthropic: signing proxy detected (Invalid signature in thinking block), demoting unsigned thinking and retrying",
+			"anthropic: signing proxy detected (thinking signature rejected), demoting unsigned thinking and retrying",
 			{
 				provider: model.provider,
 				model: model.id,
@@ -2735,6 +2753,10 @@ async function prepareAnthropicStreamParams(
 		nextParams = replacementPayload as typeof nextParams;
 	}
 	nextParams = toWellFormedDeep(nextParams) as typeof nextParams;
+	// The body is serialized once, here, from the object the client sends: a replacement payload
+	// that dropped `stream` gets it back before serialization rather than after, so these bytes
+	// are the wire bytes and the client sends them without serializing again.
+	if (nextParams.stream !== true) nextParams = { ...nextParams, stream: true };
 	const rawRequestDump: RawHttpRequestDump = {
 		provider: model.provider,
 		api: outputApi,
@@ -2770,6 +2792,7 @@ function initAnthropicStreamCacheTracking(
 function createAnthropicStreamRequest(
 	client: AnthropicMessagesClientLike,
 	params: MessageCreateParamsStreaming,
+	serializedBody: string,
 	isOAuthToken: boolean,
 	requestSignal: AbortSignal,
 	requestTimeoutMs: number | undefined,
@@ -2779,10 +2802,12 @@ function createAnthropicStreamRequest(
 		...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs),
 		maxRetries: 0,
 		...(umansGatewayWebSearchHeader ? { headers: umansGatewayWebSearchHeader } : {}),
+		// An injected SDK client serializes `params` itself; only this package's client takes the bytes.
+		...(client instanceof AnthropicMessagesClient ? { serializedBody } : {}),
 	};
 	return isOAuthToken && client.beta
-		? client.beta.messages.create({ ...params, stream: true }, requestOptions)
-		: client.messages.create({ ...params, stream: true }, requestOptions);
+		? client.beta.messages.create(params, requestOptions)
+		: client.messages.create(params, requestOptions);
 }
 
 async function fetchAnthropicStreamResponse(
@@ -2886,7 +2911,7 @@ const streamAnthropicOnce = (
 				retryCtx,
 			);
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
-			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
+			const prepareParams = async (): Promise<{ params: MessageCreateParamsStreaming; body: string }> => {
 				const prepared = await prepareAnthropicStreamParams(
 					model,
 					preparedContext,
@@ -2899,9 +2924,9 @@ const streamAnthropicOnce = (
 				);
 				rawRequestDump = prepared.rawRequestDump;
 				anthropicWireBodyJson = prepared.anthropicWireBodyJson;
-				return prepared.params;
+				return { params: prepared.params, body: prepared.anthropicWireBodyJson };
 			};
-			let params = await prepareParams();
+			let { params, body } = await prepareParams();
 
 			const cacheEnforcement: CacheEnforcement = resolveCacheEnforcement(options?.cacheEnforcement);
 			const cacheTracker: CacheTrackerState | undefined = providerSessionState?.cacheTracker;
@@ -2949,6 +2974,7 @@ const streamAnthropicOnce = (
 				const anthropicRequest = createAnthropicStreamRequest(
 					client,
 					params,
+					body,
 					isOAuthToken,
 					requestSignal,
 					requestTimeoutMs,
@@ -3001,6 +3027,10 @@ const streamAnthropicOnce = (
 							isOAuthToken,
 							serverSideFallback,
 						);
+						if (streamState.sawMessageStop) {
+							// The protocol is complete even if a broken keep-alive leaves the HTTP body open.
+							break;
+						}
 					}
 					firstTokenTime = streamState.firstTokenTime;
 
@@ -3042,7 +3072,7 @@ const streamAnthropicOnce = (
 					);
 					if (retryResult.shouldRetry) {
 						if (retryResult.resetAttempt) {
-							params = await prepareParams();
+							({ params, body } = await prepareParams());
 							retryCtx.providerRetryAttempt = 0;
 						}
 						discardAnthropicAttempt(model, output, copilotDynamicHeaders?.premiumRequests);
@@ -3108,15 +3138,50 @@ type SystemBlockOptions = {
 	cacheControl?: AnthropicCacheControl;
 };
 
-function applyClaudeCodeSystemCache(
+/**
+ * Place system-block cache breakpoints that survive a volatile trailing block.
+ *
+ * veyyon appends per-request project context (cwd, date, workspace tree) as the
+ * final system block, so a single trailing breakpoint hashes the whole prefix
+ * *including* that block — a new cwd or a midnight rollover then re-writes the
+ * entire system cache (issue #7324). This caches the trailing block (full-match
+ * reuse when nothing changed) AND the stable harness prefix at `firstCacheableIndex`
+ * (preserving the shared prompt prefix across suffix/assignment changes).
+ *
+ * @returns breakpoints placed (0-2, capped by `maxBreakpoints`).
+ */
+function cacheSystemPrefixBreakpoints(
 	blocks: AnthropicSystemBlock[],
 	cacheControl: AnthropicCacheControl | undefined,
+	maxBreakpoints: number,
+	firstCacheableIndex: number,
 ): number {
-	if (!cacheControl || blocks.length === 0) return 0;
+	if (!cacheControl || maxBreakpoints <= 0) return 0;
+	let placed = 0;
 	const lastIndex = blocks.length - 1;
-	if (blocks[lastIndex].cache_control != null) return 0;
-	blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
-	return 1;
+	if (lastIndex >= firstCacheableIndex && blocks[lastIndex].cache_control == null) {
+		blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
+		placed++;
+	}
+	if (placed >= maxBreakpoints) return placed;
+	const stableIndex = firstCacheableIndex;
+	if (stableIndex < lastIndex && blocks[stableIndex].cache_control == null) {
+		blocks[stableIndex] = { ...blocks[stableIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
+		placed++;
+	}
+	return placed;
+}
+
+/**
+ * First system-block index that may carry a cache breakpoint. Skips the OAuth
+ * cloak blocks that must stay uncached: the CC billing header (block 0, a
+ * per-request fingerprint) and the Claude Code identity instruction (block 1).
+ */
+function firstCacheableSystemIndex(blocks: readonly AnthropicSystemBlock[]): number {
+	let index = 0;
+	if (blocks[index]?.text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX)) index++;
+	if (blocks[index]?.text === claudeCodeSystemInstruction) index++;
+	return index;
 }
 
 export function buildAnthropicSystemBlocks(
@@ -3140,7 +3205,7 @@ export function buildAnthropicSystemBlocks(
 		for (const prompt of sanitizedPrompts) {
 			blocks.push({ type: "text", text: prompt });
 		}
-		applyClaudeCodeSystemCache(blocks, cacheControl);
+		cacheSystemPrefixBreakpoints(blocks, cacheControl, 2, firstCacheableSystemIndex(blocks));
 
 		return blocks;
 	}
@@ -3188,7 +3253,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
-	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
+	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model, baseUrl);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	// Disable Bun's native ~300s pre-response fetch timeout (issue #2422).
 	// `AnthropicMessagesClient` already arms its own DEFAULT_TIMEOUT_MS timer
@@ -3343,13 +3408,30 @@ function createClient(
 	return { client, isOAuthToken: oauthToken };
 }
 
-function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
+function disableThinkingIfToolChoiceForced(
+	params: MessageCreateParamsStreaming,
+	model: Model<"anthropic-messages">,
+): void {
 	const toolChoice = params.tool_choice;
 	if (!toolChoice) return;
 	if (toolChoice.type !== "any" && toolChoice.type !== "tool") return;
 
 	delete params.thinking;
 	delete params.context_management;
+
+	// Adaptive-only models can't be switched off by omitting `thinking` — a bare
+	// omission defaults to adaptive thinking ON, so a forced-tool turn would still
+	// reason instead of calling the tool (#6589). Pin the lowest adaptive effort
+	// instead of dropping it, mirroring the disable branch in buildParams. Vertex
+	// rawPredict can't carry the effort beta as an HTTP header, so it keeps the
+	// delete behavior (the field is stripped there anyway; see buildParams).
+	if (isAdaptiveOnlyThinking(model) && model.provider !== "google-vertex") {
+		const outputConfig = (params.output_config as AnthropicOutputConfig | undefined) ?? {};
+		outputConfig.effort = "low";
+		params.output_config = outputConfig;
+		return;
+	}
+
 	const outputConfig = params.output_config as AnthropicOutputConfig | undefined;
 	if (!outputConfig) return;
 
@@ -3388,27 +3470,6 @@ type CacheControlBlock = {
 	cache_control?: AnthropicCacheControl | null;
 };
 
-function applyCacheControlToLastBlock<T extends CacheControlBlock>(
-	blocks: T[],
-	cacheControl: AnthropicCacheControl,
-): boolean {
-	if (blocks.length === 0) return false;
-	const lastIndex = blocks.length - 1;
-	if (blocks[lastIndex].cache_control != null) return false;
-	blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
-	return true;
-}
-function applyCacheControlToStableSystemPrefix<T extends CacheControlBlock>(
-	blocks: T[],
-	cacheControl: AnthropicCacheControl,
-	index: number,
-): boolean {
-	if (index < 0 || index >= blocks.length - 1) return false;
-	if (blocks[index].cache_control != null) return false;
-	blocks[index] = { ...blocks[index], cache_control: cloneAnthropicCacheControl(cacheControl) };
-	return true;
-}
-
 function applyCacheControlToLastTextBlock(
 	blocks: Array<ContentBlockParam & CacheControlBlock>,
 	cacheControl: AnthropicCacheControl,
@@ -3445,39 +3506,13 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		isCCLayout =
 			params.system.length >= 3 &&
 			(params.system[0] as { text?: string }).text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX) === true;
-		if (isCCLayout) {
-			const placed = Math.min(
-				MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed,
-				applyClaudeCodeSystemCache(params.system as AnthropicSystemBlock[], cacheControl),
-			);
-			cacheBreakpointsUsed += placed;
-		} else if (applyCacheControlToLastBlock(params.system, cacheControl)) {
-			cacheBreakpointsUsed++;
-		}
-
-		// Veyyon's first own system block is the stable harness shared across
-		// parent and agent prompts. Anchor it before project, assignment, and
-		// Argot blocks so those changing suffixes cannot invalidate the shared
-		// prefix. OAuth prepends billing and Claude Code instruction blocks, so
-		// the harness sits at index 2 there and index 0 otherwise.
-		//
-		// Budget after this, out of the four Anthropic allows: the API-key layout
-		// spends two on system (trailing block plus this anchor) and two on the
-		// trailing messages below, exactly four. The Claude Code layout spends the
-		// same two on system but marks only the final message, so it spends three
-		// and leaves one unspent. That is deliberate: the CC layout exists to
-		// mirror the request shape of the client it cloaks, and the number of
-		// cache_control markers is wire-visible, so spending the slot would be a
-		// difference for the sake of a fallback anchor.
-		const stablePrefixIndex = isCCLayout ? 2 : 0;
-		if (
-			cacheBreakpointsUsed < MAX_CACHE_BREAKPOINTS &&
-			applyCacheControlToStableSystemPrefix(params.system, cacheControl, stablePrefixIndex)
-		) {
-			cacheBreakpointsUsed++;
-		}
+		cacheBreakpointsUsed += cacheSystemPrefixBreakpoints(
+			params.system as AnthropicSystemBlock[],
+			cacheControl,
+			MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed,
+			isCCLayout ? firstCacheableSystemIndex(params.system as AnthropicSystemBlock[]) : 0,
+		);
 	}
-
 	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
 
 	const start = isCCLayout ? Math.max(0, params.messages.length - 1) : Math.max(0, params.messages.length - 2);
@@ -3679,6 +3714,22 @@ function usesAdaptiveThinkingTagOnly(model: Model<"anthropic-messages">): boolea
 	return thinking.efforts.length > 0;
 }
 
+/**
+ * True for adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5)
+ * that reject `thinking.type: "disabled"`. Turning thinking off on these models
+ * means omitting the `thinking` field entirely and pinning the lowest adaptive
+ * effort — a bare omission defaults to adaptive thinking ON. Excludes MiniMax,
+ * which drives adaptive thinking through the `thinking.type: "adaptive"` tag
+ * itself rather than `output_config.effort`.
+ */
+function isAdaptiveOnlyThinking(model: Model<"anthropic-messages">): boolean {
+	return (
+		model.thinking?.mode === "anthropic-adaptive" &&
+		!model.compat.disableAdaptiveThinking &&
+		!usesAdaptiveThinkingTagOnly(model)
+	);
+}
+
 function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
@@ -3764,12 +3815,7 @@ function buildAnthropicThinkingParams(
 		};
 	}
 	if (options?.thinkingEnabled === false) {
-		const compat = model.compat;
-		if (
-			model.thinking?.mode === "anthropic-adaptive" &&
-			!compat.disableAdaptiveThinking &&
-			!usesAdaptiveThinkingTagOnly(model)
-		) {
+		if (isAdaptiveOnlyThinking(model)) {
 			// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
 			// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
 			// Omit the thinking field (the API defaults to adaptive) and pin the
@@ -3971,7 +4017,7 @@ function buildParams(
 		params.tool_choice = toolChoice;
 	}
 
-	disableThinkingIfToolChoiceForced(params);
+	disableThinkingIfToolChoiceForced(params, model);
 	ensureMaxTokensForThinking(params, maxOutputTokens);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);
@@ -4035,38 +4081,40 @@ function buildToolResultBlock(
 export type AnthropicMessageParam = MessageParam;
 
 /**
- * Recursively replace lone surrogates in string leaves. Identity-preserving:
- * returns the input object/array when nothing changed.
+ * Recursively replace lone surrogates in string leaves. Identity-preserving and copy-on-write:
+ * returns the input object/array when nothing changed, and copies only the containers on the path
+ * to a changed leaf, so a well-formed request allocates nothing.
  */
 function toWellFormedDeep(value: unknown): unknown {
-	if (typeof value === "string") {
-		const wellFormed = value.toWellFormed();
-		return wellFormed === value ? value : wellFormed;
-	}
+	if (typeof value === "string") return value.isWellFormed() ? value : value.toWellFormed();
 	if (Array.isArray(value)) {
-		let changed = false;
-		const next = value.map(entry => {
+		let next: unknown[] | undefined;
+		for (let i = 0; i < value.length; i++) {
+			const entry = value[i];
 			const sanitized = toWellFormedDeep(entry);
-			if (sanitized !== entry) changed = true;
-			return sanitized;
-		});
-		return changed ? next : value;
+			if (sanitized === entry) continue;
+			next ??= value.slice();
+			next[i] = sanitized;
+		}
+		return next ?? value;
 	}
 	if (isRecord(value)) {
-		let changed = false;
-		const next: Record<string, unknown> = {};
-		for (const [key, entry] of Object.entries(value)) {
+		let next: Record<string, unknown> | undefined;
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			const entry = value[key];
 			const sanitized = toWellFormedDeep(entry);
-			if (sanitized !== entry) changed = true;
+			if (sanitized === entry) continue;
+			next ??= { ...value };
 			next[key] = sanitized;
 		}
-		return changed ? next : value;
+		return next ?? value;
 	}
 	return value;
 }
 
 function convertAnthropicUserContent(
-	content: (TextContent | ImageContent)[] | string | undefined,
+	content: (TextContent | ImageContent | VideoContent)[] | string | undefined,
 	supportsImages: boolean,
 ): string | ContentBlockParam[] | undefined {
 	if (!content) return undefined;

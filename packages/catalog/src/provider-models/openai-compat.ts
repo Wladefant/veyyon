@@ -1316,8 +1316,8 @@ export interface XaiModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions("xai", "https://api.x.ai/v1", config);
+export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-responses"> {
+	return createSimpleOpenAIResponsesOptions("xai", "https://api.x.ai/v1", config);
 }
 
 export interface XaiOAuthModelManagerConfig {
@@ -1412,7 +1412,7 @@ const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as c
 function withXaiOAuthCompatDefaults(model: ModelSpec<"openai-responses">): ModelSpec<"openai-responses"> {
 	const compat = {
 		...(model.compat ?? {}),
-		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? false,
+		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? true,
 		filterReasoningHistory: model.compat?.filterReasoningHistory ?? true,
 		supportsImageDetailOriginal: model.compat?.supportsImageDetailOriginal ?? false,
 		omitReasoningEffort: model.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(model.id),
@@ -1455,7 +1455,7 @@ function mergeCuratedIntoModel(
 	const compat = {
 		...(base.compat ?? {}),
 		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
-		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? false,
+		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? true,
 		filterReasoningHistory: base.compat?.filterReasoningHistory ?? true,
 		supportsImageDetailOriginal: base.compat?.supportsImageDetailOriginal ?? false,
 		omitReasoningEffort: !effortCapable,
@@ -3902,12 +3902,28 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 							["tools", "tool_choice", "functions", "function_call"].includes(param),
 						)
 					: reference?.supportsTools;
+	// Enrich from the bundled reference with provider-INDEPENDENT reasoning
+	// hints only. The reference is resolved against the global bundled catalog,
+	// so a custom endpoint exposing an alias that collides with a bundled model
+	// (a LiteLLM proxy serving `kimi-k3`, which matches Fireworks' bundled
+	// `kimi-k3`) must not inherit that provider's transport compat. Spreading
+	// the resolved `reference.compat` wholesale leaked `wireModelIdMode`,
+	// `toolSchemaFlavor`, `thinkingFormat`, etc. across the provider boundary —
+	// rewriting the wire id to `accounts/fireworks/models/kimi-k3` for a
+	// non-Fireworks endpoint (issue #9938). `buildModel` re-derives every
+	// transport field from the discovered provider and model id, so only the
+	// effort vocabulary flows through here. Mirrors `discoverOpenAIModelsList`.
+	const referenceCompat = reference?.compat as OpenAICompat | undefined;
 	const compat: OpenAICompat = {
-		...(reference?.compat ?? {}),
 		supportsStore: false,
 		supportsDeveloperRole: false,
-		...(supportedOpenAIParams !== undefined
-			? { supportsReasoningEffort: supportedOpenAIParams.includes("reasoning_effort") }
+		supportsReasoningEffort:
+			supportedOpenAIParams !== undefined
+				? supportedOpenAIParams.includes("reasoning_effort")
+				: (referenceCompat?.supportsReasoningEffort ?? false),
+		...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
+		...(referenceCompat?.omitReasoningEffort !== undefined
+			? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
 			: {}),
 	};
 	return {
@@ -4258,7 +4274,11 @@ export interface GithubCopilotModelManagerConfig {
 
 const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus|fable|mythos)-\d/;
 const isCopilotResponsesModelId = (modelId: string): boolean =>
-	modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
+	modelId === "grok-4.5" ||
+	modelId === "grok-4.6" ||
+	modelId.startsWith("gpt-5") ||
+	modelId.startsWith("oswe") ||
+	modelId.startsWith("mai-");
 
 function inferCopilotApi(modelId: string): Api {
 	if (COPILOT_ANTHROPIC_MODEL_PATTERN.test(modelId)) {
@@ -4878,7 +4898,16 @@ const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution("https://opencod
 // anthropic-style requests to /v1/messages and the gateway would return its
 // `Page Not Found` HTML (issue #887 for the qwen/m2.7 entries; minimax-m3
 // and minimax-m3-free added under #1617 for the same root cause).
+//
+// muse-spark-1.2 / muse-spark-1.2-contributor are the same inverse case: the
+// Go gateway's /zen/go/v1/models discovery drops the `provider.npm` hint, so
+// without an override they fall through to openai-completions even though the
+// gateway only serves them at /zen/go/v1/responses (@ai-sdk/openai per
+// https://opencode.ai/docs/go/#endpoints). The completions parser then closes
+// the stream with no finish_reason on every tool-call turn (#8957).
 const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen/go", {
+	"muse-spark-1.2": "openai-responses",
+	"muse-spark-1.2-contributor": "openai-responses",
 	"minimax-m2.7": "openai-completions",
 	"minimax-m3": "openai-completions",
 	"minimax-m3-free": "openai-completions",
@@ -4955,13 +4984,31 @@ function resolveGoogleVertexApi(modelId: string, raw: ModelsDevModel): { api: Ap
 	return { api: "google-vertex", baseUrl: GOOGLE_VERTEX_BASE_URL };
 }
 
+const BEDROCK_RUNTIME_RESOLUTION = {
+	api: "bedrock-converse-stream",
+	baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+} as const;
+const BEDROCK_MANTLE_RESPONSES_RESOLUTION = {
+	api: "openai-responses",
+	baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+} as const;
+const BEDROCK_MANTLE_OPENAI_MODEL_IDS: Record<string, true> = {
+	"openai.gpt-5.4": true,
+	"openai.gpt-5.5": true,
+	"openai.gpt-5.6-luna": true,
+	"openai.gpt-5.6-sol": true,
+	"openai.gpt-5.6-terra": true,
+};
+
 const MODELS_DEV_PROVIDER_DESCRIPTORS_BEDROCK: readonly ModelsDevProviderDescriptor[] = [
 	// --- Amazon Bedrock ---
 	{
 		modelsDevKey: "amazon-bedrock",
 		providerId: "amazon-bedrock",
-		api: "bedrock-converse-stream",
-		baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+		api: BEDROCK_RUNTIME_RESOLUTION.api,
+		baseUrl: BEDROCK_RUNTIME_RESOLUTION.baseUrl,
+		resolveApi: modelId =>
+			BEDROCK_MANTLE_OPENAI_MODEL_IDS[modelId] ? BEDROCK_MANTLE_RESPONSES_RESOLUTION : BEDROCK_RUNTIME_RESOLUTION,
 		filterModel: (id, m) => {
 			if (m.tool_call !== true) return false;
 			if (id.startsWith("ai21.jamba")) return false;
@@ -4976,14 +5023,25 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_BEDROCK: readonly ModelsDevProviderDescrip
 				id: crossRegionId,
 				name: toModelName(m.name, crossRegionId),
 			};
-			// Also emit EU variants for Claude models
+			// Also emit EU and AWS GovCloud (`us-gov.`) geo inference-profile
+			// variants for Claude models. GovCloud accounts list system profiles
+			// under the `us-gov.` prefix (e.g. us-gov.anthropic.claude-sonnet-4-5-…);
+			// without these rows the catalog only has commercial geos (`us.`/`eu.`/…)
+			// and model resolution rejects the GovCloud id (or misroutes commercial
+			// geos onto us-east-1 with GovCloud credentials → 403).
 			if (modelId.startsWith("anthropic.claude-")) {
+				const displayName = toModelName(m.name, modelId);
 				return [
 					bedrockModel,
 					{
 						...bedrockModel,
 						id: `eu.${modelId}`,
-						name: `${toModelName(m.name, modelId)} (EU)`,
+						name: `${displayName} (EU)`,
+					},
+					{
+						...bedrockModel,
+						id: `us-gov.${modelId}`,
+						name: `${displayName} (GovCloud)`,
 					},
 				];
 			}
@@ -5040,7 +5098,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		defaultContextWindow: 131072,
 	}),
 	// --- xAI ---
-	openAiCompletionsDescriptor("xai", "xai", "https://api.x.ai/v1"),
+	simpleModelsDevDescriptor("xai", "xai", "openai-responses", "https://api.x.ai/v1"),
 	// --- OAuth twins: surfaces models.dev catalogs only under the API-key twin ---
 	// These exist so LIVE discovery rows pick up the declared reasoning surface;
 	// without them the twin knowledge sat only in the bundle generator, and a

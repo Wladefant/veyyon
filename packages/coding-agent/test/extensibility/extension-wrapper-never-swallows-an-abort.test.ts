@@ -72,6 +72,13 @@ async function outcomeOf(tool: AgentTool): Promise<unknown> {
 	return await wrapped
 		.execute("call-1", {} as never, undefined, undefined, {
 			settings: { get: (path: string) => (path === "tools.approvalMode" ? "yolo" : undefined) },
+			// The refusal fence only forwards a tool context with an owning session.
+			// A settings-only frame is policy, not a caller context; it is stripped
+			// before approval and would test a missing-policy error, not this tool.
+			sessionManager: {
+				getSessionId: () => "abort-wrapper-test",
+				getCwd: () => process.cwd(),
+			},
 		} as never)
 		.then(
 			result => result,

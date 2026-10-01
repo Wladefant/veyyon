@@ -31,12 +31,20 @@ import { inlineBudgetFor } from "./output-artifact";
 import { wrapBrackets } from "./render-utils";
 import { renderError } from "./tool-errors";
 
-export type { DiagnosticMeta, LimitsMeta, OutputMeta, SourceMeta, TruncationMeta } from "./output-notice";
+export type {
+	ColumnUnit,
+	DiagnosticMeta,
+	LimitsMeta,
+	OutputMeta,
+	SourceMeta,
+	TruncationMeta,
+} from "./output-notice";
 // The notice text and the metadata shape moved to their own module so `session/messages.ts` could
 // append a notice without reaching the tool layer. Re-exported here because every existing caller asks
 // this file for them, and forwarding costs nothing: that module imports two formatters and the
 // diagnostic renderer.
 export {
+	formatColumnTruncatedNotice,
 	formatFullOutputReference,
 	formatOutputNotice,
 	formatTruncationMetaNotice,
@@ -45,7 +53,7 @@ export {
 	stripRawOutputArtifactNotice,
 } from "./output-notice";
 
-import type { OutputMeta, TruncationMeta } from "./output-notice";
+import type { ColumnUnit, OutputMeta, TruncationMeta } from "./output-notice";
 import { formatFullOutputReference, formatOutputNotice, formatTruncationMetaNotice } from "./output-notice";
 
 // =============================================================================
@@ -75,6 +83,16 @@ export interface TruncationTextOptions {
 }
 
 /**
+ * Input for {@link OutputMetaBuilder.limits}. A column cap names the unit it was enforced in, so a new
+ * producer cannot report a byte cap as characters by leaving the unit out.
+ */
+export type LimitsInput = {
+	matchLimit?: number;
+	resultLimit?: number;
+	headLimit?: number;
+} & ({ columnMax?: undefined } | { columnMax: number | undefined; columnUnit: ColumnUnit });
+
+/**
  * Fluent builder for OutputMeta.
  *
  * @example
@@ -82,7 +100,7 @@ export interface TruncationTextOptions {
  * details.meta = outputMeta()
  *   .truncation(truncation, { direction: "head" })
  *   .matchLimit(limitReached ? effectiveLimit : 0)
- *   .columnTruncated(linesTruncated ? DEFAULT_MAX_COLUMN : 0)
+ *   .columnTruncated(linesTruncated ? DEFAULT_MAX_COLUMN : 0, "bytes")
  *   .get();
  * ```
  */
@@ -160,6 +178,15 @@ export class OutputMetaBuilder {
 
 	/** Add truncation info from OutputSummary. No-op if not truncated. */
 	truncationFromSummary(summary: OutputSummary, options: TruncationSummaryOptions): this {
+		// A per-line column cap only trims individual lines (with a `…` marker);
+		// it is not a window/byte truncation, so surface it as its own limit
+		// notice rather than a "Showing lines X-Y … limit" range. This runs even
+		// when the output is otherwise complete (`truncated === false`). The sink
+		// caps in UTF-8 bytes and mirrors the raw stream to `summary.artifactId`
+		// whenever the cap drops bytes, so the notice says "bytes" and points there.
+		if (summary.columnMax != null && summary.columnMax > 0 && (summary.columnTruncatedLines ?? 0) > 0) {
+			this.columnTruncated(summary.columnMax, "bytes", summary.artifactId);
+		}
 		if (!summary.truncated) return this;
 
 		const { direction, startLine = 1, totalFileLines } = options;
@@ -298,7 +325,7 @@ export class OutputMetaBuilder {
 	}
 
 	/** Add limit notices in one call. */
-	limits(limits: { matchLimit?: number; resultLimit?: number; headLimit?: number; columnMax?: number }): this {
+	limits(limits: LimitsInput): this {
 		if (limits.matchLimit !== undefined) {
 			this.matchLimit(limits.matchLimit);
 		}
@@ -309,7 +336,7 @@ export class OutputMetaBuilder {
 			this.headLimit(limits.headLimit);
 		}
 		if (limits.columnMax !== undefined) {
-			this.columnTruncated(limits.columnMax);
+			this.columnTruncated(limits.columnMax, limits.columnUnit);
 		}
 		return this;
 	}
@@ -324,10 +351,17 @@ export class OutputMetaBuilder {
 		return this.#reachedLimit("headLimit", reached, suggestion);
 	}
 
-	/** Add column truncation notice. No-op if maxColumn <= 0. */
-	columnTruncated(maxColumn: number): this {
+	/**
+	 * Add column truncation notice. No-op if maxColumn <= 0. `unit` names the unit the producer
+	 * enforced the cap in. `artifactId` names the raw, uncapped capture when the producer mirrored
+	 * one; the notice then points at it, as the tail-truncation notice does.
+	 */
+	columnTruncated(maxColumn: number, unit: ColumnUnit, artifactId?: string): this {
 		if (maxColumn <= 0) return this;
-		this.#meta.limits = { ...this.#meta.limits, columnTruncated: { maxColumn } };
+		this.#meta.limits = {
+			...this.#meta.limits,
+			columnTruncated: artifactId === undefined ? { maxColumn, unit } : { maxColumn, unit, artifactId },
+		};
 		return this;
 	}
 

@@ -1,8 +1,7 @@
 # Environment variables, complete
 
-Every variable the runtime reads, grouped by subsystem. The dozen an operator actually sets are on
-[Environment variables](./environment.md); this page is the exhaustive list, derived from current
-code paths in:
+Every variable the runtime reads, grouped by subsystem. The commonly set variables are in
+[Environment variables](./environment.md). Every variable here is read by code in:
 
 - `packages/coding-agent/src/**`
 - `packages/ai/src/**` (provider/auth resolution used by coding-agent)
@@ -22,9 +21,9 @@ Most runtime lookups use `$env` from `@veyyon/utils` (`packages/utils/src/env.ts
 4. Config-root `.env` (`~/.veyyon/profiles/default/.env`, respecting `VEYYON_CONFIG_DIR` and the active profile) for keys not already set
 5. Home `.env` (`~/.env`) for keys not already set
 
-Precedence is not the same as load order, and the difference matters if you are reading the source. Part of the home `.env` is applied FIRST, by `packages/utils/src/dotenv-home.ts`, because a `VEYYON_CODING_AGENT_DIR` or `XDG_CONFIG_HOME` set there sets where layers 3 and 4 are. `packages/utils/src/dirs.ts` imports that module before it resolves anything, so a directory is never computed from a pre-`.env` environment. `env.ts` then applies all four layers in full, overriding the values home contributed and nothing else, and refreshes the directory resolver. The result is the precedence listed above, whichever module a program imported.
+Precedence is not the same as load order. Part of the home `.env` is applied FIRST, by `packages/utils/src/dotenv-home.ts`, because a `VEYYON_CODING_AGENT_DIR` or `XDG_CONFIG_HOME` set there sets where layers 3 and 4 are. `packages/utils/src/dirs.ts` imports that module before it resolves anything, so a directory is never computed from a pre-`.env` environment. `env.ts` then applies all four layers in full, overriding the values home contributed and nothing else, and refreshes the directory resolver. The result is the precedence listed above, whichever module a program imported.
 
-That early phase applies only the variables that decide where a directory is: `VEYYON_CODING_AGENT_DIR`, `VEYYON_CONFIG_DIR`, and the four `XDG_*` bases. Everything else in your home `.env`, including every API key, waits for `env.ts`. The reason is that whatever is in the environment that early is inherited by every process veyyon spawns, and the sandboxed evaluator that runs your `eval` code is one of them: it should not receive your credentials.
+That early phase applies only the variables that set where a directory is: `VEYYON_CODING_AGENT_DIR`, `VEYYON_CONFIG_DIR`, and the four `XDG_*` bases. Everything else in your home `.env`, including every API key, waits for `env.ts`. The reason is that whatever is in the environment that early is inherited by every process veyyon spawns, and the sandboxed evaluator that runs your `eval` code is one of them: it should not receive your credentials.
 
 Two variables are not read from a `.env` file at all. `VEYYON_PROFILE` selects the profile, and the profile sets where layers 3 and 4 are, so reading it out of one of them would be circular; set it in your shell or pass `--profile`. `PATH` is read only after `env.ts` has run, which is when binary lookup happens anyway, so extending `PATH` in a `.env` works as it always has.
 
@@ -118,7 +117,7 @@ The provider-first projection of this map is documented in [Providers](./provide
 
 ### Auth broker / auth gateway (remote credential vault)
 
-When the broker is enabled, the local SQLite credential store is bypassed and all OAuth refresh / access tokens live on the broker host. See [`auth-broker-gateway.md`](../../../internal/auth-broker-gateway.md) for the full protocol, CLI surface, and 5-min/15-s usage cache layering.
+When the broker is enabled, the local SQLite credential store is bypassed and all OAuth refresh / access tokens are stored on the broker host. See [`auth-broker-gateway.md`](../../../internal/auth-broker-gateway.md) for the full protocol, CLI surface, and 5-min/15-s usage cache layering.
 
 | Variable                | Used for                                                                                     | Required when                                                                                                             | Notes / precedence                                                                                                                                                                         |
 | ----------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -152,7 +151,7 @@ When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry 
   - inline PEM (including escaped `\n` sequences).
 
   `NODE_EXTRA_CA_CERTS` is honoured for every provider fetch (OpenAI-compatible,
-  Codex, Ollama, Azure Responses, Google, Anthropic), not just Foundry, Bun's
+  Codex, Ollama, Azure Responses, Google, Anthropic), not only Foundry. Bun's
   `fetch` does not consume the env var natively, so the bundle is merged into
   `RequestInit.tls.ca` alongside the system root store. The `CLAUDE_CODE_*` mTLS
   material remains Anthropic-Foundry-specific.
@@ -179,7 +178,7 @@ When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry 
 | `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` / `AWS_CONTAINER_CREDENTIALS_FULL_URI` | Marks Bedrock as available in provider detection (credential resolution itself covers env keys, profiles/SSO/`credential_process`, then IMDSv2) |
 | `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`                                  | Marks Bedrock as available in provider detection (same caveat as the ECS variables above)     |
 | `AWS_BEDROCK_SKIP_AUTH`                                                         | If `1`, injects dummy credentials (proxy/non-auth scenarios)                                  |
-| `HTTPS_PROXY` / `HTTP_PROXY`                                                    | Honored via Bun's native fetch proxy support (the provider no longer ships an AWS SDK / proxy-agent transport) |
+| `HTTPS_PROXY` / `HTTP_PROXY`                                                    | Honored via Bun's native fetch proxy support (the provider uses no AWS SDK or proxy-agent transport) |
 | `NO_PROXY`                                                                      | Excludes matching hosts from Bun's native proxy routing                                       |
 
 Region fallback in provider code: `options.region` → `AWS_REGION` → `AWS_DEFAULT_REGION` → `us-east-1`.
@@ -258,8 +257,8 @@ Both providers can be reached over two different HTTP APIs, and these pick which
 
 | Variable                      | Behavior                                                                                                                     |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `VEYYON_OPENROUTER_RESPONSES` | OpenRouter uses the Responses API unless this is exactly `0`, which selects chat completions. Any other value leaves the default in place |
-| `VEYYON_PERPLEXITY_RESPONSES` | Perplexity web search uses the Responses API only when this is exactly `1`                                                    |
+| `VEYYON_OPENROUTER_RESPONSES` | OpenRouter uses the Responses API unless this is `0`, which selects chat completions. Any other value leaves the default in place |
+| `VEYYON_PERPLEXITY_RESPONSES` | Perplexity web search uses the Responses API only when this is `1`                                                    |
 
 ### Prompt cache controls
 
@@ -334,7 +333,7 @@ Use `ANTHROPIC_SEARCH_BASE_URL` (optionally with `ANTHROPIC_SEARCH_API_KEY`) to 
 | `VEYYON_PY`                 | Boolean-like override for the Python eval backend: truthy (`1`/`true`/`yes`/`on`) enables, any other value disables; unset defers to the `eval.py` setting (default enabled)        |
 | `VEYYON_JS`                 | Same boolean-like override for the JavaScript eval backend; unset defers to the `eval.js` setting (default enabled)                                                                 |
 | `VEYYON_PYTHON_SKIP_CHECK`  | If `1`, skips Python interpreter availability checks (subprocess runner still starts on demand)                     |
-| `VEYYON_PYTHON_INTEGRATION` | If `1`, opts gated integration tests in (e.g. `python-runner-integration.test.ts`) into running against real Python |
+| `VEYYON_PYTHON_INTEGRATION` | If `1`, integration tests such as `python-runner-integration.test.ts` run against a real Python interpreter instead of being skipped |
 | `VEYYON_PYTHON_IPC_TRACE`   | If `1`, logs NDJSON frames exchanged with the Python runner subprocess                                              |
 | `VEYYON_RUBY_IPC_TRACE`     | Same, for the Ruby runner subprocess                                                                                |
 | `VEYYON_JULIA_IPC_TRACE`    | Same, for the Julia runner subprocess                                                                               |
@@ -370,7 +369,7 @@ Extra conditional behavior:
 | `VEYYON_SUBPROCESS_CMD`          | Overrides agent spawn command (`veyyon` / `veyyon.cmd` resolution bypass)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `VEYYON_TASK_MAX_OUTPUT_BYTES`   | Max captured output bytes per agent (default `500000`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `VEYYON_TASK_MAX_OUTPUT_LINES`   | Max captured output lines per agent (default `5000`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `VEYYON_TIMING`                  | If set (any non-empty value), prints a hierarchical timing-span tree to **stderr** via `logger.printTimings()`. In interactive mode the tree prints once the agent is ready (before the TUI starts); in print mode it prints after the whole prompt batch completes. Print-mode prompts are wrapped in `print:prompt:initial` / `print:prompt:next` spans so each user message shows up as its own row. `VEYYON_TIMING=x` exits the process with code 0 right after printing in interactive mode (use to measure cold startup only). `VEYYON_TIMING=full` lists every module-load entry instead of just the top N. |
+| `VEYYON_TIMING`                  | If set (any non-empty value), prints a hierarchical timing-span tree to **stderr** via `logger.printTimings()`. In interactive mode the tree prints once the agent is ready (before the TUI starts); in print mode it prints after the whole prompt batch completes. Print-mode prompts are wrapped in `print:prompt:initial` / `print:prompt:next` spans so each user message shows up as its own row. `VEYYON_TIMING=x` exits the process with code 0 right after printing in interactive mode (use to measure cold startup only). `VEYYON_TIMING=full` lists every module-load entry instead of only the top N. |
 | `VEYYON_DEBUG_STARTUP`           | If set (any non-empty value), streams one synchronous `[startup] <phase>:start` / `:done` marker line to **stderr** as each startup phase begins/ends, including command-module imports (`cli:load:<name>`) and the native addon extraction/`dlopen` (`native:*`). Unlike `VEYYON_TIMING` (which prints only once startup completes), the markers survive a hard hang: the last line on stderr states the phase the process is stuck in. Combine with `VEYYON_TIMING` freely; markers and the span tree share the same phase names.                                                                                |
 | `VEYYON_PACKAGE_DIR`         | Overrides package asset base dir resolution (docs, examples, and CHANGELOG assets)|
 | `VEYYON_REPAIR_DISABLE`      | If `1`/`true`/`yes`, disables malformed-tool-call schema repair (calls fail instead of being repaired) |
@@ -401,7 +400,7 @@ Extra conditional behavior:
 | `VEYYON_EDIT_FUZZY_THRESHOLD`    | Similarity floor for fuzzy matching, `0`-`1`. `auto` (the default) reads the `edit.fuzzyThreshold` setting. A value outside the range, or not a number, fails the call                                                                                                                                                                                                                                                                                                       |
 | `VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS` | Cross-provider first-event watchdog in ms; `0` disables it. A per-request `streamFirstEventTimeoutMs` wins, and OpenAI-family transports prefer `VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS`. Default 100000                                                                                                                                                                                                                                                          |
 | `VEYYON_STREAM_IDLE_TIMEOUT_MS`  | Cross-provider maximum idle gap between streamed events in ms, applied once the first event has arrived; `0` disables it. A per-request `streamIdleTimeoutMs` wins, and `VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS` is the OpenAI-family alias. Default 120000                                                                                                                                                                                                                |
-| `VEYYON_NO_THINKING_LOOP_GUARD`  | If `1`, disables the repeated-thinking-block loop detector for the models it normally guards                                                                                                                                                                                                                                                                                                                                                                               |
+| `VEYYON_NO_THINKING_LOOP_GUARD`  | If `1`, disables the repeated-thinking-block loop detector for the models it normally checks                                                                                                                                                                                                                                                                                                                                                                               |
 | `VEYYON_MAX_AST_FILES`           | Positive integer cap on how many files one `ast_edit` call may rewrite (default `1000`)                                                                                                                                                                                                                                                                                                                                                                                    |
 | `VEYYON_TOKENIZER_ACCURATE`      | If `1`, uses the accurate tokenizer instead of the fast estimate. Ignored under `NODE_ENV=test`                                                                                                                                                                                                                                                                                                                                                                             |
 | `VEYYON_REQ_DEBUG`               | If `1`, dumps every provider HTTP request and its response stream to `rr-session-<n>.json` and `rr-session-<n>.res.log` in the process working directory, mode `0600`. **The dumps include request headers, so they contain credentials.** A dump that cannot be written is logged and the request proceeds                                                                                                                                                                 |
@@ -420,7 +419,7 @@ These are consumed via `@veyyon/utils/dirs` and affect where coding-agent stores
 | Variable              | Default / behavior                                                            |
 | --------------------- | ----------------------------------------------------------------------------- |
 | `VEYYON_CONFIG_DIR`   | Config root dirname under home (default `.veyyon`). A name, not a path: an absolute value is rejected at startup. |
-| `VEYYON_PROFILE`      | Activate a named profile (relocates the user base to `~/.veyyon/profiles/<name>`)|
+| `VEYYON_PROFILE`      | Activate a named profile (relocates the profile base to `~/.veyyon/profiles/<name>`)|
 | `VEYYON_WORKTREE_DIR` | Base directory for task-isolation worktrees (default `~/.veyyon/profiles/<name>/wt`)|
 | `VEYYON_GITHUB_CACHE_DB` | Path override for the GitHub tool cache database|
 | `VEYYON_AUTORESEARCH_DB_DIR` | Directory override for the autoresearch database|
@@ -471,14 +470,14 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 | `VEYYON_NOTIFICATIONS`        | `off` / `0` / `false` suppress desktop notifications                                  |
 | `VEYYON_TUI_WRITE_LOG`        | If set, logs TUI writes to file                                                       |
 | `VEYYON_HARDWARE_CURSOR`      | If `1`, enables hardware cursor mode                                                  |
-| `VEYYON_NO_SYNC_OUTPUT`       | If set (any non-empty value), disables DEC 2026 synchronized-output wrappers while keeping TUI autowrap guards |
+| `VEYYON_NO_SYNC_OUTPUT`       | If set (any non-empty value), disables DEC 2026 synchronized-output wrappers; paint writes still disable terminal autowrap |
 | `VEYYON_TUI_SYNC_OUTPUT`      | `0` disables synchronized output, `1` forces it on. It shares one override tier with `VEYYON_NO_SYNC_OUTPUT` and `VEYYON_FORCE_SYNC_OUTPUT`, and an opt-out always beats a force-on. With no override the default comes from `TERM_FEATURES`, `WT_SESSION`, a terminal allowlist, and then a runtime DECRQM probe |
 | `VEYYON_FORCE_SYNC_OUTPUT`    | `1` forces synchronized output on, unless an opt-out is also set                                        |
 | `VEYYON_TUI_SCROLL_TRANSPORT` | `alt-arrows` releases the mouse grab and moves the transcript to the alternate screen with Alternate Scroll Mode, so the terminal keeps native selection and sends wheel ticks as cursor keys. Any other value keeps the default `mouse` transport |
 | `VEYYON_NO_DECCARA`           | If set (truthy), disables Kitty DECCARA rectangular-SGR background fills (forces padded-string rendering) |
 | `VEYYON_DEBUG_REDRAW`         | If `1`, enables redraw debug logging                                                  |
 | `VEYYON_FORCE_IMAGE_PROTOCOL` | Forces terminal image protocol detection (`kitty`, `iterm2`/`iterm`, `sixel`, `none`) |
-| `VEYYON_TUI_RESIZE_IN_PLACE`  | `1`/`true` force in-place resize (no alt-screen borrow, no ED3 rewrap); `0`/`false` force the alt-screen fast path. Default-on for Warp, which re-reports its size on alt-screen toggles |
+| `VEYYON_TUI_RESIZE_IN_PLACE`  | `1`/`true` force in-place resize (no alt-screen borrow, no ED3 rewrap); `0`/`false` force the alt-screen fast path. Default-on for Warp, which re-reports its size on alt-screen toggles; `1` also forces it on a host that owns the grid (ConPTY), whose default is the borrow |
 
 ---
 
@@ -501,6 +500,6 @@ Treat these as secrets; do not log or commit them:
 - Cloud credentials (`AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS` path may expose service-account material)
 - Search/provider auth vars (`EXA_API_KEY`, `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, Anthropic search keys)
 - Foundry mTLS material (`CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`, `NODE_EXTRA_CA_CERTS` when it points to private CA bundles)
-- `VEYYON_REQ_DEBUG` is not a secret itself, but the `rr-session-*.json` dumps it writes into the working directory record request headers verbatim, so a dump carries whatever credential authenticated the request. Delete the files or keep them out of the repository
+- `VEYYON_REQ_DEBUG` is not a secret itself, but the `rr-session-*.json` dumps it writes into the working directory record request headers verbatim, so a dump contains whatever credential authenticated the request. Delete the files or keep them out of the repository
 
 Python runtime also explicitly strips many common key vars before spawning kernel subprocesses (`packages/coding-agent/src/eval/py/runtime.ts`).

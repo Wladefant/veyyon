@@ -18,15 +18,24 @@ import {
 import { formatMoreLines, logger } from "@veyyon/utils";
 import type { ImageFallbackReason } from "@veyyon/utils/image-fallback";
 import { isRecord } from "@veyyon/utils/type-guards";
-import type { ToolExecutionBlock } from "@veyyon/wire/presentation";
+import type { ToolView } from "@veyyon/view";
+import type {
+	ToolExecutionBlock,
+	ToolExecutionDisplay,
+	ToolExecutionImageItem,
+	ToolExecutionMultiFileItem,
+	ToolExecutionPolicies,
+} from "@veyyon/wire/presentation";
 import type { RenderResultOptions } from "../../../../extensibility/custom-tools/types";
 import {
 	buildToolRenderContext,
 	createToolExecutionProducer,
 	notExecutedReason,
-	type ToolExecutionProducer,
+	type ToolExecutionDrawContext,
+	ToolExecutionProducer,
 } from "../../../../presentation/tool-execution";
 import { recordImageDisplay } from "../../../../session/image-visibility";
+import type { HighlightRequest } from "../../../../theme/highlight";
 import { transitionsEnabled } from "../../../../theme/shimmer";
 import type { Theme } from "../../../../theme/theme";
 import { getThemeEpoch, theme } from "../../../../theme/theme";
@@ -49,7 +58,7 @@ import {
 	truncateToWidth,
 } from "../../../../tools/core/render-utils";
 import { toolViewDefinitions } from "../../../../tools/view-registry";
-import { drawToolView } from "../../draw/draw-tool-view";
+import { drawToolView, toolViewHighlightRequests } from "../../draw/draw-tool-view";
 import {
 	CachedOutputBlock,
 	isFramedBlockComponent,
@@ -77,6 +86,29 @@ export { turnFailedToolResult } from "../../../../presentation/tool-execution";
 
 export type DisplaceableToolName = "job" | "todo";
 
+/** What a card's call phase draws: its title row, the tool's own renderer, a failure, its view, or nothing. */
+type CallDrawing =
+	| { readonly kind: "title" }
+	| { readonly kind: "custom" }
+	| { readonly kind: "failure"; readonly error: string }
+	| { readonly kind: "view"; readonly view: ToolView }
+	| { readonly kind: "nothing" };
+
+/** What a card's result phase draws. */
+type ResultDrawing =
+	| { readonly kind: "custom" }
+	| { readonly kind: "failure"; readonly error: string; readonly fallbackText: string | undefined }
+	| { readonly kind: "multiFile"; readonly items: readonly ToolExecutionMultiFileItem[] }
+	| { readonly kind: "view"; readonly view: ToolView }
+	| { readonly kind: "generic" }
+	| { readonly kind: "raw" };
+
+const DRAW_TITLE = { kind: "title" } as const;
+const DRAW_CUSTOM = { kind: "custom" } as const;
+const DRAW_NOTHING = { kind: "nothing" } as const;
+const DRAW_GENERIC = { kind: "generic" } as const;
+const DRAW_RAW = { kind: "raw" } as const;
+
 const ROW_INDENT_PATTERN = /^((?:\x1b\[[0-9;]*m)*)( *)/;
 
 function dedent(rows: readonly string[]): string[] {
@@ -98,6 +130,9 @@ interface ImagePlaceholder {
 	readonly block: { data?: string; mimeType?: string };
 	readonly reason: ImageFallbackReason;
 }
+
+/** The render options a tool's call and result renderers receive. */
+type ToolRenderState = RenderResultOptions & { renderContext?: Record<string, unknown> };
 
 function isAgentToolLike(value: unknown): value is AnyAgentTool {
 	return (
@@ -156,18 +191,23 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
 
 let toolExecutionInstanceSeq = 0;
 
+/**
+ * The rail frame each card built around a child, keyed by that child: one table for every card rather
+ * than a WeakMap per card. The owner is kept beside the frame, since the frame draws its card's status.
+ */
+const railWrappers = new WeakMap<Component, { owner: ToolExecutionComponent; framed: Component }>();
+
 export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion, ToolExecutionHandle {
 	#contentBox: Box;
 	#contentText: WidthAwareText;
-	#railWrappers = new WeakMap<Component, Component>();
 	#multiFileBoxes: (Box | Spacer)[] = [];
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
 	#notExecutedNotice: Text | undefined;
 	readonly #instanceId = ++toolExecutionInstanceSeq;
-	#block: ToolExecutionBlock;
+	/** What the card draws from: a producer it builds its block from, or a block it was handed whole. */
+	#source: ToolExecutionProducer | ToolExecutionBlock;
 	#options: ToolExecutionOptions;
-	#producer?: ToolExecutionProducer;
 	#ui?: TUI;
 	#expanded = false;
 	#showImages: boolean;
@@ -175,10 +215,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#resultVersion = 1;
 	#lastDisplayKey: string | undefined;
 	#displayInputVersion = 0;
-	#displayBuilt = false;
+	#displayStale = true;
 	#renderedImageCount = 0;
-	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
-	#imageConversionFailures: Set<number> = new Set();
+	/** Created on the first Kitty conversion: almost no card holds an image to convert. */
+	#convertedImages: Map<number, { data: string; mimeType: string }> | undefined;
+	#imageConversionFailures: Set<number> | undefined;
 	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
 	#railIdleLive = false;
@@ -241,7 +282,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#showImages = this.#options.showImages ?? true;
 			this.#expanded = this.#options.expanded ?? false;
 
-			this.#producer = createToolExecutionProducer({
+			this.#source = createToolExecutionProducer({
 				toolName,
 				args,
 				options: this.#options,
@@ -249,10 +290,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				toolCallId,
 				cwd: this.#options.cwd,
 			});
-			this.#block = this.#producer.block;
 		} else {
 			// (block, options)
-			this.#block = blockOrToolName;
+			this.#source = blockOrToolName;
 			this.#options = (argsOrOptions as ToolExecutionOptions) ?? {};
 			if (isAgentToolLike(optionsOrTool)) {
 				this.#options.tool = optionsOrTool;
@@ -264,17 +304,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#showImages = this.#options.showImages ?? true;
 			this.#expanded = this.#options.expanded ?? false;
 
-			if (this.#options.dataSource) {
-				this.#producer = this.#options.dataSource;
-			} else if (this.#options.tool || !this.#block.display) {
-				this.#applyRawBlock(this.#block);
+			const dataSource = this.#options.dataSource;
+			if (!dataSource && (this.#options.tool || !blockOrToolName.display)) {
+				this.#applyRawBlock(blockOrToolName);
+			} else {
+				if (dataSource) this.#source = dataSource;
+				this.#adoptBlockLifecycle(blockOrToolName);
 			}
 		}
-		this.#isPartial = this.#block.status === "pending" || this.#block.status === "running";
-		this.#sealed =
-			this.#block.display?.policies?.sealed ??
-			(this.#block.status !== "pending" && this.#block.status !== "running");
-		this.#backgroundTaskFrozen = this.#block.display?.policies?.backgroundTaskFrozen ?? false;
 
 		this.#contentBox = new Box(COMPOSER_INSET_COLS, 1);
 		this.#contentText = new WidthAwareText(contentWidth => this.#formatGenericFallback(contentWidth), 0, 0);
@@ -284,17 +321,48 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 		this.#updateSpinnerAnimation();
 		this.#updateRailMotion();
-		if (this.#producer) {
-			this.#setupProducerSubscription();
-		}
+		this.#setupProducerSubscription();
 		this.#updateDisplay();
 	}
 
+	/** The producer the card builds its block from, when it has one. */
+	get #producer(): ToolExecutionProducer | undefined {
+		return this.#source instanceof ToolExecutionProducer ? this.#source : undefined;
+	}
+
+	/**
+	 * The block the card draws: its producer's block for the card's expansion, spinner frame and
+	 * freeze, or the block it was handed. The producer builds it on the first read after a change, so
+	 * a card handed its call, its result and a spinner start and stop between two frames builds one
+	 * block, for the frame that draws it.
+	 */
+	get #block(): ToolExecutionBlock {
+		const source = this.#source;
+		return source instanceof ToolExecutionProducer ? source.produceBlock(this.#drawContext()) : source;
+	}
+
+	/** The card's presentation policies, read without building the views its block carries. */
+	#policies(): ToolExecutionPolicies | undefined {
+		const source = this.#source;
+		return source instanceof ToolExecutionProducer ? source.policies(this.#drawContext()) : source.display?.policies;
+	}
+
+	#drawContext(): ToolExecutionDrawContext {
+		return { expanded: this.#expanded, frame: this.#spinnerFrame, frozen: this.#backgroundTaskFrozen };
+	}
+
+	/** Take whether the card is unsettled, sealed and frozen from a block it was handed. */
+	#adoptBlockLifecycle(block: ToolExecutionBlock): void {
+		this.#isPartial = block.status === "pending" || block.status === "running";
+		this.#sealed = block.display?.policies?.sealed ?? !this.#isPartial;
+		this.#backgroundTaskFrozen = block.display?.policies?.backgroundTaskFrozen ?? false;
+	}
+
 	#setupProducerSubscription(): void {
-		if (!this.#producer) return;
+		const producer = this.#producer;
+		if (!producer) return;
 		this.#producerUnsubscribe?.();
-		this.#producerUnsubscribe = this.#producer.subscribe(block => {
-			this.#block = block;
+		this.#producerUnsubscribe = producer.subscribe(() => {
 			// A synchronous update (args, result, seal) bumps its own version and rebuilds once it has
 			// finished. A recompute the producer started itself (a streaming diff preview settling)
 			// changes no input the display key reads, so the key moves here or the settled preview
@@ -303,21 +371,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#displayInputVersion++;
 			this.#updateDisplay();
 			this.#requestScopedRender();
-		});
-	}
-
-	/**
-	 * The block, rebuilt for the expansion, spinner frame and freeze this component is on. A card
-	 * reads `context.frame` inside its view (the composer caret blinks on it), so the block is
-	 * rebuilt wherever the frame moves: the tick, the spinner starting, and the spinner stopping. The
-	 * producer memoizes on the three inputs, so a call that changed none of them costs a comparison.
-	 */
-	#syncBlock(): void {
-		if (!this.#producer) return;
-		this.#block = this.#producer.produceBlock({
-			expanded: this.#expanded,
-			frame: this.#spinnerFrame,
-			frozen: this.#backgroundTaskFrozen,
 		});
 	}
 
@@ -332,18 +385,21 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	#applyRawBlock(block: ToolExecutionBlock): void {
 		const args = this.#parseInputArgs(block.input);
-		this.#producer ??= createToolExecutionProducer({
-			toolName: block.toolName,
-			args,
-			options: this.#options,
-			tool: this.#options.tool,
-			toolCallId: block.toolCallId,
-			id: block.id,
-			cwd: this.#options.cwd,
-		});
-		this.#producer.updateArgs(args, block.toolCallId);
+		const producer =
+			this.#producer ??
+			createToolExecutionProducer({
+				toolName: block.toolName,
+				args,
+				options: this.#options,
+				tool: this.#options.tool,
+				toolCallId: block.toolCallId,
+				id: block.id,
+				cwd: this.#options.cwd,
+			});
+		this.#source = producer;
+		producer.updateArgs(args, block.toolCallId);
 		if (block.output !== undefined || block.error !== undefined) {
-			this.#producer.updateResult(
+			producer.updateResult(
 				{
 					content: [{ type: "text", text: block.error ?? block.output ?? "" }],
 					isError: block.status === "failed" || block.status === "rejected" || block.status === "aborted",
@@ -352,7 +408,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				block.toolCallId,
 			);
 		}
-		this.#syncBlock();
+		this.#isPartial = producer.isPartial || producer.result === undefined;
+		this.#sealed = producer.sealed;
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -374,12 +431,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#producerUnsubscribe?.();
 			this.#producerUnsubscribe = undefined;
 			if (this.#producer !== this.#options.dataSource) this.#producer?.seal();
-			this.#producer = undefined;
-			this.#block = block;
+			this.#source = block;
+			this.#adoptBlockLifecycle(block);
 		}
-		this.#isPartial = this.#block.status === "pending" || this.#block.status === "running";
-		this.#sealed = this.#block.display?.policies?.sealed ?? !this.#isPartial;
-		this.#backgroundTaskFrozen = this.#block.display?.policies?.backgroundTaskFrozen ?? false;
 		this.#resultVersion++;
 		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
@@ -389,13 +443,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	updateArgs(args: unknown, toolCallId?: string): void {
-		if (toolCallId) this.#block.toolCallId = toolCallId;
+		if (toolCallId) this.#source.toolCallId = toolCallId;
 		if (this.#rawArgs === args) return;
 		this.#rawArgs = args;
 		this.#inSyncUpdate = true;
 		try {
-			if (!this.#producer) {
-				this.#producer = createToolExecutionProducer({
+			let producer = this.#producer;
+			if (!producer) {
+				producer = createToolExecutionProducer({
 					toolName: this.#block.toolName,
 					args,
 					options: this.#options,
@@ -404,10 +459,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 					id: this.#block.id,
 					cwd: this.#options.cwd,
 				});
+				this.#source = producer;
 				this.#setupProducerSubscription();
 			}
-			this.#producer.updateArgs(args, toolCallId);
-			this.#syncBlock();
+			producer.updateArgs(args, toolCallId);
 			this.#displayInputVersion++;
 			this.#updateSpinnerAnimation();
 			this.#updateDisplay();
@@ -417,11 +472,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	setArgsComplete(toolCallId?: string): void {
-		if (toolCallId) this.#block.toolCallId = toolCallId;
+		if (toolCallId) this.#source.toolCallId = toolCallId;
 		this.#inSyncUpdate = true;
 		try {
 			this.#producer?.setArgsComplete(toolCallId);
-			this.#syncBlock();
 			this.#updateSpinnerAnimation();
 			this.#updateDisplay();
 		} finally {
@@ -444,21 +498,28 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		isPartial = false,
 		toolCallId?: string,
 	): void {
-		if (toolCallId) this.#block.toolCallId = toolCallId;
-		if (isPartial && this.#block.toolName === "task" && this.#maybeFreezeBackgroundTask()) {
+		if (toolCallId) this.#source.toolCallId = toolCallId;
+		if (isPartial && this.#source.toolName === "task" && this.#maybeFreezeBackgroundTask()) {
 			return;
 		}
-		const hadNoResult = this.#isPartial && this.#block.output === undefined && this.#block.error === undefined;
 		const wasPartialResult = this.#isPartial;
-		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
+		// The first result after a frame painted the no-result shape repaints the viewport. The block is
+		// read for it only when such a frame was painted, so a card handed its result before its first
+		// frame, as every card of a rebuilt transcript is, never builds the block it no longer draws.
+		const firstResultAfterRepaintShapePaint =
+			this.#firstResultViewportRepaintShapePainted &&
+			wasPartialResult &&
+			this.#block.output === undefined &&
+			this.#block.error === undefined;
 		const partialResultPainted = this.#partialResultShapePainted;
 		this.#firstResultViewportRepaintShapePainted = false;
 		this.#partialResultShapePainted = false;
 
 		this.#inSyncUpdate = true;
 		try {
-			if (!this.#producer) {
-				this.#producer = createToolExecutionProducer({
+			let producer = this.#producer;
+			if (!producer) {
+				producer = createToolExecutionProducer({
 					toolName: this.#block.toolName,
 					args: this.#parseInputArgs(this.#block.input),
 					options: this.#options,
@@ -467,17 +528,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 					id: this.#block.id,
 					cwd: this.#options.cwd,
 				});
+				this.#source = producer;
 				this.#setupProducerSubscription();
 			}
-			this.#producer.updateResult(result, isPartial, toolCallId);
-			this.#syncBlock();
+			producer.updateResult(result, isPartial, toolCallId);
 			this.#isPartial = isPartial;
 			this.#resultVersion++;
 			this.#updateSpinnerAnimation();
 			this.#updateRailMotion();
 			this.#updateDisplay();
 			this.#resetDisplayForResultTopologyChange(
-				hadNoResult && firstResultRepaintShapePainted,
+				firstResultAfterRepaintShapePaint,
 				wasPartialResult && partialResultPainted,
 				isPartial,
 			);
@@ -503,8 +564,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#reportImageDisplay(index: number, fallback: ImageFallbackReason | undefined): void {
-		if (!this.#block.toolCallId) return;
-		recordImageDisplay(this.#block.toolCallId, index, fallback);
+		const toolCallId = this.#source.toolCallId;
+		if (!toolCallId) return;
+		recordImageDisplay(toolCallId, index, fallback);
 	}
 
 	#maybeConvertImagesForKitty(): void {
@@ -516,20 +578,22 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			const img = images[i];
 			if (!img.data || !img.mimeType) continue;
 			if (img.mimeType === "image/png") continue;
-			if (this.#convertedImages.has(i)) continue;
-			if (this.#imageConversionFailures.has(i)) continue;
+			if (this.#convertedImages?.has(i)) continue;
+			if (this.#imageConversionFailures?.has(i)) continue;
 
 			const index = i;
 			new Bun.Image(Buffer.from(img.data, "base64"))
 				.png()
 				.toBase64()
 				.then(data => {
+					this.#convertedImages ??= new Map();
 					this.#convertedImages.set(index, { data, mimeType: "image/png" });
 					this.#displayInputVersion++;
 					this.#updateDisplay();
 					if (typeof this.#ui?.requestRender === "function") this.#ui.requestRender();
 				})
 				.catch(() => {
+					this.#imageConversionFailures ??= new Set();
 					this.#imageConversionFailures.add(index);
 					this.#displayInputVersion++;
 					this.#updateDisplay();
@@ -539,13 +603,12 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#updateSpinnerAnimation(): void {
-		const policies = this.#block.display?.policies;
+		const policies = this.#policies();
+		const toolName = this.#source.toolName;
 		const isStreamingArgs =
 			!this.#sealed &&
 			this.#isPartial &&
-			(this.#block.toolName === "edit" ||
-				this.#block.toolName === "apply_patch" ||
-				this.#block.toolName === "write");
+			(toolName === "edit" || toolName === "apply_patch" || toolName === "write");
 		const isBackgroundAsyncRunning = policies?.backgroundTaskFrozen === true;
 		const pendingCallConsumesSpinner = this.#isPartial && policies?.animatedPendingPreview === true;
 		const partialResultConsumesSpinner = this.#isPartial && policies?.animatedPartialResult === true;
@@ -563,7 +626,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				if (this.#maybeFreezeBackgroundTask()) return;
 				if (!Array.isArray(theme?.spinnerFrames)) {
 					logger.warn("Spinner stopped: the active theme has no spinner frames", {
-						tool: this.#block.toolName,
+						tool: this.#source.toolName,
 						theme: theme === undefined ? "unset" : "no spinnerFrames",
 					});
 					this.stopAnimation();
@@ -571,7 +634,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				}
 				const fCount = theme.spinnerFrames.length;
 				this.#spinnerFrame = sharedSpinnerFrame(fCount, performance.now());
-				this.#syncBlock();
 				this.#updateDisplay();
 				this.#requestScopedRender();
 			}, SPINNER_RENDER_INTERVAL_MS);
@@ -580,15 +642,13 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
 		}
-		this.#syncBlock();
 	}
 
 	#maybeFreezeBackgroundTask(): boolean {
 		if (this.#backgroundTaskFrozen) return true;
-		if (this.#block.toolName !== "task" || this.#options.liveRegion === undefined) return false;
+		if (this.#source.toolName !== "task" || this.#options.liveRegion === undefined) return false;
 		if (!this.#options.liveRegion.isBlockInLiveRegion(this)) {
 			this.#backgroundTaskFrozen = true;
-			this.#syncBlock();
 			this.#updateSpinnerAnimation();
 			this.#updateRailMotion();
 			this.#updateDisplay();
@@ -662,8 +722,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	#onRail(component: Component): Component {
 		if (isFramedBlockComponent(component)) return component;
-		const cached = this.#railWrappers.get(component);
-		if (cached) return cached;
+		const cached = railWrappers.get(component);
+		if (cached?.owner === this) return cached.framed;
 		const block = new CachedOutputBlock();
 		const framed = markFramedBlockComponent({
 			render: (width: number): readonly string[] => {
@@ -693,19 +753,21 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				block.invalidate();
 				component.invalidate?.();
 			},
+			releaseRenderCache: () => {
+				block.invalidate();
+				component.releaseRenderCache?.();
+			},
 			dispose: () => component.dispose?.(),
 		});
-		this.#railWrappers.set(component, framed);
+		railWrappers.set(component, { owner: this, framed });
 		return framed;
 	}
 
 	#railMotion(railRows: number): RailMotion | undefined {
 		if (this.#railSettleFrame !== undefined) return { kind: "settle", frame: this.#railSettleFrame };
 		if (!this.#railIdleLive) return undefined;
-		if (
-			this.#isPartial &&
-			(this.#block.toolName === "edit" || this.#block.toolName === "apply_patch" || this.#block.toolName === "write")
-		) {
+		const toolName = this.#source.toolName;
+		if (this.#isPartial && (toolName === "edit" || toolName === "apply_patch" || toolName === "write")) {
 			return { kind: "idle", head: railStreamHeadAtRow(railRows) };
 		}
 		return { kind: "idle", head: railIdleHeadAtMs(railClockMs()) };
@@ -721,7 +783,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		if (this.#sealed) return true;
 		// A displaceable snapshot stays live: its rows are kept out of native scrollback so a
 		// follow-up tool call can remove the block.
-		if (this.#block.display?.policies?.displaceable) return false;
+		if (this.#policies()?.displaceable) return false;
 		if (!this.#isPartial) return true;
 		// Partial result: a background async tool is accepted to freeze (the agent continues while
 		// it runs and would otherwise pin an unbounded live region); a foreground tool streaming
@@ -744,21 +806,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#sealed = true;
 		this.#backgroundTaskFrozen = true;
 		this.stopAnimation();
-		this.#syncBlock();
 		this.#updateDisplay();
 		this.#requestScopedRender();
 	}
 
 	isDisplaceableBlock(): boolean {
-		return Boolean(this.#block.display?.policies?.displaceable) && !this.#sealed;
+		return Boolean(this.#policies()?.displaceable) && !this.#sealed;
 	}
 
 	canBeDisplacedBy(nextToolName: string | undefined): boolean {
-		return (
-			Boolean(this.#block.display?.policies?.displaceable) &&
-			this.#block.display?.policies?.displaceable === nextToolName &&
-			!this.#sealed
-		);
+		const displaceable = this.#policies()?.displaceable;
+		return Boolean(displaceable) && displaceable === nextToolName && !this.#sealed;
 	}
 
 	stopAnimation(): void {
@@ -766,7 +824,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
-			this.#syncBlock();
 		}
 		this.#stopRailMotion();
 		this.#producerUnsubscribe?.();
@@ -781,7 +838,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	setExpanded(expanded: boolean): void {
 		this.#expanded = expanded;
-		this.#syncBlock();
 		this.#updateDisplay();
 	}
 
@@ -795,17 +851,93 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#updateDisplay();
 	}
 
-	#updateDisplay(): void {
-		const key = `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${this.#backgroundTaskFrozen}|${this.#sealed}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}`;
-		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
-		this.#lastDisplayKey = key;
+	/**
+	 * Drop the drawn display with every row it memoized, and the producer's built block it was drawn
+	 * from. Both derive from the call and result, so the next render builds them again from the same
+	 * inputs; forgetting the key is what makes that render draw rather than keep a display that is no
+	 * longer there.
+	 */
+	override releaseRenderCache(): void {
+		this.#removeMultiFileBoxes();
+		this.#removeImages();
+		this.#removeNotExecutedNotice();
+		// A rail frame outlives the content box: `railWrappers` keeps it beside the child it frames,
+		// and a field child (`#contentText`) outlives every rebuild, so the frame's rows are dropped
+		// here rather than left to the table.
+		this.#contentBox.releaseRenderCache();
+		for (const child of this.#contentBox.children) child.dispose?.();
+		this.#contentBox.clear();
+		this.#producer?.releaseBlock();
+		this.#lastDisplayKey = undefined;
+		this.#displayStale = true;
+		super.releaseRenderCache();
+	}
 
+	/**
+	 * Mark the drawn display stale; the next `render` rebuilds it once.
+	 *
+	 * A card changes several times before it is drawn: a rebuilt transcript constructs it with the
+	 * call, expands it, hands it the result and seals it, and a streaming call gets more argument
+	 * deltas than frames. Drawing on each change highlighted the whole call view of every rebuilt
+	 * write only to replace it with the result view a moment later: on a 4,712-block session,
+	 * rebuilding and drawing the transcript took 999 ms that way and takes 603 ms drawn at render.
+	 * Drawing at render draws the state the frame shows, and nothing the frame never shows.
+	 */
+	#updateDisplay(): void {
+		this.#displayStale = true;
+	}
+
+	#ensureDisplay(): void {
+		if (!this.#displayStale) return;
+		this.#displayStale = false;
+		const key = this.#displayKey();
+		if (key === this.#lastDisplayKey) return;
+		this.#lastDisplayKey = key;
 		this.#rebuildDisplay();
-		this.#displayBuilt = true;
+	}
+
+	/** Every input the drawn display depends on: the display is redrawn when this changes. */
+	#displayKey(): string {
+		return `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${this.#backgroundTaskFrozen}|${this.#sealed}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}`;
+	}
+
+	/**
+	 * Add the sources the next draw of this card hands the highlighter to `into`: none when the next
+	 * render would not redraw it. A rebuilt transcript collects them from every card and highlights
+	 * them together before the frame that draws them.
+	 */
+	highlightRequests(into: HighlightRequest[]): void {
+		if (!this.#displayStale || this.#displayKey() === this.#lastDisplayKey) return;
+		const display = this.#block.display;
+		const { hasResult, drawsCall } = this.#phases(display);
+		if (drawsCall) {
+			const call = this.#callDrawing(display, hasResult);
+			if (call.kind === "view") toolViewHighlightRequests(call.view, into);
+		}
+		if (!hasResult) return;
+		const result = this.#resultDrawing(display);
+		if (result.kind === "view") {
+			toolViewHighlightRequests(result.view, into);
+		} else if (result.kind === "multiFile") {
+			for (const item of result.items) {
+				if (item.view) toolViewHighlightRequests(item.view, into);
+			}
+		}
+	}
+
+	/** Whether the display draws a result, and whether it draws the call, which a merged result replaces. */
+	#phases(display: ToolExecutionDisplay | undefined): { readonly hasResult: boolean; readonly drawsCall: boolean } {
+		const hasResult =
+			!display?.neverRan &&
+			(!this.#isPartial || this.#block.output !== undefined || this.#block.error !== undefined);
+		const mergeCallAndResult =
+			display?.policies?.mergeCallAndResult ??
+			Boolean(toolViewDefinitions[this.#block.toolName]?.mergeCallAndResult);
+		return { hasResult, drawsCall: !hasResult || !mergeCallAndResult };
 	}
 
 	#needsFirstResultViewportRepaintAtRender(): boolean {
-		return this.#block.display?.policies?.forceFirstResultViewportRepaint === true;
+		return this.#policies()?.forceFirstResultViewportRepaint === true;
 	}
 
 	#resetDisplayForResultTopologyChange(
@@ -816,7 +948,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		const provisionalResultSettled =
 			partialResultPaintedBeforeSettle &&
 			!isPartial &&
-			this.#block.display?.policies?.forceResultViewportRepaintOnSettle === true;
+			this.#policies()?.forceResultViewportRepaintOnSettle === true;
 		if (firstResultAfterRepaintShapePaint || provisionalResultSettled) {
 			if (typeof this.#ui?.resetDisplay === "function") {
 				this.#ui.resetDisplay();
@@ -825,6 +957,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	override render(width: number): readonly string[] {
+		this.#ensureDisplay();
 		const lines = super.render(width);
 		this.#firstResultViewportRepaintShapePainted = this.#needsFirstResultViewportRepaintAtRender();
 		this.#partialResultShapePainted = this.#isPartial;
@@ -848,26 +981,16 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#rebuildDisplay(): void {
 		this.#railRowsPresent = undefined;
 		const display = this.#block.display;
-		const callFailure = display?.failures?.call;
-		const resultFailure = display?.failures?.result;
 
 		// Clean up previous multi-file boxes
-		for (const box of this.#multiFileBoxes) {
-			this.removeChild(box);
-		}
-		this.#multiFileBoxes = [];
+		this.#removeMultiFileBoxes();
 
 		this.#contentBox.setBgFn(undefined);
 		const previousChildren = this.#contentBox.children;
 		this.#contentBox.clear();
 
-		const tool = this.#options.tool;
-		const custom = this.#options.customRenderer;
-		const customCall = custom?.renderCall ?? tool?.renderCall;
-		const customResult = custom?.renderResult ?? tool?.renderResult;
-
 		const fallbackText = this.#block.error ?? this.#block.output ?? "";
-		const renderState = {
+		const renderState: ToolRenderState = {
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
 			spinnerFrame: this.#spinnerFrame,
@@ -883,300 +1006,18 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			),
 		};
 
-		const hasResult =
-			!display?.neverRan &&
-			(!this.#isPartial || this.#block.output !== undefined || this.#block.error !== undefined);
-		const mergeCallAndResult =
-			display?.policies?.mergeCallAndResult ??
-			Boolean(toolViewDefinitions[this.#block.toolName]?.mergeCallAndResult);
-		const shouldRenderCall = !hasResult || !mergeCallAndResult;
-		// A call render that IS a live widget (`callIsLiveWidget`, today only `ask`) is replaced by
-		// the plain label once the call is known never to have run, so an unasked question is not
-		// left looking answerable.
-		const suppressMergedWidget = display?.neverRan === true && display.policies?.callIsLiveWidget === true;
+		const { hasResult, drawsCall } = this.#phases(display);
 		const callArgs = this.#producer ? this.#producer.callPreview.arguments : this.#parseInputArgs(this.#block.input);
 
-		// Call Phase
-		let callRendered = false;
-		if (shouldRenderCall) {
-			if (suppressMergedWidget) {
-				this.#contentBox.addChild(
-					this.#onRail(
-						new Text(theme.fg("toolTitle", theme.bold(display?.toolLabel ?? this.#block.toolName)), 0, 0),
-					),
-				);
-				callRendered = true;
-			} else if (customCall) {
-				try {
-					const comp = customCall.call(custom?.renderCall ? custom : tool, callArgs, renderState, theme) as
-						| Component
-						| undefined;
-					if (comp) {
-						this.#contentBox.addChild(this.#onRail(comp));
-						callRendered = true;
-					}
-				} catch (err) {
-					this.#contentBox.addChild(
-						reportRendererFailure(`tool "${this.#block.toolName}" call`, err, "showing the tool name only"),
-					);
-					this.#contentBox.addChild(
-						this.#onRail(
-							new Text(theme.fg("toolTitle", theme.bold(display?.toolLabel ?? this.#block.toolName)), 0, 0),
-						),
-					);
-					callRendered = true;
-				}
-			} else if (callFailure) {
-				this.#contentBox.addChild(
-					reportRendererFailure(
-						`tool "${this.#block.toolName}" call`,
-						new Error(callFailure.error),
-						"showing the tool name only",
-					),
-				);
-				this.#contentBox.addChild(
-					this.#onRail(
-						new Text(theme.fg("toolTitle", theme.bold(display?.toolLabel ?? this.#block.toolName)), 0, 0),
-					),
-				);
-				callRendered = true;
-			} else if (display?.callView) {
-				try {
-					const callComp = drawToolView(display.callView, theme, this.#spinnerFrame);
-					this.#contentBox.addChild(this.#onRail(callComp));
-					callRendered = true;
-				} catch (err) {
-					this.#contentBox.addChild(
-						reportRendererFailure(`tool "${this.#block.toolName}" call`, err, "showing the tool name only"),
-					);
-					this.#contentBox.addChild(
-						this.#onRail(
-							new Text(theme.fg("toolTitle", theme.bold(display?.toolLabel ?? this.#block.toolName)), 0, 0),
-						),
-					);
-					callRendered = true;
-				}
-			} else if (!hasResult && !display?.generic) {
-				this.#contentBox.addChild(
-					this.#onRail(
-						new Text(theme.fg("toolTitle", theme.bold(display?.toolLabel ?? this.#block.toolName)), 0, 0),
-					),
-				);
-				callRendered = true;
-			}
-		}
-
-		// Result Phase / Generic Display
+		const callRendered = drawsCall ? this.#renderCallPhase(display, hasResult, callArgs, renderState) : false;
 		if (hasResult) {
-			if (customResult) {
-				const fallbackText = this.#block.error ?? this.#block.output ?? "";
-				const rawContent = this.#producer?.result?.content;
-				const content: (TextContent | ImageContent)[] = Array.isArray(rawContent)
-					? (rawContent as (TextContent | ImageContent)[])
-					: typeof rawContent === "string"
-						? [{ type: "text", text: rawContent }]
-						: [{ type: "text", text: fallbackText }];
-				const resultPayload: AgentToolResult<unknown> = {
-					content,
-					details: this.#producer?.result?.details,
-					isError: this.#producer?.result?.isError ?? Boolean(this.#block.error),
-				};
-				try {
-					const comp = (
-						custom?.renderResult
-							? custom.renderResult(resultPayload, renderState, theme, callArgs)
-							: tool?.renderResult?.(resultPayload, renderState, theme, callArgs)
-					) as Component | undefined;
-					if (comp) this.#contentBox.addChild(this.#onRail(comp));
-				} catch (err) {
-					const raw = this.#block.error ?? this.#block.output;
-					const fallback = raw ? "showing raw output" : "there is no raw output to show instead";
-					this.#contentBox.addChild(reportRendererFailure(`tool "${this.#block.toolName}" result`, err, fallback));
-					if (raw) {
-						this.#contentBox.addChild(
-							this.#onRail(new Text(theme.fg("toolOutput", replaceTabs(shortenEmbeddedPaths(raw))), 0, 0)),
-						);
-					}
-				}
-			} else if (resultFailure) {
-				const raw = resultFailure.fallbackText ?? this.#block.error ?? this.#block.output;
-				const fallback = raw ? "showing raw output" : "there is no raw output to show instead";
-				this.#contentBox.addChild(
-					reportRendererFailure(`tool "${this.#block.toolName}" result`, new Error(resultFailure.error), fallback),
-				);
-				if (raw) {
-					this.#contentBox.addChild(
-						this.#onRail(new Text(theme.fg("toolOutput", replaceTabs(shortenEmbeddedPaths(raw))), 0, 0)),
-					);
-				}
-			} else if (display?.multiFileViews && display.multiFileViews.length > 1) {
-				for (let i = 0; i < display.multiFileViews.length; i++) {
-					const item = display.multiFileViews[i];
-					if (i > 0) {
-						const spacer = new Spacer(1);
-						this.#multiFileBoxes.push(spacer);
-						this.addChild(spacer);
-					}
-					const fileBox = new Box(COMPOSER_INSET_COLS, 0);
-					if (item.view) {
-						try {
-							const itemComp = drawToolView(item.view, theme, this.#spinnerFrame);
-							fileBox.addChild(this.#onRail(itemComp));
-						} catch (err) {
-							fileBox.addChild(
-								reportRendererFailure(
-									`tool "${this.#block.toolName}" result`,
-									err,
-									`no result is shown for ${item.path}`,
-								),
-							);
-						}
-					} else if (item.errorNotice) {
-						fileBox.addChild(
-							reportRendererFailure(
-								`tool "${this.#block.toolName}" result`,
-								new Error(item.errorNotice),
-								`no result is shown for ${item.path}`,
-							),
-						);
-					}
-					this.#multiFileBoxes.push(fileBox);
-					this.addChild(fileBox);
-				}
-
-				if (display.remainingPendingFiles && display.remainingPendingFiles > 0 && this.#isPartial) {
-					const pendingSpacer = new Spacer(1);
-					this.#multiFileBoxes.push(pendingSpacer);
-					this.addChild(pendingSpacer);
-					const pendingBox = new Box(COMPOSER_INSET_COLS, 0);
-					const spinner =
-						this.#spinnerFrame !== undefined ? formatStatusIcon("running", theme, this.#spinnerFrame) : "";
-					const pendingText = renderStatusLine(
-						{
-							iconOverride: spinner,
-							title: "Edit",
-							description: theme.fg(
-								"dim",
-								`${display.remainingPendingFiles} more file${display.remainingPendingFiles > 1 ? "s" : ""} pending…`,
-							),
-						},
-						theme,
-					);
-					pendingBox.addChild(this.#onRail(new Text(pendingText, 0, 0)));
-					this.#multiFileBoxes.push(pendingBox);
-					this.addChild(pendingBox);
-				}
-			} else if (display?.resultView) {
-				try {
-					const resultComp = drawToolView(display.resultView, theme, this.#spinnerFrame);
-					this.#contentBox.addChild(this.#onRail(resultComp));
-				} catch (err) {
-					const raw = this.#block.error ?? this.#block.output;
-					const fallback = raw ? "showing raw output" : "there is no raw output to show instead";
-					this.#contentBox.addChild(reportRendererFailure(`tool "${this.#block.toolName}" result`, err, fallback));
-					if (raw) {
-						this.#contentBox.addChild(
-							this.#onRail(new Text(theme.fg("toolOutput", replaceTabs(shortenEmbeddedPaths(raw))), 0, 0)),
-						);
-					}
-				}
-			} else if (display?.generic) {
-				this.#contentBox.addChild(this.#onRail(this.#contentText));
-				this.#contentText.invalidate();
-			} else {
-				const raw = this.#block.error ?? this.#block.output;
-				if (raw) {
-					this.#contentBox.addChild(
-						this.#onRail(new Text(theme.fg("toolOutput", replaceTabs(shortenEmbeddedPaths(raw))), 0, 0)),
-					);
-				}
-			}
+			this.#renderResultPhase(display, callArgs, renderState);
 		} else if (!callRendered && display?.generic) {
-			this.#contentBox.addChild(this.#onRail(this.#contentText));
-			this.#contentText.invalidate();
+			this.#addGenericContent();
 		}
 
-		// Images
-		for (const img of this.#imageComponents) {
-			this.removeChild(img);
-		}
-		this.#imageComponents = [];
-		for (const spacer of this.#imageSpacers) {
-			this.removeChild(spacer);
-		}
-		this.#imageSpacers = [];
-
-		const images = display?.images;
-		if (images && images.length > 0) {
-			const canDraw = Boolean(TERMINAL.imageProtocol) && this.#showImages;
-			const undrawable: ImagePlaceholder[] = [];
-
-			for (let i = 0; i < images.length; i++) {
-				const img = images[i];
-				if (!canDraw) {
-					const reason = TERMINAL.imageProtocol ? "images-off" : "no-protocol";
-					undrawable.push({ block: img, reason });
-					this.#reportImageDisplay(i, reason);
-					continue;
-				}
-				if (!img.data || !img.mimeType) continue;
-
-				const converted = this.#convertedImages.get(i);
-				const imageData = converted?.data ?? img.data;
-				const imageMimeType = converted?.mimeType ?? img.mimeType;
-
-				if (TERMINAL.imageProtocol === ImageProtocol.Kitty && imageMimeType !== "image/png") {
-					if (this.#imageConversionFailures.has(i)) {
-						undrawable.push({ block: img, reason: "unsupported-format" });
-						this.#reportImageDisplay(i, "unsupported-format");
-					}
-					continue;
-				}
-
-				const spacer = new Spacer(1);
-				this.addChild(spacer);
-				this.#imageSpacers.push(spacer);
-				this.#reportImageDisplay(i, undefined);
-				const imageComponent = new Image(
-					imageData,
-					imageMimeType,
-					{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
-					{
-						...resolveImageOptions(),
-						budget: this.#ui?.imageBudget,
-						imageKey: `te${this.#instanceId}:${i}`,
-						onDisplayed: fallback => this.#reportImageDisplay(i, fallback),
-					},
-				);
-				this.#imageComponents.push(imageComponent);
-				this.addChild(imageComponent);
-			}
-
-			if (undrawable.length > 0) {
-				const rows = this.#imagePlaceholderRows(undrawable);
-				this.#contentBox.addChild(this.#onRail(new Text(theme.fg("dim", rows), 0, 0)));
-			}
-		}
-
-		// Not executed notice
-		if (this.#notExecutedNotice) {
-			this.removeChild(this.#notExecutedNotice);
-			this.#notExecutedNotice = undefined;
-		}
-		const reason =
-			display?.notExecutedReason ??
-			notExecutedReason(
-				this.#block.output !== undefined || this.#block.error !== undefined ? { details: undefined } : undefined,
-				this.#sealed,
-			);
-		if (reason !== undefined) {
-			this.#notExecutedNotice = new Text(
-				theme.fg("warning", `${theme.status.warning} ${reason}`),
-				COMPOSER_INSET_COLS,
-				0,
-			);
-			this.addChild(this.#notExecutedNotice);
-		}
+		this.#rebuildImages(display?.images);
+		this.#rebuildNotExecutedNotice(display);
 		if (previousChildren.length > 0) {
 			const retained = new Set(this.#contentBox.children);
 			for (const child of previousChildren) {
@@ -1184,6 +1025,325 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			}
 		}
 		this.#renderedImageCount = this.#imageComponents.length;
+	}
+
+	/** The tool's title row: its display label, or its name. */
+	#addTitleRow(display: ToolExecutionDisplay | undefined): void {
+		this.#contentBox.addChild(
+			this.#onRail(new Text(theme.fg("toolTitle", theme.bold(display?.toolLabel ?? this.#block.toolName)), 0, 0)),
+		);
+	}
+
+	/** Report a call renderer failure and fall back to the title row. */
+	#addCallFailure(display: ToolExecutionDisplay | undefined, err: unknown): void {
+		this.#contentBox.addChild(
+			reportRendererFailure(`tool "${this.#block.toolName}" call`, err, "showing the tool name only"),
+		);
+		this.#addTitleRow(display);
+	}
+
+	/** Report a result renderer failure and fall back to the raw output, when there is any. */
+	#addResultFailure(err: unknown, raw: string | undefined): void {
+		const fallback = raw ? "showing raw output" : "there is no raw output to show instead";
+		this.#contentBox.addChild(reportRendererFailure(`tool "${this.#block.toolName}" result`, err, fallback));
+		this.#addRawOutput(raw);
+	}
+
+	#addRawOutput(raw: string | undefined): void {
+		if (!raw) return;
+		this.#contentBox.addChild(
+			this.#onRail(new Text(theme.fg("toolOutput", replaceTabs(shortenEmbeddedPaths(raw))), 0, 0)),
+		);
+	}
+
+	#addGenericContent(): void {
+		this.#contentBox.addChild(this.#onRail(this.#contentText));
+		this.#contentText.invalidate();
+	}
+
+	/**
+	 * What the call phase draws. Chosen apart from the drawing, so `highlightRequests` reads the
+	 * choice the draw makes.
+	 */
+	#callDrawing(display: ToolExecutionDisplay | undefined, hasResult: boolean): CallDrawing {
+		// A call render that IS a live widget (`callIsLiveWidget`, today only `ask`) is replaced by
+		// the plain label once the call is known never to have run, so an unasked question is not
+		// left looking answerable.
+		if (display?.neverRan === true && display.policies?.callIsLiveWidget === true) return DRAW_TITLE;
+		if (this.#options.customRenderer?.renderCall ?? this.#options.tool?.renderCall) return DRAW_CUSTOM;
+		const failure = display?.failures?.call;
+		if (failure) return { kind: "failure", error: failure.error };
+		if (display?.callView) return { kind: "view", view: display.callView };
+		return !hasResult && !display?.generic ? DRAW_TITLE : DRAW_NOTHING;
+	}
+
+	/** Draw the call phase. True when it added a row for the call. */
+	#renderCallPhase(
+		display: ToolExecutionDisplay | undefined,
+		hasResult: boolean,
+		callArgs: unknown,
+		renderState: ToolRenderState,
+	): boolean {
+		const drawing = this.#callDrawing(display, hasResult);
+		switch (drawing.kind) {
+			case "title":
+				this.#addTitleRow(display);
+				return true;
+			case "custom":
+				return this.#renderCustomCall(display, callArgs, renderState);
+			case "failure":
+				this.#addCallFailure(display, new Error(drawing.error));
+				return true;
+			case "view":
+				try {
+					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this.#spinnerFrame)));
+				} catch (err) {
+					this.#addCallFailure(display, err);
+				}
+				return true;
+			case "nothing":
+				return false;
+		}
+	}
+
+	/** Draw the call through the tool's own renderer. True when it drew a row. */
+	#renderCustomCall(
+		display: ToolExecutionDisplay | undefined,
+		callArgs: unknown,
+		renderState: ToolRenderState,
+	): boolean {
+		const custom = this.#options.customRenderer;
+		const tool = this.#options.tool;
+		const customCall = custom?.renderCall ?? tool?.renderCall;
+		if (!customCall) return false;
+		try {
+			const comp = customCall.call(custom?.renderCall ? custom : tool, callArgs, renderState, theme) as
+				| Component
+				| undefined;
+			if (!comp) return false;
+			this.#contentBox.addChild(this.#onRail(comp));
+		} catch (err) {
+			this.#addCallFailure(display, err);
+		}
+		return true;
+	}
+
+	/** What the result phase draws, chosen apart from the drawing as `#callDrawing` is. */
+	#resultDrawing(display: ToolExecutionDisplay | undefined): ResultDrawing {
+		if (this.#options.customRenderer?.renderResult ?? this.#options.tool?.renderResult) return DRAW_CUSTOM;
+		const failure = display?.failures?.result;
+		if (failure) return { kind: "failure", error: failure.error, fallbackText: failure.fallbackText };
+		if (display?.multiFileViews && display.multiFileViews.length > 1) {
+			return { kind: "multiFile", items: display.multiFileViews };
+		}
+		if (display?.resultView) return { kind: "view", view: display.resultView };
+		return display?.generic ? DRAW_GENERIC : DRAW_RAW;
+	}
+
+	#renderResultPhase(
+		display: ToolExecutionDisplay | undefined,
+		callArgs: unknown,
+		renderState: ToolRenderState,
+	): void {
+		const drawing = this.#resultDrawing(display);
+		switch (drawing.kind) {
+			case "custom":
+				this.#renderCustomResult(callArgs, renderState);
+				return;
+			case "failure":
+				this.#addResultFailure(
+					new Error(drawing.error),
+					drawing.fallbackText ?? this.#block.error ?? this.#block.output,
+				);
+				return;
+			case "multiFile":
+				this.#renderMultiFileViews(drawing.items, display?.remainingPendingFiles);
+				return;
+			case "view":
+				try {
+					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this.#spinnerFrame)));
+				} catch (err) {
+					this.#addResultFailure(err, this.#block.error ?? this.#block.output);
+				}
+				return;
+			case "generic":
+				this.#addGenericContent();
+				return;
+			case "raw":
+				this.#addRawOutput(this.#block.error ?? this.#block.output);
+				return;
+		}
+	}
+
+	#renderCustomResult(callArgs: unknown, renderState: ToolRenderState): void {
+		const custom = this.#options.customRenderer;
+		const tool = this.#options.tool;
+		const fallbackText = this.#block.error ?? this.#block.output ?? "";
+		const rawContent = this.#producer?.result?.content;
+		const content: (TextContent | ImageContent)[] = Array.isArray(rawContent)
+			? (rawContent as (TextContent | ImageContent)[])
+			: typeof rawContent === "string"
+				? [{ type: "text", text: rawContent }]
+				: [{ type: "text", text: fallbackText }];
+		const resultPayload: AgentToolResult<unknown> = {
+			content,
+			details: this.#producer?.result?.details,
+			isError: this.#producer?.result?.isError ?? Boolean(this.#block.error),
+		};
+		try {
+			const comp = (
+				custom?.renderResult
+					? custom.renderResult(resultPayload, renderState, theme, callArgs)
+					: tool?.renderResult?.(resultPayload, renderState, theme, callArgs)
+			) as Component | undefined;
+			if (comp) this.#contentBox.addChild(this.#onRail(comp));
+		} catch (err) {
+			this.#addResultFailure(err, this.#block.error ?? this.#block.output);
+		}
+	}
+
+	#addMultiFileChild(child: Box | Spacer): void {
+		this.#multiFileBoxes.push(child);
+		this.addChild(child);
+	}
+
+	#renderMultiFileViews(
+		views: readonly ToolExecutionMultiFileItem[],
+		remainingPendingFiles: number | undefined,
+	): void {
+		for (let i = 0; i < views.length; i++) {
+			if (i > 0) this.#addMultiFileChild(new Spacer(1));
+			this.#addMultiFileChild(this.#multiFileBox(views[i]));
+		}
+		if (remainingPendingFiles && remainingPendingFiles > 0 && this.#isPartial) {
+			this.#addMultiFileChild(new Spacer(1));
+			this.#addMultiFileChild(this.#pendingFilesBox(remainingPendingFiles));
+		}
+	}
+
+	#multiFileBox(item: ToolExecutionMultiFileItem): Box {
+		const fileBox = new Box(COMPOSER_INSET_COLS, 0);
+		if (item.view) {
+			try {
+				fileBox.addChild(this.#onRail(drawToolView(item.view, theme, this.#spinnerFrame)));
+			} catch (err) {
+				fileBox.addChild(
+					reportRendererFailure(
+						`tool "${this.#block.toolName}" result`,
+						err,
+						`no result is shown for ${item.path}`,
+					),
+				);
+			}
+		} else if (item.errorNotice) {
+			fileBox.addChild(
+				reportRendererFailure(
+					`tool "${this.#block.toolName}" result`,
+					new Error(item.errorNotice),
+					`no result is shown for ${item.path}`,
+				),
+			);
+		}
+		return fileBox;
+	}
+
+	#pendingFilesBox(count: number): Box {
+		const pendingBox = new Box(COMPOSER_INSET_COLS, 0);
+		const spinner = this.#spinnerFrame !== undefined ? formatStatusIcon("running", theme, this.#spinnerFrame) : "";
+		const pendingText = renderStatusLine(
+			{
+				iconOverride: spinner,
+				title: "Edit",
+				description: theme.fg("dim", `${count} more file${count > 1 ? "s" : ""} pending…`),
+			},
+			theme,
+		);
+		pendingBox.addChild(this.#onRail(new Text(pendingText, 0, 0)));
+		return pendingBox;
+	}
+
+	#removeMultiFileBoxes(): void {
+		for (const box of this.#multiFileBoxes) this.removeChild(box);
+		this.#multiFileBoxes = [];
+	}
+
+	#removeImages(): void {
+		for (const img of this.#imageComponents) this.removeChild(img);
+		this.#imageComponents = [];
+		for (const spacer of this.#imageSpacers) this.removeChild(spacer);
+		this.#imageSpacers = [];
+	}
+
+	#removeNotExecutedNotice(): void {
+		if (!this.#notExecutedNotice) return;
+		this.removeChild(this.#notExecutedNotice);
+		this.#notExecutedNotice = undefined;
+	}
+
+	#rebuildImages(images: readonly ToolExecutionImageItem[] | undefined): void {
+		this.#removeImages();
+		if (!images || images.length === 0) return;
+
+		const hiddenReason: ImageFallbackReason | undefined =
+			TERMINAL.imageProtocol && this.#showImages ? undefined : TERMINAL.imageProtocol ? "images-off" : "no-protocol";
+		const undrawable: ImagePlaceholder[] = [];
+		for (let i = 0; i < images.length; i++) {
+			const img = images[i];
+			const reason = hiddenReason ?? this.#addImage(img, i);
+			if (reason === undefined) continue;
+			undrawable.push({ block: img, reason });
+			this.#reportImageDisplay(i, reason);
+		}
+		if (undrawable.length > 0) {
+			const rows = this.#imagePlaceholderRows(undrawable);
+			this.#contentBox.addChild(this.#onRail(new Text(theme.fg("dim", rows), 0, 0)));
+		}
+	}
+
+	/** Add a drawable image with its spacer. The reason it cannot be drawn, when it has image data it cannot show. */
+	#addImage(img: ToolExecutionImageItem, i: number): ImageFallbackReason | undefined {
+		if (!img.data || !img.mimeType) return undefined;
+		const converted = this.#convertedImages?.get(i);
+		const imageData = converted?.data ?? img.data;
+		const imageMimeType = converted?.mimeType ?? img.mimeType;
+		if (TERMINAL.imageProtocol === ImageProtocol.Kitty && imageMimeType !== "image/png") {
+			return this.#imageConversionFailures?.has(i) ? "unsupported-format" : undefined;
+		}
+		const spacer = new Spacer(1);
+		this.addChild(spacer);
+		this.#imageSpacers.push(spacer);
+		this.#reportImageDisplay(i, undefined);
+		const imageComponent = new Image(
+			imageData,
+			imageMimeType,
+			{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
+			{
+				...resolveImageOptions(),
+				budget: this.#ui?.imageBudget,
+				imageKey: `te${this.#instanceId}:${i}`,
+				onDisplayed: fallback => this.#reportImageDisplay(i, fallback),
+			},
+		);
+		this.#imageComponents.push(imageComponent);
+		this.addChild(imageComponent);
+		return undefined;
+	}
+
+	#rebuildNotExecutedNotice(display: ToolExecutionDisplay | undefined): void {
+		this.#removeNotExecutedNotice();
+		const reason =
+			display?.notExecutedReason ??
+			notExecutedReason(
+				this.#block.output !== undefined || this.#block.error !== undefined ? { details: undefined } : undefined,
+				this.#sealed,
+			);
+		if (reason === undefined) return;
+		this.#notExecutedNotice = new Text(
+			theme.fg("warning", `${theme.status.warning} ${reason}`),
+			COMPOSER_INSET_COLS,
+			0,
+		);
+		this.addChild(this.#notExecutedNotice);
 	}
 
 	#formatGenericFallback(contentWidth: number): string {

@@ -8,6 +8,7 @@ import { modelMatchesHost } from "../hosts";
 import {
 	hasOpus47ApiRestrictions,
 	isAnthropicFableOrMythosModel,
+	isAnthropicOpus55Model,
 	supportsMidConversationSystemMessages,
 } from "../identity/family";
 import { ANTHROPIC_API_ENDPOINT } from "../provider-endpoints";
@@ -110,7 +111,8 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// detection requires the canonical api.anthropic.com host plus a
 		// supported model id.
 		supportsMidConversationSystem: official && supportsMidConversationSystemMessages(spec.id),
-		supportsForcedToolChoice: !requiresThinkingEnabled && !isAnthropicFableOrMythosModel(spec.id),
+		supportsForcedToolChoice:
+			!requiresThinkingEnabled && !isAnthropicFableOrMythosModel(spec.id) && !isAnthropicOpus55Model(spec.id),
 		// Opus 4.7+ and Fable/Mythos reject temperature/top_p/top_k with a 400.
 		supportsSamplingParams: !hasOpus47ApiRestrictions(spec.id),
 		// Z.AI workaround (issue #814): its proxy deserializes tool_result blocks

@@ -40,7 +40,11 @@ export {
 	STREAM_READ_ERROR_PATTERN,
 	TRANSIENT_TRANSPORT_PATTERN,
 } from "./domains/network";
-export { matchesCompiledGrammarTooLargeText, matchesStrictToolsRejectionText } from "./domains/request";
+export {
+	matchesCompiledGrammarTooLargeText,
+	matchesStrictToolsRejectionText,
+	matchesToolChoiceRejectionText,
+} from "./domains/request";
 export type { ClassificationRule, ClassRule, ErrorDomain, Recovery, RecoveryStage, Signal } from "./domains/types";
 export * from "./flag";
 export {
@@ -386,6 +390,14 @@ export function isStreamEnvelopeError(error: unknown): boolean {
 		error instanceof Error &&
 		(error.message.includes(STREAM_ENVELOPE_ERROR_PREFIX) || STREAM_EVENT_ORDER_PATTERN.test(error.message))
 	);
+}
+
+/** Persisted-text form of {@link isStreamEnvelopeError}: recognizes the
+ *  prefix-tagged envelope diagnostic on an aborted turn's `errorMessage` /
+ *  `stopDetails.explanation` so loop-level salvage can classify it after the
+ *  original `Error` instance is gone. */
+export function isStreamEnvelopeErrorText(text: string): boolean {
+	return text.includes(STREAM_ENVELOPE_ERROR_PREFIX);
 }
 
 /**

@@ -95,11 +95,11 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "amazon-bedrock",
-		defaultModel: "us.anthropic.claude-opus-4-8",
+		defaultModel: "us.anthropic.claude-opus-5-5",
 	},
 	{
 		id: "anthropic",
-		defaultModel: "claude-opus-4-8",
+		defaultModel: "claude-opus-5-5",
 		envVars: ["ANTHROPIC_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => anthropicModelManagerOptions(config),
 		catalogDiscovery: { label: "Anthropic" },
@@ -258,7 +258,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "litellm",
-		defaultModel: "claude-opus-4-8",
+		defaultModel: "claude-opus-5-5",
 		envVars: ["LITELLM_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => litellmModelManagerOptions(config),
 		resolveCacheProviderId: resolveLitellmCacheProviderId,
@@ -475,13 +475,13 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "xai",
-		defaultModel: "grok-4-fast-non-reasoning",
+		defaultModel: "grok-4.5",
 		envVars: ["XAI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => xaiModelManagerOptions(config),
 	},
 	{
 		id: "xai-oauth",
-		defaultModel: "grok-4.3",
+		defaultModel: "grok-4.5",
 		envVars: ["XAI_OAUTH_TOKEN", "XAI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => xaiOAuthModelManagerOptions(config),
 		catalogDiscovery: {

@@ -14,7 +14,6 @@ import {
 import * as typebox from "@veyyon/kernel/registry/typebox";
 import { errorMessage, logger } from "@veyyon/utils";
 import { type } from "arktype";
-import * as zodModule from "zod/v4";
 import { type DiscoveredCustomTool, loadCapability } from "../../discovery";
 import { toolCapability } from "../../discovery/capability/tool";
 import { pluginsRootFor } from "../../discovery/helpers";
@@ -177,7 +176,7 @@ export class CustomToolLoader {
 			logger,
 			typebox,
 			arktype: type,
-			zod: zodModule,
+			zod: pi.zod,
 			pi,
 			pushPendingAction: action => {
 				if (!pushPendingAction) {

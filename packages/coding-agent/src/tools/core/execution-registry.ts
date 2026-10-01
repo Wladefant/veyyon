@@ -55,6 +55,16 @@ class ToolExecutionEntry {
 		return { policy: established ?? ownerPolicy?.(), established };
 	}
 
+	resolveExecution(
+		tool: { name: string },
+		context?: ToolPolicyFrame,
+		ownerPolicy?: () => ToolPolicyFrame | undefined,
+	): { policy: ToolPolicyFrame; toolContext: AgentToolContext | undefined } {
+		const { policy, established } = this.#resolve(context, ownerPolicy);
+		const assertedPolicy = this.assert(tool, policy);
+		return { policy: assertedPolicy, toolContext: established ? asToolContext(established) : undefined };
+	}
+
 	/**
 	 * Fence a call whose caller may have established no context at all, then hand
 	 * back the context the tool may be given: the caller's own, or nothing.
@@ -86,15 +96,12 @@ class ToolExecutionEntry {
 		context?: ToolPolicyFrame,
 		ownerPolicy?: () => ToolPolicyFrame | undefined,
 	): Promise<AgentToolResult<TDetails, any>> {
-		const { policy, established } = this.#resolve(context, ownerPolicy);
+		const { policy, toolContext } = this.resolveExecution(tool, context, ownerPolicy);
 		// The fenced policy becomes ambient, so a tool that calls another tool
 		// inherits the policy this call was judged against even when the caller
 		// established nothing. The tool itself still sees only what the caller
 		// brought.
-		const fenced = this.assert(tool, policy);
-		return executionContext.run(fenced, () =>
-			tool.execute(toolCallId, params, signal, onUpdate, established && asToolContext(established)),
-		);
+		return executionContext.run(policy, () => tool.execute(toolCallId, params, signal, onUpdate, toolContext));
 	}
 }
 

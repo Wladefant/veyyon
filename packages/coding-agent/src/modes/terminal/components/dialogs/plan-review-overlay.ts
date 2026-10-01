@@ -112,7 +112,12 @@ export interface PlanReviewOverlayOptions {
 	slider?: HookSelectorSlider;
 	/** Display label for the external-editor key, surfaced in the footer help. */
 	externalEditorLabel?: string;
-	/** Repaint hook for the unfold ticks (the overlay is otherwise static). */
+	/**
+	 * Repaint hook for a change no input event carries: an annotation the external
+	 * editor commits after the key that opened it returned, or a plan swapped in by
+	 * {@link PlanReviewOverlay.setPlanContent}. The host repaints after every input
+	 * event on its own.
+	 */
 	requestRender?: () => void;
 }
 
@@ -162,6 +167,7 @@ export class PlanReviewOverlay implements Component {
 	#bodyRowOffset = 0;
 
 	#annotating = false;
+	#requestRender: (() => void) | undefined;
 	#input: Input;
 
 	constructor(
@@ -183,6 +189,7 @@ export class PlanReviewOverlay implements Component {
 		this.#helpSuffix = options.helpText ?? DEFAULT_HELP_SUFFIX;
 		this.#externalEditorLabel = options.externalEditorLabel;
 		this.#promptTitle = options.promptTitle;
+		this.#requestRender = options.requestRender;
 		this.#selectedIndex = this.#coerceIndex(options.initialIndex ?? 0);
 		if (options.slider && options.slider.segments.length > 0) {
 			this.#slider = options.slider;
@@ -212,6 +219,7 @@ export class PlanReviewOverlay implements Component {
 		this.#deleted = [];
 		this.#undo = [];
 		this.#recomputeFeedback();
+		this.#requestRender?.();
 	}
 
 	#setSections(planContent: string): void {
@@ -300,7 +308,9 @@ export class PlanReviewOverlay implements Component {
 		if (this.#annotating) {
 			if (this.callbacks.onAnnotationExternalEditor && matchesAppExternalEditor(keyData)) {
 				this.callbacks.onAnnotationExternalEditor(this.#input.getValue(), text => {
-					if (text !== null) this.#submitAnnotation(text);
+					if (text === null) return;
+					this.#submitAnnotation(text);
+					this.#requestRender?.();
 				});
 				return;
 			}

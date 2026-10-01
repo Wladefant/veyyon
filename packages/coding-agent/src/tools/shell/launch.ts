@@ -6,7 +6,7 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
-import { clampLow, prompt, sanitizeText } from "@veyyon/utils";
+import { clampLow, lazy, prompt, sanitizeText } from "@veyyon/utils";
 import { type } from "arktype";
 import { daemonClientForProject } from "../../launch/client";
 import { DAEMON_COMPLETIONS_LIMIT } from "../../launch/completions";
@@ -25,47 +25,50 @@ import type { Theme } from "../../theme/theme";
 import type { ToolSession } from "..";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import { resolveToCwd } from "../core/path-utils";
+import { checkPolysimMainArgv, checkPolysimMainDenial, type PolysimDenialResult } from "../core/polysim-main-guard";
 import { formatDuration, previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import { releaseLaunchExitWatch, watchLaunchedProcessExit } from "./launch-exit-watch";
 import { readyPendingSummary } from "./launch-view";
 
-const launchSchema = type({
-	op: type("'start' | 'list' | 'logs' | 'wait' | 'send' | 'stop' | 'restart' | 'describe'").describe(
-		"launch operation",
-	),
-	"name?": type("string <= 48").describe("stable project-scoped launch name"),
-	"application?": type("string > 0").describe("start: executable or application path"),
-	"args?": type("string[]").describe("start: argv passed directly to the application"),
-	"env?": type({ "[string]": "string" }).describe("start: extra environment variables"),
-	"cwd?": type("string").describe("start: working directory; defaults to the session directory"),
-	"pty?": type("boolean").describe("start: allocate an interactive PTY; default true"),
-	"ready?": type({
-		"log?": type("string > 0").describe("regex matched against output"),
-		"port?": type("number").describe("TCP port that must accept connections"),
-		"host?": type("string > 0").describe("TCP readiness host; default 127.0.0.1"),
-		"timeout?": type("number > 0").describe("seconds to wait; default 30"),
-	}).describe("start: readiness conditions; all supplied conditions must pass"),
-	"restart?": type("'no' | 'on-failure' | 'always'").describe("start: restart policy; default no"),
-	"persist?": type("boolean").describe("start: survive the last veyyon client exiting; default false"),
-	"detached?": type("boolean").describe(
-		"start: survive every veyyon and broker exit; implies persist and disables PTY input",
-	),
-	"lines?": type("number > 0").describe("logs: output lines; default 100, max 1000"),
-	"head?": type("boolean").describe("logs: read from the beginning instead of the tail"),
-	"grep?": type("string > 0").describe("logs: regex filter"),
-	"follow?": type("boolean").describe("logs: wait for output newer than cursor"),
-	"cursor?": type("number >= 0").describe("logs: output cursor returned by an earlier call"),
-	"for?": type("'ready' | 'exit'").describe("wait: lifecycle condition; default exit"),
-	"pattern?": type("string > 0").describe("wait: output regex; takes precedence over for"),
-	"text?": type("string > 0").describe("send: stdin text"),
-	"enter?": type("boolean").describe("send: append Enter after text; default true"),
-	"keys?": type("string[]").describe("send: terminal keys after text"),
-	"signal?": type("'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGQUIT' | 'SIGKILL'").describe("send: process-tree signal"),
-	"timeout?": type("number > 0").describe("logs/wait/stop: max seconds; default 30 (stop: 5)"),
-});
+const launchSchema = lazy(() =>
+	type({
+		op: type("'start' | 'list' | 'logs' | 'wait' | 'send' | 'stop' | 'restart' | 'describe'").describe(
+			"launch operation",
+		),
+		"name?": type("string <= 48").describe("stable project-scoped launch name"),
+		"application?": type("string > 0").describe("start: executable or application path"),
+		"args?": type("string[]").describe("start: argv passed directly to the application"),
+		"env?": type({ "[string]": "string" }).describe("start: extra environment variables"),
+		"cwd?": type("string").describe("start: working directory; defaults to the session directory"),
+		"pty?": type("boolean").describe("start: allocate an interactive PTY; default true"),
+		"ready?": type({
+			"log?": type("string > 0").describe("regex matched against output"),
+			"port?": type("number").describe("TCP port that must accept connections"),
+			"host?": type("string > 0").describe("TCP readiness host; default 127.0.0.1"),
+			"timeout?": type("number > 0").describe("seconds to wait; default 30"),
+		}).describe("start: readiness conditions; all supplied conditions must pass"),
+		"restart?": type("'no' | 'on-failure' | 'always'").describe("start: restart policy; default no"),
+		"persist?": type("boolean").describe("start: survive the last veyyon client exiting; default false"),
+		"detached?": type("boolean").describe(
+			"start: survive every veyyon and broker exit; implies persist and disables PTY input",
+		),
+		"lines?": type("number > 0").describe("logs: output lines; default 100, max 1000"),
+		"head?": type("boolean").describe("logs: read from the beginning instead of the tail"),
+		"grep?": type("string > 0").describe("logs: regex filter"),
+		"follow?": type("boolean").describe("logs: wait for output newer than cursor"),
+		"cursor?": type("number >= 0").describe("logs: output cursor returned by an earlier call"),
+		"for?": type("'ready' | 'exit'").describe("wait: lifecycle condition; default exit"),
+		"pattern?": type("string > 0").describe("wait: output regex; takes precedence over for"),
+		"text?": type("string > 0").describe("send: stdin text"),
+		"enter?": type("boolean").describe("send: append Enter after text; default true"),
+		"keys?": type("string[]").describe("send: terminal keys after text"),
+		"signal?": type("'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGQUIT' | 'SIGKILL'").describe("send: process-tree signal"),
+		"timeout?": type("number > 0").describe("logs/wait/stop: max seconds; default 30 (stop: 5)"),
+	}),
+);
 
-export type LaunchParams = typeof launchSchema.infer;
+export type LaunchParams = typeof launchSchema.value.infer;
 
 const KEY_INPUT: Record<string, string> = {
 	ENTER: "\r",
@@ -212,7 +215,7 @@ export function daemonLabel(daemon: DaemonSnapshot): string {
 
 /**
  * The owning condition that ends a daemon: `last-client-exit` (the default —
- * the broker stops it once the last veyyon in this directory exits),
+ * the broker stops it once the last veyyon of this profile in this directory exits),
  * `broker-shutdown` (`persist`: outlives the last client, dies with the
  * broker), or `detached` (survives every veyyon and broker exit).
  */
@@ -369,7 +372,26 @@ async function toolDetails(result: DaemonRpcResult, params: LaunchParams): Promi
 			throw new ToolError(`Internal daemon result ${result.op} is not tool-visible`);
 	}
 }
-function approvalFor(params: unknown): ToolApprovalDecision {
+/**
+ * The polysimulator-main refusal for a launch call: the argv a `start` runs,
+ * and the text a `send` types into a process that may be a shell. The
+ * receiving shell's directory is not known, so `send` is judged as if it
+ * could be polysimulator.
+ */
+function polysimDenialFor(params: unknown, session: ToolSession): PolysimDenialResult | undefined {
+	if (typeof params !== "object" || params === null) return undefined;
+	const call = params as Partial<LaunchParams>;
+	if (call.op === "start" && call.application) {
+		const cwd = resolveToCwd(call.cwd ?? session.cwd, session.cwd);
+		return checkPolysimMainArgv([call.application, ...(call.args ?? [])], cwd, call.env);
+	}
+	if (call.op === "send" && call.text) return checkPolysimMainDenial(call.text, undefined);
+	return undefined;
+}
+
+function approvalFor(params: unknown, session: ToolSession): ToolApprovalDecision {
+	const polysimDenial = polysimDenialFor(params, session);
+	if (polysimDenial) return { tier: "exec", deny: true, reason: polysimDenial.reason };
 	if (typeof params !== "object" || params === null || !("op" in params)) return "exec";
 	switch (params.op) {
 		case "list":
@@ -383,7 +405,7 @@ function approvalFor(params: unknown): ToolApprovalDecision {
 }
 
 /** Project-scoped launch tool for supervising processes in every coding-agent session. */
-export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDetails, Theme> {
+export class LaunchTool implements AgentTool<typeof launchSchema.value, LaunchToolDetails, Theme> {
 	readonly name = "launch";
 	// Launch supervises a spawned process, whose effects are whatever the
 	// application does; the argv does not bound them.
@@ -391,7 +413,9 @@ export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDeta
 	readonly loadMode = "essential";
 	readonly summary = "Supervise a shared project process that does not end on its own";
 	readonly description = prompt.render(toolsPrompts["tools/launch"].text);
-	readonly parameters = launchSchema;
+	get parameters(): typeof launchSchema.value {
+		return launchSchema.value;
+	}
 	readonly strict = true;
 	readonly examples: readonly ToolExample<LaunchParams>[] = [
 		{
@@ -409,7 +433,7 @@ export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDeta
 			call: { op: "logs", name: "web", follow: true, cursor: 1842, timeout: 30 },
 		},
 	];
-	readonly approval = approvalFor;
+	readonly approval = (params: unknown): ToolApprovalDecision => approvalFor(params, this.session);
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -417,9 +441,11 @@ export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDeta
 		_toolCallId: string,
 		params: LaunchParams,
 		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<LaunchToolDetails, typeof launchSchema>,
+		_onUpdate?: AgentToolUpdateCallback<LaunchToolDetails, typeof launchSchema.value>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<LaunchToolDetails>> {
+		const polysimDenial = polysimDenialFor(params, this.session);
+		if (polysimDenial) throw new ToolError(polysimDenial.reason);
 		// Session CPU budget: keep the group in sync on every op, but refuse only
 		// the ops that create a process. A saturated budget that also refused
 		// `stop` left no way to end the work saturating it. The broker (spawned

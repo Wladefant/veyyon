@@ -30,7 +30,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@veyyon/utils";
-import { sessionFileName } from "@veyyon/utils/session-file";
+import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ToolSession } from "..";
 import { mcpManagerInstance } from "../mcp/manager-instance";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
@@ -98,6 +98,23 @@ function renderAgentUserPrompt(assignment: string): string {
 	return prompt.render(agentPrompts["agent/user-prompt"].text, {
 		assignment: assignment.trim(),
 	});
+}
+
+const noLocalValue = (): null => null;
+
+/**
+ * The internal-URL options an agent resolves `local://` and `artifact://` through: the parent's own,
+ * or its artifacts dir and session id. Built outside the spawn: the child session keeps these
+ * functions for as long as it lives, and a function created in the spawn body would keep the whole
+ * spawn scope with them, the tool call's update callback and abort signal included.
+ */
+function localProtocolOptionsFor(session: ToolSession): LocalProtocolOptions {
+	return (
+		session.localProtocolOptions ?? {
+			getArtifactsDir: session.getArtifactsDir ?? noLocalValue,
+			getSessionId: session.getSessionId ?? noLocalValue,
+		}
+	);
 }
 
 function createUsageTotals(): Usage {
@@ -624,6 +641,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	 * see `treeSpawnSemaphore`.
 	 */
 	#spawnSemaphore: Semaphore | undefined;
+	/**
+	 * Reads the `/yolo` bypass live, so `/yolo off` reaches an agent that is already running. A field
+	 * rather than an arrow in the spawn body: the child session holds it for as long as the agent is
+	 * kept alive, and an arrow there would hold the whole spawn scope, including its progress snapshot
+	 * and the tool call's update callback.
+	 */
+	readonly #parentApprovalBypassed = (): boolean => this.session.isApprovalBypassed?.() ?? false;
 
 	get parameters(): TaskToolSchemaInstance {
 		const isolationEnabled = this.session.settings.get("agent.isolation.mode") !== "none";
@@ -722,6 +746,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError(validationError);
 		}
 
+		// An edit to config.yml since the last spawn applies here, before the catalog and routing
+		// are read, without the operator having to run /reload-config first.
+		await this.session.settings.reloadConfigIfChanged();
 		const { agents: discoveredAgents } = await discoverAgents(this.session.cwd);
 		const catalog = this.#enabledAgents(discoveredAgents, true);
 		if (!agentsEnabled(this.session.settings)) {
@@ -1542,13 +1569,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// everything" fidelity requirement. Route them to the durable sessions dir (never
 		// os.tmpdir, which the OS GC-reaps) and never delete them. An agent transcript is
 		// a full session record with session_init; losing it is a data-loss bug (GRAN-1).
-		const orphanArtifactsDir = artifactsDir ? null : path.join(getSessionsDir(), `orphan-task-${Snowflake.next()}`);
+		const orphanArtifactsDir = artifactsDir
+			? null
+			: path.join(getSessionsDir(), `${ORPHAN_AGENT_TRANSCRIPT_PREFIX}${Snowflake.next()}`);
 		const effectiveArtifactsDir = artifactsDir || orphanArtifactsDir!;
 
-		const localProtocolOptions: LocalProtocolOptions = this.session.localProtocolOptions ?? {
-			getArtifactsDir: this.session.getArtifactsDir ?? (() => null),
-			getSessionId: this.session.getSessionId ?? (() => null),
-		};
+		const localProtocolOptions = localProtocolOptionsFor(this.session);
 
 		// Agents adopt the parent's ArtifactManager so artifact IDs are unique
 		// across the whole tree and outputs land flat in the parent's dir.
@@ -1715,11 +1741,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				// The `/yolo` bypass lives on the session, not in settings, so it has
 				// to be handed over explicitly or the child silently drops a rung.
 				bypassAllApprovals: this.session.isApprovalBypassed?.() ?? false,
-				// Read live, so `/yolo off` reaches an agent that is already running.
-				parentApprovalBypassed: () => this.session.isApprovalBypassed?.() ?? false,
+				parentApprovalBypassed: this.#parentApprovalBypassed,
 				obfuscateProviderText: this.session.obfuscateProviderText,
 				completeImpl: this.session.sideComplete,
 				mcpManager,
+				// The child's own background jobs report to this conversation, not to whichever
+				// top-level session in the process was built first.
+				asyncJobManager: this.session.asyncJobManager,
 				contextFiles,
 				skills: inheritedSkills,
 				autoloadSkills: resolvedAutoloadSkills,

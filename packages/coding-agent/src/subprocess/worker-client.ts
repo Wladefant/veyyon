@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -201,7 +202,7 @@ export function createWorkerSubprocess<Outbound>(options: {
 			// signal exit (SIGSEGV from a native fault, OOM SIGKILL, operator
 			// `kill -9`) is a real worker death that must fault in-flight
 			// requests so callers don't await forever.
-			if (exitCode === null && intentionalExit.value) return;
+			if ((exitCode === null || process.platform === "win32") && intentionalExit.value) return;
 			const reason = exitCode !== null ? `code ${exitCode}` : `signal ${signalCode ?? "unknown"}`;
 			// The stderr target is drained only after exit so idle unref'd
 			// workers do not keep the parent alive; wait for that drain before
@@ -368,6 +369,21 @@ export function createWorkerHandle<Inbound, Outbound>(
 		},
 		async terminate() {
 			intentionalExit.value = true;
+			if (proc.pid && proc.pid !== process.pid) {
+				if (process.platform === "win32") {
+					try {
+						spawnSync("taskkill.exe", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+					} catch {
+						// Already gone.
+					}
+				} else {
+					try {
+						spawnSync("pkill", ["-KILL", "-P", String(proc.pid)], { stdio: "ignore" });
+					} catch {
+						// Already gone or pkill not available.
+					}
+				}
+			}
 			try {
 				proc.kill("SIGKILL");
 			} catch {

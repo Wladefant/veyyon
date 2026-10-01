@@ -80,12 +80,6 @@ export function isPathIntact(path: readonly Component[]): boolean {
 	return true;
 }
 
-export interface PreparedLine {
-	raw: string;
-	width: number;
-	line: string;
-}
-
 const SGR_SEQUENCE = sgrSequence("g");
 
 // SGR coalescing. The renderer's component tree emits a styled span as
@@ -467,6 +461,13 @@ export function terminalLine(line: string, screenRow?: number, budget?: DirectIm
  * normalized, width-fitted content rows without the per-line terminator, which
  * is appended at write time so width checks stay on content, not reset bytes.
  *
+ * `#raw[i]` is the composed row `#frame[i]` was prepared from, and every entry
+ * was prepared at `#width`. Two parallel arrays rather than a record per row: a
+ * long transcript's frame holds tens of thousands of rows for the whole session,
+ * and a record per row cost more than the two pointers it held. A width change
+ * retires every entry at once, which is also what a per-row width comparison
+ * did, since the whole frame is always prepared at one width.
+ *
  * `validRows` counts the leading rows known prepared against the CURRENT
  * composed frame: a compose lowers it to the stable prefix, a completed
  * `prepare()` raises it to the frame length, and an abandoned frame (ghostty
@@ -474,7 +475,8 @@ export function terminalLine(line: string, screenRow?: number, budget?: DirectIm
  */
 export class PreparedFrameCache {
 	#frame: string[] = [];
-	#meta: PreparedLine[] = [];
+	#raw: string[] = [];
+	#width = -1;
 	#validRows = 0;
 
 	get validRows(): number {
@@ -495,34 +497,47 @@ export class PreparedFrameCache {
 		return this.#frame[index];
 	}
 
-	setRow(index: number, prepared: PreparedLine): void {
-		this.#meta[index] = prepared;
-		this.#frame[index] = prepared.line;
+	/**
+	 * Prepare composed row `index` ahead of the frame walk (a segment rewrite)
+	 * and return the prepared line. A row prepared at a width other than the
+	 * cache's leaves the cache without a width, so the next {@link prepare}
+	 * re-prepares every row rather than trusting rows fitted to the old one.
+	 */
+	setRow(index: number, raw: string, width: number): string {
+		const line = prepareLine(raw, width);
+		this.#frame[index] = line;
+		if (width === this.#width) this.#raw[index] = raw;
+		else this.#width = -1;
+		return line;
 	}
 
 	/**
 	 * Prepare the composed frame for emission, in place. Rows below `validRows`
 	 * are already prepared against the current frame; rows at/after it are
-	 * revalidated positionally — a row whose raw content and width match its
-	 * cached entry reuses the prepared line, anything else re-prepares.
+	 * revalidated positionally — a row whose raw content matches its cached
+	 * entry at the cache's width reuses the prepared line, anything else
+	 * re-prepares.
 	 */
 	prepare(frame: readonly string[], width: number): string[] {
 		const prepared = this.#frame;
-		const meta = this.#meta;
+		const raws = this.#raw;
+		if (width !== this.#width) {
+			// Every entry was fitted to another width. Truncating the sources
+			// makes every row miss below, and the rebuild writes them back in
+			// row order, so the array never holds a hole.
+			this.#width = width;
+			this.#validRows = 0;
+			raws.length = 0;
+		}
 		if (prepared.length > frame.length) {
 			prepared.length = frame.length;
-			meta.length = frame.length;
+			raws.length = Math.min(raws.length, frame.length);
 		}
 		for (let i = Math.min(this.#validRows, prepared.length); i < frame.length; i++) {
 			const raw = frame[i]!;
-			const cached = meta[i];
-			if (cached !== undefined && cached.raw === raw && cached.width === width) {
-				prepared[i] = cached.line;
-				continue;
-			}
-			const entry = prepareLine(raw, width);
-			meta[i] = entry;
-			prepared[i] = entry.line;
+			if (raws[i] === raw) continue;
+			raws[i] = raw;
+			prepared[i] = prepareLine(raw, width);
 		}
 		this.#validRows = frame.length;
 		return prepared;
@@ -533,23 +548,19 @@ export class PreparedFrameCache {
 export function prepareLinesArray(lines: readonly string[], width: number): string[] {
 	const prepared: string[] = new Array(lines.length);
 	for (let i = 0; i < lines.length; i++) {
-		prepared[i] = prepareLine(lines[i]!, width).line;
+		prepared[i] = prepareLine(lines[i]!, width);
 	}
 	return prepared;
 }
 
-export function prepareLine(raw: string, width: number): PreparedLine {
-	if (TERMINAL.isImageLine(raw)) {
-		return { raw, width, line: raw };
-	}
+/** A composed row as the terminal receives it: normalized and fitted to `width` cells, without the line terminator. */
+export function prepareLine(raw: string, width: number): string {
+	if (TERMINAL.isImageLine(raw)) return raw;
 	const source = lineFitSource(raw, width);
 	const normalized = normalizeTerminalOutput(source);
 	const asciiWidth = ansiAsciiLineWidth(normalized, width);
-	if ((asciiWidth ?? visibleWidth(normalized)) <= width) {
-		return { raw, width, line: normalized };
-	}
-	const line = truncateToWidth(normalized, width, Ellipsis.Omit);
-	return { raw, width, line };
+	if ((asciiWidth ?? visibleWidth(normalized)) <= width) return normalized;
+	return truncateToWidth(normalized, width, Ellipsis.Omit);
 }
 
 function lineFitSource(raw: string, width: number): string {
@@ -668,19 +679,30 @@ export function lineRewriteSequence(
 	screenRow?: number,
 	budget?: DirectImagePlacementLookup,
 ): string {
-	if (TERMINAL.isImageLine(line)) return ERASE_LINE + imageLineAt(line, screenRow, budget);
-	const written = terminalLine(line, screenRow, budget);
-	const asciiWidth = ansiAsciiLineWidth(line, width);
-	if (asciiWidth !== undefined) {
-		// Exact width model: skip the erase only when the row truly fills
-		// the line (an EL there would eat the last cell via pending-wrap).
-		return asciiWidth >= width ? written : written + ERASE_TO_END_OF_LINE;
+	// End every rewrite at column zero. ConPTY can materialize a pending wrap
+	// before a following cursor-addressing sequence even while DECAWM is
+	// disabled; on the bottom row that becomes an untracked scroll and leaks
+	// live chrome into native history. The row loops that call this append only
+	// LF, because this CR supplies the other half of their CRLF.
+	let rewrite: string;
+	if (TERMINAL.isImageLine(line)) {
+		rewrite = ERASE_LINE + imageLineAt(line, screenRow, budget);
+	} else {
+		const written = terminalLine(line, screenRow, budget);
+		const asciiWidth = ansiAsciiLineWidth(line, width);
+		if (asciiWidth !== undefined) {
+			// Exact width model: skip the erase only when the row truly fills
+			// the line (an EL there would eat the last cell via pending-wrap).
+			rewrite = asciiWidth >= width ? written : written + ERASE_TO_END_OF_LINE;
+		} else {
+			// Non-ASCII rows: the native measure can over-count combining-heavy
+			// scripts, so a row it calls "full" may render short and leave stale
+			// cells from the previous occupant — which would then scroll into
+			// history baked into the committed row. Erase the line first instead
+			// (rewrites always start at column 1, so EL-to-end clears the whole
+			// row); the leading reset keeps BCE on the default background.
+			rewrite = SGR_RESET + ERASE_TO_END_OF_LINE + written;
+		}
 	}
-	// Non-ASCII rows: the native measure can over-count combining-heavy
-	// scripts, so a row it calls "full" may render short and leave stale
-	// cells from the previous occupant — which would then scroll into
-	// history baked into the committed row. Erase the line first instead
-	// (rewrites always start at column 1, so EL-to-end clears the whole
-	// row); the leading reset keeps BCE on the default background.
-	return SGR_RESET + ERASE_TO_END_OF_LINE + written;
+	return `${rewrite}\r`;
 }

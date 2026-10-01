@@ -27,6 +27,7 @@ const DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS = ANTIGRAVITY_ENDPOINTS;
  * fails as "no quota information" rather than as a wrong URL.
  */
 export const FETCH_AVAILABLE_MODELS_PATH = "/v1internal:fetchAvailableModels";
+export const RETRIEVE_USER_QUOTA_SUMMARY_PATH = "/v1internal:retrieveUserQuotaSummary";
 
 const ANTIGRAVITY_DISCOVERY_DENYLIST = new Set(["chat_20706", "chat_23310", "gemini-2.5-pro"]);
 

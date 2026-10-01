@@ -52,7 +52,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/ast-edit": 375,
 	"tools/async-result": 105,
 	"tools/bash": 1564,
-	"tools/browser": 1575,
+	"tools/browser": 1440,
 	"tools/checkpoint": 166,
 	"tools/debug": 414,
 	"tools/eval": 2007,
@@ -66,9 +66,9 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/inspect-image-system": 192,
 	"tools/irc": 681,
 	"tools/job": 413,
-	"tools/launch": 711,
+	"tools/launch": 722,
 	"tools/learn": 198,
-	"tools/lsp": 564,
+	"tools/lsp": 610,
 	"tools/lsp-late-diagnostic": 83,
 	"tools/manage-skill": 217,
 	"tools/memory-edit": 243,
@@ -85,7 +85,8 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/ssh": 236,
 	"tools/task": 1146,
 	"tools/task-summary": 151,
-	"tools/todo": 500,
+	// 500 -> 505: the `pending` op row and the concurrent in-progress rule the todo tool gained.
+	"tools/todo": 505,
 	"tools/vibe-kill": 78,
 	"tools/vibe-list": 77,
 	"tools/vibe-send": 184,
@@ -98,7 +99,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 21747;
+const RECORDED_TOTAL = 21674;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),

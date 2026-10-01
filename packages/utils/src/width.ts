@@ -476,6 +476,29 @@ function correctedRunWidth(run: string): number {
 }
 
 /**
+ * The width scan's verdict on each BMP code unit past ASCII, filled the first time the scan reads
+ * it: 0 = not yet classified, 1 = one cell in any row, 2 = anything else.
+ *
+ * A unit is one cell in any row when the escape-aware measure scores it one cell alone. That measure
+ * adds a unit's cells to its neighbours' everywhere outside the sequences it corrects, and every unit
+ * those are built from (a variation selector, a keycap or enclosing mark, a joiner, a surrogate half)
+ * scores other than one cell alone, so a row holding one ends the scan and is measured whole. Adding a
+ * one-cell unit's cell to the scan's count therefore gives the answer the measure gives the row. The
+ * Compatibility Jamo block is never one cell here: its width follows
+ * {@link setHangulCompatibilityJamoWidth}, which can change after a verdict is kept.
+ */
+let oneCellUnits: Uint8Array | undefined;
+
+function isOneCellUnit(code: number): boolean {
+	oneCellUnits ??= new Uint8Array(0x10000);
+	const known = oneCellUnits[code];
+	if (known !== 0) return known === 1;
+	const oneCell = (code < 0x3131 || code > 0x318e) && correctedBunWidth(String.fromCharCode(code)) === 1;
+	oneCellUnits[code] = oneCell ? 1 : 2;
+	return oneCell;
+}
+
+/**
  * Visible width of a string in terminal columns, excluding ANSI/OSC escapes.
  *
  * `Bun.stringWidth` does the heavy lifting (UAX#11 width tables + ANSI/OSC
@@ -487,8 +510,7 @@ export function visibleWidth(str: string): number {
 	if (!str) return 0;
 
 	// Long non-escape text is faster through Bun's native scanner than through
-	// a JS printable-ASCII prepass. Escape-bearing strings stay on the scanner
-	// below so CSI/OSC-heavy render output can still bail out at the first ESC.
+	// a JS printable-ASCII prepass.
 	if (str.length >= LONG_WIDTH_FAST_PATH_MIN && !str.includes(ESC)) {
 		let width = correctedBunWidth(str);
 		const tabCount = countTabs(str);
@@ -496,20 +518,39 @@ export function visibleWidth(str: string): number {
 		return width;
 	}
 
+	// Printable ASCII, one-cell units past ASCII (box drawing, gutters, arrows,
+	// punctuation, Latin-1), tabs and SGR sequences (`ESC [`, digits, `:` or `;`,
+	// then `m`) are counted here: a styled row of rendered prose or chrome is only
+	// these, and each SGR sequence draws nothing. The scan stops at anything else,
+	// which the native measure below reads from the start of the string.
 	let tabCount = 0;
+	let sgrLength = 0;
 	let i = 0;
 	for (; i < str.length; i++) {
 		const code = str.charCodeAt(i);
-		if (code < 0x20 || code > 0x7e) {
-			if (code === 0x09) {
-				tabCount++;
+		if (code >= 0x20 && code <= 0x7e) continue;
+		if (code === 0x09) {
+			tabCount++;
+			continue;
+		}
+		if (code === 0x1b && str.charCodeAt(i + 1) === 0x5b) {
+			let end = i + 2;
+			while (end < str.length) {
+				const param = str.charCodeAt(end);
+				if (param < 0x30 || param > 0x3b) break;
+				end++;
+			}
+			if (str.charCodeAt(end) === 0x6d) {
+				sgrLength += end + 1 - i;
+				i = end;
 				continue;
 			}
-			break;
 		}
+		if (code > 0x7e && isOneCellUnit(code)) continue;
+		break;
 	}
 	if (i === str.length) {
-		return tabCount === 0 ? str.length : str.length + tabCount * (DEFAULT_TAB_WIDTH - 1);
+		return str.length - sgrLength + tabCount * (DEFAULT_TAB_WIDTH - 1);
 	}
 
 	for (let tabIndex = str.indexOf(TAB, i + 1); tabIndex !== -1; tabIndex = str.indexOf(TAB, tabIndex + 1)) {

@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tree_sitter::{Point, TreeCursor};
+use tree_sitter::{Node, Point, TreeCursor};
 
 use crate::{
 	parse_cache::with_parsed_tree,
@@ -94,14 +94,19 @@ pub fn block_range_at(options: BlockRangeOptions) -> Result<Option<BlockRange>> 
 			return None;
 		}
 		// Climb to the outermost named ancestor that still begins on `row`,
-		// excluding the whole-file root. Ancestors can only begin on an earlier
-		// row, so the first parent that starts before `row` stops the climb.
+		// excluding the whole-file root. The first parent that starts before `row`
+		// stops the climb, and so does a statement-sequence container: it begins
+		// exactly where its first statement does, so adopting it would swallow
+		// every following sibling statement.
 		let mut node = leaf;
 		while let Some(parent) = node.parent() {
 			if parent.id() == root.id() {
 				break;
 			}
 			if parent.start_position().row != row {
+				break;
+			}
+			if is_statement_sequence(parent, node) {
 				break;
 			}
 			node = parent;
@@ -119,6 +124,50 @@ pub fn block_range_at(options: BlockRangeOptions) -> Result<Option<BlockRange>> 
 		})
 	})?;
 	Ok(resolved.flatten())
+}
+
+/// Is `parent` a statement-sequence container that `node` merely opens? These
+/// nodes wrap the sibling statements or entries of a body without a token of
+/// their own, so they begin exactly where their first child does: Go and
+/// PowerShell `statement_list`, Python/Starlark/Lua `block`, Ruby
+/// `body_statement`, Swift/Kotlin `statements`, HCL/CMake `body`, Scala
+/// `indented_block`, YAML `block_mapping`/`block_sequence`, Kotlin
+/// `import_list`, PowerShell `hash_literal_body`.
+///
+/// The container is matched by kind because grammars expose no uniform
+/// structural marker: field-less prefix runs such as Java/Kotlin/Swift
+/// `modifiers` (one annotation per line) look identical but must be climbed
+/// through to reach the declaration. Braced `block`s never match because they
+/// begin at `{`; requiring the next sibling to start a later row at `node`'s
+/// column also rules out a leading label (`'a: {` in Rust). Extras (comments)
+/// trailing `node` on its last row are skipped so `if … {} // note` still
+/// stops the climb.
+fn is_statement_sequence(parent: Node<'_>, node: Node<'_>) -> bool {
+	if !matches!(
+		parent.kind(),
+		"statement_list"
+			| "block"
+			| "body_statement"
+			| "statements"
+			| "body"
+			| "indented_block"
+			| "block_mapping"
+			| "block_sequence"
+			| "import_list"
+			| "hash_literal_body"
+	) || parent.start_byte() != node.start_byte()
+	{
+		return false;
+	}
+	let end_row = node.end_position().row;
+	let mut next = node.next_named_sibling();
+	while let Some(sibling) = next.filter(|s| s.is_extra() && s.start_position().row == end_row) {
+		next = sibling.next_named_sibling();
+	}
+	next.is_some_and(|next| {
+		let next_start = next.start_position();
+		next_start.row > end_row && next_start.column == node.start_position().column
+	})
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -521,6 +570,41 @@ mod tests {
 		})
 		.expect("block resolution succeeds");
 		assert_eq!(result, Some(BlockRange { start_line: 1, end_line: 3 }));
+	}
+
+	#[test]
+	fn go_leading_statement_excludes_following_siblings() {
+		// tree-sitter-go wraps a block body in a `statement_list` that begins
+		// exactly at its first statement; the leading `if` must not resolve to
+		// the whole list and swallow the statements after it.
+		let code = "package p\n\nfunc f() error {\n\tif err := step(); err != nil {\n\t\treturn \
+		            err\n\t}\n\tother()\n\treturn nil\n}\n";
+		let range = block_range_at(BlockRangeOptions {
+			code: code.to_string(),
+			lang: Some("go".to_string()),
+			path: None,
+			line: 4,
+		})
+		.expect("parse succeeds")
+		.expect("block resolved");
+		assert_eq!(range.start_line, 4);
+		assert_eq!(range.end_line, 6);
+	}
+
+	#[test]
+	fn go_leading_statement_trailing_comment_keeps_following_siblings() {
+		let code = "package p\n\nfunc f() error {\n\tif err := step(); err != nil {\n\t\treturn \
+		            err\n\t} // trailing note\n\tother()\n\treturn nil\n}\n";
+		let range = block_range_at(BlockRangeOptions {
+			code: code.to_string(),
+			lang: Some("go".to_string()),
+			path: None,
+			line: 4,
+		})
+		.expect("parse succeeds")
+		.expect("block resolved");
+		assert_eq!(range.start_line, 4);
+		assert_eq!(range.end_line, 6);
 	}
 
 	fn boundaries(code: &str, path: &str, ranges: &[(u32, u32)]) -> Option<Vec<u32>> {

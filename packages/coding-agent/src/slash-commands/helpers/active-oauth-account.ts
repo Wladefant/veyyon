@@ -1,5 +1,6 @@
 import type { UsageLimit, UsageReport } from "@veyyon/ai";
 import type { OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
+import { providerSharesProjectAcrossAccounts } from "@veyyon/ai/usage";
 
 function normalizeIdentityValue(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
@@ -44,16 +45,26 @@ export function limitMatchesActiveAccount(
 		if (activeOrgId !== reportOrgId) return false;
 		if (!activeAccountId && !activeEmail && !activeProjectId) return true;
 	}
-	if (activeAccountId) {
-		const reportAccountId = normalizeIdentityValue(metadata.accountId) ?? normalizeIdentityValue(metadata.account_id);
-		if (reportAccountId === activeAccountId) return true;
-		if (normalizeIdentityValue(limit.scope.accountId) === activeAccountId) return true;
-	}
-	if (activeEmail && normalizeIdentityValue(metadata.email) === activeEmail) return true;
-	if (activeProjectId) {
-		if (normalizeIdentityValue(metadata.projectId) === activeProjectId) return true;
-		if (normalizeIdentityValue(limit.scope.projectId) === activeProjectId) return true;
-	}
+	const reportAccountId =
+		normalizeIdentityValue(metadata.accountId) ??
+		normalizeIdentityValue(metadata.account_id) ??
+		normalizeIdentityValue(limit.scope.accountId);
+	const reportEmail = normalizeIdentityValue(metadata.email);
+	const reportProjectId = normalizeIdentityValue(metadata.projectId) ?? normalizeIdentityValue(limit.scope.projectId);
+
+	// Conflicting identity check: when both emails are known and differ, or
+	// both account ids are known and differ, the limit belongs to a different
+	// account and must never match. ProjectId fallback is only reached when
+	// there is no conflicting identity.
+	if (activeEmail && reportEmail && activeEmail !== reportEmail) return false;
+	if (activeAccountId && reportAccountId && activeAccountId !== reportAccountId) return false;
+
+	if (activeAccountId && reportAccountId === activeAccountId) return true;
+	if (activeEmail && reportEmail === activeEmail) return true;
+	// A project shared by every account of a provider (Antigravity's `aicode-consumers`) names no
+	// account, and matching on it would hand one account's limits to every sibling.
+	if (providerSharesProjectAcrossAccounts(report.provider)) return false;
+	if (activeProjectId && reportProjectId === activeProjectId) return true;
 	return false;
 }
 

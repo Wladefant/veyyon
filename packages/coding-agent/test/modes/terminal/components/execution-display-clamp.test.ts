@@ -220,7 +220,7 @@ describe("bounding the retained output", () => {
 		const footer = buildStatusFooter({
 			status: "complete",
 			exitCode: 0,
-			truncation: undefined,
+			meta: undefined,
 			hiddenLineCount: 80,
 			droppedLineCount: 4_900,
 		});
@@ -236,7 +236,7 @@ describe("bounding the retained output", () => {
 		const footer = buildStatusFooter({
 			status: "complete",
 			exitCode: 0,
-			truncation: undefined,
+			meta: undefined,
 			hiddenLineCount: 5,
 			droppedLineCount: 0,
 		});
@@ -248,7 +248,7 @@ describe("bounding the retained output", () => {
 		const footer = buildStatusFooter({
 			status: "complete",
 			exitCode: 0,
-			truncation: undefined,
+			meta: undefined,
 			hiddenLineCount: 5,
 		});
 		expect(footer?.getText() ?? "").not.toContain("dropped");

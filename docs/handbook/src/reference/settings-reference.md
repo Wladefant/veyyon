@@ -177,6 +177,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `session.newKeepsBackground` | /new Keeps The Old Session | boolean | `false` | What /new does while a response is still streaming. On: the old conversation keeps running in the background and the screen attaches to a new one; the status line counts background conversations. Off: the old turn is stopped and its provider stream closed before the new session starts. Takes effect at the next start. |
+| `session.backgroundLimit` | Background Session Limit | number | `3` | Most conversations /new keeps running in the background at once (1-20). A /new past the limit stops the oldest background conversation and closes its provider stream. |
 
 ### Approvals
 
@@ -376,7 +377,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `hindsight.apiUrl` | Hindsight API URL | string | `http://localhost:8888` | Hindsight server URL (Cloud or self-hosted). |
-| `hindsight.bankId` | Hindsight Bank ID | string | _(unset)_ | Base memory bank name. Unset uses `veyyon`. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping sets whether the project name is appended (per-project) or carried as a `project:` tag instead (per-project-tagged). |
+| `hindsight.bankId` | Hindsight Bank ID | string | _(unset)_ | Base memory bank name. Unset uses `veyyon` in the default profile and `veyyon-\<profile>` in a named one, so profiles keep separate memories; set the same value in two profiles to share one bank. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping sets whether the project name is appended (per-project) or carried as a `project:` tag instead (per-project-tagged). |
 | `hindsight.scoping` | Hindsight Scoping | enum | `per-project-tagged` | global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall. Values: `global`, `per-project`, `per-project-tagged`. |
 | `hindsight.autoRecall` | Hindsight Auto Recall | boolean | `true` | Recall memories on the first turn of each session. |
 | `hindsight.autoRetain` | Hindsight Auto Retain | boolean | `true` | Retain transcript every N turns and at session boundaries. |
@@ -607,7 +608,7 @@ veyyon config get compaction.threshold
 |---|---|---|---|---|
 | `agent.maxConcurrency` | Max Concurrent Agents | number | `32` | Maximum number of spawned agents running at once. Unlimited: no cap. |
 | `agent.maxRuntimeMs` | Max Agent Runtime | number | `0` | Maximum wall-clock time a spawned agent may run. An agent that reaches it is aborted with a 'timed out' reason. Unlimited: no limit. |
-| `agent.softRequestBudget` | Soft Request Budget | number | `200` | Number of model requests a spawned agent may make per run before it is asked to wrap up. At 1.5 times this number the run is stopped and the agent returns what it has. Disabled: no limit. The bundled scout and sonic agents have a lower built-in budget. |
+| `agent.softRequestBudget` | Soft Request Budget | number | `250` | Number of model requests a spawned agent may make per run before it is asked to wrap up. At 1.5 times this number the run is stopped and the agent returns what it has. Disabled: no limit. The bundled scout and sonic agents have a lower built-in budget. |
 | `agent.softRequestBudgetNotice` | Soft Request Budget Notice | boolean | `true` | Send an agent one steering notice when it crosses its Soft Request Budget, asking it to wrap up before the forced stop. |
 | `agent.enableLsp` | LSP in Agents | boolean | `false` | Allow spawned agents to use the lsp tool. Off keeps agents cheaper. |
 
@@ -661,7 +662,7 @@ veyyon config get compaction.threshold
 | `speech.mode` | Speech Vocalization Mode | enum | `assistant` | What to speak: all = assistant messages + thinking; assistant = messages only; yield = only the final message at turn end. Values: `all`, `assistant`, `yield`. |
 | `speech.enhanced` | Enhanced Speech Rewriting | boolean | `false` | Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure. |
 | `speech.voice` | Speech Vocalization Voice | enum | `af_heart` | Kokoro voice used when speaking the assistant's output aloud. Values: `af_heart`, `af_bella`, `af_nicole`, `af_aoede`, `af_kore`, `af_sarah`, `am_michael`, `am_fenrir`, `am_puck`, `bf_emma`, `bm_george`, `bm_fable`. |
-| `providers.fetch` | Fetch Provider | enum | `auto` | Reader backend priority for the fetch/read URL tool. Values: `auto`, `native`, `trafilatura`, `lynx`, `parallel`, `jina`. |
+| `providers.fetch` | Fetch Provider | enum | `auto` | Reader backend priority for the fetch/read URL tool. Values: `auto`, `native`, `trafilatura`, `lynx`, `parallel`, `jina`, `firecrawl`. |
 | `codexResets.autoRedeem` | Codex Auto-Redeem Saved Resets | enum | `unset` | When a turn is blocked by the Codex weekly limit on the active account and no other account is available, run the saved-reset check. Unset: prompt before spending the first eligible reset. Yes: spend eligible resets without prompting. No: skip the check. Requires retries enabled. Values: `unset`, `yes`, `no`. |
 | `codexResets.minBlockedMinutes` | Codex Auto-Redeem Min Block | number | `60` | Only auto-redeem when the natural weekly reset is at least this many minutes away (don't spend a ~30-day credit to save a short wait). |
 | `codexResets.keepCredits` | Codex Auto-Redeem Reserve | number | `0` | Never auto-spend below this many saved resets (0 = the last credit may be spent automatically). |
@@ -670,6 +671,8 @@ veyyon config get compaction.threshold
 | `exa.searchDelayMs` | Exa Search Delay | number | `1000` | Minimum delay between Exa web search requests in milliseconds; set 0 to disable pacing. |
 | `exa.enableResearcher` | Exa Researcher | boolean | `false` | Enable the Exa researcher tool for AI-powered deep research. |
 | `exa.enableWebsets` | Exa Websets | boolean | `false` | Enable Exa webset management and enrichment tools. |
+| `firecrawl.endpoint` | Firecrawl Endpoint | string | _(unset)_ | Base URL of Firecrawl API (defaults to https://api.firecrawl.dev). |
+| `firecrawl.apiKey` | Firecrawl API Key | string | _(unset)_ | API key or auth token for Firecrawl (can also use FIRECRAWL_API_KEY environment variable). |
 | `searxng.endpoint` | SearXNG Endpoint | string | _(unset)_ | Base URL of a self-hosted SearXNG instance used for web search. |
 
 ### Discovery
@@ -810,7 +813,7 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `compaction.thresholdPercent` | number | `-1` | Retired: use `compaction.threshold` instead. |
 | `compaction.thresholdTokens` | number | `-1` | Retired: use `compaction.threshold` instead. |
 | `cycleOrder` | array | `["smol","slow"]` |  |
-| `defaultThinkingLevel` | enum | `high` | Values: `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Retired: use `defaultEffort` instead. |
+| `defaultThinkingLevel` | enum | `high` | Values: `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Retired: use `defaultEffort` instead. |
 | `dev.autoqaPush.token` | string | _(unset)_ |  |
 | `disabledExtensions` | array | `[]` |  |
 | `disabledProviders` | array | `[]` |  |
@@ -889,8 +892,6 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `statusLine.leftSegments` | array | `[]` |  |
 | `statusLine.rightSegments` | array | `[]` |  |
 | `statusLine.segmentOptions` | record | `{}` |  |
-| `statusLine.separator` | enum | `pipe` | Values: `powerline`, `powerline-thin`, `slash`, `pipe`, `block`, `none`, `ascii`. |
-| `statusLine.transparent` | boolean | `true` |  |
 | `stt.language` | string | `en` |  |
 | `thinkingBudgets.high` | number | `16384` |  |
 | `thinkingBudgets.low` | number | `2048` |  |
@@ -903,4 +904,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-357 settings in /settings, 120 configuration-file keys, 477 in all.
+359 settings in /settings, 118 configuration-file keys, 477 in all.

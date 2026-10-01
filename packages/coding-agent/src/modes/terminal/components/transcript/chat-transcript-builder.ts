@@ -24,6 +24,7 @@ import {
 	toUserMessageView,
 } from "../../../../presentation/transcript-builder";
 import type { CustomMessage } from "../../../../session/messages";
+import { type HighlightRequest, prefetchHighlights } from "../../../../theme/highlight";
 import { theme } from "../../../../theme/theme";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../../../tools/core/streamed-tool-args";
 import { isLiveBackgroundTask } from "../../utils/async-tool-state";
@@ -68,7 +69,6 @@ export interface ChatTranscriptBuilderDeps {
 	resolveImageLinks?: (
 		message: Extract<AgentMessage, { role: "developer" | "user" }>,
 	) => readonly (string | undefined)[] | undefined;
-	onPopulateHistory?: (text: string) => void;
 	onInheritDisplaceableTodo?: (component: ToolExecutionComponent) => void;
 	isStreaming?: () => boolean;
 	retryAttempt?: () => number;
@@ -157,17 +157,13 @@ export class ChatTranscriptBuilder {
 		return this.container.children.length === 0;
 	}
 	/** Discard all components and rebuild the whole transcript from `input`. */
-	rebuild(
-		input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[],
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
-	): void {
+	rebuild(input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[]): void {
 		this.reset();
 		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
 			const message = messages[i]!;
 			this.#appendPersistedMessage(message, {
-				populateHistory: options.populateHistory,
 				cacheMissExplained: cacheMissExplainedAt?.[i] ?? false,
 			});
 		}
@@ -175,16 +171,12 @@ export class ChatTranscriptBuilder {
 	}
 
 	/** Append newly persisted entries without rebuilding already rendered rows. */
-	append(
-		input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[],
-		options: { populateHistory?: boolean } = {},
-	): void {
+	append(input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[]): void {
 		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
 			const message = messages[i]!;
 			this.#appendPersistedMessage(message, {
-				populateHistory: options.populateHistory,
 				cacheMissExplained: cacheMissExplainedAt?.[i] ?? false,
 			});
 		}
@@ -192,10 +184,7 @@ export class ChatTranscriptBuilder {
 	}
 
 	/** Append a single message to the transcript (live dispatch). */
-	appendMessage(
-		message: AgentMessage,
-		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
-	): Component[] {
+	appendMessage(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[] {
 		switch (message.role) {
 			case "assistant": {
 				const timeline = splitAssistantMessageToolTimeline(message);
@@ -398,7 +387,6 @@ export class ChatTranscriptBuilder {
 	#appendPersistedMessage(
 		message: AgentMessage,
 		options?: {
-			populateHistory?: boolean;
 			imageLinks?: readonly (string | undefined)[];
 			cacheMissExplained?: boolean;
 		},
@@ -420,7 +408,6 @@ export class ChatTranscriptBuilder {
 	#appendCommonMessage(
 		message: AgentMessage,
 		options?: {
-			populateHistory?: boolean;
 			imageLinks?: readonly (string | undefined)[];
 		},
 	): Component[] {
@@ -442,23 +429,20 @@ export class ChatTranscriptBuilder {
 					userView.imageLinks = options?.imageLinks ?? this.deps.resolveImageLinks?.(message);
 					const userComponent = new UserMessageComponent(userView);
 					this.container.addChild(userComponent);
-					if (options?.populateHistory && message.role === "user" && !userView.synthetic) {
-						this.deps.onPopulateHistory?.(textContent);
-					}
 				}
 				return [];
 			}
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.deps.ui, message.excludeFromContext);
 				if (message.output) component.appendOutput(message.output);
-				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
+				component.setComplete(message.exitCode, message.cancelled, { meta: message.meta });
 				this.container.addChild(component);
 				return [];
 			}
 			case "pythonExecution": {
 				const component = new EvalExecutionComponent(message.code, this.deps.ui, message.excludeFromContext);
 				if (message.output) component.appendOutput(message.output);
-				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
+				component.setComplete(message.exitCode, message.cancelled, { meta: message.meta });
 				this.container.addChild(component);
 				return [];
 			}
@@ -759,6 +743,20 @@ export class ChatTranscriptBuilder {
 				this.#pendingTools.delete(toolCallId);
 			}
 		}
+		this.#prefetchHighlights();
 		this.deps.requestRender();
+	}
+
+	/**
+	 * Highlight every source the rebuilt tool cards draw in one batch before the frame that draws them.
+	 * The frame draws every card, and each card otherwise highlights its sources one after another on
+	 * the render thread; the batch spreads them across threads.
+	 */
+	#prefetchHighlights(): void {
+		const requests: HighlightRequest[] = [];
+		for (const child of this.container.children) {
+			if (child instanceof ToolExecutionComponent) child.highlightRequests(requests);
+		}
+		prefetchHighlights(requests);
 	}
 }

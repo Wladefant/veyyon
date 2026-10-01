@@ -116,16 +116,12 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * which this graph already reaches. It is a leaf over modules already here, so the launch runs no
  * new code — the same split-raises-the-count case as the line above.
  *
- * 1546 to 1548: `ai/usage/anthropic-reset.ts`, the Anthropic usage-limit reset client, and
+ * 1546 to 1548 (upstream): `ai/usage/anthropic-reset.ts`, the Anthropic usage-limit reset client, and
  * `ai/usage/claude-oauth-endpoint.ts`, the OAuth base URL and headers it shares with the Claude
- * usage report. `AuthStorage` lists and redeems resets for every provider that has them and reaches
- * the Codex reset client the same way. Both are leaves over modules already here; the usage report,
- * `ai/usage/claude.ts`, stays off this graph.
+ * usage report. Both are leaves over modules already here.
  *
- * 1548 to 1549: `session/agent-session-provider-request.ts`, the provider request shaping
- * (secret redaction, Anthropic metadata, the tool-order check) split out of
- * `session/agent-session.ts` to hold that file under its line ceiling. A leaf over modules already
- * here, so the launch runs no new code — the same split-raises-the-count case as above.
+ * 1548 to 1549 (upstream): `session/agent-session-provider-request.ts`, the provider request shaping
+ * split out of `session/agent-session.ts`. A leaf over modules already here.
  *
  * 1549 to 1550: `goals/goal-record.ts`, which writes a goal's counters as a `goal_progress` entry
  * between the `mode_change` records that hold the whole goal, and reads the two back together. It is
@@ -151,14 +147,110 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * loads. They import `node:util`, type-level modules, `utils/type-guards`, `tools/core/output-notice`
  * and, for search, `hashline/format` and `tools/core/render-utils`, all already here.
  *
- * Fork modules sitting on this graph: ChatGPT-web provider modules, native control host, and
- * the refusal fence.
+ * 1557 to 1558: `session/session-spend.ts`, the spend ledger `session/agent-session.ts` reads for
+ * session stats and goal accounting, which tallies the messages a compaction summarized once per
+ * boundary instead of on every read. It imports type-level modules and `tools/core/builtin-names`,
+ * already here.
+ *
+ * 1558 to 1561: `session/runtime/advisor-roster.ts`, `session/advisor-context.ts` and
+ * `session/advisor-stats.ts`, the advisor lifecycle and delivery routing, the advisor's overflow
+ * compaction, and its spend and status figures, split out of `session/agent-session.ts` (18412
+ * lines to 17399). Leaves over modules already here, so the launch runs no new code — the same
+ * split-raises-the-count case as above.
+ *
+ * 1561 to 1562: `session/runtime/streaming-edit-guard.ts`, the check that stops a turn while an
+ * `edit` call streams toward an auto-generated file or a patch that cannot apply, split out of
+ * `session/agent-session.ts` (17399 lines to 17089). It imports the owning edit, path and
+ * local-protocol modules the runtime already reached, so the launch runs no new code.
+ *
+ * 1562 to 1566: `session/runtime/tool-discovery.ts`, `session/runtime/checkpoint-runtime.ts`,
+ * `session/runtime/user-executions.ts` and `session/runtime/post-prompt-tasks.ts`, the discovery
+ * selections and search index, the checkpoint and rewind state, the user shell and eval runs, and
+ * the work a turn schedules after `prompt()` returns, split out of `session/agent-session.ts` (17089
+ * lines to 16629). They import `node:path`, `node:timers/promises` and modules the runtime already
+ * reached, so the launch runs no new code.
+ *
+ * 1566 to 1567: `session/runtime/irc-inbox.ts`, the IRC records a streaming turn has not yet taken,
+ * split out of `session/agent-session.ts` (16629 lines to 16575). It imports only type-level
+ * modules, so the launch runs no new code.
+ *
+ * 1567 to 1568: `task/run-monitor.ts`, the progress, abort, soft-budget and output capture for one
+ * agent run, split out of `task/executor.ts` (3497 lines to 2450). It imports modules the executor
+ * already reached, so the launch runs no new code.
+ *
+ * 1568 to 1569: `secrets/session-runtime.ts`, the secret loader, expansion lease, reload queue and
+ * tool-argument expansion a session runs, split out of `sdk.ts` (3899 lines to 3322). It imports
+ * modules `sdk.ts` already reached, so the launch runs no new code.
+ *
+ * 1569 to 1570: `session/startup-model.ts`, the two-pass model and thinking-level selection a
+ * session starts on, split out of `sdk.ts` (3322 lines to 2879). It imports modules `sdk.ts`
+ * already reached, so the launch runs no new code.
+ *
+ * 1570 to 1571: `session/tool-session.ts`, the tool session a session's tools run against and the
+ * advisor's derived view of it, split out of `sdk.ts` (2705 lines to 2524). It imports modules
+ * `sdk.ts` already reached, so the launch runs no new code.
+ *
+ * 1571 to 1572: `session/prompt-inputs.ts`, the project inputs a session's system prompt renders
+ * and their re-discovery after a working-directory change, split out of `sdk.ts` (2524 lines to
+ * 2281) with the MCP startup that moved into `session/factory-mcp.ts`. It imports modules
+ * `sdk.ts` already reached, so the launch runs no new code.
+ *
+ * 1572 to 1577: `session/startup-extensions.ts`, `session/startup-background.ts`,
+ * `session/startup-records.ts`, `session/async-jobs.ts` and `secrets/request-leases.ts`, the
+ * extension and custom-command load, the Codex prewarm and language-server warmup, the argot arm
+ * and start records, the owned background-job manager and the secret lease each request in flight
+ * was admitted under, split out of `sdk.ts` (2269 lines to 1768) with the custom tools and the
+ * tool registry that moved into `session/factory-tools.ts`. They import modules `sdk.ts` already
+ * reached, so the launch runs no new code.
+ *
+ * 1577 to 1578: `hosts/terminal/engine/src/core/paint-sequences.ts`, the escape sequence each
+ * paint shape writes, split out of `core/tui.ts`. It imports `@veyyon/utils/deccara`,
+ * `@veyyon/utils/math` and engine modules the root already reached, so the launch runs no new
+ * code. `core/frame-plan.ts`, split out with it, is imported by type only and is not on the graph.
+ *
+ * 1578 to 1579: `hosts/terminal/engine/src/components/markdown-tokenizer.ts`, the block
+ * tokenizer with the setext underline precheck, split out of `components/markdown.ts`. It imports
+ * `marked`, which `markdown.ts` already reached, so the launch runs no new code.
+ *
+ * 1579 to 1620, forty-one modules, every one a file added to the tree; no module that existed at
+ * 1579 joined the graph:
+ *
+ * - Nineteen `session/runtime/*.ts` collaborators and `session/failed-turn.ts`, split out of
+ *   `session/agent-session.ts` (16447 lines to 10173): compaction runtime, summarizer and recovery,
+ *   context accounting, finalize reminders, history rewrites, loop guards, memory context, message
+ *   persistence, model handoff, plan mode, provider sessions, provider usage, retry fallback, retry
+ *   runtime, session approvals, session secrets, stop retries and yield tracking. Each imports
+ *   modules the class already reached.
+ * - Thirteen `packages/ai/src/auth-storage/*.ts` modules split out of `auth-storage.ts` (7449 lines
+ *   to 4794). Each imports modules `auth-storage.ts` already reached.
+ * - `session/provider-replay-projection.ts`, the replayed-field comparison a same-file reload runs,
+ *   split out of `session/agent-session.ts`.
+ * - `kernel/src/session/session-entry-index.ts` and `kernel/src/session/session-cold-payloads.ts`,
+ *   the loader's entry index and the compacted payloads a session file keeps until read. They
+ *   import kernel session modules and `@veyyon/utils/type-guards`, already here.
+ * - `session/top-level-sessions.ts` and `mcp/manager-lease.ts`, the disposal order of the sessions
+ *   a daemon keeps and the lease a session holds on the shared MCP manager. They import modules the
+ *   session factory already reached.
+ * - `@veyyon/utils` `log-file.ts`, `idle-trim.ts` and `stall-sampler.ts`: the rotating profile log
+ *   that replaced `winston` and `winston-daily-rotate-file` (29 npm packages off the launch), the
+ *   idle code discard, and the event-loop stall profile. They import `node:` built-ins,
+ *   `./app-identity`, `./fs-error`, `./logger` and `./type-guards`, all already here.
+ *
+ * 1620 to 1621: `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`.
+ * `catalog/build.ts` and `config/model-registry.ts`, already here, return each model's resolved
+ * compat record through it so equal records are held once.
+ *
+ * 1621 to 1623: `@veyyon/utils` `prompt-precompiled.ts`, the registry of templates the binary build
+ * compiled, and `prompt-handlebars.ts`, which loads the Handlebars compiler for the first template no
+ * build compiled. `prompt.ts`, already here, imports both. The first imports nothing that runs and the
+ * second only the `handlebars/runtime` package entry, so a binary launch evaluates no Handlebars
+ * compiler module.
  *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1570;
+const LAUNCH_REACH_CEILING = 1623;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -177,25 +269,21 @@ describe("a launch does not build every prompt registry", () => {
 		const aggregate = path.relative(REPO_ROOT, AGGREGATE);
 
 		expect(files, `${aggregate} is on the launch graph again`).not.toContain(aggregate);
-	}, 120_000);
+	});
 
 	it("never reaches it from prompt assembly either, which is where the edge was", () => {
 		const files = reached(ASSEMBLER);
 
 		expect(files).not.toContain(path.relative(REPO_ROOT, AGGREGATE));
-	}, 120_000);
+	});
 
-	it(
-		`keeps the launch graph at or under ${LAUNCH_REACH_CEILING} modules`,
-		() => {
-			const total = moduleReachCount(LAUNCH, RESOLUTION, CACHE);
+	it(`keeps the launch graph at or under ${LAUNCH_REACH_CEILING} modules`, () => {
+		const total = moduleReachCount(LAUNCH, RESOLUTION, CACHE);
 
-			expect(total, `modules reachable from main.ts:\n${reached(LAUNCH).join("\n")}`).toBeLessThanOrEqual(
-				LAUNCH_REACH_CEILING,
-			);
-		},
-		120_000,
-	);
+		expect(total, `modules reachable from main.ts:\n${reached(LAUNCH).join("\n")}`).toBeLessThanOrEqual(
+			LAUNCH_REACH_CEILING,
+		);
+	});
 
 	it(`keeps prompt assembly at or under ${ASSEMBLER_REACH_CEILING} modules`, () => {
 		const total = moduleReachCount(ASSEMBLER, RESOLUTION, CACHE);

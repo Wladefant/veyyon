@@ -45,6 +45,20 @@ export interface SessionStorageWriter {
 }
 
 /**
+ * A read handle on the object a session path named when it was opened. Reads keep answering from
+ * that object after the path is republished over, renamed or unlinked, so byte offsets recorded
+ * against it stay valid for as long as the handle is open.
+ */
+export interface PinnedSessionReader {
+	/** {@link SessionStorageStat.identity} of the object the handle reads. */
+	readonly identity: string;
+	/** The UTF-8 text of `length` bytes starting at byte `offset`. Throws on a short read. */
+	read(offset: number, length: number): string;
+	/** Release the handle. Later reads throw. */
+	close(): void;
+}
+
+/**
  * Optional guard applied by {@link SessionStorage.writeTextAtomic}. The
  * backend MUST call `commitGuard()` synchronously immediately before it makes
  * the staged content visible at `path`. If it returns `false`, the staged
@@ -167,8 +181,33 @@ export interface SessionStorage {
 	readTextSync?(path: string): string | undefined;
 	/** Read the requested UTF-8 byte windows from the head and tail of the file. */
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]>;
+	/**
+	 * Open a {@link PinnedSessionReader} on what `path` names now.
+	 *
+	 * OPTIONAL: only a backend whose rewrites publish a new object by rename can keep an old object
+	 * readable behind a handle. Absent, or returning `undefined`, means the caller holds every entry
+	 * in memory. A path that is gone throws.
+	 */
+	openPinnedReaderSync?(path: string): PinnedSessionReader | undefined;
 	writeText(path: string, content: string): Promise<void>;
 	writeTextAtomic(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void>;
+	/**
+	 * Replace `path` atomically with a copy of its first `keepBytes` bytes, `head` written over the
+	 * start of that copy, and `tail` after it. `commitGuard` applies as it does to
+	 * {@link writeTextAtomic}.
+	 *
+	 * OPTIONAL: a session rewrite that changed only its last entries uses this to keep the bytes
+	 * before them instead of serializing the whole transcript again. A backend without it, or one
+	 * whose paths name no object that can be copied, publishes the whole body through
+	 * {@link writeTextAtomic}. Fails when the file holds fewer than `keepBytes` bytes.
+	 */
+	rewriteTailAtomic?(
+		path: string,
+		keepBytes: number,
+		head: string,
+		tail: SessionFileBody,
+		options?: WriteTextAtomicOptions,
+	): Promise<void>;
 	rename(path: string, nextPath: string): Promise<void>;
 	/**
 	 * Relocate a session transcript and every artifact beneath its sibling
@@ -198,6 +237,51 @@ const writerRegistry = new FinalizationRegistry<number>(fd => {
 		// Ignore - fd may already be closed or invalid
 	}
 });
+
+/** Closes the descriptor of a pinned reader that was dropped without {@link PinnedSessionReader.close}. */
+const pinnedReaderRegistry = new FinalizationRegistry<number>(fd => {
+	try {
+		fs.closeSync(fd);
+	} catch {
+		// Already closed.
+	}
+});
+
+class FilePinnedSessionReader implements PinnedSessionReader {
+	readonly identity: string;
+	#fd: number | undefined;
+
+	constructor(fd: number, identity: string) {
+		this.#fd = fd;
+		this.identity = identity;
+		pinnedReaderRegistry.register(this, fd, this);
+	}
+
+	read(offset: number, length: number): string {
+		const fd = this.#fd;
+		if (fd === undefined) throw new Error("Pinned session reader is closed");
+		const buffer = Buffer.allocUnsafe(length);
+		let filled = 0;
+		while (filled < length) {
+			const read = fs.readSync(fd, buffer, filled, length - filled, offset + filled);
+			if (read === 0) {
+				throw new Error(
+					`Short read from session object ${this.identity}: ${filled} of ${length} bytes at ${offset}`,
+				);
+			}
+			filled += read;
+		}
+		return buffer.toString("utf-8");
+	}
+
+	close(): void {
+		const fd = this.#fd;
+		if (fd === undefined) return;
+		this.#fd = undefined;
+		pinnedReaderRegistry.unregister(this);
+		fs.closeSync(fd);
+	}
+}
 
 export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 	#closed = false;
@@ -489,6 +573,24 @@ export class FileSessionStorage implements SessionStorage {
 		}
 	}
 
+	/**
+	 * On Windows a rename over a path fails while another handle holds the file open, unless every
+	 * holder shares delete access, which this process cannot promise for the handles antivirus and
+	 * indexers open. Holding a read handle there would turn each republish into the EPERM fallback,
+	 * so the pin is POSIX only.
+	 */
+	openPinnedReaderSync(path: string): PinnedSessionReader | undefined {
+		if (process.platform === "win32") return undefined;
+		const fd = fs.openSync(path, "r");
+		try {
+			const stats = fs.fstatSync(fd);
+			return new FilePinnedSessionReader(fd, `${stats.dev}:${stats.ino}`);
+		} catch (err) {
+			fs.closeSync(fd);
+			throw toError(err);
+		}
+	}
+
 	async readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
 		return peekFileEnds(path, prefixBytes, suffixBytes, (head, tail) => [
 			utf8Decoder.decode(head),
@@ -502,7 +604,7 @@ export class FileSessionStorage implements SessionStorage {
 
 	async writeTextAtomic(fpath: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void> {
 		const dir = path.resolve(fpath, "..");
-		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+		const tempPath = this.#stagingPath(fpath);
 		await fs.promises.mkdir(dir, { recursive: true });
 		try {
 			await writeChunks(tempPath, body);
@@ -510,6 +612,58 @@ export class FileSessionStorage implements SessionStorage {
 			this.#discardTemp(tempPath, fpath);
 			throw toError(err);
 		}
+		this.#publishStaged(tempPath, fpath, options);
+	}
+
+	/**
+	 * The copy is a reflink where the filesystem supports one (btrfs, XFS, APFS) and an in-kernel
+	 * copy elsewhere, so the kept bytes never pass through this process.
+	 */
+	async rewriteTailAtomic(
+		fpath: string,
+		keepBytes: number,
+		head: string,
+		tail: SessionFileBody,
+		options?: WriteTextAtomicOptions,
+	): Promise<void> {
+		const tempPath = this.#stagingPath(fpath);
+		try {
+			await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
+			const handle = await fs.promises.open(tempPath, "r+");
+			try {
+				const { size } = await handle.stat();
+				if (size < keepBytes) {
+					throw new Error(`Session file holds ${size} bytes, fewer than the ${keepBytes} a tail rewrite keeps`);
+				}
+				await handle.truncate(keepBytes);
+				if (head.length > 0) await handle.write(head, 0, "utf-8");
+				let position = keepBytes;
+				for (const chunk of sessionBodyChunks(tail)) {
+					if (chunk.length === 0) continue;
+					const { bytesWritten } = await handle.write(chunk, position, "utf-8");
+					const chunkBytes = Buffer.byteLength(chunk, "utf-8");
+					if (bytesWritten !== chunkBytes) {
+						throw new Error(`Short write to ${tempPath}: ${bytesWritten} of ${chunkBytes} bytes`);
+					}
+					position += chunkBytes;
+				}
+			} finally {
+				await handle.close();
+			}
+		} catch (err) {
+			this.#discardTemp(tempPath, fpath);
+			throw toError(err);
+		}
+		this.#publishStaged(tempPath, fpath, options);
+	}
+
+	/** A temp path beside `fpath`, so the publish is a rename within one directory. */
+	#stagingPath(fpath: string): string {
+		return path.join(path.resolve(fpath, ".."), `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+	}
+
+	/** Make a fully written temp file the file at `fpath`, or discard it. */
+	#publishStaged(tempPath: string, fpath: string, options?: WriteTextAtomicOptions): void {
 		// Guard-check + rename MUST NOT be separated by an await. A concurrent
 		// synchronous rewrite (flushSync -> #rewriteSynchronously) can otherwise
 		// publish a fresh body between the check and the rename, and this stale

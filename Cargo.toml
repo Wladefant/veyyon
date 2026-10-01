@@ -28,6 +28,9 @@ repository = "https://github.com/santhreal/veyyon"
 [patch.crates-io]
 brush-core = { path = "natives/vendor/brush-core" }
 brush-builtins = { path = "natives/vendor/brush-builtins" }
+# tree-sitter-go 0.25.0 (latest release) rejects Go 1.26 `new(expr)`; the
+# vendored copy carries the upstream grammar fix (see its README.md).
+tree-sitter-go = { path = "natives/vendor/tree-sitter-go" }
 # async-task: smol executor tasks used by gpui, gpui_macos, and scheduler
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 # async-process: async process spawning used transitively by gpui_linux via smol
@@ -388,12 +391,13 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 png = "0.18"
 inferno = { version = "0.12", default-features = false }
-syntect = { version = "5.3", default-features = false, features = [
-   "default-syntaxes",
-   "default-themes",
-   "regex-fancy",
-   "yaml-load",
-] }
+# The addon loads a syntax set its build script linked and dumped, so at run time it
+# needs only the parser and a regex backend. The build script adds the default
+# syntaxes and the YAML loader in its own `[build-dependencies]` entry.
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig"] }
+# Oniguruma's C API, for its process-wide match and search retry limits, which
+# syntect's `regex-onig` backend reads and cannot set.
+onig_sys = { version = "69.9", default-features = false }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Markup Conversion

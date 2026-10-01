@@ -488,6 +488,16 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 });
 
+/**
+ * A pseudoconsole host (ConPTY's conhost): it owns the grid, reprinting its
+ * whole viewport from `CSI H` on every resize, so the in-place path repaints a
+ * screen nobody is looking at. Models the real ProcessTerminal, which answers
+ * this from its construction-time `conpty` override.
+ */
+class HostOwnedGridTerminal extends VirtualTerminal {
+	readonly hostOwnsGridOnResize = true;
+}
+
 describe("resize repaints in place on terminals that re-report size on alt-screen toggle (Warp)", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -581,6 +591,69 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 
 				await scheduler.flushAll(term);
 				expect(eraseScrollbackCount(writes)).toBe(0);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("keeps the alt-screen borrow on a host that owns the grid, even under a Warp marker", async () => {
+		// A Warp marker normally routes to the in-place path to escape the
+		// alt-screen-toggle feedback loop. On a host that owns the grid the
+		// in-place path is the broken one: conhost reprints its own viewport on
+		// every resize, so only the borrow's settled rebuild reaches the reader.
+		await withEnvPatch(WARP_ENV, async () => {
+			const term = new HostOwnedGridTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+
+				expect(tui.resizeViewportActive).toBe(true);
+				const drag = writes.join("");
+				expect(drag).toContain(ALT_SCREEN_ENTER);
+				// The in-place path would replay the normal screen from home here; the
+				// borrow must not, since conhost's own reprint is what the reader sees.
+				expect(drag).not.toContain("\x1b[3J");
+
+				const dragWrites = writes.length;
+
+				// The borrow's settled transaction releases the alternate screen and
+				// ends in the scrollback rebuild that erases conhost's stale copy.
+				await scheduler.flushAll(term);
+				expect(tui.resizeViewportActive).toBe(false);
+				const settle = writes.slice(dragWrites).join("");
+				expect(settle).toContain(ALT_SCREEN_EXIT);
+				expect(settle.indexOf(ALT_SCREEN_EXIT)).toBeLessThan(settle.indexOf("\x1b[3J"));
+				expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
+				expect(visible(term).at(-1)).toBe("b14-y");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("VEYYON_TUI_RESIZE_IN_PLACE=1 still forces in-place resize on a host that owns the grid", async () => {
+		// The exclusion is a default, not a lock: the documented escape hatch
+		// wins, exactly as it does over the Warp marker and over a multiplexer.
+		await withEnvPatch({ ...WARP_ENV, VEYYON_TUI_RESIZE_IN_PLACE: "1" }, async () => {
+			const term = new HostOwnedGridTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+
+				expect(tui.resizeViewportActive).toBe(false);
+				expect(tui.resizeViewportPaints).toBe(0);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
 			} finally {
 				tui.stop();
 			}

@@ -12,14 +12,30 @@
  * The module set is read off the directory at run time, so adding one turns this
  * red until it is recorded here.
  *
- * `createAgentSession` itself did NOT move and is not further split. It is one
- * 3477-line `try`/`catch` whose inner closures capture about thirty mutable
- * locals — the secret runtime lease, the obfuscator pair, the vault revision, the
- * MCP manager, the teardown flags the `catch` block reads. Turning those captures
- * into parameters is a rewrite of the startup ordering and the failure path, not
- * a move, so the plan's `factory-providers.ts`, `factory-memory.ts` and
- * `factory-advisor.ts` have no free declarations to hold and are absent rather
- * than empty. The ceiling below records where the file is.
+ * `createAgentSession` itself is split only where a concern owns its state. The
+ * secret runtime (the lease, the obfuscator pair, the vault revision, the reload
+ * queue) moved to `SessionSecretRuntime` in `src/secrets/session-runtime.ts`,
+ * which holds that state as fields instead of as captured locals, and the lease
+ * each request in flight was admitted under moved to `SecretRequestLeases` in
+ * `src/secrets/request-leases.ts`. The tool
+ * session (the mutation counters, the active-tool set, the host notifier and the
+ * advisor's derived view) moved to `src/session/tool-session.ts`. The project
+ * the system prompt renders (its snapshot, the serialized re-discovery on a cwd
+ * move and the TTSR rollback) moved to `ProjectPromptInputs` in
+ * `src/session/prompt-inputs.ts`; MCP startup and its reactive wiring moved into
+ * `factory-mcp.ts`. The startup phases that read their inputs and return a value
+ * moved beside it: the custom tools and the tool registry into `factory-tools.ts`,
+ * the extensions, their provider adoption and the custom commands into
+ * `startup-extensions.ts`, the Codex
+ * prewarm and language-server warmup into `startup-background.ts`, the argot arm
+ * and the start records into `startup-records.ts`, and the owned background-job
+ * manager into `async-jobs.ts`. The rest is
+ * one `try`/`catch` whose inner closures capture the MCP manager and the teardown
+ * flags the `catch` block reads; turning those captures into parameters is a
+ * rewrite of the startup ordering and the failure path, not a move, so the plan's
+ * `factory-providers.ts`, `factory-memory.ts` and `factory-advisor.ts` have no
+ * free declarations to hold and are absent rather than empty. The ceiling below
+ * records where the file is.
  *
  * What it does not catch: a factory module that keeps its name and grows a
  * concern that belongs to another, and the coupling inside `createAgentSession`,
@@ -34,17 +50,15 @@ const SESSION_DIR = repoPath("packages/coding-agent/src/session");
 const SDK = repoPath("packages/coding-agent/src/sdk.ts");
 
 /**
- * MEASURED at 4011 lines on fork main (up from 3832 upstream / 3950 ceiling)
- * after landing fork contracts in `createAgentSession`: native topic replenishment
- * engine and lifecycle (`cac053973`, `4df81e5e8`, `4db4b3926`, `8a2cd28df`, `11bbd59c4`),
- * tool refusal fencing via ExtensionToolWrapper (`fd1e2f0ce`, `23cba1798`), session
- * identity and task depth forwarding (`b058b6a63`, `acca40bb2`), and models discovery
- * fallback (`61656458a`).
- * Re-pinned at 4015 with 4 lines of slack.
+ * MEASURED at 1750 lines after the custom tools, extensions and their provider adoption, tool
+ * registry, background startup, start records, background-job manager and request secret leases
+ * moved out, the project half of every prompt build moved to `ProjectPromptInputs.promptOptions`,
+ * and the order a session's disposal runs in moved to `orderSessionDisposal` in
+ * `src/session/top-level-sessions.ts`. This falls when `createAgentSession` is rewritten.
  */
-const SDK_CEILING = 4015;
+const SDK_CEILING = 1750;
 
-/** MEASURED: the largest factory module is `factory-options.ts` at 369 lines. */
+/** MEASURED: the largest factory module is `factory-extensions.ts` at 395 lines. */
 const FACTORY_CEILING = 400;
 
 /**

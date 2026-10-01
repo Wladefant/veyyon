@@ -75,12 +75,18 @@ export function isMultiplexerSession(): boolean {
  * geometry never actually changes. Routing them through the in-place
  * (multiplexer) resize path never touches the alt buffer, breaking the loop.
  *
- * `VEYYON_TUI_RESIZE_IN_PLACE=1|0` forces this on/off for any terminal.
+ * `VEYYON_TUI_RESIZE_IN_PLACE=1|0` forces in-place resize on/off for any terminal.
  */
-export function reportsSizeOnAltScreenToggle(): boolean {
+export function resizeInPlaceOverride(): boolean | null {
 	const override = Bun.env.VEYYON_TUI_RESIZE_IN_PLACE;
 	if (override === "0" || override === "false") return false;
 	if (override === "1" || override === "true") return true;
+	return null;
+}
+
+export function reportsSizeOnAltScreenToggle(): boolean {
+	const override = resizeInPlaceOverride();
+	if (override !== null) return override;
 	return Bun.env.TERM_PROGRAM?.toLowerCase() === "warpterminal";
 }
 
@@ -89,9 +95,20 @@ export function reportsSizeOnAltScreenToggle(): boolean {
  * borrow, no ED3 scrollback rewrap — for multiplexer panes and for terminals
  * that loop on alt-screen toggles. The tradeoff is identical to a multiplexer:
  * scrollback above the window keeps its old wrap instead of being re-flowed.
+ *
+ * A terminal whose host owns the grid ({@link Terminal.hostOwnsGridOnResize})
+ * takes the borrow instead: conhost re-emits its whole viewport from `CSI H` on
+ * every resize while the application writes nothing, so the in-place path would
+ * repaint a grid nobody is looking at and leave the host's copy on screen.
+ * The borrow's settled transaction ends in the scrollback rebuild that erases
+ * that copy. `VEYYON_TUI_RESIZE_IN_PLACE=1` still forces the in-place path.
  */
-export function resizeRepaintsInPlace(): boolean {
-	return isMultiplexerSession() || reportsSizeOnAltScreenToggle();
+export function resizeRepaintsInPlace(hostOwnsGridOnResize = false): boolean {
+	if (isMultiplexerSession()) return true;
+	const override = resizeInPlaceOverride();
+	if (override !== null) return override;
+	if (hostOwnsGridOnResize) return false;
+	return Bun.env.TERM_PROGRAM?.toLowerCase() === "warpterminal";
 }
 
 /**

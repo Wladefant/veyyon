@@ -6,7 +6,7 @@ import { ReviewCommand } from "@veyyon/coding-agent/extensibility/custom-command
 import type { CustomCommandAPI } from "@veyyon/coding-agent/extensibility/custom-commands/types";
 import type { HookCommandContext } from "@veyyon/coding-agent/extensibility/hooks/types";
 import type { PrDiffPayload, ViewLookupResult } from "@veyyon/coding-agent/tools/web/gh";
-import * as gh from "@veyyon/coding-agent/tools/web/gh";
+import * as ghFetch from "@veyyon/coding-agent/tools/web/gh-fetch";
 import * as git from "@veyyon/coding-agent/utils/git";
 import * as jj from "@veyyon/coding-agent/utils/jj";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
@@ -249,7 +249,7 @@ describe("ReviewCommand", () => {
 
 	it("parses supported explicit PR URL formats", async () => {
 		const dir = await createTempDir();
-		const diffSpy = spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		const diffSpy = spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = { hasUI: false } as unknown as HookCommandContext;
 
@@ -275,7 +275,7 @@ describe("ReviewCommand", () => {
 
 	it("prevents local file reads for PR URL reviews", async () => {
 		const dir = await createTempDir();
-		spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = { hasUI: false } as unknown as HookCommandContext;
 
@@ -290,7 +290,7 @@ describe("ReviewCommand", () => {
 
 	it("uses PR diff URLs for omitted large PR diff instructions", async () => {
 		const dir = await createTempDir();
-		spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(makeManyFileDiff(21)));
+		spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(makeManyFileDiff(21)));
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = { hasUI: false } as unknown as HookCommandContext;
 
@@ -304,7 +304,7 @@ describe("ReviewCommand", () => {
 	});
 
 	it("rejects unsupported PR-like URL formats as normal instructions", async () => {
-		const diffSpy = spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		const diffSpy = spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
 		const command = new ReviewCommand({ cwd: "/tmp" } as unknown as CustomCommandAPI);
 		const ctx = { hasUI: false } as unknown as HookCommandContext;
 
@@ -329,7 +329,7 @@ describe("ReviewCommand", () => {
 
 	it("removes only the first valid PR URL from extra instructions", async () => {
 		const dir = await createTempDir();
-		const diffSpy = spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		const diffSpy = spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = { hasUI: false } as unknown as HookCommandContext;
 		const secondUrl = "https://github.com/owner/repo/pull/456";
@@ -343,7 +343,7 @@ describe("ReviewCommand", () => {
 
 	it("bypasses the interactive menu for explicit PR URLs", async () => {
 		const dir = await createTempDir();
-		const diffSpy = spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		const diffSpy = spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
 		let selectCalled = false;
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = createContext({
@@ -362,7 +362,7 @@ describe("ReviewCommand", () => {
 
 	it("notifies and stops when explicit PR diff fetching fails", async () => {
 		const dir = await createTempDir();
-		spyOn(gh, "getOrFetchPrDiff").mockRejectedValue(new Error("authentication required"));
+		spyOn(ghFetch, "getOrFetchPrDiff").mockRejectedValue(new Error("authentication required"));
 		const notifications: NotifyCall[] = [];
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = createContext({
@@ -384,7 +384,7 @@ describe("ReviewCommand", () => {
 
 	it("notifies and stops when explicit PR diff content is empty", async () => {
 		const dir = await createTempDir();
-		spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(" \n"));
+		spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(" \n"));
 		const notifications: NotifyCall[] = [];
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = createContext({
@@ -406,7 +406,7 @@ describe("ReviewCommand", () => {
 
 	it("reviews a detected PR from recent conversation context", async () => {
 		const dir = await createTempDir();
-		const diffSpy = spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		const diffSpy = spyOn(ghFetch, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = createContext({
 			selectedMode: "Review PR owner/example#77 from conversation",

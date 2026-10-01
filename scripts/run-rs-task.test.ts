@@ -21,27 +21,42 @@ describe("Rust gate commands", () => {
 		const clippyRuns = Object.entries(RUST_TASK_COMMANDS).flatMap(([task, commands]) =>
 			commands.filter(command => command[1] === "clippy").map(command => [task, command] as const),
 		);
-		// Three of them: check:rs, fix:rs, lint:rs. If a fourth appears it must carry the flag too.
-		expect(clippyRuns.map(([task]) => task)).toEqual(["check:rs", "fix:rs", "lint:rs"]);
-		for (const [task, command] of clippyRuns) {
+		// check:rs and lint:rs also run the two out-of-workspace shell crates; fix:rs only the workspace.
+		expect(clippyRuns.map(([task]) => task)).toEqual([
+			"check:rs",
+			"check:rs",
+			"check:rs",
+			"fix:rs",
+			"lint:rs",
+			"lint:rs",
+			"lint:rs",
+		]);
+		for (const [, command] of clippyRuns) {
 			expect(command).toContain("--all-targets");
-			expect(`${task}: ${command.join(" ")}`).toContain("--workspace");
 		}
 	});
 
-	it("runs the linting tasks with -D warnings, so a warning is a failure and not a note", () => {
-		expect(RUST_TASK_COMMANDS["lint:rs"]).toEqual([
-			["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
-		]);
-		expect(RUST_TASK_COMMANDS["check:rs"][1]).toEqual([
-			"cargo",
-			"clippy",
-			"--workspace",
-			"--all-targets",
-			"--",
-			"-D",
-			"warnings",
-		]);
+	it("runs the workspace linting with -D warnings, so a warning is a failure and not a note", () => {
+		const workspaceRun = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"];
+		expect(RUST_TASK_COMMANDS["lint:rs"][0]).toEqual(workspaceRun);
+		expect(RUST_TASK_COMMANDS["check:rs"][1]).toEqual(workspaceRun);
+	});
+
+	it("lints the in-process shell crates the workspace excludes for the exit ban, in both gates", () => {
+		// brush-core and brush-builtins are not workspace members, so `--workspace` never reaches them, yet
+		// they are the shell that runs inside the host (issue #73). The lane denies only disallowed_methods.
+		for (const task of ["check:rs", "lint:rs"] as const) {
+			const manifests = RUST_TASK_COMMANDS[task]
+				.filter(command => command.includes("--manifest-path"))
+				.map(command => command[command.indexOf("--manifest-path") + 1]);
+			expect(manifests).toEqual([
+				"natives/vendor/brush-core/Cargo.toml",
+				"natives/vendor/brush-builtins/Cargo.toml",
+			]);
+			for (const command of RUST_TASK_COMMANDS[task].filter(entry => entry.includes("--manifest-path"))) {
+				expect(command.slice(command.indexOf("--") + 1).join(" ")).toContain("-D clippy::disallowed_methods");
+			}
+		}
 	});
 
 	it("checks formatting before linting in check:rs, so a format diff is not reported as lint noise", () => {

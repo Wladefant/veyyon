@@ -20,6 +20,8 @@
 import { constants, Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getAgentDbPath } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
 import { SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
@@ -301,7 +303,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				}
 				lastBusyError = err instanceof Error ? err : new Error(String(err));
 				if (attempt < maxAttempts - 1) {
-					await Bun.sleep(baseDelayMs * 2 ** attempt);
+					await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: baseDelayMs, jitter: 0 }));
 				}
 			}
 		}

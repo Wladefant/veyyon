@@ -59,9 +59,10 @@ carries forward here because no Codex source is present in this tree.
   pytest-output-minimizer algorithm adapted in that crate.
 - `natives/vendor/*` contains vendored/patched copies of MIT-licensed Rust
   crates (uutils coreutils reimplementations `uu-*`, `brush-core` /
-  `brush-builtins` from `reubeno/brush`, and `jaq`). Each subdirectory
-  carries its own `LICENSE` file from the upstream project; those are the
-  authoritative permission notices for that code and are not restated here.
+  `brush-builtins` from `reubeno/brush`, `jaq`, and `tree-sitter-go`). Each
+  subdirectory carries its own `LICENSE` file from the upstream project; those
+  are the authoritative permission notices for that code and are not restated
+  here.
 - `packages/coding-agent/src/export/markit/NOTICE` documents the document-conversion
   code adapted from `markit-ai` under the MIT License.
 - `packages/utils/src/vendor/mermaid-ascii/NOTICE` documents the ASCII diagram

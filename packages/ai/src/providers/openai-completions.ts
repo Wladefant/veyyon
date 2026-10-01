@@ -77,6 +77,7 @@ import type {
 	ChatCompletionContentPartImage,
 	ChatCompletionContentPartText,
 	ChatCompletionContentPartVideo,
+	ChatCompletionMessageFunctionToolCall,
 	ChatCompletionMessageParam,
 	ChatCompletionTool,
 	ChatCompletionToolMessageParam,
@@ -101,19 +102,25 @@ import {
 	applyWireModelIdTransform,
 	calculateOpenAIUsageAccounting,
 	clearOpenAIStrictToolsState,
+	clearOpenAIToolChoiceState,
 	createOpenAIStrictToolsState,
+	createOpenAIToolChoiceState,
 	disableStrictToolsForScope,
 	getOpenAIPromptCacheKey,
 	getOpenAIStrictToolsScope,
 	isCompiledGrammarTooLargeStrictError,
 	isOpenRouterAnthropicModel,
 	isStrictToolsDisabledForScope,
+	isToolChoiceRejectedForScope,
+	isToolChoiceRejection,
 	type OpenAICompatPolicy,
 	type OpenAICompletionsParams,
 	type OpenAIRequestSetup,
 	type OpenAIStrictToolsScope,
 	type OpenAIStrictToolsState,
+	type OpenAIToolChoiceState,
 	parseAzureDeploymentNameMap,
+	rejectToolChoiceForScope,
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
@@ -144,8 +151,81 @@ type OpenAICompletionsDeltaWithReasoningDetails = ChatCompletionChunk.Choice["de
 	reasoning_details?: unknown;
 };
 
+type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature";
+type GeminiMessageThoughtSignature = { field: GeminiMessageThoughtSignatureField; signature: string };
+type GeminiThoughtSignatureNamespace = "google" | "vertex";
+type GeminiThoughtSignatureExtraContent = Partial<
+	Record<GeminiThoughtSignatureNamespace, { thought_signature: string }>
+>;
+type OpenAICompletionsFunctionToolCall = ChatCompletionMessageFunctionToolCall & {
+	extra_content?: GeminiThoughtSignatureExtraContent;
+};
+const GEMINI_THOUGHT_SIGNATURE_NAMESPACES: readonly GeminiThoughtSignatureNamespace[] = ["google", "vertex"];
+const GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS: readonly GeminiMessageThoughtSignatureField[] = [
+	"thinking_signature",
+	"thought_signature",
+];
+function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	for (const namespace of GEMINI_THOUGHT_SIGNATURE_NAMESPACES) {
+		const providerContent = Reflect.get(value, namespace);
+		if (typeof providerContent !== "object" || providerContent === null) continue;
+		const thoughtSignature = Reflect.get(providerContent, "thought_signature");
+		if (typeof thoughtSignature !== "string" || thoughtSignature.length === 0) continue;
+		return namespace === "google"
+			? { google: { thought_signature: thoughtSignature } }
+			: { vertex: { thought_signature: thoughtSignature } };
+	}
+	return undefined;
+}
+
+function getGeminiMessageThoughtSignature(value: unknown): GeminiMessageThoughtSignature | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	for (const field of GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS) {
+		const signature = Reflect.get(value, field);
+		if (typeof signature === "string" && signature.length > 0) return { field, signature };
+	}
+	return undefined;
+}
+
+function parseStoredThoughtSignature(thoughtSignature: string | undefined): unknown {
+	if (!thoughtSignature) return undefined;
+	try {
+		return JSON.parse(thoughtSignature);
+	} catch {
+		return undefined;
+	}
+}
+
+type StoredGeminiSignature = {
+	perCall?: unknown;
+	message?: Partial<Record<GeminiMessageThoughtSignatureField, string>>;
+};
+
+function normalizeStoredGeminiSignature(value: unknown): StoredGeminiSignature | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const perCall = Reflect.get(value, "perCall");
+	const envelopeMessage = getGeminiMessageThoughtSignature(Reflect.get(value, "message"));
+	if (perCall !== undefined || envelopeMessage) {
+		const normalized: StoredGeminiSignature = {};
+		if (perCall !== undefined) normalized.perCall = perCall;
+		if (envelopeMessage) normalized.message = { [envelopeMessage.field]: envelopeMessage.signature };
+		return normalized;
+	}
+	const legacyMessage = getGeminiMessageThoughtSignature(value);
+	if (legacyMessage) return { message: { [legacyMessage.field]: legacyMessage.signature } };
+	return { perCall: value };
+}
+
+function mergeStoredGeminiSignature(existing: string | undefined, update: StoredGeminiSignature): string {
+	const merged = normalizeStoredGeminiSignature(parseStoredThoughtSignature(existing)) ?? {};
+	if (update.perCall !== undefined) merged.perCall = update.perCall;
+	if (update.message) merged.message = update.message;
+	return JSON.stringify(merged);
+}
+
 type OpenAICompletionsAssistantMessageParam = ChatCompletionAssistantMessageParam &
-	Partial<Record<OpenAICompletionsReasoningField, string>> & {
+	Partial<Record<OpenAICompletionsReasoningField | GeminiMessageThoughtSignatureField, string>> & {
 		reasoning_details?: unknown[];
 	};
 
@@ -519,17 +599,21 @@ const OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX = "openai-completions:";
 
 type OpenAICompletionsProviderSessionState = ProviderSessionState &
 	OpenAIStrictToolsState &
-	OpenAIReasoningEffortFallbackState;
+	OpenAIReasoningEffortFallbackState &
+	OpenAIToolChoiceState;
 
 function createOpenAICompletionsProviderSessionState(): OpenAICompletionsProviderSessionState {
 	const strictToolsState = createOpenAIStrictToolsState();
 	const reasoningEffortFallbackState = createOpenAIReasoningEffortFallbackState();
+	const toolChoiceState = createOpenAIToolChoiceState();
 	const state: OpenAICompletionsProviderSessionState = {
 		...strictToolsState,
 		...reasoningEffortFallbackState,
+		...toolChoiceState,
 		close: () => {
 			clearOpenAIStrictToolsState(state);
 			clearOpenAIReasoningEffortFallbackState(state);
+			clearOpenAIToolChoiceState(state);
 		},
 	};
 	return state;
@@ -599,6 +683,54 @@ const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 // converts the already-successful response into a timeout error.
 const OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS = 2_500;
 
+const OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE: Readonly<Record<string, number>> = {
+	SERVICE_UNAVAILABLE: 503,
+	TOO_MANY_REQUESTS: 429,
+	REQUEST_TIMEOUT: 408,
+};
+
+function parseOpenAICompletionsErrorStatus(value: unknown): number | undefined {
+	const status =
+		typeof value === "number"
+			? value
+			: typeof value === "string" && /^\d{3}$/.test(value.trim())
+				? Number(value)
+				: undefined;
+	return status !== undefined && Number.isInteger(status) && status >= 400 && status <= 599 ? status : undefined;
+}
+
+/**
+ * Classify an SSE chunk that carries an `error` envelope inside a successful
+ * HTTP response (queue-full, in-stream timeouts). Returns undefined for a
+ * regular completion chunk. A status found in `code` or implied by `type` keeps
+ * HTTP semantics so retry and model-fallback recovery treat it like a non-2xx.
+ */
+function createOpenAICompletionsStreamError(chunk: unknown, provider: string): Error | undefined {
+	if (!chunk || typeof chunk !== "object") return undefined;
+	const error = Reflect.get(chunk, "error");
+	if (!error || typeof error !== "object") return undefined;
+
+	const messageValue = Reflect.get(error, "message");
+	const typeValue = Reflect.get(error, "type");
+	const codeValue = Reflect.get(error, "code");
+	const type = typeof typeValue === "string" ? typeValue.trim() : undefined;
+	const status =
+		parseOpenAICompletionsErrorStatus(codeValue) ??
+		(type ? OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE[type.toUpperCase()] : undefined);
+	const detail =
+		typeof messageValue === "string" && messageValue.length > 0
+			? messageValue
+			: "Provider returned an in-band OpenAI completions stream error";
+	if (status === undefined) {
+		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
+	}
+	// A nonnumeric string `code` is the machine code (insufficient_quota, usage_limit_reached) that
+	// quota classification reads; `type` is the generic class and only the fallback.
+	const machineCode = typeof codeValue === "string" && !/^\d+$/.test(codeValue.trim()) ? codeValue.trim() : undefined;
+	const code = machineCode || type;
+	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code });
+}
+
 type ToolCallStreamBlock = ToolCall & {
 	partialArgs?: string | Record<string, unknown>;
 	streamIndex?: number;
@@ -637,6 +769,9 @@ async function connectOpenAICompletionsStream(args: ConnectOpenAICompletionsStre
 	let activeReasoningEffortFallbackKey: string | undefined;
 	let activeRequestParams: OpenAICompletionsParams | undefined;
 	let currentDisableStrictTools = args.disableStrictTools;
+	// With no session the rejected `tool_choice` form is remembered for this call only, which is
+	// still what lets the one retry leave it out.
+	const toolChoiceState = args.providerSessionState ?? createOpenAIToolChoiceState();
 
 	const createCompletionsStream = async (toolStrictModeOverride?: ToolStrictModeOverride, captureOnly = false) => {
 		const effectiveToolStrictModeOverride = currentDisableStrictTools ? "none" : toolStrictModeOverride;
@@ -645,6 +780,8 @@ async function connectOpenAICompletionsStream(args: ConnectOpenAICompletionsStre
 			args.context,
 			args.options,
 			effectiveToolStrictModeOverride,
+			toolChoiceState,
+			args.strictToolsScope,
 		);
 		appliedStrictTools = strictToolsApplied;
 		const reasoningEffortFallbackKey = createOpenAIReasoningEffortFallbackKey(
@@ -741,6 +878,15 @@ async function connectOpenAICompletionsStream(args: ConnectOpenAICompletionsStre
 				reasoningEffortFallback,
 			);
 		} else if (
+			!args.requestSignal.aborted &&
+			isToolChoiceRejection(error, capturedErrorResponse, activeRequestParams?.tool_choice)
+		) {
+			// The endpoint takes the request but not the `tool_choice` form it named. Retry once
+			// without that form and remember it for this model, so the session pays one request.
+			// The retry sends no such form, so its own failure cannot land here again.
+			rejectToolChoiceForScope(toolChoiceState, args.strictToolsScope, activeRequestParams?.tool_choice);
+			openaiHandle = await createCompletionsStream();
+		} else if (
 			isOpenRouterAnthropicModel(args.model) &&
 			!currentDisableStrictTools &&
 			isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse)
@@ -836,6 +982,10 @@ function handleOpenAIStreamingToolCallDeltas(
 
 		if (toolCall.id) block.id = toolCall.id;
 		if (incomingName) block.name = incomingName;
+		const extraContent = getGeminiThoughtSignatureExtraContent(Reflect.get(toolCall, "extra_content"));
+		if (extraContent) {
+			block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, { perCall: extraContent });
+		}
 		let delta = "";
 		const rawArgs = toolCall.function?.arguments as string | Record<string, unknown> | undefined;
 		if (typeof rawArgs === "string") {
@@ -874,7 +1024,9 @@ function applyOpenAIReasoningDetails(delta: OpenAIChunkDelta, output: AssistantM
 		if (detail.type === "reasoning.encrypted" && typeof detail.id === "string" && detail.data) {
 			const matchingToolCall = output.content.find(b => b.type === "toolCall" && b.id === detail.id);
 			if (matchingToolCall && matchingToolCall.type === "toolCall") {
-				matchingToolCall.thoughtSignature = JSON.stringify(detail);
+				matchingToolCall.thoughtSignature = mergeStoredGeminiSignature(matchingToolCall.thoughtSignature, {
+					perCall: detail,
+				});
 			}
 		}
 	}
@@ -1418,6 +1570,7 @@ const streamOpenAICompletionsOnce = (
 			// OpenAI-compatible servers send basic usage with `finish_reason` and
 			// cache-read details in a trailing usage-only chunk, so only the
 			// no-choice terminal path may break while those details are pending.
+			let messageThoughtSignature: GeminiMessageThoughtSignature | undefined;
 			let streamFinishedAt: number | undefined;
 			let sawUsagePayload = false;
 			let awaitTrailingUsageDetails = false;
@@ -1447,6 +1600,8 @@ const streamOpenAICompletionsOnce = (
 			});
 			for await (const chunk of terminalAwareStream) {
 				if (!chunk || typeof chunk !== "object") continue;
+				const streamError = createOpenAICompletionsStreamError(chunk, model.provider);
+				if (streamError) throw streamError;
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
 				// and each chunk in a streamed completion carries the same id.
@@ -1529,6 +1684,21 @@ const streamOpenAICompletionsOnce = (
 					}
 
 					applyOpenAIReasoningDetails(choice.delta, output);
+
+					const incomingMessageThoughtSignature = getGeminiMessageThoughtSignature(choice.delta);
+					if (incomingMessageThoughtSignature) messageThoughtSignature = incomingMessageThoughtSignature;
+					if (messageThoughtSignature) {
+						for (const block of output.content) {
+							if (block.type !== "toolCall") continue;
+							block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, {
+								message: {
+									[messageThoughtSignature.field]: messageThoughtSignature.signature,
+								},
+							});
+							messageThoughtSignature = undefined;
+							break;
+						}
+					}
 				}
 
 				// If usage arrived on the finish chunk without cache-read fields,
@@ -1655,7 +1825,9 @@ function buildParams(
 	model: Model<"openai-completions">,
 	context: Context,
 	options: OpenAICompletionsOptions | undefined,
-	toolStrictModeOverride?: ToolStrictModeOverride,
+	toolStrictModeOverride: ToolStrictModeOverride,
+	toolChoiceState: OpenAIToolChoiceState,
+	toolChoiceScope: OpenAIStrictToolsScope,
 ): {
 	params: OpenAICompletionsParams;
 	toolStrictMode: AppliedToolStrictMode;
@@ -1766,6 +1938,11 @@ function buildParams(
 		// that function in `tools`. Active-tool filtering normally enforces this
 		// before provider dispatch; this guard keeps raw provider callers from
 		// emitting a self-inconsistent OpenAI-compatible payload.
+		delete params.tool_choice;
+	}
+	if (isToolChoiceRejectedForScope(toolChoiceState, toolChoiceScope, params.tool_choice)) {
+		// This model rejected this form of `tool_choice` earlier in the session. Leaving the field
+		// out is `auto`, and the reasoning policy below reads the choice that is actually sent.
 		delete params.tool_choice;
 	}
 
@@ -1967,6 +2144,7 @@ function convertOpenAIUserOrDeveloperMessage(
 					type: "image_url",
 					image_url: {
 						url: `data:${item.mimeType};base64,${item.data}`,
+						// Chat Completions has no "original"; omit it (provider default).
 						...(item.detail && item.detail !== "original" ? { detail: item.detail } : {}),
 					},
 				} satisfies ChatCompletionContentPartImage);
@@ -1977,9 +2155,7 @@ function convertOpenAIUserOrDeveloperMessage(
 			if (supportsVideos) {
 				content.push({
 					type: "video_url",
-					video_url: {
-						url: `data:${item.mimeType};base64,${item.data}`,
-					},
+					video_url: { url: `data:${item.mimeType};base64,${item.data}` },
 				} satisfies ChatCompletionContentPartVideo);
 			} else {
 				omittedVideos = true;
@@ -2152,19 +2328,32 @@ function applyOpenAIAssistantToolCalls(
 	assistantMsg.tool_calls = toolCalls.map((tc, toolCallIndex) => {
 		const toolCallId = ensureToolCallId(tc.id, `${msgIndex}:${toolCallIndex}:${tc.name}`);
 		rememberToolCallId(tc.id, toolCallId);
-		return {
+		const replayedToolCall: OpenAICompletionsFunctionToolCall = {
 			id: normalizeMistralToolId(toolCallId, compat.requiresMistralToolIds),
-			type: "function" as const,
+			type: "function",
 			function: {
 				name: tc.name,
 				arguments: serializeToolArguments(tc.arguments, tc.name),
 			},
 		};
+		const stored = normalizeStoredGeminiSignature(parseStoredThoughtSignature(tc.thoughtSignature));
+		const extraContent = getGeminiThoughtSignatureExtraContent(stored?.perCall);
+		if (extraContent) replayedToolCall.extra_content = extraContent;
+		return replayedToolCall;
 	});
-	const reasoningDetails = toolCalls
-		.filter(tc => tc.thoughtSignature)
-		.map(tc => tryParseJson(tc.thoughtSignature!))
-		.filter(Boolean);
+	for (const toolCall of toolCalls) {
+		const stored = normalizeStoredGeminiSignature(parseStoredThoughtSignature(toolCall.thoughtSignature));
+		const messageSignature = getGeminiMessageThoughtSignature(stored?.message);
+		if (!messageSignature) continue;
+		assistantMsg[messageSignature.field] = messageSignature.signature;
+		break;
+	}
+	const reasoningDetails = toolCalls.flatMap(tc => {
+		const stored = normalizeStoredGeminiSignature(parseStoredThoughtSignature(tc.thoughtSignature));
+		const perCall = stored?.perCall;
+		if (perCall === undefined || getGeminiThoughtSignatureExtraContent(perCall)) return [];
+		return [perCall];
+	});
 	if (reasoningDetails.length > 0) {
 		assistantMsg.reasoning_details = reasoningDetails;
 	}

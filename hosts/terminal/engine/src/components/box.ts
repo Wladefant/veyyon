@@ -134,6 +134,13 @@ export class Box implements Component {
 		}
 	}
 
+	releaseRenderCache(): void {
+		this.#invalidateCache();
+		for (const child of this.children) {
+			child.releaseRenderCache?.();
+		}
+	}
+
 	render(width: number): readonly string[] {
 		const children = this.children;
 		const count = children.length;
@@ -193,22 +200,23 @@ export class Box implements Component {
 				emitWidth = Math.min(innerWidth, Math.max(1, maxChildWidth + paddingX * 2));
 			}
 			const leftPad = padding(paddingX);
+			const framed = border !== undefined;
 			const interior: string[] = [];
 			// Top padding
 			for (let i = 0; i < this.#paddingY; i++) {
-				interior.push(this.#applyBg("", emitWidth));
+				interior.push(this.#row("", emitWidth, framed));
 			}
 			// Content
 			for (const lines of childLines) {
 				for (const line of lines) {
 					interior.push(
-						this.#applyBg(this.#hugContent ? leftPad + line.replace(/ +$/, "") : leftPad + line, emitWidth),
+						this.#row(this.#hugContent ? leftPad + line.replace(/ +$/, "") : leftPad + line, emitWidth, framed),
 					);
 				}
 			}
 			// Bottom padding
 			for (let i = 0; i < this.#paddingY; i++) {
-				interior.push(this.#applyBg("", emitWidth));
+				interior.push(this.#row("", emitWidth, framed));
 			}
 
 			if (border) {
@@ -240,7 +248,14 @@ export class Box implements Component {
 		return result;
 	}
 
-	#applyBg(line: string, width: number): string {
-		return applyLineBackground(line, width, this.#bgFn);
+	/**
+	 * A row reaches `width` only when something is drawn past its ink: a background fill, or a right
+	 * border that has to sit at the frame's edge. Any other row ends at its ink. The renderer erases
+	 * each row's tail, so trailing spaces draw nothing, and the memo would hold a padded copy of every
+	 * row a resumed transcript draws.
+	 */
+	#row(line: string, width: number, framed: boolean): string {
+		if (this.#bgFn) return applyLineBackground(line, width, this.#bgFn);
+		return framed ? applyLineBackground(line, width) : line;
 	}
 }

@@ -451,6 +451,14 @@ describe("a fork and a clone", () => {
 		expect(clone.get("store.name")).toBe("profile");
 		expect(clone.layerValue("profile", ["store", "name"])).toBe("profile");
 	});
+
+	it("preserves the config path across forks so subagent forks can compute a config stamp", async () => {
+		const hooks = new RecordingHooks();
+		await fs.writeFile(path.join(agentDir, "config.yml"), "store:\n  name: on-disk\n");
+		const store = await new SettingsStore({ agentDir, cwd: "/work" }, hooks).load();
+		const fork = store.forkWithRuntimeOverrides();
+		expect(await fork.configSourceStamp()).toBe(await store.configSourceStamp());
+	});
 });
 
 describe("the one-shot migration stamp", () => {

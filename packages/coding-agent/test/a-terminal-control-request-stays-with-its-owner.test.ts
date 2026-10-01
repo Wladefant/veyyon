@@ -7,9 +7,10 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import * as utils from "@veyyon/utils";
 import { assertNotTerminalOwned } from "@veyyon/kernel/session/terminal-ownership";
+import * as utils from "@veyyon/utils";
 import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
+import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -20,33 +21,73 @@ afterEach(async () => {
 async function fixture(sessionId: string, root: string) {
 	const received: string[] = [];
 	let identity = sessionId;
-	const close = await serveTerminalControl({
-		identity: () => ({ sessionId: identity, cwd: root, sessionFile: path.join(root, `${identity}.jsonl`) }),
-		deliver: async text => { received.push(text); return "started"; },
-		abort: async () => false,
-		history: () => [{ entryId: "existing", text: "Earlier response" }],
-		subscribe: () => () => {},
-	}, root);
+	const close = await serveTerminalControl(
+		{
+			identity: () => ({ sessionId: identity, cwd: root, sessionFile: path.join(root, `${identity}.jsonl`) }),
+			deliver: async text => {
+				received.push(text);
+				return "started";
+			},
+			abort: async () => false,
+			history: () => [{ entryId: "existing", text: "Earlier response" }],
+			subscribe: () => () => {},
+		},
+		root,
+	);
 	cleanup.push(close);
 	const directory = path.join(root, "run", "terminals");
-	const owners: TerminalOwner[] = await Promise.all((await fs.readdir(directory)).filter(file => file.endsWith(".json")).map(async file => JSON.parse(await fs.readFile(path.join(directory, file), "utf8"))));
+	const owners: TerminalOwner[] = await Promise.all(
+		(await fs.readdir(directory))
+			.filter(file => file.endsWith(".json"))
+			.map(async file => JSON.parse(await fs.readFile(path.join(directory, file), "utf8"))),
+	);
 	const owner = owners.find(candidate => candidate.sessionId === sessionId)!;
-	return { owner, received, change: (next: string) => { identity = next; }, close };
+	return {
+		owner,
+		received,
+		change: (next: string) => {
+			identity = next;
+		},
+		close,
+	};
 }
 
 async function request(owner: TerminalOwner, overrides: Record<string, unknown> = {}) {
 	const done = Promise.withResolvers<Record<string, unknown>>();
 	const socket = net.createConnection(owner.endpoint);
-	cleanup.push(() => { socket.destroy(); });
+	cleanup.push(() => {
+		socket.destroy();
+	});
 	// Bound real OS socket failure; no sleep or fake-clock scheduling can drive Windows named-pipe I/O.
 	const timer = setTimeout(() => done.reject(new Error("request exceeded bound")), 1_000);
 	let buffer = "";
 	socket.setEncoding("utf8");
-	socket.on("connect", () => socket.write(JSON.stringify({ version: 1, id: "probe", token: owner.token, sessionId: owner.sessionId, op: "deliver", text: "nonce", mode: "auto", ...overrides }) + "\n"));
-	socket.on("data", chunk => { buffer += chunk; if (buffer.includes("\n")) done.resolve(JSON.parse(buffer.split("\n")[0]!)); });
+	socket.on("connect", () =>
+		socket.write(
+			`${JSON.stringify({
+				version: 1,
+				id: "probe",
+				token: owner.token,
+				sessionId: owner.sessionId,
+				op: "deliver",
+				text: "nonce",
+				mode: "auto",
+				...overrides,
+			})}\n`,
+		),
+	);
+	socket.on("data", chunk => {
+		buffer += chunk;
+		if (buffer.includes("\n")) done.resolve(JSON.parse(buffer.split("\n")[0]!));
+	});
 	socket.on("error", done.reject);
 	socket.on("close", () => done.reject(new Error("closed")));
-	try { return await done.promise; } finally { clearTimeout(timer); socket.destroy(); }
+	try {
+		return await done.promise;
+	} finally {
+		clearTimeout(timer);
+		socket.destroy();
+	}
 }
 
 test("authenticated delivery targets exact session, not another terminal in the same workspace", async () => {
@@ -83,4 +124,46 @@ test("implicit resume and GUI open refuse the live owner's transcript before rea
 	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
 	await expect(SessionManager.open(first.owner.sessionFile)).rejects.toThrow("owned by a live terminal");
 	expect(await fs.readFile(first.owner.sessionFile, "utf8")).toBe(original);
+});
+
+test("startTerminalControl wires InteractiveMode delivery and submission", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-mode-"));
+	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+	const mockManager = {
+		getSessionId: () => "interactive-session",
+		getLeafId: () => "leaf-1",
+		getCwd: () => root,
+		getSessionFile: () => path.join(root, "session.jsonl"),
+		getEntries: () => [],
+	};
+	let submitted: unknown;
+	const mockMode = {
+		sessionManager: mockManager,
+		session: {
+			isStreaming: false,
+			displayAssistantContent: () => [],
+			steer: async () => {},
+			followUp: async () => {},
+			abort: async () => {},
+		},
+		isShuttingDown: false,
+		isInitialized: true,
+		onInputCallback: (val: unknown) => {
+			submitted = val;
+		},
+		startPendingSubmission: (input: unknown) => input,
+	};
+	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
+	const close = await startTerminalControl(mockMode as never);
+	cleanup.push(close);
+
+	const directory = path.join(root, "run", "terminals");
+	const files = (await fs.readdir(directory)).filter(f => f.endsWith(".json"));
+	expect(files.length).toBe(1);
+	const owner: TerminalOwner = JSON.parse(await fs.readFile(path.join(directory, files[0]!), "utf8"));
+	expect(owner.sessionId).toBe("interactive-session");
+
+	const res = await request(owner, { text: "hello terminal" });
+	expect(res).toMatchObject({ ok: true, result: "started" });
+	expect(submitted).toEqual({ text: "hello terminal" });
 });

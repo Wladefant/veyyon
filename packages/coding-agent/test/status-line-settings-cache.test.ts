@@ -53,14 +53,12 @@ function makeComponent(statusLineSettings: StatusLineSettings): StatusLineCompon
 describe("StatusLineComponent effective settings cache", () => {
 	it("keeps repeated cached renders byte-identical across presets and widths", () => {
 		const cases: StatusLineSettings[] = [
-			{ preset: "default", sessionAccent: false },
-			{ preset: "minimal", sessionAccent: false },
+			{ preset: "default" },
+			{ preset: "minimal" },
 			{
 				preset: "custom",
 				leftSegments: ["pi", "model"],
 				rightSegments: ["session_name", "context_pct"],
-				separator: "pipe",
-				sessionAccent: false,
 				segmentOptions: { model: { showThinkingLevel: false } },
 			},
 		];
@@ -80,7 +78,6 @@ describe("StatusLineComponent effective settings cache", () => {
 			preset: "custom",
 			leftSegments: ["pi"],
 			rightSegments: [],
-			separator: "none",
 			showHookStatus: false,
 		});
 		const firstEffective = component.getEffectiveSettingsForTest();
@@ -91,16 +88,13 @@ describe("StatusLineComponent effective settings cache", () => {
 			preset: "custom",
 			leftSegments: ["session_name"],
 			rightSegments: [],
-			separator: "slash",
 			showHookStatus: true,
-			sessionAccent: false,
 			segmentOptions: { path: { maxLength: 12 } },
 		});
 
 		const secondEffective = component.getEffectiveSettingsForTest();
 		expect(secondEffective).not.toBe(firstEffective);
 		expect(secondEffective.leftSegments).toEqual(["session_name"]);
-		expect(secondEffective.sessionAccent).toBe(false);
 		expect(secondEffective.segmentOptions.path?.maxLength).toBe(12);
 		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).toContain("Cache Session");
 		expect(component.render(80)).toEqual(["lint running"]);
@@ -170,7 +164,7 @@ describe("StatusLineComponent effective settings cache", () => {
 
 	it("does not mutate shared preset segment options during narrow renders", () => {
 		const before = { ...STATUS_LINE_PRESETS.default.segmentOptions?.path };
-		const component = makeComponent({ preset: "default", sessionAccent: false });
+		const component = makeComponent({ preset: "default" });
 
 		component.renderQuietLine(12);
 		component.renderQuietLine(200);
@@ -180,7 +174,7 @@ describe("StatusLineComponent effective settings cache", () => {
 	});
 
 	it("reuses the effective-settings object until settings change", () => {
-		const component = makeComponent({ preset: "default", sessionAccent: false });
+		const component = makeComponent({ preset: "default" });
 		const effective = component.getEffectiveSettingsForTest();
 
 		for (let i = 0; i < 5; i++) {
@@ -188,7 +182,7 @@ describe("StatusLineComponent effective settings cache", () => {
 			expect(component.getEffectiveSettingsForTest()).toBe(effective);
 		}
 
-		component.updateSettings({ preset: "minimal", sessionAccent: false });
+		component.updateSettings({ preset: "minimal" });
 		const nextEffective = component.getEffectiveSettingsForTest();
 		expect(nextEffective).not.toBe(effective);
 		expect(component.getEffectiveSettingsForTest()).toBe(nextEffective);
@@ -208,7 +202,6 @@ describe("StatusLineComponent effective settings cache", () => {
 				preset: "custom",
 				leftSegments: ["git", "pr"],
 				rightSegments: [],
-				sessionAccent: false,
 			});
 
 			component.watchGitState(() => {
@@ -241,7 +234,6 @@ describe("StatusLineComponent effective settings cache", () => {
 				preset: "custom",
 				leftSegments: ["pi"],
 				rightSegments: ["session_name"],
-				sessionAccent: false,
 			});
 
 			component.watchGitState(() => {

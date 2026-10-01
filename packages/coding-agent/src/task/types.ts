@@ -1,4 +1,5 @@
 import type { Usage } from "@veyyon/ai";
+import { lazy } from "@veyyon/utils/abortable";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { $envpos } from "@veyyon/utils/env";
 import { type BaseType, type } from "arktype";
@@ -68,21 +69,25 @@ export interface AgentLifecyclePayload {
 /** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
 export const LABEL_MAX = 80;
 
-export const taskItemSchema = type({
-	"name?": "string",
-	agent: "string = 'deep'",
-	task: "string",
-	"cwd?": "string",
-	"+": "delete",
-});
-const taskItemSchemaIsolated = type({
-	"name?": "string",
-	agent: "string = 'deep'",
-	task: "string",
-	"isolated?": "boolean",
-	"cwd?": "string",
-	"+": "delete",
-});
+export const taskItemSchema = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"cwd?": "string",
+		"+": "delete",
+	}),
+);
+const taskItemSchemaIsolated = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"isolated?": "boolean",
+		"cwd?": "string",
+		"+": "delete",
+	}),
+);
 
 /** Single task item. Fields are optional defensively: args stream in token by token. */
 export interface TaskItem {
@@ -98,35 +103,46 @@ export interface TaskItem {
 	cwd?: string;
 }
 
-export const taskSchema = type({
-	"name?": "string",
-	agent: "string = 'deep'",
-	task: "string",
-	"isolated?": "boolean",
-	"cwd?": "string",
-	"+": "delete",
-});
-const taskSchemaNoIsolation = type({
-	"name?": "string",
-	agent: "string = 'deep'",
-	task: "string",
-	"cwd?": "string",
-	"+": "delete",
-});
-const taskSchemaBatch = type({
-	context: "string",
-	tasks: taskItemSchemaIsolated.array(),
-	"+": "delete",
-});
-const taskSchemaBatchNoIsolation = type({
-	context: "string",
-	tasks: taskItemSchema.array(),
-	"+": "delete",
-});
-const ALL_TASK_SCHEMAS = [taskSchema, taskSchemaNoIsolation, taskSchemaBatch, taskSchemaBatchNoIsolation] as const;
+export const taskSchema = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"isolated?": "boolean",
+		"cwd?": "string",
+		"+": "delete",
+	}),
+);
+const taskSchemaNoIsolation = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"cwd?": "string",
+		"+": "delete",
+	}),
+);
+const taskSchemaBatch = lazy(() =>
+	type({
+		context: "string",
+		tasks: taskItemSchemaIsolated.value.array(),
+		"+": "delete",
+	}),
+);
+const taskSchemaBatchNoIsolation = lazy(() =>
+	type({
+		context: "string",
+		tasks: taskItemSchema.value.array(),
+		"+": "delete",
+	}),
+);
 
-type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
-export type TaskSchema = typeof taskSchema;
+type DynamicTaskSchema =
+	| typeof taskSchema.value
+	| typeof taskSchemaNoIsolation.value
+	| typeof taskSchemaBatch.value
+	| typeof taskSchemaBatchNoIsolation.value;
+export type TaskSchema = typeof taskSchema.value;
 /** Active task tool parameter schema for the current isolation / batch flags */
 export type TaskToolSchemaInstance = DynamicTaskSchema | BaseType;
 
@@ -214,8 +230,9 @@ export function getTaskSchema(options: {
 	const defaultAgent = hasDefaultAgent ? options.defaultAgent : DEFAULT_SPAWN_AGENT;
 	const enabledAgentNames = options.enabledAgentNames;
 	if (enabledAgentNames === undefined && defaultAgent === DEFAULT_SPAWN_AGENT) {
-		if (options.batchEnabled) return options.isolationEnabled ? taskSchemaBatch : taskSchemaBatchNoIsolation;
-		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
+		if (options.batchEnabled)
+			return options.isolationEnabled ? taskSchemaBatch.value : taskSchemaBatchNoIsolation.value;
+		return options.isolationEnabled ? taskSchema.value : taskSchemaNoIsolation.value;
 	}
 	const encodedNames =
 		enabledAgentNames === undefined
@@ -512,6 +529,21 @@ export interface SingleResult {
 	};
 	/** Output metadata for agent:// URL integration */
 	outputMeta?: { lineCount: number; charCount: number };
+	/** Structured salvage state captured when a run is force-stopped by budget or timeout cutoff. */
+	salvageState?: SalvageState;
+}
+
+/** Structured salvage state emitted when a run is force-stopped by budget or timeout. */
+export interface SalvageState {
+	requests: number;
+	tokens: number;
+	lastActivity: string;
+	reason?: string;
+	headSha?: string;
+	modifiedFiles?: string[];
+	uncommittedDiffs?: string;
+	remainingCriteria?: string[];
+	blockers?: string[];
 }
 
 /** Tool details for TUI rendering */

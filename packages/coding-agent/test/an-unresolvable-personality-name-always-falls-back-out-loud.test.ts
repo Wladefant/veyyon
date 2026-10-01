@@ -12,7 +12,7 @@ import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
  * WHY: `resolveFromTiers` ended in `BUILTIN_PERSONALITIES[name]`, a plain object literal indexed by an
  * operator-supplied string, so it answered every name `Object.prototype` carries. `personality:
  * "toString"` resolved to a function rather than `undefined`, `boundPersonalityText` called `.replace`
- * on it and threw, and `buildSystemPrompt`'s `withDeadline` wrapper turned that rejection into the
+ * on it and threw, and `buildSystemPrompt`'s preparation deadline turned that rejection into the
  * built-in default: no warning printed, and a Tier-B `default.md` override ignored. The unknown-name
  * fallback exists precisely to make that outcome loud, and eleven names walked around it.
  *
@@ -96,7 +96,12 @@ describe("an unresolvable personality name falls back to the default and says so
 	it("still prefers a real spec over the fallback, so the guard did not disable resolution", async () => {
 		const cwd = projectWith("default", "Project tone.");
 		const resolved = await resolvePersonality("default", { cwd });
-		expect(resolved).toEqual({ name: "default", text: "Project tone." });
+		expect(resolved).toEqual({
+			name: "default",
+			text: "Project tone.",
+			tier: "project",
+			path: path.join(cwd, ".veyyon", "personalities", "default.md"),
+		});
 	});
 
 	it("falls back to a project default override rather than the built-in when the name is inherited", async () => {

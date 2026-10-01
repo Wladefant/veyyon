@@ -7,7 +7,7 @@ import { errorMessage, isCancellation, prompt } from "@veyyon/utils";
 import { createLspWritethrough, flushLspWritethroughBatch, type WritethroughCallback, writethroughNoop } from "../lsp";
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
-import { PROMPTS } from "../prompts/registry";
+import { toolsPrompts } from "../prompts/tools/rows";
 import { budgetedFileCommit, sessionBudgetLimits } from "../session/cpu-limit";
 import type { ToolSession } from "../tools";
 import { abortedPartway } from "../tools/core/aborted-partway";
@@ -44,12 +44,12 @@ export * from "./snapshot-details";
 export * from "./streaming";
 
 type TInput =
-	| typeof replaceEditSchema
-	| typeof patchEditSchema
-	| typeof hashlineEditParamsSchema
-	| typeof applyPatchSchema;
+	| typeof replaceEditSchema.value
+	| typeof patchEditSchema.value
+	| typeof hashlineEditParamsSchema.value
+	| typeof applyPatchSchema.value;
 
-type HashlineParams = typeof hashlineEditParamsSchema.infer;
+type HashlineParams = typeof hashlineEditParamsSchema.value.infer;
 
 type EditParams = ReplaceParams | PatchParams | HashlineParams | ApplyPatchParams;
 
@@ -630,8 +630,10 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 	#getModeDefinition(): EditModeDefinition {
 		return {
 			patch: {
-				description: () => prompt.render(PROMPTS["tools/patch"].text),
-				parameters: patchEditSchema,
+				description: () => prompt.render(toolsPrompts["tools/patch"].text),
+				get parameters() {
+					return patchEditSchema.value;
+				},
 				examples: [
 					{
 						caption: "Create",
@@ -694,8 +696,10 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				},
 			},
 			apply_patch: {
-				description: () => prompt.render(PROMPTS["tools/apply-patch"].text),
-				parameters: applyPatchSchema,
+				description: () => prompt.render(toolsPrompts["tools/apply-patch"].text),
+				get parameters() {
+					return applyPatchSchema.value;
+				},
 				examples: [
 					{
 						caption: "Apply a combined patch file",
@@ -735,7 +739,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 			},
 			hashline: {
 				description: () => prompt.render(HASHLINE_PROMPTS.prompt.text),
-				parameters: hashlineEditParamsSchema,
+				get parameters() {
+					return hashlineEditParamsSchema.value;
+				},
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -755,8 +761,10 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				},
 			},
 			replace: {
-				description: () => prompt.render(PROMPTS["tools/replace"].text),
-				parameters: replaceEditSchema,
+				description: () => prompt.render(toolsPrompts["tools/replace"].text),
+				get parameters() {
+					return replaceEditSchema.value;
+				},
 				execute: (
 					tool: EditTool,
 					params: EditParams,

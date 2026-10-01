@@ -260,23 +260,42 @@ function formatPreviewWindow(lines: string[], centerIndex: number, options: Prev
 		.join("\n");
 }
 
-function findExactMatchOutcome(content: string, target: string): MatchOutcome | undefined {
-	const exactIndex = content.indexOf(target);
-	if (exactIndex === -1) {
+function findExactMatchOutcome(
+	content: string,
+	target: string,
+	excludedRanges: readonly { startIndex: number; endIndex: number }[],
+): MatchOutcome | undefined {
+	let firstIndex: number | undefined;
+	let occurrences = 0;
+	const recordedIndices: number[] = [];
+	let searchStart = 0;
+
+	while (searchStart <= content.length - target.length) {
+		const index = content.indexOf(target, searchStart);
+		if (index === -1) break;
+
+		const endIndex = index + target.length;
+		if (!excludedRanges.some(range => index < range.endIndex && endIndex > range.startIndex)) {
+			firstIndex ??= index;
+			occurrences++;
+			if (recordedIndices.length < MAX_RECORDED_MATCHES) {
+				recordedIndices.push(index);
+			}
+		}
+		searchStart = endIndex;
+	}
+
+	if (firstIndex === undefined) {
 		return undefined;
 	}
 
-	const occurrences = content.split(target).length - 1;
 	if (occurrences > 1) {
 		const contentLines = content.split("\n");
 		const occurrenceLines: number[] = [];
 		const occurrencePreviews: string[] = [];
-		let searchStart = 0;
 
-		for (let i = 0; i < MAX_RECORDED_MATCHES; i++) {
-			const idx = content.indexOf(target, searchStart);
-			if (idx === -1) break;
-			const lineNumber = content.slice(0, idx).split("\n").length;
+		for (const index of recordedIndices) {
+			const lineNumber = content.slice(0, index).split("\n").length;
 			occurrenceLines.push(lineNumber);
 			occurrencePreviews.push(
 				formatPreviewWindow(contentLines, lineNumber - 1, {
@@ -284,17 +303,16 @@ function findExactMatchOutcome(content: string, target: string): MatchOutcome | 
 					maxLen: OCCURRENCE_PREVIEW_MAX_LEN,
 				}),
 			);
-			searchStart = idx + 1;
 		}
 
 		return { occurrences, occurrenceLines, occurrencePreviews };
 	}
 
-	const startLine = content.slice(0, exactIndex).split("\n").length;
+	const startLine = content.slice(0, firstIndex).split("\n").length;
 	return {
 		match: {
 			actualText: target,
-			startIndex: exactIndex,
+			startIndex: firstIndex,
 			startLine,
 			confidence: 1,
 		},
@@ -378,6 +396,7 @@ function findBestFuzzyMatchCore(
 	offsets: number[],
 	threshold: number,
 	includeDepth: boolean,
+	excludedRanges: readonly { startIndex: number; endIndex: number }[],
 ): BestFuzzyMatchResult {
 	const targetNormalized = normalizeLines(targetLines, includeDepth);
 
@@ -387,6 +406,12 @@ function findBestFuzzyMatchCore(
 	let aboveThresholdCount = 0;
 
 	for (let start = 0; start <= contentLines.length - targetLines.length; start++) {
+		const startIndex = offsets[start];
+		const endLine = start + targetLines.length - 1;
+		const endIndex = Math.max(startIndex + 1, offsets[endLine] + contentLines[endLine].length);
+		if (excludedRanges.some(range => startIndex < range.endIndex && endIndex > range.startIndex)) {
+			continue;
+		}
 		const windowLines = contentLines.slice(start, start + targetLines.length);
 		const windowNormalized = normalizeLines(windowLines, includeDepth);
 		let score = 0;
@@ -404,7 +429,7 @@ function findBestFuzzyMatchCore(
 			bestScore = score;
 			best = {
 				actualText: windowLines.join("\n"),
-				startIndex: offsets[start],
+				startIndex,
 				startLine: start + 1,
 				confidence: score,
 			};
@@ -416,7 +441,12 @@ function findBestFuzzyMatchCore(
 	return { best, aboveThresholdCount, secondBestScore };
 }
 
-function findBestFuzzyMatch(content: string, target: string, threshold: number): BestFuzzyMatchResult {
+function findBestFuzzyMatch(
+	content: string,
+	target: string,
+	threshold: number,
+	excludedRanges: readonly { startIndex: number; endIndex: number }[],
+): BestFuzzyMatchResult {
 	const contentLines = content.split("\n");
 	const targetLines = target.split("\n");
 
@@ -428,11 +458,18 @@ function findBestFuzzyMatch(content: string, target: string, threshold: number):
 	}
 
 	const offsets = computeLineOffsets(contentLines);
-	let result = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, true);
+	let result = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, true, excludedRanges);
 
 	// Retry without indent depth if match is close but below threshold
 	if (result.best && result.best.confidence < threshold && result.best.confidence >= FALLBACK_THRESHOLD) {
-		const noDepthResult = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, false);
+		const noDepthResult = findBestFuzzyMatchCore(
+			contentLines,
+			targetLines,
+			offsets,
+			threshold,
+			false,
+			excludedRanges,
+		);
 		if (noDepthResult.best && noDepthResult.best.confidence > result.best.confidence) {
 			result = noDepthResult;
 		}
@@ -443,25 +480,35 @@ function findBestFuzzyMatch(content: string, target: string, threshold: number):
 
 /**
  * Find a match for target text within content.
- * Used primarily for replace-mode edits.
+ * Used primarily for replace-mode edits; excluded ranges remain invisible to exact and fuzzy matching.
  */
 export function findMatch(
 	content: string,
 	target: string,
-	options: { allowFuzzy: boolean; threshold?: number },
+	options: {
+		allowFuzzy: boolean;
+		threshold?: number;
+		excludedRanges?: readonly { startIndex: number; endIndex: number }[];
+	},
 ): MatchOutcome {
 	if (target.length === 0) {
 		return {};
 	}
+	const excludedRanges = options.excludedRanges ?? [];
 
-	const exactMatch = findExactMatchOutcome(content, target);
+	const exactMatch = findExactMatchOutcome(content, target, excludedRanges);
 	if (exactMatch) {
 		return exactMatch;
 	}
 
 	// Try fuzzy match
 	const threshold = options.threshold ?? DEFAULT_FUZZY_THRESHOLD;
-	const { best, aboveThresholdCount, secondBestScore } = findBestFuzzyMatch(content, target, threshold);
+	const { best, aboveThresholdCount, secondBestScore } = findBestFuzzyMatch(
+		content,
+		target,
+		threshold,
+		excludedRanges,
+	);
 
 	if (!best) {
 		return {};

@@ -229,10 +229,6 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: false,
 		reason: "self-update; a maintenance command, and capping the updater could leave a half-written install",
 	},
-	"packages/coding-agent/src/cli/claude-trace-cli.ts": {
-		wired: false,
-		reason: "trace inspection CLI; drives no agent session",
-	},
 	"packages/coding-agent/src/cli/shell-cli.ts": {
 		wired: false,
 		reason: "the operator's own interactive shell (veyyon shell), typed at by a human, not agent-spawned compute",
@@ -249,6 +245,16 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	"packages/coding-agent/src/modes/terminal/interactive-mode.ts": {
 		wired: false,
 		reason: "process relaunch; the new process replaces the harness, and the harness is never in the budget",
+	},
+	"packages/coding-agent/src/task/topic-replenishment.ts": {
+		wired: false,
+		reason:
+			"the task ledger's Python bridge and lock holder are harness bookkeeping; killing the holder on a budget breach would drop the ledger lock mid-claim",
+	},
+	"packages/coding-agent/src/tools/core/polysim-main-guard.ts": {
+		wired: false,
+		reason:
+			"the github tool's push and merge guard asks `gh pr view` for a PR's base branch before the call runs; a harness policy check with its own 5 s timeout, and a budget kill would turn the lookup into a refusal",
 	},
 	"packages/coding-agent/src/subprocess/worker-runtime.ts": {
 		wired: false,

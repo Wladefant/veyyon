@@ -24,7 +24,8 @@ export enum Reason {
 	EXIT = "exit", // Normal process exit
 	SIGINT = "sigint", // Ctrl-C or SIGINT
 	SIGTERM = "sigterm", // SIGTERM
-	SIGHUP = "sighup", // SIGHUP
+	SIGHUP = "sighup", // SIGHUP; on Windows also a closed console window (CTRL_CLOSE_EVENT)
+	SIGBREAK = "sigbreak", // Windows Ctrl+Break (CTRL_BREAK_EVENT)
 	UNCAUGHT_EXCEPTION = "uncaught_exception", // Fatal exception
 	UNHANDLED_REJECTION = "unhandled_rejection", // Unhandled promise rejection
 	MANUAL = "manual", // Manual cleanup (not triggered by process)
@@ -107,6 +108,48 @@ function isWriteEpipe(err: unknown): boolean {
 /** Only errors observed on our output streams prove a consumer closed them. */
 export function isStdioWriteEpipe(err: Error): boolean {
 	return isWriteEpipe(err) && stdioErrors.has(err);
+}
+
+/**
+ * Whether `err` is an ENOSPC ("no space left on device") filesystem error.
+ * Disk-full writes from logs, sessions, or artifacts must never be fatal —
+ * killing Main discards every running lane. The session can continue even
+ * when individual writes fail; disk pressure is transient. See issue #73.
+ */
+export function isEnospc(err: unknown): boolean {
+	if (err === null || typeof err !== "object") return false;
+	if (!("code" in err)) return false;
+	return err.code === "ENOSPC";
+}
+
+/**
+ * Detect Bun's advanced-serialization (structured-clone) IPC decode failure.
+ *
+ * When a worker subprocess spawned with `serialization: "advanced"` sends a
+ * malformed or truncated frame, Bun raises the decode failure as a
+ * process-level `uncaughtException` in the *parent* rather than routing it to
+ * the channel's `ipc()` callback (oven-sh/bun#37287). The error is a bare
+ * `TypeError: Unable to deserialize data.` whose only own property is `message`
+ * — it carries no `code`, no `syscall`, and no `stack`. Matching all four traits
+ * keeps unrelated application `TypeError`s (which always carry a populated
+ * multi-frame stack) on the fatal path, so a genuine bug is never silently
+ * swallowed.
+ *
+ * Every advanced-serialization channel in this process is an optional worker
+ * subsystem (TTS, STT, tiny-title, mnemopi embeddings, JS eval), so one
+ * worker's bad frame must fault only that worker — via its own `onExit`/error
+ * path — never tear down the whole session. Callers log-and-continue instead of
+ * taking the fatal path. Mirrors {@link isIpcSendEpipe} for the send side
+ * (#2997, #9158).
+ */
+export function isWorkerIpcDeserializeError(err: unknown): boolean {
+	return (
+		err instanceof TypeError &&
+		err.message === "Unable to deserialize data." &&
+		!err.stack &&
+		!("code" in err) &&
+		!("syscall" in err)
+	);
 }
 
 // Well-known key marking an error as an *expected* teardown artifact (e.g. a
@@ -207,6 +250,24 @@ if (isMainThread) {
 				logger.warn("Ignoring EPIPE from non-stdio write; owning operation handles failure", { err });
 				return;
 			}
+			// ENOSPC from a log, session, or artifact write must not be fatal —
+			// killing Main discards every running lane. Disk pressure is
+			// transient; the write's caller handles the local failure. #73.
+			if (isEnospc(err)) {
+				logger.warn("Disk full (ENOSPC) — degrading gracefully instead of crashing", { err });
+				return;
+			}
+			// A malformed advanced-serialization frame from a worker subprocess
+			// surfaces here as a process-level uncaughtException (oven-sh/bun#37287)
+			// rather than in the channel's ipc() callback. It is a worker-local
+			// fault on the subprocess-isolation boundary, so contain it to that
+			// worker: log and continue, letting the owning client detect the dead
+			// worker via its own onExit/error path instead of exiting the whole
+			// session. Mirrors the ipc-send EPIPE containment below (#9158, #2997).
+			if (isWorkerIpcDeserializeError(err)) {
+				logger.warn("Ignoring malformed worker IPC frame; optional subsystem will self-recover", { err });
+				return;
+			}
 			// fd 2 may be redirected to the log while a TUI owns the terminal
 			// (stderr-guard); re-point it at the real terminal so the fatal
 			// report is visible. Terminal modes are restored moments later by
@@ -247,6 +308,11 @@ if (isMainThread) {
 				logger.warn("Ignoring EPIPE from non-stdio write; owning operation handles failure", { err: reason });
 				return;
 			}
+			// ENOSPC: same rationale as the uncaughtException guard above. #73.
+			if (isEnospc(reason)) {
+				logger.warn("Disk full (ENOSPC) — degrading gracefully instead of crashing", { err });
+				return;
+			}
 			for (const interceptor of rejectionInterceptors) {
 				try {
 					if (interceptor(reason)) return;
@@ -271,9 +337,21 @@ if (isMainThread) {
 			process.exit(143); // 128 + SIGTERM (15)
 		})
 		.on("SIGHUP", async () => {
+			// On Windows libuv raises this for CTRL_CLOSE_EVENT and then holds the
+			// console's control thread, so the few seconds Windows allows before it
+			// terminates the process are ours to record the exit in.
 			await runCleanup(Reason.SIGHUP);
 			process.exit(129); // 128 + SIGHUP (1)
 		});
+	if (process.platform === "win32") {
+		// Ctrl+Break is delivered even while the terminal reads Ctrl+C as input.
+		// With no listener libuv declines it and Windows ends the process from the
+		// control thread: no JavaScript, no exit record (veyyon#73).
+		process.on("SIGBREAK", async () => {
+			await runCleanup(Reason.SIGBREAK);
+			process.exit(149); // 128 + SIGBREAK (21)
+		});
+	}
 } else {
 	// Worker thread: only register exit handler for cleanup.
 	// DO NOT register uncaughtException/unhandledRejection handlers here -
@@ -337,20 +415,26 @@ export function cleanup(): Promise<void> {
 	return runCleanup(Reason.MANUAL);
 }
 
+/** Controls how manual process shutdown handles terminal output. */
+export interface QuitOptions {
+	/** Wait for buffered stdout before exiting; disable after the terminal has disconnected. */
+	drainStdout?: boolean;
+}
+
 /**
  * Runs all cleanup callbacks and exits.
  *
- * In main thread: waits for stdout drain, then calls process.exit().
+ * In main thread: waits for stdout drain unless disabled, then calls process.exit().
  * In workers: runs cleanup only (process.exit would kill entire process).
  */
-export async function quit(code: number = 0): Promise<void> {
+export async function quit(code: number = 0, options: QuitOptions = {}): Promise<void> {
 	await runCleanup(Reason.MANUAL);
 
 	if (!isMainThread) {
 		return; // Workers: cleanup done, let worker exit naturally
 	}
 
-	if (process.stdout.writableLength > 0) {
+	if (options.drainStdout !== false && process.stdout.writableLength > 0) {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		process.stdout.once("drain", resolve);
 		await Promise.race([promise, Bun.sleep(5000)]);

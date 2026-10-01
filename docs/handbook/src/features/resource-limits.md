@@ -61,10 +61,10 @@ that plugins run. A capped process passes the budget to its own children, by cgr
 Object inheritance on Linux and Windows and by a process-tree walk on macOS, so a build that
 spawns a compiler fleet is still one budget.
 
-A spawn is refused while the budget is saturated or the group could not be created. That applies
+A spawn is rejected while the budget is saturated or the group could not be created. That applies
 to a bash command, a new MCP stdio server, an `exec` call from a custom tool, custom command,
 extension, or hook, and a new eval cell. An extension module the CLI loads before a session
-exists resolves the root session's gate when it spawns.
+exists uses the root session's budget check when it spawns.
 
 Some processes belong to no single session and join the root session's budget instead. Those are
 the shared harness workers, such as the tiny title model and embeddings, and the speech capture
@@ -76,7 +76,9 @@ oversight:
 - **Anything that starts before a session exists.** Host capability probes, the shell environment
   snapshot, model provider probes, and the ssh bootstrap for a remote auth broker all run when
   there is no budget to join.
-- **The harness itself.** Agent turns, the TUI, and the relaunch that replaces the veyyon process.
+- **The harness itself.** Agent turns, the TUI, the relaunch that replaces the veyyon process, the
+  task ledger's lock and bookkeeping helpers, whose lock a budget kill would drop mid-claim, and the
+  `gh pr view` lookup the `github` tool's push and merge guard runs before it lets a call through.
 - **Programs that are yours rather than the agent's.** The editor veyyon opens a file in, the
   clipboard helper, the desktop notifier, `veyyon shell`, and the self-updater. Capping the
   updater could leave a half-written install, and killing your editor on a budget breach would
@@ -115,7 +117,7 @@ Where the operating system offers a per-group CPU quota, the kernel does the cap
   `/cpu-limit lift`, turns rate control off rather than flooring to 0.01% of the machine.
 
 A once-per-second watcher reads the group's usage on top of the kernel cap. When usage stays
-pinned at the budget for about three seconds, new commands are rejected with an error that names
+pinned at the budget for about three seconds, new commands are rejected with an error that states
 the budget, the measured usage, and the fix (raise `session.cpuLimitCores` or wait), until usage
 drops. The kernel cap is the enforcement of last resort: if the watcher lags, commands throttle,
 they never run free.

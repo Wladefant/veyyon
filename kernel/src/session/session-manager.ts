@@ -2,14 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { BranchSummaryMessage, CompactionSummaryMessage } from "@veyyon/agent-core/compaction/messages";
-import type {
-	ImageContent,
-	MessageAttribution,
-	ServiceTierByFamily,
-	TextContent,
-	Usage,
-	VideoContent,
-} from "@veyyon/ai";
+import type { ImageContent, MessageAttribution, ServiceTierByFamily, TextContent, VideoContent } from "@veyyon/ai";
 import { allowsSessionTelemetry, type InstrumentationLevel } from "@veyyon/ai/instrumentation";
 import {
 	directoryExists,
@@ -23,7 +16,6 @@ import {
 } from "@veyyon/utils";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
-import { assertNotTerminalOwned } from "./terminal-ownership";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore, blobsDirForSessionDir } from "./blob-store";
 import {
@@ -33,10 +25,14 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
+import { ColdEntryPayloads, MIN_COLD_LINE_BYTES, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
 import {
+	BRANCH_SETTINGS_ENTRY_TYPES,
 	type BuildSessionContextOptions,
 	buildSessionContext,
 	buildSessionContextFromPath,
+	compactedHistoryEnd,
+	resolveContextLeaf,
 	type SessionContext,
 	walkBranchPath,
 } from "./session-context";
@@ -47,6 +43,7 @@ import {
 	type FileEntry,
 	type LabelEntry,
 	type NewSessionOptions,
+	SESSION_TITLE_SLOT_BYTES,
 	SESSION_TITLE_SLOT_ENTRY_TYPE,
 	type SessionCheckpoint,
 	type SessionCheckpointEntry,
@@ -61,8 +58,22 @@ import {
 	type TitleChangeEntry,
 	type UsageStatistics,
 } from "./session-entries";
-import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
-import { loadEntriesFromFile, readTitleSlotFromFile, resolveBlobRefsInEntries } from "./session-loader";
+import { SessionEntryIndex } from "./session-entry-index";
+import {
+	findMostRecentSession,
+	foreignSessionFileProfile,
+	listAllSessions,
+	listSessions,
+	type SessionInfo,
+} from "./session-listing";
+import {
+	loadEntriesFromFile,
+	loadSessionFile,
+	readTitleSlotFromFile,
+	resolveBlobRefsInEntries,
+	restoreEntryPayloadsSync,
+	type SessionFileLayout,
+} from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
@@ -74,12 +85,14 @@ import { prepareEntryForPersistence } from "./session-persistence";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
+	type PinnedSessionReader,
 	type SessionFileBody,
 	type SessionStorage,
 	type SessionStorageStat,
 	type SessionStorageWriter,
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
+import { assertNotTerminalOwned } from "./terminal-ownership";
 
 const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
@@ -94,6 +107,37 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
  * bounded is bounded either way.
  */
 const CHUNK_TARGET_CHARS = 1 << 20;
+
+/**
+ * Where this manager's entry lines sit in the file it last published. Valid while that file is
+ * exactly what it published plus the entries it appended since, and holds no line from another
+ * writer, so the bytes before any entry are known without serializing anything.
+ *
+ * A rewrite whose updates start at some entry keeps the bytes before it and writes the rest
+ * ({@link SessionStorage.rewriteTailAtomic}). On a long session that is the live context instead
+ * of the whole transcript: every prune rewrites the file, and a prune touches only entries after
+ * the compaction boundary.
+ */
+interface PublishedLines {
+	/** The header line as published. A header that serializes differently needs the whole file. */
+	header: string;
+	/** Each entry whose line is in the file, in file order. An entry replaced or dropped since no longer matches. */
+	entries: SessionEntry[];
+	/** Byte offset of each of those lines, parallel to `entries`. */
+	entryOffsets: number[];
+}
+
+/** `lines` batched into writes of about {@link CHUNK_TARGET_CHARS}. */
+function* batchLines(lines: Iterable<string>): Generator<string> {
+	let chunk = "";
+	for (const line of lines) {
+		chunk += line;
+		if (chunk.length < CHUNK_TARGET_CHARS) continue;
+		yield chunk;
+		chunk = "";
+	}
+	if (chunk.length > 0) yield chunk;
+}
 
 function mintSessionId(): string {
 	return Bun.randomUUIDv7();
@@ -137,51 +181,19 @@ function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
 	return current;
 }
 
-function emptyUsageStatistics(): UsageStatistics {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		orchestrationInput: 0,
-		orchestrationOutput: 0,
-		orchestrationCacheRead: 0,
-		premiumRequests: 0,
-		cost: 0,
-	};
-}
-
-function taskUsageFrom(details: unknown): Usage | undefined {
-	if (details === null || typeof details !== "object") return undefined;
-	const maybeUsage = (details as Record<string, unknown>).usage;
-	return maybeUsage !== null && typeof maybeUsage === "object" ? (maybeUsage as Usage) : undefined;
-}
-
-function entryUsage(entry: SessionEntry): Usage | undefined {
-	if (entry.type !== "message") return undefined;
-	const message = entry.message;
-	if (message.role === "assistant") return message.usage;
-	if (message.role === "toolResult" && message.toolName === "task") return taskUsageFrom(message.details);
-	return undefined;
-}
-
-function addUsage(target: UsageStatistics, usage: Usage | undefined): void {
-	if (!usage) return;
-	target.input += usage.input;
-	target.output += usage.output;
-	target.cacheRead += usage.cacheRead;
-	target.cacheWrite += usage.cacheWrite;
-	target.totalTokens += usage.totalTokens;
-	target.orchestrationInput += usage.orchestration?.input ?? 0;
-	target.orchestrationOutput += usage.orchestration?.output ?? 0;
-	target.orchestrationCacheRead += usage.orchestration?.cacheRead ?? 0;
-	target.premiumRequests += usage.premiumRequests ?? 0;
-	target.cost += usage.cost.total;
-}
-
 function isAssistantEntry(entry: SessionEntry): boolean {
 	return entry.type === "message" && entry.message.role === "assistant";
+}
+
+/**
+ * Parse a session line and restore what persistence moved out of it, as a load does. The range a
+ * cold entry reads runs to the next entry's line, so it may hold a blank line after its own.
+ */
+function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
+	const end = line.indexOf("\n");
+	const entry = JSON.parse(end === -1 ? line : line.slice(0, end)) as SessionEntry;
+	restoreEntryPayloadsSync(entry, blobs);
+	return entry;
 }
 
 function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
@@ -233,163 +245,6 @@ function holdsOnlyDraftMetadata(entries: readonly SessionEntry[]): boolean {
 
 function isSessionIncarnationTelemetry(entry: SessionEntry): boolean {
 	return entry.type === "session_lifecycle" || entry.type === "session_checkpoint";
-}
-
-function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {
-	return new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime();
-}
-
-/**
- * Maintains the derived views over a session's entry list: id lookup, the
- * parent→children adjacency, the resolved label map, the active leaf, and the
- * running usage totals. Kept in lockstep with the manager's `#entries` so reads
- * stay O(1)/O(children) instead of rescanning the whole journal.
- */
-class SessionEntryIndex {
-	#entriesById = new Map<string, SessionEntry>();
-	#children = new Map<string | null, SessionEntry[]>();
-	#labels = new Map<string, string>();
-	#leaf: string | null = null;
-	#usage = emptyUsageStatistics();
-	/**
-	 * Root→leaf path of `#leaf`, or undefined until a reader asks for it. An
-	 * append to the leaf extends it in place; anything else that can change the
-	 * walk (a leaf move, a rebuild, an insert off the leaf) drops it. Every
-	 * startup reader walks the active branch, and on a session of hundreds of
-	 * thousands of entries each walk costs tens of milliseconds.
-	 */
-	#leafPath: SessionEntry[] | undefined;
-
-	clear(): void {
-		this.#entriesById.clear();
-		this.#children.clear();
-		this.#labels.clear();
-		this.#leaf = null;
-		this.#leafPath = undefined;
-		this.#usage = emptyUsageStatistics();
-	}
-
-	rebuild(entries: readonly SessionEntry[]): void {
-		this.clear();
-		for (const entry of entries) this.insert(entry);
-	}
-
-	insert(entry: SessionEntry): void {
-		// The new leaf's path is the old leaf's path plus this entry exactly when
-		// it hangs off the old leaf and does not shadow an id already on the map.
-		const leafPath =
-			this.#leaf !== null && entry.parentId === this.#leaf && !this.#entriesById.has(entry.id)
-				? this.#leafPath
-				: undefined;
-		this.#entriesById.set(entry.id, entry);
-		this.#leaf = entry.id;
-		leafPath?.push(entry);
-		this.#leafPath = leafPath;
-
-		const bucket = this.#children.get(entry.parentId);
-		if (bucket) bucket.push(entry);
-		else this.#children.set(entry.parentId, [entry]);
-
-		if (entry.type === "label") {
-			if (entry.label) this.#labels.set(entry.targetId, entry.label);
-			else this.#labels.delete(entry.targetId);
-		}
-
-		addUsage(this.#usage, entryUsage(entry));
-	}
-
-	has(id: string): boolean {
-		return this.#entriesById.has(id);
-	}
-
-	get(id: string): SessionEntry | undefined {
-		return this.#entriesById.get(id);
-	}
-
-	/**
-	 * The live id→entry map. Read-only for callers (lookups + `generateId`
-	 * collision checks); never mutate it directly — go through `insert`/`rebuild`.
-	 */
-	entriesById(): Map<string, SessionEntry> {
-		return this.#entriesById;
-	}
-
-	leafId(): string | null {
-		return this.#leaf;
-	}
-
-	leafEntry(): SessionEntry | undefined {
-		return this.#leaf ? this.#entriesById.get(this.#leaf) : undefined;
-	}
-
-	setLeaf(id: string | null): void {
-		if (id !== this.#leaf) this.#leafPath = undefined;
-		this.#leaf = id;
-	}
-
-	childrenOf(parentId: string): SessionEntry[] {
-		return [...(this.#children.get(parentId) ?? [])];
-	}
-
-	labelFor(id: string): string | undefined {
-		return this.#labels.get(id);
-	}
-
-	labelsInEffect(): IterableIterator<[string, string]> {
-		return this.#labels.entries();
-	}
-
-	usageSnapshot(): UsageStatistics {
-		return { ...this.#usage };
-	}
-
-	pathTo(id: string | null | undefined = this.#leaf): SessionEntry[] {
-		return id === this.#leaf ? this.leafPath().slice() : walkBranchPath(this.#entriesById, this.#lookup(id));
-	}
-
-	/**
-	 * The active branch, root→leaf. Shared with the index: read it, never mutate
-	 * it. {@link pathTo} returns a copy for callers that keep or edit the array.
-	 */
-	leafPath(): readonly SessionEntry[] {
-		this.#leafPath ??= walkBranchPath(this.#entriesById, this.#lookup(this.#leaf));
-		return this.#leafPath;
-	}
-
-	#lookup(id: string | null | undefined): SessionEntry | undefined {
-		return id ? this.#entriesById.get(id) : undefined;
-	}
-
-	tree(entries: readonly SessionEntry[]): SessionTreeNode[] {
-		const nodes = new Map<string, SessionTreeNode>();
-		const roots: SessionTreeNode[] = [];
-
-		for (const entry of entries) {
-			nodes.set(entry.id, { entry, children: [], label: this.#labels.get(entry.id) });
-		}
-
-		for (const entry of entries) {
-			const node = nodes.get(entry.id)!;
-			const parentId = entry.parentId;
-			if (parentId === null || parentId === entry.id) {
-				roots.push(node);
-				continue;
-			}
-
-			const parent = nodes.get(parentId);
-			if (parent) parent.children.push(node);
-			else roots.push(node);
-		}
-
-		const stack = roots.slice();
-		while (stack.length > 0) {
-			const node = stack.pop()!;
-			node.children.sort(orderedByTimestamp);
-			for (let ci = 0; ci < node.children.length; ci++) stack.push(node.children[ci]!);
-		}
-
-		return roots;
-	}
 }
 
 export type ReadonlySessionManager = Pick<
@@ -511,6 +366,8 @@ export class SessionManager {
 	#hasTitleSlot = true;
 	#entries: SessionEntry[] = [];
 	#index = new SessionEntryIndex();
+	/** Payloads of entries the live context cannot reach, read back from the session file on use. */
+	readonly #cold = new ColdEntryPayloads();
 	#instrumentation: InstrumentationLevel | undefined;
 	#nextSequence = 1;
 	#lifecycleStarted = false;
@@ -549,7 +406,7 @@ export class SessionManager {
 	/** Bumped on every sync rewrite / chain reset so stale queued tasks become no-ops. */
 	#diskEpoch = 0;
 	/**
-	 * UTF-8 bytes the most recent {@link #fileChunks} pass produced. The body is
+	 * UTF-8 bytes of the file the most recent {@link #fileLines} or {@link #tailLines} pass produced. The body is
 	 * never held whole, so this is how a publish knows the file's size without
 	 * serializing it a second time.
 	 */
@@ -606,7 +463,18 @@ export class SessionManager {
 	 * without reading the file: a different inode means someone republished the
 	 * path, whether or not the body they wrote is the same length as ours.
 	 */
-	#publishedFileState: { size: number; identity?: string } | null = null;
+	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines } | null = null;
+	/**
+	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
+	 * installed with {@link #lastBodyBytes} once that body is published.
+	 */
+	#lastBodyLines: PublishedLines | undefined;
+	/**
+	 * Index in `#entries` of the earliest entry an in-place update may have changed since a rewrite
+	 * last started serializing, or `Infinity` when none has. Each rewrite takes it and resets it, so
+	 * an update that lands while a rewrite runs is written by the next one.
+	 */
+	#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
@@ -632,6 +500,13 @@ export class SessionManager {
 	 * sessions root.
 	 */
 	#sessionDirPinned: boolean;
+	/**
+	 * The last breadcrumb this manager wrote marked a lazy `/new` boundary whose
+	 * JSONL is not yet on disk. Cleared (and the crumb re-stamped non-fresh) once
+	 * the session materializes, so a materialized-then-deleted session still falls
+	 * back to the most-recent session instead of being treated as a fresh crumb.
+	 */
+	#breadcrumbFresh = false;
 
 	private constructor(
 		cwd: string,
@@ -666,8 +541,18 @@ export class SessionManager {
 		return this.#blobStore;
 	}
 
-	#rememberBreadcrumb(cwd: string, sessionFile: string): void {
-		if (!this.#suppressBreadcrumb) writeTerminalBreadcrumb(cwd, sessionFile);
+	#rememberBreadcrumb(cwd: string, sessionFile: string, fresh = false): void {
+		this.#breadcrumbFresh = fresh;
+		if (!this.#suppressBreadcrumb) writeTerminalBreadcrumb(cwd, sessionFile, fresh);
+	}
+
+	/**
+	 * Re-stamp a fresh `/new` breadcrumb as non-fresh once the session has
+	 * materialized on disk. A no-op unless the current breadcrumb is still fresh.
+	 */
+	#materializeBreadcrumb(): void {
+		if (!this.#breadcrumbFresh || !this.#sessionFile) return;
+		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile, false);
 	}
 
 	#clearDiskError(): void {
@@ -711,6 +596,8 @@ export class SessionManager {
 		if (!this.#diskFailure) this.#diskFailure = error;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = true;
+		// What reached the file is no longer known, so the next rewrite writes all of it.
+		this.#firstUpdatedEntry = 0;
 
 		if (!this.#diskFailureLogged) {
 			this.#diskFailureLogged = true;
@@ -832,31 +719,111 @@ export class SessionManager {
 	 * size. Read it only after the write returns.
 	 */
 	#fileBody(): SessionFileBody {
-		return () => this.#fileChunks();
+		return () => batchLines(this.#fileLines());
 	}
 
-	/** Every line of the file, in publish order. */
+	/**
+	 * Every line of the file, in publish order. A pass records the file's size in
+	 * {@link #lastBodyBytes} and, unless another writer's line is in it, where each
+	 * entry's line starts in {@link #lastBodyLines}.
+	 */
 	*#fileLines(): Generator<string> {
+		this.#lastBodyBytes = 0;
+		this.#lastBodyLines = undefined;
+		const header = this.#lineFor(this.#header);
+		const foreign = this.#foreignLines;
+		const lines: PublishedLines = { header, entries: [], entryOffsets: [] };
 		yield this.#titleSlotLine();
-		yield this.#lineFor(this.#header);
-		for (const entry of this.#entries) yield this.#lineFor(entry);
-		for (const line of this.#foreignLines) yield line.endsWith("\n") ? line : `${line}\n`;
+		yield header;
+		let bytes = yield* this.#entryLines(lines, 0, SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8"));
+		for (const raw of foreign) {
+			const line = raw.endsWith("\n") ? raw : `${raw}\n`;
+			bytes += Buffer.byteLength(line, "utf-8");
+			yield line;
+		}
+		this.#lastBodyBytes = bytes;
+		if (foreign.length === 0) this.#lastBodyLines = lines;
 	}
 
-	/** Those lines batched into writes of about {@link CHUNK_TARGET_CHARS}. */
-	*#fileChunks(): Generator<string> {
-		this.#lastBodyBytes = 0;
-		let chunk = "";
-		for (const line of this.#fileLines()) {
-			chunk += line;
-			if (chunk.length < CHUNK_TARGET_CHARS) continue;
-			this.#lastBodyBytes += Buffer.byteLength(chunk, "utf-8");
-			yield chunk;
-			chunk = "";
+	/**
+	 * The lines of `#entries` from index `from` on, the first starting at byte `offset`. Each entry
+	 * and its offset is appended to `lines`. Returns the offset after the last line.
+	 */
+	*#entryLines(lines: PublishedLines, from: number, offset: number): Generator<string, number> {
+		const entries = this.#entries;
+		for (let i = from; i < entries.length; i++) {
+			const entry = entries[i]!;
+			const line = this.#lineFor(entry);
+			lines.entries.push(entry);
+			lines.entryOffsets.push(offset);
+			offset += Buffer.byteLength(line, "utf-8");
+			yield line;
 		}
-		if (chunk.length === 0) return;
-		this.#lastBodyBytes += Buffer.byteLength(chunk, "utf-8");
-		yield chunk;
+		return offset;
+	}
+
+	/**
+	 * The lines a tail rewrite writes after the first `keep` entries of `lines`, which end at byte
+	 * `keepBytes`. `lines` is cut back to those entries and extended to describe the new file.
+	 */
+	*#tailLines(lines: PublishedLines, keep: number, keepBytes: number): Generator<string> {
+		this.#lastBodyBytes = 0;
+		this.#lastBodyLines = undefined;
+		lines.entries.length = keep;
+		lines.entryOffsets.length = keep;
+		this.#lastBodyBytes = yield* this.#entryLines(lines, keep, keepBytes);
+		this.#lastBodyLines = lines;
+	}
+
+	/**
+	 * How much of the published file a rewrite can keep: the first `keep` entry lines, ending at
+	 * byte `keepBytes`, when the storage can copy them and the file is still exactly what
+	 * {@link #publishedFileState} describes. `undefined` when the whole file has to be written.
+	 *
+	 * `updatedFrom` is the earliest entry an in-place update may have changed. An entry replaced,
+	 * dropped or reordered since the publish ends the kept run too, because it no longer matches the
+	 * entry whose line is at that position.
+	 */
+	#tailRewritePlan(updatedFrom: number): { lines: PublishedLines; keep: number; keepBytes: number } | undefined {
+		const state = this.#publishedFileState;
+		const lines = state?.lines;
+		if (!state || !lines || !this.#storage.rewriteTailAtomic || this.#foreignLines.length > 0) return undefined;
+		if (lines.header !== this.#lineFor(this.#header) || !this.#fileIsExactlyAsPublished()) return undefined;
+		const entries = this.#entries;
+		let keep = Math.min(updatedFrom, lines.entries.length, entries.length);
+		for (let i = 0; i < keep; i++) {
+			if (lines.entries[i] !== entries[i]) {
+				keep = i;
+				break;
+			}
+		}
+		if (keep === 0) return undefined;
+		const keepBytes = keep < lines.entries.length ? lines.entryOffsets[keep]! : state.size;
+		return { lines, keep, keepBytes };
+	}
+
+	/**
+	 * Publish the file at `sessionFile` atomically, writing only the lines after the kept prefix
+	 * when {@link #tailRewritePlan} finds one.
+	 */
+	async #publishAtomically(sessionFile: string, epoch: number, updatedFrom: number): Promise<void> {
+		const options = { commitGuard: () => this.#diskEpoch === epoch };
+		const plan = this.#tailRewritePlan(updatedFrom);
+		if (!plan || !this.#storage.rewriteTailAtomic) {
+			await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), options);
+			return;
+		}
+		// The arrays are rebuilt for the new file as its lines are written, so they stop
+		// describing the old one now.
+		const { lines, keep, keepBytes } = plan;
+		if (this.#publishedFileState?.lines === lines) this.#publishedFileState.lines = undefined;
+		await this.#storage.rewriteTailAtomic(
+			sessionFile,
+			keepBytes,
+			this.#titleSlotLine(),
+			() => batchLines(this.#tailLines(lines, keep, keepBytes)),
+			options,
+		);
 	}
 
 	/** Remember an id as ours, so a line carrying it is never treated as foreign. */
@@ -1044,31 +1011,37 @@ export class SessionManager {
 			this.#diskEpoch++;
 			this.#diskTail = Promise.resolve();
 			this.#closeWriterEventually();
+			this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 			this.#storage.writeTextSync(this.#sessionFile, body);
-			this.#notePublishedFile(this.#lastBodyBytes);
+			this.#notePublishedFile();
 			// The file matches memory again, so the fault episode is over and a later one
 			// is a new thing to report.
 			this.#clearDiskError();
 			this.#fileIsCurrent = true;
+			this.#materializeBreadcrumb();
 			this.#rewriteRequired = false;
 			this.#hasTitleSlot = true;
+			this.#coolUnreachablePayloads();
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
 	}
 
 	/**
-	 * Rewrite the whole file atomically (temp-write + rename, EPERM-safe) on the
-	 * disk chain. The body is serialized after the writer is closed. The fence
-	 * is enabled BEFORE `#closeWriterHandle()` and stays active until the last
-	 * atomic publish returns, so a sync append landing in the close-yield window
-	 * cannot open a fresh writer that the pending replacement would then detach
-	 * from the current JSONL path. A `commitGuard` also prevents a superseding
-	 * synchronous rewrite from being overwritten by the stale body serialized
-	 * before it ran.
+	 * Republish the file atomically (temp-write + rename, EPERM-safe) on the
+	 * disk chain. `updatedFrom` is the earliest entry an in-place update changed;
+	 * lines before it may be kept as published (see {@link #tailRewritePlan}), and
+	 * the default writes every line. The body is serialized after the writer is
+	 * closed. The fence is enabled BEFORE `#closeWriterHandle()` and stays active
+	 * until the last atomic publish returns, so a sync append landing in the
+	 * close-yield window cannot open a fresh writer that the pending replacement
+	 * would then detach from the current JSONL path. A `commitGuard` also prevents
+	 * a superseding synchronous rewrite from being overwritten by the stale body
+	 * serialized before it ran.
 	 */
-	async #rewriteAtomically(): Promise<void> {
+	async #rewriteAtomically(updatedFrom = 0): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
+		this.#firstUpdatedEntry = Math.min(this.#firstUpdatedEntry, updatedFrom);
 
 		const startEpoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
@@ -1077,8 +1050,10 @@ export class SessionManager {
 					// Same as the synchronous publish: the episode ends when the file is whole.
 					this.#clearDiskError();
 					this.#fileIsCurrent = true;
+					this.#materializeBreadcrumb();
 					this.#rewriteRequired = false;
 					this.#hasTitleSlot = true;
+					this.#coolUnreachablePayloads();
 				}
 			},
 			{ epoch: startEpoch },
@@ -1108,12 +1083,20 @@ export class SessionManager {
 				// that omits them deletes them (see #refreshForeignLines).
 				await this.#refreshForeignLines();
 				if (this.#diskEpoch !== epoch) return false;
-				const body = this.#fileBody();
-				await this.#storage.writeTextAtomic(sessionFile, body, {
-					commitGuard: () => this.#diskEpoch === epoch,
-				});
-				if (this.#diskEpoch !== epoch) return false;
-				this.#notePublishedFile(this.#lastBodyBytes);
+				const updatedFrom = this.#firstUpdatedEntry;
+				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
+				let published = false;
+				try {
+					const coldIdentity = this.#publishedFileState?.identity;
+					await this.#publishAtomically(sessionFile, epoch, updatedFrom);
+					if (this.#diskEpoch !== epoch) return false;
+					this.#notePublishedFile();
+					this.#rebaseColdPayloads(coldIdentity);
+					published = true;
+				} finally {
+					// Not written, so the next rewrite still owes these entries.
+					if (!published) this.#firstUpdatedEntry = Math.min(this.#firstUpdatedEntry, updatedFrom);
+				}
 			} while (this.#atomicRewriteDirty);
 			return true;
 		} finally {
@@ -1194,7 +1177,15 @@ export class SessionManager {
 			void this.#appendWriter()
 				.append(line)
 				.catch(err => this.#noteDiskFailure(err));
-			if (this.#publishedFileState !== null) this.#publishedFileState.size += Buffer.byteLength(line, "utf-8");
+			const state = this.#publishedFileState;
+			if (state !== null) {
+				const offset = state.size;
+				const length = Buffer.byteLength(line, "utf-8");
+				state.lines?.entries.push(entry);
+				state.lines?.entryOffsets.push(offset);
+				state.size += length;
+				if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
+			}
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -1230,8 +1221,11 @@ export class SessionManager {
 		return current.size !== expected.size;
 	}
 
-	/** Record what we just published, so the next append can tell it is still there. */
-	#notePublishedFile(bodyByteLength: number): void {
+	/**
+	 * Record the body the last {@link #fileLines} or {@link #tailLines} pass produced as what is
+	 * at the session path, so the next append can tell it is still there.
+	 */
+	#notePublishedFile(): void {
 		if (!this.#sessionFile) return;
 		let identity: string | undefined;
 		try {
@@ -1239,7 +1233,130 @@ export class SessionManager {
 		} catch {
 			identity = undefined;
 		}
-		this.#publishedFileState = { size: bodyByteLength, identity };
+		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
+	}
+
+	/**
+	 * After a publish of this manager's that kept the bytes before its first rewritten entry, read
+	 * the cold entries in that prefix from the new file, so the one it replaced is released. `from`
+	 * is the identity the publish started from; cold entries recorded against any other object
+	 * stay on it.
+	 */
+	#rebaseColdPayloads(from: string | undefined): void {
+		const sessionFile = this.#sessionFile;
+		const to = this.#publishedFileState?.identity;
+		if (from === undefined || to === undefined || sessionFile === undefined) return;
+		if (this.#cold.pinnedIdentity !== from) return;
+		this.#cold.rebase(this.#entries, to, () => this.#openPinnedReader(sessionFile));
+	}
+
+	#openPinnedReader(sessionFile: string): PinnedSessionReader | undefined {
+		try {
+			return this.#storage.openPinnedReaderSync?.(sessionFile);
+		} catch (err) {
+			logger.debug("session file could not be pinned; its entries stay in memory", {
+				sessionFile,
+				error: errorMessage(err),
+			});
+			return undefined;
+		}
+	}
+
+	/**
+	 * Move the payloads of entries the live context cannot reach out of memory, to be read back
+	 * from the session file on use (see {@link ColdEntryPayloads}).
+	 *
+	 * Runs only while every entry's line in the file is what the entry holds: after a load that
+	 * changed nothing, after this manager's own publish, and after a compaction the caller has
+	 * persisted ({@link coolCompactedHistory}). An in-place update not yet handed to
+	 * {@link rewriteEntries}, a publish in flight, or a line of another writer's stops it.
+	 *
+	 * The live context is the active branch from the newest compaction's keep boundary on, plus
+	 * every entry on the branch whose kind the settings walk of each context build reads. Everything
+	 * else, including other branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on
+	 * use.
+	 */
+	#coolUnreachablePayloads(): void {
+		const sessionFile = this.#sessionFile;
+		const state = this.#publishedFileState;
+		const lines = state?.lines;
+		if (!this.#persist || sessionFile === undefined || !state || !lines || state.identity === undefined) return;
+		if (this.#storage.openPinnedReaderSync === undefined) return;
+		if (
+			!this.#fileIsCurrent ||
+			this.#rewriteRequired ||
+			this.#firstUpdatedEntry !== Number.POSITIVE_INFINITY ||
+			this.#atomicRewriteFenceEpoch !== null ||
+			this.#foreignLines.length > 0
+		) {
+			return;
+		}
+		const path = this.#activePath();
+		const liveFrom = compactedHistoryEnd(path);
+		// Undefined when the whole file is the live branch: then only record-only entries go cold.
+		let live: Set<SessionEntry> | undefined;
+		if (liveFrom > 0 || path.length !== this.#entries.length) {
+			live = new Set<SessionEntry>();
+			for (let i = 0; i < path.length; i++) {
+				const entry = path[i]!;
+				if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
+			}
+		}
+		const { entries, entryOffsets } = lines;
+		const identity = state.identity;
+		const blobs = this.#blobs;
+		let pinned = false;
+		for (let i = 0; i < entries.length; i++) {
+			const entry = entries[i]!;
+			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type) && (live === undefined || live.has(entry))) continue;
+			const offset = entryOffsets[i]!;
+			const end = i + 1 < entries.length ? entryOffsets[i + 1]! : state.size;
+			if (!pinned) {
+				pinned = this.#cold.pin(
+					identity,
+					() => this.#openPinnedReader(sessionFile),
+					line => restoreColdLine(line, blobs),
+				);
+				if (!pinned) return;
+			}
+			this.#cold.cool(entry, offset, end - offset);
+		}
+	}
+
+	/**
+	 * Move a {@link RECORD_ONLY_ENTRY_TYPES} entry the append path just wrote out of memory. The
+	 * write completes inside `append`, so the line is in the file object the last publish recorded;
+	 * {@link ColdEntryPayloads.coolWritten} reads it back before cooling. Without this, a spawned
+	 * agent's `session_init` appended after its file was created, and every `subagent_spawn`, stays
+	 * in memory until the next whole-file publish.
+	 */
+	#coolAppendedRecord(entry: SessionEntry, line: string, offset: number, length: number): void {
+		const sessionFile = this.#sessionFile;
+		const identity = this.#publishedFileState?.identity;
+		if (!this.#persist || sessionFile === undefined || identity === undefined) return;
+		if (length < MIN_COLD_LINE_BYTES || this.#storage.openPinnedReaderSync === undefined) return;
+		const blobs = this.#blobs;
+		const pinned = this.#cold.pin(
+			identity,
+			() => this.#openPinnedReader(sessionFile),
+			restored => restoreColdLine(restored, blobs),
+		);
+		if (pinned) this.#cold.coolWritten(entry, line, offset, length);
+	}
+
+	/**
+	 * Move the payloads of the history a compaction just summarized out of memory. Call once the
+	 * compaction entry and every in-place update that came with it are handed to the session.
+	 */
+	coolCompactedHistory(): void {
+		this.#coolUnreachablePayloads();
+	}
+
+	/** The active branch, root first: the index's cached path when the leaf resolves. */
+	#activePath(): readonly SessionEntry[] {
+		if (this.#index.leafEntry()) return this.#index.leafPath();
+		const byId = this.#index.entriesById();
+		return walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
 	}
 
 	async #persistTitleChangeEntry(entry: TitleChangeEntry, update: SessionTitleUpdate): Promise<void> {
@@ -1281,10 +1398,16 @@ export class SessionManager {
 				if (!sessionFile) return;
 				try {
 					await this.#appendWriter().append(line);
-					if (this.#publishedFileState !== null) this.#publishedFileState.size += Buffer.byteLength(line, "utf-8");
+					if (this.#publishedFileState !== null) {
+						this.#publishedFileState.size += Buffer.byteLength(line, "utf-8");
+						// Written off the disk chain's order with the synchronous appends, so where
+						// this line landed among them is not known.
+						this.#publishedFileState.lines = undefined;
+					}
 					await this.#storage.updateSessionTitle(sessionFile, update);
 					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {
+					this.#firstUpdatedEntry = 0;
 					if (!(await this.#runFencedAtomicRewrite(epoch))) return;
 					this.#clearDiskError();
 					this.#fileIsCurrent = true;
@@ -1352,7 +1475,7 @@ export class SessionManager {
 			this.#sessionFile =
 				forcedSessionFile ??
 				path.join(this.#sessionDir, sessionFileName(`${fileSafeTimestamp(timestamp)}_${this.#sessionId}`));
-			this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
+			this.#rememberBreadcrumb(this.#cwd, this.#sessionFile, true);
 		} else {
 			this.#sessionFile = undefined;
 		}
@@ -1599,10 +1722,10 @@ export class SessionManager {
 	async setSessionFile(sessionFile: string): Promise<void> {
 		const resolvedSessionFile = path.resolve(sessionFile);
 		await assertNotTerminalOwned(resolvedSessionFile);
-		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage, {
+		const loaded = await loadSessionFile(resolvedSessionFile, this.#storage, {
 			operatorNotices: this.#operatorNotices,
 		});
-		await this.#switchToLoadedFile(resolvedSessionFile, fileEntries);
+		await this.#switchToLoadedFile(resolvedSessionFile, loaded.entries, loaded.layout);
 	}
 
 	/**
@@ -1610,7 +1733,11 @@ export class SessionManager {
 	 * read the header's cwd before the manager exists, and hands the same entries here rather than
 	 * parsing a second time.
 	 */
-	async #switchToLoadedFile(resolvedSessionFile: string, fileEntries: FileEntry[]): Promise<void> {
+	async #switchToLoadedFile(
+		resolvedSessionFile: string,
+		fileEntries: FileEntry[],
+		layout: SessionFileLayout | undefined,
+	): Promise<void> {
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		let migrated = false;
 		let header: SessionHeader | undefined;
@@ -1625,7 +1752,7 @@ export class SessionManager {
 					operatorNotices: this.#operatorNotices,
 				},
 			);
-			// loadEntriesFromFile guarantees entries[0] is a valid session header.
+			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
 			if (headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryExists(headerCwd))) {
@@ -1672,7 +1799,25 @@ export class SessionManager {
 		this.#artifactManagerSessionFile = null;
 
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
+		if (layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(layout);
 		this.#startLifecycle("resumed");
+		this.#coolUnreachablePayloads();
+	}
+
+	/**
+	 * Take a loaded file's layout as what this manager published there. The file is a title slot,
+	 * the header and one line per entry, in `#entries` order, and nothing was changed on load that a
+	 * publish would write differently, so the next rewrite can keep the lines before its first
+	 * changed entry and skip reading the file back for another writer's lines, as it would after
+	 * its own publish. A header that serializes differently from its line is caught by the rewrite
+	 * plan, which then writes the whole file.
+	 */
+	#adoptLoadedLayout(layout: SessionFileLayout): void {
+		this.#publishedFileState = {
+			size: layout.size,
+			identity: layout.identity,
+			lines: { header: layout.header, entries: this.#entries.slice(), entryOffsets: layout.entryOffsets },
+		};
 	}
 
 	/** Start a new session. Drains and closes any existing writer first. */
@@ -2475,10 +2620,30 @@ export class SessionManager {
 	/**
 	 * Rewrite the session file after in-place entry updates (e.g. pruning old tool
 	 * outputs). Use sparingly.
+	 *
+	 * `updated` lists every entry changed in place since the file was last
+	 * written. The lines before the earliest of them are kept as they are on disk
+	 * instead of serialized again, which on a long session is most of the file.
+	 * Omit it when the changed set is not known: every line is written.
 	 */
-	async rewriteEntries(): Promise<void> {
+	async rewriteEntries(updated?: Iterable<SessionEntry>): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
-		await this.#rewriteAtomically();
+		await this.#rewriteAtomically(updated === undefined ? 0 : this.#earliestIndexOf(updated));
+	}
+
+	/**
+	 * Index in `#entries` of the earliest of `updated`, found from the end because
+	 * updates cluster in the live tail. `Infinity` for none, and 0 when one of
+	 * them is not in `#entries`, since its position is then unknown.
+	 */
+	#earliestIndexOf(updated: Iterable<SessionEntry>): number {
+		const pending = new Set(updated);
+		if (pending.size === 0) return Number.POSITIVE_INFINITY;
+		const entries = this.#entries;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			if (pending.delete(entries[i]!) && pending.size === 0) return i;
+		}
+		return 0;
 	}
 
 	/**
@@ -2599,6 +2764,20 @@ export class SessionManager {
 			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
 		}
 		return buildSessionContextFromPath(this.#index.leafPath(), options);
+	}
+
+	/**
+	 * The tool names the newest `mcp_tool_selection` entry records on the branch
+	 * {@link buildSessionContext} reads, or `undefined` when that branch records
+	 * none. Scans for the one entry instead of rebuilding the branch's messages.
+	 */
+	getMCPToolSelection(): readonly string[] | undefined {
+		const path = this.#activePath();
+		for (let i = path.length - 1; i >= 0; i--) {
+			const entry = path[i]!;
+			if (entry.type === "mcp_tool_selection") return entry.selectedToolNames;
+		}
+		return undefined;
 	}
 
 	/** Strip stale OpenAI Responses assistant replay metadata from loaded entries. */
@@ -2951,8 +3130,8 @@ export class SessionManager {
 		},
 	): Promise<SessionManager> {
 		await assertNotTerminalOwned(filePath);
-		const loaded = await loadEntriesFromFile(filePath, storage, { operatorNotices: options?.operatorNotices });
-		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
+		const loaded = await loadSessionFile(filePath, storage, { operatorNotices: options?.operatorNotices });
+		const header = loaded.entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when that directory still
 		// exists. A deleted project dir would make the constructor's #cwd — and the
 		// `setProjectDir` chdir interactive mode runs next — point at (and fail on)
@@ -2976,7 +3155,7 @@ export class SessionManager {
 			options?.instrumentation,
 		);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		await manager.#switchToLoadedFile(path.resolve(filePath), loaded);
+		await manager.#switchToLoadedFile(path.resolve(filePath), loaded.entries, loaded.layout);
 		return manager;
 	}
 
@@ -3062,7 +3241,30 @@ export class SessionManager {
 		const breadcrumb = await readTerminalBreadcrumbEntry();
 		let chosenSession: string | null | undefined;
 
-		if (breadcrumb) {
+		// A crumb naming another profile's transcript is written by a pre-isolation build. Following it
+		// would continue that profile's session under this one's settings, and the moved-project branch
+		// below would relocate the file into this profile. `--continue` stays inside the active profile.
+		if (breadcrumb && !foreignSessionFileProfile(breadcrumb.sessionFile)) {
+			// A fresh `/new` boundary whose JSONL was never materialized (lazy
+			// new-session persistence, then a process exit before any assistant
+			// output). Honor the boundary: start fresh rather than falling back to
+			// findMostRecentSession(), which would resurrect the pre-`/new`
+			// transcript. A materialized (or genuinely stale/deleted) crumb reports
+			// exists=false only when fresh, so this never masks a real stale crumb.
+			if (breadcrumb.fresh && !breadcrumb.exists) {
+				const manager = new SessionManager(
+					cwd,
+					dir,
+					true,
+					storage,
+					sessionDir !== undefined,
+					options?.operatorNotices,
+					options?.instrumentation,
+				);
+				manager.#resetToNewSession();
+				manager.#startLifecycle("created");
+				return manager;
+			}
 			// Recover stale crumbs: an agent open (pre-fix) may have pointed this
 			// terminal's breadcrumb at an artifact child; resume the parent instead.
 			breadcrumb.sessionFile = resolveBreadcrumbToInteractiveRoot(breadcrumb.sessionFile);

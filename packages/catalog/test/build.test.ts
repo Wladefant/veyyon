@@ -192,12 +192,15 @@ describe("buildModel", () => {
 	});
 });
 
-describe("xAI-OAuth Responses reasoning-effort suppression", () => {
-	const grokResponsesSpec = (id: string): ModelSpec<"openai-responses"> => ({
+describe("xAI Responses reasoning-effort suppression", () => {
+	const grokResponsesSpec = (
+		id: string,
+		provider: "xai" | "xai-oauth" = "xai-oauth",
+	): ModelSpec<"openai-responses"> => ({
 		id,
 		name: id,
 		api: "openai-responses",
-		provider: "xai-oauth",
+		provider,
 		baseUrl: "https://api.x.ai/v1",
 		reasoning: true,
 		input: ["text"],
@@ -205,7 +208,6 @@ describe("xAI-OAuth Responses reasoning-effort suppression", () => {
 		contextWindow: 512_000,
 		maxTokens: 512_000,
 	});
-
 	it("keeps grok-build effort-capable on the wire without fabricating a ladder", () => {
 		// grok-build accepts the wire `reasoning.effort` param; it was wrongly
 		// encoded as dial-less, which silently discarded the user's thinking
@@ -228,6 +230,28 @@ describe("xAI-OAuth Responses reasoning-effort suppression", () => {
 		expect(buildOpenAIResponsesCompat(grokResponsesSpec("grok-4.3")).supportsReasoningEffort).toBe(true);
 	});
 
+	it("applies the same Responses dialect to paid xai and xai-oauth", () => {
+		const paid = buildOpenAIResponsesCompat(grokResponsesSpec("grok-4.3", "xai"));
+		const oauth = buildOpenAIResponsesCompat(grokResponsesSpec("grok-4.3", "xai-oauth"));
+		expect(paid.promptCacheSessionHeader).toBe("x-grok-conv-id");
+		expect(oauth.promptCacheSessionHeader).toBe("x-grok-conv-id");
+		expect(paid.includeEncryptedReasoning).toBe(true);
+		expect(oauth.includeEncryptedReasoning).toBe(true);
+		expect(paid.filterReasoningHistory).toBe(true);
+		expect(oauth.filterReasoningHistory).toBe(true);
+		expect(paid.supportsImageDetailOriginal).toBe(false);
+		expect(oauth.supportsImageDetailOriginal).toBe(false);
+		expect(paid.supportsReasoningEffort).toBe(true);
+		expect(oauth.supportsReasoningEffort).toBe(true);
+	});
+
+	it("omits effort for paid xai models off the Grok allowlist", () => {
+		const compat = buildOpenAIResponsesCompat(grokResponsesSpec("grok-code-fast-1", "xai"));
+		expect(compat.supportsReasoningEffort).toBe(false);
+		expect(compat.omitReasoningEffort).toBe(true);
+		expect(buildModel(grokResponsesSpec("grok-code-fast-1", "xai")).thinking).toBeUndefined();
+	});
+
 	it("lets an explicit compat.supportsReasoningEffort override the allowlist default", () => {
 		const compat = buildOpenAIResponsesCompat({
 			...grokResponsesSpec("grok-build"),
@@ -236,7 +260,7 @@ describe("xAI-OAuth Responses reasoning-effort suppression", () => {
 		expect(compat.supportsReasoningEffort).toBe(true);
 	});
 
-	it("does not suppress effort for a non-xai-oauth provider with a grok-like id", () => {
+	it("does not suppress effort for a non-xAI provider with a grok-like id", () => {
 		const compat = buildOpenAIResponsesCompat({
 			...grokResponsesSpec("grok-build"),
 			provider: "openai",

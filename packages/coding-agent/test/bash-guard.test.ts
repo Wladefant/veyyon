@@ -28,6 +28,7 @@ import {
 	FLAGGED_BASH_PATTERNS,
 	findCriticalBashRisk,
 	findFlaggedBashPattern,
+	isHomedirUnsafePackageCommand,
 	judgeDeleteTarget,
 	normalizeAbsolutePath,
 	resolveGuardHome,
@@ -1081,5 +1082,64 @@ describe("paths the shell resolves differently from the process", () => {
 		expect(decide("rm -rf ../build")).toBe("allowed");
 		expect(decide("rm -rf ../sibling/dist")).toBe("allowed");
 		expect(decide("rm -rf ../..")).toBe("allowed");
+	});
+});
+describe("isHomedirUnsafePackageCommand", () => {
+	it("flags package installation commands", () => {
+		expect(isHomedirUnsafePackageCommand("npm install express")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm i express")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm add express")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm ci")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm update")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm upgrade")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm uninstall express")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm remove express")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm init -y")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("npm link")).toBe(true);
+
+		expect(isHomedirUnsafePackageCommand("bun install")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("bun add zod")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("bun remove zod")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("bun i")).toBe(true);
+
+		expect(isHomedirUnsafePackageCommand("yarn add react")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("yarn install")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("yarn remove react")).toBe(true);
+
+		expect(isHomedirUnsafePackageCommand("pnpm add typescript")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("pnpm install")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("pnpm i")).toBe(true);
+	});
+
+	it("flags npx and bunx commands", () => {
+		expect(isHomedirUnsafePackageCommand("npx prettier --write .")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("bunx biome check")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("pnpx dlx tsx script.ts")).toBe(true);
+	});
+
+	it("flags unsafe package commands chained after other commands", () => {
+		expect(isHomedirUnsafePackageCommand("cd ~ && npm install lodash")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("echo hello; bun add vitest")).toBe(true);
+		expect(isHomedirUnsafePackageCommand("mkdir test && cd test && yarn install")).toBe(true);
+	});
+
+	it("allows harmless or read-only package manager commands", () => {
+		expect(isHomedirUnsafePackageCommand("npm --version")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("npm run build")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("npm test")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("npm ls")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("bun run test")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("bun test")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("yarn build")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("pnpm run dev")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("npm")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("bun")).toBe(false);
+	});
+
+	it("allows non-package-manager commands", () => {
+		expect(isHomedirUnsafePackageCommand("git status")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("ls -la")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("echo hello")).toBe(false);
+		expect(isHomedirUnsafePackageCommand("cat package.json")).toBe(false);
 	});
 });

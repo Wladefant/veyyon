@@ -18,7 +18,15 @@ export function shortenPath(filePath: unknown, homeDir?: string): string {
 		return "";
 	}
 	const home = homeDir ?? os.homedir();
-	if (home && filePath.startsWith(home)) {
+	// Windows paths are case-insensitive, and a drive letter or UNC root brings its own dialect:
+	// the shell, the drive and a provider each report `C:\Users\Operator` or `c:\users\operator`
+	// for the same directory, so a case-sensitive prefix test leaves the account name in a
+	// displayed path. A POSIX home keeps the case-sensitive comparison.
+	const windowsStyle = /^[A-Za-z]:[\\/]/.test(home) || home.startsWith("\\\\");
+	const hasHomePrefix = windowsStyle
+		? filePath.toLowerCase().startsWith(home.toLowerCase())
+		: filePath.startsWith(home);
+	if (home && hasHomePrefix) {
 		const suffix = filePath.slice(home.length);
 		if (suffix === "" || suffix.startsWith(path.posix.sep) || suffix.startsWith(path.win32.sep)) {
 			return `~${suffix.replaceAll(path.win32.sep, path.posix.sep)}`;

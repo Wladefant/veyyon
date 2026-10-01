@@ -61,6 +61,12 @@ export interface ResolvedApproval {
 	 * routine prompt from a floor it must not lift.
 	 */
 	critical?: boolean;
+	/**
+	 * The scope a session grant for this call covers, as the tool reported it.
+	 * Present only on a plain `prompt`: an `override` or `critical` decision is
+	 * about its own arguments, and no earlier answer can have been about them.
+	 */
+	pattern?: string;
 }
 
 /**
@@ -175,7 +181,7 @@ function isToolTier(value: unknown): value is ToolTier {
 	return typeof value === "string" && TIER_VALUES.has(value as ToolTier);
 }
 
-function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> {
+function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> & { deny?: boolean } {
 	if (isToolTier(value)) {
 		return { tier: value, override: false };
 	}
@@ -188,18 +194,25 @@ function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> {
 		// also beat a per-tool allow, and requiring both flags at every call site
 		// is a way to eventually forget one.
 		const critical = record.critical === true;
+		const deny = record.deny === true;
+		const override = critical || record.override === true || deny;
+		// Kept on an `override` decision too: `resolveApprovalInner` returns an
+		// override without it, which is the one place the pattern is dropped.
+		const pattern = typeof record.pattern === "string" && record.pattern.length > 0 ? record.pattern : undefined;
 		return {
 			tier,
-			override: critical || record.override === true,
+			override,
 			...(critical ? { critical: true } : {}),
+			...(deny ? { deny: true } : {}),
 			...(reason ? { reason } : {}),
+			...(pattern ? { pattern } : {}),
 		};
 	}
 
 	return { tier: "exec", override: false };
 }
 
-function getToolDecision(tool: ApprovalSubject, args: unknown): Omit<ResolvedApproval, "policy"> {
+function getToolDecision(tool: ApprovalSubject, args: unknown): Omit<ResolvedApproval, "policy"> & { deny?: boolean } {
 	const approval = tool.approval;
 	const decision: ToolApprovalDecision | undefined = typeof approval === "function" ? approval(args) : approval;
 	return normalizeDecision(decision);
@@ -277,6 +290,14 @@ function resolveApprovalInner(
 	const level = normalizeApprovalMode(mode);
 	const decision = getToolDecision(tool, args);
 	const userPolicy = Object.hasOwn(userConfig, tool.name) ? normalizePolicy(userConfig[tool.name]) : undefined;
+	if (decision.deny) {
+		return {
+			policy: "deny",
+			tier: decision.tier,
+			override: true,
+			reason: decision.reason,
+		};
+	}
 
 	if (level === "yolo") {
 		// A critical decision has a floor: yolo used to return here before ever
@@ -358,6 +379,7 @@ function resolveApprovalInner(
 		tier: decision.tier,
 		override: false,
 		...(decision.reason ? { reason: decision.reason } : {}),
+		...(decision.pattern ? { pattern: decision.pattern } : {}),
 	};
 }
 
@@ -398,8 +420,8 @@ export function requiresApproval(
 	mode: ApprovalMode,
 	userConfig: Record<string, unknown> = {},
 	options?: ApprovalResolutionOptions,
-): { required: boolean; reason?: string; critical?: boolean } {
-	const { policy, reason, critical } = resolveApproval(tool, args, mode, userConfig, options);
+): { required: boolean; reason?: string; critical?: boolean; pattern?: string } {
+	const { policy, reason, critical, pattern } = resolveApproval(tool, args, mode, userConfig, options);
 
 	if (policy === "deny") {
 		const detail =
@@ -409,7 +431,7 @@ export function requiresApproval(
 		throw new Error(detail);
 	}
 
-	if (policy === "prompt") return { required: true, reason, critical };
+	if (policy === "prompt") return { required: true, reason, critical, ...(pattern ? { pattern } : {}) };
 	return { required: false };
 }
 

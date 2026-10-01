@@ -7,7 +7,7 @@ import { Container, type Loader, Text, type TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { highlightCode } from "../../../../theme/highlight";
 import { theme } from "../../../../theme/theme-binding";
-import type { TruncationMeta } from "../../../../tools/core/output-meta";
+import type { OutputMeta } from "../../../../tools/core/output-meta";
 import {
 	buildExecutionFrame,
 	buildStatusFooter,
@@ -28,7 +28,7 @@ export class EvalExecutionComponent extends Container {
 	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#loader: Loader;
-	#truncation?: TruncationMeta;
+	#meta?: OutputMeta;
 	#expanded = false;
 	#contentContainer: Container;
 
@@ -104,11 +104,11 @@ export class EvalExecutionComponent extends Container {
 	setComplete(
 		exitCode: number | undefined,
 		cancelled: boolean,
-		options?: { output?: string; truncation?: TruncationMeta },
+		options?: { output?: string; meta?: OutputMeta },
 	): void {
 		this.#exitCode = exitCode;
 		this.#status = resolveExecutionStatus(exitCode, cancelled);
-		this.#truncation = options?.truncation;
+		this.#meta = options?.meta;
 		if (options?.output !== undefined) {
 			this.#setOutput(options.output);
 		}
@@ -147,7 +147,7 @@ export class EvalExecutionComponent extends Container {
 			const footer = buildStatusFooter({
 				status: this.#status,
 				exitCode: this.#exitCode,
-				truncation: this.#truncation,
+				meta: this.#meta,
 				hiddenLineCount,
 				droppedLineCount: this.#droppedLineCount,
 			});

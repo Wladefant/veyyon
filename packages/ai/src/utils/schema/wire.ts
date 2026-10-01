@@ -13,9 +13,11 @@
 
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { ArkErrors, Type } from "arktype";
-// We import the Zod *value* (z) for runtime APIs. Marker checks rely on the
-// `_zod` symbol that every Zod v4 schema instance carries.
-import { type ZodType, z } from "zod/v4";
+// Type-only: marker checks rely on the `_zod` property every Zod v4 schema instance carries, and
+// conversion loads Zod's core on the first Zod schema converted (see `zodToWireSchema`), so a
+// process whose tools are all ArkType never evaluates Zod.
+import type { ZodType } from "zod/v4";
+import type * as ZodCore from "zod/v4/core";
 import type { Tool, TSchema } from "../../types";
 import { upgradeJsonSchemaTo202012 } from "./draft";
 import { stamp } from "./stamps";
@@ -555,7 +557,10 @@ export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
 		// `target: "draft-2020-12"` matches what Anthropic's `input_schema` validator
 		// requires out of the box; our other provider sanitizers (OpenAI strict,
 		// Google, Anthropic CCA) already handle the superset structurally.
-		const raw = z.toJSONSchema(s, { target: "draft-2020-12" }) as Record<string, unknown>;
+		// Zod's core converter, which classic (`zod/v4`) and mini (`zod/mini`) schemas share. A Zod
+		// schema is built by a caller that has loaded Zod already, so this reads a loaded module.
+		const { toJSONSchema } = require("zod/v4/core") as typeof ZodCore;
+		const raw = toJSONSchema(s, { target: "draft-2020-12" }) as Record<string, unknown>;
 		return postProcess(raw);
 	});
 }

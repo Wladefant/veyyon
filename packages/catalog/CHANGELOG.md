@@ -2,12 +2,46 @@
 
 ## [Unreleased]
 
+### Removed
+
+- `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
+
 ### Fixed
 
+- Fixed LiteLLM discovery leaking a colliding bundled model's provider-specific transport onto custom endpoints: a discovered alias matching a bundled model no longer inherits that model's wire-id transform or tool-schema flavor.
+- Fixed `opencode-go/muse-spark-1.2` (and `muse-spark-1.2-contributor`) failing every tool-call turn with `OpenAI completions stream closed before a finish_reason was received` by routing them to the Responses API.
+- Fixed GitHub Copilot `grok-4.6` to route through the Responses API (`/responses`) instead of `/chat/completions`, which returned 400 unsupported_api_for_model.
+- Cloud Code Assist Gemini 3.6/3.7 Flash no longer maps user `minimal` to wire `thinkingLevel: MINIMAL` when that effort is aliased onto the `-low` SKU. The request now sends `LOW`, which those SKUs accept.
+- Fixed Amazon Bedrock catalog generation omitting AWS GovCloud `us-gov.*` Claude inference-profile IDs, so selectors like `amazon-bedrock/us-gov.anthropic.claude-sonnet-4-5-…` resolve.
+- Fixed Amazon Bedrock GPT models to route through Responses.
+- Fixed GitHub Copilot `mai-code-1-flash-picker` (and other `mai-*` models) to route through the `/responses` endpoint instead of `/chat/completions`, which returned 400 unsupported_api_for_model.
+- ChatGPT Codex discovery identifies as Codex CLI 0.159.2, so a subscription lists `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol`, which the backend omits below 0.155.1 and 0.159.0, and the bundled catalog carries them with their prices ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- `gen:models` reads the first enabled, unexpired login of a provider from the shared auth store instead of the first row, so an expired earliest login no longer makes Codex discovery fall back to the previous models.
+- Loading the provider catalog no longer evaluates arktype: `chatgpt-web` discovery checks its daemon's JSON with `isRecord` instead of four all-`unknown` schemas.
+- `COMMAND_CODE_COSTS` uses plain string keys instead of computed `["…"]` keys, which Biome's `useLiteralKeys` rule rejected; no behavior change.
+- Claude Opus 5.5 downgrades forced tool choice (`supportsForcedToolChoice: false`) to avoid 400 invalid_request_error rejections, and default models for anthropic, amazon-bedrock, and litellm promote to Opus 5.5.
 - `calculateCost` and `resolveRequestCost` fall back to zero pricing for unconstructed model objects missing an explicit `cost` property.
+- Finalized SQLite statement handles in `modelCacheStamp` to prevent statement handle accumulation on shared databases.
 - Anthropic OAuth advertises Claude Code 2.1.280, and the bundled catalog includes Claude Opus 5.5 with its low-through-max effort ladder and published pricing.
 - The Command Code catalog is declared in one module: `provider-models/openai-compat` no longer re-declares `COMMAND_CODE_STATIC_MODELS`, `CommandCodeModelManagerConfig` and `commandCodeModelManagerOptions` beside `provider-models/command-code`, whose contract-applying versions are the ones every consumer already imports.
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.
+### Changed
+
+- Switched the paid 'xai' provider (using 'XAI_API_KEY') from Chat Completions to the Responses API ('/v1/responses'), and defaulted both 'xai' and 'xai-oauth' to 'grok-4.5'.
+- `@veyyon/catalog/models` imports `models.json` by path and reads it when the registry is built, so a process no longer holds the 2.2 MB catalog text on its heap for its whole life.
+- `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
+- The models.dev overlay drops its parsed `api.json` 30 seconds after the last provider reads it and reads `models-dev.json` again on the next use, which cut the idle heap after a model refresh from 68.7 MiB to 59.7 MiB and its live objects from 752,441 to 595,112 (median of 3 runs).
+- Model id classification no longer keeps a process-lifetime table from each id to its answer, which cut the idle heap of an interactive session from 66.8 MiB to 63.6 MiB (median of 3 runs) and stops each newly seen model id from growing the heap.
+- Models whose resolved compat records are equal share one frozen record, which cut the retained heap of a full catalog build from 4.41 MiB to 2.69 MiB and the idle heap of an interactive session from 43.8 MiB to 41.5 MiB (median of 3 runs).
+- GitLab Duo workflow discovery parses the available-models answer without Zod, and `@veyyon/catalog` no longer depends on `zod`; every answer resolves to the same models.
+- The parsed bundled catalog and the reference index built from it are released 30 seconds after the last read and parsed again on the next one, and the provider list is kept apart so listing providers never parses the catalog, which cut the settled idle heap of an interactive session from 39.96 MiB to 38.88 MiB and its live objects from 485,605 to 471,040 (median of 5 runs).
+- Cursor and Devin model discovery modules load through `lazy` from `@veyyon/utils`; no user-visible change.
+
+### Fixed
+
+- OpenCode gateway models send the `tool_choice` a caller sets, so the models that accept a pinned tool receive it; a model that rejects it pays one retried request per session.
+- A model the models.dev overlay enriches keeps the compat its bundled row declares, so wafer.ai GLM and Kimi models request the Z.ai thinking format and xAI OAuth models map `minimal` effort to `low` again; the model cache schema moves to v12 to drop rows that stored a resolved compat record as their declaration, which cut the cached rows of a full catalog refresh from 4.85 MB to 1.72 MB and the static model stage a launch restores from 10.8 MB to 7.8 MB and 4.79 MiB to 3.16 MiB retained.
+
 ## [1.5.4] - 2026-09-24
 
 ### Fixed

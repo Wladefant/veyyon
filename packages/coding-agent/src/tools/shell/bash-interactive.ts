@@ -14,7 +14,7 @@ import type { Theme } from "../../theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
 import { formatStatusIcon, replaceTabs } from "../core/render-utils";
-import { readTerminalRows } from "./terminal-output";
+import { loadXtermTerminal, readTerminalRows } from "./terminal-output";
 
 export interface BashInteractiveResult extends OutputSummary {
 	exitCode: number | undefined;
@@ -27,17 +27,9 @@ function normalizeCaptureChunk(chunk: string): string {
 	return sanitizeWithOptionalSixelPassthrough(normalized, sanitizeText);
 }
 
-// @xterm/headless is only needed once an interactive PTY session actually starts,
-// so it is loaded lazily (and memoized) instead of weighing down CLI startup.
-let xtermTerminalCtor: typeof XtermModule.Terminal | undefined;
-
-async function loadXtermTerminal(): Promise<typeof XtermModule.Terminal> {
-	if (!xtermTerminalCtor) {
-		const mod = (await import("@xterm/headless")) as typeof XtermModule & { default?: typeof XtermModule };
-		xtermTerminalCtor = (mod.default ?? mod).Terminal;
-	}
-	return xtermTerminalCtor;
-}
+// Caps only the live xterm display backlog; OutputSink remains the bounded
+// source of truth for the final captured output.
+const MAX_LIVE_WRITE_QUEUE_CHUNKS = 512;
 
 function normalizeInputForPty(data: string, applicationCursorKeysMode: boolean): string {
 	const kitty = parseKittySequence(data);
@@ -99,7 +91,7 @@ function normalizeInputForPty(data: string, applicationCursorKeysMode: boolean):
 	}
 	return data;
 }
-class BashInteractiveOverlayComponent implements Component {
+export class BashInteractiveOverlayComponent implements Component {
 	#terminal: XtermTerminalType;
 	#state: "running" | "complete" | "timed_out" | "killed" = "running";
 	#exitCode: number | undefined;
@@ -137,7 +129,32 @@ class BashInteractiveOverlayComponent implements Component {
 
 	appendOutput(chunk: string): void {
 		this.#writeQueue.push(chunk);
+		this.#trimWriteQueue();
 		this.#drainQueue();
+	}
+
+	/**
+	 * Bounds the backlog of chunks waiting on xterm's write callback by dropping the oldest
+	 * pending ones, so a command printing faster than the console decodes holds a fixed
+	 * amount of memory and the console shows its newest output.
+	 */
+	#trimWriteQueue(): void {
+		// Release the chunks xterm already consumed. The queue resets only on a full drain,
+		// which never comes while a fast producer keeps a backlog alive, so without this the
+		// array keeps one entry per completed write.
+		if (this.#writeOffset > 0) {
+			this.#writeQueue.splice(0, this.#writeOffset);
+			this.#writeOffset = 0;
+		}
+		const firstPending = this.#writing ? 1 : 0;
+		const overflow = this.#writeQueue.length - firstPending - MAX_LIVE_WRITE_QUEUE_CHUNKS;
+		if (overflow > 0) {
+			this.#writeQueue.splice(firstPending, overflow);
+			// A dropped chunk can hold the terminator of an OSC/DCS/APC string the console is
+			// still inside (a title, a sixel payload), which would swallow everything after it.
+			// A string terminator is a no-op in the ground state and ends such a string otherwise.
+			this.#writeQueue[firstPending] = `\u001b\\${this.#writeQueue[firstPending]}`;
+		}
 	}
 
 	#drainQueue(): void {

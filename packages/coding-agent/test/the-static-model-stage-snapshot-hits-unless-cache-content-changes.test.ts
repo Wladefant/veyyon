@@ -10,6 +10,8 @@
  * than the content it mirrors, or whose parseable payload can change without
  * detection. Discovery snapshots must not duplicate the bundled catalog, and
  * restoring them must preserve every model and configured provider override.
+ * Every retired layout, including the SHA-256 frame each installed copy wrote
+ * under the current fingerprint, rebuilds instead of being served.
  *
  * What it does not catch: a new fingerprint input that remains stable across
  * these launches while changing in production (none known).
@@ -24,12 +26,15 @@ import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { getBundledModels } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { writeJsonSnapshotSync } from "@veyyon/utils/json-snapshot";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface SnapshotHeader {
+	frame: number;
 	fingerprint: string;
-	payloadDigest: string;
+	bytes: number;
+	crc32: number;
 }
 
 interface SnapshotStage {
@@ -134,6 +139,28 @@ describe("static model stage snapshot", () => {
 		expect(overridden.length).toBeGreaterThan(0);
 		expect(overridden.every(model => model.baseUrl === "https://example.invalid/anthropic")).toBe(true);
 		expect(mtime()).toBe(before);
+	});
+
+	it("a warm launch shares one compat record among restored models that resolve it equal", async () => {
+		// The stage stores resolved records, so its restore bypasses `buildModel` and the record
+		// sharing it does; `models-with-equal-compat-hold-one-record` covers the catalog's paths.
+		tempDir = path.join(os.tmpdir(), `pi-reg-snap-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+		modelsPath = path.join(tempDir, "models.yml");
+		snapshotPath = path.join(tempDir, "resolved-models.json");
+		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		const reference = getBundledModels("anthropic")[0]!;
+		const cached = ["claude-shared-a", "claude-shared-b"].map(id => ({ ...reference, id }));
+		writeModelCache("anthropic", Date.now(), cached, true, "", path.join(tempDir, "models.db"));
+		launch();
+		const before = mtime();
+
+		const warm = new ModelRegistry(authStorage, modelsPath, { snapshotIo: true });
+
+		expect(mtime()).toBe(before);
+		const [a, b] = cached.map(model => warm.find("anthropic", model.id)!.compat);
+		expect(a).toBe(b!);
+		expect(Object.isFrozen(a)).toBe(true);
 	});
 
 	it("sqlite sidecar mtime churn does not invalidate the snapshot", async () => {
@@ -274,24 +301,31 @@ describe("static model stage snapshot", () => {
 		expect(readSnapshot().stage.cachedStandard).toEqual(stage.cachedStandard);
 	});
 
-	it.each(["fingerprint", "framing"])("rebuilds a retired stage with obsolete %s", async variant => {
-		await coldLaunch();
-		const { header, stage } = readSnapshot();
-		const expectedProviders = [...stage.cachedStandard.authoritativeFreshProviders];
-		stage.cachedStandard.authoritativeFreshProviders.push("synthetic-corruption");
-		const payload = JSON.stringify(stage);
-		const payloadDigest = createHash("sha256").update(payload).digest("hex");
-		const staleHeader =
-			variant === "fingerprint"
-				? { fingerprint: header.fingerprint.replace(/^[^:]+/, "8"), payloadDigest }
-				: { fingerprint: header.fingerprint, stageDigest: payloadDigest };
-		fs.writeFileSync(snapshotPath, `${JSON.stringify(staleHeader)}\n${payload}`);
+	it.each(["obsolete fingerprint version", "retired SHA-256 frame", "retired stage-digest frame"])(
+		"rebuilds a retired stage with %s",
+		async variant => {
+			await coldLaunch();
+			const { header, stage } = readSnapshot();
+			const expectedProviders = [...stage.cachedStandard.authoritativeFreshProviders];
+			stage.cachedStandard.authoritativeFreshProviders.push("synthetic-corruption");
+			const payload = JSON.stringify(stage);
+			const digest = createHash("sha256").update(payload).digest("hex");
+			if (variant === "obsolete fingerprint version") {
+				writeJsonSnapshotSync(snapshotPath, header.fingerprint.replace(/^[^:]+/, "8"), stage);
+			} else {
+				const retiredHeader =
+					variant === "retired SHA-256 frame"
+						? { fingerprint: header.fingerprint, payloadDigest: digest }
+						: { fingerprint: header.fingerprint, stageDigest: digest };
+				fs.writeFileSync(snapshotPath, `${JSON.stringify(retiredHeader)}\n${payload}`);
+			}
 
-		launch();
+			launch();
 
-		expect(readSnapshot().stage.cachedStandard.authoritativeFreshProviders).toEqual(expectedProviders);
-		expect(readSnapshot().header.fingerprint.split(":")[0]).toBe("9");
-	});
+			expect(readSnapshot().stage.cachedStandard.authoritativeFreshProviders).toEqual(expectedProviders);
+			expect(readSnapshot().header).toMatchObject({ frame: 2, fingerprint: header.fingerprint });
+		},
+	);
 
 	it("a snapshot naming another fingerprint misses rather than serving", async () => {
 		await coldLaunch();

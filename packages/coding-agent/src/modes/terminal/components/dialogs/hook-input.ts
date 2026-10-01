@@ -7,8 +7,7 @@ import { Container, Input, Markdown, Spacer, type TUI } from "@veyyon/tui";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
-import { getMarkdownTheme } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
 import {
@@ -86,9 +85,7 @@ export class HookInputComponent extends Container {
 		this.#cardTitle = firstTitleLine;
 		const bodyTitle = restTitleLines.join("\n");
 		if (bodyTitle.length > 0) {
-			this.#titleComponent = new Markdown(bodyTitle, 1, 0, getMarkdownTheme(), {
-				color: t => theme.fg("accent", t),
-			});
+			this.#titleComponent = new Markdown(bodyTitle, 1, 0, getMarkdownTheme(), markdownTextStyle("accent"));
 			this.addChild(this.#titleComponent);
 			this.addChild(new Spacer(1));
 		}

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { errorMessage, formatBytes } from "@veyyon/utils";
+import { errorMessage, formatBytes, lazy } from "@veyyon/utils";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import type { ViewSpan } from "@veyyon/view";
 import { type } from "arktype";
@@ -23,10 +23,9 @@ import {
 	EXPERIMENT_MAX_LINES,
 	formatElapsed,
 	formatNum,
-	gitStatusPorcelain,
-	gitWorkDirPrefix,
 	parseAsiLines,
 	parseMetricLines,
+	readWorkDirStatus,
 	resolveActiveBranchSession,
 } from "../helpers";
 import { buildExperimentState } from "../state";
@@ -38,10 +37,12 @@ import type {
 } from "../types";
 import { DEFAULT_HARNESS_COMMAND } from "./init-experiment";
 
-const runExperimentSchema = type({
-	"timeout_seconds?": type("number").describe("timeout in seconds (default 600)"),
-	"arm?": type("string").describe("candidate arm this measurement belongs to, when breadth > 1"),
-});
+const runExperimentSchema = lazy(() =>
+	type({
+		"timeout_seconds?": type("number").describe("timeout in seconds (default 600)"),
+		"arm?": type("string").describe("candidate arm this measurement belongs to, when breadth > 1"),
+	}),
+);
 
 interface ProcessExecutionResult {
 	exitCode: number | null;
@@ -60,13 +61,15 @@ interface ProgressSnapshot {
 
 export function createRunExperimentTool(
 	options: AutoresearchToolFactoryOptions,
-): ToolDefinition<typeof runExperimentSchema, RunDetails | RunExperimentProgressDetails> {
+): ToolDefinition<typeof runExperimentSchema.value, RunDetails | RunExperimentProgressDetails> {
 	return {
 		name: "run_experiment",
 		label: "Run Experiment",
 		description:
 			"Run any benchmark command. Output is captured automatically; `METRIC name=value` and `ASI key=value` lines printed by the command are parsed.",
-		parameters: runExperimentSchema,
+		get parameters() {
+			return runExperimentSchema.value;
+		},
 		defaultInactive: true,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
@@ -89,9 +92,8 @@ export function createRunExperimentTool(
 			// pre-existing dirty file would then be attributed to the experiment and reverted with it.
 			let preRunDirtyPaths: string[];
 			try {
-				const preRunStatus = await gitStatusPorcelain(ctx.cwd);
-				const workDirPrefix = await gitWorkDirPrefix(ctx.cwd);
-				preRunDirtyPaths = parseWorkDirDirtyPaths(preRunStatus, workDirPrefix);
+				const { statusText, workDirPrefix } = await readWorkDirStatus(ctx.cwd);
+				preRunDirtyPaths = parseWorkDirDirtyPaths(statusText, workDirPrefix);
 			} catch (err) {
 				return {
 					content: [

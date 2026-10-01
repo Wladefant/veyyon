@@ -82,10 +82,12 @@ SCENE_COMMAND='env STARTUP_EXECUTABLE=/repo/path/to/binary bash -l' \
 ```
 
 Bundled and resolved model snapshots use `@veyyon/utils/json-snapshot`. Each write
-serializes its payload once; each read verifies the fingerprint and payload bytes
-before parsing. Replacement is atomic without a durability flush because a missing
-or invalid snapshot rebuilds from its inputs. Bundled format v4 and resolved-stage
-format v9 reject snapshots from preceding formats. The resolved stage stores only
+serializes its payload once behind a header line that states the frame version, the
+input fingerprint, and the payload's byte length and CRC-32. Each read checks those
+fields against the bytes read from disk, then parses the payload once. Replacement is
+atomic without a durability flush because a missing or invalid snapshot rebuilds from
+its inputs. Frame version 2, bundled format v4 and resolved-stage format v9 reject
+snapshots from preceding layouts. The resolved stage stores only
 discovery-derived models and provider state. Bundled models resolve once per requested
 provider, without installing a disk snapshot store during production startup.
 Explicitly installed catalog snapshot stores remain supported. Provider overrides
@@ -371,4 +373,4 @@ The binary meets the first target at 84ms warm and 79ms cold, medians of 5 on an
 It is still a target and not a gate. Wiring it to CI needs a runner whose timings are stable enough
 that a red build means a regression, and a first-frame median here moves by more than 50% between
 repetitions, and by more than that when a type check shares the machine.
-*Verified against `46980a2485` on 2026-09-11.*
+*Verified against `9a035acb63` on 2026-09-30.*

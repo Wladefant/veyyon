@@ -221,11 +221,37 @@ describe("the modules that were repointed stay cut", () => {
 	 * were already reached through that file. No consumer gained an edge to a
 	 * subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-09-18: `api-key-resolver.ts` 56 -> 57 and `shared-llm.ts` 208 -> 209, each by the
+	 * one module `@veyyon/utils/backoff`, a zero-import leaf holding `exponentialBackoffDelay`.
+	 * `@veyyon/utils/fetch-retry` and the SQLite credential store, already on both reaches, computed
+	 * their retry doubling inline and now take it from that owner. The leaf imports nothing, so no
+	 * consumer gained an edge to a subsystem it did not already reach.
+	 */
+	/**
+	 * Re-measured 2026-09-29: `parser.ts` 120 -> 121, `db.ts` 122 -> 123, `sync-worker.ts` 121 -> 122,
+	 * `api-key-resolver.ts` 57 -> 58 and `shared-llm.ts` 209 -> 210, each by the one module
+	 * `@veyyon/utils/log-file`, the rotating profile log that replaced `winston` and
+	 * `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on every one of these reaches, writes
+	 * through it; its imports are `node:` built-ins, `./app-identity` and `./fs-error`, all already
+	 * reached. The two npm packages it replaced were never counted here, so no consumer gained an edge to
+	 * a subsystem it did not already reach.
+	 */
+	/**
+	 * Re-measured 2026-09-29 again: `parser.ts` 121 -> 122, `db.ts` 123 -> 124, `sync-worker.ts`
+	 * 122 -> 123 and `shared-llm.ts` 210 -> 211, each by the one module `catalog/compat/share.ts`, a
+	 * zero-import leaf holding `shareCompat`. `catalog/build.ts`, already on every one of these reaches,
+	 * returns each model's resolved compat record through it so equal records are held once. The leaf
+	 * imports nothing, so no consumer gained an edge to a subsystem it did not already reach.
+	 */
 	it.each([
-		["agent/src/proxy.ts", 145],
-		["apps/stats/src/parser.ts", 120],
-		["apps/stats/src/db.ts", 122],
-		["apps/stats/src/sync-worker.ts", 121],
+		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
+		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt
+		// loader, on top of the fork's own graph. Growth from those named modules, not a new edge out of a cut.
+		["agent/src/proxy.ts", 147],
+		["apps/stats/src/parser.ts", 124],
+		["apps/stats/src/db.ts", 126],
+		["apps/stats/src/sync-worker.ts", 125],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
@@ -236,22 +262,12 @@ describe("the modules that were repointed stay cut", () => {
 		// zero-import leaf that owns the escape constants; `sanitize-text.ts`, already on this reach,
 		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
 		// its own, so nothing outside this closure was gained.
-		["coding-agent/src/config/api-key-resolver.ts", 56],
+		["coding-agent/src/config/api-key-resolver.ts", 58],
 		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		// Re-measured 2026-09-18 at 210, from 208, on this fork and not upstream: the local
-		// `codex-chatgpt-web` bridge provider, two files under `provider-models/descriptors.ts`
-		// (`provider-models/chatgpt-web.ts` and the `discovery/chatgpt-web.ts` reader it names).
-		// Removing the descriptor edge and the `provider-models/index.ts` re-export drops this reach
-		// to exactly upstream's 208, and `@veyyon/utils/scoped-timeout` — the reader's third module —
-		// was already on this closure, which is why it costs two here and three on `env-api-key.ts`.
-		// Re-measured 2026-09-21 at 211, from 210, by one module: `ai/src/providers/vision-content.ts`
-		// (added by `df69e53f9`), the video/image placeholder constants and the vision partition that
-		// nine provider files share, named here by `providers/gitlab-duo-workflow.ts`, which was
-		// already on this closure. It imports its three types only, so it adds no edge of its own.
-		["coding-agent/src/commit/shared-llm.ts", 211],
+		["coding-agent/src/commit/shared-llm.ts", 214],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

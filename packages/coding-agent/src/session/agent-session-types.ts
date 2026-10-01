@@ -28,13 +28,7 @@ import type { SessionTitleSource } from "@veyyon/kernel/session/session-entries"
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { postmortem } from "@veyyon/utils";
 import type { ArgotSession } from "argot";
-import type {
-	AdviseTool,
-	AdvisorConfig,
-	AdvisorEmissionGuard,
-	AdvisorRuntime,
-	AdvisorTranscriptRecorder,
-} from "../advisor";
+import type { AdvisorConfig, AdvisorContextFile } from "../advisor";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import type { CompactionEngineAction } from "../config/compaction-strategy";
 import type { EffortSource } from "../config/effort-resolver";
@@ -131,8 +125,27 @@ export type AgentSessionEvent =
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 
+/**
+ * Default bound on how long dispose waits for an aborted agent loop to unwind. It
+ * plus the 3s async-job drain stays under {@link SHUTDOWN_DISPOSE_TIMEOUT_MS}, so
+ * the transcript still closes before an interactive shutdown stops waiting.
+ */
+export const DISPOSE_AGENT_LOOP_SETTLE_MS = 1_000;
+
+/**
+ * How often {@link AgentSession.waitForQuiescence} re-reads the pending async wake when no event
+ * arrived. Covers the transitions that emit nothing: a delivery acknowledged by a `job` poll, and a
+ * delivery waiting out a retry backoff.
+ */
+export const QUIESCENCE_RECHECK_MS = 1_000;
+
 export interface AgentSessionDisposeOptions {
 	mnemopiConsolidateTimeoutMs?: number;
+	/**
+	 * How long dispose waits for the aborted agent loop to unwind before it releases
+	 * the resources that loop uses. Defaults to {@link DISPOSE_AGENT_LOOP_SETTLE_MS}.
+	 */
+	agentLoopSettleTimeoutMs?: number;
 	/**
 	 * Postmortem reason that triggered this dispose (signal/fatal teardown
 	 * paths). When set, the persisted `session_exit` diagnostic records it
@@ -247,7 +260,10 @@ export interface AgentSessionConfig {
 	onResponse?: SimpleStreamOptions["onResponse"];
 	/** Raw SSE hook used by the active session request path */
 	onSseEvent?: SimpleStreamOptions["onSseEvent"];
-	/** Per-session raw SSE diagnostic buffer */
+	/**
+	 * Per-session raw SSE diagnostic buffer. Absent, a top-level session creates one and a spawned
+	 * session records no raw SSE.
+	 */
 	rawSseDebugBuffer?: RawSseDebugBuffer;
 	/** Current session message-to-LLM conversion pipeline */
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
@@ -342,24 +358,25 @@ export interface AgentSessionConfig {
 	/** Marks `agent.promptCacheKey` as fork-inherited so incompatible route changes can clear it. */
 	providerPromptCacheKeySource?: "explicit" | "fork";
 	/**
-	 * Full advisor toolset, pre-built in `createAgentSession` against a distinct,
-	 * advisor-scoped `ToolSession` (its own `-advisor` session/agent id) so the
-	 * advisor's tool state stays isolated from the primary. The advisor is a full
-	 * agent; its config `tools` selects a subset (default read/search). Undefined
-	 * when the advisor is disabled.
+	 * Builds the full advisor toolset against a distinct, advisor-scoped `ToolSession` (its own
+	 * `-advisor` session/agent id) so the advisor's tool state stays isolated from the primary. The
+	 * advisor is a full agent; its config `tools` selects a subset (default read/search). Called on
+	 * the first advisor turn or tool listing, and again only after a build that failed, so a session
+	 * that never runs an advisor loads and constructs none of these tools. Undefined gives advisors no
+	 * tools beyond `advise`.
 	 */
-	advisorTools?: AgentTool[];
+	loadAdvisorTools?: () => Promise<AgentTool[]>;
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
 	/** Preloaded YAML top-level `instructions` shared baseline, kept separate from
 	 *  `advisorWatchdogPrompt` so `/advisor configure` can swap it live. */
 	advisorSharedInstructions?: string;
 	/**
-	 * Preloaded project context files (AGENTS.md, etc.) rendered as a system-prompt
-	 * block for the advisor — the same standing instructions the primary agent
-	 * receives, so the reviewer holds the agent to them.
+	 * Project context files (AGENTS.md, etc.) the advisor's system prompt renders when an advisor
+	 * starts: the same standing instructions the primary agent receives, so the reviewer holds the
+	 * agent to them.
 	 */
-	advisorContextPrompt?: string;
+	advisorContextFiles?: readonly AdvisorContextFile[];
 	/**
 	 * Advisors discovered from `WATCHDOG.yml`. Empty/undefined runs a single
 	 * legacy advisor on the `advisor` role (byte-for-byte the pre-config path).
@@ -372,12 +389,13 @@ export interface AgentSessionConfig {
 	 */
 	pruneToolDescriptions?: boolean | ((model: Model) => boolean);
 	/**
-	 * Disconnect this session's OWNED MCP manager on dispose. Provided only when
-	 * the session created the manager (top-level sessions); spawned agents reuse a
-	 * parent's manager via `options.mcpManager` and omit this so a child's
-	 * teardown never tears down the shared servers.
+	 * Release this session's hold on its MCP manager on dispose; the last hold
+	 * disconnects the manager (see `mcp/manager-lease.ts`). Provided for the
+	 * session that created the manager and for every top-level session that
+	 * shares it; spawned agents reuse a parent's manager without a hold and omit
+	 * this, so a child's teardown never tears down the shared servers.
 	 */
-	disconnectOwnedMcpManager?: () => Promise<void>;
+	releaseMcpManager?: () => Promise<void>;
 	/**
 	 * Override the bundled system prompt used by automatic session-title
 	 * generation paths (initial title + replan refresh). Source-of-truth is
@@ -479,10 +497,11 @@ export interface ContextUsageBreakdown {
 	pendingMessagesTokens: number;
 }
 
-/** Session statistics for /session command */
-export interface SessionStats {
-	sessionFile: string | undefined;
-	sessionId: string;
+/**
+ * What a session has spent: message counts, tokens, cost and premium requests over the messages
+ * the compaction in effect summarized away plus the live context.
+ */
+export interface SessionSpend {
 	userMessages: number;
 	assistantMessages: number;
 	toolCalls: number;
@@ -498,6 +517,12 @@ export interface SessionStats {
 	};
 	premiumRequests: number;
 	cost: number;
+}
+
+/** Session statistics for /session command */
+export interface SessionStats extends SessionSpend {
+	sessionFile: string | undefined;
+	sessionId: string;
 	contextUsage?: ContextUsage;
 }
 
@@ -537,45 +562,9 @@ export interface PerAdvisorStat {
 	messages: AdvisorStats["messages"];
 }
 
-/**
- * One live advisor instance: its own agent/runtime/tools/recorder plus a
- * per-advisor emission guard and identity. The session holds an array of these;
- * primary-scoped state (turn counters, interrupt latches, the shared yield
- * channel) stays on the session.
- */
-export interface ActiveAdvisor {
-	/** Display name from config ("default" for the legacy no-YAML advisor). */
-	name: string;
-	/** Slug for the transcript filename/session id; "" → `__advisor.jsonl`. */
-	slug: string;
-	agent: Agent;
-	runtime: AdvisorRuntime;
-	adviseTool: AdviseTool;
-	emissionGuard: AdvisorEmissionGuard;
-	recorder: AdvisorTranscriptRecorder;
-	/** Latest recorder close, awaited by dispose() so the final turn lands on disk. */
-	recorderClosed: Promise<void>;
-	/** Unsubscribe for the advisor agent's event stream feeding the recorder. */
-	agentUnsubscribe?: () => void;
-	model: Model;
-	thinkingLevel: ThinkingLevel;
-	/** Stable key for the resolved runtime inputs that require a rebuild to change. */
-	signature: string;
-}
-
-/** Resolved advisor config ready to instantiate as an {@link ActiveAdvisor}. */
-export interface AdvisorRuntimeDescriptor {
-	config: AdvisorConfig;
-	name: string;
-	slug: string;
-	model: Model;
-	thinkingLevel: ThinkingLevel;
-	signature: string;
-}
-
 export interface ProjectAdvisorScope {
 	advisorWatchdogPrompt?: string;
-	advisorContextPrompt?: string;
+	advisorContextFiles?: readonly AdvisorContextFile[];
 	advisorSharedInstructions?: string;
 	advisorConfigs?: AdvisorConfig[];
 }
@@ -740,7 +729,7 @@ export type ScheduledAgentContinueOptions = {
 	generation?: number;
 	shouldContinue?: () => boolean;
 	onSkip?: (reason: AgentContinueSkipReason) => void;
-	onError?: () => void;
+	onError?: (error: unknown) => void;
 };
 
 export type SessionNameTrigger = "replan";

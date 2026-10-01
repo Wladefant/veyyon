@@ -641,6 +641,51 @@ describe("agentLoop with AgentMessage", () => {
 		expect(finalTurn.content).toContainEqual({ type: "text", text: "done after recovery" });
 	});
 
+	it("runs completed tool calls after an Anthropic stream envelope truncation error", async () => {
+		const executedParams: Array<{ value: string }> = [];
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executedParams.push(params);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+					stopReason: "error",
+					errorMessage: "Anthropic stream envelope error: stream ended before message_stop",
+				},
+				{ content: ["done after recovery"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop(
+			[createUserMessage("run echo")],
+			context,
+			config,
+			undefined,
+			mock.stream,
+		).result();
+
+		expect(executedParams).toEqual([{ value: "hello" }]);
+		expect(mock.calls).toHaveLength(2);
+		expect(messages.map(message => message.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+		const recoveredTurn = messages[1] as AssistantMessage;
+		expect(recoveredTurn.stopReason).toBe("toolUse");
+		expect(recoveredTurn.stopDetails?.type).toBe("stream_interrupted_after_content");
+	});
+
 	it("does not recover completed tool calls after non-stream transient errors", async () => {
 		const executedParams: Array<{ value: string }> = [];
 		const toolSchema = type({ value: "string" });
@@ -940,6 +985,108 @@ describe("agentLoop with AgentMessage", () => {
 		if (tracedToolCall?.type === "toolCall") {
 			expect(tracedToolCall.intent).toBe("Read one file");
 		}
+	});
+
+	it("rejects a tool call whose intent field carries the payload instead of a label", async () => {
+		const writeSchema = type({ path: "string", content: "string" });
+		const written: Record<string, unknown>[] = [];
+		const writeTool: AgentTool<typeof writeSchema> = {
+			name: "write",
+			label: "Write",
+			description: "write file",
+			parameters: writeSchema,
+			execute: async (_toolCallId, args) => {
+				written.push(args as Record<string, unknown>);
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [writeTool] };
+		const oversizedPayload = "const a = 1;\n".repeat(30); // > 200 chars
+
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "call-1",
+							name: "write",
+							arguments: { path: "src/main.ts", [INTENT_FIELD]: oversizedPayload },
+						},
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			intentTracing: true,
+		};
+
+		const stream = agentLoop([createUserMessage("run")], context, config, undefined, mock.stream);
+		for await (const _ of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+
+		expect(written).toHaveLength(0);
+		const toolResult = messages.find(m => m.role === "toolResult") as ToolResultMessage | undefined;
+		expect(toolResult).toBeDefined();
+		expect(toolResult?.details).toMatchObject({ isError: true });
+		const firstContent = toolResult?.content[0];
+		expect(firstContent && "text" in firstContent ? firstContent.text : "").toContain("is a short intent label");
+	});
+
+	it("permits tools that legitimately declare an 'i' parameter to accept long values", async () => {
+		const customSchema = type({ i: "string" });
+		const received: Record<string, unknown>[] = [];
+		const customTool: AgentTool<typeof customSchema> = {
+			name: "custom",
+			label: "Custom",
+			description: "custom tool",
+			parameters: customSchema,
+			execute: async (_toolCallId, args) => {
+				received.push(args as Record<string, unknown>);
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [customTool] };
+		const longValue = "long text ".repeat(30);
+
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "call-1",
+							name: "custom",
+							arguments: { [INTENT_FIELD]: longValue },
+						},
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			intentTracing: true,
+		};
+
+		const stream = agentLoop([createUserMessage("run")], context, config, undefined, mock.stream);
+		for await (const _ of stream) {
+			// drain
+		}
+		await stream.result();
+
+		expect(received).toHaveLength(1);
+		expect(received[0]?.i).toBe(longValue);
 	});
 
 	it("runs shared tools in parallel and emits completion-ordered results", async () => {

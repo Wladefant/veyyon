@@ -13,7 +13,7 @@
  */
 import { errorMessage, isRecord, prompt } from "@veyyon/utils";
 import { requestsPrompts } from "../../../prompts/requests/rows";
-import * as gh from "../../../tools/web/gh";
+import * as ghFetch from "../../../tools/web/gh-fetch";
 import * as git from "../../../utils/git";
 import * as jj from "../../../utils/jj";
 import type { HookCommandContext } from "../../hooks/types";
@@ -401,7 +401,7 @@ async function buildPrReviewPrompt(
 ): Promise<string | undefined> {
 	let diffText: string;
 	try {
-		const lookup = await gh.getOrFetchPrDiff({ cwd: api.cwd, repo: ref.repo, number: ref.number });
+		const lookup = await ghFetch.getOrFetchPrDiff({ cwd: api.cwd, repo: ref.repo, number: ref.number });
 		diffText = lookup.payload.unified;
 	} catch (err) {
 		const message = errorMessage(err);

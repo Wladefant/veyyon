@@ -22,6 +22,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { $env } from "@veyyon/utils/env";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
@@ -229,7 +230,22 @@ interface SsoCachedToken {
 	expiresAt?: string;
 	startUrl?: string;
 	region?: string;
+	/** Present when the token was minted with the refresh_token grant enabled. */
+	refreshToken?: string;
+	clientId?: string;
+	clientSecret?: string;
+	/** Client registration expiry; refresh is impossible once this passes. */
+	registrationExpiresAt?: string;
 }
+
+/** A cache hit plus the filename it came from, so a refresh can be written back. */
+interface SsoCacheEntry {
+	token: SsoCachedToken;
+	file: string;
+}
+
+/** Refresh this long before `expiresAt` so a request in flight cannot age out. */
+const SSO_TOKEN_REFRESH_SKEW_MS = 60_000;
 
 async function readSsoCredentials(
 	profileCfg: Record<string, string>,
@@ -253,19 +269,29 @@ async function readSsoCredentials(
 	}
 	if (!startUrl || !ssoRegion) return undefined;
 
-	const token = await loadSsoCachedToken(startUrl, sessionName);
-	if (!token?.accessToken) {
+	const cached = await loadSsoCachedToken(startUrl, sessionName);
+	if (!cached?.token.accessToken) {
 		throw new AIError.AwsCredentialsError(
 			`AWS SSO token for ${startUrl} not found in ~/.aws/sso/cache. Run 'aws sso login' first.`,
 			"sso-token-missing",
 		);
 	}
-	const expiresAt = token.expiresAt ? Date.parse(token.expiresAt) : Number.POSITIVE_INFINITY;
-	if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-		throw new AIError.AwsCredentialsError(
-			`AWS SSO token for ${startUrl} has expired. Run 'aws sso login' to refresh.`,
-			"sso-token-expired",
-		);
+	let accessToken = cached.token.accessToken;
+	const expiresAt = cached.token.expiresAt ? Date.parse(cached.token.expiresAt) : Number.POSITIVE_INFINITY;
+	const expired = Number.isFinite(expiresAt) && expiresAt <= Date.now();
+	// Access tokens are short-lived (often 1 h) but ship with a refresh token whose
+	// client registration lasts weeks. The AWS CLI refreshes transparently, so a
+	// profile that works under `aws` must not fail here; only a genuinely
+	// unrefreshable token warrants sending the user back to `aws sso login`.
+	if (Number.isFinite(expiresAt) && expiresAt - SSO_TOKEN_REFRESH_SKEW_MS <= Date.now()) {
+		const refreshed = await refreshSsoToken(cached.token, cached.file, ssoRegion, signal, fetchImpl);
+		if (refreshed?.accessToken) accessToken = refreshed.accessToken;
+		else if (expired) {
+			throw new AIError.AwsCredentialsError(
+				`AWS SSO token for ${startUrl} has expired. Run 'aws sso login' to refresh.`,
+				"sso-token-expired",
+			);
+		}
 	}
 
 	const url =
@@ -274,7 +300,7 @@ async function readSsoCredentials(
 		`&role_name=${encodeURIComponent(profileCfg.sso_role_name)}`;
 	const response = await fetchImpl(url, {
 		method: "GET",
-		headers: { "x-amz-sso_bearer_token": token.accessToken },
+		headers: { "x-amz-sso_bearer_token": accessToken },
 		signal,
 	});
 	if (!response.ok) {
@@ -312,7 +338,7 @@ async function readSsoCredentials(
 async function loadSsoCachedToken(
 	startUrl: string,
 	sessionName: string | undefined,
-): Promise<SsoCachedToken | undefined> {
+): Promise<SsoCacheEntry | undefined> {
 	const cacheDir = path.join(os.homedir(), ".aws", "sso", "cache");
 	let entries: string[];
 	try {
@@ -342,7 +368,7 @@ async function loadSsoCachedToken(
 			const text = await fs.promises.readFile(path.join(cacheDir, file), "utf8");
 			const parsed = JSON.parse(text) as SsoCachedToken;
 			if (parsed.startUrl === startUrl || (sessionName && file === `${hash}.json`)) {
-				return parsed;
+				return { token: parsed, file };
 			}
 		} catch (err) {
 			unreadable.push(`${file}: ${String(err)}`);
@@ -355,6 +381,91 @@ async function loadSsoCachedToken(
 		);
 	}
 	return undefined;
+}
+
+/**
+ * Exchange the cached refresh token for a fresh access token via SSO OIDC
+ * `CreateToken`, which is what the AWS CLI does transparently on every command.
+ *
+ * Returns `undefined` when refresh is impossible (no refresh grant material, or
+ * the client registration itself has expired) or when the exchange fails, so a
+ * broken refresh surfaces the existing "run aws sso login" remedy rather than an
+ * opaque network error.
+ */
+async function refreshSsoToken(
+	token: SsoCachedToken,
+	file: string,
+	ssoRegion: string,
+	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
+): Promise<SsoCachedToken | undefined> {
+	if (!token.refreshToken || !token.clientId || !token.clientSecret) return undefined;
+	const registrationExpiresAt = token.registrationExpiresAt ? Date.parse(token.registrationExpiresAt) : Number.NaN;
+	if (Number.isFinite(registrationExpiresAt) && registrationExpiresAt <= Date.now()) {
+		logger.debug("aws-credentials: SSO client registration expired; cannot refresh");
+		return undefined;
+	}
+
+	let response: Response;
+	try {
+		response = await fetchImpl(`https://oidc.${ssoRegion}.amazonaws.com/token`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				clientId: token.clientId,
+				clientSecret: token.clientSecret,
+				grantType: "refresh_token",
+				refreshToken: token.refreshToken,
+			}),
+			signal,
+		});
+	} catch (err) {
+		logger.debug("aws-credentials: SSO token refresh request failed", { err: String(err) });
+		return undefined;
+	}
+	if (!response.ok) {
+		const body = await response.text().catch(() => "");
+		logger.debug("aws-credentials: SSO token refresh rejected", {
+			status: response.status,
+			body: body.slice(0, 200),
+		});
+		return undefined;
+	}
+	const json = (await response.json().catch(() => undefined)) as
+		| { accessToken?: string; expiresIn?: number; refreshToken?: string }
+		| undefined;
+	if (!json?.accessToken) {
+		logger.debug("aws-credentials: SSO token refresh returned no accessToken");
+		return undefined;
+	}
+
+	const updated: SsoCachedToken = {
+		...token,
+		accessToken: json.accessToken,
+		// `expiresIn` is seconds from now; the cache records an absolute instant.
+		// Trim milliseconds to match the format the AWS CLI writes.
+		expiresAt: new Date(Date.now() + (json.expiresIn ?? 0) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+		// The service may rotate the refresh token; persisting the new one keeps
+		// the following refresh working.
+		refreshToken: json.refreshToken ?? token.refreshToken,
+	};
+	await writeSsoCachedToken(file, updated);
+	return updated;
+}
+
+/**
+ * Persist a refreshed token so the AWS CLI, other SDKs, and the next Veyyon process
+ * all start from a live token. The write is atomic, so a concurrent reader never
+ * observes a half-written cache entry; a failure here is logged and ignored, since
+ * the in-memory token is still usable for this run.
+ */
+async function writeSsoCachedToken(file: string, token: SsoCachedToken): Promise<void> {
+	const target = path.join(os.homedir(), ".aws", "sso", "cache", file);
+	try {
+		await atomicWriteFile(target, JSON.stringify(token));
+	} catch (err) {
+		logger.debug("aws-credentials: failed to persist refreshed SSO token", { file, err: String(err) });
+	}
 }
 
 async function sha1Hex(input: string): Promise<string> {

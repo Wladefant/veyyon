@@ -19,6 +19,7 @@ import {
 	hashPath,
 	isDateOnly,
 	isEnoent,
+	lazy,
 	nonEmptyTrimmed,
 	prompt,
 	removeTempPath,
@@ -77,6 +78,7 @@ export { parsePositiveDecimalInt } from "./gh-format";
 
 import { saveOutputArtifact } from "../core/output-artifact";
 import type { OutputMeta } from "../core/output-meta";
+import { checkGithubToolPolysimMainDenial, checkPushTargetPolysimMainDenial } from "../core/polysim-main-guard";
 import { type ToolAbortError, ToolError, throwIfAborted } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { parsePrUrl } from "./gh-url";
@@ -212,34 +214,36 @@ const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
 	"run_watch",
 ]);
 
-const githubSchema = type({
-	op: type(
-		"'repo_view' | 'pr_create' | 'pr_checkout' | 'pr_push' | 'search_issues' | 'search_prs' | 'search_code' | 'search_commits' | 'search_repos' | 'run_watch'",
-	).describe("github operation"),
-	"repo?": type("string").describe("owner/repo"),
-	"branch?": type("string").describe("branch"),
-	"pr?": type("string | string[]").describe("pr number, url, or branch"),
-	"force?": type("boolean").describe("reset existing local branch"),
-	"forceWithLease?": type("boolean").describe("force-with-lease push"),
-	"title?": type("string").describe("pr title"),
-	"body?": type("string").describe("pr body markdown"),
-	"base?": type("string").describe("pr base branch"),
-	"head?": type("string").describe("pr head branch"),
-	"draft?": type("boolean").describe("open pr as draft"),
-	"fill?": type("boolean").describe("auto-fill pr title/body from commits"),
-	"reviewer?": type("string[]").describe("reviewers"),
-	"assignee?": type("string[]").describe("assignees"),
-	"label?": type("string[]").describe("labels"),
-	"query?": type("string").describe("search query"),
-	"since?": type("string").describe("lower-bound date filter"),
-	"until?": type("string").describe("upper-bound date filter"),
-	"dateField?": type("'created' | 'updated'").describe("date field"),
-	"limit?": type("number").describe("max results"),
-	"run?": type("string").describe("actions run id or url"),
-	"tail?": type("number").describe("log lines per failed job"),
-});
+const githubSchema = lazy(() =>
+	type({
+		op: type(
+			"'repo_view' | 'pr_create' | 'pr_checkout' | 'pr_push' | 'search_issues' | 'search_prs' | 'search_code' | 'search_commits' | 'search_repos' | 'run_watch'",
+		).describe("github operation"),
+		"repo?": type("string").describe("owner/repo"),
+		"branch?": type("string").describe("branch"),
+		"pr?": type("string | string[]").describe("pr number, url, or branch"),
+		"force?": type("boolean").describe("reset existing local branch"),
+		"forceWithLease?": type("boolean").describe("force-with-lease push"),
+		"title?": type("string").describe("pr title"),
+		"body?": type("string").describe("pr body markdown"),
+		"base?": type("string").describe("pr base branch"),
+		"head?": type("string").describe("pr head branch"),
+		"draft?": type("boolean").describe("open pr as draft"),
+		"fill?": type("boolean").describe("auto-fill pr title/body from commits"),
+		"reviewer?": type("string[]").describe("reviewers"),
+		"assignee?": type("string[]").describe("assignees"),
+		"label?": type("string[]").describe("labels"),
+		"query?": type("string").describe("search query"),
+		"since?": type("string").describe("lower-bound date filter"),
+		"until?": type("string").describe("upper-bound date filter"),
+		"dateField?": type("'created' | 'updated'").describe("date field"),
+		"limit?": type("number").describe("max results"),
+		"run?": type("string").describe("actions run id or url"),
+		"tail?": type("number").describe("log lines per failed job"),
+	}),
+);
 
-type GithubInput = typeof githubSchema.infer;
+type GithubInput = typeof githubSchema.value.infer;
 
 export interface GhToolDetails {
 	meta?: OutputMeta;
@@ -1900,9 +1904,13 @@ function buildTextResult(
  */
 export const MUTATING_GITHUB_OPS: ReadonlySet<string> = new Set(["pr_create", "pr_checkout", "pr_push"]);
 
-export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails> {
+export class GithubTool implements AgentTool<typeof githubSchema.value, GhToolDetails> {
 	readonly name = "github";
 	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const polysimDenial = checkGithubToolPolysimMainDenial(args, this.session.cwd);
+		if (polysimDenial) {
+			return { tier: "exec", deny: true, reason: polysimDenial.reason };
+		}
 		const rawOp = (args as Partial<GithubInput>).op;
 		const op = typeof rawOp === "string" ? rawOp : "";
 		return GITHUB_READONLY_OPS.has(op) ? "read" : "exec";
@@ -1911,7 +1919,9 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 	readonly loadMode = "discoverable";
 	readonly label = "GitHub";
 	readonly description = prompt.render(toolsPrompts["tools/github"].text);
-	readonly parameters = githubSchema;
+	get parameters(): typeof githubSchema.value {
+		return githubSchema.value;
+	}
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
@@ -1929,6 +1939,10 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<GhToolDetails>> {
 		throwIfAborted(signal);
+		const polysimDenial = checkGithubToolPolysimMainDenial(params, this.session.cwd);
+		if (polysimDenial) {
+			throw new ToolError(polysimDenial.reason);
+		}
 		const dispatch = async (): Promise<AgentToolResult<GhToolDetails>> => {
 			switch (params.op) {
 				case "repo_view":
@@ -2272,6 +2286,10 @@ async function executePrPush(
 	}
 
 	const target = await resolvePrBranchPushTarget(repoRoot, localBranch, signal);
+	const polysimDenial = checkPushTargetPolysimMainDenial(target.remoteUrl, target.remoteBranch);
+	if (polysimDenial) {
+		throw new ToolError(polysimDenial.reason);
+	}
 	const currentBranch = await git.branch.current(repoRoot, signal);
 	const sourceRef = currentBranch === localBranch ? "HEAD" : toLocalBranchRef(localBranch);
 	const refspec = `${sourceRef}:refs/heads/${target.remoteBranch}`;

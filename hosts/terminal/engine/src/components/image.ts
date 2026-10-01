@@ -88,6 +88,10 @@ export class Image implements Component {
 	}
 
 	invalidate(): void {
+		this.releaseRenderCache();
+	}
+
+	releaseRenderCache(): void {
 		this.#cachedLines = undefined;
 		this.#cachedWidth = undefined;
 	}

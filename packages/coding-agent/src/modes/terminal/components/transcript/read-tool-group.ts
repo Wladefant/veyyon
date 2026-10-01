@@ -263,7 +263,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (!toolCallId || isPartial) return;
 		const entry = this.#entries.get(toolCallId);
 		if (!entry) return;
-		updateReadEntryResult(entry, result);
+		updateReadEntryResult(entry, result, { withContent: this.#showContentPreview });
 		this.#updateDisplay();
 	}
 
@@ -512,6 +512,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const title = pathDisplay ? `Read ${pathDisplay}` : "Read";
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
+		const drop = () => {
+			cachedWidth = undefined;
+			cachedLines = undefined;
+		};
 		const expanded = this.#expanded;
 		const component: Component = {
 			render: (width: number) => {
@@ -541,10 +545,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				cachedWidth = width;
 				return cachedLines;
 			},
-			invalidate: () => {
-				cachedWidth = undefined;
-				cachedLines = undefined;
-			},
+			invalidate: drop,
+			releaseRenderCache: drop,
 		};
 		this.addChild(component);
 	}

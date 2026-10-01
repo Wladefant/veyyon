@@ -4,30 +4,69 @@
 
 ## [Unreleased]
 
+### Added
+
+- `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
+
 ### Changed
 
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
+- `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
 
 ### Fixed
+- Fixed `SettingsStore.forkWithRuntimeOverrides` dropping `#configPath` on forked in-memory instances, so subagents and runtime forks can compute `configSourceStamp()` and detect on-disk config changes.
 
+- Fixed blob reference resolution passing unvalidated `blob:sha256:` and `blobtext:sha256:` suffixes into `path.join`, allowing a crafted ref (e.g. `blob:sha256:../../../etc/passwd`) in a persisted or shared session to escape the blob directory and read arbitrary files into image history; `parseBlobRef` and `parseTextBlobRef` now reject any suffix that is not a canonical 64-char lowercase hex hash ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Artifacts are staged on a hidden sibling and verified against their own byte count before the rename publishes them, so a write that stops short can no longer leave a truncated artifact that `artifact://` resolves as a complete result, and a failed rewrite leaves the previous bytes in place ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Bounded synchronous SQLite busy_timeout to 1s in headless hosts for session storage databases, so lock contention fails fast rather than freezing protocol loops for 5s ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed a first-use race in `ArtifactManager` where two concurrent `save` or `allocatePath` callers on a fresh instance both scanned the directory and allocated duplicate artifact IDs ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- A terminal ownership claim whose PID is alive but whose endpoint answers nothing no longer blocks every launch in the project; the check now confirms the owner is serving, since Windows recycles PIDs and a claim file outliving its CLI used to match an unrelated process ([#196](https://github.com/Wladefant/veyyon/issues/196)).
 - Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
+- Assert terminal writer ownership cleanly when switching session files and remove unused title slot parsing in session manager ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).
 ### Added
 
 - A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
+- `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
+- `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
+- `SessionStorage` has an optional `openPinnedReaderSync` that opens a read handle whose reads keep answering from the file object a path named when it was opened; `FileSessionStorage` implements it outside Windows.
 
 ### Changed
 
+- The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
+- Session storage and the session retry policy take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
+- `buildSessionContextFromPath` reads a branch's settings, emits its messages and strips dangling tool calls in single-purpose steps instead of one 374-line function, and drops content-less dangling turns in one pass instead of splicing each out, cutting a context build that drops 10,000 such turns from 10.4 ms to 0.7 ms with identical contexts across 200,000 generated branches.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
 - A `tool_execution_start` session entry writes no `startedAt`, since the entry's own timestamp holds the start time, and writes its argument summary only when no preceding assistant message records the call, which cut the start markers in local sessions from 581.83 MB to 403.91 MB; a marker that wrote `startedAt` still reads back that time.
 - The `ToolResultCodec` contract permits a codec to rebuild a dropped field from the details the written line keeps as well as from the result's content; no behavior change.
 - Opening a session points every loaded string of 64 characters or more at one shared copy of its text, whether parsed from the file or read back from the blob store, and keeps no pooled string once the load returns, which cut the heap of a loaded 372.7 MiB session from 608.7 MiB to 401.7 MiB for 136 ms more load time.
+- Rebuilding a session context locates the applied compaction by searching from the end of the branch, which takes about 7ms off each rebuild of a 238,084-entry branch.
+- `SessionManager.rewriteEntries` takes the entries a caller changed in place and rewrites the session file from the earliest of them on, keeping the bytes before it without parsing or serializing them, which cut the rewrite after a one-entry prune on a 376 MiB, 109,360-entry session from 1.2 s to 135 ms.
+- The session listing matches a `--resume` argument against a transcript filename through `sessionFileMatchesResumeArgument` from `@veyyon/utils/session-file`, the matcher the startup profile lookup uses; no user-visible change.
+- The first rewrite after resuming a session keeps the file's bytes before the earliest updated entry and reads nothing back when the loaded file holds one clean record per line, which cut the first-turn prune rewrite of a resumed 39 MB, 13,470-entry session from one whole-file write plus a 39 MB read to a partial write with no read.
+- `SessionInfo.messageCount` documents that it counts the messages in the scanned prefix and is a lower bound for a longer session; no behavior change.
+- `SessionManager` keeps the payloads of entries its live context cannot reach in the session file and reads each back through a handle on the file object it loaded, which cut a resumed 402 MiB, 135,650-entry session from 501 MiB heap plus 369 MiB external memory to 117 MiB plus 46 MiB and its RSS from 1,072 MiB to 602 MiB, for about 400 ms more open time; Windows keeps every entry in memory.
+- A context build reads the default model of a session without `model_change` entries from the newest assistant turn on the branch instead of from every assistant turn in order; the model it selects is unchanged.
+- `SessionManager` keeps the payloads of `session_init`, `settings_snapshot` and `subagent_spawn` entries in the session file on the live branch as well, reading each back on first use, so a spawned agent's recorded system prompt no longer stays in memory.
+- `SessionManager` moves a `session_init`, `settings_snapshot` or `subagent_spawn` entry out of memory as soon as the append that wrote it completes, instead of at the next whole-file publish, which cut the heap after 40 live subagents from 102.4 MiB to 96.9 MiB (median of 3 runs).
+- A forwarding tool wrapper reads each forwarded property through one accessor shared by every wrapper instead of a getter and setter pair built per wrapper and per key, which cut the live objects after 40 live subagents from 756,648 to 729,618 and the heap from 95.4 MiB to 94.3 MiB (median of 3 runs).
+- A listed session holds at most 4,096 characters of first-message and message text, copied out of the scanned window, and the session list index moves to version 2 so rows an earlier build indexed without the bound are rescanned, which cut the rows of a 125-session directory from 21.39 MiB to 1.97 MiB and its list index from 5.45 MiB to 557 KiB.
+- The error a cold entry's failed read-back raises formats its cause with `errorMessage` from `@veyyon/utils`; no user-visible change.
+- A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
 
 ### Fixed
 
+- An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
+- An unquoted YAML scalar that spells an enum member, such as `advisor.syncBacklog: 3`, reads as that member and is no longer reported as invalid at load.
+- `resolveResumableSession` returns a session another profile wrote as `scope: "profile"` with the owning profile's name instead of as a `global` match, and `foreignSessionFileProfile` returns the profile other than the active one that holds a transcript path.
+- `SessionManager.continueRecent` ignores a terminal breadcrumb naming another profile's transcript instead of continuing that session, or relocating it into the active profile when its recorded directory is gone.
+- With sessions stored under `$XDG_DATA_HOME/veyyon`, the all-projects session listing, `resolveResumableSession`'s other-profile lookup and `foreignSessionFileProfile` read the sessions directory each profile writes to instead of `<agentDir>/sessions`, which held none of them.
+- `listAllSessions` and `SessionManager.listAll` list top-level sessions only, leaving out spawned-agent transcripts in a session's artifacts directory and orphaned `orphan-task-*` transcripts; `resolveResumableSession` still resolves an agent transcript by id.
 - The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
+- A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
+- `isSamplingKnob` answers `false` for a name inherited from `Object.prototype`, such as `toString` or `constructor`, instead of `true`.
 
 ## [1.5.5] - 2026-09-25
 

@@ -76,6 +76,9 @@ if (out instanceof type.errors) {
 - `.parse(x)` → `const out = schema(x); if (out instanceof type.errors) throw new Error(out.summary); use out;`
 - `.safeParse(x).success` → `!(schema(x) instanceof type.errors)`
 - NEVER use `.allows()` for tool validation: it skips morphs/defaults/narrows.
+- A module that does not otherwise need `arktype`'s value tests the result with `isArkErrors(out)`
+  from `@veyyon/ai/utils/schema` instead of `instanceof type.errors`. The `instanceof` test imports
+  `arktype` at run time, and that import costs 362 ms of module evaluation wherever it is reached.
 - `.infer` (output) and `.inferIn` (input) are inference-only properties (no runtime value).
 
 ## Advanced
@@ -91,6 +94,29 @@ const myScope = scope({
 const m = myScope.export();        // Module, m.outer, m.inner are Type instances
 ```
 Use `.export()`, NOT `.compile()` (that method does not exist on a Scope).
+
+### Compiled and interpreted validators
+The CLI entry configures ArkType jitless in `runCli` (`packages/coding-agent/src/cli.ts`) before any
+command loads a schema, so a schema built from the default `type` validates by interpreted traversal
+and compiles no validator code. In the compiled binary this cuts `import("arktype")` from 47 ms to
+25 ms and `createAgentSession` from 125 ms to 104 ms. `veyyon --smoke-test` fails when `arktype`
+evaluates before that call, which happens when a static import from `cli.ts` reaches it.
+
+Interpreted traversal costs little on a small value (a tool call's arguments: 3.4 µs against 3.1 µs)
+and a lot on a large one (a 751-message chat-completions request: 2.1 ms against 42 µs). A schema that
+validates large values on a hot path builds with a scope that sets `jitless: false`, as the auth
+gateway's request schemas do through `packages/ai/src/providers/gateway-schema-type.ts`. Test
+processes do not go through `runCli` and validate with compiled validators.
+
+Rejection wording depends on the mode. Compiled, a union of literals lists its members
+(`op must be "done", "init" or "start" (was "x")`). Interpreted, a described union reports its
+description instead (`op must be operation to apply (was "x")`), and an undescribed one still lists
+its members. `validateToolArguments` (`packages/ai/src/utils/validation.ts`) appends
+`(accepted: …)` to a closed-set issue line that does not list the members, so a tool-argument
+rejection names the legal values in both modes. A test that asserts rejection wording builds its
+schema with `scope({}, { jitless })` for each mode, as
+`packages/ai/test/tool-validation-error-bounds.test.ts` does; a scope's `jitless` overrides the
+process configuration.
 
 ### Morphs / transforms (replacing `.transform()`)
 ```ts
@@ -131,4 +157,4 @@ is a candidate to **stay on Zod** (external-boundary exception), note it in your
 - Report: files changed, any `.strict`→`"+"`, `.refine`→`.narrow`, `.catch`→morph, and any file you
   intentionally left on Zod (with the reason).
 
-*Verified against `d3e3db30` on 2026-07-23.*
+*Verified against `46a822fcef` on 2026-09-27.*

@@ -23,6 +23,7 @@ import { lazyNativeClass, lazyNativeFn } from "./loader-state.js";
 
 // --- generated native exports (do not edit) ---
 // classes
+export const CodeHighlighter = lazyNativeClass("CodeHighlighter");
 export const CpuBudgetGroup = lazyNativeClass("CpuBudgetGroup");
 export const MacAppearanceObserver = lazyNativeClass("MacAppearanceObserver");
 export const MacOSPowerAssertion = lazyNativeClass("MacOSPowerAssertion");
@@ -51,6 +52,7 @@ export const glob = lazyNativeFn("glob");
 export const grep = lazyNativeFn("grep");
 export const hasMatch = lazyNativeFn("hasMatch");
 export const highlightCode = lazyNativeFn("highlightCode");
+export const highlightCodeBatch = lazyNativeFn("highlightCodeBatch");
 export const htmlToMarkdown = lazyNativeFn("htmlToMarkdown");
 export const invalidateFsScanCache = lazyNativeFn("invalidateFsScanCache");
 export const isoBackend = lazyNativeFn("isoBackend");
@@ -66,7 +68,9 @@ export const matchesKittySequence = lazyNativeFn("matchesKittySequence");
 export const matchesLegacySequence = lazyNativeFn("matchesLegacySequence");
 export const parseKey = lazyNativeFn("parseKey");
 export const parseKittySequence = lazyNativeFn("parseKittySequence");
+export const readCommitMemory = lazyNativeFn("readCommitMemory");
 export const readImageFromClipboard = lazyNativeFn("readImageFromClipboard");
+export const releaseEmbeddedModulePages = lazyNativeFn("releaseEmbeddedModulePages");
 export const search = lazyNativeFn("search");
 export const setHangulCompatJamoWidthOverride = lazyNativeFn("setHangulCompatJamoWidthOverride");
 export const sliceWithWidth = lazyNativeFn("sliceWithWidth");

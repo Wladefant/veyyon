@@ -142,6 +142,42 @@ describe("limitMatchesActiveAccount", () => {
 			false,
 		);
 	});
+
+	test("two accounts sharing a projectId with different emails match only their own limits", () => {
+		const accountA = { email: "alice@example.com", projectId: "aicode-consumers" };
+		const accountB = { email: "bob@example.com", projectId: "aicode-consumers" };
+
+		const reportA = makeReport({
+			metadata: { email: "alice@example.com", projectId: "aicode-consumers" },
+		});
+		const reportB = makeReport({
+			metadata: { email: "bob@example.com", projectId: "aicode-consumers" },
+		});
+		const limitA = makeLimit({ projectId: "aicode-consumers" });
+		const limitB = makeLimit({ projectId: "aicode-consumers" });
+
+		expect(limitMatchesActiveAccount(reportA, limitA, accountA)).toBe(true);
+		expect(limitMatchesActiveAccount(reportB, limitB, accountA)).toBe(false);
+		expect(limitMatchesActiveAccount(reportB, limitB, accountB)).toBe(true);
+		expect(limitMatchesActiveAccount(reportA, limitA, accountB)).toBe(false);
+	});
+
+	test("two accounts sharing a projectId with different accountIds match only their own limits", () => {
+		const accountA = { accountId: "acc-1", projectId: "aicode-consumers" };
+		const accountB = { accountId: "acc-2", projectId: "aicode-consumers" };
+
+		const reportA = makeReport({
+			metadata: { accountId: "acc-1", projectId: "aicode-consumers" },
+		});
+		const reportB = makeReport({
+			metadata: { accountId: "acc-2", projectId: "aicode-consumers" },
+		});
+
+		expect(limitMatchesActiveAccount(reportA, makeLimit(), accountA)).toBe(true);
+		expect(limitMatchesActiveAccount(reportB, makeLimit(), accountA)).toBe(false);
+		expect(limitMatchesActiveAccount(reportB, makeLimit(), accountB)).toBe(true);
+		expect(limitMatchesActiveAccount(reportA, makeLimit(), accountB)).toBe(false);
+	});
 });
 
 describe("reportMatchesActiveAccount", () => {
@@ -156,5 +192,41 @@ describe("reportMatchesActiveAccount", () => {
 	test("does not match a report with no limits", () => {
 		const report = makeReport({ limits: [], metadata: { email: "user@example.com" } });
 		expect(reportMatchesActiveAccount(report, { email: "user@example.com" })).toBe(false);
+	});
+});
+
+describe("an Antigravity project shared by every account", () => {
+	// WHY: both Antigravity logins carry projectId `aicode-consumers`. Matching on it handed the
+	// first account's limits to the second (veyyon#102). The class: any provider for which
+	// `providerSharesProjectAcrossAccounts` holds must never match on the project.
+	const identity = { projectId: "aicode-consumers" };
+	const shared = makeReport({ provider: "google-antigravity", metadata: { projectId: "aicode-consumers" } });
+
+	test("does not attribute a report to an account by the shared project alone", () => {
+		expect(limitMatchesActiveAccount(shared, makeLimit({ provider: "google-antigravity" }), identity)).toBe(false);
+	});
+
+	test("still attributes by email, which names one account", () => {
+		const report = makeReport({
+			provider: "google-antigravity",
+			metadata: { projectId: "aicode-consumers", email: "a@example.com" },
+		});
+		expect(
+			limitMatchesActiveAccount(report, makeLimit({ provider: "google-antigravity" }), {
+				...identity,
+				email: "a@example.com",
+			}),
+		).toBe(true);
+		expect(
+			limitMatchesActiveAccount(report, makeLimit({ provider: "google-antigravity" }), {
+				...identity,
+				email: "b@example.com",
+			}),
+		).toBe(false);
+	});
+
+	test("other providers keep the project fallback", () => {
+		const report = makeReport({ provider: "google-gemini-cli", metadata: { projectId: "proj-1" } });
+		expect(limitMatchesActiveAccount(report, makeLimit(), { projectId: "proj-1" })).toBe(true);
 	});
 });

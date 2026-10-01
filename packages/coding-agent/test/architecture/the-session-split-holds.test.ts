@@ -5,9 +5,9 @@
  * readers — mixed in with the class that uses them. Those declarations touch no
  * instance state, so every importer of one of them pulled in the whole runtime.
  * They now live in sibling modules beside it, and the compaction policy has since
- * moved on again into `@veyyon/kernel`. Two families of instance state have left
- * too — TTSR and the todo board — as collaborators under `runtime/`, each
- * owning its own fields behind a host interface it declares.
+ * moved on again into `@veyyon/kernel`. Four families of instance state have left
+ * too — TTSR, the todo board, the thinking level and the advisors — as collaborators
+ * under `runtime/`, each owning its own fields behind a host interface it declares.
  *
  * The defect class this closes is a split that unwinds. Three shapes of it:
  * a sibling or collaborator that imports back from `agent-session.ts`, which makes
@@ -36,19 +36,33 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 18553 lines on fork main (up from 18524 / 18550 ceiling).
- * The net 29 lines added across subsequent fork commits belong strictly to fork contracts
- * in `AgentSession`:
- * 1. Extension context session identity (`b058b6a63`, `a1d1fd2c7`): 10 lines forwarding
- *    `taskDepth`, `parentTaskPrefix`, `agentId`, and `isSubagent` into runtime extension context.
- * 2. Tool refusal fence at dynamic choke point (`23cba1798`, `fd1e2f0ce`, `7900444b2`): 2 lines net
- *    wrapping dynamic tools (MCP, RPC, custom) with standing session policy refusals via ExtensionToolWrapper.
- * 3. Bounded todo reminder formatting (`24e3b7efe`, `95db7b1d5`): 17 lines formatting in-progress
- *    reminder items and hidden active count bounds.
- * None can move to collaborators without violating leaf boundaries or introducing unnatural abstractions.
- * Re-pinned after upstream-949 merge at 18,725.
+ * MEASURED at 10173 lines. Model target selection left earlier — the role resolver, the
+ * configured-target reader, the compaction candidate walk and its effort map — and provider request
+ * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
+ * after it, because not one of those members read or wrote a field of the runtime: every input was
+ * a parameter, so they sat in the class only because of where they were typed. TTSR, the todo board,
+ * the thinking level, the advisor roster, the streaming-edit guard, tool discovery, the checkpoint
+ * state, user shell and eval runs, the post-prompt task tracker, the IRC inbox, the retry ladder and
+ * its model fallback, secret redaction, compaction with its summarizer and dead-end recovery, and
+ * the prewalk and plan-yolo model handoffs, plan mode with its plan reference and decision
+ * ladder, the message write queue with its persistence-key index, the context figure with its
+ * prompt snapshot and rewrite anchor, the memory backend state with its delivered recall, the
+ * provider session ids with the inherited prompt cache key, the tool-call loop guard with the
+ * Gemini reasoning-header detector, the empty-stop and unexpected-stop retry cycles, the
+ * provider usage recording with its saved-reset redeems, the history rewrites (stale-result and
+ * overflow prunes, image drops, shake and dedup), the terminal `yield` record, the evidence
+ * ledger with the rewind, verification and review reminders, and the approval state (the
+ * auto-approve flag, the `/yolo` bypass, the kept per-tool decisions and the ACP permission proxy)
+ * left as collaborators under `runtime/`.
+ * The number falls
+ * again when the next one leaves. It ratchets: slack is what it takes to not fail on the next honest
+ * edit, and a ceiling left far above a shrinking file stops being a bound.
+ *
+ * RE-MEASURED 2026-09-30 at 10412 after the santhreal merge: upstream's 10173 plus the fork's own
+ * additions (the `agent.maxConcurrency` resize wiring, the unsupported-input guard, the session
+ * liveness records and the terminal-ownership checks), which the collaborators above do not yet carry.
  */
-const RUNTIME_CEILING = 18_725;
+const RUNTIME_CEILING = 10_430;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -58,9 +72,40 @@ const RUNTIME_DIR = "runtime";
  * one fails here before it fails anywhere useful, which is the point: a
  * collaborator is a decision about where state lives, not a file drop.
  */
-const COLLABORATORS = ["thinking-runtime.ts", "todo-runtime.ts", "ttsr-runtime.ts"] as const;
+const COLLABORATORS = [
+	"advisor-roster.ts",
+	"checkpoint-runtime.ts",
+	"compaction-recovery.ts",
+	"compaction-runtime.ts",
+	"compaction-summarizer.ts",
+	"context-accounting.ts",
+	"finalize-reminders.ts",
+	"history-rewrites.ts",
+	"irc-inbox.ts",
+	"loop-guards.ts",
+	"max-concurrency-runtime.ts",
+	"memory-context.ts",
+	"message-persistence.ts",
+	"model-handoff.ts",
+	"plan-mode-runtime.ts",
+	"post-prompt-tasks.ts",
+	"provider-sessions.ts",
+	"provider-usage.ts",
+	"retry-fallback.ts",
+	"retry-runtime.ts",
+	"session-approvals.ts",
+	"session-secrets.ts",
+	"stop-retries.ts",
+	"streaming-edit-guard.ts",
+	"thinking-runtime.ts",
+	"todo-runtime.ts",
+	"tool-discovery.ts",
+	"ttsr-runtime.ts",
+	"user-executions.ts",
+	"yield-tracker.ts",
+] as const;
 
-/** MEASURED: the larger collaborator is `ttsr-runtime.ts` at 866 lines. */
+/** MEASURED: the largest collaborator is `retry-runtime.ts` at 959 lines. */
 const COLLABORATOR_CEILING = 1_000;
 
 /** MEASURED: the largest sibling is `agent-session-types.ts` at 782 lines. */

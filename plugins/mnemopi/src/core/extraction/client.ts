@@ -1,3 +1,4 @@
+import { scheduler } from "node:timers/promises";
 import type { ApiKey, FetchImpl } from "@veyyon/ai";
 // The owner, not the barrel: `withAuth` is the only runtime name this file wants
 // from `@veyyon/ai`, and the barrel brings the streaming engine, the provider
@@ -5,6 +6,7 @@ import type { ApiKey, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import * as AIError from "@veyyon/ai/error";
 import { OPENROUTER_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
@@ -112,8 +114,12 @@ export class ExtractionClient {
 							if (AIError.is(flags, AIError.Flag.UsageLimit) || AIError.is(flags, AIError.Flag.Transient)) {
 								rateLimitError = exc;
 								if (attempt + 1 < 3) {
-									await Bun.sleep(
-										Math.min(RATE_LIMIT_BACKOFF_MAX_MS, RATE_LIMIT_BACKOFF_BASE_MS * 2 ** attempt),
+									await scheduler.wait(
+										exponentialBackoffDelay(attempt, {
+											baseMs: RATE_LIMIT_BACKOFF_BASE_MS,
+											maxMs: RATE_LIMIT_BACKOFF_MAX_MS,
+											jitter: 0,
+										}),
 									);
 									continue;
 								}
@@ -131,7 +137,7 @@ export class ExtractionClient {
 			} catch (exc) {
 				lastError = exc;
 			}
-			if (modelIndex + 1 < models.length) await Bun.sleep(FALLBACK_MODEL_DELAY_MS);
+			if (modelIndex + 1 < models.length) await scheduler.wait(FALLBACK_MODEL_DELAY_MS);
 		}
 
 		diag.recordFailure("cloud", lastError, "all_models_failed");

@@ -80,6 +80,22 @@ describe("the Claude Code fingerprint tracks a supported release", () => {
 		).toBeGreaterThanOrEqual(0);
 	});
 
+	it("accepts the minimum demanded by the recorded Opus 5.5 rejection", () => {
+		const response = {
+			type: "error",
+			error: {
+				type: "invalid_request_error",
+				message:
+					"Claude Code 2.1.257 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.",
+				details: { error_code: "claude_code_version_too_old" },
+			},
+		};
+		const minimum = /version (\d+\.\d+\.\d+) or newer/.exec(response.error.message)?.[1];
+		expect(minimum).toBe(OBSERVED_API_MINIMUM);
+		expect(versionOrder("2.1.257", minimum!)).toBe(-1);
+		expect(versionOrder(CLAUDE_CODE_VERSION, minimum!)).toBeGreaterThanOrEqual(0);
+	});
+
 	/**
 	 * The backtest for the reported run: the fingerprint that was sent is below what the body demanded, and
 	 * the one this repository now sends is not. Against the pre-fix constant the second expectation fails,

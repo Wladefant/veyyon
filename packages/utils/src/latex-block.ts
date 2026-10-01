@@ -21,7 +21,7 @@
 // (https://github.com/thatmagicalcat/txm, MIT/Apache-2.0), reimplemented from
 // scratch here on this module's ANSI-aware Box model.
 
-import { latexColorScope, latexToUnicode, MATH_FONT_COMMANDS } from "./latex-unicode";
+import { isAsciiLetter, latexColorScope, latexToUnicode, MATH_FONT_COMMANDS } from "./latex-unicode";
 import { clamp } from "./math";
 import { visibleWidth } from "./width";
 
@@ -39,93 +39,95 @@ interface Box {
 type CellAlign = "l" | "c" | "r";
 
 const BAR = "─";
-const FRAC_COMMANDS: Record<string, true> = { frac: true, dfrac: true, tfrac: true, cfrac: true };
-const BINOM_COMMANDS: Record<string, true> = { binom: true, dbinom: true, tbinom: true };
+const FRAC_COMMANDS: ReadonlySet<string> = new Set(["frac", "dfrac", "tfrac", "cfrac"]);
+const BINOM_COMMANDS: ReadonlySet<string> = new Set(["binom", "dbinom", "tbinom"]);
 
 // Display "wrapper" environments whose body is an expression (possibly with `\\`
 // row breaks and `&` alignment). Their rows are parsed so fractions inside stack
 // and `&` columns align.
-const DISPLAY_ROW_ENVIRONMENTS: Record<string, true> = {
-	equation: true,
-	eqnarray: true,
-	align: true,
-	aligned: true,
-	alignat: true,
-	alignedat: true,
-	flalign: true,
-	split: true,
-	gather: true,
-	gathered: true,
-	gatheredat: true,
-	multline: true,
-	displaymath: true,
-	math: true,
-};
+const DISPLAY_ROW_ENVIRONMENTS: ReadonlySet<string> = new Set([
+	"equation",
+	"eqnarray",
+	"align",
+	"aligned",
+	"alignat",
+	"alignedat",
+	"flalign",
+	"split",
+	"gather",
+	"gathered",
+	"gatheredat",
+	"multline",
+	"displaymath",
+	"math",
+]);
 
 // Environments laid out as 2-D grids of parsed cells: [open, close] delimiter.
-const GRID_ENVIRONMENTS: Record<string, readonly [string, string]> = {
-	matrix: ["", ""],
-	smallmatrix: ["", ""],
-	array: ["", ""],
-	pmatrix: ["(", ")"],
-	bmatrix: ["[", "]"],
-	Bmatrix: ["{", "}"],
-	vmatrix: ["|", "|"],
-	Vmatrix: ["‖", "‖"],
-	cases: ["{", ""],
-	dcases: ["{", ""],
-	rcases: ["", "}"],
-	drcases: ["", "}"],
-};
+const GRID_ENVIRONMENTS: ReadonlyMap<string, readonly [string, string]> = new Map(
+	Object.entries<readonly [string, string]>({
+		matrix: ["", ""],
+		smallmatrix: ["", ""],
+		array: ["", ""],
+		pmatrix: ["(", ")"],
+		bmatrix: ["[", "]"],
+		Bmatrix: ["{", "}"],
+		vmatrix: ["|", "|"],
+		Vmatrix: ["‖", "‖"],
+		cases: ["{", ""],
+		dcases: ["{", ""],
+		rcases: ["", "}"],
+		drcases: ["", "}"],
+	}),
+);
 
 // Operators whose display-style scripts stack above/below the symbol.
-const LIMIT_OPERATORS: Record<string, true> = {
-	sum: true,
-	prod: true,
-	coprod: true,
-	bigcup: true,
-	bigcap: true,
-	bigsqcup: true,
-	bigvee: true,
-	bigwedge: true,
-	bigoplus: true,
-	bigotimes: true,
-	bigodot: true,
-	biguplus: true,
-	lim: true,
-	limsup: true,
-	liminf: true,
-	projlim: true,
-	injlim: true,
-	varlimsup: true,
-	varliminf: true,
-	varprojlim: true,
-	varinjlim: true,
-	max: true,
-	min: true,
-	sup: true,
-	inf: true,
-	det: true,
-	gcd: true,
-	Pr: true,
-	argmax: true,
-	argmin: true,
-};
+const LIMIT_OPERATORS: ReadonlySet<string> = new Set([
+	"sum",
+	"prod",
+	"coprod",
+	"bigcup",
+	"bigcap",
+	"bigsqcup",
+	"bigvee",
+	"bigwedge",
+	"bigoplus",
+	"bigotimes",
+	"bigodot",
+	"biguplus",
+	"lim",
+	"limsup",
+	"liminf",
+	"projlim",
+	"injlim",
+	"varlimsup",
+	"varliminf",
+	"varprojlim",
+	"varinjlim",
+	"max",
+	"min",
+	"sup",
+	"inf",
+	"det",
+	"gcd",
+	"Pr",
+	"argmax",
+	"argmin",
+]);
 
 // Integral-family operators: scripts stay beside the symbol (LaTeX display
 // convention) unless an explicit `\limits` follows.
-const INTEGRAL_OPERATORS: Record<string, true> = {
-	int: true,
-	iint: true,
-	iiint: true,
-	iiiint: true,
-	oint: true,
-	oiint: true,
-	oiiint: true,
-	idotsint: true,
-	intop: true,
-	smallint: true,
-};
+const INTEGRAL_OPERATORS: ReadonlySet<string> = new Set([
+	"int",
+	"iint",
+	"iiint",
+	"iiiint",
+	"oint",
+	"oiint",
+	"oiiint",
+	"idotsint",
+	"intop",
+	"smallint",
+]);
 
 // Vertical delimiter piece characters: `only` for single-line content, then
 // top/mid/bot columns for stretched forms; `axis` replaces `mid` at the
@@ -138,52 +140,56 @@ interface DelimPieces {
 	axis?: string;
 }
 
-const DELIM_PIECES: Record<string, DelimPieces> = {
-	"(": { only: "(", top: "⎛", mid: "⎜", bot: "⎝" },
-	")": { only: ")", top: "⎞", mid: "⎟", bot: "⎠" },
-	"[": { only: "[", top: "⎡", mid: "⎢", bot: "⎣" },
-	"]": { only: "]", top: "⎤", mid: "⎥", bot: "⎦" },
-	"{": { only: "{", top: "⎧", mid: "⎪", bot: "⎩", axis: "⎨" },
-	"}": { only: "}", top: "⎫", mid: "⎪", bot: "⎭", axis: "⎬" },
-	"|": { only: "|", top: "│", mid: "│", bot: "│" },
-	"‖": { only: "‖", top: "║", mid: "║", bot: "║" },
-	"⌈": { only: "⌈", top: "⎡", mid: "⎢", bot: "⎢" },
-	"⌉": { only: "⌉", top: "⎤", mid: "⎥", bot: "⎥" },
-	"⌊": { only: "⌊", top: "⎢", mid: "⎢", bot: "⎣" },
-	"⌋": { only: "⌋", top: "⎥", mid: "⎥", bot: "⎦" },
-};
+const DELIM_PIECES: ReadonlyMap<string, DelimPieces> = new Map(
+	Object.entries<DelimPieces>({
+		"(": { only: "(", top: "⎛", mid: "⎜", bot: "⎝" },
+		")": { only: ")", top: "⎞", mid: "⎟", bot: "⎠" },
+		"[": { only: "[", top: "⎡", mid: "⎢", bot: "⎣" },
+		"]": { only: "]", top: "⎤", mid: "⎥", bot: "⎦" },
+		"{": { only: "{", top: "⎧", mid: "⎪", bot: "⎩", axis: "⎨" },
+		"}": { only: "}", top: "⎫", mid: "⎪", bot: "⎭", axis: "⎬" },
+		"|": { only: "|", top: "│", mid: "│", bot: "│" },
+		"‖": { only: "‖", top: "║", mid: "║", bot: "║" },
+		"⌈": { only: "⌈", top: "⎡", mid: "⎢", bot: "⎢" },
+		"⌉": { only: "⌉", top: "⎤", mid: "⎥", bot: "⎥" },
+		"⌊": { only: "⌊", top: "⎢", mid: "⎢", bot: "⎣" },
+		"⌋": { only: "⌋", top: "⎥", mid: "⎥", bot: "⎦" },
+	}),
+);
 
 // `\left`/`\right`/`\middle` delimiter token → piece-table key. Unknown tokens
 // fall back to `latexToUnicode` and render at the baseline row only.
-const DELIM_KEYS: Record<string, string> = {
-	"(": "(",
-	")": ")",
-	"[": "[",
-	"]": "]",
-	"\\{": "{",
-	"\\}": "}",
-	"\\lbrace": "{",
-	"\\rbrace": "}",
-	"|": "|",
-	"\\vert": "|",
-	"\\lvert": "|",
-	"\\rvert": "|",
-	"\\|": "‖",
-	"\\Vert": "‖",
-	"\\lVert": "‖",
-	"\\rVert": "‖",
-	"\\langle": "⟨",
-	"\\rangle": "⟩",
-	"<": "⟨",
-	">": "⟩",
-	"\\lceil": "⌈",
-	"\\rceil": "⌉",
-	"\\lfloor": "⌊",
-	"\\rfloor": "⌋",
-	"\\lbrack": "[",
-	"\\rbrack": "]",
-	".": "",
-};
+const DELIM_KEYS: ReadonlyMap<string, string> = new Map(
+	Object.entries({
+		"(": "(",
+		")": ")",
+		"[": "[",
+		"]": "]",
+		"\\{": "{",
+		"\\}": "}",
+		"\\lbrace": "{",
+		"\\rbrace": "}",
+		"|": "|",
+		"\\vert": "|",
+		"\\lvert": "|",
+		"\\rvert": "|",
+		"\\|": "‖",
+		"\\Vert": "‖",
+		"\\lVert": "‖",
+		"\\rVert": "‖",
+		"\\langle": "⟨",
+		"\\rangle": "⟩",
+		"<": "⟨",
+		">": "⟩",
+		"\\lceil": "⌈",
+		"\\rceil": "⌉",
+		"\\lfloor": "⌊",
+		"\\rfloor": "⌋",
+		"\\lbrack": "[",
+		"\\rbrack": "]",
+		".": "",
+	}),
+);
 
 /**
  * Inline-run conversion context. `wrap` re-applies the scoped commands (math
@@ -288,7 +294,7 @@ function fracBox(num: Box, den: Box): Box {
  */
 function delimColumn(key: string, height: number, baseline: number): Box | null {
 	if (!key) return null;
-	const pieces = DELIM_PIECES[key];
+	const pieces = DELIM_PIECES.get(key);
 	if (height <= 1) {
 		const only = pieces?.only ?? key;
 		return only ? { lines: [only], baseline: 0, width: visibleWidth(only) } : null;
@@ -515,7 +521,7 @@ function readDelimToken(src: string, i: number): Span | null {
 
 /** Piece-table key for a delimiter token; unknown commands resolve via Unicode. */
 function delimKey(token: string): string {
-	const mapped = DELIM_KEYS[token];
+	const mapped = DELIM_KEYS.get(token);
 	if (mapped !== undefined) return mapped;
 	return token.startsWith("\\") ? latexToUnicode(token).trim() : token;
 }
@@ -763,7 +769,7 @@ function parseEnvironment(src: string, start: number, ctx: Ctx): { box: Box; end
 	if (env === null) return null;
 	const starred = env.env.endsWith("*");
 	const base = starred ? env.env.slice(0, -1) : env.env;
-	const gridDelims = GRID_ENVIRONMENTS[base];
+	const gridDelims = GRID_ENVIRONMENTS.get(base);
 	if (gridDelims) {
 		let p = env.bodyStart;
 		while (src[p] === " " || src[p] === "\n" || src[p] === "\t") p++;
@@ -790,7 +796,7 @@ function parseEnvironment(src: string, start: number, ctx: Ctx): { box: Box; end
 		const grid = gridBox(cells, align, () => 2, 1);
 		return { box: delimBox(grid, gridDelims[0], gridDelims[1]), end: env.end };
 	}
-	if (!DISPLAY_ROW_ENVIRONMENTS[base]) {
+	if (!DISPLAY_ROW_ENVIRONMENTS.has(base)) {
 		return { box: textBox(latexToUnicode(ctx.wrap(src.slice(start, env.end)))), end: env.end };
 	}
 	let bodyStart = env.bodyStart;
@@ -869,339 +875,408 @@ function parseExpr(src: string, ctx: Ctx = ROOT_CTX): Box {
 	}
 	blockDepth++;
 	try {
-		return parseExprInner(src, ctx);
+		return new ExprParser(src, ctx).parse();
 	} finally {
 		blockDepth--;
 	}
 }
 
-function parseExprInner(src: string, ctx: Ctx = ROOT_CTX): Box {
-	const boxes: Box[] = [];
-	let inline = "";
-	let color = "";
-	let colorScope: ((text: string) => string) | null = null;
-	const flush = (): void => {
-		if (!inline) return;
-		boxes.push(textBox(latexToUnicode(ctx.wrap(color + inline))));
-		inline = "";
-	};
+/**
+ * The converter falls back to `^(…)`/`_(…)` when any character of a script
+ * lacks a Unicode script form; those scripts get real raised/lowered boxes.
+ */
+function isUnconvertibleScript(raw: string | undefined): boolean {
+	if (raw === undefined) return false;
+	const flat = latexToUnicode(raw);
+	return flat.startsWith("^") || flat.startsWith("_");
+}
+
+/** `\left … \middle … \right` as stretched delimiter columns around the parsed segments. */
+function leftRightBox(lr: LeftRightParts, segments: Box[], height: number, above: number): Box {
+	const parts: Box[] = [];
+	const left = delimColumn(delimKey(lr.left), height, above);
+	if (left) parts.push(left);
+	for (let s = 0; s < segments.length; s++) {
+		parts.push(segments[s]);
+		if (s < lr.middles.length) {
+			const middle = delimColumn(delimKey(lr.middles[s]), height, above);
+			if (middle) parts.push(middle);
+		}
+	}
+	const right = delimColumn(delimKey(lr.right), height, above);
+	if (right) parts.push(right);
+	return hconcat(parts);
+}
+
+/**
+ * One left-to-right pass over a math fragment. Finished 2-D constructs collect
+ * in `#boxes`; flat text accumulates in `#inline` and becomes one
+ * `latexToUnicode` box on the next `#flush`. `#color`/`#colorScope` track the
+ * active `\color` switch, which applies to every later run and box in this
+ * fragment. Each `#…` handler consumes one construct at `#i` and advances it.
+ */
+class ExprParser {
+	readonly #src: string;
+	readonly #ctx: Ctx;
+	readonly #boxes: Box[] = [];
+	#inline = "";
+	#color = "";
+	#colorScope: ((text: string) => string) | null = null;
+	#i = 0;
+
+	constructor(src: string, ctx: Ctx) {
+		this.#src = src;
+		this.#ctx = ctx;
+	}
+
+	parse(): Box {
+		const src = this.#src;
+		while (this.#i < src.length) {
+			const c = src[this.#i];
+			if (c === "\\") {
+				this.#command();
+			} else if (c === "^" || c === "_") {
+				this.#scripts(c);
+			} else if (c === "{") {
+				this.#braceGroup();
+			} else if (!((c === "(" || c === "[") && this.#bareDelimiter(c))) {
+				this.#inline += c;
+				this.#i++;
+			}
+		}
+		this.#flush();
+		if (this.#boxes.length === 0) return textBox("");
+		return hconcat(this.#boxes);
+	}
+
+	#flush(): void {
+		if (!this.#inline) return;
+		this.#boxes.push(textBox(latexToUnicode(this.#ctx.wrap(this.#color + this.#inline))));
+		this.#inline = "";
+	}
+
 	/** Child context carrying the enclosing wrapper plus current color state. */
-	const inner = (): Ctx => {
-		if (!color) return ctx;
-		const pre = color;
+	#inner(): Ctx {
+		if (!this.#color) return this.#ctx;
+		const pre = this.#color;
+		const ctx = this.#ctx;
 		return { wrap: run => ctx.wrap(pre + run) };
-	};
+	}
+
 	/** Apply the active `\color` scope to a structural box's glyphs. */
-	const paint = (box: Box): Box => (colorScope === null ? box : colorizeBox(box, colorScope));
-	let i = 0;
-	while (i < src.length) {
-		const c = src[i];
-		if (c === "\\") {
-			let j = i + 1;
-			let name = "";
-			while (j < src.length && /[A-Za-z]/.test(src[j])) {
-				name += src[j];
-				j++;
-			}
-			if (name && FRAC_COMMANDS[name]) {
-				flush();
-				const num = readArg(src, j);
-				const den = readArg(src, num.end);
-				boxes.push(paint(fracBox(parseExpr(num.text, inner()), parseExpr(den.text, inner()))));
-				i = den.end;
+	#paint(box: Box): Box {
+		return this.#colorScope === null ? box : colorizeBox(box, this.#colorScope);
+	}
+
+	/** Flush the pending run, then append a finished structural box. */
+	#emit(box: Box): void {
+		this.#flush();
+		this.#boxes.push(this.#paint(box));
+	}
+
+	#command(): void {
+		const src = this.#src;
+		let j = this.#i + 1;
+		while (j < src.length && isAsciiLetter(src.charCodeAt(j))) j++;
+		const name = src.slice(this.#i + 1, j);
+		if (!name) {
+			// Non-letter command (`\\`, `\,`, `\{`, …): keep the 2-char token inline.
+			this.#inline += `\\${src[j] ?? ""}`;
+			this.#i = j + 1;
+			return;
+		}
+		if (FRAC_COMMANDS.has(name)) return this.#twoArgs(j, fracBox);
+		if (BINOM_COMMANDS.has(name)) return this.#twoArgs(j, binomBox);
+		if (name === "sqrt") return this.#sqrt(j);
+		if (name === "left" && this.#leftRight()) return;
+		if (LIMIT_OPERATORS.has(name) || INTEGRAL_OPERATORS.has(name)) return this.#bigOperator(name, j);
+		if (name === "color" || name === "normalcolor") return this.#setColor(name, j);
+		if (name === "begin" && this.#environment()) return;
+		if ((MATH_FONT_COMMANDS.has(name) || name === "textcolor") && this.#scopedWrapper(name, j)) return;
+		this.#otherCommand(name, j);
+	}
+
+	/** `\frac{a}{b}` / `\binom{n}{k}`: two arguments laid out by `layout`. */
+	#twoArgs(j: number, layout: (first: Box, second: Box) => Box): void {
+		const first = readArg(this.#src, j);
+		const second = readArg(this.#src, first.end);
+		this.#flush();
+		this.#boxes.push(
+			this.#paint(layout(parseExpr(first.text, this.#inner()), parseExpr(second.text, this.#inner()))),
+		);
+		this.#i = second.end;
+	}
+
+	#sqrt(j: number): void {
+		const src = this.#src;
+		let k = j;
+		while (src[k] === " ") k++;
+		let degree: string | null = null;
+		if (src[k] === "[") {
+			const close = src.indexOf("]", k);
+			degree = src.slice(k + 1, close === -1 ? src.length : close);
+			k = close === -1 ? src.length : close + 1;
+		}
+		const arg = readArg(src, k);
+		// Display style always draws the roof (like LaTeX); inline math
+		// keeps the flat `√(…)` form via latexToUnicode.
+		this.#flush();
+		this.#boxes.push(this.#paint(radicalBox(parseExpr(arg.text, this.#inner()), degree)));
+		this.#i = arg.end;
+	}
+
+	/** `\left … \right`; false when the pair is unbalanced and `\left` stays an ordinary command. */
+	#leftRight(): boolean {
+		const lr = readLeftRight(this.#src, this.#i);
+		if (!lr) return false;
+		const segBoxes = lr.segments.map(segment => parseExpr(segment, this.#inner()));
+		let above = 0;
+		let below = 0;
+		for (const b of segBoxes) {
+			above = Math.max(above, b.baseline);
+			below = Math.max(below, b.lines.length - 1 - b.baseline);
+		}
+		const height = above + below + 1;
+		if (height === 1) {
+			// Single-line: keep the whole span inline so converter
+			// state (fonts, colors, spacing) is preserved.
+			this.#inline += this.#src.slice(this.#i, lr.end);
+		} else {
+			this.#emit(leftRightBox(lr, segBoxes, height, above));
+		}
+		this.#i = lr.end;
+		return true;
+	}
+
+	/** `\sum`, `\lim`, `\int`, …, honoring a trailing `\limits` / `\nolimits`. */
+	#bigOperator(name: string, j: number): void {
+		const src = this.#src;
+		let k = j;
+		while (src[k] === " ") k++;
+		let stack = LIMIT_OPERATORS.has(name);
+		let resume = j; // resume point when the operator stays inline
+		if (src.startsWith("\\limits", k) && !isAsciiLetter(src.charCodeAt(k + 7))) {
+			stack = true;
+			resume = k = k + 7;
+		} else if (src.startsWith("\\nolimits", k) && !isAsciiLetter(src.charCodeAt(k + 9))) {
+			stack = false;
+			resume = k + 9;
+		}
+		if (stack && this.#stackedLimits(name, k)) return;
+		this.#inline += `\\${name}`;
+		this.#i = resume;
+	}
+
+	/** Stack the operator's `_`/`^` scripts starting at `k` above and below it; false when it has none. */
+	#stackedLimits(name: string, k: number): boolean {
+		const src = this.#src;
+		let subText: string | null = null;
+		let supText: string | null = null;
+		let m = k;
+		for (;;) {
+			// Peek past spaces without consuming them, so a run
+			// following the operator keeps its leading space.
+			let n = m;
+			while (src[n] === " ") n++;
+			if (src[n] === "_" && subText === null) {
+				const arg = readArg(src, n + 1);
+				subText = arg.text;
+				m = arg.end;
 				continue;
 			}
-			if (name && BINOM_COMMANDS[name]) {
-				flush();
-				const top = readArg(src, j);
-				const bottom = readArg(src, top.end);
-				boxes.push(paint(binomBox(parseExpr(top.text, inner()), parseExpr(bottom.text, inner()))));
-				i = bottom.end;
+			if (src[n] === "^" && supText === null) {
+				const arg = readArg(src, n + 1);
+				supText = arg.text;
+				m = arg.end;
 				continue;
 			}
-			if (name === "sqrt") {
-				let k = j;
+			break;
+		}
+		if (subText === null && supText === null) return false;
+		this.#flush();
+		const glyph = textBox(latexToUnicode(this.#ctx.wrap(`${this.#color}\\${name}`)));
+		const sub = subText === null ? null : parseExpr(subText, this.#inner());
+		const sup = supText === null ? null : parseExpr(supText, this.#inner());
+		this.#boxes.push(this.#paint(limitsBox(glyph, sub, sup)));
+		this.#i = m;
+		return true;
+	}
+
+	/** `\color{…}` / `\color[model]{…}` / `\normalcolor`: switch the color for the rest of the fragment. */
+	#setColor(name: string, j: number): void {
+		this.#flush(); // preceding run keeps the previous color
+		if (name === "normalcolor") {
+			this.#color = "";
+			this.#colorScope = null;
+			this.#i = j;
+			return;
+		}
+		const src = this.#src;
+		let k = j;
+		while (src[k] === " ") k++;
+		let opt = "";
+		if (src[k] === "[") {
+			const close = src.indexOf("]", k);
+			if (close !== -1) {
+				opt = src.slice(k, close + 1);
+				k = close + 1;
 				while (src[k] === " ") k++;
-				let degree: string | null = null;
-				if (src[k] === "[") {
-					const close = src.indexOf("]", k);
-					degree = src.slice(k + 1, close === -1 ? src.length : close);
-					k = close === -1 ? src.length : close + 1;
-				}
-				const arg = readArg(src, k);
-				// Display style always draws the roof (like LaTeX); inline math
-				// keeps the flat `√(…)` form via latexToUnicode.
-				flush();
-				boxes.push(paint(radicalBox(parseExpr(arg.text, inner()), degree)));
-				i = arg.end;
-				continue;
 			}
-			if (name === "left") {
-				const lr = readLeftRight(src, i);
-				if (lr) {
-					const segBoxes = lr.segments.map(segment => parseExpr(segment, inner()));
-					let above = 0;
-					let below = 0;
-					for (const b of segBoxes) {
-						above = Math.max(above, b.baseline);
-						below = Math.max(below, b.lines.length - 1 - b.baseline);
-					}
-					const height = above + below + 1;
-					if (height === 1) {
-						// Single-line: keep the whole span inline so converter
-						// state (fonts, colors, spacing) is preserved.
-						inline += src.slice(i, lr.end);
-						i = lr.end;
-						continue;
-					}
-					flush();
-					const parts: Box[] = [];
-					const push = (col: Box | null): void => {
-						if (col) parts.push(col);
-					};
-					push(delimColumn(delimKey(lr.left), height, above));
-					segBoxes.forEach((segment, s) => {
-						parts.push(segment);
-						if (s < lr.middles.length) push(delimColumn(delimKey(lr.middles[s]), height, above));
-					});
-					push(delimColumn(delimKey(lr.right), height, above));
-					boxes.push(paint(hconcat(parts)));
-					i = lr.end;
-					continue;
-				}
-			}
-			if (name && (LIMIT_OPERATORS[name] || INTEGRAL_OPERATORS[name])) {
-				let k = j;
-				while (src[k] === " ") k++;
-				let stack = LIMIT_OPERATORS[name] === true;
-				let resume = j; // resume point when the operator stays inline
-				if (src.startsWith("\\limits", k) && !/[A-Za-z]/.test(src[k + 7] ?? "")) {
-					stack = true;
-					resume = k = k + 7;
-				} else if (src.startsWith("\\nolimits", k) && !/[A-Za-z]/.test(src[k + 9] ?? "")) {
-					stack = false;
-					resume = k + 9;
-				}
-				if (stack) {
-					let subText: string | null = null;
-					let supText: string | null = null;
-					let m = k;
-					for (;;) {
-						// Peek past spaces without consuming them, so a run
-						// following the operator keeps its leading space.
-						let n = m;
-						while (src[n] === " ") n++;
-						if (src[n] === "_" && subText === null) {
-							const arg = readArg(src, n + 1);
-							subText = arg.text;
-							m = arg.end;
-							continue;
-						}
-						if (src[n] === "^" && supText === null) {
-							const arg = readArg(src, n + 1);
-							supText = arg.text;
-							m = arg.end;
-							continue;
-						}
-						break;
-					}
-					if (subText !== null || supText !== null) {
-						flush();
-						const glyph = textBox(latexToUnicode(ctx.wrap(`${color}\\${name}`)));
-						boxes.push(
-							paint(
-								limitsBox(
-									glyph,
-									subText === null ? null : parseExpr(subText, inner()),
-									supText === null ? null : parseExpr(supText, inner()),
-								),
-							),
-						);
-						i = m;
-						continue;
-					}
-				}
-				inline += `\\${name}`;
-				i = resume;
-				continue;
-			}
-			if (name === "color" || name === "normalcolor") {
-				flush(); // preceding run keeps the previous color
-				if (name === "normalcolor") {
-					color = "";
-					colorScope = null;
-					i = j;
-					continue;
-				}
-				let k = j;
-				while (src[k] === " ") k++;
-				let opt = "";
-				if (src[k] === "[") {
-					const close = src.indexOf("]", k);
-					if (close !== -1) {
-						opt = src.slice(k, close + 1);
-						k = close + 1;
-						while (src[k] === " ") k++;
-					}
-				}
-				if (src[k] === "{") {
-					const spec = readBraceGroup(src, k);
-					color = `\\color${opt}{${spec.text}}`;
-					colorScope = latexColorScope(opt ? opt.slice(1, -1).trim() : null, spec.text);
-					i = spec.end;
-				} else {
-					color = "";
-					colorScope = null;
-					i = k;
-				}
-				continue;
-			}
-			if (name === "begin") {
-				const env = parseEnvironment(src, i, inner());
-				if (env) {
-					flush();
-					boxes.push(paint(env.box));
-					i = env.end;
-					continue;
-				}
-			}
-			if (name && (MATH_FONT_COMMANDS.has(name) || name === "textcolor")) {
-				// Scoped wrapper around 2-D content: recurse with the wrapper
-				// re-applied to every inline run, so styling crosses boxes.
-				let k = j;
-				while (src[k] === " ") k++;
-				let prefix = `\\${name}`;
-				let scope: ((text: string) => string) | null = null;
-				if (name === "textcolor") {
-					let model: string | null = null;
-					if (src[k] === "[") {
-						const close = src.indexOf("]", k);
-						if (close !== -1) {
-							model = src.slice(k + 1, close).trim();
-							prefix += src.slice(k, close + 1);
-							k = close + 1;
-							while (src[k] === " ") k++;
-						}
-					}
-					if (src[k] !== "{") {
-						inline += `\\${name}`;
-						i = j;
-						continue;
-					}
-					const spec = readBraceGroup(src, k);
-					prefix += `{${spec.text}}`;
-					scope = latexColorScope(model, spec.text);
-					k = spec.end;
+		}
+		if (src[k] === "{") {
+			const spec = readBraceGroup(src, k);
+			this.#color = `\\color${opt}{${spec.text}}`;
+			this.#colorScope = latexColorScope(opt ? opt.slice(1, -1).trim() : null, spec.text);
+			this.#i = spec.end;
+		} else {
+			this.#color = "";
+			this.#colorScope = null;
+			this.#i = k;
+		}
+	}
+
+	/** `\begin{env}…\end{env}`; false when unbalanced and `\begin` stays an ordinary command. */
+	#environment(): boolean {
+		const env = parseEnvironment(this.#src, this.#i, this.#inner());
+		if (!env) return false;
+		this.#emit(env.box);
+		this.#i = env.end;
+		return true;
+	}
+
+	/**
+	 * Scoped wrapper around 2-D content (`\mathbf{…}`, `\textcolor{c}{…}`):
+	 * recurse with the wrapper re-applied to every inline run, so styling
+	 * crosses boxes. False when no `{…}` body follows a font command, which
+	 * then stays an ordinary command.
+	 */
+	#scopedWrapper(name: string, j: number): boolean {
+		const src = this.#src;
+		let k = j;
+		while (src[k] === " ") k++;
+		let prefix = `\\${name}`;
+		let scope: ((text: string) => string) | null = null;
+		if (name === "textcolor") {
+			let model: string | null = null;
+			if (src[k] === "[") {
+				const close = src.indexOf("]", k);
+				if (close !== -1) {
+					model = src.slice(k + 1, close).trim();
+					prefix += src.slice(k, close + 1);
+					k = close + 1;
 					while (src[k] === " ") k++;
 				}
-				if (src[k] === "{") {
-					const content = readBraceGroup(src, k);
-					flush();
-					const pre = color;
-					let box = parseExpr(content.text, { wrap: run => ctx.wrap(`${pre}${prefix}{${run}}`) });
-					if (scope !== null) box = colorizeBox(box, scope);
-					boxes.push(paint(box));
-					i = content.end;
-					continue;
-				}
 			}
-			if (!name) {
-				// Non-letter command (`\\`, `\,`, `\{`, …): keep the 2-char token inline.
-				inline += `\\${src[j] ?? ""}`;
-				i = j + 1;
-				continue;
+			if (src[k] !== "{") {
+				this.#inline += `\\${name}`;
+				this.#i = j;
+				return true;
 			}
-			// Other command: keep it and its bracket/brace arguments inline so a
-			// `{…}` argument is never mistaken for a top-level stacking group.
-			inline += `\\${name}`;
-			i = j;
-			while (src[i] === "[" || src[i] === "{") {
-				if (src[i] === "{") {
-					const group = readBraceGroup(src, i);
-					inline += `{${group.text}}`;
-					i = group.end;
-				} else {
-					const close = src.indexOf("]", i);
-					const end = close === -1 ? src.length : close + 1;
-					inline += src.slice(i, end);
-					i = end;
-				}
-			}
-			continue;
+			const spec = readBraceGroup(src, k);
+			prefix += `{${spec.text}}`;
+			scope = latexColorScope(model, spec.text);
+			k = spec.end;
+			while (src[k] === " ") k++;
 		}
-		if (c === "^" || c === "_") {
-			const first = readScript(src, i);
-			// Consume an immediately following opposite script (`M_i^j`) so both
-			// land in one shared column instead of two successive ones.
-			let second: Span | null = null;
-			let n = first.end;
-			while (src[n] === " ") n++;
-			if (src[n] === (c === "^" ? "_" : "^")) second = readScript(src, n);
-			const end = second === null ? first.end : second.end;
-			const supText = c === "^" ? first.text : second?.text;
-			const subText = c === "_" ? first.text : second?.text;
-			const supBox = supText === undefined ? null : parseExpr(scriptArgOf(supText), inner());
-			const subBox = subText === undefined ? null : parseExpr(scriptArgOf(subText), inner());
-			// The converter falls back to `^(…)`/`_(…)` when any character lacks a
-			// Unicode script form; those scripts get real raised/lowered boxes.
-			const unconvertible = (raw: string | undefined): boolean => {
-				if (raw === undefined) return false;
-				const flat = latexToUnicode(raw);
-				return flat.startsWith("^") || flat.startsWith("_");
-			};
-			const tall = (supBox !== null && supBox.lines.length > 1) || (subBox !== null && subBox.lines.length > 1);
-			if (tall || unconvertible(supText) || unconvertible(subText)) {
-				// Block script (`x^{\frac{1}{2}}`, `x^q`): raise/lower the boxes
-				// against the run or box they follow.
-				flush();
-				const base = boxes.pop() ?? textBox("");
-				boxes.push(paint(attachScripts(base, subBox, supBox)));
-				i = end;
-				continue;
-			}
-			const last = boxes[boxes.length - 1];
-			if (inline === "" && last !== undefined && last.lines.length > 1) {
-				// Scripts directly on a tall box (`M^T`, `\right|_{x=a}`): pin
-				// the Unicode script glyphs (guaranteed convertible here after
-				// the gate above) to its corners.
-				const corner = (raw: string | undefined): Box | null =>
-					raw === undefined ? null : textBox(latexToUnicode(ctx.wrap(color + raw)));
-				boxes[boxes.length - 1] = paint(attachScripts(last, corner(subText), corner(supText)));
-				i = end;
-				continue;
-			}
-			inline += src.slice(i, end);
-			i = end;
-			continue;
-		}
-		if (c === "{") {
-			const group = readBraceGroup(src, i);
-			flush();
-			boxes.push(paint(parseExpr(group.text, inner())));
-			i = group.end;
-			continue;
-		}
-		if (c === "(" || c === "[") {
-			// Bare delimiters stretch when their content is tall (common in
-			// model output that omits `\left`/`\right`).
-			const closeCh = c === "(" ? ")" : "]";
-			const close = matchDelim(src, i, c, closeCh);
-			if (close !== -1) {
-				const innerBox = parseExpr(src.slice(i + 1, close), inner());
-				if (innerBox.lines.length > 1) {
-					flush();
-					boxes.push(paint(delimBox(innerBox, c, closeCh)));
-					i = close + 1;
-					continue;
-				}
-			}
-		}
-		inline += c;
-		i++;
+		if (src[k] !== "{") return false;
+		const content = readBraceGroup(src, k);
+		this.#flush();
+		const pre = this.#color;
+		const ctx = this.#ctx;
+		let box = parseExpr(content.text, { wrap: run => ctx.wrap(`${pre}${prefix}{${run}}`) });
+		if (scope !== null) box = colorizeBox(box, scope);
+		this.#boxes.push(this.#paint(box));
+		this.#i = content.end;
+		return true;
 	}
-	flush();
-	if (boxes.length === 0) return textBox("");
-	return hconcat(boxes);
+
+	/**
+	 * Any other command: keep it and its bracket/brace arguments inline so a
+	 * `{…}` argument is never mistaken for a top-level stacking group.
+	 */
+	#otherCommand(name: string, j: number): void {
+		const src = this.#src;
+		this.#inline += `\\${name}`;
+		let i = j;
+		while (src[i] === "[" || src[i] === "{") {
+			if (src[i] === "{") {
+				const group = readBraceGroup(src, i);
+				this.#inline += `{${group.text}}`;
+				i = group.end;
+			} else {
+				const close = src.indexOf("]", i);
+				const end = close === -1 ? src.length : close + 1;
+				this.#inline += src.slice(i, end);
+				i = end;
+			}
+		}
+		this.#i = i;
+	}
+
+	/** `^`/`_` scripts, consuming an immediately following opposite script. */
+	#scripts(c: "^" | "_"): void {
+		const src = this.#src;
+		const start = this.#i;
+		const first = readScript(src, start);
+		// Consume an immediately following opposite script (`M_i^j`) so both
+		// land in one shared column instead of two successive ones.
+		let second: Span | null = null;
+		let n = first.end;
+		while (src[n] === " ") n++;
+		if (src[n] === (c === "^" ? "_" : "^")) second = readScript(src, n);
+		const end = second === null ? first.end : second.end;
+		const supText = c === "^" ? first.text : second?.text;
+		const subText = c === "_" ? first.text : second?.text;
+		const supBox = supText === undefined ? null : parseExpr(scriptArgOf(supText), this.#inner());
+		const subBox = subText === undefined ? null : parseExpr(scriptArgOf(subText), this.#inner());
+		this.#i = end;
+		const tall = (supBox !== null && supBox.lines.length > 1) || (subBox !== null && subBox.lines.length > 1);
+		if (tall || isUnconvertibleScript(supText) || isUnconvertibleScript(subText)) {
+			// Block script (`x^{\frac{1}{2}}`, `x^q`): raise/lower the boxes
+			// against the run or box they follow.
+			this.#flush();
+			const base = this.#boxes.pop() ?? textBox("");
+			this.#boxes.push(this.#paint(attachScripts(base, subBox, supBox)));
+			return;
+		}
+		const boxes = this.#boxes;
+		const last = boxes[boxes.length - 1];
+		if (this.#inline === "" && last !== undefined && last.lines.length > 1) {
+			// Scripts directly on a tall box (`M^T`, `\right|_{x=a}`): pin
+			// the Unicode script glyphs (guaranteed convertible here after
+			// the gate above) to its corners.
+			boxes[boxes.length - 1] = this.#paint(attachScripts(last, this.#corner(subText), this.#corner(supText)));
+			return;
+		}
+		this.#inline += src.slice(start, end);
+	}
+
+	/** A convertible script as a flat corner glyph in the active color. */
+	#corner(raw: string | undefined): Box | null {
+		return raw === undefined ? null : textBox(latexToUnicode(this.#ctx.wrap(this.#color + raw)));
+	}
+
+	#braceGroup(): void {
+		const group = readBraceGroup(this.#src, this.#i);
+		this.#emit(parseExpr(group.text, this.#inner()));
+		this.#i = group.end;
+	}
+
+	/**
+	 * Bare delimiters stretch when their content is tall (common in model
+	 * output that omits `\left`/`\right`). False when unbalanced or flat, and
+	 * the opening character stays in the inline run.
+	 */
+	#bareDelimiter(c: "(" | "["): boolean {
+		const closeCh = c === "(" ? ")" : "]";
+		const close = matchDelim(this.#src, this.#i, c, closeCh);
+		if (close === -1) return false;
+		const innerBox = parseExpr(this.#src.slice(this.#i + 1, close), this.#inner());
+		if (innerBox.lines.length <= 1) return false;
+		this.#emit(delimBox(innerBox, c, closeCh));
+		this.#i = close + 1;
+		return true;
+	}
 }
 
 /**

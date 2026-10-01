@@ -6,18 +6,20 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 } from "@veyyon/agent-core";
-import { escapeXmlAttribute, escapeXmlText } from "@veyyon/utils";
+import { escapeXmlAttribute, escapeXmlText, lazy } from "@veyyon/utils";
 import { type } from "arktype";
 import { advisorPrompts } from "../prompts/advisor/rows";
 
-const adviseSchema = type({
-	note: type("string").describe(
-		"One concrete piece of advice for the agent you are watching. Terse, specific, actionable.",
-	),
-	"severity?": type("'nit' | 'concern' | 'blocker'").describe("How strongly to weigh this. Omit for a plain nit."),
-});
+const adviseSchema = lazy(() =>
+	type({
+		note: type("string").describe(
+			"One concrete piece of advice for the agent you are watching. Terse, specific, actionable.",
+		),
+		"severity?": type("'nit' | 'concern' | 'blocker'").describe("How strongly to weigh this. Omit for a plain nit."),
+	}),
+);
 
-export type AdviseParams = typeof adviseSchema.infer;
+export type AdviseParams = typeof adviseSchema.value.infer;
 
 export type AdvisorSeverity = "nit" | "concern" | "blocker";
 
@@ -79,7 +81,7 @@ export function isInterruptingSeverity(severity: AdvisorSeverity | undefined): b
  * Append a staleness caveat to an advisor note when newer primary turns arrived
  * after the reviewed transcript window (i.e. `hasFreshBacklog` is true on the
  * advisor runtime at delivery time). Pure function — no session coupling — so it
- * can be unit-tested in isolation and called from `AgentSession#routeAdvice`.
+ * can be unit-tested in isolation and called from `AdvisorRoster#routeAdvice`.
  */
 export function annotateForStaleness(note: string, hasFreshBacklog: boolean): string {
 	if (!hasFreshBacklog) return note;
@@ -172,11 +174,13 @@ function advisorSeverityRank(severity: AdvisorSeverity | undefined): number {
 	return ADVISOR_SEVERITY_RANK[severity ?? "nit"];
 }
 
-export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails> {
+export class AdviseTool implements AgentTool<typeof adviseSchema.value, AdviseDetails> {
 	readonly name = "advise";
 	readonly label = "Advise";
 	readonly description = advisorPrompts["advisor/advise-tool"].text;
-	readonly parameters = adviseSchema;
+	get parameters(): typeof adviseSchema.value {
+		return adviseSchema.value;
+	}
 	readonly intent = "omit" as const;
 	/** Highest delivered severity rank per normalized note. A new call passes
 	 *  through only when its rank strictly exceeds the recorded one (a real

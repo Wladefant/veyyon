@@ -101,6 +101,22 @@ export interface MnemopiSubprocessEmbeddingModel {
 	embed(texts: string[], batchSize?: number): AsyncIterable<number[][]>;
 }
 
+/**
+ * Upper bound on a steady-state embed IPC round-trip. Initialization is
+ * intentionally exempt: bundled installs may spend several minutes installing
+ * fastembed and bootstrapping the model, and killing that worker can strand the
+ * runtime install lock. Once initialization succeeds, a longer embed stall
+ * means a hung native runtime (issue #4792) that would otherwise pin whatever
+ * awaits the embed — a turn's memory recall or the headless shutdown
+ * consolidation — indefinitely, leaving the process alive with an unreaped
+ * `__omp_worker_mnemopi_embed` child (issue #7352). On expiry the embed fails
+ * and the worker is SIGKILL-reaped so the next request respawns a fresh one.
+ */
+export const EMBED_REQUEST_TIMEOUT_MS = 120_000;
+
+/** Race marker for {@link MnemopiEmbedClient.#awaitRequest}. */
+const REQUEST_TIMED_OUT = Symbol("mnemopi.embed.timedOut");
+
 export class MnemopiEmbedClient {
 	#worker: MnemopiEmbedWorkerHandle | null = null;
 	#unsubscribeMessage: (() => void) | null = null;
@@ -108,6 +124,7 @@ export class MnemopiEmbedClient {
 	#pending = new Map<string, PendingRequest>();
 	#nextRequestId = 0;
 	#spawnWorker: () => MnemopiEmbedWorkerHandle;
+	#requestTimeoutMs: number;
 	#idleUnloadMs: number;
 	#idleTimer: NodeJS.Timeout | undefined;
 	/** The kill a request arriving mid-unload waits out before it spawns a replacement. */
@@ -126,10 +143,21 @@ export class MnemopiEmbedClient {
 
 	constructor(
 		spawnWorker: () => MnemopiEmbedWorkerHandle = spawnMnemopiEmbedWorker,
-		idleUnloadMs: number = DEFAULT_EMBED_IDLE_UNLOAD_MS,
+		idleUnloadMsOrOptions:
+			| number
+			| { idleUnloadMs?: number; requestTimeoutMs?: number } = DEFAULT_EMBED_IDLE_UNLOAD_MS,
+		requestTimeoutMs: number = EMBED_REQUEST_TIMEOUT_MS,
 	) {
 		this.#spawnWorker = spawnWorker;
-		this.#idleUnloadMs = parseEmbedIdleUnloadMs(idleUnloadMs);
+		if (typeof idleUnloadMsOrOptions === "object" && idleUnloadMsOrOptions !== null) {
+			this.#idleUnloadMs = parseEmbedIdleUnloadMs(
+				idleUnloadMsOrOptions.idleUnloadMs ?? DEFAULT_EMBED_IDLE_UNLOAD_MS,
+			);
+			this.#requestTimeoutMs = idleUnloadMsOrOptions.requestTimeoutMs ?? EMBED_REQUEST_TIMEOUT_MS;
+		} else {
+			this.#idleUnloadMs = parseEmbedIdleUnloadMs(idleUnloadMsOrOptions);
+			this.#requestTimeoutMs = requestTimeoutMs;
+		}
 	}
 
 	/**
@@ -264,12 +292,38 @@ export class MnemopiEmbedClient {
 			// worker's "embed before init" guard. Worker `ensureLoaded` is
 			// idempotent so steady-state embeds pay no extra cost.
 			worker.send({ type: "embed", id, model, cacheDir, texts, batchSize });
-			const result = await promise;
+			const result = await this.#awaitRequest(promise);
 			if (result instanceof Error) throw result;
 			return result;
 		} finally {
 			this.#pending.delete(id);
 			this.#armIdleTimer();
+		}
+	}
+
+	/**
+	 * Await one steady-state embed reply, bounded by
+	 * {@link EMBED_REQUEST_TIMEOUT_MS}. The timeout timer is `unref`'d so a
+	 * pending request never keeps the parent event loop alive on its own (the
+	 * awaiting caller does). On expiry the wedged worker is SIGKILL-reaped via
+	 * `#reap` — faulting any other in-flight request and letting the
+	 * next call respawn a fresh child — before the request rejects, so a hung
+	 * native runtime cannot pin a turn's recall or shutdown consolidation
+	 * forever (issue #7352).
+	 */
+	async #awaitRequest<T>(promise: Promise<T>): Promise<T> {
+		const { promise: timedOut, resolve: fire } = Promise.withResolvers<typeof REQUEST_TIMED_OUT>();
+		const timer = setTimeout(() => fire(REQUEST_TIMED_OUT), this.#requestTimeoutMs);
+		timer.unref?.();
+		try {
+			const winner = await Promise.race([promise, timedOut]);
+			if (winner === REQUEST_TIMED_OUT) {
+				void this.#reap();
+				throw new Error("mnemopi embed worker request timed out");
+			}
+			return winner;
+		} finally {
+			clearTimeout(timer);
 		}
 	}
 

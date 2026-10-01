@@ -1,17 +1,21 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { isEnoent } from "@veyyon/utils/fs-error";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import * as logger from "@veyyon/utils/logger";
-import { readLines } from "@veyyon/utils/stream";
+import { StreamFrameLimitError, streamFrameCeiling } from "@veyyon/utils/stream";
 import {
 	BlobStore,
 	blobsDirForSessionDir,
 	isBlobRef,
 	isTextBlobRef,
 	resolveImageData,
+	resolveImageDataSync,
 	resolveImageDataUrl,
+	resolveImageDataUrlSync,
 	resolveTextBlobRef,
+	resolveTextBlobRefSync,
 } from "./blob-store";
 import type { OperatorNotices } from "./operator-notices";
 import { buildSessionContext } from "./session-context";
@@ -25,7 +29,7 @@ import {
 import { checkSessionEntryShape } from "./session-entry-shape";
 import { migrateToCurrentVersion } from "./session-migrations";
 import { isImageBlock, isImageDataPayload } from "./session-persistence";
-import { FileSessionStorage, type SessionStorage } from "./session-storage";
+import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import {
 	parseTitleSlotFromContent,
 	parseTitleSlotLine,
@@ -57,20 +61,33 @@ export class CorruptSessionFileError extends Error {
 	}
 }
 
+/**
+ * Where a file's records sit, for a file laid out the way a publish writes it: a fixed-width title
+ * slot, then one line per record. Every line parsed, no record was dropped or re-linked, and `end`
+ * is the byte just past the last record's newline, so the file holds nothing else when `end` is
+ * its size.
+ */
+export interface SessionRecordLayout {
+	/** The header line as read, newline included. */
+	header: string;
+	/** Byte offset of each record line after the header, parallel to `entries.slice(1)`. */
+	entryOffsets: number[];
+	/** Byte offset just past the last record's newline. */
+	end: number;
+}
+
 function splitTitleSlot(content: string): {
 	body: string;
 	slot: SessionTitleUpdate | undefined;
-	startLine: number;
-	startByteOffset: number;
+	slotLineBytes: number | undefined;
 } {
 	const slot = titleUpdateFromSlot(parseTitleSlotFromContent(content));
-	if (!slot) return { body: content, slot: undefined, startLine: 1, startByteOffset: 1 };
+	if (!slot) return { body: content, slot: undefined, slotLineBytes: undefined };
 	const newlineIndex = content.indexOf("\n");
 	return {
 		body: content.slice(newlineIndex + 1),
 		slot,
-		startLine: 2,
-		startByteOffset: Buffer.byteLength(content.slice(0, newlineIndex + 1), "utf-8") + 1,
+		slotLineBytes: Buffer.byteLength(content.slice(0, newlineIndex), "utf-8"),
 	};
 }
 
@@ -171,27 +188,33 @@ class SessionRecordLoop {
 	readonly #streaming: boolean;
 	readonly #logSource: string | undefined;
 	readonly #notices: SessionLoadOptions;
-	#line: number;
-	#byteOffset: number;
+	#line = 1;
+	#byteOffset = 1;
+	/** Bytes of the title slot line, newline included, when the file starts with one. */
+	#titleSlotBytes = 0;
+	/** 0-based byte offset of each record line after the header, parallel to `entries.slice(1)`. */
+	readonly #offsets: number[] = [];
+	#headerLine: string | undefined;
+	/** 0-based byte offset just past the last record's newline. */
+	#end = 0;
+	#stitched = 0;
 
-	constructor(options: {
-		streaming: boolean;
-		logSource: string | undefined;
-		notices: SessionLoadOptions;
-		startLine?: number;
-		startByteOffset?: number;
-	}) {
+	constructor(options: { streaming: boolean; logSource: string | undefined; notices: SessionLoadOptions }) {
 		this.#streaming = options.streaming;
 		this.#logSource = options.logSource;
 		this.#notices = options.notices;
-		this.#line = options.startLine ?? 1;
-		this.#byteOffset = options.startByteOffset ?? 1;
 	}
 
-	/** Advance past a line the caller consumed itself, such as the physical title slot. */
+	/** Advance past a line the caller consumed itself. */
 	skip(byteLength: number): void {
 		this.#line += 1;
 		this.#byteOffset += byteLength + 1;
+	}
+
+	/** Advance past the physical title slot, which is not a record. */
+	skipTitleSlot(byteLength: number): void {
+		if (this.#byteOffset === 1) this.#titleSlotBytes = byteLength + 1;
+		this.skip(byteLength);
 	}
 
 	/** Feed one physical line and its byte length. A blank line only moves the cursor. */
@@ -217,7 +240,10 @@ class SessionRecordLoop {
 
 		const shape = checkSessionEntryShape(value);
 		if (shape.ok) {
+			if (this.entries.length === 0) this.#headerLine = text;
+			else this.#offsets.push(this.#byteOffset - 1);
 			this.entries.push(value as FileEntry);
+			this.#end = this.#byteOffset + byteLength;
 		} else {
 			this.#issues.push({ line: this.#line, byteOffset: this.#byteOffset, problem: shape.problem });
 			logger.warn("Dropped a session record that decoded to the wrong shape (data lost)", {
@@ -241,54 +267,121 @@ class SessionRecordLoop {
 			emitDroppedRecordNotice(this.#notices, this.#issues);
 		}
 		const stitched = stitchOrphanedEntries(this.entries);
+		this.#stitched = stitched;
 		if (stitched > 0) {
 			logger.warn("Re-linked session records whose parent was lost", { source: this.#logSource, stitched });
 			emitStitchedRecordNotice(this.#notices, stitched);
 		}
 		return this.entries;
 	}
+
+	/**
+	 * Where the records sit, when the file read so far is laid out the way a publish writes it (see
+	 * {@link SessionRecordLayout}). Read after {@link finish}.
+	 */
+	layout(): SessionRecordLayout | undefined {
+		if (this.#titleSlotBytes !== SESSION_TITLE_SLOT_BYTES || this.#headerLine === undefined) return undefined;
+		if (this.#issues.length > 0 || this.#stitched > 0) return undefined;
+		// The header line is a slice of the file text read to find it, and a slice shares that text's
+		// buffer: holding it for the session's life would hold every byte of the file with it. The copy
+		// holds the header's bytes alone.
+		const header = Buffer.from(`${this.#headerLine}\n`, "utf-8").toString("utf-8");
+		return { header, entryOffsets: this.#offsets, end: this.#end };
+	}
+}
+
+/** What one read of a session file produced, from either load path. */
+export interface ParsedSessionContent {
+	entries: FileEntry[];
+	titleSlot: SessionTitleUpdate | undefined;
+	layout: SessionRecordLayout | undefined;
 }
 
 /** Parse session JSONL while stripping and folding the optional fixed title slot. */
-export function parseSessionContent(
-	content: string,
-	context: SessionLoadOptions = {},
-): {
-	entries: FileEntry[];
-	titleSlot: SessionTitleUpdate | undefined;
-} {
-	const { body, slot, startLine, startByteOffset } = splitTitleSlot(content);
-	const loop = new SessionRecordLoop({
-		streaming: false,
-		logSource: context.source,
-		notices: context,
-		startLine,
-		startByteOffset,
-	});
+export function parseSessionContent(content: string, context: SessionLoadOptions = {}): ParsedSessionContent {
+	const { body, slot, slotLineBytes } = splitTitleSlot(content);
+	const loop = new SessionRecordLoop({ streaming: false, logSource: context.source, notices: context });
+	if (slotLineBytes !== undefined) loop.skipTitleSlot(slotLineBytes);
 	for (const rawLine of body.split("\n")) loop.push(rawLine, Buffer.byteLength(rawLine, "utf-8"));
-	return { entries: foldTitleSlot(loop.finish(), slot), titleSlot: slot };
+	return { entries: foldTitleSlot(loop.finish(), slot), titleSlot: slot, layout: loop.layout() };
+}
+
+/**
+ * How many bytes one read of a streamed session file asks for. Each read is split into lines and
+ * parsed before the next one is issued, so this is the most file text the load holds at once
+ * beyond the one line that spans two reads.
+ */
+const STREAM_READ_BYTES = 1 << 20;
+
+const LINE_FEED = 0x0a;
+
+/**
+ * The text of `bytes[start, end)`, decoded the way `TextDecoder.decode` decodes it: invalid
+ * sequences become U+FFFD and a leading UTF-8 byte order mark is dropped.
+ */
+function decodeLine(bytes: Buffer, start: number, end: number): string {
+	if (end - start >= 3 && bytes[start] === 0xef && bytes[start + 1] === 0xbb && bytes[start + 2] === 0xbf) start += 3;
+	return bytes.toString("utf-8", start, end);
+}
+
+/**
+ * Hand each line of the file at `filePath` to `onLine`, with its byte length, reading
+ * {@link STREAM_READ_BYTES} at a time. A line is the bytes before a line feed, or the bytes after
+ * the last one when the file does not end with one; an empty line is a line. A line longer than
+ * the stream frame bound fails with `StreamFrameLimitError`, as every line reader does.
+ *
+ * Each read is split synchronously: an async iterator over lines cost one promise per line, and
+ * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
+ */
+async function forEachFileLine(filePath: string, onLine: (text: string, byteLength: number) => void): Promise<void> {
+	const limit = streamFrameCeiling();
+	const handle = await fs.promises.open(filePath, "r");
+	try {
+		let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
+		// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
+		let carried = 0;
+		for (;;) {
+			if (carried === buffer.length) {
+				const grown = Buffer.allocUnsafe(buffer.length * 2);
+				buffer.copy(grown, 0, 0, carried);
+				buffer = grown;
+			}
+			const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, null);
+			const filled = buffer.subarray(0, carried + bytesRead);
+			let start = 0;
+			for (let end = filled.indexOf(LINE_FEED, carried); end !== -1; end = filled.indexOf(LINE_FEED, start)) {
+				if (end - start > limit) throw new StreamFrameLimitError("line", end - start, limit);
+				onLine(decodeLine(filled, start, end), end - start);
+				start = end + 1;
+			}
+			carried = filled.length - start;
+			if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
+			if (bytesRead === 0) {
+				if (carried > 0) onLine(decodeLine(filled, start, filled.length), carried);
+				return;
+			}
+			filled.copyWithin(0, start);
+		}
+	} finally {
+		await handle.close();
+	}
 }
 
 /** Exported for testing — the ≥8MiB streaming path (works on any file size). */
 export async function loadEntriesFromFileStream(
 	filePath: string,
 	options: SessionLoadOptions = {},
-): Promise<{
-	entries: FileEntry[];
-	titleSlot: SessionTitleUpdate | undefined;
-}> {
+): Promise<ParsedSessionContent> {
 	let titleSlot: SessionTitleUpdate | undefined;
 	const loop = new SessionRecordLoop({
 		streaming: true,
 		logSource: filePath,
 		notices: { ...options, source: options.source ?? filePath },
 	});
-	const decoder = new TextDecoder();
 	let first = true;
 
 	try {
-		for await (const lineBytes of readLines(Bun.file(filePath).stream())) {
-			const text = decoder.decode(lineBytes);
+		await forEachFileLine(filePath, (text, byteLength) => {
 			if (first) {
 				first = false;
 				// The slot is a fixed-size first line, not a record, so it never reaches the
@@ -296,18 +389,18 @@ export async function loadEntriesFromFileStream(
 				const slot = parseTitleSlotLine(text.trim());
 				if (slot) {
 					titleSlot = titleUpdateFromSlot(slot);
-					loop.skip(lineBytes.byteLength);
-					continue;
+					loop.skipTitleSlot(byteLength);
+					return;
 				}
 			}
-			loop.push(text, lineBytes.byteLength);
-		}
+			loop.push(text, byteLength);
+		});
 	} catch (err) {
-		if (isEnoent(err)) return { entries: [], titleSlot: undefined };
+		if (isEnoent(err)) return { entries: [], titleSlot: undefined, layout: undefined };
 		throw err;
 	}
 
-	return { entries: foldTitleSlot(loop.finish(), titleSlot), titleSlot };
+	return { entries: foldTitleSlot(loop.finish(), titleSlot), titleSlot, layout: loop.layout() };
 }
 
 /** Read only the fixed-size head window to detect a physical title slot. */
@@ -331,28 +424,57 @@ export function parseSessionEntries(content: string): FileEntry[] {
 	return parseSessionContent(content).entries;
 }
 
+/**
+ * Where each record of a loaded file sits, for a file laid out the way a publish writes it (see
+ * {@link SessionRecordLayout}) that was the same object, the same size, before and after the read.
+ * A writer that keeps the bytes before its first changed record can start from this instead of
+ * reading the file back.
+ */
+export interface SessionFileLayout {
+	size: number;
+	/** The storage's identity for the object read (see {@link SessionStorageStat.identity}). */
+	identity: string;
+	/** The header line as read, newline included. */
+	header: string;
+	/** Byte offset of each record line after the header, parallel to `entries.slice(1)`. */
+	entryOffsets: number[];
+}
+
+export interface LoadedSessionFile {
+	entries: FileEntry[];
+	layout: SessionFileLayout | undefined;
+}
+
 /** Exported for testing */
 export async function loadEntriesFromFile(
 	filePath: string,
 	storage: SessionStorage = new FileSessionStorage(),
 	options: SessionLoadOptions = {},
 ): Promise<FileEntry[]> {
-	let loaded: { entries: FileEntry[]; titleSlot: SessionTitleUpdate | undefined };
-	let size: number;
+	return (await loadSessionFile(filePath, storage, options)).entries;
+}
+
+/** Load a session file's entries, and where they sit in it when that can be established. */
+export async function loadSessionFile(
+	filePath: string,
+	storage: SessionStorage = new FileSessionStorage(),
+	options: SessionLoadOptions = {},
+): Promise<LoadedSessionFile> {
+	let loaded: ParsedSessionContent;
+	let before: SessionStorageStat;
 	try {
-		const stat = storage.statSync(filePath);
-		size = stat.size;
+		before = storage.statSync(filePath);
 		loaded =
-			storage instanceof FileSessionStorage && stat.size >= STREAM_LOAD_THRESHOLD_BYTES
+			storage instanceof FileSessionStorage && before.size >= STREAM_LOAD_THRESHOLD_BYTES
 				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath })
 				: parseSessionContent(await storage.readText(filePath), { ...options, source: options.source ?? filePath });
 	} catch (err) {
-		if (isEnoent(err)) return [];
+		if (isEnoent(err)) return { entries: [], layout: undefined };
 		throw err;
 	}
 	const { entries } = loaded;
 
-	if (size === 0) return [];
+	if (before.size === 0) return { entries: [], layout: undefined };
 	if (entries.length === 0) {
 		throw new CorruptSessionFileError(filePath, "the non-empty file has no readable session header");
 	}
@@ -361,7 +483,29 @@ export async function loadEntriesFromFile(
 		throw new CorruptSessionFileError(filePath, "the first readable record is not a session header");
 	}
 
-	return entries;
+	return { entries, layout: verifiedLayout(storage, filePath, before, loaded.layout) };
+}
+
+/**
+ * `layout` as a description of the file at `filePath`, when the read covered all of it and nothing
+ * replaced or grew the file while it was read. Appends only grow a file and a publish replaces the
+ * object, so an unchanged identity and size on both sides of the read rule out both.
+ */
+function verifiedLayout(
+	storage: SessionStorage,
+	filePath: string,
+	before: SessionStorageStat,
+	layout: SessionRecordLayout | undefined,
+): SessionFileLayout | undefined {
+	if (!layout || before.identity === undefined || layout.end !== before.size) return undefined;
+	let after: SessionStorageStat;
+	try {
+		after = storage.statSync(filePath);
+	} catch {
+		return undefined;
+	}
+	if (after.identity !== before.identity || after.size !== before.size) return undefined;
+	return { size: before.size, identity: before.identity, header: layout.header, entryOffsets: layout.entryOffsets };
 }
 
 /**
@@ -502,44 +646,79 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
  */
 const BLOB_READ_CONCURRENCY = 8;
 
+/** The reference `site` holds, or `undefined` when its slot no longer holds a string. */
+function siteReference(site: BlobSite): string | undefined {
+	switch (site.kind) {
+		case "image-data":
+			return site.owner.data;
+		case "image-url":
+			return site.owner.image_url;
+		case "text": {
+			const reference = site.owner[site.key];
+			return typeof reference === "string" ? reference : undefined;
+		}
+		case "text-item": {
+			const reference = site.owner[site.index];
+			return typeof reference === "string" ? reference : undefined;
+		}
+	}
+}
+
+/** Write what `reference` resolved to back into its slot. */
+function settleBlobSite(
+	site: BlobSite,
+	reference: string,
+	resolved: string,
+	lost: LostPayloads,
+	strings: StringPool,
+): void {
+	// Each resolver returns the reference unchanged when the blob is gone, and it is
+	// only called on a value that IS a reference, so an unchanged value is a loss.
+	if (resolved === reference) lost.count += 1;
+	const value = strings.intern(resolved);
+	switch (site.kind) {
+		case "image-data":
+			site.owner.data = value;
+			return;
+		case "image-url":
+			site.owner.image_url = value;
+			return;
+		case "text":
+			site.owner[site.key] = value;
+			return;
+		case "text-item":
+			site.owner[site.index] = value;
+			return;
+	}
+}
+
 async function resolveBlobSite(
 	site: BlobSite,
 	blobStore: BlobStore,
 	lost: LostPayloads,
 	strings: StringPool,
 ): Promise<void> {
-	// Each resolver returns the reference unchanged when the blob is gone, and it is
-	// only called on a value that IS a reference, so an unchanged value is a loss.
-	switch (site.kind) {
-		case "image-data": {
-			const resolved = await resolveImageData(blobStore, site.owner.data);
-			if (resolved === site.owner.data) lost.count += 1;
-			site.owner.data = strings.intern(resolved);
-			return;
-		}
-		case "image-url": {
-			const resolved = await resolveImageDataUrl(blobStore, site.owner.image_url);
-			if (resolved === site.owner.image_url) lost.count += 1;
-			site.owner.image_url = strings.intern(resolved);
-			return;
-		}
-		case "text": {
-			const reference = site.owner[site.key];
-			if (typeof reference !== "string") return;
-			const resolved = await resolveTextBlobRef(blobStore, reference);
-			if (resolved === reference) lost.count += 1;
-			site.owner[site.key] = strings.intern(resolved);
-			return;
-		}
-		case "text-item": {
-			const reference = site.owner[site.index];
-			if (typeof reference !== "string") return;
-			const resolved = await resolveTextBlobRef(blobStore, reference);
-			if (resolved === reference) lost.count += 1;
-			site.owner[site.index] = strings.intern(resolved);
-			return;
-		}
-	}
+	const reference = siteReference(site);
+	if (reference === undefined) return;
+	const resolved =
+		site.kind === "image-data"
+			? await resolveImageData(blobStore, reference)
+			: site.kind === "image-url"
+				? await resolveImageDataUrl(blobStore, reference)
+				: await resolveTextBlobRef(blobStore, reference);
+	settleBlobSite(site, reference, resolved, lost, strings);
+}
+
+function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPayloads, strings: StringPool): void {
+	const reference = siteReference(site);
+	if (reference === undefined) return;
+	const resolved =
+		site.kind === "image-data"
+			? resolveImageDataSync(blobStore, reference)
+			: site.kind === "image-url"
+				? resolveImageDataUrlSync(blobStore, reference)
+				: resolveTextBlobRefSync(blobStore, reference);
+	settleBlobSite(site, reference, resolved, lost, strings);
 }
 
 async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
@@ -618,6 +797,20 @@ export async function resolveBlobRefsInEntries(
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
 		if (options) emitLostPayloadNotice(options, lost.count);
 	}
+	return lost.count;
+}
+
+/**
+ * Restore one entry read back from its session line without awaiting: the externalized payloads
+ * and codec-dropped fields {@link resolveBlobRefsInEntries} restores on load. Returns how many
+ * references the blob store could not answer; the load already reported each of them.
+ */
+export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore): number {
+	const lost: LostPayloads = { count: 0 };
+	const scan: EntryScan = { sites: [], strings: new StringPool() };
+	scanEntryValue(entry, scan);
+	for (const site of scan.sites) resolveBlobSiteSync(site, blobStore, lost, scan.strings);
+	restoreToolResultEntries([entry]);
 	return lost.count;
 }
 

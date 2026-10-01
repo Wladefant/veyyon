@@ -303,6 +303,43 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			expect(writes).toEqual([payload]);
 		});
 
+		it("honors an injected conpty override on a host that is not ConPTY", () => {
+			// The seam's contract: a construction-time `conpty` value decides the
+			// ConPTY-dependent paths, so a plain host can model a ConPTY one (and
+			// vice versa) without mutating `WSL_DISTRO_NAME` / `WSL_INTEROP`. Live
+			// detection is what made this suite non-hermetic: on a WSL developer
+			// box it flipped the flag the suite asserts on, while CI stayed green.
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+			const payload = buildFullPaint(2000, 60);
+
+			const conptyWrites = captureStdoutWrites();
+			new ProcessTerminal({ conpty: true }).write(payload);
+			expect(conptyWrites.length).toBeGreaterThan(1);
+			for (const chunk of conptyWrites) {
+				expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(16 * 1024);
+			}
+			expect(conptyWrites.join("")).toBe(payload);
+
+			vi.restoreAllMocks();
+
+			const plainWrites = captureStdoutWrites();
+			new ProcessTerminal({ conpty: false }).write(payload);
+			expect(plainWrites).toEqual([payload]);
+		});
+
+		it("answers hostOwnsGridOnResize from the same construction override", () => {
+			// Resize routing must read the override, not live detection: an
+			// injected `conpty` value that modeled one host for writes and the
+			// opposite host for resize routing would be no model at all.
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+			expect(new ProcessTerminal({ conpty: true }).hostOwnsGridOnResize).toBe(true);
+			expect(new ProcessTerminal({ conpty: false }).hostOwnsGridOnResize).toBe(false);
+			// No override: live detection still decides, and the WSL markers are
+			// cleared for every case in this block.
+			expect(new ProcessTerminal().hostOwnsGridOnResize).toBe(false);
+		});
+
 		it("chunks a CJK payload on win32 whose code-unit length fits but encoded bytes don't (#2095)", () => {
 			// 200 BMP code units / row × 3 bytes each = 600 bytes / row. 30 rows
 			// = 6000 code units but 18 KiB UTF-8 bytes — code-unit check alone

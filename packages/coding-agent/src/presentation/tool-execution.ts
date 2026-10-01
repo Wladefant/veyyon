@@ -1,33 +1,25 @@
 import { type AnyAgentTool, type SyntheticToolResultDetails, toolResultNeverRan } from "@veyyon/agent-core";
 import type { SnapshotStore } from "@veyyon/hashline";
-import { clampLow, getProjectDir, logger, sanitizeText } from "@veyyon/utils";
-import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
-import type { ToolView, ToolViewContext, ToolViewRenderer } from "@veyyon/view";
+import { clampLow, getProjectDir } from "@veyyon/utils";
+import { isRecord } from "@veyyon/utils/type-guards";
+import type { ToolViewContext, ToolViewRenderer } from "@veyyon/view";
 import type {
 	BlockId,
 	ToolExecutionBlock,
 	ToolExecutionDisplay,
-	ToolExecutionGenericDisplay,
 	ToolExecutionImageItem,
-	ToolExecutionMultiFileItem,
 	ToolExecutionPolicies,
 	ToolStatus,
 } from "@veyyon/wire/presentation";
 import { asyncToolState } from "../modes/terminal/utils/async-tool-state";
-import { formatArgsInline } from "../tools/core/json-tree-render";
-import {
-	DEFAULT_TERMINAL_PREVIEW_LINES,
-	shortenEmbeddedPaths,
-	shortenPath,
-	showResolvedModelDefault,
-} from "../tools/core/render-utils";
+import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath, showResolvedModelDefault } from "../tools/core/render-utils";
 import { isWaitingPollDetails } from "../tools/shell/job-view";
 import { type ToolViewDefinition, toolViewDefinitions } from "../tools/view-registry";
 import type { EditMode } from "../utils/edit-mode";
-import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
 import { displayArguments } from "./display-arguments";
 import { toReadEntryView } from "./read-group";
 import { ToolCallPreview } from "./tool-call-preview";
+import { buildGenericDisplay, getTextOutput, NO_CARD_VIEWS, renderToolCardViews } from "./tool-card-views";
 
 export type DisplaceableToolName = "job" | "todo";
 
@@ -124,20 +116,6 @@ export function getImageSourceName(result: { details?: unknown } | undefined, ar
 	return undefined;
 }
 
-export function getTextOutput(result: ToolExecutionBuildParams["result"]): string {
-	if (!result || !result.content) return "";
-	if (typeof result.content === "string") {
-		return sanitizeWithOptionalSixelPassthrough(result.content, sanitizeText);
-	}
-	if (Array.isArray(result.content)) {
-		const textBlocks = result.content.filter(
-			(c): c is { type: string; text?: string } => isRecord(c) && c.type === "text" && typeof c.text === "string",
-		);
-		return textBlocks.map(c => sanitizeWithOptionalSixelPassthrough(c.text || "", sanitizeText)).join("\n");
-	}
-	return "";
-}
-
 function normalizeTimeoutSeconds(value: unknown, maxSeconds: number): number | undefined {
 	if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
 	return clampLow(value, 1, maxSeconds);
@@ -200,25 +178,17 @@ export interface ToolExecutionBuildParams {
 	showResolvedModel?: boolean;
 }
 
-export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): ToolExecutionDisplay {
+/**
+ * Presentation policies for the card, read from the tool's own policy and its registry definition.
+ * A predicate policy is evaluated against the call's arguments.
+ */
+function resolveToolExecutionPolicies(params: ToolExecutionBuildParams): ToolExecutionPolicies {
 	const toolName = params.toolName;
-	const toolCallId = params.toolCallId ?? "";
-	const toolLabel = params.toolLabel ?? params.tool?.label ?? toolName;
-	const isPartial = params.isPartial ?? params.result === undefined;
-	const sealed = params.sealed ?? false;
 	const args = params.args;
 	const result = params.result;
-
-	const neverRan = isNeverRanResult(result);
-	const renderableResult = neverRan
-		? undefined
-		: typeof result?.content === "string"
-			? { ...result, content: [{ type: "text", text: result.content }] }
-			: result;
-	const notExecuted = notExecutedReason(result, sealed);
-
-	// Tool view definition & policies
 	const definition = params.toolViewDefinition ?? toolViewDefinitions[toolName];
+	const isPartial = params.isPartial ?? result === undefined;
+	const sealed = params.sealed ?? false;
 	const toolPolicy = params.tool as Partial<ToolViewDefinition> | undefined;
 	const mergeCallAndResult =
 		toolPolicy?.mergeCallAndResult === true ||
@@ -251,7 +221,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 	const backgroundTaskFrozen =
 		params.frozen ?? (params.toolName === "task" && asyncToolState(result?.details) === "running" && sealed);
 
-	const policies: ToolExecutionPolicies = {
+	return {
 		mergeCallAndResult,
 		callIsLiveWidget,
 		inline,
@@ -263,6 +233,28 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 		displaceable,
 		sealed,
 	};
+}
+
+export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): ToolExecutionDisplay {
+	const toolName = params.toolName;
+	const toolCallId = params.toolCallId ?? "";
+	const toolLabel = params.toolLabel ?? params.tool?.label ?? toolName;
+	const isPartial = params.isPartial ?? params.result === undefined;
+	const sealed = params.sealed ?? false;
+	const args = params.args;
+	const result = params.result;
+
+	const neverRan = isNeverRanResult(result);
+	const renderableResult = neverRan
+		? undefined
+		: typeof result?.content === "string"
+			? { ...result, content: [{ type: "text", text: result.content }] }
+			: result;
+	const notExecuted = notExecutedReason(result, sealed);
+
+	// Tool view definition & policies
+	const definition = params.toolViewDefinition ?? toolViewDefinitions[toolName];
+	const policies = resolveToolExecutionPolicies(params);
 
 	// Call args resolution
 	const callArgs = params.callPreview ? params.callPreview.arguments : args;
@@ -273,148 +265,31 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 		partial: isPartial,
 		frame: params.frame,
 		hasResult: Boolean(renderableResult),
-		frozen: backgroundTaskFrozen,
+		frozen: policies.backgroundTaskFrozen,
 		showResolvedModel: params.showResolvedModel ?? showResolvedModelDefault(),
 	};
 
 	// Tool view renderer resolution (tool's own view or registry definition's view)
 	const viewRenderer = params.tool?.view ?? definition?.view;
-
-	let callView: ToolView | undefined;
-	let resultView: ToolView | undefined;
-	let multiFileViews: ToolExecutionMultiFileItem[] | undefined;
-	let remainingPendingFiles: number | undefined;
-	let failures: ToolExecutionDisplay["failures"];
-
-	if (viewRenderer) {
-		const renderer = viewRenderer as ToolViewRenderer;
-		// Check for multi-file edit results
-		let perFileResults: Array<{ path: string; isError?: boolean }> | undefined;
-		if (
-			isRecord(renderableResult?.details) &&
-			"perFileResults" in renderableResult.details &&
-			Array.isArray(renderableResult.details.perFileResults)
-		) {
-			perFileResults = renderableResult.details.perFileResults as Array<{ path: string; isError?: boolean }>;
-		}
-
-		if (perFileResults && perFileResults.length > 1 && (!params.tool?.view || renderer.renderResult)) {
-			multiFileViews = [];
-			for (const fileResult of perFileResults) {
-				try {
-					const fv = renderer.renderResult!(
-						{ content: [], details: fileResult, isError: fileResult.isError },
-						viewContext,
-						callArgs,
-					);
-					multiFileViews.push({ path: fileResult.path, isError: fileResult.isError, view: fv });
-				} catch (err) {
-					multiFileViews.push({
-						path: fileResult.path,
-						isError: true,
-						errorNotice: errorMessage(err),
-					});
-				}
-			}
-
-			let argEdits: Array<{ path?: unknown }> | undefined;
-			if (isRecord(args) && "edits" in args && Array.isArray(args.edits)) {
-				argEdits = args.edits as Array<{ path?: unknown }>;
-			}
-			const totalFiles = argEdits
-				? new Set(argEdits.map(e => (isRecord(e) && "path" in e ? e.path : undefined)).filter(Boolean)).size
-				: 0;
-			const remaining = Math.max(0, totalFiles - perFileResults.length);
-			if (remaining > 0 && isPartial) {
-				remainingPendingFiles = remaining;
-			}
-		} else {
-			// Single card
-			const shouldRenderCall = !renderableResult || !mergeCallAndResult;
-			const suppressMergedWidget = neverRan && callIsLiveWidget;
-
-			if (shouldRenderCall && !suppressMergedWidget && (!params.tool?.view || renderer.renderCall)) {
-				try {
-					callView = renderer.renderCall!(callArgs, viewContext);
-				} catch (err) {
-					logger.warn("Tool view call renderer threw; showing the generic card", {
-						toolName,
-						toolCallId,
-						error: errorMessage(err),
-					});
-					failures ??= {};
-					failures.call = {
-						error: errorMessage(err),
-					};
-				}
-			}
-
-			if (renderableResult && (!params.tool?.view || renderer.renderResult)) {
-				try {
-					resultView = renderer.renderResult!(
-						{
-							content: renderableResult.content,
-							details: renderableResult.details,
-							isError: renderableResult.isError,
-						},
-						viewContext,
-						callArgs,
-					);
-				} catch (err) {
-					logger.warn("Tool view result renderer threw; showing the generic card", {
-						toolName,
-						toolCallId,
-						error: errorMessage(err),
-					});
-					const raw = getTextOutput(renderableResult);
-					failures ??= {};
-					failures.result = {
-						error: errorMessage(err),
-						fallbackText: raw || undefined,
-					};
-				}
-			}
-		}
-	}
+	const views = viewRenderer
+		? renderToolCardViews(
+				viewRenderer as ToolViewRenderer,
+				params,
+				renderableResult,
+				neverRan,
+				policies,
+				viewContext,
+				callArgs,
+				isPartial,
+			)
+		: NO_CARD_VIEWS;
 
 	// Generic fallback presentation when no renderer owns the card, and when the one that does threw:
 	// the reader gets the arguments and the output, never the exception's text.
-	let generic: ToolExecutionGenericDisplay | undefined;
-	if ((!viewRenderer && !params.tool?.renderCall && !params.tool?.renderResult) || failures !== undefined) {
-		const icon = isPartial
-			? params.frame !== undefined
-				? "running"
-				: "pending"
-			: renderableResult?.isError
-				? "error"
-				: "done";
-
-		let argsPreview: string | undefined;
-		const argsObject = args && typeof args === "object" ? (args as Record<string, unknown>) : null;
-		if (argsObject && Object.keys(argsObject).length > 0) {
-			argsPreview = formatArgsInline(argsObject, 60, shortenEmbeddedPaths);
-		}
-
-		let outputText: string | undefined;
-		let isJson = false;
-		if (renderableResult) {
-			outputText = getTextOutput(renderableResult);
-			const trimmed = outputText.trimStart();
-			if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-				try {
-					JSON.parse(trimmed);
-					isJson = true;
-				} catch {}
-			}
-		}
-
-		generic = {
-			icon,
-			argsPreview,
-			outputText,
-			isJson,
-		};
-	}
+	const generic =
+		(!viewRenderer && !params.tool?.renderCall && !params.tool?.renderResult) || views.failures !== undefined
+			? buildGenericDisplay(args, renderableResult, isPartial, params.frame)
+			: undefined;
 
 	// Image extraction
 	const imageBlocks = getAllImageBlocks(result);
@@ -427,10 +302,10 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 
 	return {
 		toolLabel,
-		callView,
-		resultView,
-		multiFileViews,
-		remainingPendingFiles,
+		callView: views.callView,
+		resultView: views.resultView,
+		multiFileViews: views.multiFileViews,
+		remainingPendingFiles: views.remainingPendingFiles,
 		readEntry: toolName === "read" ? toReadEntryView(toolCallId, args, result, isPartial, isError) : undefined,
 		notExecutedReason: notExecuted,
 		neverRan,
@@ -438,7 +313,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 		images: images.length > 0 ? images : undefined,
 		imageSourcePath,
 		policies,
-		failures,
+		failures: views.failures,
 	};
 }
 
@@ -520,11 +395,32 @@ export interface ToolExecutionProducerParams {
 	cwd?: string;
 }
 
+/** What the card drawing a producer's block is on: its expansion, spinner frame and freeze. */
+export type ToolExecutionDrawContext = Pick<ToolExecutionBuildParams, "expanded" | "frame" | "frozen">;
+
+const NO_LISTENERS: readonly (() => void)[] = [];
+
 export class ToolExecutionProducer {
 	#params: ToolExecutionBuildParams & { isPartial: boolean; sealed: boolean };
 	#callPreview: ToolCallPreview;
-	#listeners = new Set<(block: ToolExecutionBlock) => void>();
-	#currentBlock: ToolExecutionBlock;
+	/**
+	 * Replaced, never mutated, so a notify walks the listeners it started with. A card subscribes
+	 * once, and a one-element array is smaller than the backing store of a one-element Set.
+	 */
+	#listeners: readonly (() => void)[] = NO_LISTENERS;
+	/**
+	 * The block for the current parameters and context, or `undefined` once either changed. It is
+	 * built when it is next read, never when it changes.
+	 *
+	 * A card changes several times before a frame draws it: a rebuilt transcript hands it the call and
+	 * then the result, and its spinner starts and stops in between. Building on each change built a
+	 * rebuilt 3,959-card transcript 13,210 blocks for the 3,959 its first frame drew. A card disposed
+	 * with its transcript seals its producer on the way out, and building that sealed block cost a
+	 * rebuilt 64k-block transcript two seconds for a block nobody read.
+	 */
+	#currentBlock: ToolExecutionBlock | undefined;
+	/** The policies for the current parameters and context, which a card reads without building its views. */
+	#currentPolicies: ToolExecutionPolicies | undefined;
 	/** The arguments as the model sent them, so a repeat of the same object is recognised before conforming. */
 	#rawArgs: unknown;
 
@@ -549,14 +445,14 @@ export class ToolExecutionProducer {
 			snapshots: params.options?.snapshots,
 			fuzzyThreshold: params.options?.editFuzzyThreshold,
 			allowFuzzy: params.options?.editAllowFuzzy,
-			onChange: () => this.#recompute(),
+			onChange: () => this.#changed(),
 		});
 		this.#params.callPreview = this.#callPreview;
-		this.#currentBlock = buildToolExecutionBlock(this.#params);
 		this.#callPreview.update(args);
 	}
 
 	get block(): ToolExecutionBlock {
+		this.#currentBlock ??= buildToolExecutionBlock(this.#params);
 		return this.#currentBlock;
 	}
 
@@ -566,6 +462,12 @@ export class ToolExecutionProducer {
 
 	get toolCallId(): string | undefined {
 		return this.#params.toolCallId;
+	}
+
+	set toolCallId(toolCallId: string | undefined) {
+		if (toolCallId === this.#params.toolCallId) return;
+		this.#params.toolCallId = toolCallId;
+		this.#changed();
 	}
 
 	get callPreview(): ToolCallPreview {
@@ -584,10 +486,11 @@ export class ToolExecutionProducer {
 		return this.#params.sealed;
 	}
 
-	subscribe(listener: (block: ToolExecutionBlock) => void): () => void {
-		this.#listeners.add(listener);
+	/** Call `listener` when the block changes. The listener reads the block when it needs it. */
+	subscribe(listener: () => void): () => void {
+		if (!this.#listeners.includes(listener)) this.#listeners = [...this.#listeners, listener];
 		return () => {
-			this.#listeners.delete(listener);
+			this.#listeners = this.#listeners.filter(existing => existing !== listener);
 		};
 	}
 
@@ -598,14 +501,14 @@ export class ToolExecutionProducer {
 		const args = displayArguments(this.#params.tool, rawArgs);
 		this.#params.args = args;
 		this.#callPreview.update(args);
-		this.#recompute();
+		this.#changed();
 	}
 
 	setArgsComplete(toolCallId?: string): void {
 		if (toolCallId) this.#params.toolCallId = toolCallId;
 		this.#callPreview.complete = true;
 		this.#callPreview.update(this.#params.args);
-		this.#recompute();
+		this.#changed();
 	}
 
 	updateResult(result: NonNullable<ToolExecutionBuildParams["result"]>, isPartial = false, toolCallId?: string): void {
@@ -613,40 +516,65 @@ export class ToolExecutionProducer {
 		this.#params.result = result;
 		this.#params.isPartial = isPartial;
 		if (!isPartial) this.#callPreview.complete = true;
-		this.#recompute();
+		this.#changed();
 	}
 
 	seal(): void {
 		if (this.#params.sealed) return;
 		this.#params.sealed = true;
 		this.#callPreview.stop();
-		this.#recompute();
+		this.#changed();
 	}
 
 	async whenSettled(): Promise<void> {
 		await this.#callPreview.whenSettled();
 	}
 
-	produceBlock(context?: Pick<ToolExecutionBuildParams, "expanded" | "frame" | "frozen">): ToolExecutionBlock {
-		if (!context) return this.#currentBlock;
+	/** The block for `context`, built on the first read after the parameters or the context changed. */
+	produceBlock(context?: ToolExecutionDrawContext): ToolExecutionBlock {
+		if (context) this.#applyContext(context);
+		return this.block;
+	}
+
+	/**
+	 * Forget the built block. Nothing changed, so no listener hears of it; the next read builds the
+	 * same block from the same parameters.
+	 */
+	releaseBlock(): void {
+		this.#currentBlock = undefined;
+	}
+
+	/**
+	 * The card's presentation policies for `context`. They are the policies the block for `context`
+	 * carries, resolved without building its views, so a card deciding whether to animate, freeze or
+	 * give way to the next call does not project a view nobody draws.
+	 */
+	policies(context?: ToolExecutionDrawContext): ToolExecutionPolicies {
+		if (context) this.#applyContext(context);
+		this.#currentPolicies ??= this.#currentBlock?.display?.policies ?? resolveToolExecutionPolicies(this.#params);
+		return this.#currentPolicies;
+	}
+
+	#applyContext(context: ToolExecutionDrawContext): void {
 		const expanded = context.expanded ?? false;
 		if (
 			(this.#params.expanded ?? false) === expanded &&
 			this.#params.frame === context.frame &&
 			this.#params.frozen === context.frozen
 		) {
-			return this.#currentBlock;
+			return;
 		}
 		this.#params.expanded = expanded;
 		this.#params.frame = context.frame;
 		this.#params.frozen = context.frozen;
-		this.#currentBlock = buildToolExecutionBlock(this.#params);
-		return this.#currentBlock;
+		this.#currentBlock = undefined;
+		this.#currentPolicies = undefined;
 	}
 
-	#recompute(): void {
-		this.#currentBlock = buildToolExecutionBlock(this.#params);
-		for (const listener of this.#listeners) listener(this.#currentBlock);
+	#changed(): void {
+		this.#currentBlock = undefined;
+		this.#currentPolicies = undefined;
+		for (const listener of this.#listeners) listener();
 	}
 }
 

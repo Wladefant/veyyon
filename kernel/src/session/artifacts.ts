@@ -6,7 +6,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { errorMessage, isEnoent, logger } from "@veyyon/utils";
+import { atomicWriteFileWith } from "@veyyon/utils/atomic-write";
+import { isEnoent } from "@veyyon/utils/fs-error";
+import * as logger from "@veyyon/utils/logger";
+import { errorMessage } from "@veyyon/utils/type-guards";
 
 /**
  * Sanitize a tool name for safe use as the middle segment of the artifact
@@ -27,6 +30,42 @@ function sanitizeToolType(toolType: string): string {
 }
 
 /**
+ * Publish one artifact payload, whole or not at all.
+ *
+ * `artifact://<id>` and `agent://<id>` resolve an artifact by SCANNING the
+ * artifacts directory — nothing compares the file against what was meant to be
+ * written. So a write that stopped short would leave a truncated file that still
+ * resolved as a complete result, and a rewrite of the same path destroyed the
+ * previous bytes before it knew whether the new ones would land.
+ *
+ * The payload is staged on a hidden sibling, checked against its own byte count
+ * and on-disk size, and only then renamed into place; any failure removes the
+ * staging file and leaves the destination exactly as it was. The rename itself
+ * comes from `@veyyon/utils/atomic-write`, which owns the Windows
+ * replace-existing recovery, so this adds no second atomic-write implementation.
+ *
+ * @returns the verified UTF-8 byte count.
+ */
+export async function writeArtifactAtomically(path: string, content: string): Promise<number> {
+	const expectedBytes = Buffer.byteLength(content);
+	await atomicWriteFileWith(path, async tempPath => {
+		const writtenBytes = await Bun.write(tempPath, content);
+		if (writtenBytes !== expectedBytes) {
+			throw new Error(`Artifact write incomplete: wrote ${writtenBytes} of ${expectedBytes} bytes`);
+		}
+		const onDiskBytes = Bun.file(tempPath).size;
+		if (onDiskBytes !== expectedBytes) {
+			throw new Error(`Artifact size mismatch: found ${onDiskBytes} of ${expectedBytes} bytes`);
+		}
+		// Read the payload back through the same reader a resolver uses, so a file
+		// the buffers accept but the filesystem cannot return fails here rather than
+		// reaching the caller as a short artifact.
+		await Bun.file(tempPath).slice(0, Math.min(expectedBytes, 1)).arrayBuffer();
+	});
+	return expectedBytes;
+}
+
+/**
  * Manages artifact storage for a session.
  *
  * Artifacts are stored with sequential IDs in the session's artifact directory.
@@ -40,7 +79,7 @@ export class ArtifactManager {
 	#nextId = 0;
 	readonly #dir: string;
 	#dirCreated = false;
-	#initialized = false;
+	#initPromise: Promise<void> | null = null;
 
 	/**
 	 * @param dir Directory that will hold artifact files. Created lazily on first save.
@@ -62,10 +101,11 @@ export class ArtifactManager {
 			await fs.mkdir(this.#dir, { recursive: true });
 			this.#dirCreated = true;
 		}
-		if (!this.#initialized) {
-			await this.#scanExistingIds();
-			this.#initialized = true;
-		}
+		// Memoize the first-use scan so it runs exactly once. Concurrent callers
+		// share the in-flight promise instead of each re-seeding #nextId across
+		// the readdir yield in #scanExistingIds (which would hand duplicate ids).
+		this.#initPromise ??= this.#scanExistingIds();
+		await this.#initPromise;
 	}
 
 	/**
@@ -115,7 +155,7 @@ export class ArtifactManager {
 	 */
 	async save(content: string, toolType: string): Promise<string> {
 		const { id, path } = await this.allocatePath(toolType);
-		await Bun.write(path, content);
+		await writeArtifactAtomically(path, content);
 		return id;
 	}
 

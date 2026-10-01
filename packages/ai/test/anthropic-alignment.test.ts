@@ -228,12 +228,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(hiddenUtility.defaultHeaders["anthropic-beta"]).toContain("redact-thinking-2026-02-12");
 	});
 
-	it("matches CC system-block layout: billing and instruction uncached, single breakpoint on the last context block", () => {
-		// We mimic Claude Code's billing+instruction system layout but do NOT emit
-		// the `scope: "global"` field that CC attaches to its middle breakpoint —
-		// `prompt-caching-scope-2026-01-05` only works against canonical
-		// `api.anthropic.com`, and third-party Anthropic-compatible proxies
-		// (z.ai, openrouter, …) reject the unknown field outright.
+	it("caches the stable prefix and the trailing block while leaving billing + CC identity uncached", () => {
 		const blocks = buildAnthropicSystemBlocks(["Stay concise."], {
 			includeClaudeCodeInstruction: true,
 			extraInstructions: ["Use citations when possible"],
@@ -241,22 +236,50 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 
 		expect(blocks).toHaveLength(4);
+		// OAuth cloak blocks stay uncached: the billing header is a per-request
+		// fingerprint and the CC identity block mimics Claude Code.
 		expect(blocks?.[0].text).toStartWith("x-anthropic-billing-header:");
 		expect(blocks?.[0].cache_control).toBeUndefined();
 		expect(blocks?.[1].text).toBe(claudeCodeSystemInstruction);
 		expect(blocks?.[1].cache_control).toBeUndefined();
-		// Only the LAST system block carries the cache breakpoint: a single trailing
-		// `cache_control` caches the entire system prefix as one entry, conserving the
-		// 4-breakpoint budget (`enforceCacheControlLimit`) for message-level caching.
+		// Stable-prefix breakpoint on the block before the trailing footer, plus a
+		// full-match breakpoint on the trailing block itself (#7324).
 		expect(blocks?.[2]).toEqual({
 			type: "text",
 			text: "Use citations when possible",
+			cache_control: { type: "ephemeral" },
 		});
 		expect(blocks?.[3]).toEqual({
 			type: "text",
 			text: "Stay concise.",
 			cache_control: { type: "ephemeral" },
 		});
+	});
+
+	it("keeps the stable-prefix breakpoint when the trailing project footer (cwd/date) changes (#7324)", () => {
+		const staticInstructions = "STATIC INSTRUCTIONS BLOCK";
+		const build = (footer: string) =>
+			buildAnthropicSystemBlocks([staticInstructions, footer], {
+				includeClaudeCodeInstruction: true,
+				cacheControl: { type: "ephemeral" },
+			});
+		// blocks: [billing, CC identity, staticInstructions, project footer]
+		const runA = build("PROJECT\nToday is 2026-08-01, cwd '/tmp/a'.");
+		const runB = build("PROJECT\nToday is 2026-08-02, cwd '/tmp/b'.");
+
+		for (const blocks of [runA, runB]) {
+			expect(blocks).toHaveLength(4);
+			expect(blocks?.[0].cache_control).toBeUndefined();
+			expect(blocks?.[1].cache_control).toBeUndefined();
+			// The static block carries a breakpoint whose prefix excludes the
+			// volatile footer, so a cwd/date change reuses it instead of
+			// re-writing the whole system cache.
+			expect(blocks?.[2].text).toBe(staticInstructions);
+			expect(blocks?.[2].cache_control).toEqual({ type: "ephemeral" });
+			expect(blocks?.[3].cache_control).toEqual({ type: "ephemeral" });
+		}
+		// The cached stable prefix is byte-identical across the two runs.
+		expect(runA?.[2].text).toBe(runB?.[2].text);
 	});
 
 	it("caches Claude Code context and the last user block in OAuth request payloads", async () => {
@@ -1767,6 +1790,59 @@ describe("Anthropic request fingerprint alignment", () => {
 		);
 	});
 
+	it("routes chat through ANTHROPIC_BASE_URL for the stock Anthropic provider (#7874)", async () => {
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				FOUNDRY_BASE_URL: undefined,
+				ANTHROPIC_BASE_URL: "https://my-gateway.example.com",
+				ANTHROPIC_CUSTOM_HEADERS: "x-api-key: gateway-key",
+			},
+			() => {
+				const options = buildAnthropicClientOptions({
+					model: ANTHROPIC_MODEL,
+					apiKey: "sk-ant-api-gateway-key",
+					extraBetas: [],
+					stream: true,
+					interleavedThinking: false,
+					dynamicHeaders: {},
+				});
+
+				// Chat no longer leaks a gateway-scoped key to api.anthropic.com.
+				expect(options.baseURL).toBe("https://my-gateway.example.com");
+				// A non-official gateway forwards ANTHROPIC_CUSTOM_HEADERS, so gateways
+				// that require x-api-key work without enabling Foundry mode.
+				expect(options.defaultHeaders["X-Api-Key"]).toBe("gateway-key");
+			},
+		);
+	});
+
+	it("keeps an explicit non-official model.baseUrl ahead of ANTHROPIC_BASE_URL (#7874)", async () => {
+		const configuredModel: Model<"anthropic-messages"> = buildModel({
+			...ANTHROPIC_MODEL_SPEC,
+			baseUrl: "https://configured.example.com",
+		});
+		await withEnv(
+			{
+				CLAUDE_CODE_USE_FOUNDRY: undefined,
+				FOUNDRY_BASE_URL: undefined,
+				ANTHROPIC_BASE_URL: "https://my-gateway.example.com",
+			},
+			() => {
+				const options = buildAnthropicClientOptions({
+					model: configuredModel,
+					apiKey: "sk-ant-api-test",
+					extraBetas: [],
+					stream: true,
+					interleavedThinking: false,
+					dynamicHeaders: {},
+				});
+
+				expect(options.baseURL).toBe("https://configured.example.com");
+			},
+		);
+	});
+
 	it("loads Foundry mTLS and CA material from file paths", async () => {
 		const tmpDir = path.join(os.tmpdir(), `pi-ai-foundry-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 		fs.mkdirSync(tmpDir, { recursive: true });
@@ -2198,7 +2274,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 	});
 
-	it("preserves task budget when forced tool choice disables thinking", async () => {
+	it("pins low effort (not a bare omission) when forced tool choice disables adaptive-only thinking", async () => {
 		const payload = (await captureAnthropicPayload(
 			buildModel({
 				...ANTHROPIC_MODEL_SPEC,
@@ -2234,10 +2310,77 @@ describe("Anthropic request fingerprint alignment", () => {
 			};
 		};
 
+		// Adaptive-only Opus 4.7 rejects `thinking.type: "disabled"`, and a bare
+		// omission defaults to adaptive thinking ON — so the forced-tool turn must
+		// pin the lowest effort to actually suppress reasoning (#6589), while the
+		// caller's task budget still rides along on output_config.
 		expect(payload.thinking).toBeUndefined();
 		expect(payload.output_config).toEqual({
+			effort: "low",
 			task_budget: { type: "tokens", total: 64_000 },
 		});
+	});
+
+	it("disables adaptive-only thinking when the caller sets disableReasoning via the public stream() path", async () => {
+		// #6589: disableReasoning is a SimpleStreamOptions flag that never reaches
+		// AnthropicOptions directly; mapOptionsForApi must fold it into
+		// thinkingEnabled:false so adaptive-only Opus 4.7 omits thinking + pins low
+		// effort instead of defaulting to adaptive-ON at the requested effort.
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamSimple(
+			buildModel({
+				...ANTHROPIC_MODEL_SPEC,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				},
+			}),
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "sk-ant-oat-test",
+				signal: createAbortedSignal(),
+				reasoning: Effort.High,
+				disableReasoning: true,
+				onPayload: payload => resolve(payload),
+			},
+		);
+		const payload = (await promise) as { thinking?: unknown; output_config?: { effort?: string } };
+
+		expect(payload.thinking).toBeUndefined();
+		expect(payload.output_config).toEqual({ effort: "low" });
+	});
+
+	it("deletes thinking without an effort pin for non-adaptive reasoning models on forced tool choice", async () => {
+		// Budget-thinking models (Sonnet 4.5) turn thinking off by simple omission,
+		// so the forced-tool guard must NOT leak an adaptive effort:"low" pin onto
+		// them (that pin is exclusive to adaptive-only families — #6589).
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Use the tool", timestamp: Date.now() }],
+				tools: [
+					{
+						name: "lookup",
+						description: "Lookup a value",
+						parameters: { type: "object", properties: {}, additionalProperties: false },
+					},
+				],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.High,
+				toolChoice: { type: "tool", name: "lookup" },
+			},
+		)) as { thinking?: unknown; output_config?: unknown };
+
+		expect(payload.thinking).toBeUndefined();
+		expect(payload.output_config).toBeUndefined();
 	});
 
 	it("downgrades forced tool choice for Claude Fable/Mythos without deleting adaptive thinking", async () => {
