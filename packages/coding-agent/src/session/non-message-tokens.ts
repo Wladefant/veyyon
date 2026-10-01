@@ -253,6 +253,16 @@ export function isAtRestReadingDeferred(session: AgentSession): boolean {
 	return deferredAtRestReadings.has(session);
 }
 
+/**
+ * Whether `session` rests with its reading held: the host holds the at-rest reading and the session
+ * has no message yet. A reader of the context gauge in this state does not measure, because measuring
+ * builds every active tool's schema: the status row draws the gauge the last launch recorded, and the
+ * slash popup, which a first keystroke opens, states no figure.
+ */
+export function restsWithReadingHeld(session: AgentSession): boolean {
+	return deferredAtRestReadings.has(session) && (session.messages?.length ?? 0) === 0;
+}
+
 /** End the hold {@link deferAtRestReading} placed on `session`. */
 export function releaseAtRestReading(session: AgentSession): void {
 	deferredAtRestReadings.delete(session);

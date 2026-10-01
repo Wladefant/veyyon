@@ -17,10 +17,12 @@
  * the render rather than by a list of paths. The release arms are the positive control: the same
  * instrumentation sees the reads once the session leaves rest, so zero reads under the hold is the
  * guard and not a blind probe. Around it: the edit takes the reading after its frame and not inside
- * the keystroke, a submission takes it before its message lands, the borrowed gauge is the recorded
- * one for the default role and the unknown for any other model, a session with a message measures
- * as before, the readings compaction and `/context` take measure whether or not the row is held,
- * and a session created without the hold measures during creation.
+ * the keystroke, a first keystroke that opens a popup (`/`, `@`, `#`) builds no schema while the
+ * popup computes its rows (the slash popup evaluates every command's description, and `/context`
+ * and `/compact` state no figure at rest), a submission takes it before its message lands, the
+ * borrowed gauge is the recorded one for the default role and the unknown for any other model, a
+ * session with a message measures as before, the readings compaction and `/context` take measure
+ * whether or not the row is held, and a session created without the hold measures during creation.
  *
  * WHAT THIS DOES NOT CATCH: `runInteractiveMode` in `main.ts`, which this suite does not drive. It
  * passes `deferAtRestReading` for an interactive launch and takes the reading before a startup
@@ -316,6 +318,26 @@ describe("the interactive host holds the reading until the session leaves rest",
 		await turn.promise;
 	}
 
+	/** Type `key` into the composer and resolve once the autocomplete it opened holds its suggestions. */
+	async function typeIntoPopup(mode: InteractiveMode, key: string): Promise<void> {
+		const updated = Promise.withResolvers<void>();
+		const previous = mode.editor.onAutocompleteUpdate;
+		mode.editor.onAutocompleteUpdate = () => {
+			mode.editor.onAutocompleteUpdate = previous;
+			previous?.();
+			updated.resolve();
+		};
+		mode.editor.handleInput(key);
+		await updated.promise;
+	}
+
+	/** The description the open slash popup draws for `/name`. */
+	function popupDescription(mode: InteractiveMode, name: string): string | undefined {
+		const item = mode.editor.getAutocompleteState()?.items.find(entry => entry.value === name);
+		if (!item) throw new Error(`the popup lists no /${name}`);
+		return item.description;
+	}
+
 	it("commits frames over an idle session without reading any tool's schema", async () => {
 		const session = await create({ deferAtRestReading: true });
 		const reads = countSchemaReads(session);
@@ -355,5 +377,51 @@ describe("the interactive host holds the reading until the session leaves rest",
 		expect(reads.count).toBeGreaterThan(0);
 		expect(isAtRestReadingDeferred(session)).toBe(false);
 		expect(readLaunchFacts().contextPercent).not.toBe(RECORDED_PERCENT);
+	});
+
+	// The characters that open a popup on an empty composer (`Editor#insertCharacter`). The release the
+	// keystroke queues after its frame is held off, so a read counted here is the popup's own.
+	it.each(["/", "@", "#"])("opens the %s popup on a first keystroke without reading any tool's schema", async key => {
+		const session = await create({ deferAtRestReading: true });
+		const reads = countSchemaReads(session);
+		const mode = await host(session);
+		await committedFrame(mode);
+		vi.spyOn(mode, "takeAtRestReading").mockImplementation(() => {});
+
+		await typeIntoPopup(mode, key);
+
+		expect(reads.count).toBe(0);
+		expect(isAtRestReadingDeferred(session)).toBe(true);
+	});
+
+	it("states no context figure in the slash popup a first keystroke opens", async () => {
+		const session = await create({ deferAtRestReading: true });
+		const mode = await host(session);
+		await committedFrame(mode);
+
+		await typeIntoPopup(mode, "/");
+
+		// The popup lands before the frame that releases the hold.
+		expect(isAtRestReadingDeferred(session)).toBe(true);
+		expect(popupDescription(mode, "context")).toBe("Show context usage breakdown");
+		expect(popupDescription(mode, "compact")).toBe("Compact the session context");
+	});
+
+	it("states the measured context in the slash popup once the session left rest", async () => {
+		const session = await create({ deferAtRestReading: true });
+		const mode = await host(session);
+		await committedFrame(mode);
+		mode.takeAtRestReading();
+		const usage = session.getContextUsage();
+		if (!usage) throw new Error("the released session measured no usage");
+
+		await typeIntoPopup(mode, "/");
+
+		expect(popupDescription(mode, "context")).toContain(
+			`${usage.tokens.toLocaleString()}/${usage.contextWindow.toLocaleString()}`,
+		);
+		expect(popupDescription(mode, "compact")).toBe(
+			`Compact the session context · ${Math.round(usage.percent)}% used`,
+		);
 	});
 });
