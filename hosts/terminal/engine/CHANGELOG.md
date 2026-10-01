@@ -27,6 +27,7 @@
 
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - After a resize under the `alt-arrows` scroll transport, the engine replays the transcript once instead of on every later frame, so a resumed 600-turn session at rest spends 0.06 CPU seconds per 10 seconds after a resize instead of 6.85 (median of three).
+- A frame in which two or more root children report rows dropped from native scrollback splices each child's rows out of the committed record at that child's own start, from the last child back, instead of splicing their sum at the topmost child's start, so the record no longer diverges from the terminal and forces a transcript replay on the next frame.
 
 ## [1.5.4] - 2026-09-24
 
