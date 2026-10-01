@@ -28,6 +28,7 @@
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
+- `IdleTrim` accepts `release`, which runs on the first quiet sampling window after a busy one and again after each trim; a `release` that throws is not called again and the trim continues.
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
 - `@veyyon/utils/prompt` exports `renderSequence(templates, context, options)`, which returns what `render` returns for the joined templates and renders each precompiled template on its own when no boundary changes the bytes, so the joined text is not parsed.
@@ -46,6 +47,7 @@
 
 ### Changed
 
+- On Linux the binary's embedded module pages are released on the first 5-second window under 5% CPU after work instead of after 30 quiet seconds, so an idle session 15 seconds after launch holds 190 MiB RSS instead of 270-286 MiB, and a session with turns 12 seconds apart holds 209-216 MiB after its second and third turns instead of 290-295 MiB, at unchanged turn latency.
 - The compiled binary holds one copy of Zod instead of two, because the schema converter no longer `require`s a CommonJS copy beside the one the package barrel hands to extensions; the binary is 2.3 MiB smaller and an idle session holds 3 MiB less RSS after collection (270 to 267 MiB, median of five).
 - The resolved model stage (`resolved-models.json`) stores each distinct compat record once and each model an index into that table, so on a profile with 5,646 models the file is 0.81 MB instead of 2.10 MB and a launch restores the model registry in 10.2 ms instead of 22.2 ms, with 4.5 MiB less RSS growth (median of 11); a stage written by an earlier release is rebuilt once.
 - 261 class members that read no instance state are module functions and constants instead of `#private` members; JSC copies every private name of a class into each function its body creates, so with the 73 moved in the other packages the binary shrinks by 815 KiB and an idle session holds 580 KiB less RSS after the idle trim (median of five).
