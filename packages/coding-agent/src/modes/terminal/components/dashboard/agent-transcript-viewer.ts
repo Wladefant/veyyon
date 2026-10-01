@@ -269,7 +269,7 @@ export class AgentTranscriptViewer implements Component {
 			return;
 		}
 		const state = this.#localState;
-		if (state && this.#canAppendLocal(sessionFile, stat, state)) {
+		if (state && canAppendLocal(sessionFile, stat, state)) {
 			if (stat.size === state.size && stat.mtimeMs === state.mtimeMs) return;
 			if (stat.size > state.size) {
 				this.#appendLocal(sessionFile, stat, state);
@@ -285,24 +285,6 @@ export class AgentTranscriptViewer implements Component {
 		this.#localUnavailable = reason;
 		this.#model = undefined;
 		this.#rebuild([]);
-	}
-
-	#canAppendLocal(sessionFile: string, stat: fs.Stats, state: LocalTranscriptState): boolean {
-		if (state.path !== sessionFile || state.dev !== stat.dev || state.ino !== stat.ino || stat.size < state.size)
-			return false;
-		for (const sentinel of state.sentinels) {
-			let current: Buffer;
-			try {
-				current = readFileRangeSync(sessionFile, sentinel.offset, sentinel.bytes.byteLength);
-			} catch (err) {
-				// The file can be unlinked/rotated between statSync and this read.
-				// Treat as not-appendable so #refresh falls back to a guarded full load.
-				logger.debug("transcript viewer: sentinel read failed", { err: String(err) });
-				return false;
-			}
-			if (!current.equals(sentinel.bytes)) return false;
-		}
-		return true;
 	}
 
 	#loadLocalFull(sessionFile: string, stat: fs.Stats): void {
@@ -764,4 +746,22 @@ export class AgentTranscriptViewer implements Component {
 		if (!this.deps.registry.get(this.deps.agentId)?.sessionFile) return "No session file available yet.";
 		return "No messages yet.";
 	}
+}
+
+function canAppendLocal(sessionFile: string, stat: fs.Stats, state: LocalTranscriptState): boolean {
+	if (state.path !== sessionFile || state.dev !== stat.dev || state.ino !== stat.ino || stat.size < state.size)
+		return false;
+	for (const sentinel of state.sentinels) {
+		let current: Buffer;
+		try {
+			current = readFileRangeSync(sessionFile, sentinel.offset, sentinel.bytes.byteLength);
+		} catch (err) {
+			// The file can be unlinked/rotated between statSync and this read.
+			// Treat as not-appendable so #refresh falls back to a guarded full load.
+			logger.debug("transcript viewer: sentinel read failed", { err: String(err) });
+			return false;
+		}
+		if (!current.equals(sentinel.bytes)) return false;
+	}
+	return true;
 }

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.
+
 ### Added
 
 - Added `naturalWidth()`, `isSearchable()`, and `cancel()` to `SelectList`, alongside `ComponentScopedRender` and dynamic viewport adaptations.
@@ -17,9 +21,11 @@
 - Fixed duplicate `stdin` event listeners (`end`, `close`, `error`) being registered if `ProcessTerminal.start()` is called repeatedly on an active terminal instance ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
+- `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
 
 ### Changed
 
+- 23 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
 - The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.
 - The editor dispatches a key through single-purpose handlers for autocomplete, kill and line keys, Enter and new-line keys, and cursor keys instead of one 270-line method; with the memoized key tests in `@veyyon/utils`, a typed character costs 1.35 µs instead of 3.01 µs and a mixed editing key 5.84 µs instead of 7.55 µs.
@@ -37,6 +43,7 @@
 
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - After a resize under the `alt-arrows` scroll transport, the engine replays the transcript once instead of on every later frame, so a resumed 600-turn session at rest spends 0.06 CPU seconds per 10 seconds after a resize instead of 6.85 (median of three).
+- A frame in which two or more root children report rows dropped from native scrollback splices each child's rows out of the committed record at that child's own start, from the last child back, instead of splicing their sum at the topmost child's start, so the record no longer diverges from the terminal and forces a transcript replay on the next frame.
 
 ## [1.5.4] - 2026-09-24
 

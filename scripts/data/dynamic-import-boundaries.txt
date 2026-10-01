@@ -54,6 +54,7 @@ packages/coding-agent/src/extensibility/custom-commands/loader.ts
 packages/coding-agent/src/extensibility/custom-tools/loader.ts
 packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts
 packages/coding-agent/src/extensibility/plugins/marketplace-auto-update.ts
+packages/coding-agent/src/internal-urls/veyyon-protocol.ts
 packages/coding-agent/src/main.ts
 packages/coding-agent/src/memory/mnemopi/backend.ts
 packages/coding-agent/src/memory/mnemopi/state.ts
@@ -71,6 +72,7 @@ packages/coding-agent/src/slash-commands/builtin-share.ts
 packages/coding-agent/src/slash-commands/dispatch.ts
 packages/coding-agent/src/slash-commands/helpers/stats-dashboard.ts
 packages/coding-agent/src/system-prompt-builder/section-overrides.ts
+packages/coding-agent/src/task/isolation-runner.ts
 packages/coding-agent/src/task/persisted-revive.ts
 packages/coding-agent/src/telemetry-export.ts
 packages/coding-agent/src/tools/agent/manifest.ts

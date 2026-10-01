@@ -180,13 +180,18 @@ function rebuild(display: ReadDisplayContent, content: CodedResultContent): Reso
 		const numbers = readRows(body);
 		if (numbers === undefined) return undefined;
 		const lineNumbers = storedNumbers(numbers, startLine);
-		let text: string | undefined;
+		// The result text the rows are read from, until the card text is built from it. A prune that
+		// replaces the result's content leaves this display the only holder of that text, so the
+		// getter releases it once the card text exists.
+		let rows: string | undefined = body;
+		let text = "";
 		const rebuilt: ResolvedReadDisplay = {
 			get text() {
-				if (text === undefined) {
+				if (rows !== undefined) {
 					const texts: string[] = [];
-					readRows(body, texts);
+					readRows(rows, texts);
 					text = texts.join("\n");
+					rows = undefined;
 				}
 				return text;
 			},
@@ -219,7 +224,12 @@ export const readResultCodec: ToolResultCodec = {
 		const body = firstResultText(content);
 		if (body === undefined) return details;
 		const loaded = rebuiltRows.get(details.displayContent);
-		if (loaded !== undefined && loaded.body === body) return { ...details, displayContent: loaded.tag };
+		if (loaded !== undefined) {
+			if (loaded.body === body) return { ...details, displayContent: loaded.tag };
+			// The content no longer holds the text the display was rebuilt from (a prune replaced it), so
+			// the tag is never written again and the entry would hold that text for nothing.
+			rebuiltRows.delete(details.displayContent);
+		}
 		if (!isWholeDisplay(details.displayContent)) return details;
 		const displayContent = encode(details.displayContent, body);
 		return displayContent === undefined ? details : { ...details, displayContent };

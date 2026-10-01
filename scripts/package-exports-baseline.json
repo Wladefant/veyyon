@@ -457,6 +457,7 @@
 			"githubCopilotUsageProvider",
 			"googleGeminiCliUsageProvider",
 			"guardThinkingLoopStream",
+			"installZodCoreConverter",
 			"instrumentationRank",
 			"interleavedThinkingBeta",
 			"isAnthropicStreamRetryable",
@@ -862,6 +863,7 @@
 			"dereferenceJsonSchema",
 			"enforceStrictSchema",
 			"findStrictToolSchemaViolation",
+			"installZodCoreConverter",
 			"isArkErrors",
 			"isArkSchema",
 			"isJsonObjectEmpty",
@@ -992,6 +994,7 @@
 			"compareSemVer",
 			"coreWeaveModelManagerOptions",
 			"coreWeaveProjectHeaders",
+			"createLazyModelReferenceIndex",
 			"createModelManager",
 			"createSimpleOpenAICompletionsOptions",
 			"cursorModelManagerOptions",
@@ -1127,6 +1130,7 @@
 			"projectOpenAIProReasoningAliases",
 			"qianfanModelManagerOptions",
 			"qwenPortalModelManagerOptions",
+			"readBundledModelKeys",
 			"readCodexClaimsFromPayload",
 			"readCodexTokenIdentity",
 			"readDiscoveryJson",
@@ -1227,6 +1231,7 @@
 			"buildModelProviderPriorityRank",
 			"buildModelReferenceIndex",
 			"compareSemVer",
+			"createLazyModelReferenceIndex",
 			"enforcesThinkingPrefixBinding",
 			"findThinkingVariantToken",
 			"getBracketStrippedModelIdCandidates",
@@ -3192,6 +3197,7 @@
 			"isFramedBlockComponent",
 			"isHyperlinkEnabled",
 			"markFramedBlockComponent",
+			"neverExpanded",
 			"outputBlockContentWidth",
 			"padToWidth",
 			"renderCodeCell",
@@ -3378,7 +3384,8 @@
 		"@veyyon/coding-agent/theme/defaults": [
 			"DEFAULT_THEME_NAMES",
 			"getDefaultTheme",
-			"getDefaultThemes"
+			"getDefaultThemes",
+			"readThemeAsset"
 		],
 		"@veyyon/coding-agent/thinking": [
 			"AUTO_THINKING",

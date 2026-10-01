@@ -260,7 +260,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#applySnapshot(snapshot: SnapshotResponse, generation: number, protectNewBlocks = true): void {
 		const nowMs = Date.now();
 		const previousCredentials = this.#snapshot.credentials;
-		const credentials = snapshot.credentials.map(entry => this.#normalizeSnapshotEntryBlocks(entry, nowMs));
+		const credentials = snapshot.credentials.map(entry => normalizeSnapshotEntryBlocks(entry, nowMs));
 		if (snapshotBlocksChanged(previousCredentials, credentials)) this.#invalidateUsageCache();
 		if (protectNewBlocks) this.#protectNewSnapshotBlocks(previousCredentials, credentials, nowMs);
 		this.#snapshot = { ...snapshot, credentials };
@@ -395,7 +395,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		generation: number,
 		serverNowMs: number,
 	): void {
-		const incoming = this.#normalizeSnapshotEntryBlocks(entry, Date.now());
+		const incoming = normalizeSnapshotEntryBlocks(entry, Date.now());
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === incoming.id);
 		const previousBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
 		const blocksChanged = !credentialBlockSnapshotsEqual(previousBlocks, incoming.blocks);
@@ -721,23 +721,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#snapshot = { ...this.#snapshot, credentials: next };
 	}
 
-	#normalizeSnapshotEntryBlocks(entry: SnapshotEntry, nowMs: number): SnapshotEntry {
-		if (!entry.blocks || entry.blocks.length === 0) return entry;
-		const blocks = entry.blocks
-			.filter(block => block.blockedUntilMs > nowMs)
-			.map(block => ({
-				providerKey: block.providerKey,
-				blockScope: block.blockScope,
-				blockedUntilMs: block.blockedUntilMs,
-				...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
-			}))
-			.sort(compareCredentialBlockSnapshots);
-		if (blocks.length > 0) return { ...entry, blocks };
-		const next: SnapshotEntry = { ...entry };
-		delete next.blocks;
-		return next;
-	}
-
 	#upsertSnapshotBlock(block: StoredCredentialBlock): void {
 		const index = this.#snapshot.credentials.findIndex(entry => entry.id === block.credentialId);
 		if (index === -1) return;
@@ -1005,6 +988,23 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#cache.clear();
 		this.#usageOverlays.clear();
 	}
+}
+
+function normalizeSnapshotEntryBlocks(entry: SnapshotEntry, nowMs: number): SnapshotEntry {
+	if (!entry.blocks || entry.blocks.length === 0) return entry;
+	const blocks = entry.blocks
+		.filter(block => block.blockedUntilMs > nowMs)
+		.map(block => ({
+			providerKey: block.providerKey,
+			blockScope: block.blockScope,
+			blockedUntilMs: block.blockedUntilMs,
+			...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
+		}))
+		.sort(compareCredentialBlockSnapshots);
+	if (blocks.length > 0) return { ...entry, blocks };
+	const next: SnapshotEntry = { ...entry };
+	delete next.blocks;
+	return next;
 }
 
 /**

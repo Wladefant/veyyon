@@ -314,34 +314,6 @@ export class Executor {
 		pending.deferredBlanks = [];
 	}
 
-	/**
-	 * Strip a single read-output line-number prefix (`N:`) from every bare body
-	 * row, but only when *all* bare rows carry one. A uniform set of prefixes is
-	 * the signature of content pasted straight from `read`/`search` output; a
-	 * mixed set means the `N:` is genuine payload content and must stay. Rows
-	 * authored with an explicit `+` are not bare and are never touched.
-	 */
-	#stripBarePrefixesIfUniform(payloads: PayloadRow[]): void {
-		let sawBare = false;
-		let allLiteralValues = true;
-		for (const row of payloads) {
-			if (!row.bare || row.text.trim().length === 0) continue;
-			sawBare = true;
-			const stripped = stripOneLeadingHashlinePrefix(row.text);
-			if (stripped === row.text) return;
-			allLiteralValues &&= BARE_LITERAL_VALUE_RE.test(stripped);
-		}
-		if (!sawBare) return;
-		// A body where every stripped remainder is a lone quoted/numeric literal
-		// (optionally comma-terminated) is the shape of a numeric-keyed dict or
-		// YAML mapping (`1: "one",`), not read-output paste; stripping the "N:"
-		// keys would mangle every line. Leave such bodies untouched.
-		if (allLiteralValues) return;
-		for (const row of payloads) {
-			if (row.bare && row.text.trim().length > 0) row.text = stripOneLeadingHashlinePrefix(row.text);
-		}
-	}
-
 	pushInsert(cursor: Cursor, text: string, lineNum: number, mode?: "replacement"): void {
 		this.#edits.push({
 			kind: "insert",
@@ -372,7 +344,7 @@ export class Executor {
 		const pending = this.#pending;
 		if (!pending) return;
 		const { target, lineNum, payloads } = pending;
-		this.#stripBarePrefixesIfUniform(payloads);
+		stripBarePrefixesIfUniform(payloads);
 		this.#pending = undefined;
 		const spec = PATCH_OPERATIONS[target.kind];
 		if (spec.takesBody && payloads.length === 0) {
@@ -406,6 +378,34 @@ export class Executor {
 			const cursor: Cursor = { kind: "eof" };
 			for (const text of texts) this.pushInsert(cursor, text, lineNum);
 		}
+	}
+}
+
+/**
+ * Strip a single read-output line-number prefix (`N:`) from every bare body
+ * row, but only when *all* bare rows carry one. A uniform set of prefixes is
+ * the signature of content pasted straight from `read`/`search` output; a
+ * mixed set means the `N:` is genuine payload content and must stay. Rows
+ * authored with an explicit `+` are not bare and are never touched.
+ */
+function stripBarePrefixesIfUniform(payloads: PayloadRow[]): void {
+	let sawBare = false;
+	let allLiteralValues = true;
+	for (const row of payloads) {
+		if (!row.bare || row.text.trim().length === 0) continue;
+		sawBare = true;
+		const stripped = stripOneLeadingHashlinePrefix(row.text);
+		if (stripped === row.text) return;
+		allLiteralValues &&= BARE_LITERAL_VALUE_RE.test(stripped);
+	}
+	if (!sawBare) return;
+	// A body where every stripped remainder is a lone quoted/numeric literal
+	// (optionally comma-terminated) is the shape of a numeric-keyed dict or
+	// YAML mapping (`1: "one",`), not read-output paste; stripping the "N:"
+	// keys would mangle every line. Leave such bodies untouched.
+	if (allLiteralValues) return;
+	for (const row of payloads) {
+		if (row.bare && row.text.trim().length > 0) row.text = stripOneLeadingHashlinePrefix(row.text);
 	}
 }
 

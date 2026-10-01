@@ -164,7 +164,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		const shouldPoll = requestedPollIds !== undefined || cancelIds.length === 0;
 
 		if (!shouldPoll) {
-			const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
+			const cancelledJobs = visibleJobs(manager, cancelIds, ownerId);
 			return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
 		}
 
@@ -172,12 +172,12 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		// - If `poll` was passed explicitly, watch exactly those (filtered to existing).
 		// - If `poll` was omitted (and so was `cancel`), default to all running jobs.
 		const jobsToWatch = requestedPollIds
-			? this.#visibleJobs(manager, requestedPollIds, ownerId)
+			? visibleJobs(manager, requestedPollIds, ownerId)
 			: manager.getRunningJobs(ownerFilter);
 
 		if (jobsToWatch.length === 0) {
 			if (cancelOutcomes.length > 0) {
-				const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
+				const cancelledJobs = visibleJobs(manager, cancelIds, ownerId);
 				return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
 			}
 			// Zero pollable jobs is not necessarily "nothing running": agents
@@ -202,7 +202,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 				lines.push("No running background jobs to wait for.");
 			}
 			if (agents.length > 0) {
-				lines.push("", ...this.#describeAgents(agents));
+				lines.push("", ...describeAgents(agents));
 			}
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
@@ -238,7 +238,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		const watchedJobIds = runningJobs.map(job => job.id);
 		manager.watchJobs(watchedJobIds);
 
-		const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
+		const cancelledJobs = visibleJobs(manager, cancelIds, ownerId);
 		const allTrackedJobs = cancelledJobs.concat(jobsToWatch);
 
 		const PROGRESS_INTERVAL_MS = 500;
@@ -296,22 +296,6 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 	}
 
 	/**
-	 * Resolve a list of job ids to job records visible to the calling agent.
-	 * Drops missing ids and ids owned by other agents, so cross-agent inspection
-	 * via the `job` tool is impossible.
-	 */
-	#visibleJobs(manager: AsyncJobManager, ids: string[], ownerId: string | undefined): AsyncJob[] {
-		const out: AsyncJob[] = [];
-		for (const id of ids) {
-			const job = manager.getJob(id);
-			if (!job) continue;
-			if (ownerId && job.ownerId !== ownerId) continue;
-			out.push(job);
-		}
-		return out;
-	}
-
-	/**
 	 * Kill a running agent that has no job row, when `cancel` names one.
 	 *
 	 * A spawner could always SEE these agents (`job list` reports them under
@@ -333,7 +317,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		if (!registry || !ref || ref.kind !== "sub") {
 			return { id, status: "not_found", message: `Background job not found: ${id}` };
 		}
-		if (ownerId && !this.#isDescendant(registry, id, ownerId)) {
+		if (ownerId && !isDescendant(registry, id, ownerId)) {
 			return { id, status: "not_found", message: `Background job not found: ${id}` };
 		}
 		if (ref.status === "aborted") {
@@ -355,19 +339,6 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			status: "cancelled",
 			message: `Killed agent ${id}. Its transcript remains readable at history://${id}.`,
 		};
-	}
-
-	/** Whether `id` sits anywhere under `ancestorId` in the spawn tree. */
-	#isDescendant(registry: AgentRegistry, id: string, ancestorId: string): boolean {
-		const seen = new Set<string>();
-		let current = registry.get(id)?.parentId;
-		// Guarded against a cycle: a corrupted parent chain must not hang the tool.
-		while (current && !seen.has(current)) {
-			if (current === ancestorId) return true;
-			seen.add(current);
-			current = registry.get(current)?.parentId;
-		}
-		return false;
 	}
 
 	/**
@@ -415,21 +386,6 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			});
 		}
 		return out;
-	}
-
-	/** Model-facing lines for the running-agents section shared by `list` and empty-poll results. */
-	#describeAgents(agents: AgentActivitySnapshot[]): string[] {
-		const lines = [`## Running Agents (${agents.length}) — not job-backed\n`];
-		for (const agent of agents) {
-			const parent = agent.parentId ? ` (spawned by \`${agent.parentId}\`)` : "";
-			const activity = agent.activity ? ` — ${agent.activity}` : "";
-			lines.push(`- \`${agent.id}\`${parent} — up ${formatDuration(agent.ageMs)}${activity}`);
-		}
-		lines.push(
-			"",
-			"These agents have no job entry. Coordinate via `irc`, read transcripts at `history://<id>`, and kill one you spawned by passing its id to `cancel`.",
-		);
-		return lines;
 	}
 
 	#snapshotJobs(
@@ -525,7 +481,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 
 		if (agents.length > 0) {
 			if (lines.length > 0) lines.push("");
-			const al = this.#describeAgents(agents);
+			const al = describeAgents(agents);
 			for (let li = 0; li < al.length; li++) lines.push(al[li]!);
 		}
 
@@ -549,6 +505,50 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			...(isWaitingPollDetails(details) ? { useless: true } : {}),
 		};
 	}
+}
+
+/**
+ * Resolve a list of job ids to job records visible to the calling agent.
+ * Drops missing ids and ids owned by other agents, so cross-agent inspection
+ * via the `job` tool is impossible.
+ */
+function visibleJobs(manager: AsyncJobManager, ids: string[], ownerId: string | undefined): AsyncJob[] {
+	const out: AsyncJob[] = [];
+	for (const id of ids) {
+		const job = manager.getJob(id);
+		if (!job) continue;
+		if (ownerId && job.ownerId !== ownerId) continue;
+		out.push(job);
+	}
+	return out;
+}
+
+/** Whether `id` sits anywhere under `ancestorId` in the spawn tree. */
+function isDescendant(registry: AgentRegistry, id: string, ancestorId: string): boolean {
+	const seen = new Set<string>();
+	let current = registry.get(id)?.parentId;
+	// Guarded against a cycle: a corrupted parent chain must not hang the tool.
+	while (current && !seen.has(current)) {
+		if (current === ancestorId) return true;
+		seen.add(current);
+		current = registry.get(current)?.parentId;
+	}
+	return false;
+}
+
+/** Model-facing lines for the running-agents section shared by `list` and empty-poll results. */
+function describeAgents(agents: AgentActivitySnapshot[]): string[] {
+	const lines = [`## Running Agents (${agents.length}) — not job-backed\n`];
+	for (const agent of agents) {
+		const parent = agent.parentId ? ` (spawned by \`${agent.parentId}\`)` : "";
+		const activity = agent.activity ? ` — ${agent.activity}` : "";
+		lines.push(`- \`${agent.id}\`${parent} — up ${formatDuration(agent.ageMs)}${activity}`);
+	}
+	lines.push(
+		"",
+		"These agents have no job entry. Coordinate via `irc`, read transcripts at `history://<id>`, and kill one you spawned by passing its id to `cancel`.",
+	);
+	return lines;
 }
 
 export const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;

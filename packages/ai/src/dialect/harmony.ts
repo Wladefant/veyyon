@@ -101,7 +101,7 @@ class HarmonyInbandScanner implements InbandScanner {
 
 				const rawHeader = this.#buffer.slice(0, message);
 				this.#rawBlock += this.#buffer.slice(0, message + MESSAGE.length);
-				const header = this.#parseHeader(rawHeader);
+				const header = parseHeader(rawHeader);
 				this.#buffer = this.#buffer.slice(message + MESSAGE.length);
 				this.#enterBody(header, events);
 				continue;
@@ -210,17 +210,6 @@ class HarmonyInbandScanner implements InbandScanner {
 		this.#clearBody();
 	}
 
-	#parseHeader(rawHeader: string): HeaderFields {
-		const channelIndex = rawHeader.indexOf(CHANNEL);
-		const rolePart = channelIndex === -1 ? rawHeader : rawHeader.slice(0, channelIndex);
-		const channelPart = channelIndex === -1 ? "" : rawHeader.slice(channelIndex + CHANNEL.length);
-		return {
-			role: firstWord(rolePart),
-			channel: firstWord(channelPart),
-			recipient: parseRecipient(rawHeader),
-		};
-	}
-
 	#parseArgs(): Record<string, unknown> {
 		return parseToolArgsText(this.#toolArgs, { source: "harmony", tool: this.#name });
 	}
@@ -239,6 +228,17 @@ class HarmonyInbandScanner implements InbandScanner {
 		this.#state = "outside";
 		this.#clearBody();
 	}
+}
+
+function parseHeader(rawHeader: string): HeaderFields {
+	const channelIndex = rawHeader.indexOf(CHANNEL);
+	const rolePart = channelIndex === -1 ? rawHeader : rawHeader.slice(0, channelIndex);
+	const channelPart = channelIndex === -1 ? "" : rawHeader.slice(channelIndex + CHANNEL.length);
+	return {
+		role: firstWord(rolePart),
+		channel: firstWord(channelPart),
+		recipient: parseRecipient(rawHeader),
+	};
 }
 
 function findNextToken(text: string, tokens: readonly string[]): TokenMatch | undefined {

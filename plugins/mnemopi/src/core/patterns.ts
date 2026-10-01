@@ -74,13 +74,13 @@ export class MemoryCompressor {
 		const originalSize = utf8Size(content);
 		if (method === "auto") {
 			let [compressed, stats] = this.#dictCompress(content);
-			if (stats.savingsPercent < 5) [compressed, stats] = this.#rleCompress(content);
+			if (stats.savingsPercent < 5) [compressed, stats] = rleCompress(content);
 			return [compressed, stats];
 		}
 
 		if (method === "dict") return this.#dictCompress(content);
-		if (method === "rle") return this.#rleCompress(content);
-		if (method === "semantic") return this.#semanticCompressSingle(content);
+		if (method === "rle") return rleCompress(content);
+		if (method === "semantic") return semanticCompressSingle(content);
 		return [
 			content,
 			new CompressionStats({
@@ -103,39 +103,6 @@ export class MemoryCompressor {
 		const compressedSize = utf8Size(compressed);
 		const ratio = originalSize > 0 ? compressedSize / originalSize : 1.0;
 		return [compressed, new CompressionStats({ originalSize, compressedSize, ratio, method: "dict" })];
-	}
-
-	#rleCompress(content: string): readonly [string, CompressionStats] {
-		const originalSize = utf8Size(content);
-		if (content.length === 0) {
-			return [content, new CompressionStats({ originalSize: 0, compressedSize: 0, ratio: 1.0, method: "rle" })];
-		}
-
-		const compressed: string[] = [];
-		let count = 1;
-		for (let i = 1; i < content.length; i++) {
-			if (content[i] === content[i - 1] && count < 255) {
-				count++;
-			} else {
-				const prev = content[i - 1] ?? "";
-				compressed.push(count > 3 ? `[${prev}*${count}]` : content.slice(i - count, i));
-				count = 1;
-			}
-		}
-		const last = content[content.length - 1] ?? "";
-		compressed.push(count > 3 ? `[${last}*${count}]` : content.slice(content.length - count));
-		const compressedString = compressed.join("");
-		const compressedSize = utf8Size(compressedString);
-		const ratio = originalSize > 0 ? compressedSize / originalSize : 1.0;
-		return [compressedString, new CompressionStats({ originalSize, compressedSize, ratio, method: "rle" })];
-	}
-
-	#semanticCompressSingle(content: string): readonly [string, CompressionStats] {
-		const originalSize = utf8Size(content);
-		const compressed = originalSize > 500 ? `${content.slice(0, 250)} [...] ${content.slice(-100)}` : content;
-		const compressedSize = utf8Size(compressed);
-		const ratio = originalSize > 0 ? compressedSize / originalSize : 1.0;
-		return [compressed, new CompressionStats({ originalSize, compressedSize, ratio, method: "semantic" })];
 	}
 
 	compressBatch(memories: readonly MemoryRecord[], method = "auto"): readonly [MemoryRecord[], CompressionStats] {
@@ -183,6 +150,39 @@ export class MemoryCompressor {
 		}
 		return content;
 	}
+}
+
+function rleCompress(content: string): readonly [string, CompressionStats] {
+	const originalSize = utf8Size(content);
+	if (content.length === 0) {
+		return [content, new CompressionStats({ originalSize: 0, compressedSize: 0, ratio: 1.0, method: "rle" })];
+	}
+
+	const compressed: string[] = [];
+	let count = 1;
+	for (let i = 1; i < content.length; i++) {
+		if (content[i] === content[i - 1] && count < 255) {
+			count++;
+		} else {
+			const prev = content[i - 1] ?? "";
+			compressed.push(count > 3 ? `[${prev}*${count}]` : content.slice(i - count, i));
+			count = 1;
+		}
+	}
+	const last = content[content.length - 1] ?? "";
+	compressed.push(count > 3 ? `[${last}*${count}]` : content.slice(content.length - count));
+	const compressedString = compressed.join("");
+	const compressedSize = utf8Size(compressedString);
+	const ratio = originalSize > 0 ? compressedSize / originalSize : 1.0;
+	return [compressedString, new CompressionStats({ originalSize, compressedSize, ratio, method: "rle" })];
+}
+
+function semanticCompressSingle(content: string): readonly [string, CompressionStats] {
+	const originalSize = utf8Size(content);
+	const compressed = originalSize > 500 ? `${content.slice(0, 250)} [...] ${content.slice(-100)}` : content;
+	const compressedSize = utf8Size(compressed);
+	const ratio = originalSize > 0 ? compressedSize / originalSize : 1.0;
+	return [compressed, new CompressionStats({ originalSize, compressedSize, ratio, method: "semantic" })];
 }
 
 export interface DetectedPatternInit {

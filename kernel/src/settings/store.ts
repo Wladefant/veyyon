@@ -478,6 +478,15 @@ export class SettingsStore {
 	 * Returns the merged value from global + project + overrides, or the default.
 	 */
 	get<P extends SettingPath>(path: P): SettingValue<P> {
+		return this.#resolve(path, true);
+	}
+
+	/**
+	 * The effective value of `path`. `memoize` stores a cache miss in {@link #resolvedCache}; a read
+	 * that visits every declared path, such as {@link getEffectiveSnapshot}, passes false so the cache
+	 * holds only the paths a session reads.
+	 */
+	#resolve<P extends SettingPath>(path: P, memoize: boolean): SettingValue<P> {
 		// Global-scoped settings live in ~/.veyyon/config.yml, not the profile
 		// store. Read them live through their binding (never cached) so the UI
 		// always reflects the current global config, and fall back to the schema
@@ -515,7 +524,7 @@ export class SettingsStore {
 			const scoped = this.#hooks.resolveForCwd(path, value, this.#cwd) ?? value;
 			resolved = registered ? this.#declaredValue(path, scoped) : scoped;
 		}
-		this.#resolvedCache.set(path, resolved);
+		if (memoize) this.#resolvedCache.set(path, resolved);
 		return resolved as SettingValue<P>;
 	}
 
@@ -602,7 +611,7 @@ export class SettingsStore {
 		// mode exists to subscribe, so its refusal would otherwise be announced to an
 		// empty set and never mentioned again, which is the silence this whole path
 		// exists to end.
-		if (this.#reportedSaveFailure) this.#deliverSaveFailure(listener, this.#reportedSaveFailure);
+		if (this.#reportedSaveFailure) deliverSaveFailure(listener, this.#reportedSaveFailure);
 		return () => {
 			this.#saveFailureListeners.delete(listener);
 		};
@@ -693,7 +702,7 @@ export class SettingsStore {
 				}
 				this.#clearGlobalWriteFailure();
 			} else {
-				this.#mutateTree(this.#overrides, toSegments(path), value, isUnset);
+				mutateTree(this.#overrides, toSegments(path), value, isUnset);
 				this.rebuildMerged();
 			}
 			const next = this.get(path);
@@ -709,7 +718,7 @@ export class SettingsStore {
 		// value.
 		this.#stampOwnedMigrationsFor(path);
 		const segments = toSegments(path);
-		this.#mutateTree(this.#global, segments, value, isUnset);
+		mutateTree(this.#global, segments, value, isUnset);
 		if (isUnset) {
 			// Also drop a runtime override for the same path. Both are values this
 			// process owns, and leaving the override in place would make "Default"
@@ -728,14 +737,9 @@ export class SettingsStore {
 		this.#fireEffectiveSettingChanged(path, next, prev);
 	}
 
-	#mutateTree(tree: RawSettings, segments: readonly string[], value: unknown, isUnset: boolean): void {
-		if (isUnset) deleteByPath(tree, segments);
-		else setByPath(tree, segments, value);
-	}
-
 	#applyOverrideMutation(path: SettingPath, value: unknown, isClear: boolean): void {
 		const prev = this.get(path);
-		this.#mutateTree(this.#overrides, toSegments(path), value, isClear);
+		mutateTree(this.#overrides, toSegments(path), value, isClear);
 		this.rebuildMerged();
 		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
 	}
@@ -1097,7 +1101,7 @@ export class SettingsStore {
 	getEffectiveSnapshot(): Record<string, unknown> {
 		const result: Record<string, unknown> = {};
 		for (const key of indexedSchema().paths.slice().sort()) {
-			result[key] = this.get(key);
+			result[key] = this.#resolve(key, false);
 		}
 		return result;
 	}
@@ -1131,7 +1135,7 @@ export class SettingsStore {
 
 	async load(): Promise<this> {
 		await this.#loadProfileAndOverlays(false);
-		this.#reportShadowedConfigFiles();
+		reportShadowedConfigFiles();
 		this.#fireAllHooks();
 		return this;
 	}
@@ -1139,24 +1143,6 @@ export class SettingsStore {
 	async loadReadOnly(): Promise<this> {
 		await this.#loadProfileAndOverlays(true);
 		return this;
-	}
-
-	/**
-	 * Report a config file that exists but is ignored because a higher-precedence
-	 * one exists too.
-	 *
-	 * `dirs` finds these but cannot report them: it sits below the logger, which
-	 * imports it. This is the layer that has somewhere to say it, so it says it
-	 * here rather than letting a whole settings file be silently dead.
-	 */
-	#reportShadowedConfigFiles(): void {
-		for (const shadowed of findShadowedGlobalConfigFiles()) {
-			logger.warn("Global config file is being ignored because a higher-precedence one exists", {
-				ignored: shadowed.ignored,
-				using: shadowed.using,
-				fix: `merge ${path.basename(shadowed.ignored)} into ${path.basename(shadowed.using)} and delete it`,
-			});
-		}
 	}
 
 	/**
@@ -1543,16 +1529,7 @@ export class SettingsStore {
 	#announceSaveFailure(failure: SettingsSaveFailure): void {
 		this.#reportedSaveFailure = failure;
 		for (const listener of this.#saveFailureListeners) {
-			this.#deliverSaveFailure(listener, failure);
-		}
-	}
-
-	/** One listener call, isolated so a listener that throws cannot silence the rest. */
-	#deliverSaveFailure(listener: (failure: SettingsSaveFailure) => void, failure: SettingsSaveFailure): void {
-		try {
-			listener(failure);
-		} catch (listenerError) {
-			logger.warn("Settings: a save-failure listener threw", { error: errorMessage(listenerError) });
+			deliverSaveFailure(listener, failure);
 		}
 	}
 
@@ -1644,5 +1621,37 @@ export class SettingsStore {
 	#fireAllHooks(): void {
 		if (!this.#activateProcessHooks) return;
 		this.#hooks.applyAllHooks(this);
+	}
+}
+
+function mutateTree(tree: RawSettings, segments: readonly string[], value: unknown, isUnset: boolean): void {
+	if (isUnset) deleteByPath(tree, segments);
+	else setByPath(tree, segments, value);
+}
+
+/**
+ * Report a config file that exists but is ignored because a higher-precedence
+ * one exists too.
+ *
+ * `dirs` finds these but cannot report them: it sits below the logger, which
+ * imports it. This is the layer that has somewhere to say it, so it says it
+ * here rather than letting a whole settings file be silently dead.
+ */
+function reportShadowedConfigFiles(): void {
+	for (const shadowed of findShadowedGlobalConfigFiles()) {
+		logger.warn("Global config file is being ignored because a higher-precedence one exists", {
+			ignored: shadowed.ignored,
+			using: shadowed.using,
+			fix: `merge ${path.basename(shadowed.ignored)} into ${path.basename(shadowed.using)} and delete it`,
+		});
+	}
+}
+
+/** One listener call, isolated so a listener that throws cannot silence the rest. */
+function deliverSaveFailure(listener: (failure: SettingsSaveFailure) => void, failure: SettingsSaveFailure): void {
+	try {
+		listener(failure);
+	} catch (listenerError) {
+		logger.warn("Settings: a save-failure listener threw", { error: errorMessage(listenerError) });
 	}
 }

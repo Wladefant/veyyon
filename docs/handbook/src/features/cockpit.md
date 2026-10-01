@@ -95,10 +95,18 @@ screen, so the card mixes the composer hairline, the composer outline and the tr
 of the background this terminal reported last time. A reply that contradicts the record takes
 effect on the next frame. Each of the three maps holds its 24 most recently written entries.
 
-Each recorded fact is replaced by a measured one as the session mounts. A tree committed from
-another terminal since the last launch keeps the recorded marker until `git status` answers, about
-130ms in. A project you open for the first time has no dirty marker. The gauge reads `?` only
-until this model has idled somewhere once; after that a new project starts at the model's
+Each recorded fact is replaced by a measured one as the session mounts, except the gauge. The gauge
+states the recorded reading until the session leaves rest: the measurement, which builds every
+active tool's schema, runs once the frame that draws the first keystroke in the composer is
+committed, or when a prompt is submitted. A session closed without a keystroke builds no tool schema
+and files no new reading. A resumed session states its gauge from the transcript until it leaves
+rest: the prompt size the provider reported for the last response, plus an estimate of the messages
+after it, with the tools, skills and system prompt counted at the size recorded with that response.
+A transcript whose responses recorded no such size is measured as the session mounts. A tree
+committed from another terminal since the last launch keeps the recorded marker until `git status`
+answers, about 130ms in. A project you open for the first time
+has no dirty marker. The gauge reads `?` only until a session on this model has left rest once;
+after that a new project starts at the model's
 subtracted reading and the session adds what this project's own context costs, so the bar fills
 rather than empties when the session lands. Configuring a different model resets it to `?` again,
 because a reading is a fraction of the window it was taken against. A model you have never run

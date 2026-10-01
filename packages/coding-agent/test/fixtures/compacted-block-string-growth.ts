@@ -296,7 +296,7 @@ function helpersFor(chat: TranscriptContainer, expanded: boolean, settings: Sett
 		effectiveHideThinkingBlock: false,
 		proseOnlyThinking: false,
 		lastAssistantUsage: undefined,
-		editor: { addToHistory() {} },
+		editor: { seedHistory() {} },
 		viewSession: {
 			sessionManager: { getCwd: () => "/repo", putBlobSync: () => "fixture-blob" },
 			getToolByName: () => undefined,

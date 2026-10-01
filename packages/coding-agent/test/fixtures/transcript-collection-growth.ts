@@ -27,7 +27,8 @@ export const IMAGE_READ = "read with an image";
 export const SUBJECTS: readonly string[] = [CONVERSATION, IMAGE_READ, ...BUILTIN_TOOL_NAMES, ...HIDDEN_TOOL_NAMES];
 const COLLECTIONS = ["Map", "Set", "WeakMap", "WeakSet"] as const;
 /** A 1x1 PNG: a format every image protocol draws as it stands, so no conversion starts. */
-const PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+export const PIXEL_PNG =
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 const usage = {
 	input: 1,

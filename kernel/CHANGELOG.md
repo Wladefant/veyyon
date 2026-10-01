@@ -33,10 +33,11 @@
 
 ### Changed
 
+- 13 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
 - Session storage and the session retry policy take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `buildSessionContextFromPath` reads a branch's settings, emits its messages and strips dangling tool calls in single-purpose steps instead of one 374-line function, and drops content-less dangling turns in one pass instead of splicing each out, cutting a context build that drops 10,000 such turns from 10.4 ms to 0.7 ms with identical contexts across 200,000 generated branches.
-- Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
+- `SessionManager` checks whether an entry id belongs to the session against its id index instead of a second set holding every id, and `getChildren` filters the entry list instead of a parent-to-children map built for every entry, which cut the heap of an opened 390 MiB, 107,917-entry session from 91 MiB to 75 MiB and its open time from 1,002 ms to 961 ms (median of 5 alternating runs).
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
 - A `tool_execution_start` session entry writes no `startedAt`, since the entry's own timestamp holds the start time, and writes its argument summary only when no preceding assistant message records the call, which cut the start markers in local sessions from 581.83 MB to 403.91 MB; a marker that wrote `startedAt` still reads back that time.
 - The `ToolResultCodec` contract permits a codec to rebuild a dropped field from the details the written line keeps as well as from the result's content; no behavior change.
@@ -54,9 +55,12 @@
 - A listed session holds at most 4,096 characters of first-message and message text, copied out of the scanned window, and the session list index moves to version 2 so rows an earlier build indexed without the bound are rescanned, which cut the rows of a 125-session directory from 21.39 MiB to 1.97 MiB and its list index from 5.45 MiB to 557 KiB.
 - The error a cold entry's failed read-back raises formats its cause with `errorMessage` from `@veyyon/utils`; no user-visible change.
 - A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
+- `getEffectiveSnapshot` resolves every declared setting without memoizing it, so a store keeps cached values only for paths its session reads, which cut the heap a live spawned session retains from 315.4 KiB to 277.0 KiB (median of 3 runs over 20 sessions).
+- `SessionManager.getCwd` returns the absolute cwd the session holds instead of resolving a new copy on every read, so the transcript rows of a resumed 600-turn session share one path string instead of holding 1,599 copies, which cut its heap and extra memory from 123,876 KiB to 123,672 KiB and its live strings from 135,858 to 134,281 (median of five); every returned value is unchanged.
 
 ### Fixed
 
+- A title change made while a session file rewrite is queued or in progress is written to the file once instead of twice, and a change that lands after the rewrite read its body is published by a second pass instead of being lost with its title.
 - An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
 - An unquoted YAML scalar that spells an enum member, such as `advisor.syncBacklog: 3`, reads as that member and is no longer reported as invalid at load.
 - `resolveResumableSession` returns a session another profile wrote as `scope: "profile"` with the owning profile's name instead of as a `global` match, and `foreignSessionFileProfile` returns the profile other than the active one that holds a transcript path.

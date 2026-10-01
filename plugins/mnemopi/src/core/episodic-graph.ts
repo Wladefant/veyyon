@@ -268,12 +268,12 @@ export class EpisodicGraph {
 	extractGist(content: string, memoryId: string): Gist {
 		return {
 			id: `gist_${memoryId}`,
-			text: this.#createSummary(content),
+			text: createSummary(content),
 			timestamp: toUtcIso(),
-			participants: this.#extractParticipants(content),
-			location: this.#extractLocation(content),
-			emotion: this.#extractEmotion(content),
-			timeScope: this.#extractTemporalScope(content),
+			participants: extractParticipants(content),
+			location: extractLocation(content),
+			emotion: extractEmotion(content),
+			timeScope: extractTemporalScope(content),
 		};
 	}
 	extractFacts(content: string, memoryId: string): Fact[] {
@@ -416,7 +416,7 @@ export class EpisodicGraph {
 	scoreMemoryLink(sourceMemoryId: string, targetMemoryId: string): number {
 		const left = this.#memoryFeatures(sourceMemoryId);
 		const right = this.#memoryFeatures(targetMemoryId);
-		return this.#scoreFeatures(left, right);
+		return scoreFeatures(left, right);
 	}
 	ingestMemory(content: string, memoryId: string, options: IngestOptions = {}): IngestResult {
 		const sessionId = options.sessionId ?? "default";
@@ -518,46 +518,6 @@ export class EpisodicGraph {
 		return row.count;
 	}
 
-	#extractParticipants(content: string): string[] {
-		const names = Array.from(content.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g), match => match[1] ?? "");
-		const pronouns = Array.from(
-			content.matchAll(/\b(I|you|we|they|he|she|it|me|us|them|him|her)\b/gi),
-			match => match[1] ?? "",
-		);
-		return unique([...names, ...pronouns], 5);
-	}
-
-	#extractTemporalScope(content: string): string | null {
-		for (const [pattern, scope] of TEMPORAL_SCOPE_PATTERNS) {
-			if (pattern.test(content)) return scope;
-		}
-		return null;
-	}
-
-	#extractLocation(content: string): string | null {
-		const properPlace =
-			/\b(?:at|in|from)\s+([A-Z][a-zA-Z\s]+?)(?:\s+(?:yesterday|today|tomorrow|now|last|next|on|at)\b|$)/i.exec(
-				content,
-			);
-		if (properPlace?.[1] !== undefined) return properPlace[1].trim();
-		const genericPlace = /\b(office|home|work|school|hospital|store|restaurant|building|room)\b/i.exec(content);
-		return genericPlace?.[1] ?? null;
-	}
-
-	#extractEmotion(content: string): string | null {
-		const lower = content.toLocaleLowerCase();
-		if (POSITIVE_EMOTIONS.some(word => lower.includes(word))) return "positive";
-		if (NEGATIVE_EMOTIONS.some(word => lower.includes(word))) return "negative";
-		if (NEUTRAL_EMOTIONS.some(word => lower.includes(word))) return "neutral";
-		return null;
-	}
-
-	#createSummary(content: string): string {
-		const firstSentence = content.split(/[.!?]+/, 1)[0]?.trim() ?? "";
-		if (firstSentence.length > 10) return firstSentence.slice(0, 100);
-		return content.slice(0, 100).trim();
-	}
-
 	#knownMemoryIds(exclude: string): string[] {
 		const ids = new Set<string>();
 		const gistRows = this.db
@@ -630,8 +590,48 @@ export class EpisodicGraph {
 		}
 		return lowerSet(features);
 	}
+}
 
-	#scoreFeatures(left: Set<string>, right: Set<string>): number {
-		return Math.round(overlapScore(left, right) * 1000) / 1000;
+function extractParticipants(content: string): string[] {
+	const names = Array.from(content.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g), match => match[1] ?? "");
+	const pronouns = Array.from(
+		content.matchAll(/\b(I|you|we|they|he|she|it|me|us|them|him|her)\b/gi),
+		match => match[1] ?? "",
+	);
+	return unique([...names, ...pronouns], 5);
+}
+
+function extractTemporalScope(content: string): string | null {
+	for (const [pattern, scope] of TEMPORAL_SCOPE_PATTERNS) {
+		if (pattern.test(content)) return scope;
 	}
+	return null;
+}
+
+function extractLocation(content: string): string | null {
+	const properPlace =
+		/\b(?:at|in|from)\s+([A-Z][a-zA-Z\s]+?)(?:\s+(?:yesterday|today|tomorrow|now|last|next|on|at)\b|$)/i.exec(
+			content,
+		);
+	if (properPlace?.[1] !== undefined) return properPlace[1].trim();
+	const genericPlace = /\b(office|home|work|school|hospital|store|restaurant|building|room)\b/i.exec(content);
+	return genericPlace?.[1] ?? null;
+}
+
+function extractEmotion(content: string): string | null {
+	const lower = content.toLocaleLowerCase();
+	if (POSITIVE_EMOTIONS.some(word => lower.includes(word))) return "positive";
+	if (NEGATIVE_EMOTIONS.some(word => lower.includes(word))) return "negative";
+	if (NEUTRAL_EMOTIONS.some(word => lower.includes(word))) return "neutral";
+	return null;
+}
+
+function createSummary(content: string): string {
+	const firstSentence = content.split(/[.!?]+/, 1)[0]?.trim() ?? "";
+	if (firstSentence.length > 10) return firstSentence.slice(0, 100);
+	return content.slice(0, 100).trim();
+}
+
+function scoreFeatures(left: Set<string>, right: Set<string>): number {
+	return Math.round(overlapScore(left, right) * 1000) / 1000;
 }

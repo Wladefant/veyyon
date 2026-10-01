@@ -5,13 +5,16 @@ import { IdleTrim } from "@veyyon/utils/idle-trim";
 
 /**
  * Contract: `IdleTrim` runs its trim once the process has spent `quietMs` without a busy sampling
- * window, runs it once per quiet stretch, and runs it again only after the process has worked.
+ * window, runs it once per quiet stretch, and runs it again only after the process has worked. Its
+ * `release` runs on the first quiet window after work and right after each trim, once per quiet
+ * stretch, and a release that throws is dropped without stopping the trim.
  *
- * The defect class this closes is a trim that fires at the wrong time or at the wrong rate: during
- * work (a busy window not resetting the quiet period, the boundary read the wrong way), repeatedly
- * while idle (a trim re-arming itself, or its own collection counted as work), or after stop()
- * (a stale armed window, two sampling chains after a restart). Each is driven through the real
- * class with an injected clock, CPU counter and timer, so every window is chosen, not slept.
+ * The defect class this closes is a trim or release that fires at the wrong time or at the wrong
+ * rate: during work (a busy window not resetting the quiet period, the boundary read the wrong way),
+ * repeatedly while idle (a trim or release re-arming itself, or the trim's own collection counted as
+ * work), or after stop() (a stale armed window, two sampling chains after a restart). Each is driven
+ * through the real class with an injected clock, CPU counter and timer, so every window is chosen,
+ * not slept.
  *
  * The engine end is checked in a child process: the default trim must discard compiled code, and
  * a started trim must never keep a process alive. Those fail if Bun turns `shrink()` into a no-op
@@ -27,11 +30,14 @@ const RATIO = 0.05;
 /** CPU at the threshold: the most a quiet window may use. */
 const LIMIT_MS = SAMPLE_MS * RATIO;
 
-function harness(trim: () => void = () => {}) {
+function harness(hooks: { trim?: () => void; release?: () => void } = {}) {
 	let nowMs = 0;
 	let cpuMs = 0;
 	const armed: { cb: () => void; cancelled: boolean; unrefed: boolean }[] = [];
 	const trims: number[] = [];
+	const releases: number[] = [];
+	/** Trims and releases in the order they ran, as `trim@<ms>` and `release@<ms>`. */
+	const events: string[] = [];
 	const idle = new IdleTrim({
 		quietMs: QUIET_MS,
 		sampleMs: SAMPLE_MS,
@@ -52,12 +58,20 @@ function harness(trim: () => void = () => {}) {
 		},
 		trim: () => {
 			trims.push(nowMs);
-			trim();
+			events.push(`trim@${nowMs}`);
+			hooks.trim?.();
+		},
+		release: () => {
+			releases.push(nowMs);
+			events.push(`release@${nowMs}`);
+			hooks.release?.();
 		},
 	});
 	return {
 		idle,
 		trims,
+		releases,
+		events,
 		armed,
 		/** Let one sampling window elapse with `windowCpuMs` of CPU spent inside it. */
 		window(windowCpuMs = 0): void {
@@ -140,6 +154,47 @@ describe("when the trim runs", () => {
 	});
 });
 
+describe("when the release runs", () => {
+	test("a quiet process releases at its first quiet window and right after the trim, and only then", () => {
+		const h = harness();
+		h.idle.start();
+		h.window();
+		expect(h.events).toEqual([`release@${SAMPLE_MS}`]);
+		h.windows(QUIET_MS / SAMPLE_MS - 1);
+		expect(h.events).toEqual([`release@${SAMPLE_MS}`, `trim@${QUIET_MS}`, `release@${QUIET_MS}`]);
+		// The window after the trim carries its collection and is not judged; silence after it
+		// releases nothing more.
+		h.window(LIMIT_MS * 8);
+		h.windows(1440);
+		expect(h.events).toEqual([`release@${SAMPLE_MS}`, `trim@${QUIET_MS}`, `release@${QUIET_MS}`]);
+	});
+
+	test("each busy window re-arms the release for the next quiet window, well inside quietMs", () => {
+		const h = harness();
+		h.idle.start();
+		h.window(LIMIT_MS + 1);
+		expect(h.releases).toEqual([]);
+		h.windows(2);
+		expect(h.releases).toEqual([2 * SAMPLE_MS]);
+		h.windows(2, LIMIT_MS + 1);
+		h.window();
+		expect(h.releases).toEqual([2 * SAMPLE_MS, 6 * SAMPLE_MS]);
+		expect(h.trims).toEqual([]);
+	});
+
+	test("CPU at the threshold releases and one millisecond over it does not", () => {
+		const atLimit = harness();
+		atLimit.idle.start();
+		atLimit.window(LIMIT_MS);
+		expect(atLimit.releases).toEqual([SAMPLE_MS]);
+
+		const overLimit = harness();
+		overLimit.idle.start();
+		overLimit.windows(100, LIMIT_MS + 1);
+		expect(overLimit.releases).toEqual([]);
+	});
+});
+
 describe("lifecycle", () => {
 	test("every armed window is unref'd", () => {
 		const h = harness();
@@ -160,6 +215,7 @@ describe("lifecycle", () => {
 		const armedBefore = h.armed.length;
 		stale.cb();
 		expect(h.trims).toEqual([]);
+		expect(h.releases).toEqual([SAMPLE_MS]);
 		expect(h.armed.length).toBe(armedBefore);
 	});
 
@@ -178,8 +234,11 @@ describe("lifecycle", () => {
 		expect(h.armed.length).toBe(armedAfterRestart);
 		h.windows(QUIET_MS / SAMPLE_MS - 1);
 		expect(h.trims).toEqual([]);
+		// The restart re-arms the release as well as the quiet period.
+		expect(h.releases).toEqual([SAMPLE_MS, restartedAt + SAMPLE_MS]);
 		h.window();
 		expect(h.trims).toEqual([restartedAt + QUIET_MS]);
+		expect(h.releases).toEqual([SAMPLE_MS, restartedAt + SAMPLE_MS, restartedAt + QUIET_MS]);
 		// One chain: exactly one new window armed per window elapsed.
 		expect(h.armed.length - armedAfterRestart).toBe(QUIET_MS / SAMPLE_MS);
 	});
@@ -189,15 +248,41 @@ describe("lifecycle", () => {
 		vi.spyOn(logger, "warn").mockImplementation((message, context) => {
 			warnings.push([message, context]);
 		});
-		const h = harness(() => {
-			throw new Error("shrink is not a function");
+		const h = harness({
+			trim: () => {
+				throw new Error("shrink is not a function");
+			},
 		});
 		h.idle.start();
 		h.windows(QUIET_MS / SAMPLE_MS);
 		expect(h.trims).toEqual([QUIET_MS]);
+		expect(h.releases).toEqual([SAMPLE_MS]);
 		expect(h.idle.running).toBe(false);
 		expect(h.armed.at(-1)!.cancelled).toBe(true);
 		expect(warnings).toEqual([["Idle trim failed; sampling stopped", { error: "shrink is not a function" }]]);
+	});
+
+	test("a release that throws is dropped and says so, and sampling and the trim continue", () => {
+		const warnings: unknown[][] = [];
+		vi.spyOn(logger, "warn").mockImplementation((message, context) => {
+			warnings.push([message, context]);
+		});
+		const h = harness({
+			release: () => {
+				throw new Error("pagemap unreadable");
+			},
+		});
+		h.idle.start();
+		h.windows(QUIET_MS / SAMPLE_MS);
+		h.window(LIMIT_MS * 8);
+		h.window(LIMIT_MS + 1);
+		h.windows(QUIET_MS / SAMPLE_MS);
+		const busyEnd = (QUIET_MS / SAMPLE_MS + 2) * SAMPLE_MS;
+		expect(h.trims).toEqual([QUIET_MS, busyEnd + QUIET_MS]);
+		// Attempted once, at the first quiet window; neither trim nor the later quiet stretch calls it.
+		expect(h.releases).toEqual([SAMPLE_MS]);
+		expect(h.idle.running).toBe(true);
+		expect(warnings).toEqual([["Idle release failed; release stopped", { error: "pagemap unreadable" }]]);
 	});
 });
 

@@ -23,11 +23,12 @@
  * stale.
  *
  * WHAT IT DOES NOT CATCH. Components other than `ToolExecutionComponent` (the read group, assistant
- * messages, custom message renderers) are not swept. `setArgsComplete`, `seal`, `setShowImages` and
- * `invalidate` change nothing a `write` card shows, so for those only the no-draw half is asserted,
- * and `setArgsComplete` and `invalidate` leave the card's display inputs unchanged, so an eager draw
- * in either one stays green here. Builds are counted through the views a block projects, so work a
- * build does outside them is counted only alongside them.
+ * messages, custom message renderers) are not swept. `setArgsComplete`, `seal`, `setShowImages`,
+ * `invalidate` and `toolExecutionChanged` change nothing a `write` card shows, so for those only the
+ * no-draw half is asserted, and `setArgsComplete` and `invalidate` leave the card's display inputs
+ * unchanged, so an eager draw in either one stays green here. Builds are
+ * counted through the views a block projects, so work a build does outside them is counted only
+ * alongside them.
  */
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
@@ -114,6 +115,9 @@ const MUTATIONS: Record<string, Mutation> = {
 	invalidate: {
 		apply: card => card.invalidate(),
 	},
+	toolExecutionChanged: {
+		apply: card => card.toolExecutionChanged(),
+	},
 };
 
 /** Public methods that read the card, drop what it drew or end its life, and never change what it draws. */
@@ -126,6 +130,7 @@ const NOT_MUTATIONS = [
 	"highlightRequests",
 	"isDisplaceableBlock",
 	"isTranscriptBlockFinalized",
+	"railState",
 	"releaseRenderCache",
 	"render",
 	"stopAnimation",
@@ -140,6 +145,7 @@ const QUERIES: Record<string, (card: ToolExecutionComponent) => unknown> = {
 	isDisplaceableBlock: card => card.isDisplaceableBlock(),
 	isTranscriptBlockFinalized: card => card.isTranscriptBlockFinalized(),
 	releaseRenderCache: card => card.releaseRenderCache(),
+	railState: card => card.railState,
 	whenPreviewSettled: card => card.whenPreviewSettled(),
 	stopAnimation: card => card.stopAnimation(),
 	dispose: card => card.dispose(),

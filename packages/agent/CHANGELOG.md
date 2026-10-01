@@ -27,12 +27,15 @@
 
 ### Changed
 
+- Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
+- `Agent` reads its fallback Google model only when the initial state names no model, so a session that brings its own model no longer builds the Google provider's bundled models, and a launch with no credential builds 478 model specs instead of 521.
 - The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
 - `Agent` holds each system prompt section as the shared copy of its text, whether it arrives in the initial state or through `setSystemPrompt`, so live agents with equal sections hold one buffer of each.
 - `normalizeTools` holds a description with an appended examples block as the shared copy of its text, so live agents with the same tools hold one buffer of each, which cut the heap after 40 live subagents from 96.9 MiB to 95.4 MiB (median of 3 runs).
+- `estimateTokens` caches both option variants of a message in one record of four numbers instead of a holder object plus an object per variant, which cut the heap and extra memory of an idle resumed 600-turn session from 123,632 KiB to 123,399 KiB and its live objects from 708,261 to 702,908 (median of five).
 
 ## [1.5.4] - 2026-09-24
 

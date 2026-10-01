@@ -39,6 +39,7 @@ import {
 import { AssistantMessageComponent } from "./assistant-message";
 import { BashExecutionComponent } from "./bash-execution";
 import { detectCacheInvalidation, usesExplicitPromptCache } from "./cache-invalidation-marker";
+import type { ChatBlockHost } from "./chat-block";
 import { BranchSummaryMessageComponent, CompactionSummaryMessageComponent } from "./compaction-summary-message";
 import { CustomMessageComponent, createSpecializedCustomComponent } from "./custom-message";
 import { EvalExecutionComponent } from "./eval-execution";
@@ -69,6 +70,7 @@ export interface ChatTranscriptBuilderDeps {
 	resolveImageLinks?: (
 		message: Extract<AgentMessage, { role: "developer" | "user" }>,
 	) => readonly (string | undefined)[] | undefined;
+	onPopulateHistory?: (text: string) => void;
 	onInheritDisplaceableTodo?: (component: ToolExecutionComponent) => void;
 	isStreaming?: () => boolean;
 	retryAttempt?: () => number;
@@ -118,6 +120,12 @@ export class ChatTranscriptBuilder {
 	#todoSnapshot: ToolExecutionComponent | null = null;
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
+	/** One repaint callback and one scoped-repaint host for every assistant component this builder
+	 *  creates; both read `deps` at call time. */
+	readonly #requestRender = (): void => this.deps.requestRender();
+	readonly #renderHost: ChatBlockHost = {
+		requestComponentRender: component => this.deps.ui.requestComponentRender(component),
+	};
 
 	constructor(private readonly deps: ChatTranscriptBuilderDeps) {
 		this.#expanded = deps.initialExpanded ?? false;
@@ -157,13 +165,17 @@ export class ChatTranscriptBuilder {
 		return this.container.children.length === 0;
 	}
 	/** Discard all components and rebuild the whole transcript from `input`. */
-	rebuild(input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[]): void {
+	rebuild(
+		input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[],
+		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
+	): void {
 		this.reset();
 		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
 			const message = messages[i]!;
 			this.#appendPersistedMessage(message, {
+				populateHistory: options.populateHistory,
 				cacheMissExplained: cacheMissExplainedAt?.[i] ?? false,
 			});
 		}
@@ -171,12 +183,16 @@ export class ChatTranscriptBuilder {
 	}
 
 	/** Append newly persisted entries without rebuilding already rendered rows. */
-	append(input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[]): void {
+	append(
+		input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[],
+		options: { populateHistory?: boolean } = {},
+	): void {
 		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
 			const message = messages[i]!;
 			this.#appendPersistedMessage(message, {
+				populateHistory: options.populateHistory,
 				cacheMissExplained: cacheMissExplainedAt?.[i] ?? false,
 			});
 		}
@@ -184,7 +200,10 @@ export class ChatTranscriptBuilder {
 	}
 
 	/** Append a single message to the transcript (live dispatch). */
-	appendMessage(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[] {
+	appendMessage(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
+	): Component[] {
 		switch (message.role) {
 			case "assistant": {
 				const timeline = splitAssistantMessageToolTimeline(message);
@@ -387,6 +406,7 @@ export class ChatTranscriptBuilder {
 	#appendPersistedMessage(
 		message: AgentMessage,
 		options?: {
+			populateHistory?: boolean;
 			imageLinks?: readonly (string | undefined)[];
 			cacheMissExplained?: boolean;
 		},
@@ -408,6 +428,7 @@ export class ChatTranscriptBuilder {
 	#appendCommonMessage(
 		message: AgentMessage,
 		options?: {
+			populateHistory?: boolean;
 			imageLinks?: readonly (string | undefined)[];
 		},
 	): Component[] {
@@ -429,6 +450,9 @@ export class ChatTranscriptBuilder {
 					userView.imageLinks = options?.imageLinks ?? this.deps.resolveImageLinks?.(message);
 					const userComponent = new UserMessageComponent(userView);
 					this.container.addChild(userComponent);
+					if (options?.populateHistory && message.role === "user" && !userView.synthetic) {
+						this.deps.onPopulateHistory?.(textContent);
+					}
 				}
 				return [];
 			}
@@ -479,16 +503,15 @@ export class ChatTranscriptBuilder {
 		const hideThinkingBlock = this.deps.hideThinkingBlock?.() ?? false;
 		const proseOnlyThinking = this.deps.proseOnlyThinking ? this.deps.proseOnlyThinking() : true;
 		const thinkingRenderers = this.deps.getThinkingRenderers?.() ?? (this.deps.getMessageRenderer ? undefined : []);
-		const assistantComponent: AssistantMessageComponent = new AssistantMessageComponent(
+		return new AssistantMessageComponent(
 			toAssistantMessageView(message, { retryAttempt }),
 			hideThinkingBlock,
-			() => this.deps.requestRender(),
+			this.#requestRender,
 			thinkingRenderers,
 			this.deps.ui.imageBudget,
 			proseOnlyThinking,
-			() => this.deps.ui.requestComponentRender(assistantComponent),
+			this.#renderHost,
 		);
-		return assistantComponent;
 	}
 
 	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>, cacheMissExplained: boolean): void {

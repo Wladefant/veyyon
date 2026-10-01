@@ -18,7 +18,7 @@ import { type ToolViewDefinition, toolViewDefinitions } from "../tools/view-regi
 import type { EditMode } from "../utils/edit-mode";
 import { displayArguments } from "./display-arguments";
 import { toReadEntryView } from "./read-group";
-import { ToolCallPreview } from "./tool-call-preview";
+import { ToolCallPreview, type ToolCallPreviewListener } from "./tool-call-preview";
 import { buildGenericDisplay, getTextOutput, NO_CARD_VIEWS, renderToolCardViews } from "./tool-card-views";
 
 export type DisplaceableToolName = "job" | "todo";
@@ -317,35 +317,28 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 	};
 }
 
+/** The status a block built from `params` reports, derived without building the block. */
+export function toolExecutionStatus(params: ToolExecutionBuildParams): ToolStatus {
+	const isPartial = params.isPartial ?? params.result === undefined;
+	if (isPartial) return "running";
+	const result = params.result;
+	if (params.isError === true || result?.isError === true) {
+		if (!isNeverRanResult(result)) return "failed";
+		const record = result?.details as Record<string, unknown> | undefined;
+		return record?.__skipped === true ? "aborted" : "rejected";
+	}
+	return result === undefined ? "pending" : "succeeded";
+}
+
 export function buildToolExecutionBlock(params: ToolExecutionBuildParams): ToolExecutionBlock {
 	const toolName = params.toolName;
 	const toolCallId = params.toolCallId ?? "";
 	const id = params.id ?? (toolCallId ? `tool:${toolCallId}` : `tool:${toolName}:${Date.now()}`);
 	const timestamp = params.timestamp ?? Date.now();
-	const isPartial = params.isPartial ?? params.result === undefined;
 	const args = params.args;
 	const result = params.result;
 	const neverRan = isNeverRanResult(result);
-
-	let status: ToolStatus;
-	if (isPartial) {
-		status = "running";
-	} else if (params.isError === true || result?.isError === true) {
-		if (neverRan) {
-			const record = result?.details as Record<string, unknown> | undefined;
-			if (record?.__skipped === true) {
-				status = "aborted";
-			} else {
-				status = "rejected";
-			}
-		} else {
-			status = "failed";
-		}
-	} else if (result === undefined) {
-		status = "pending";
-	} else {
-		status = "succeeded";
-	}
+	const status = toolExecutionStatus(params);
 
 	const display = buildToolExecutionDisplay(params);
 	const renderableResult = neverRan ? undefined : result;
@@ -398,16 +391,25 @@ export interface ToolExecutionProducerParams {
 /** What the card drawing a producer's block is on: its expansion, spinner frame and freeze. */
 export type ToolExecutionDrawContext = Pick<ToolExecutionBuildParams, "expanded" | "frame" | "frozen">;
 
-const NO_LISTENERS: readonly (() => void)[] = [];
+/** What a producer notifies when its block changes. The listener reads the block when it needs it. */
+export interface ToolExecutionListener {
+	toolExecutionChanged(): void;
+}
 
-export class ToolExecutionProducer {
+const NO_LISTENERS: readonly ToolExecutionListener[] = [];
+
+/**
+ * Listeners are objects rather than callbacks, and the producer is its own preview's listener, so a
+ * card listening to its producer and the producer listening to its preview hold no closure per card.
+ */
+export class ToolExecutionProducer implements ToolCallPreviewListener {
 	#params: ToolExecutionBuildParams & { isPartial: boolean; sealed: boolean };
 	#callPreview: ToolCallPreview;
 	/**
 	 * Replaced, never mutated, so a notify walks the listeners it started with. A card subscribes
 	 * once, and a one-element array is smaller than the backing store of a one-element Set.
 	 */
-	#listeners: readonly (() => void)[] = NO_LISTENERS;
+	#listeners: readonly ToolExecutionListener[] = NO_LISTENERS;
 	/**
 	 * The block for the current parameters and context, or `undefined` once either changed. It is
 	 * built when it is next read, never when it changes.
@@ -445,7 +447,7 @@ export class ToolExecutionProducer {
 			snapshots: params.options?.snapshots,
 			fuzzyThreshold: params.options?.editFuzzyThreshold,
 			allowFuzzy: params.options?.editAllowFuzzy,
-			onChange: () => this.#changed(),
+			listener: this,
 		});
 		this.#params.callPreview = this.#callPreview;
 		this.#callPreview.update(args);
@@ -486,12 +488,24 @@ export class ToolExecutionProducer {
 		return this.#params.sealed;
 	}
 
-	/** Call `listener` when the block changes. The listener reads the block when it needs it. */
-	subscribe(listener: () => void): () => void {
+	/** The status its block reports, read without building the block. */
+	get status(): ToolStatus {
+		return toolExecutionStatus(this.#params);
+	}
+
+	/** Notify `listener` when the block changes, until it is unsubscribed. */
+	subscribe(listener: ToolExecutionListener): void {
 		if (!this.#listeners.includes(listener)) this.#listeners = [...this.#listeners, listener];
-		return () => {
-			this.#listeners = this.#listeners.filter(existing => existing !== listener);
-		};
+	}
+
+	unsubscribe(listener: ToolExecutionListener): void {
+		if (!this.#listeners.includes(listener)) return;
+		const remaining = this.#listeners.filter(existing => existing !== listener);
+		this.#listeners = remaining.length === 0 ? NO_LISTENERS : remaining;
+	}
+
+	toolCallPreviewChanged(): void {
+		this.#changed();
 	}
 
 	updateArgs(rawArgs: unknown, toolCallId?: string): void {
@@ -515,7 +529,8 @@ export class ToolExecutionProducer {
 		if (toolCallId) this.#params.toolCallId = toolCallId;
 		this.#params.result = result;
 		this.#params.isPartial = isPartial;
-		if (!isPartial) this.#callPreview.complete = true;
+		// The card draws the final result in place of the preview, so the preview computes nothing more.
+		if (!isPartial) this.#callPreview.settle();
 		this.#changed();
 	}
 
@@ -574,7 +589,7 @@ export class ToolExecutionProducer {
 	#changed(): void {
 		this.#currentBlock = undefined;
 		this.#currentPolicies = undefined;
-		for (const listener of this.#listeners) listener();
+		for (const listener of this.#listeners) listener.toolExecutionChanged();
 	}
 }
 
