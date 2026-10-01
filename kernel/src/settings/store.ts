@@ -475,6 +475,15 @@ export class SettingsStore {
 	 * Returns the merged value from global + project + overrides, or the default.
 	 */
 	get<P extends SettingPath>(path: P): SettingValue<P> {
+		return this.#resolve(path, true);
+	}
+
+	/**
+	 * The effective value of `path`. `memoize` stores a cache miss in {@link #resolvedCache}; a read
+	 * that visits every declared path, such as {@link getEffectiveSnapshot}, passes false so the cache
+	 * holds only the paths a session reads.
+	 */
+	#resolve<P extends SettingPath>(path: P, memoize: boolean): SettingValue<P> {
 		// Global-scoped settings live in ~/.veyyon/config.yml, not the profile
 		// store. Read them live through their binding (never cached) so the UI
 		// always reflects the current global config, and fall back to the schema
@@ -512,7 +521,7 @@ export class SettingsStore {
 			const scoped = this.#hooks.resolveForCwd(path, value, this.#cwd) ?? value;
 			resolved = registered ? this.#declaredValue(path, scoped) : scoped;
 		}
-		this.#resolvedCache.set(path, resolved);
+		if (memoize) this.#resolvedCache.set(path, resolved);
 		return resolved as SettingValue<P>;
 	}
 
@@ -909,7 +918,7 @@ export class SettingsStore {
 	getEffectiveSnapshot(): Record<string, unknown> {
 		const result: Record<string, unknown> = {};
 		for (const key of indexedSchema().paths.slice().sort()) {
-			result[key] = this.get(key);
+			result[key] = this.#resolve(key, false);
 		}
 		return result;
 	}

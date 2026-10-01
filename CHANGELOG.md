@@ -238,6 +238,7 @@
 - A listed session holds at most 4,096 characters of first-message and message text, copied out of the scanned window, and the session list index moves to version 2 so rows an earlier build indexed without the bound are rescanned, which cut the rows of a 125-session directory from 21.39 MiB to 1.97 MiB and its list index from 5.45 MiB to 557 KiB.
 - The error a cold entry's failed read-back raises formats its cause with `errorMessage` from `@veyyon/utils`; no user-visible change.
 - A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
+- `getEffectiveSnapshot` resolves every declared setting without memoizing it, so a store keeps cached values only for paths its session reads, which cut the heap a live spawned session retains from 315.4 KiB to 277.0 KiB (median of 3 runs over 20 sessions).
 - 12 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The extraction client waits between fallback models through `scheduler.wait` from `node:timers/promises`, the wait its rate-limit retries use; the delay is unchanged.
