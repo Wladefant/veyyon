@@ -9832,6 +9832,15 @@ export class AgentSession {
 	}
 
 	/**
+	 * Context usage with the non-message size the newest usage anchor recorded standing in for a
+	 * measurement, so reading it builds no tool schema. Undefined when no anchor recorded that size or
+	 * a prompt is in flight. See `ContextAccounting.restingUsage`.
+	 */
+	getRestingContextUsage(): ContextUsage | undefined {
+		return this.#context.restingUsage();
+	}
+
+	/**
 	 * Monotonic counter that changes whenever the in-flight pending context
 	 * snapshot is set or cleared. Status-line context memoization keys on this so
 	 * a value computed mid-turn cannot persist after the turn ends/aborts.

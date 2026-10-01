@@ -19,6 +19,7 @@ import { stripSchemaDescriptions, toolWireSchema } from "@veyyon/ai/utils/schema
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { shouldInlineToolDescriptors } from "../config/inline-tool-descriptors-mode";
+import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { Tool } from "../tools";
 import type { AgentSession } from "./agent-session";
@@ -261,6 +262,22 @@ export function isAtRestReadingDeferred(session: AgentSession): boolean {
  */
 export function restsWithReadingHeld(session: AgentSession): boolean {
 	return deferredAtRestReadings.has(session) && (session.messages?.length ?? 0) === 0;
+}
+
+/**
+ * The context usage a display states for `session`. While the host holds the at-rest reading, a
+ * session with no message states no figure and a session with messages, such as a resumed one,
+ * states its resting usage (`AgentSession.getRestingContextUsage`), which takes the non-message
+ * size its newest provider response recorded instead of building every tool's schema. A held
+ * session whose responses recorded no such size, and every session the host does not hold, measure.
+ */
+export function displayedContextUsage(session: AgentSession): ContextUsage | undefined {
+	if (deferredAtRestReadings.has(session)) {
+		if ((session.messages?.length ?? 0) === 0) return undefined;
+		const resting = session.getRestingContextUsage();
+		if (resting) return resting;
+	}
+	return session.getContextUsage();
 }
 
 /** End the hold {@link deferAtRestReading} placed on `session`. */

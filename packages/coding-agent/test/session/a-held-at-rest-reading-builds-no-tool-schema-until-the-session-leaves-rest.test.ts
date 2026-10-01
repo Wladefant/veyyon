@@ -21,8 +21,11 @@
  * popup computes its rows (the slash popup evaluates every command's description, and `/context`
  * and `/compact` state no figure at rest), a submission takes it before its message lands, the
  * borrowed gauge is the recorded one for the default role and the unknown for any other model, a
- * session with a message measures as before, the readings compaction and `/context` take measure
- * whether or not the row is held, and a session created without the hold measures during creation.
+ * resumed session states the resting usage its last stamped response supports (the figure the
+ * measurement reaches while the stamped non-message size is current) in the row and the slash popup
+ * without building a schema, a session whose messages carry no stamped size measures as before, the
+ * readings compaction and `/context` take measure whether or not the row is held, and a session
+ * created without the hold measures during creation.
  *
  * WHAT THIS DOES NOT CATCH: `runInteractiveMode` in `main.ts`, which this suite does not drive. It
  * passes `deferAtRestReading` for an interactive launch and takes the reading before a startup
@@ -48,7 +51,11 @@ import { StatusPresentationProducer } from "@veyyon/coding-agent/presentation/st
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { CreateAgentSessionOptions } from "@veyyon/coding-agent/session/factory-options";
-import { computeNonMessageBreakdown, isAtRestReadingDeferred } from "@veyyon/coding-agent/session/non-message-tokens";
+import {
+	computeNonMessageBreakdown,
+	computeNonMessageTokens,
+	isAtRestReadingDeferred,
+} from "@veyyon/coding-agent/session/non-message-tokens";
 import { recordAtRestLaunch } from "@veyyon/coding-agent/session/startup-records";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
@@ -139,6 +146,55 @@ function mountRow(session: AgentSession): { row: StatusLineComponent; producer: 
 /** The rendered footline, ANSI stripped. */
 function render(row: StatusLineComponent): string {
 	return stripAnsi(row.renderQuietLine(200) ?? "");
+}
+
+/** Prompt tokens the reopened response reports beyond the non-message half. */
+const ANCHOR_MESSAGE_TOKENS = 4_000;
+
+/**
+ * Reopen, held, a session whose last provider response was stamped by `stamp`, called with the
+ * non-message size the same prompt measures now; `null` stamps nothing, as a response from before
+ * the stamp existed. A user message the run never sent stands after it, so the resting figure has a
+ * tail to estimate. The reopened session runs in the same project as the one that wrote the file,
+ * so its prompt measures what the stamp recorded.
+ */
+async function resumeHeld(stamp: (nonMessageTokens: number) => number | null): Promise<AgentSession> {
+	const writer = await create({});
+	const current = computeNonMessageTokens(writer);
+	const recorded = stamp(current);
+	const model = bundledModel();
+	const manager = writer.sessionManager;
+	const promptTokens = current + ANCHOR_MESSAGE_TOKENS;
+	manager.appendMessage({ role: "user", content: "hello", timestamp: 1_000 });
+	manager.appendMessage({
+		role: "assistant",
+		content: [{ type: "text", text: "hello back" }],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		stopReason: "stop",
+		usage: {
+			input: promptTokens,
+			output: 20,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: promptTokens + 20,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		...(recorded === null ? {} : { contextSnapshot: { promptTokens, nonMessageTokens: recorded } }),
+		timestamp: 2_000,
+	});
+	manager.appendMessage({ role: "user", content: "a question the run never sent", timestamp: 3_000 });
+	await manager.flush();
+	const file = manager.getSessionFile();
+	if (!file) throw new Error("the writer persisted no session file");
+	const cwd = manager.getCwd();
+	return create({
+		deferAtRestReading: true,
+		cwd,
+		agentDir: path.join(path.dirname(cwd), "agent"),
+		sessionManager: await SessionManager.open(file, path.dirname(file)),
+	});
 }
 
 beforeAll(async () => {
@@ -258,6 +314,49 @@ describe("a held at-rest reading builds no tool schema in the status row", () =>
 
 		expect(filed).not.toBeNull();
 		expect(filed).not.toBe(RECORDED_PERCENT);
+	});
+});
+
+describe("a resumed session's held reading states its resting usage without building a tool schema", () => {
+	it("draws the figure the measurement reaches when the stamped size is current", async () => {
+		const session = await resumeHeld(current => current);
+		const reads = countSchemaReads(session);
+		const { row, producer } = mountRow(session);
+
+		render(row);
+		const drawn = producer.getSnapshot().context.usedTokens;
+
+		expect(reads.count).toBe(0);
+		expect(isAtRestReadingDeferred(session)).toBe(true);
+		const measured = session.getContextUsage()?.tokens;
+		expect(reads.count).toBeGreaterThan(0);
+		expect(drawn).toBe(measured ?? -1);
+	});
+
+	it("draws the stamped size while held and the measured one once the host releases the hold", async () => {
+		// The prompt grew by 1,000 tokens outside the message list since the stamp.
+		const session = await resumeHeld(current => current - 1_000);
+		const { row, producer } = mountRow(session);
+		render(row);
+		const held = producer.getSnapshot().context.usedTokens;
+
+		recordAtRestLaunch(session, session.settings);
+		render(row);
+		const released = producer.getSnapshot().context.usedTokens;
+
+		expect(released).toBe(session.getContextUsage()?.tokens ?? -1);
+		expect(held).toBe((released ?? 0) - 1_000);
+	});
+
+	it("measures a resumed session whose response stamped no size", async () => {
+		const session = await resumeHeld(() => null);
+		const reads = countSchemaReads(session);
+		const { row, producer } = mountRow(session);
+
+		render(row);
+
+		expect(reads.count).toBeGreaterThan(0);
+		expect(producer.getSnapshot().context.usedTokens).toBe(session.getContextUsage()?.tokens ?? -1);
 	});
 });
 
@@ -423,5 +522,23 @@ describe("the interactive host holds the reading until the session leaves rest",
 		expect(popupDescription(mode, "compact")).toBe(
 			`Compact the session context · ${Math.round(usage.percent)}% used`,
 		);
+	});
+
+	it("commits a resumed session's frames and opens its slash popup stating the resting usage without reading any tool's schema", async () => {
+		const session = await resumeHeld(current => current);
+		const reads = countSchemaReads(session);
+		const mode = await host(session);
+		await committedFrame(mode);
+		vi.spyOn(mode, "takeAtRestReading").mockImplementation(() => {});
+
+		await typeIntoPopup(mode, "/");
+
+		expect(reads.count).toBe(0);
+		const context = popupDescription(mode, "context");
+		const compact = popupDescription(mode, "compact");
+		const usage = session.getContextUsage();
+		if (!usage) throw new Error("the resumed session measured no usage");
+		expect(context).toContain(`${usage.tokens.toLocaleString()}/${usage.contextWindow.toLocaleString()}`);
+		expect(compact).toBe(`Compact the session context · ${Math.round(usage.percent)}% used`);
 	});
 });

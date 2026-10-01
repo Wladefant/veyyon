@@ -10,7 +10,7 @@ import { parseCompactArgs } from "@veyyon/kernel/session/compact-modes";
 import { formatShakeSummary, type ShakeMode } from "@veyyon/kernel/session/shake-types";
 import { buildMemoryPayloadForDisplay, resolveMemoryBackend } from "../memory/backend";
 import type { HandoffResult } from "../session/agent-session-types";
-import { restsWithReadingHeld } from "../session/non-message-tokens";
+import { displayedContextUsage } from "../session/non-message-tokens";
 import { argumentHandlerTui } from "./builtin-shared";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import { buildContextReportText } from "./helpers/context-report";
@@ -48,9 +48,9 @@ export const CONTEXT_HANDLERS = {
 	},
 	context: {
 		getTuiAutocompleteDescription: runtime => {
-			// A session at rest states no figure: measuring builds every tool's schema, and the first
+			// A session at rest measures nothing: measuring builds every tool's schema, and the first
 			// keystroke of a launch opens this popup.
-			const usage = restsWithReadingHeld(runtime.ctx.session) ? undefined : runtime.ctx.session.getContextUsage();
+			const usage = displayedContextUsage(runtime.ctx.session);
 			if (!usage) return "Show context usage breakdown";
 			// Same vocabulary as the status-line gauge: tok/tok in one unit, and the
 			// percentage names what it is instead of leaving "17%" to be read as
@@ -69,7 +69,7 @@ export const CONTEXT_HANDLERS = {
 	},
 	compact: {
 		getTuiAutocompleteDescription: runtime => {
-			const usage = restsWithReadingHeld(runtime.ctx.session) ? undefined : runtime.ctx.session.getContextUsage();
+			const usage = displayedContextUsage(runtime.ctx.session);
 			return usage
 				? `Compact the session context · ${Math.round(usage.percent)}% used`
 				: "Compact the session context";
