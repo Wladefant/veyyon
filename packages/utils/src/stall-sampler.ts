@@ -16,9 +16,17 @@
  * Cost. JSC records a sample only while JavaScript is executing, so an idle process accumulates no
  * samples. At a 10ms interval a mixed JSON/string workload measured 842,667 ops/s against 844,667
  * with the profiler off (medians of five interleaved runs pinned to one core), and a rotation —
- * stopping the profile, discarding it and starting the next — costs 2ms. The profile is rotated
- * every 10s on a tick the watchdog saw as quiet, so a stall's own samples are never the ones a
- * rotation throws away.
+ * stopping the profile, discarding it and starting the next — costs 2ms. A rotation runs on a tick
+ * the watchdog saw as quiet, so a stall's own samples are never the ones a rotation throws away.
+ *
+ * Idle cost. The profiler's thread wakes at the sampling interval whether or not JavaScript runs,
+ * and each restart wakes the collector's helper threads. Over 30s of an idle process, a 10ms
+ * interval measured 2,981 wakeups of the profiler's thread, and a rotation every 10s added 2,514
+ * wakeups of the helper threads. So a profile is replaced once it could hold 1,000 samples — after
+ * 10s at the 10ms interval and 100s at the 100ms interval — and the first rotation after 10s
+ * without a busy tick restarts the profile at 100ms, which measured 300 wakeups per 30s. The first
+ * busy tick restarts it at 10ms. A stall that begins while the process is idle is sampled at 100ms:
+ * a 3s stall records 30 samples.
  *
  * `node:inspector` costs 4.3ms of module evaluation and the first frame must not wait on it, so it
  * is reached through a deferred `require` on the first quiet tick rather than imported.
@@ -46,8 +54,11 @@ export interface StallStacks {
 
 /** The part of the sampler the loop watchdog drives. */
 export interface StallStackSource {
-	/** Called on every tick the watchdog did not see as blocked. */
-	quiet(nowMs: number): void;
+	/**
+	 * Called on every tick the watchdog did not see as blocked. `busy` is whether the process spent
+	 * more than an idle share of CPU across the interval the tick ended.
+	 */
+	quiet(nowMs: number, busy: boolean): void;
 	/** The samples recorded between two `performance.now()` readings. */
 	stacksBetween(fromMs: number, toMs: number): Promise<StallStacks | undefined>;
 }
@@ -65,10 +76,14 @@ interface ParsedProfile {
 	nodes: Map<number, ProfileNode>;
 }
 
-/** Sampling interval in microseconds. */
-const SAMPLE_INTERVAL_US = 10_000;
-/** How long one profile accumulates before a quiet tick replaces it. */
-const ROTATE_AFTER_MS = 10_000;
+/** Sampling interval in microseconds while the process works. */
+const BUSY_INTERVAL_US = 10_000;
+/** Sampling interval in microseconds once the process has been idle for `IDLE_AFTER_MS`. */
+const IDLE_INTERVAL_US = 100_000;
+/** Quiet time after the last busy tick before the next rotation restarts at the idle interval. */
+const IDLE_AFTER_MS = 10_000;
+/** The most samples one profile accumulates before a quiet tick replaces it. */
+const ROTATE_AFTER_SAMPLES = 1_000;
 /** How many self frames a report lists. */
 const SELF_FRAMES = 8;
 /** How many frames of the hottest path a report keeps, innermost last. */
@@ -170,6 +185,10 @@ export class StallSampler implements StallStackSource {
 	#session: inspectorModule.Session | undefined;
 	#state: SamplerState = "off";
 	#startedAtMs = 0;
+	/** Interval of the running profile, or of the profile a queued restart begins. */
+	#intervalUs = BUSY_INTERVAL_US;
+	/** The last tick the watchdog reported busy. The tick that starts the sampler counts as one. */
+	#busyAtMs = 0;
 	/** Every profiler command runs after the previous one settles; the profiler is process-global. */
 	#chain: Promise<unknown> = Promise.resolve();
 
@@ -195,16 +214,18 @@ export class StallSampler implements StallStackSource {
 		logger.debug("stall sampler disabled", { error: errorMessage(error) });
 	}
 
-	/** Start the next profile at the watchdog's interval. The caller holds the chain. */
+	/** Start the next profile at `#intervalUs`. The caller holds the chain. */
 	async #begin(): Promise<void> {
-		await this.#post("Profiler.setSamplingInterval", { interval: SAMPLE_INTERVAL_US });
+		await this.#post("Profiler.setSamplingInterval", { interval: this.#intervalUs });
 		await this.#post("Profiler.start");
 		this.#startedAtMs = performance.now();
 	}
 
-	quiet(nowMs: number): void {
+	quiet(nowMs: number, busy: boolean): void {
+		if (busy) this.#busyAtMs = nowMs;
 		if (this.#state === "off") {
 			this.#state = "starting";
+			this.#busyAtMs = nowMs;
 			void this.#enqueue(async () => {
 				if (this.#state !== "starting") return;
 				try {
@@ -222,7 +243,13 @@ export class StallSampler implements StallStackSource {
 			});
 			return;
 		}
-		if (this.#state !== "running" || nowMs - this.#startedAtMs < ROTATE_AFTER_MS) return;
+		if (this.#state !== "running") return;
+		const intervalUs = nowMs - this.#busyAtMs < IDLE_AFTER_MS ? BUSY_INTERVAL_US : IDLE_INTERVAL_US;
+		const full = nowMs - this.#startedAtMs >= (this.#intervalUs / 1000) * ROTATE_AFTER_SAMPLES;
+		// A busy tick restarts an idle-interval profile at once. Going idle waits for the rotation,
+		// which restarts the profile regardless.
+		if (!full && intervalUs >= this.#intervalUs) return;
+		this.#intervalUs = intervalUs;
 		// Hold off the next rotation until this one has restarted the profile.
 		this.#startedAtMs = Number.POSITIVE_INFINITY;
 		void this.#enqueue(async () => {

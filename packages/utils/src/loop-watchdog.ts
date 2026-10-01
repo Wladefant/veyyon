@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { BUSY_CPU_RATIO } from "./idle-trim";
 import * as logger from "./logger";
 import { takeLoopPhaseProfile } from "./loop-phase";
 import type { StallStackSource } from "./stall-sampler";
@@ -195,7 +196,9 @@ export class LoopWatchdog {
 			}
 		} else {
 			this.#wasBlocked = false;
-			this.#stacks?.quiet(this.#now());
+			// The sampler drops to its idle interval while the process does no work, so each quiet
+			// tick reports whether the interval's CPU went over an idle share of its wall time.
+			this.#stacks?.quiet(this.#now(), cpuMs > (this.#intervalMs + blockedMs) * BUSY_CPU_RATIO);
 		}
 		this.#armTick();
 	}

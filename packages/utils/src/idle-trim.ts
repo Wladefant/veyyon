@@ -1,15 +1,18 @@
 import * as logger from "./logger";
 import { errorMessage } from "./type-guards";
 
+/**
+ * A window whose process CPU exceeds this share of its wall time is busy: an idle interactive
+ * session measures 0.5%, a streaming turn tens of percent.
+ */
+export const BUSY_CPU_RATIO = 0.05;
+
 export interface IdleTrimOptions {
 	/** Quiet time after the last busy window before the trim runs, in ms. Default 30 000. */
 	quietMs?: number;
 	/** Length of one CPU sampling window, in ms. Default 5 000. */
 	sampleMs?: number;
-	/**
-	 * A window whose process CPU exceeds this share of its wall time is busy. Default 0.05: an idle
-	 * interactive session measures 0.5%, a streaming turn tens of percent.
-	 */
+	/** A window whose process CPU exceeds this share of its wall time is busy. Default `BUSY_CPU_RATIO`. */
 	busyCpuRatio?: number;
 	/** Monotonic clock source; injectable for tests. Default `performance.now`. */
 	now?: () => number;
@@ -98,7 +101,7 @@ export class IdleTrim {
 	constructor(options: IdleTrimOptions = {}) {
 		this.#quietMs = options.quietMs ?? 30_000;
 		this.#sampleMs = options.sampleMs ?? 5_000;
-		this.#busyCpuRatio = options.busyCpuRatio ?? 0.05;
+		this.#busyCpuRatio = options.busyCpuRatio ?? BUSY_CPU_RATIO;
 		this.#now = options.now ?? (() => performance.now());
 		this.#cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
 		this.#schedule =
