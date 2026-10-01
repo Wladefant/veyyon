@@ -21,6 +21,7 @@
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
 - `Agent` holds each system prompt section as the shared copy of its text, whether it arrives in the initial state or through `setSystemPrompt`, so live agents with equal sections hold one buffer of each.
 - `normalizeTools` holds a description with an appended examples block as the shared copy of its text, so live agents with the same tools hold one buffer of each, which cut the heap after 40 live subagents from 96.9 MiB to 95.4 MiB (median of 3 runs).
+- `estimateTokens` caches both option variants of a message in one record of four numbers instead of a holder object plus an object per variant, which cut the heap and extra memory of an idle resumed 600-turn session from 123,632 KiB to 123,399 KiB and its live objects from 708,261 to 702,908 (median of five).
 
 ## [1.5.4] - 2026-09-24
 
