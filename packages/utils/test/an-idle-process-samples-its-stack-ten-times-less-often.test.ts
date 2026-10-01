@@ -16,8 +16,10 @@ import { StallSampler } from "@veyyon/utils/stall-sampler";
  * at the idle interval, one busy tick restores the busy interval at once, a process that worked
  * inside the idle stretch keeps the busy interval through a rotation, the boundary of the idle
  * stretch falls on 10s exactly, and a profile is replaced once it could hold 1,000 samples, which
- * is 10s at the busy interval and 100s at the idle one. The watchdog cases pin what a quiet tick
- * reports as busy: CPU over `BUSY_CPU_RATIO` of the wall time the tick's interval spanned.
+ * is 10s at the busy interval and 100s at the idle one. A parked sampler samples once a second, and
+ * the first quiet tick after the watchdog wakes restores the idle interval. The watchdog cases pin
+ * what a quiet tick reports as busy: CPU over `BUSY_CPU_RATIO` of the wall time the tick's interval
+ * spanned.
  *
  * WHAT IT DOES NOT CATCH. The wakeup counts themselves are a property of the engine's profiler
  * thread and are measured on the binary, not here. Sample counts read the interval: a held loop of
@@ -37,6 +39,10 @@ function holdTheLoopForMs(ms: number): number {
 const IDLE_MAX = 10;
 /** At least this many samples land in a 500ms hold at the 10ms busy interval. */
 const BUSY_MIN = 25;
+/** At most this many samples land in a 2s hold at the 1s parked interval. */
+const PARKED_MAX = 3;
+/** At least this many land in a 2s hold that starts inside a parked wait and ends at the idle interval. */
+const RESTORED_MIN = 6;
 
 const samplers: StallSampler[] = [];
 
@@ -50,13 +56,13 @@ async function startedSampler(nowMs: number): Promise<StallSampler> {
 }
 
 /**
- * Settles every queued restart, holds the loop for 500ms and returns the samples the profile
+ * Settles every queued restart, holds the loop for `holdMs` and returns the samples the profile
  * recorded inside the hold. Reading restarts the profile at the interval it had.
  */
-async function samplesInHold(sampler: StallSampler): Promise<number> {
+async function samplesInHold(sampler: StallSampler, holdMs = 500): Promise<number> {
 	await sampler.stacksBetween(0, 0);
 	const from = performance.now();
-	holdTheLoopForMs(500);
+	holdTheLoopForMs(holdMs);
 	const stacks = await sampler.stacksBetween(from, performance.now());
 	if (!stacks) throw new Error("the sampler is not running");
 	return stacks.samples;
@@ -155,6 +161,22 @@ describe("an idle process samples its stack ten times less often", () => {
 		sampler.quiet(performance.now() + 10_000, true);
 		expect((await sampler.stacksBetween(0, performance.now()))?.samples).toBe(0);
 	});
+
+	test("a parked sampler samples once a second", async () => {
+		const sampler = await idleSampler();
+		sampler.park();
+		// The thread finishes its 100ms wait, then waits a second per sample.
+		expect(await samplesInHold(sampler, 2_000)).toBeLessThanOrEqual(PARKED_MAX);
+	});
+
+	test("the first quiet tick after a park restores the idle interval", async () => {
+		const sampler = await idleSampler();
+		sampler.park();
+		await sampler.stacksBetween(0, 0);
+		sampler.quiet(performance.now() + 20_000, false);
+		// The thread applies the idle interval when its parked wait ends, at most a second in.
+		expect(await samplesInHold(sampler, 2_000)).toBeGreaterThanOrEqual(RESTORED_MIN);
+	});
 });
 
 describe("what a quiet tick reports as busy", () => {
@@ -173,6 +195,7 @@ describe("what a quiet tick reports as busy", () => {
 			stacks: {
 				quiet: (nowMs, busy) => void reports.push([nowMs, busy]),
 				stacksBetween: async () => undefined,
+				park: () => {},
 			},
 		});
 		watchdog.start(); // armed at 0, due at 250

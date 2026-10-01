@@ -1,7 +1,9 @@
 import { performance } from "node:perf_hooks";
+import { type ActivitySignal, processActivity } from "./activity-signal";
 import { BUSY_CPU_RATIO } from "./idle-trim";
 import * as logger from "./logger";
 import { takeLoopPhaseProfile } from "./loop-phase";
+import { rearmingTimeout } from "./rearming-timeout";
 import type { StallStackSource } from "./stall-sampler";
 
 export interface LoopWatchdogOptions {
@@ -11,7 +13,7 @@ export interface LoopWatchdogOptions {
 	thresholdMs?: number;
 	/** Monotonic clock source; injectable for tests. Default `performance.now`. */
 	now?: () => number;
-	/** Timer source; injectable for tests. Default `setTimeout`. */
+	/** Timer source; injectable for tests. Default `rearmingTimeout()`. */
 	schedule?: (cb: () => void, ms: number) => LoopWatchdogTimer;
 	/**
 	 * Process CPU consumed so far, in microseconds; injectable for tests.
@@ -24,6 +26,10 @@ export interface LoopWatchdogOptions {
 	 * the block were executing. Absent, blocks are reported without stacks.
 	 */
 	stacks?: StallStackSource;
+	/** Quiet time, in ms, after which the watchdog parks until work is reported. Default 10 000. */
+	parkAfterMs?: number;
+	/** Where work is reported; the watchdog parks only while a host is attached. Default `processActivity`. */
+	activity?: ActivitySignal;
 }
 
 /**
@@ -46,7 +52,7 @@ interface LoopWatchdogTimer {
 const SINGLE_THREAD_CPU_RATIO = 1.25;
 
 /**
- * Always-on event-loop lag probe. Each tick is scheduled `intervalMs` ahead of
+ * Event-loop lag probe for a process that is working. Each tick is scheduled `intervalMs` ahead of
  * a recorded deadline; a tick that fires `thresholdMs` past its deadline means
  * the loop did not come back on time. The overshoot is logged once on the
  * rising edge (one block ⇒ one line, deduped via `#wasBlocked`).
@@ -76,9 +82,15 @@ const SINGLE_THREAD_CPU_RATIO = 1.25;
  * line says so, carrying `topPhase` and `phaseMs` as the evidence that rules
  * that phase OUT.
  *
+ * PARKED AT REST. A tick that runs between two of Bun's idle collections keeps that collector at
+ * one collection a second, so after `parkAfterMs` of ticks that saw neither a block nor busy CPU
+ * the watchdog parks on `activity`: it arms no tick, the stack sampler drops to its parked
+ * interval, and the next reported keystroke or frame arms the next tick. A stall that begins while
+ * the watchdog is parked and reports no work until it ends is not detected. A stall in the work
+ * that woke it is, since that tick was armed before the work ran.
+ *
  * The handle is `unref`'d so the probe never keeps the process alive, and stop()
- * cancels the armed timer when the handle exposes `cancel` (the default
- * `setTimeout` handle does, via `clearTimeout`). The `#generation` guard remains
+ * cancels the armed timer and drops a parked wake. The `#generation` guard remains
  * as a fallback for injected handles that cannot cancel.
  */
 export class LoopWatchdog {
@@ -100,25 +112,37 @@ export class LoopWatchdog {
 	/** When the armed tick's interval began. A block's stacks are read from here to the late tick. */
 	#armedAtMs = 0;
 	#stacks: StallStackSource | undefined;
+	#parkAfterMs: number;
+	#activity: ActivitySignal;
+	/** The last tick that saw a block or busy CPU, or the start or wake that followed rest. */
+	#quietSinceMs = 0;
+	#parked = false;
+	/** Arms the next tick once work is reported after the watchdog parked. */
+	#wake = (): void => {
+		if (!this.#parked) return;
+		this.#parked = false;
+		this.#quietSinceMs = this.#now();
+		// The phases recorded while parked belong to no interval the next tick measures.
+		takeLoopPhaseProfile();
+		this.#armTick();
+	};
 
 	constructor(options: LoopWatchdogOptions = {}) {
 		this.#intervalMs = options.intervalMs ?? 250;
 		this.#thresholdMs = options.thresholdMs ?? 250;
 		this.#now = options.now ?? (() => performance.now());
-		this.#schedule =
-			options.schedule ??
-			((cb, ms) => {
-				const timer = setTimeout(cb, ms);
-				return { unref: () => timer.unref?.(), cancel: () => clearTimeout(timer) };
-			});
+		this.#schedule = options.schedule ?? rearmingTimeout();
 		this.#cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
 		this.#stacks = options.stacks;
+		this.#parkAfterMs = options.parkAfterMs ?? 10_000;
+		this.#activity = options.activity ?? processActivity;
 	}
 
 	start(): void {
 		if (this.#running) return;
 		this.#running = true;
 		this.#wasBlocked = false;
+		this.#quietSinceMs = this.#now();
 		this.#armTick();
 	}
 
@@ -128,6 +152,8 @@ export class LoopWatchdog {
 		this.#generation++;
 		this.#handle?.cancel?.();
 		this.#handle = undefined;
+		this.#parked = false;
+		this.#activity.unpark(this.#wake);
 	}
 
 	#armTick(): void {
@@ -142,7 +168,8 @@ export class LoopWatchdog {
 
 	#tick(generation: number): void {
 		if (!this.#running || generation !== this.#generation) return;
-		const blockedMs = this.#now() - this.#expected;
+		const now = this.#now();
+		const blockedMs = now - this.#expected;
 		const cpu = this.#cpuUsage();
 		// Microseconds since this tick was armed. The interval the process had to
 		// run in is `intervalMs + blockedMs`, so CPU is compared against the
@@ -153,6 +180,7 @@ export class LoopWatchdog {
 		// later, phase-less block.
 		const { phase, ms } = takeLoopPhaseProfile();
 		if (blockedMs > this.#thresholdMs) {
+			this.#quietSinceMs = now;
 			if (!this.#wasBlocked) {
 				this.#wasBlocked = true;
 				const phaseMs = Math.round(ms);
@@ -198,7 +226,15 @@ export class LoopWatchdog {
 			this.#wasBlocked = false;
 			// The sampler drops to its idle interval while the process does no work, so each quiet
 			// tick reports whether the interval's CPU went over an idle share of its wall time.
-			this.#stacks?.quiet(this.#now(), cpuMs > (this.#intervalMs + blockedMs) * BUSY_CPU_RATIO);
+			const busy = cpuMs > (this.#intervalMs + blockedMs) * BUSY_CPU_RATIO;
+			this.#stacks?.quiet(now, busy);
+			if (busy) {
+				this.#quietSinceMs = now;
+			} else if (now - this.#quietSinceMs >= this.#parkAfterMs && this.#activity.park(this.#wake)) {
+				this.#parked = true;
+				this.#stacks?.park();
+				return;
+			}
 		}
 		this.#armTick();
 	}

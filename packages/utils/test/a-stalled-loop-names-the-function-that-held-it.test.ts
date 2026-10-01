@@ -113,7 +113,7 @@ describe("a stalled loop names the function that held it", () => {
 			},
 			// The loop was never given the CPU: the block is recorded at debug, not warned about.
 			cpuUsage: () => ({ user: 0, system: 0 }),
-			stacks: { quiet: () => {}, stacksBetween: async () => stacks },
+			stacks: { quiet: () => {}, stacksBetween: async () => stacks, park: () => {} },
 		});
 		watchdog.start();
 		nowValue = 900;
@@ -141,6 +141,7 @@ describe("a stalled loop names the function that held it", () => {
 			cpuUsage: () => ({ user: nowValue * 1000, system: 0 }),
 			stacks: {
 				quiet: nowMs => void quietAt.push(nowMs),
+				park: () => {},
 				stacksBetween: async (fromMs, toMs) => {
 					windows.push([fromMs, toMs]);
 					return undefined;
