@@ -16,10 +16,10 @@ import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } fr
  * `./docs-index`, loaded on the first `veyyon://` resolve or completion.
  *
  * A compiled binary replaces the module's payload read with a 1.4 MB string literal, and a module on
- * the startup graph costs its chunk whether or not a function in it runs: statically linked into a
- * bytecode binary that never calls it, the module measured 1.58 MiB of heap and 11 MiB of RSS. The
- * router registers this handler for every session, so the import is the boundary that keeps the
- * payload's chunk unlinked until a `veyyon://` URL is resolved.
+ * the startup graph is linked whether or not a function in it runs: statically linked into the release
+ * binary, the module held 0.8 MiB of RSS five seconds after launch. The router registers this handler
+ * for every session, so the import is the boundary that keeps the payload's chunk unlinked until a
+ * `veyyon://` URL is resolved.
  */
 let docsIndex: Promise<typeof docsIndexModule> | undefined;
 function loadDocsIndex(): Promise<typeof docsIndexModule> {

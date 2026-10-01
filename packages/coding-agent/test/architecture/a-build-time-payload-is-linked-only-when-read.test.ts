@@ -5,8 +5,9 @@
  * index, a 1.4 MB string literal, and Bun's code splitting links a module's chunk when the first module
  * that imports it statically is linked. `internal-urls/router.ts` registers `VeyyonProtocolHandler` for
  * every session, and the handler imported `./docs-index` statically, so every launch linked the
- * payload's chunk for a `veyyon://` URL it never resolved. A bytecode binary that links the module and
- * never calls into it measured 1.58 MiB more heap and 11 MiB more RSS than one that does not.
+ * payload's chunk for a `veyyon://` URL it never resolved. In the release binary, an idle session five
+ * seconds after launch held 0.8 MiB more RSS (median of seven) with the module linked; the JS heap and
+ * the RSS after the idle trim were unchanged.
  *
  * THE CLASS. Any product module that imports a payload's reader statically. The payloads are the keys
  * of `buildPayloadDefines()`, the map both release builds spread into `define`, so a new payload is
