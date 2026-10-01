@@ -529,7 +529,8 @@ export class ToolExecutionProducer implements ToolCallPreviewListener {
 		if (toolCallId) this.#params.toolCallId = toolCallId;
 		this.#params.result = result;
 		this.#params.isPartial = isPartial;
-		if (!isPartial) this.#callPreview.complete = true;
+		// The card draws the final result in place of the preview, so the preview computes nothing more.
+		if (!isPartial) this.#callPreview.settle();
 		this.#changed();
 	}
 
