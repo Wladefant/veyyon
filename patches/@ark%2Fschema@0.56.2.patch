@@ -24,6 +24,69 @@ index 19ad1869c46cf57bde4a09dcb6400ab2c83809e1..4f3df3198713856ad76dd49cc378f0f4
                  : l.hash < r.hash ? -1
                      : 1);
      return result;
+diff --git a/out/module.d.ts b/out/module.d.ts
+index 394fe9f6b6682e1f8ec7a78039be6e4d8d7c0b20..e7a67b534d20e6dad9d5e5cc9acef225a537e12a 100644
+--- a/out/module.d.ts
++++ b/out/module.d.ts
+@@ -12,6 +12,7 @@ export interface InternalModule<exports extends InternalResolutions = InternalRe
+     root?: BaseRoot;
+ }
+ export declare const bindModule: (module: InternalModule, $: BaseScope) => InternalModule;
++export declare const defineLazyMember: (module: InternalModule, alias: string, build: () => InternalResolution) => void;
+ type exportSchemaScope<$> = {
+     [k in keyof $]: instantiateRoot<$[k]>;
+ };
+diff --git a/out/module.js b/out/module.js
+index 905252427fcd41c56c0eeb424acd3670c78ac63c..a499e82783c8f83eedf8c2ac4c558769559edce7 100644
+--- a/out/module.js
++++ b/out/module.js
+@@ -6,10 +6,40 @@ export class RootModule extends DynamicBase {
+         return "module";
+     }
+ }
+-export const bindModule = (module, $) => new RootModule(flatMorph(module, (alias, value) => [
+-    alias,
+-    hasArkKind(value, "module") ?
+-        bindModule(value, $)
+-        : $.bindReference(value)
+-]));
++// a member defined this way is built on first read and cached on the module. It is not enumerable,
++// so a scope's export, resolutions and JSON skip it while unread, and its key set does not change
++// when it is read (veyyon patch)
++export const defineLazyMember = (module, alias, build) => {
++    Object.defineProperty(module, alias, {
++        configurable: true,
++        enumerable: false,
++        get() {
++            const value = build();
++            Object.defineProperty(module, alias, { value, enumerable: false });
++            return value;
++        }
++    });
++};
++// a scope's export binds every member before the scope resolves and then compiles them together; a
++// member bound after that, which only a lazy member is, is finalized (compiled) as it is bound
++// (veyyon patch)
++const bindMember = (value, $) => {
++    if (hasArkKind(value, "module"))
++        return bindModule(value, $);
++    const bound = $.bindReference(value);
++    return $.resolved && hasArkKind(bound, "root") ? $.finalize(bound) : bound;
++};
++export const bindModule = (module, $) => {
++    const bound = new RootModule(flatMorph(module, (alias, value) => [
++        alias,
++        bindMember(value, $)
++    ]));
++    // a lazy member stays lazy on the bound module and binds when it is first read (veyyon patch)
++    for (const alias of Object.getOwnPropertyNames(module)) {
++        if (Object.prototype.propertyIsEnumerable.call(module, alias))
++            continue;
++        defineLazyMember(bound, alias, () => bindMember(module[alias], $));
++    }
++    return bound;
++};
+ export const SchemaModule = RootModule;
 diff --git a/out/node.js b/out/node.js
 index 3ef69c277c81b348e2812f9ce538df9ddcf0adbf..b9d7e03a3bc2496871e2a69cf9b97e73351be8ec 100644
 --- a/out/node.js
