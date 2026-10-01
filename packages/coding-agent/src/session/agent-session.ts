@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -4498,9 +4499,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Compose a stable signature for the inputs that `rebuildSystemPrompt` reads.
-	 * Two calls producing identical signatures are guaranteed to produce identical
-	 * system prompt bytes, so the rebuild can be skipped.
+	 * Compose a SHA-256 digest of the inputs that `rebuildSystemPrompt` reads.
+	 * Two calls producing the same digest produce identical system prompt bytes,
+	 * so the rebuild can be skipped.
+	 *
+	 * The session holds the digest, not the text it was computed from: the inputs
+	 * include every active tool's description, so the text is the size of the
+	 * whole tool catalog and a held copy of it would stay on the heap for the life
+	 * of every session and every live subagent. Each input is fed to the hash in
+	 * order, separators included, so the digest is that of the joined text without
+	 * the joined text being built.
 	 *
 	 * The signature covers:
 	 *   1. Active tool names in order (the prompt renders them in this order).
@@ -4539,36 +4547,42 @@ export class AgentSession {
 	 * reconnects would keep yesterday's date indefinitely.
 	 */
 	#computeAppliedToolSignature(toolNames: string[], tools: AgentTool[]): string {
-		// Order-preserving join: any reorder must produce a different signature so
-		// the rebuild fires and the new tool list reaches the API.
-		const nameSegment = toolNames.join("\u0001");
+		const hash = createHash("sha256");
+		const feedJoined = (parts: readonly string[], separator: string): void => {
+			for (let index = 0; index < parts.length; index++) {
+				if (index > 0) hash.update(separator);
+				hash.update(parts[index]);
+			}
+		};
 		const describeTool = (tool: AgentTool): string =>
 			`${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}|${tool.customWireName ?? ""}`;
-		const descriptionSegment = tools.map(describeTool).join("\u0002");
-		let registrySegment = "";
+		// Order-preserving: any reorder must produce a different digest so the
+		// rebuild fires and the new tool list reaches the API.
+		feedJoined(toolNames, "\u0001");
+		hash.update("\u0003");
+		feedJoined(tools.map(describeTool), "\u0002");
+		hash.update("\u0005");
 		if (this.#discovery.mcpEnabled) {
 			// Registry iteration order is not load-bearing for the prompt content, so we
-			// sort to keep the signature insensitive to incidental insertion order.
+			// sort to keep the digest insensitive to incidental insertion order.
 			const entries: string[] = [];
 			for (const tool of this.#toolRegistry.values()) {
 				entries.push(describeTool(tool));
 			}
-			entries.sort();
-			registrySegment = entries.join("\u0004");
+			feedJoined(entries.sort(), "\u0004");
 		}
-		let instructionsSegment = "";
+		hash.update("\u0007");
 		const serverInstructions = this.#getMcpServerInstructions?.();
 		if (serverInstructions && serverInstructions.size > 0) {
-			// Sort by server name so transport flap order does not perturb the signature.
+			// Sort by server name so transport flap order does not perturb the digest.
 			const entries: string[] = [];
 			for (const [server, instructions] of serverInstructions) {
 				entries.push(`${server}=${instructions}`);
 			}
-			entries.sort();
-			instructionsSegment = entries.join("\u0006");
+			feedJoined(entries.sort(), "\u0006");
 		}
-		const date = this.#getLocalCalendarDate();
-		return `${nameSegment}\u0003${descriptionSegment}\u0005${registrySegment}\u0007${instructionsSegment}|${date}`;
+		hash.update(`|${this.#getLocalCalendarDate()}`);
+		return hash.digest("base64");
 	}
 
 	/**
