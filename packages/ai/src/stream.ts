@@ -151,7 +151,7 @@ function isLeakedThinkingHealExempt(model: Model<Api>): boolean {
 }
 
 /** Strict official-Codex endpoint check; exact origin or a path boundary after {@link CODEX_BASE_URL}. */
-function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
+export function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return true;
 	const lower = trimTrailingSlashes(baseUrl.toLowerCase());
 	return lower === CODEX_BASE_URL || lower.startsWith(`${CODEX_BASE_URL}/`);
