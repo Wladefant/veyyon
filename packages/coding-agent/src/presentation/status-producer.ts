@@ -31,7 +31,12 @@ import { settings } from "../config/settings-instance";
 import { recordedRestingGauge, recordRestLaunchFacts } from "../modes/launch-facts";
 import { accountDisplayLabel, accountsForProvider, buildAccountInventory } from "../session/account-inventory";
 import type { AgentSession } from "../session/agent-session";
-import { computeSystemContextTokens, isAtRestReadingDeferred } from "../session/non-message-tokens";
+import {
+	computeSystemContextTokens,
+	displayedContextUsage,
+	isAtRestReadingDeferred,
+	restsWithReadingHeld,
+} from "../session/non-message-tokens";
 import { limitMatchesActiveAccount } from "../slash-commands/helpers/active-oauth-account";
 import { calculateTokensPerSecond } from "./token-rate";
 /**
@@ -186,14 +191,8 @@ interface ContextUsageMemo {
 	systemPromptRef: readonly string[] | undefined;
 	toolsRef: readonly unknown[] | undefined;
 	skillsRef: readonly unknown[] | undefined;
-}
-
-/**
- * Whether the gauge draws the resting reading the last launch recorded instead of measuring: the host
- * holds the session's at-rest reading until the session leaves rest, and the session has no message yet.
- */
-function drawsRecordedGauge(session: AgentSession): boolean {
-	return isAtRestReadingDeferred(session) && (session.messages?.length ?? 0) === 0;
+	/** Whether the at-rest reading was held: a held reading states the resting usage, a taken one measures. */
+	held: boolean;
 }
 
 interface ActiveMeter {
@@ -446,6 +445,7 @@ export class StatusPresentationProducer implements StatusDataSource {
 		const systemPrompt = session.systemPrompt;
 		const tools = session.agent?.state?.tools;
 		const skills = session.skills;
+		const held = isAtRestReadingDeferred(session);
 		const cache = this.#contextUsageCache;
 		if (
 			cache &&
@@ -456,11 +456,12 @@ export class StatusPresentationProducer implements StatusDataSource {
 			cache.contextUsageRevision === contextUsageRevision &&
 			cache.systemPromptRef === systemPrompt &&
 			cache.toolsRef === tools &&
-			cache.skillsRef === skills
+			cache.skillsRef === skills &&
+			cache.held === held
 		) {
 			return cache;
 		}
-		const usage = typeof session.getContextUsage === "function" ? session.getContextUsage() : undefined;
+		const usage = typeof session.getContextUsage === "function" ? displayedContextUsage(session) : undefined;
 		const memo: ContextUsageMemo = {
 			messagesRef: messages,
 			length,
@@ -472,6 +473,7 @@ export class StatusPresentationProducer implements StatusDataSource {
 			systemPromptRef: systemPrompt,
 			toolsRef: tools,
 			skillsRef: skills,
+			held,
 		};
 		this.#contextUsageCache = memo;
 		return memo;
@@ -480,7 +482,7 @@ export class StatusPresentationProducer implements StatusDataSource {
 	getContextBreakdown(session: AgentSession, autoCompactEnabled: boolean): StatusContextBreakdown {
 		const modelContextWindow = session.model?.contextWindow ?? session.state?.model?.contextWindow ?? 0;
 		const compactionSettings = autoCompactEnabled ? session.settings?.getGroup?.("compaction") : undefined;
-		if (drawsRecordedGauge(session)) {
+		if (restsWithReadingHeld(session)) {
 			const gauge = measureContextGauge(null, modelContextWindow, compactionSettings);
 			gauge.contextPercent = recordedRestingGauge(session.state?.model ?? session.model ?? null);
 			return gauge;
@@ -654,7 +656,7 @@ export class StatusPresentationProducer implements StatusDataSource {
 			},
 			// A recorded gauge drawn back is not a measurement; filing it would copy the model's floor
 			// onto a project that was never measured.
-			drawsRecordedGauge(session) ? null : contextPercent,
+			restsWithReadingHeld(session) ? null : contextPercent,
 			contextLimit,
 		);
 	}

@@ -9,7 +9,9 @@
  *
  * The class this closes is a context figure computed from usage that does not describe the prompt
  * the session sends next. Each case drives the real collaborator against a real in-memory
- * `SessionManager` and a live message list, and reads the figure.
+ * `SessionManager` and a live message list, and reads the figure. The resting usage reads the same
+ * figure with the non-message size the anchor stamped in place of a measurement, so it obeys the same
+ * anchor rules and never asks the host to measure.
  *
  * What it does not catch: whether each history-rewriting pass calls `markHistoryRewritten`
  * (`nothing-to-compact-is-a-dead-end-only-without-headroom` and the compaction suites drive those
@@ -28,19 +30,21 @@ const NON_MESSAGE = 1_000;
 function harness(level: InstrumentationLevel = "off") {
 	const store = SessionManager.inMemory();
 	const messages: AgentMessage[] = [];
-	const state = { nonMessage: NON_MESSAGE };
+	/** `measured` counts every time the collaborator asked the host to measure the non-message half. */
+	const state = { nonMessage: NON_MESSAGE, measured: 0 };
 	const context = new ContextAccounting({
 		sessionStore: store,
 		model: () => undefined,
 		messages: () => messages,
 		instrumentationLevel: () => level,
-		nonMessageTokens: () => state.nonMessage,
-		nonMessageBreakdown: () => ({
-			skillsTokens: 0,
-			toolsTokens: 0,
-			systemContextTokens: 0,
-			systemPromptTokens: state.nonMessage,
-		}),
+		nonMessageTokens: () => {
+			state.measured++;
+			return state.nonMessage;
+		},
+		nonMessageBreakdown: () => {
+			state.measured++;
+			return { skillsTokens: 0, toolsTokens: 0, systemContextTokens: 0, systemPromptTokens: state.nonMessage };
+		},
 		storedMessagesTokens: () =>
 			messages.reduce((sum, message) => sum + estimateTokens(message, { excludeEncryptedReasoning: true }), 0),
 	});
@@ -74,6 +78,11 @@ function assistant(text: string, timestamp: number, promptTokens: number): Assis
 		stopReason: "stop",
 		timestamp,
 	};
+}
+
+/** A response stamped with the non-message size its prompt measured, as `MessagePersistence` stamps it. */
+function stamped(text: string, timestamp: number, promptTokens: number, nonMessageTokens: number): AssistantMessage {
+	return { ...assistant(text, timestamp, promptTokens), contextSnapshot: { promptTokens, nonMessageTokens } };
 }
 
 function tokens(...messages: AgentMessage[]): number {
@@ -238,5 +247,65 @@ describe("the prompt snapshot of a run in flight", () => {
 
 		const ultra = snapshotAt("ultra");
 		expect(ultra.snapshot?.compactionEntryId).toBe(ultra.compactionId);
+	});
+});
+
+describe("the resting usage", () => {
+	it("takes the stamped non-message size in place of measuring and estimates the tail", () => {
+		const { state, context, add } = harness();
+		add(user("question", 1));
+		add(stamped("answer", 2, 50_000, NON_MESSAGE - 300));
+		const tail = user("a follow-up that has not been sent yet", 3);
+		add(tail);
+
+		const resting = context.restingUsage();
+
+		expect(state.measured).toBe(0);
+		expect(resting?.tokens).toBe(50_000 + tokens(tail));
+		// The measurement sees the 300 tokens the non-message half grew by since the stamp.
+		expect(context.usage().tokens).toBe(50_000 + 300 + tokens(tail));
+	});
+
+	it("never reads below the stored conversation, counted with the stamped size", () => {
+		const { state, context, add } = harness();
+		add(user("stored context ".repeat(4_000), 1));
+		add(stamped("answer", 2, 10, NON_MESSAGE - 300));
+
+		const resting = context.restingUsage();
+
+		expect(state.measured).toBe(0);
+		expect(resting?.tokens).toBe(context.estimateStoredTokens() - 300);
+	});
+
+	it("states nothing when the anchor stamped no size", () => {
+		const { state, context, add } = harness();
+		add(user("question", 1));
+		add(assistant("answer", 2, 50_000));
+
+		expect(context.restingUsage()).toBeUndefined();
+		expect(state.measured).toBe(0);
+	});
+
+	it("states nothing when the only stamped response predates the latest compaction", () => {
+		const { store, context, add } = harness();
+		add(user("question", 1));
+		add(stamped("answer", 2, 50_000, NON_MESSAGE));
+		store.appendCompaction("summary", undefined, store.getLeafId() ?? "", 50_000);
+		add(user("after the compaction", 3));
+
+		expect(context.restingUsage()).toBeUndefined();
+	});
+
+	it("states nothing while a prompt is in flight", () => {
+		const { context, add } = harness();
+		add(user("question", 1));
+		add(stamped("answer", 2, 50_000, NON_MESSAGE));
+		const submitted = user("next question", 3);
+		context.beginPrompt([submitted]);
+		add(submitted);
+
+		expect(context.restingUsage()).toBeUndefined();
+		context.endPrompt();
+		expect(context.restingUsage()?.tokens).toBe(50_000 + tokens(submitted));
 	});
 });
