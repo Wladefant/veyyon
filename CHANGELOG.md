@@ -47,6 +47,7 @@
 
 ### Changed
 
+- Capability discovery finds the repository root by checking each ancestor of the working directory for `.git` instead of listing and keeping every ancestor directory, and concurrent loads share one lookup; twenty concurrent lookups from a directory under a 1,700-entry directory take 0.31 ms instead of 2.50 ms and leave 32 KiB on the heap instead of 259 KiB, and from a home directory outside any repository take 0.30 ms instead of 1.85 ms and leave 33 KiB instead of 185 KiB (median of 15).
 - A session compares a SHA-256 digest of its tool names, descriptions and MCP server instructions to decide whether a tool change rebuilds the system prompt, instead of keeping the joined text, so each main session and live subagent holds 87,568 fewer bytes of heap once its tool set has been applied twice with the default tools.
 - On Linux the binary's embedded module pages are released on the first 5-second window under 5% CPU after work instead of after 30 quiet seconds, so an idle session 15 seconds after launch holds 190 MiB RSS instead of 270-286 MiB, and a session with turns 12 seconds apart holds 209-216 MiB after its second and third turns instead of 290-295 MiB, at unchanged turn latency.
 - The compiled binary holds one copy of Zod instead of two, because the schema converter no longer `require`s a CommonJS copy beside the one the package barrel hands to extensions; the binary is 2.3 MiB smaller and an idle session holds 3 MiB less RSS after collection (270 to 267 MiB, median of five).
