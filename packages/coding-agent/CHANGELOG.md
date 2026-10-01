@@ -151,6 +151,7 @@
 
 ### Fixed
 
+- A read card rebuilt on resume drops the file text it was built from once its card text exists, and a prune that replaces the read's result drops it too, so a resumed 600-turn session whose overflow prune superseded 398 reads holds 49.6 MiB of heap instead of 54.7 MiB and 244 MiB RSS after collection instead of 248-249 MiB (two runs each, 40-second settle).
 - Dismissing the welcome card on a resumed session reports the card's rows as dropped from native scrollback instead of unmounting them unreported, so the first turn no longer replays the transcript: on a resumed 600-turn session its peak resident memory is 492 MiB instead of 527 MiB, its CPU time 0.48 s instead of 0.68 s, and its largest erasing frame 57 rows instead of 31,635 (median of five).
 - Resuming a session or rebuilding the transcript puts its earlier prompts in the up/down history ring without writing them to the prompt history database again, so resuming a 600-turn session adds 0 rows to `history.db` instead of 600 (median of seven).
 - A spawned agent no longer records its context gauge, model name and thinking level into the launch facts, so the next launch's card and status row state the top-level session's reading instead of the last spawned agent's, and a spawned agent no longer builds every tool's wire schema at creation to measure that gauge: the first one created in a fresh process takes 119 ms instead of 181 ms (median of five).
