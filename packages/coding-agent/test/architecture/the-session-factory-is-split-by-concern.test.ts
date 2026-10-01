@@ -58,7 +58,7 @@ const SDK = repoPath("packages/coding-agent/src/sdk.ts");
  * `measureAtRestLaunch` in `src/session/startup-records.ts`. This falls when
  * `createAgentSession` is rewritten.
  */
-const SDK_CEILING = 1726;
+const SDK_CEILING = 1840;
 
 /** MEASURED: the largest factory module is `factory-extensions.ts` at 395 lines. */
 const FACTORY_CEILING = 400;

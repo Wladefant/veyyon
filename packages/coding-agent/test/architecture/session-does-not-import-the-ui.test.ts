@@ -28,6 +28,10 @@ const SESSION = path.join(SRC, "session");
  */
 const ALLOWED = new Map<string, string>([
 	[
+		"modes/launch-facts",
+		"The last launch's facts as plain data. Imports nothing, so a session module reading it cannot bring the terminal UI in.",
+	],
+	[
 		"theme/theme-binding",
 		"The live `theme` binding and nothing else. Imports one type and no values, which `test/theme/theme-binding-stays-live.test.ts` asserts, so it cannot bring the engine back.",
 	],
