@@ -65,7 +65,7 @@ import { renderStatusLine } from "./status-line";
 import { styleTerminalRow } from "./terminal-row";
 import { renderTreeList } from "./tree-list";
 import type { State } from "./types";
-import { createCachedComponent, padToWidth } from "./utils";
+import { createCachedComponent, neverExpanded, padToWidth } from "./utils";
 import { wrapDiffRow } from "./wrap-diff-row";
 
 /**
@@ -972,21 +972,18 @@ export function drawHeadedBlock(view: HeadedBlockView, theme: Theme, spinnerFram
 	const lines = view.lines;
 	const hidden = view.hidden;
 	const tail = view.tail;
-	return createCachedComponent(
-		() => false,
-		width => {
-			const rows: string[] = [];
-			if (header !== undefined) rows.push(truncateToWidth(header, width, Ellipsis.Omit));
-			const body = lines.map(line => drawRowToWidth(line, theme, Math.max(1, width - INDENT), spinnerFrame));
-			// A window is measured on the rows the lines occupy at the width the body has, which is the
-			// width minus the indent every one of them is drawn at.
-			const windowed = tail === undefined ? body : drawTailWindow(body, tail, theme, Math.max(1, width - INDENT));
-			for (const row of windowed) rows.push(`  ${row}`);
-			const note = hidden === undefined ? undefined : drawHiddenNote(hidden, theme);
-			if (note !== undefined) rows.push(truncateToWidth(`  ${note}`, width, Ellipsis.Omit));
-			return rows;
-		},
-	);
+	return createCachedComponent(neverExpanded, width => {
+		const rows: string[] = [];
+		if (header !== undefined) rows.push(truncateToWidth(header, width, Ellipsis.Omit));
+		const body = lines.map(line => drawRowToWidth(line, theme, Math.max(1, width - INDENT), spinnerFrame));
+		// A window is measured on the rows the lines occupy at the width the body has, which is the
+		// width minus the indent every one of them is drawn at.
+		const windowed = tail === undefined ? body : drawTailWindow(body, tail, theme, Math.max(1, width - INDENT));
+		for (const row of windowed) rows.push(`  ${row}`);
+		const note = hidden === undefined ? undefined : drawHiddenNote(hidden, theme);
+		if (note !== undefined) rows.push(truncateToWidth(`  ${note}`, width, Ellipsis.Omit));
+		return rows;
+	});
 }
 
 /** The two columns a block's lines sit in, under the row that names them. */
@@ -1181,18 +1178,15 @@ export function drawNotice(view: NoticeView, theme: Theme): Component {
 		for (const line of view.body) lines.push(drawNoticeLine(line, theme));
 	}
 	lines.push("");
-	return createCachedComponent(
-		() => false,
-		width => {
-			const lineWidth = Math.max(3, width);
-			const innerWidth = Math.max(1, lineWidth - 2);
-			return lines.map(line => {
-				const truncated = truncateToWidth(line, innerWidth, Ellipsis.Omit);
-				const padded = padToWidth(` ${padToWidth(truncated, innerWidth)} `, lineWidth);
-				return theme.inverse(theme.fg(color, padded));
-			});
-		},
-	);
+	return createCachedComponent(neverExpanded, width => {
+		const lineWidth = Math.max(3, width);
+		const innerWidth = Math.max(1, lineWidth - 2);
+		return lines.map(line => {
+			const truncated = truncateToWidth(line, innerWidth, Ellipsis.Omit);
+			const padded = padToWidth(` ${padToWidth(truncated, innerWidth)} `, lineWidth);
+			return theme.inverse(theme.fg(color, padded));
+		});
+	});
 }
 
 /**

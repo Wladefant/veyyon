@@ -140,6 +140,7 @@
 - The bundled rules are parsed once per process and every session's TTSR manager shares one compiled set of their conditions, scopes and globs, so loading and registering them takes 0.02 ms instead of 0.5 ms per session and a live spawned session retains 245.6 KiB of heap instead of 277.0 KiB and 1,723 objects instead of 2,606 (median of three runs over 20 sessions).
 - ArkType schema nodes create their `assert`, `pipe`, `rootApply` and `allows` closures on first read instead of at construction, so a node traversed only as part of a larger schema retains half the function cells and the compiled binary's idle heap drops from 48.7 MiB to 47.8 MiB and live objects from 438,905 to 422,703 (median of seven).
 - An ArkType schema node without metadata serializes itself once and holds that JSON object and string as both its inner and its full serialization, so the compiled binary's idle heap and extra memory drop by 271 KiB, from 68,550 KiB to 68,279 KiB, and live objects from 422,696 to 421,155 (median of five).
+- A rebuilt transcript allocates no closure per assistant turn or tool card beyond the function a tool's view draws through: rail frames, framed blocks and cached views are class instances, cards, producers and tool-result images report through listener objects, inline images share one theme, and an assistant turn repaints through its host, so a resumed 600-turn session holds 120,613 KiB of heap and extra memory instead of 123,380 KiB, 639,759 live objects instead of 702,893 and 385 MiB RSS instead of 389 MiB (median of five).
 
 ### Fixed
 

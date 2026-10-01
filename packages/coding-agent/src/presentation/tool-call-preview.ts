@@ -3,6 +3,11 @@ import { logger } from "@veyyon/utils";
 import { EDIT_MODE_STRATEGIES, type PerFileDiffPreview } from "../edit/streaming";
 import type { EditMode } from "../utils/edit-mode";
 
+/** What a preview notifies when a computed diff preview lands. */
+export interface ToolCallPreviewListener {
+	toolCallPreviewChanged(): void;
+}
+
 export interface ToolCallPreviewOptions {
 	toolName: string;
 	mode?: EditMode;
@@ -10,7 +15,8 @@ export interface ToolCallPreviewOptions {
 	snapshots?: SnapshotStore;
 	fuzzyThreshold?: number;
 	allowFuzzy?: boolean;
-	onChange: () => void;
+	/** An object rather than a callback, so the producer that owns a preview listens without a closure per card. */
+	listener: ToolCallPreviewListener;
 }
 
 export function isEditLikeToolName(toolName: string): boolean {
@@ -151,7 +157,7 @@ export class ToolCallPreview {
 			});
 			if (controller.signal.aborted || !previews) return;
 			this.#previews = isStreaming ? stabilizePreviews(previews) : previews;
-			this.options.onChange();
+			this.options.listener.toolCallPreviewChanged();
 		} catch (error) {
 			if (!controller.signal.aborted) {
 				logger.warn("Edit preview diff failed", { tool: this.options.toolName, error: String(error) });

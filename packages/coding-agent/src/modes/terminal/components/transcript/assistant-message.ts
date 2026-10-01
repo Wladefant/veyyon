@@ -17,6 +17,7 @@ import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import type { AssistantErrorPresentation, AssistantMessageView, AssistantSegment } from "@veyyon/wire/presentation";
 import chalk from "chalk";
 import type { AssistantThinkingRenderer } from "../../../../extensibility/extensions/types";
+import { TOOL_OUTPUT_IMAGE_THEME } from "../../../../theme/image-theme";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
 import { theme } from "../../../../theme/theme";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../../../tools/core/render-utils";
@@ -27,6 +28,7 @@ import {
 } from "../../../../utils/thinking-display";
 import { paintHotTail, shimmerPhase } from "../chrome/follow";
 import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cache-invalidation-marker";
+import type { ChatBlockHost } from "./chat-block";
 
 /**
  * Max lines of a turn-ending provider error rendered inline in the transcript.
@@ -41,6 +43,9 @@ const MAX_TRANSCRIPT_ERROR_LINES = 8;
 const CODE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 type ThinkingSegment = Extract<AssistantSegment, { kind: "thinking" }>;
+
+/** Shared by every component that has no extension thinking renderer; nothing writes into it. */
+const NO_THINKING_RENDERERS: readonly AssistantThinkingRenderer[] = [];
 
 function resolveThinkingDisplay(segment: ThinkingSegment, proseOnly: boolean): { text: string; visible: boolean } {
 	if (segment.redacted) return { text: "", visible: false };
@@ -196,7 +201,11 @@ function lerpHex(from: string, to: string, t: number): string {
  */
 export class AssistantMessageComponent extends Container {
 	#contentContainer: Container;
-	#markerSlot: Container;
+	/** Holds the slim cache-invalidation divider above the content. Created by the first
+	 *  {@link setCacheInvalidation} that has a divider to show; a turn that never shows one holds
+	 *  only the content container. */
+	#markerSlot: Container | undefined;
+	#thinkingRenderers: readonly AssistantThinkingRenderer[];
 	#lastMessage?: AssistantMessageView;
 	/** Created on the first tool result image; a turn that shows none allocates none of the three. */
 	#toolImagesByCallId: Map<string, ImageContent[]> | undefined;
@@ -237,7 +246,9 @@ export class AssistantMessageComponent extends Container {
 	/** Width of the most recent render(); the settled-rows walk reads child
 	 *  renders at exactly this width (L1 cache hits). */
 	#lastRenderWidth = 0;
-	// Fast-path state: reuse Markdown children when message shape is stable during streaming.
+	// Fast-path state: reuse Markdown children when message shape is stable during streaming. A
+	// component holds it only while the block can still stream: a component built from a finished
+	// message captures none until a different message arrives, and sealing the block drops it.
 	#fastPathKey: string | undefined;
 	#fastPathItems:
 		| Array<{ md: Markdown; contentIndex: number; blockType: "text" | "thinking"; lastText: string }>
@@ -283,22 +294,18 @@ export class AssistantMessageComponent extends Container {
 		message?: AssistantMessageView,
 		private hideThinkingBlock = false,
 		private readonly onImageUpdate?: () => void,
-		private readonly thinkingRenderers: readonly AssistantThinkingRenderer[] = [],
+		thinkingRenderers: readonly AssistantThinkingRenderer[] = NO_THINKING_RENDERERS,
 		private readonly imageBudget?: ImageBudget,
 		private proseOnlyThinking = true,
-		/** Scoped repaint of THIS component only (the TUI's requestComponentRender
-		 *  pre-bound to this instance). The shimmer ticker prefers it over the
-		 *  full-tree onImageUpdate so 30fps flow never triggers a whole-transcript
-		 *  walk (issue #4377). Falls back to onImageUpdate when not provided. */
-		private readonly requestSelfRender?: () => void,
+		/** Host that repaints THIS component only (the TUI's requestComponentRender).
+		 *  The shimmer ticker prefers it over the full-tree onImageUpdate so 30fps
+		 *  flow never triggers a whole-transcript walk (issue #4377). Falls back to
+		 *  onImageUpdate when not provided. */
+		private readonly renderHost?: ChatBlockHost,
 	) {
 		super();
 		this.#transcriptBlockFinalized = message !== undefined;
-
-		// Slim cache-invalidation divider, populated above the content when this
-		// turn's request lost the prompt cache (see setCacheInvalidation).
-		this.#markerSlot = new Container();
-		this.addChild(this.#markerSlot);
+		this.#thinkingRenderers = thinkingRenderers.length === 0 ? NO_THINKING_RENDERERS : thinkingRenderers;
 
 		// Container for text/thinking content
 		this.#contentContainer = new Container();
@@ -316,9 +323,20 @@ export class AssistantMessageComponent extends Container {
 	 * block version so the change repaints even after content finalized.
 	 */
 	setCacheInvalidation(info: CacheInvalidation | undefined): void {
-		this.#markerSlot.clear();
-		if (info) {
-			this.#markerSlot.addChild(new CacheInvalidationMarkerComponent(info));
+		let slot = this.#markerSlot;
+		if (info && slot === undefined) {
+			// The divider sits above the content, so the slot goes first.
+			slot = new Container();
+			this.#markerSlot = slot;
+			this.clear();
+			this.addChild(slot);
+			this.addChild(this.#contentContainer);
+		}
+		if (slot !== undefined) {
+			slot.clear();
+			if (info) {
+				slot.addChild(new CacheInvalidationMarkerComponent(info));
+			}
 		}
 		this.#blockVersion++;
 	}
@@ -479,7 +497,8 @@ export class AssistantMessageComponent extends Container {
 
 	#startShimmer(): void {
 		if (this.#shimmerTimer) return;
-		const repaint = this.requestSelfRender ?? this.onImageUpdate;
+		const host = this.renderHost;
+		const repaint = host ? () => host.requestComponentRender(this) : this.onImageUpdate;
 		this.#shimmerTimer = setInterval(() => repaint?.(), SHIMMER_TICK_MS);
 		this.#shimmerTimer.unref?.();
 	}
@@ -522,7 +541,7 @@ export class AssistantMessageComponent extends Container {
 	getTranscriptBlockSettledRows(): number {
 		if (this.#transcriptBlockFinalized || !this.#lastUpdateTransient) return 0;
 		if (this.#containsMermaidSource) return 0;
-		if (this.#markerSlot.children.length > 0) return 0;
+		if (this.#markerSlot !== undefined && this.#markerSlot.children.length > 0) return 0;
 		const items = this.#fastPathItems;
 		const width = this.#lastRenderWidth;
 		if (!items || items.length === 0 || width <= 0) return 0;
@@ -564,12 +583,14 @@ export class AssistantMessageComponent extends Container {
 		// was no thinking pulse to trigger the rebuild path below.
 		this.#trailActive = false;
 		this.#stopShimmer();
-		// If the live pulse was on screen when the block sealed, drop the fast path
-		// and rebuild so the placeholder is removed — finalized blocks never animate.
-		if (this.#thinkingDots) {
-			this.#fastPathKey = undefined;
-			this.#fastPathItems = undefined;
-			if (this.#lastMessage) this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
+		// A sealed block never streams again, so it drops the fast-path state; a later update (a
+		// pinned error clearing, a late tool image) rebuilds through the teardown path.
+		this.#fastPathKey = undefined;
+		this.#fastPathItems = undefined;
+		// If the live pulse was on screen when the block sealed, rebuild so the placeholder is
+		// removed — finalized blocks never animate.
+		if (this.#thinkingDots && this.#lastMessage) {
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
 	}
 
@@ -690,12 +711,11 @@ export class AssistantMessageComponent extends Container {
 					: image;
 			if (TERMINAL.imageProtocol && displayImage) {
 				this.#contentContainer.addChild(
-					new Image(
-						displayImage.data,
-						displayImage.mimeType,
-						{ fallbackColor: (text: string) => theme.fg("toolOutput", text) },
-						{ ...resolveImageOptions(), budget: this.imageBudget, imageKey: key },
-					),
+					new Image(displayImage.data, displayImage.mimeType, TOOL_OUTPUT_IMAGE_THEME, {
+						...resolveImageOptions(),
+						budget: this.imageBudget,
+						imageKey: key,
+					}),
 				);
 				continue;
 			}
@@ -710,7 +730,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	#appendThinkingExtensions(contentIndex: number, thinkingIndex: number, text: string): void {
-		for (const renderer of this.thinkingRenderers) {
+		for (const renderer of this.#thinkingRenderers) {
 			try {
 				const component = renderer(
 					{
@@ -764,7 +784,7 @@ export class AssistantMessageComponent extends Container {
 		}
 		// Extension stability: if thinking renderers exist and any tracked thinking
 		// block's text changed, extensions may produce a different child count.
-		if (this.thinkingRenderers.length > 0 && this.#fastPathItems) {
+		if (this.#thinkingRenderers.length > 0 && this.#fastPathItems) {
 			for (const item of this.#fastPathItems) {
 				if (item.blockType === "thinking") {
 					const content = message.segments[item.contentIndex];
@@ -851,6 +871,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	updateContent(message: AssistantMessageView, opts?: { transient?: boolean }): void {
+		const previous = this.#lastMessage;
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
@@ -917,8 +938,12 @@ export class AssistantMessageComponent extends Container {
 		this.#thinkingDots = undefined;
 		this.#thinkingLabel = undefined;
 
-		// Determine if we should capture Markdown instances for next fast path
-		const shouldCapture = this.#canFastPath(message);
+		// Determine if we should capture Markdown instances for next fast path. A block that has
+		// not been finalized is streaming; a finalized one streams only when a different message
+		// follows the one it was built from (an assistant segment after a tool call). Re-rendering
+		// the same message (theme change, pinned error, sealing) captures nothing.
+		const canStream = !this.#transcriptBlockFinalized || (previous !== undefined && previous !== message);
+		const shouldCapture = canStream && this.#canFastPath(message);
 		const captureItems:
 			| Array<{ md: Markdown; contentIndex: number; blockType: "text" | "thinking"; lastText: string }>
 			| undefined = shouldCapture ? [] : undefined;

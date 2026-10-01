@@ -7,6 +7,7 @@ import {
 	Container,
 	getImageDimensions,
 	Image,
+	type ImageDisplayListener,
 	ImageProtocol,
 	imageFallback,
 	type NativeScrollbackLiveRegion,
@@ -32,10 +33,12 @@ import {
 	createToolExecutionProducer,
 	notExecutedReason,
 	type ToolExecutionDrawContext,
+	type ToolExecutionListener,
 	ToolExecutionProducer,
 } from "../../../../presentation/tool-execution";
 import { recordImageDisplay } from "../../../../session/image-visibility";
 import type { HighlightRequest } from "../../../../theme/highlight";
+import { TOOL_OUTPUT_IMAGE_THEME } from "../../../../theme/image-theme";
 import { transitionsEnabled } from "../../../../theme/shimmer";
 import type { Theme } from "../../../../theme/theme";
 import { getThemeEpoch, theme } from "../../../../theme/theme";
@@ -193,13 +196,86 @@ let toolExecutionInstanceSeq = 0;
 
 /**
  * The rail frame each card built around a child, keyed by that child: one table for every card rather
- * than a WeakMap per card. The owner is kept beside the frame, since the frame draws its card's status.
+ * than a WeakMap per card. The frame holds its owner, since it draws its card's status.
  */
-const railWrappers = new WeakMap<Component, { owner: ToolExecutionComponent; framed: Component }>();
+const railWrappers = new WeakMap<Component, RailFrame>();
 
-export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion, ToolExecutionHandle {
+function isDrawnRow(line: string): boolean {
+	return line.trim() !== "";
+}
+
+/**
+ * The frame a card draws around a child that does not frame itself: the child's first drawn row is
+ * the header and the rest the body, on a rail in the card's status. A class rather than an object of
+ * closures, so a framed child costs its card two objects and shares the methods with every other.
+ */
+class RailFrame implements Component {
+	readonly owner: ToolExecutionComponent;
+	readonly #child: Component;
+	readonly #block = new CachedOutputBlock();
+
+	constructor(owner: ToolExecutionComponent, child: Component) {
+		this.owner = owner;
+		this.#child = child;
+		markFramedBlockComponent(this);
+	}
+
+	render(width: number): readonly string[] {
+		const inner = this.#child.render(outputBlockContentWidth(width, 0));
+		const first = inner.findIndex(isDrawnRow);
+		if (first === -1) return [];
+		const rows = dedent(inner.slice(first));
+		const body = rows.slice(1);
+		return this.#block.render(
+			{
+				header: rows[0],
+				state: this.owner.railState,
+				sections: body.length > 0 ? [{ lines: body }] : [],
+				contentPaddingLeft: 0,
+				width,
+			},
+			theme,
+		);
+	}
+
+	invalidate(): void {
+		this.#block.invalidate();
+		this.#child.invalidate?.();
+	}
+
+	releaseRenderCache(): void {
+		this.#block.invalidate();
+		this.#child.releaseRenderCache?.();
+	}
+
+	dispose(): void {
+		this.#child.dispose?.();
+	}
+}
+
+/** Records, for one image of a tool call's result, whether it reached the screen. */
+class ImageDisplayReport implements ImageDisplayListener {
+	readonly #toolCallId: string;
+	readonly #index: number;
+
+	constructor(toolCallId: string, index: number) {
+		this.#toolCallId = toolCallId;
+		this.#index = index;
+	}
+
+	imageDisplayed(fallback: ImageFallbackReason | undefined): void {
+		recordImageDisplay(this.#toolCallId, this.#index, fallback);
+	}
+}
+
+export class ToolExecutionComponent
+	extends Container
+	implements NativeScrollbackLiveRegion, ToolExecutionHandle, ToolExecutionListener
+{
 	#contentBox: Box;
-	#contentText: WidthAwareText;
+	/** The generic fallback row, created by the first display that draws it; a card whose tool draws its
+	 *  own call or result never holds one. */
+	#contentText: WidthAwareText | undefined;
 	#multiFileBoxes: (Box | Spacer)[] = [];
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
@@ -234,7 +310,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#firstResultViewportRepaintShapePainted = false;
 	#partialResultShapePainted = false;
 	#rawArgs: unknown;
-	#producerUnsubscribe?: () => void;
+	/** The producer this card listens to, so a change of source stops listening to the old one. */
+	#subscribedProducer: ToolExecutionProducer | undefined;
 	#inSyncUpdate = false;
 
 	constructor(
@@ -314,7 +391,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		}
 
 		this.#contentBox = new Box(COMPOSER_INSET_COLS, 1);
-		this.#contentText = new WidthAwareText(contentWidth => this.#formatGenericFallback(contentWidth), 0, 0);
 
 		this.addChild(this.#contentBox);
 		this.setIgnoreTight(true);
@@ -361,17 +437,26 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#setupProducerSubscription(): void {
 		const producer = this.#producer;
 		if (!producer) return;
-		this.#producerUnsubscribe?.();
-		this.#producerUnsubscribe = producer.subscribe(() => {
-			// A synchronous update (args, result, seal) bumps its own version and rebuilds once it has
-			// finished. A recompute the producer started itself (a streaming diff preview settling)
-			// changes no input the display key reads, so the key moves here or the settled preview
-			// waits for the next spinner tick to be drawn.
-			if (this.#inSyncUpdate) return;
-			this.#displayInputVersion++;
-			this.#updateDisplay();
-			this.#requestScopedRender();
-		});
+		this.#unsubscribeProducer();
+		producer.subscribe(this);
+		this.#subscribedProducer = producer;
+	}
+
+	#unsubscribeProducer(): void {
+		this.#subscribedProducer?.unsubscribe(this);
+		this.#subscribedProducer = undefined;
+	}
+
+	/** The producer's block changed. The card itself is the listener, so it holds no closure for it. */
+	toolExecutionChanged(): void {
+		// A synchronous update (args, result, seal) bumps its own version and rebuilds once it has
+		// finished. A recompute the producer started itself (a streaming diff preview settling)
+		// changes no input the display key reads, so the key moves here or the settled preview
+		// waits for the next spinner tick to be drawn.
+		if (this.#inSyncUpdate) return;
+		this.#displayInputVersion++;
+		this.#updateDisplay();
+		this.#requestScopedRender();
 	}
 
 	#applyRawBlock(block: ToolExecutionBlock): void {
@@ -419,8 +504,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			}
 			if (this.#producer !== previousProducer) this.#setupProducerSubscription();
 		} else {
-			this.#producerUnsubscribe?.();
-			this.#producerUnsubscribe = undefined;
+			this.#unsubscribeProducer();
 			if (this.#producer !== this.#options.dataSource) this.#producer?.seal();
 			this.#source = block;
 			this.#adoptBlockLifecycle(block);
@@ -714,44 +798,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#onRail(component: Component): Component {
 		if (isFramedBlockComponent(component)) return component;
 		const cached = railWrappers.get(component);
-		if (cached?.owner === this) return cached.framed;
-		const block = new CachedOutputBlock();
-		const framed = markFramedBlockComponent({
-			render: (width: number): readonly string[] => {
-				const inner = component.render(outputBlockContentWidth(width, 0));
-				const first = inner.findIndex(line => line.trim() !== "");
-				if (first === -1) return [];
-				const rows = dedent(inner.slice(first));
-				const body = rows.slice(1);
-				return block.render(
-					{
-						header: rows[0],
-						state: this.#isPartial
-							? "running"
-							: this.#block.status === "failed" ||
-									this.#block.status === "rejected" ||
-									this.#block.status === "aborted"
-								? "error"
-								: "success",
-						sections: body.length > 0 ? [{ lines: body }] : [],
-						contentPaddingLeft: 0,
-						width,
-					},
-					theme,
-				);
-			},
-			invalidate: () => {
-				block.invalidate();
-				component.invalidate?.();
-			},
-			releaseRenderCache: () => {
-				block.invalidate();
-				component.releaseRenderCache?.();
-			},
-			dispose: () => component.dispose?.(),
-		});
-		railWrappers.set(component, { owner: this, framed });
+		if (cached?.owner === this) return cached;
+		const framed = new RailFrame(this, component);
+		railWrappers.set(component, framed);
 		return framed;
+	}
+
+	/** The status the rail frames around this card's children draw, read without building its block. */
+	get railState(): "running" | "error" | "success" {
+		if (this.#isPartial) return "running";
+		const status = this.#source.status;
+		return status === "failed" || status === "rejected" || status === "aborted" ? "error" : "success";
 	}
 
 	#railMotion(railRows: number): RailMotion | undefined {
@@ -817,8 +874,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#spinnerFrame = undefined;
 		}
 		this.#stopRailMotion();
-		this.#producerUnsubscribe?.();
-		this.#producerUnsubscribe = undefined;
+		this.#unsubscribeProducer();
 		this.#producer?.seal();
 	}
 
@@ -1048,8 +1104,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#addGenericContent(): void {
-		this.#contentBox.addChild(this.#onRail(this.#contentText));
-		this.#contentText.invalidate();
+		this.#contentText ??= new WidthAwareText(contentWidth => this.#formatGenericFallback(contentWidth), 0, 0);
+		const text = this.#contentText;
+		this.#contentBox.addChild(this.#onRail(text));
+		text.invalidate();
 	}
 
 	/**
@@ -1304,17 +1362,13 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.addChild(spacer);
 		this.#imageSpacers.push(spacer);
 		this.#reportImageDisplay(i, undefined);
-		const imageComponent = new Image(
-			imageData,
-			imageMimeType,
-			{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
-			{
-				...resolveImageOptions(),
-				budget: this.#ui?.imageBudget,
-				imageKey: `te${this.#instanceId}:${i}`,
-				onDisplayed: fallback => this.#reportImageDisplay(i, fallback),
-			},
-		);
+		const toolCallId = this.#source.toolCallId;
+		const imageComponent = new Image(imageData, imageMimeType, TOOL_OUTPUT_IMAGE_THEME, {
+			...resolveImageOptions(),
+			budget: this.#ui?.imageBudget,
+			imageKey: `te${this.#instanceId}:${i}`,
+			displayListener: toolCallId ? new ImageDisplayReport(toolCallId, i) : undefined,
+		});
 		this.#imageComponents.push(imageComponent);
 		this.addChild(imageComponent);
 		return undefined;

@@ -12,16 +12,23 @@
  * after, the block and the policies in both orders, and compared with a producer built fresh into the
  * same state; each must also change what that fresh producer shows, so a change that shows nothing
  * cannot pass by comparing two stale reads.
+ * The status a producer states without building its block (the card's rail reads it) is compared
+ * with its block's in every state the changes reach, a call that never ran, one an interrupt skipped
+ * and one an interrupt stopped while running.
  *
  * WHAT IT DOES NOT CATCH. A change that lands through the call preview's asynchronous edit diff is
- * delivered by its `onChange` callback, which only an edit tool with a diff strategy drives; the
+ * delivered through `toolCallPreviewChanged`, which only an edit tool with a diff strategy drives; the
  * streamed edit preview suites cover that path.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
 import { isDeepStrictEqual } from "node:util";
 import type { AnyAgentTool } from "@veyyon/agent-core";
 import type { ToolExecutionBlock } from "@veyyon/wire/presentation";
-import { type ToolExecutionDrawContext, ToolExecutionProducer } from "../src/presentation/tool-execution";
+import {
+	type ToolExecutionDrawContext,
+	ToolExecutionProducer,
+	turnFailedToolResult,
+} from "../src/presentation/tool-execution";
 import { initTheme } from "../src/theme/theme";
 
 /** A tool whose views show every input they were drawn from: the arguments, the result and the view context. */
@@ -43,6 +50,9 @@ const ECHO_TOOL = {
 const ARGS = { input: "first" };
 const PARTIAL = { content: [{ type: "text", text: "partial" }] };
 const SETTLED = { content: [{ type: "text", text: "settled" }] };
+/** A call an interrupt cut the batch short of, which never ran, and one it stopped while running. */
+const SKIPPED_BEFORE_ENTRY = { __skipped: true, entered: false };
+const SKIPPED_AFTER_ENTRY = { __skipped: true, entered: true };
 
 type Step = (producer: ToolExecutionProducer) => void;
 
@@ -96,12 +106,18 @@ const READS = [
 	"isPartial",
 	"policies",
 	"produceBlock",
+	"releaseBlock",
 	"result",
 	"sealed",
+	"status",
 	"subscribe",
 	"toolName",
+	"unsubscribe",
 	"whenSettled",
 ];
+
+/** The call preview's notification, which the producer relays to its listeners; the preview holds the change. */
+const RELAYS = ["toolCallPreviewChanged"];
 
 /** A change of each draw context field, from the first context to the second. */
 const CONTEXT_CHANGES: {
@@ -144,7 +160,7 @@ describe("a tool card's block shows the latest change it was handed", () => {
 
 	it("records every public member of the producer as a change or a read", () => {
 		const members = Object.getOwnPropertyNames(ToolExecutionProducer.prototype).sort();
-		expect(members).toEqual([...Object.keys(CHANGES), ...READS].sort());
+		expect(members).toEqual([...Object.keys(CHANGES), ...READS, ...RELAYS].sort());
 	});
 
 	for (const [member, changes] of Object.entries(CHANGES)) {
@@ -156,7 +172,7 @@ describe("a tool card's block shows the latest change it was handed", () => {
 					// Read first, so the change has a cached block and cached policies to drop.
 					read(card, context);
 					let notified = 0;
-					card.subscribe(() => notified++);
+					card.subscribe({ toolExecutionChanged: () => notified++ });
 					apply(card);
 					const after = read(card, context);
 					expect({ after, notified }).toEqual({ after: read(producerAt([...from, apply]), context), notified: 1 });
@@ -175,8 +191,29 @@ describe("a tool card's block shows the latest change it was handed", () => {
 					invisible.push(member);
 			}
 		}
-		// Completing the arguments only restarts an edit tool's diff preview, which reports through `onChange`.
+		// Completing the arguments only restarts an edit tool's diff preview, which reports through `toolCallPreviewChanged`.
 		expect(invisible).toEqual(["setArgsComplete"]);
+	});
+
+	it("states the status its block reports, in every state", () => {
+		const states: readonly (readonly Step[])[] = [
+			[],
+			...Object.values(CHANGES).flatMap(changes =>
+				Object.values(changes).map(({ from, apply }) => [...from, apply]),
+			),
+			[producer => producer.updateResult(turnFailedToolResult("stream reset"), false)],
+			[producer => producer.updateResult({ ...SETTLED, isError: true, details: SKIPPED_BEFORE_ENTRY }, false)],
+			[producer => producer.updateResult({ ...SETTLED, isError: true, details: SKIPPED_AFTER_ENTRY }, false)],
+		];
+		const read = states.map(steps => {
+			const producer = producerAt(steps);
+			// Whether reading the status builds the block is asserted by the card's query sweep.
+			return { status: producer.status, built: producer.block.status };
+		});
+		expect(read.map(({ status }) => status)).toEqual(read.map(({ built }) => built));
+		expect(new Set(read.map(({ status }) => status))).toEqual(
+			new Set(["running", "succeeded", "failed", "rejected", "aborted"]),
+		);
 	});
 
 	for (const [field, [first, second]] of Object.entries(CONTEXT_CHANGES)) {

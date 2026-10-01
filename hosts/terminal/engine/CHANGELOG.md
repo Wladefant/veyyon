@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.
+
 ### Added
 
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.

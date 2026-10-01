@@ -298,18 +298,37 @@ function buildKey(options: OutputBlockOptions): bigint {
 }
 
 /**
+ * A self-framing tool component backed by a cached output block. A class rather than an object of
+ * closures, so a drawn card holds its frame in two objects and shares the methods with every other.
+ */
+class FramedBlock implements FramedBlockComponent {
+	// Marked so the tool-execution container treats it as self-framing (renders flush, no extra
+	// padding/background) the same way `markFramedBlockComponent` blocks are treated.
+	readonly [FRAMED_BLOCK_COMPONENT] = true as const;
+	readonly #block = new CachedOutputBlock();
+	readonly #theme: Theme;
+	readonly #build: (width: number) => OutputBlockOptions;
+
+	constructor(theme: Theme, build: (width: number) => OutputBlockOptions) {
+		this.#theme = theme;
+		this.#build = build;
+	}
+
+	render(width: number): readonly string[] {
+		return this.#block.render(this.#build(width), this.#theme);
+	}
+
+	invalidate(): void {
+		this.#block.invalidate();
+	}
+}
+
+/**
  * Build a self-framing tool component backed by a cached output block. The
  * `build` callback returns the block options for a given width; the cache
  * dedupes re-renders. Pass `borderColor: "borderMuted"` for the dim "legacy"
  * look that does not compete with the state-colored framed tools.
  */
 export function framedBlock(theme: Theme, build: (width: number) => OutputBlockOptions): Component {
-	const block = new CachedOutputBlock();
-	// Marked so the tool-execution container treats it as self-framing (renders
-	// flush, no extra padding/background) the same way `markFramedBlockComponent`
-	// blocks are treated.
-	return markFramedBlockComponent({
-		render: (width: number): readonly string[] => block.render(build(width), theme),
-		invalidate: () => block.invalidate(),
-	});
+	return new FramedBlock(theme, build);
 }
