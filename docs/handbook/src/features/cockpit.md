@@ -95,7 +95,9 @@ screen, so the card mixes the composer hairline, the composer outline and the tr
 of the background this terminal reported last time. A reply that contradicts the record takes
 effect on the next frame. Each of the three maps holds its 24 most recently written entries.
 
-Each recorded fact is replaced by a measured one as the session mounts. A tree committed from
+Each recorded fact is replaced by a measured one as the session mounts. The gauge is replaced one
+frame later: the session's first frame states the recorded reading, and the measurement, which
+builds every active tool's schema, runs after that frame is drawn. A tree committed from
 another terminal since the last launch keeps the recorded marker until `git status` answers, about
 130ms in. A project you open for the first time has no dirty marker. The gauge reads `?` only
 until this model has idled somewhere once; after that a new project starts at the model's

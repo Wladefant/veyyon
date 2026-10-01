@@ -65,7 +65,6 @@ import { describeLegacyPromptFile, findLegacyPromptFiles } from "./legacy-system
 import { MCPManager } from "./mcp";
 import { holdCreatedMcpManager, holdSharedMcpManager, type McpManagerRelease } from "./mcp/manager-lease";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory/backend";
-import { recordRestLaunchFacts } from "./modes/launch-facts";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID, mainAgentIdFor } from "./registry/agent-registry";
 import { resolveHarnessProfileForModel, resolvePromptSectionOrderForModel } from "./registry/model-profile";
@@ -221,6 +220,7 @@ import {
 	isLegacyBuiltinToolDefinition,
 	loadSessionCustomTools,
 } from "./session/factory-tools";
+import { deferAtRestReading } from "./session/non-message-tokens";
 import {
 	applySystemPromptOverride,
 	composeAppendPrompt,
@@ -233,7 +233,7 @@ import {
 	loadStartupCustomCommands,
 	loadStartupExtensions,
 } from "./session/startup-extensions";
-import { armLaunchArgot, measureAtRestLaunch, recordNewSessionStart } from "./session/startup-records";
+import { armLaunchArgot, recordAtRestLaunch, recordNewSessionStart } from "./session/startup-records";
 import { buildAdvisorTools, createSessionToolSession } from "./session/tool-session";
 
 let sshCleanupRegistered = false;
@@ -1517,8 +1517,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		secretRuntime.attachSession(session);
 		// The launch card describes the top-level session a launch opens; a spawned agent records nothing.
 		if (agentKind === "main") {
-			const atRest = measureAtRestLaunch(session, settings);
-			void recordRestLaunchFacts(atRest, atRest.contextPercent, atRest.contextLimit);
+			if (options.deferAtRestReading) deferAtRestReading(session);
+			else recordAtRestLaunch(session, settings);
 		}
 
 		armLaunchArgot({

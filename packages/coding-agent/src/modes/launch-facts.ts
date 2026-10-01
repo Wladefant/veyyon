@@ -428,6 +428,32 @@ export interface RestLaunchFactsSource {
 	systemContextTokens: number;
 }
 
+/**
+ * Whether `model` is the configured default role's model, the key every model fact and gauge is
+ * filed under. The role is `provider/id` — comparing it to the bare `model.id` never matched — and
+ * it carries an optional `:thinking` or `@route` suffix, which is why this tests the qualified id as
+ * a PREFIX at a delimiter rather than splitting on a colon the id may contain.
+ */
+function isDefaultRoleModel(model: RestLaunchFactsSource["model"]): boolean {
+	const role = settings.getModelRole("default");
+	const qualified = model?.provider ? `${model.provider}/${model.id}` : model?.id;
+	return (
+		!!role &&
+		!!qualified &&
+		(role === qualified || role.startsWith(`${qualified}:`) || role.startsWith(`${qualified}@`))
+	);
+}
+
+/**
+ * The resting gauge the last launch recorded for `model` in this project, as {@link readLaunchFacts}
+ * states it to the card, or null when `model` is not the default role the record is keyed on, when
+ * nothing is recorded, or when settings are not initialized.
+ */
+export function recordedRestingGauge(model: RestLaunchFactsSource["model"]): number | null {
+	if (!isSettingsInitialized() || !isDefaultRoleModel(model)) return null;
+	return readLaunchFacts().contextPercent;
+}
+
 export function recordRestLaunchFacts(
 	source: RestLaunchFactsSource,
 	contextPercent: number | null,
@@ -441,16 +467,8 @@ export function recordRestLaunchFacts(
 	if (!isSettingsInitialized()) return Promise.resolve();
 	const update: LaunchFactsUpdate = {};
 	// Both model facts are filed under the DEFAULT ROLE, because that string is
-	// what the next launch keys on. The role is `provider/id` — comparing it to
-	// the bare `model.id` never matched — and it carries an optional `:thinking`
-	// or `@route` suffix, which is why this tests the qualified id as a PREFIX at
-	// a delimiter rather than splitting on a colon the id may contain.
-	const role = settings.getModelRole("default");
-	const qualified = source.model?.provider ? `${source.model.provider}/${source.model.id}` : source.model?.id;
-	const isDefaultRole =
-		!!role &&
-		!!qualified &&
-		(role === qualified || role.startsWith(`${qualified}:`) || role.startsWith(`${qualified}@`));
+	// what the next launch keys on.
+	const isDefaultRole = isDefaultRoleModel(source.model);
 
 	// A percentage is a fraction of the window of the model that measured it; a
 	// session runs another model whenever `--model` or `/model` says so, and

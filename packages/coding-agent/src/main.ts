@@ -101,6 +101,7 @@ import type { InteractiveSessionFactory } from "./session/background-sessions";
 import { rootBudgetGroupOwnerId, sessionCpuExecHooks } from "./session/cpu-limit";
 import { loadSessionExtensions } from "./session/factory-extensions";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "./session/factory-options";
+import { recordAtRestLaunch } from "./session/startup-records";
 import { dispatchBuiltinSlashCommand } from "./slash-commands/dispatch";
 import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
@@ -686,6 +687,10 @@ async function runInteractiveMode(
 	// Yield once so the completed first frame can flush to stdout before the background
 	// discovery refresh begins.
 	await yieldToEventLoop();
+	// The session was created with its at-rest reading held so the first frame did not wait on every
+	// tool's schema; take it now and redraw the gauge it measures.
+	recordAtRestLaunch(session, session.settings);
+	mode.ui.requestRender();
 	session.modelRegistry?.refreshInBackground();
 
 	// Subscribed BEFORE the wizard, not after it. The write-side twin of the
@@ -2316,7 +2321,10 @@ async function runSessionLaunch(
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
-	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
+	const created = await createSession(
+		{ ...sessionOptions, ...shared, deferAtRestReading: launch.isInteractive },
+		launch.isInteractive,
+	);
 	const { session } = created;
 	installPersistedAgentReviver(launch, session, eventBus, sessionOptions.enableLsp ?? true);
 	if (launch.parsedArgs.apiKey && !sessionOptions.model && session.model) {

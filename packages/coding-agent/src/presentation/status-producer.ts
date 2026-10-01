@@ -28,10 +28,10 @@ import type {
 } from "@veyyon/wire/presentation";
 import { measureContextGauge } from "../config/compaction-strategy";
 import { settings } from "../config/settings-instance";
-import { recordRestLaunchFacts } from "../modes/launch-facts";
+import { recordedRestingGauge, recordRestLaunchFacts } from "../modes/launch-facts";
 import { accountDisplayLabel, accountsForProvider, buildAccountInventory } from "../session/account-inventory";
 import type { AgentSession } from "../session/agent-session";
-import { computeNonMessageBreakdown } from "../session/non-message-tokens";
+import { computeSystemContextTokens, isAtRestReadingDeferred } from "../session/non-message-tokens";
 import { limitMatchesActiveAccount } from "../slash-commands/helpers/active-oauth-account";
 import { calculateTokensPerSecond } from "./token-rate";
 /**
@@ -186,6 +186,14 @@ interface ContextUsageMemo {
 	systemPromptRef: readonly string[] | undefined;
 	toolsRef: readonly unknown[] | undefined;
 	skillsRef: readonly unknown[] | undefined;
+}
+
+/**
+ * Whether the gauge draws the resting reading the last launch recorded instead of measuring: the host
+ * holds the session's at-rest reading for its first frame, and the session has no message yet.
+ */
+function drawsRecordedGauge(session: AgentSession): boolean {
+	return isAtRestReadingDeferred(session) && (session.messages?.length ?? 0) === 0;
 }
 
 interface ActiveMeter {
@@ -471,8 +479,13 @@ export class StatusPresentationProducer implements StatusDataSource {
 
 	getContextBreakdown(session: AgentSession, autoCompactEnabled: boolean): StatusContextBreakdown {
 		const modelContextWindow = session.model?.contextWindow ?? session.state?.model?.contextWindow ?? 0;
-		const { usedTokens, contextWindow } = this.#contextUsage(session, modelContextWindow);
 		const compactionSettings = autoCompactEnabled ? session.settings?.getGroup?.("compaction") : undefined;
+		if (drawsRecordedGauge(session)) {
+			const gauge = measureContextGauge(null, modelContextWindow, compactionSettings);
+			gauge.contextPercent = recordedRestingGauge(session.state?.model ?? session.model ?? null);
+			return gauge;
+		}
+		const { usedTokens, contextWindow } = this.#contextUsage(session, modelContextWindow);
 		return measureContextGauge(usedTokens, contextWindow, compactionSettings);
 	}
 
@@ -630,15 +643,18 @@ export class StatusPresentationProducer implements StatusDataSource {
 	}
 
 	recordLaunchFacts(contextPercent: number | null, contextLimit: number): void {
+		const session = this.#session;
 		void recordRestLaunchFacts(
 			{
-				model: this.#session.state?.model ?? this.#session.model,
-				thinkingLevel: this.#session.state?.thinkingLevel ?? null,
-				isAutoThinking: this.#session.isAutoThinking,
-				messageCount: this.#session.messages?.length ?? 0,
-				systemContextTokens: computeNonMessageBreakdown(this.#session).systemContextTokens,
+				model: session.state?.model ?? session.model,
+				thinkingLevel: session.state?.thinkingLevel ?? null,
+				isAutoThinking: session.isAutoThinking,
+				messageCount: session.messages?.length ?? 0,
+				systemContextTokens: computeSystemContextTokens(session),
 			},
-			contextPercent,
+			// A recorded gauge drawn back is not a measurement; filing it would copy the model's floor
+			// onto a project that was never measured.
+			drawsRecordedGauge(session) ? null : contextPercent,
 			contextLimit,
 		);
 	}

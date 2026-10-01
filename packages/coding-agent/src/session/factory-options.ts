@@ -266,6 +266,14 @@ export interface CreateAgentSessionOptions {
 	hasUI?: boolean;
 
 	/**
+	 * Hold a top-level session's at-rest reading until the host calls `recordAtRestLaunch` from
+	 * `session/startup-records`, rather than measuring it during creation. The reading builds every
+	 * tool's schema on a cold process; the interactive host sets this and records the reading after
+	 * the session's first frame. Ignored for a spawned agent, which records no reading. Default: false.
+	 */
+	deferAtRestReading?: boolean;
+
+	/**
 	 * Opt-in OpenTelemetry instrumentation forwarded to the underlying Agent.
 	 * Passing `{}` enables the loop's GenAI-semantic-convention spans. See
 	 * {@link AgentTelemetryConfig} for the full surface (hooks, content capture,

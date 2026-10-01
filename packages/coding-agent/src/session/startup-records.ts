@@ -12,9 +12,10 @@ import type { ArgotSession } from "argot";
 import { armArgotAfterStartup, shouldAutoloadArgotAtStartup } from "../argot-cache";
 import { measureContextGauge } from "../config/compaction-strategy";
 import type { Settings } from "../config/settings";
+import { recordRestLaunchFacts } from "../modes/launch-facts";
 import { ARGOT_HANDLES_BANNER } from "../system-prompt-builder/section-registry";
 import type { AgentSession } from "./agent-session";
-import { computeNonMessageBreakdown } from "./non-message-tokens";
+import { computeSystemContextTokens, releaseAtRestReading } from "./non-message-tokens";
 
 type StartRecorder = Pick<SessionManager, "appendSessionInit" | "appendSettingsSnapshot" | "appendCustomMessageEntry">;
 
@@ -59,20 +60,8 @@ export interface AtRestLaunchReading {
 	contextLimit: number;
 }
 
-/**
- * Measure the at-rest reading of a top-level session the moment it exists, not when the status row
- * first renders. The launch card reads the recorded file on every render and repaints when a record
- * lands, so on a cold launch (no recording from a previous session) the hero's model name and
- * provider and the context gauge arrive with the session rather than with the mounted row, and the
- * next launch states them from the first frame. The row re-records the same decision on its own
- * renders against the same gauge; a record that changes nothing does not write.
- *
- * A spawned agent files nothing, so the caller measures only a top-level session. The card describes
- * the top-level session a launch opens. A spawned agent can run the default model with its own system
- * prompt, tools and effort, and filing its reading would hand the next launch a gauge and a rung
- * measured on a prompt that launch never builds.
- */
-export function measureAtRestLaunch(session: AgentSession, settings: Settings): AtRestLaunchReading {
+/** Measure the at-rest reading of a top-level session. */
+function measureAtRestLaunch(session: AgentSession, settings: Settings): AtRestLaunchReading {
 	const usage = session.getContextUsage();
 	const gauge = measureContextGauge(
 		usage?.tokens ?? null,
@@ -84,10 +73,33 @@ export function measureAtRestLaunch(session: AgentSession, settings: Settings): 
 		thinkingLevel: session.state.thinkingLevel ?? null,
 		isAutoThinking: session.isAutoThinking,
 		messageCount: session.messages?.length ?? 0,
-		systemContextTokens: computeNonMessageBreakdown(session).systemContextTokens,
+		systemContextTokens: computeSystemContextTokens(session),
 		contextPercent: gauge.contextPercent,
 		contextLimit: gauge.contextLimit,
 	};
+}
+
+/**
+ * Measure the at-rest reading of a top-level session and file it for the next launch's card, as soon
+ * as the session exists rather than when the status row first renders. The launch card reads the
+ * recorded file on every render and repaints when a record lands, so on a cold launch (no recording
+ * from a previous session) the hero's model name and provider and the context gauge arrive with the
+ * session, and the next launch states them from the first frame. The row re-records the same decision
+ * on its own renders against the same gauge; a record that changes nothing does not write.
+ *
+ * The interactive host creates its session with the reading held (`deferAtRestReading`) and calls
+ * this after the session's first frame, because the reading builds every tool's schema on a cold
+ * process. This ends the hold, so the status row measures from its next render.
+ *
+ * A spawned agent files nothing, so the caller records only a top-level session. The card describes
+ * the top-level session a launch opens. A spawned agent can run the default model with its own system
+ * prompt, tools and effort, and filing its reading would hand the next launch a gauge and a rung
+ * measured on a prompt that launch never builds.
+ */
+export function recordAtRestLaunch(session: AgentSession, settings: Settings): void {
+	releaseAtRestReading(session);
+	const atRest = measureAtRestLaunch(session, settings);
+	void recordRestLaunchFacts(atRest, atRest.contextPercent, atRest.contextLimit);
 }
 
 /** What {@link armLaunchArgot} reads. */
