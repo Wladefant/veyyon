@@ -63,7 +63,7 @@ export interface NodeClosureCensus {
 	lazyMembersOwnAfterBuild: Record<string, number>;
 }
 
-interface ArkNode {
+export interface ArkNode {
 	readonly kind: string;
 	readonly id: string;
 	readonly inner: Readonly<Record<string, unknown>>;
@@ -78,7 +78,7 @@ function isArkNode(value: unknown): value is ArkNode {
 	);
 }
 
-function registeredNodes(): Set<ArkNode> {
+export function registeredNodes(): Set<ArkNode> {
 	const holder: unknown = Reflect.get(globalThis, "$ark");
 	const registry: unknown =
 		typeof holder === "object" && holder !== null ? Reflect.get(holder, "nodesByRegisteredId") : undefined;
@@ -99,7 +99,7 @@ function functionCells(): number {
  * date, a predicate and a morph. Every key and literal carries `salt` so no node comes from the
  * cache of an earlier build.
  */
-function buildBroadSchema(salt: string): unknown {
+export function buildBroadSchema(salt: string): unknown {
 	const props: Record<string, unknown> = {};
 	for (let i = 0; i < 40; i++) props[`option_${salt}_${i}?`] = `'a_${salt}_${i}' | 'b_${salt}_${i}' | ${i}`;
 	props[`name_${salt}`] = "string > 2";

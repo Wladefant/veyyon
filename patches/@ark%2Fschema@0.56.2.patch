@@ -95,6 +95,37 @@ index 3ef69c277c81b348e2812f9ce538df9ddcf0adbf..b9d7e03a3bc2496871e2a69cf9b97e73
      traverse(data, pipedFromCtx) {
          return this(data, pipedFromCtx, null);
      }
+diff --git a/out/parse.js b/out/parse.js
+index 5cb3da607629a71d328f49bcebb81bd151a1e74a..d41c41669e91c9dc36fd9463f03c94e7e2878ddd 100644
+--- a/out/parse.js
++++ b/out/parse.js
+@@ -129,9 +129,12 @@ export const createNode = ({ id, kind, inner, meta, $, ignoreCache }) => {
+     }
+     if (impl.finalizeInnerJson)
+         innerJson = impl.finalizeInnerJson(innerJson);
+-    let json = { ...innerJson };
++    // a node without meta serializes to its inner JSON, so it shares that object and string rather
++    // than building and holding a second copy of each (veyyon patch)
++    const hasMeta = !isEmptyObject(meta);
++    let json = hasMeta ? { ...innerJson } : innerJson;
+     let metaJson = {};
+-    if (!isEmptyObject(meta)) {
++    if (hasMeta) {
+         metaJson = flatMorph(meta, (k, v) => [
+             k,
+             k === "examples" ? v : defaultValueSerializer(v)
+@@ -140,9 +143,9 @@ export const createNode = ({ id, kind, inner, meta, $, ignoreCache }) => {
+     }
+     innerJson = possiblyCollapse(innerJson, impl.collapsibleKey, false);
+     const innerHash = JSON.stringify({ kind, ...innerJson });
+-    json = possiblyCollapse(json, impl.collapsibleKey, false);
++    json = hasMeta ? possiblyCollapse(json, impl.collapsibleKey, false) : innerJson;
+     const collapsibleJson = possiblyCollapse(json, impl.collapsibleKey, true);
+-    const hash = JSON.stringify({ kind, ...json });
++    const hash = hasMeta ? JSON.stringify({ kind, ...json }) : innerHash;
+     // we have to wait until after reduction to return a cached entry,
+     // since reduction can add impliedSiblings
+     if ($.nodesByHash[hash] && !ignoreCache)
 diff --git a/out/roots/root.js b/out/roots/root.js
 index 2176434a7d04020337a07f88304c6d4590f44b3c..0bd018a82f6989e89a39d5604a4e5391f04a0645 100644
 --- a/out/roots/root.js
