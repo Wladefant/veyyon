@@ -317,6 +317,53 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(configuredModel?.contextWindow).toBe(65_536);
 	});
 
+	test("Codex discovery falls back to a resolved non-OAuth token when no OAuth accounts exist", async () => {
+		authStorage.setRuntimeApiKey("openai-codex", "runtime-openai-codex");
+		let modelListCalls = 0;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			modelListCalls++;
+			expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer runtime-openai-codex");
+			return Response.json({
+				models: [
+					{
+						slug: "runtime-codex-model",
+						display_name: "Runtime Codex Model",
+						context_window: 128_000,
+						supported_in_api: true,
+						input_modalities: ["text"],
+					},
+				],
+			});
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refreshProvider("openai-codex", "online");
+		expect(modelListCalls).toBe(1);
+		expect(registry.find("openai-codex", "runtime-codex-model")).toBeDefined();
+	});
+
+	test("Codex discovery aborts (keeps bundled models) when any account credential fails to refresh", async () => {
+		authStorage.close();
+		authStorage = await AuthStorage.create(":memory:", {
+			refreshOAuthCredential: async (_provider, _credId, credential): Promise<OAuthCredentials> => {
+				if (credential.access.includes("expired")) throw new Error("simulated refresh failure");
+				return { ...credential, expires: Date.now() + 3_600_000 };
+			},
+		});
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", access: "fresh-codex", refresh: "refresh-fresh", expires: Date.now() + 3_600_000 },
+			{ type: "oauth", access: "expired-codex", refresh: "refresh-expired", expires: Date.now() - 60_000 },
+		]);
+		let modelListCalls = 0;
+		const fetchMock: FetchImpl = async () => {
+			modelListCalls++;
+			return Response.json({ models: [] });
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refreshProvider("openai-codex", "online");
+		expect(modelListCalls).toBe(0);
+		expect(getModelsForProvider(registry, "openai-codex").length).toBeGreaterThan(0);
+	});
+
 	test("auto-discovers ollama models without provider config", async () => {
 		const fetchMock = mockOllamaDiscovery(["phi4-mini"]);
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });

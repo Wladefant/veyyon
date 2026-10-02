@@ -2,7 +2,7 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
 import { canonicalizeEfforts, type Effort, isEffort } from "../effort";
 import { parseKnownModel, semverEqual } from "../identity/classify";
-import type { ModelReasoningOptions, ModelSpec } from "../types";
+import type { FetchImpl, ModelReasoningOptions, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toNonEmptyString } from "../utils";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
@@ -41,7 +41,7 @@ interface CodexModelEntry {
 	default_reasoning_level?: unknown;
 	supported_reasoning_levels?: unknown;
 	input_modalities?: unknown;
-	visibility?: unknown;
+	supported_in_api?: unknown;
 	priority?: unknown;
 	prefer_websockets?: unknown;
 	use_responses_lite?: unknown;
@@ -72,7 +72,7 @@ export interface CodexModelDiscoveryOptions {
 	/** Abort signal for network request cancellation. */
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
-	fetchFn?: typeof fetch;
+	fetchFn?: FetchImpl;
 	/**
 	 * Called with the reason each route attempt produced nothing.
 	 *
@@ -226,8 +226,8 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 		return null;
 	}
 
-	const visibility = toNonEmptyString(payload.visibility)?.toLowerCase();
-	if (visibility === "hide" || visibility === "hidden") {
+	const supportedInApi = toBoolean(payload.supported_in_api);
+	if (supportedInApi === false) {
 		return null;
 	}
 

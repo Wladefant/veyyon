@@ -43,6 +43,65 @@ describe("openaiCodexModelManagerOptions", () => {
 		expect(models?.map(model => model.id)).toEqual(["gpt-5-codex"]);
 		expect(sawAuth).toContain("codex-secret");
 	});
+
+	it("unions models across multiple accounts and preserves order/dedupes", async () => {
+		const options = openaiCodexModelManagerOptions({
+			resolveAccounts: async () => [
+				{ accessToken: "token-account-1", accountId: "acc-1" },
+				{ accessToken: "token-account-2", accountId: "acc-2" },
+			],
+		});
+		expect(options.dynamicModelsAuthoritative).toBe(true);
+
+		const requestedAccounts: string[] = [];
+		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+			const accountId = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
+			requestedAccounts.push(accountId);
+			const models =
+				accountId === "acc-1"
+					? [{ slug: "model-common" }, { slug: "model-acc1-only" }]
+					: [{ slug: "model-common" }, { slug: "model-acc2-only" }];
+			return new Response(JSON.stringify({ data: models }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+		const models = await options.fetchDynamicModels?.();
+		expect(requestedAccounts).toEqual(["acc-1", "acc-2"]);
+		expect(models?.map(model => model.id)).toEqual(["model-acc1-only", "model-common", "model-acc2-only"]);
+	});
+
+	it("aborts discovery (returns null) when resolveAccounts returns null", async () => {
+		const options = openaiCodexModelManagerOptions({ resolveAccounts: async () => null });
+		let fetchCalled = false;
+		globalThis.fetch = (async () => {
+			fetchCalled = true;
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		expect(await options.fetchDynamicModels?.()).toBeNull();
+		expect(fetchCalled).toBe(false);
+	});
+
+	it("aborts discovery (returns null) when any account fetch fails", async () => {
+		const options = openaiCodexModelManagerOptions({
+			resolveAccounts: async () => [
+				{ accessToken: "token-ok", accountId: "acc-ok" },
+				{ accessToken: "token-fail", accountId: "acc-fail" },
+			],
+		});
+		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+			if (accountId === "acc-ok") {
+				return new Response(JSON.stringify({ data: [{ slug: "model-ok" }] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			return new Response("Unauthorized", { status: 401 });
+		}) as unknown as typeof fetch;
+		expect(await options.fetchDynamicModels?.()).toBeNull();
+	});
 });
 
 describe("cursorModelManagerOptions", () => {
