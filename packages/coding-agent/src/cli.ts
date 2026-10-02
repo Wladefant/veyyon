@@ -534,7 +534,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	if (isProcessEntry && resolved.argv[0] === "launch") {
 		// Deferred import: loading supervisor at module load would evaluate its
 		// dependency graph before setProfile() runs, breaking profile selection.
-		const { shouldSuperviseLaunch, superviseProcess } = await import("./supervisor/process");
+		const { shouldSuperviseLaunch, superviseProcess } = await import("./cli/supervisor/process");
 		if (shouldSuperviseLaunch(resolved.argv.slice(1))) {
 			const { exitCode } = await superviseProcess();
 			process.exitCode = exitCode;
