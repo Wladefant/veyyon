@@ -48,7 +48,6 @@ describe("xai-oauth bundled catalog (regression)", () => {
 		});
 	}
 
-
 	// The OAuth surface's /v1/models reports no per-request output limit, so the
 	// curated catalog owns maxTokens — set to mirror each model's contextWindow
 	// (the openai-responses wire still clamps the actual request to
