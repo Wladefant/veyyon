@@ -5,12 +5,12 @@ import type { ApiKey, FetchImpl, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { fetchAntigravityImageModel } from "@veyyon/catalog/discovery/antigravity";
 import {
 	ANTIGRAVITY_ENDPOINTS,
 	ANTIGRAVITY_PRIMARY_ENDPOINT,
 	ANTIGRAVITY_SANDBOX_ENDPOINT,
 } from "@veyyon/catalog/provider-endpoints";
-import { fetchAntigravityImageModel } from "@veyyon/catalog/discovery/antigravity";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -573,7 +573,9 @@ async function resolveAntigravityImageTarget(
 		});
 		if (advertised?.id) {
 			model = advertised.id;
-			endpoints = [advertised.endpoint];
+			// Keep the discovered endpoint first but retain the other configured
+			// fallbacks so generation retries (429/5xx/network) still fail over.
+			endpoints = [advertised.endpoint, ...endpoints.filter(endpoint => endpoint !== advertised.endpoint)];
 		}
 	} catch {
 		// Keep fallback model and endpoints.
@@ -1409,13 +1411,20 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 					const responseText = parsed.text.length > 0 ? parsed.text.join(" ") : undefined;
 
 					if (parsed.images.length === 0) {
-						return buildNoImageResult({ provider, model: usedModel, responseText, details: { usage: parsed.usage } });
+						return buildNoImageResult({
+							provider,
+							model: usedModel,
+							responseText,
+							details: { usage: parsed.usage },
+						});
 					}
 
 					const imagePaths = await saveImagesToTemp(parsed.images);
 
 					return {
-						content: [{ type: "text", text: buildResponseSummary(provider, usedModel, imagePaths, responseText) }],
+						content: [
+							{ type: "text", text: buildResponseSummary(provider, usedModel, imagePaths, responseText) },
+						],
 						details: {
 							provider,
 							model: usedModel,

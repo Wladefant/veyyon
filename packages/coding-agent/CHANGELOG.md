@@ -8,7 +8,7 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
-- Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation, while preserving configured endpoint failovers ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.

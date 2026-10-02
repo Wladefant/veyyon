@@ -617,6 +617,7 @@ describe("imageGenTool", () => {
 		setPreferredImageProvider("antigravity");
 		const requestUrls: string[] = [];
 		const requestedModels: string[] = [];
+		let capturedRankingContext: { modelId?: string } | undefined;
 		const fetchMock = (async (input: string | URL | Request, init?: RequestInit) => {
 			const url = input.toString();
 			requestUrls.push(url);
@@ -671,17 +672,20 @@ describe("imageGenTool", () => {
 			} as unknown as ReadonlySessionManager,
 			modelRegistry: {
 				getApiKey: async () => undefined,
-				getApiKeyForProvider: async (provider: string) => (provider === "google-antigravity" ? creds : undefined),
+				getApiKeyForProvider: async (provider: string, _sessionId?: string, context?: { modelId?: string }) => {
+					if (provider === "google-antigravity") {
+						capturedRankingContext = context;
+						return creds;
+					}
+					return undefined;
+				},
 				getProviderBaseUrl: () => undefined,
 				getAll: () => [],
 				authStorage: {
 					hasNonEnvCredential: () => false,
 					rotateSessionCredential: async () => false,
 				},
-				resolver: (provider: string) =>
-					provider === "google-antigravity"
-						? () => creds
-						: () => "test-xai-token",
+				resolver: (provider: string) => (provider === "google-antigravity" ? () => creds : () => "test-xai-token"),
 			} as unknown as ModelRegistry,
 			model: undefined,
 			isIdle: () => true,
@@ -704,6 +708,7 @@ describe("imageGenTool", () => {
 		expect(requestedModels).toEqual(["gemini-3.1-flash-image"]);
 		expect(result.details?.provider).toBe("antigravity");
 		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+		expect(capturedRankingContext?.modelId).toBeUndefined();
 	});
 
 	it("re-discovers the image model when withAuth rotates to a sibling Antigravity account", async () => {
@@ -800,5 +805,182 @@ describe("imageGenTool", () => {
 		]);
 		expect(result.details?.provider).toBe("antigravity");
 		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+	});
+
+	it("fails over to the sandbox endpoint in auto mode after a production 5xx", async () => {
+		setPreferredImageProvider("antigravity");
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes(":fetchAvailableModels")) {
+				requestUrls.push(url);
+				return new Response(JSON.stringify({ imageGenerationModelIds: ["gemini-3.1-flash-image"] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			if (url.includes("streamGenerateContent")) {
+				requestUrls.push(url);
+				if (url.startsWith("https://daily-cloudcode-pa.googleapis.com/")) {
+					return new Response(JSON.stringify({ error: { message: "backend unavailable" } }), {
+						status: 503,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(
+					`data: ${JSON.stringify({
+						response: {
+							candidates: [
+								{
+									content: {
+										parts: [
+											{
+												inlineData: {
+													data: Buffer.from("sandbox-antigravity-image").toString("base64"),
+													mimeType: "image/png",
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					})}\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			}
+			throw new Error(`Unexpected provider request: ${url}`);
+		}) as unknown as typeof fetch;
+		const creds = JSON.stringify({ token: "test-token", projectId: "test-project" });
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => (provider === "google-antigravity" ? creds : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: () => false,
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => (provider === "google-antigravity" ? () => creds : () => "test-xai-token"),
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-antigravity-failover", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual([
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+			"https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+		]);
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+		const savedPath = result.details?.imagePaths[0];
+		if (!savedPath) throw new Error("Expected generated image path");
+		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("sandbox-antigravity-image"));
+	});
+
+	it("prioritizes the advertised endpoint when discovered on a fallback host", async () => {
+		setPreferredImageProvider("antigravity");
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes(":fetchAvailableModels")) {
+				requestUrls.push(url);
+				if (url.startsWith("https://daily-cloudcode-pa.googleapis.com/")) {
+					return new Response(JSON.stringify({ error: { message: "primary discovery unavailable" } }), {
+						status: 503,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(JSON.stringify({ imageGenerationModelIds: ["gemini-3.1-flash-image"] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			if (url.includes("streamGenerateContent")) {
+				requestUrls.push(url);
+				if (url.startsWith("https://daily-cloudcode-pa.googleapis.com/")) {
+					return new Response(JSON.stringify({ error: { message: "primary host was not advertised" } }), {
+						status: 404,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(
+					`data: ${JSON.stringify({
+						response: {
+							candidates: [
+								{
+									content: {
+										parts: [
+											{
+												inlineData: {
+													data: Buffer.from("sandbox-advertised-image").toString("base64"),
+													mimeType: "image/png",
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					})}\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			}
+			throw new Error(`Unexpected provider request: ${url}`);
+		}) as unknown as typeof fetch;
+		const creds = JSON.stringify({ token: "test-token", projectId: "test-project" });
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => (provider === "google-antigravity" ? creds : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: () => false,
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => (provider === "google-antigravity" ? () => creds : () => "test-xai-token"),
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-antigravity-sandbox-advertised",
+			{ subject: "a cat" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual([
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+			"https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
+			"https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+		]);
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+		const savedPath = result.details?.imagePaths[0];
+		if (!savedPath) throw new Error("Expected generated image path");
+		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("sandbox-advertised-image"));
 	});
 });
