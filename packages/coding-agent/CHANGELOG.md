@@ -44,6 +44,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Fixed Nerd Font symbols drawing the D3.js icon for C# files and the Microsoft logo for the context meter; they now use the C# and generic window icons ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hard `session_stop` blocks survive the advisory continuation limit, reasonless blocks retain a fallback instruction, and aborted turns cannot schedule stale stop feedback ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved bearer token fallback when discovering OpenAI Codex models without stored OAuth accounts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed timed-out or interrupted glob searches keeping native filesystem workers alive and blocking subsequent agent turns (oh-my-pi 510f9e05c7397c69f373f01d4d4f098e917aa2e3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
