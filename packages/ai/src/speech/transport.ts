@@ -23,25 +23,29 @@ export async function postSpeechRequest(
 	const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 	const fetchImpl = options.fetch ?? fetch;
 	const label = `${model.provider}/${model.id}`;
+	const seenKeys = new Set<string>();
+	if (typeof options.apiKey === "string" && options.apiKey.length > 0) seenKeys.add(options.apiKey);
 	const audio = await withAuth(
 		options.apiKey,
 		async key => {
+			if (typeof key === "string" && key.length > 0) seenKeys.add(key);
 			const modelWithResolve = model as {
 				resolveHeaders?: (signal?: AbortSignal) => Promise<Record<string, string>> | Record<string, string>;
 			};
 			const configuredHeaders = modelWithResolve.resolveHeaders
 				? await modelWithResolve.resolveHeaders(signal)
 				: model.headers;
-			const headers: Record<string, string> = {};
+			const headers = new Headers();
 			if (configuredHeaders) {
-				for (const [name, value] of Object.entries(configuredHeaders)) {
-					if (name.toLowerCase() === "authorization") continue;
-					headers[name] = String(value);
+				const entries =
+					configuredHeaders instanceof Headers ? configuredHeaders.entries() : Object.entries(configuredHeaders);
+				for (const [name, value] of entries) {
+					if (name.toLowerCase() !== "authorization") headers.set(name, String(value));
 				}
 			}
-			headers.Authorization = `Bearer ${key}`;
-			headers["Content-Type"] = "application/json";
-			headers["User-Agent"] = USER_AGENT;
+			headers.set("Authorization", `Bearer ${key}`);
+			headers.set("Content-Type", "application/json");
+			headers.set("User-Agent", USER_AGENT);
 
 			const response = await fetchImpl(`${model.baseUrl.replace(/\/+$/, "")}${path}`, {
 				method: "POST",
@@ -50,13 +54,12 @@ export async function postSpeechRequest(
 				signal,
 			});
 			if (!response.ok) {
-				const detail = await response.text();
+				let detail = AIError.redactProviderSecrets(await response.text());
+				for (const secret of seenKeys) detail = detail.replaceAll(secret, "[redacted]");
 				throw new SpeechApiError(
 					`${label} speech API failed (${response.status}): ${detail.slice(0, 300)}`,
 					response.status,
-					{
-						headers: response.headers,
-					},
+					{ headers: response.headers },
 				);
 			}
 			return new Uint8Array(await response.arrayBuffer());
