@@ -1,12 +1,10 @@
+// WHY: SQLite startup must release failed connections, retry real contention within a bound,
+// install timeout policy before initialization, and publish WAL frames to the main file.
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import {
-	annotateSqliteError,
-	checkpointWal,
-	isSqliteBusyError,
-	isSqliteCorruptionError,
-	openSqliteDatabase,
-} from "../src/sqlite";
+import * as fs from "node:fs";
+import { getDbBusyTimeoutMs } from "../src/env";
+import { checkpointWal, isSqliteBusyError, isSqliteCorruptionError, openSqliteDatabase } from "../src/sqlite";
 import { TempDir } from "../src/temp";
 
 describe("openSqliteDatabase", () => {
@@ -53,36 +51,72 @@ describe("openSqliteDatabase", () => {
 		expect(caught?.code).toBe("SQLITE_ERROR");
 	});
 
-	it("negative control: without path attribution the error message lacks the database path", () => {
-		const db = new Database(":memory:");
-		let rawError: Error | undefined;
-		try {
-			db.run("SELECT * FROM non_existent_table");
-		} catch (err) {
-			rawError = err instanceof Error ? err : new Error(String(err));
-		} finally {
-			db.close();
-		}
-
-		expect(rawError).toBeDefined();
-		expect(rawError?.message).not.toContain('Database "/some/test/path":');
-		const annotated = annotateSqliteError(rawError, "/some/test/path");
-		expect(annotated.message).toContain('Database "/some/test/path":');
-	});
-
-	it("checkpointWal runs passive WAL checkpoint without error", async () => {
+	it("checkpointWal publishes committed WAL content into the main database file", async () => {
 		await using dir = await TempDir.create("@veyyon-sqlite-wal-");
 		const dbPath = dir.join("wal.db");
+		const sentinel = "veyyon-checkpoint-committed-marker";
 		await openSqliteDatabase(dbPath, db => {
 			try {
 				db.run("PRAGMA journal_mode = WAL");
-				db.run("CREATE TABLE t (id INT)");
+				db.run("PRAGMA wal_autocheckpoint = 0");
+				db.run("CREATE TABLE events (value TEXT)");
+				db.run("INSERT INTO events VALUES (?)", [sentinel]);
+				expect(fs.readFileSync(dbPath).includes(Buffer.from(sentinel))).toBe(false);
 				checkpointWal(db);
+				expect(fs.readFileSync(dbPath).includes(Buffer.from(sentinel))).toBe(true);
 			} finally {
 				db.close();
 			}
 		});
 	});
+
+	it.each([true, false])(
+		"real BUSY contention terminates within its attempt bound, transient=%s",
+		async transient => {
+			await using dir = await TempDir.create("@veyyon-sqlite-lock-");
+			const dbPath = dir.join("busy.db");
+			const blocker = new Database(dbPath);
+			blocker.run("CREATE TABLE events (value TEXT)");
+			blocker.run("BEGIN IMMEDIATE");
+			let attempts = 0;
+			let rows: unknown;
+			let failure: unknown;
+			try {
+				try {
+					rows = await openSqliteDatabase(dbPath, db => {
+						attempts++;
+						expect(db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout).toBe(
+							getDbBusyTimeoutMs(),
+						);
+						db.run("PRAGMA busy_timeout = 1");
+						try {
+							db.run("INSERT INTO events VALUES ('opened')");
+						} catch (error) {
+							if (transient && attempts === 1) blocker.run("ROLLBACK");
+							throw error;
+						}
+						const values = db.query("SELECT value FROM events").all();
+						db.close();
+						return values;
+					});
+				} catch (error) {
+					failure = error;
+				}
+				if (transient) {
+					expect(failure).toBeUndefined();
+					expect(attempts).toBe(2);
+					expect(rows).toEqual([{ value: "opened" }]);
+				} else {
+					expect(attempts).toBe(4);
+					expect(failure).toMatchObject({ code: "SQLITE_BUSY" });
+					expect((failure as Error).message).toContain(dbPath);
+				}
+			} finally {
+				blocker.close();
+			}
+		},
+		10000,
+	);
 
 	it("classifies SQLite busy and corruption error codes accurately", () => {
 		expect(isSqliteBusyError({ code: "SQLITE_BUSY" })).toBeTrue();
