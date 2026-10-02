@@ -113,10 +113,7 @@ describe("codex SSE request body zstd compression", () => {
 			expect(headers.get("content-type")).toContain("application/json");
 			if (!(body instanceof Uint8Array)) throw new Error("expected a compressed binary body");
 			// A zstd frame begins with the magic number 0xFD2FB528 (little-endian).
-			expect(body[0]).toBe(0x28);
-			expect(body[1]).toBe(0xb5);
-			expect(body[2]).toBe(0x2f);
-			expect(body[3]).toBe(0xfd);
+			expect(Array.from(body.subarray(0, 4))).toEqual([0x28, 0xb5, 0x2f, 0xfd]);
 
 			const decompressed = new TextDecoder().decode(Bun.zstdDecompressSync(body));
 			expect(decompressed).toBe(JSON.stringify(PINNED_PAYLOAD));
@@ -137,18 +134,29 @@ describe("codex SSE request body zstd compression", () => {
 	it.each([400, 415])("retries uncompressed when server rejects compressed request with %i", async status => {
 		const tempDir = TempDir.createSync("@temp-zstd-fallback-");
 		setAgentDir(tempDir.path());
-		const cancelSpy = vi.spyOn(ReadableStream.prototype, "cancel");
+		let rejectedBodyCanceled = false;
+		let canceledBeforeRetry = false;
 		const attempts: Array<{ headers: Headers; body: RequestInit["body"] }> = [];
 
 		const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
 			const headers = new Headers(init?.headers);
 			attempts.push({ headers, body: init?.body });
 			if (attempts.length === 1) {
-				return new Response(JSON.stringify({ error: { message: "Rejected" } }), {
+				const response = new Response(JSON.stringify({ error: { message: "Rejected" } }), {
 					status,
 					headers: { "content-type": "application/json" },
 				});
+				// Retry classification reads a clone; observe cancellation of the original body.
+				Object.defineProperty(response, "body", {
+					value: new ReadableStream({
+						cancel() {
+							rejectedBodyCanceled = true;
+						},
+					}),
+				});
+				return response;
 			}
+			canceledBeforeRetry = rejectedBodyCanceled;
 			return new Response(createCompletedCodexSse("Success after retry"), {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -161,13 +169,13 @@ describe("codex SSE request body zstd compression", () => {
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
+		expect(canceledBeforeRetry).toBe(true);
 		expect(attempts).toHaveLength(2);
 		expect(attempts[0].headers.get("content-encoding")).toBe("zstd");
 		expect(attempts[0].body instanceof Uint8Array).toBe(true);
-		expect(new TextDecoder().decode(Bun.zstdDecompressSync(attempts[0].body as Uint8Array))).toContain("Say hello");
-		expect(cancelSpy).toHaveBeenCalled();
+		const decoded = new TextDecoder().decode(Bun.zstdDecompressSync(attempts[0].body as Uint8Array));
 		expect(attempts[1].headers.has("content-encoding")).toBe(false);
-		expect(typeof attempts[1].body).toBe("string");
+		expect(JSON.parse(attempts[1].body as string)).toEqual(JSON.parse(decoded));
 	});
 
 	it("does not compress with zstd when using a non-official baseUrl", async () => {
