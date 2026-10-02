@@ -705,6 +705,7 @@ async function generateModels() {
 	}
 	if (!authoritativeCatalogProviders.has("muse-code")) {
 		allModels.push(...MUSE_CODE_STATIC_MODELS);
+	}
 	// Seed the GMI Cloud default model so a fresh install (and a regen without a
 	// `GMI_API_KEY`) still resolves the descriptor's `defaultModel` synchronously
 	// at boot. If live `/v1/models` discovery succeeds, it is authoritative.
