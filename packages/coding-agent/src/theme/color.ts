@@ -3,8 +3,10 @@
 // Owned here per the theme boundary split; theme.ts re-exports the public
 // surface so external imports are unchanged.
 
+import { getTerminalInfo } from "@veyyon/tui/terminal-capabilities";
 import { SGR_BG_RESET, SGR_FG_RESET } from "@veyyon/utils/ansi";
 import { colorLuma } from "@veyyon/utils/color";
+import { detectTerminalId } from "@veyyon/utils/terminal-emulator";
 import { isRecord } from "@veyyon/utils/type-guards";
 import {
 	type ColorValue,
@@ -346,22 +348,12 @@ export type ColorMode = "truecolor" | "256color";
 // Color Utilities
 // ============================================================================
 
-export function detectColorMode(): ColorMode {
-	const colorterm = Bun.env.COLORTERM;
-	if (colorterm === "truecolor" || colorterm === "24bit") {
-		return "truecolor";
-	}
-	// Windows Terminal supports truecolor
-	if (Bun.env.WT_SESSION) {
-		return "truecolor";
-	}
-	const term = Bun.env.TERM || "";
-	// Only fall back to 256color for truly limited terminals
-	if (term === "dumb" || term === "" || term === "linux") {
-		return "256color";
-	}
-	// Assume truecolor for everything else - virtually all modern terminals support it
-	return "truecolor";
+/** Resolve theme color depth from the shared terminal capability model. */
+export function detectColorMode(env: NodeJS.ProcessEnv = Bun.env): ColorMode {
+	// Windows Terminal supports truecolor but sets no COLORTERM or TERM_PROGRAM.
+	if (env.WT_SESSION) return "truecolor";
+	const terminal = getTerminalInfo(detectTerminalId(env), process.platform, env);
+	return terminal.trueColor ? "truecolor" : "256color";
 }
 
 export function colorToAnsi(color: string, mode: ColorMode): string {
