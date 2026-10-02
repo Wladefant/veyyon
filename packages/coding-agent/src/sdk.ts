@@ -41,7 +41,7 @@ import { ModelRegistry } from "./config/model-registry";
 import { buildServiceTierByFamily } from "./config/service-tier";
 import { Settings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
-import { createBridgeEditTool } from "./cursor-bridge-tools";
+import { createBridgeEditToolProvider } from "./cursor-bridge-tools";
 import { initializeWithSettings } from "./discovery";
 import { setActiveRules } from "./discovery/capability/rule";
 import { bucketRules } from "./discovery/capability/rule-buckets";
@@ -976,10 +976,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: toolRegistry,
 			getToolContext: () => toolContextStore.getContext(),
 			emitEvent: event => cursorEventEmitter?.(event),
-			getEditReplaceTool: () => {
-				if (!toolRegistry.has("edit")) return undefined;
-				return createBridgeEditTool(toolSession, extensionRunner);
-			},
+			getEditReplaceTool: createBridgeEditToolProvider(toolRegistry, toolSession, extensionRunner),
 		});
 
 		// Keep prompt placement and provider-schema pruning on one per-model

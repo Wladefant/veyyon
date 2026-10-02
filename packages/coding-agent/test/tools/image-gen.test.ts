@@ -3,15 +3,15 @@ import type { Model } from "@veyyon/ai";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
+import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
+import { removeWithRetries } from "@veyyon/utils";
 import {
 	getImageGenTools,
 	getImageGenToolsWithRegistry,
 	imageGenTool,
 	isImageProviderPreference,
 	setPreferredImageProvider,
-} from "@veyyon/coding-agent/tools/web/image-gen";
-import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
-import { removeWithRetries } from "@veyyon/utils";
+} from "../../src/tools/web/image-gen";
 
 /**
  * isImageProviderPreference guards the persisted image-provider setting so an unknown or
@@ -492,6 +492,57 @@ describe("imageGenTool", () => {
 
 		expect(requestUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
 		expect(result.details?.provider).toBe("openai-codex");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
+	// A provider preference must not block a credentialed provider that supports
+	// the requested ratio; this does not cover HTTP-error fallback.
+	it("skips a credentialed preferred provider with an incompatible aspect ratio", async () => {
+		setPreferredImageProvider("gemini");
+		const requestUrls: string[] = [];
+		const ctx: CustomToolContext = {
+			fetch: async input => {
+				requestUrls.push(input.toString());
+				return new Response(
+					JSON.stringify({ data: [{ b64_json: Buffer.from("ratio-fallback-image").toString("base64") }] }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			},
+			sessionManager: {
+				getCwd: () => "/repo",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "google") return "test-gemini-token";
+					if (provider === "xai-oauth") return "test-xai-token";
+					return undefined;
+				},
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => async () =>
+					provider === "google" ? "test-gemini-token" : "test-xai-token",
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-ratio-fallback",
+			{ subject: "a cat", aspect_ratio: "3:2" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+		expect(requestUrls).toEqual(["https://api.x.ai/v1/images/generations"]);
+		expect(result.details?.provider).toBe("xai");
 		expect(result.details?.imageCount).toBe(1);
 	});
 

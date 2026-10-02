@@ -133,8 +133,8 @@ fn translate_unix_drive_path(path: &Path) -> Option<PathBuf> {
 	native.push(char::from(drive).to_ascii_uppercase());
 	native.push(':');
 	native.push('\\');
-	for &byte in tail {
-		native.push(if is_path_separator(byte) { '\\' } else { char::from(byte) });
+	for character in raw[raw.len() - tail.len()..].chars() {
+		native.push(if character == '/' { '\\' } else { character });
 	}
 	Some(PathBuf::from(native))
 }
@@ -164,10 +164,6 @@ fn drive_alias_parts(bytes: &[u8]) -> Option<(u8, &[u8])> {
 	None
 }
 
-#[cfg(any(windows, test))]
-const fn is_path_separator(byte: u8) -> bool {
-	byte == b'/' || byte == b'\\'
-}
 
 #[cfg(test)]
 mod tests {

@@ -43,6 +43,60 @@ describe("openaiCodexModelManagerOptions", () => {
 		expect(models?.map(model => model.id)).toEqual(["gpt-5-codex"]);
 		expect(sawAuth).toContain("codex-secret");
 	});
+
+	it("unions models across multiple accounts and preserves order/dedupes", async () => {
+		const options = openaiCodexModelManagerOptions({
+			resolveAccounts: async () => [
+				{ accessToken: "tok-1", accountId: "acc-1" },
+				{ accessToken: "tok-2", accountId: "acc-2" },
+			],
+		});
+		expect(options.dynamicModelsAuthoritative).toBe(true);
+		const requested: string[] = [];
+		globalThis.fetch = (async (_u: unknown, init?: RequestInit) => {
+			const id = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
+			requested.push(id);
+			return Response.json({ data: [{ slug: id === "acc-1" ? "m-1" : "m-2" }, { slug: "m-common" }] });
+		}) as unknown as typeof fetch;
+		const models = await options.fetchDynamicModels?.();
+		expect(requested).toEqual(["acc-1", "acc-2"]);
+		expect(models?.map(m => m.id)).toEqual(["m-1", "m-common", "m-2"]);
+	});
+
+	it("aborts discovery (returns null) when resolveAccounts returns null", async () => {
+		let called = false;
+		globalThis.fetch = (async () => {
+			called = true;
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		expect(
+			await openaiCodexModelManagerOptions({ resolveAccounts: async () => null }).fetchDynamicModels?.(),
+		).toBeNull();
+		expect(called).toBe(false);
+	});
+
+	it("aborts discovery (returns null) when any account fetch fails", async () => {
+		const options = openaiCodexModelManagerOptions({
+			resolveAccounts: async () => [
+				{ accessToken: "tok-ok", accountId: "acc-ok" },
+				{ accessToken: "tok-fail", accountId: "acc-fail" },
+			],
+		});
+		globalThis.fetch = (async (_u: unknown, init?: RequestInit) =>
+			new Headers(init?.headers).get("chatgpt-account-id") === "acc-ok"
+				? Response.json({ data: [{ slug: "ok" }] })
+				: new Response("Unauthorized", { status: 401 })) as unknown as typeof fetch;
+		expect(await options.fetchDynamicModels?.()).toBeNull();
+	});
+
+	it("namespaces cache under union-v1 and isolates distinct account fingerprints", () => {
+		expect(openaiCodexModelManagerOptions().cacheProviderId).toBe("openai-codex:union-v1");
+		const a = openaiCodexModelManagerOptions({ accountFingerprint: "a" });
+		const b = openaiCodexModelManagerOptions({ accountFingerprint: "a\u0000b" });
+		expect(a.cacheProviderId).toBe("openai-codex:union-v1:a");
+		expect(b.cacheProviderId).toBe("openai-codex:union-v1:a\u0000b");
+		expect(a.cacheProviderId).not.toBe(b.cacheProviderId);
+	});
 });
 
 describe("cursorModelManagerOptions", () => {

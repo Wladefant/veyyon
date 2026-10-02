@@ -38,6 +38,7 @@ const RETRY_DECISION: Record<string, boolean> = {
 	ThinkingLoop: true,
 	StaleResponsesItem: true,
 	ProviderFinishError: true,
+	EmptyResponse: true,
 	// Owned by the credential-rotation layer, which retries against a DIFFERENT
 	// account. Retriable at the session level for that reason, and deliberately
 	// not retriable at the provider level (asserted in the corpus block below).
@@ -127,6 +128,7 @@ const FRAME_BAIT_TEXT: Record<keyof typeof AIError.Flag, string> = {
 	ThinkingLoop: "model repeated the same thinking block",
 	StaleResponsesItem: "Item with id 'rs_abc' not found. previous_response expired",
 	ProviderFinishError: "Provider finish_reason: error",
+	EmptyResponse: "thought-only response without final output",
 	UsageLimit: "You've reached your usage limit. Upgrade to increase your limit.",
 	MalformedFunctionCall: "MALFORMED_FUNCTION_CALL",
 	Timeout: "Request timed out after 60000ms",
@@ -330,6 +332,7 @@ describe("a stack trace is not evidence about the failure", () => {
 			"AuthFailed",
 			"ContentBlocked",
 			"ContextOverflow",
+			"EmptyResponse",
 			"MalformedFunctionCall",
 			"ProviderFinishError",
 			"Timeout",

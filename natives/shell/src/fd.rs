@@ -690,7 +690,7 @@ fn search(
 	let separator = cli
 		.path_separator
 		.clone()
-		.unwrap_or_else(|| std::path::MAIN_SEPARATOR.to_string());
+		.unwrap_or_else(|| "/".to_string());
 	let config = SearchConfig {
 		base_dir,
 		absolute_roots,
@@ -1593,11 +1593,11 @@ fn root_was_absolute(path: &Path, roots: &[PathBuf]) -> bool {
 }
 
 fn normalize_display_path(path: &Path) -> String {
-	path.to_string_lossy().replace('\\', "/")
+	veyyon_walker::normalize_path(path).into_owned()
 }
 
 fn normalize_os_str(value: &OsStr) -> String {
-	value.to_string_lossy().replace('\\', "/")
+	normalize_display_path(Path::new(value))
 }
 
 fn format_path(template: &str, path: &Path, display: &str) -> String {
