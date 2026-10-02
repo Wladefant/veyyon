@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the GMI Cloud provider (`gmi-cloud`) with dynamic model discovery and bundled default model seed ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the `openai-codex` subscription fields: 1M context for `gpt-5.6-*`, a `maxContextWindow` ceiling (872K, 922K for Astra and GPT-6.1 Sol), `longContext` pricing above 272K, `serviceTierCost` for flex and priority, zero cache-write cost for GPT-6 subscription models, the `gpt-daybreak-blue-latest` price, and the hidden `gpt-image-2` image runner ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added `getBundledChatModels` and `resolveSessionContextWindow`, which cap a session at the standard-pricing window unless extended context is on ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 ### Changed

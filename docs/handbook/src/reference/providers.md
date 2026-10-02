@@ -99,6 +99,7 @@ Each provider has one or more environment variables that supply a key when no st
 |---|---|
 | `cerebras` | `CEREBRAS_API_KEY` |
 | `command-code` | `CMD_API_KEY`, then `COMMAND_CODE_API_KEY`, then `COMMANDCODE_API_KEY` |
+| `gmi-cloud` | `GMI_API_KEY` |
 | `deepseek` | `DEEPSEEK_API_KEY` |
 | `fireworks` | `FIREWORKS_API_KEY` |
 | `together` | `TOGETHER_API_KEY` |

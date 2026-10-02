@@ -1090,6 +1090,43 @@ export function projectOpenAIProReasoningAliases(models: readonly ModelSpec<Api>
 	return out;
 }
 
+const GMI_CLOUD_BASE_URL = "https://api.gmi-serving.com/v1";
+
+/**
+ * Bundled fallback seed for GMI Cloud. Generation has no `GMI_API_KEY`, so a
+ * regen without credentials would leave the provider slice empty and the
+ * declared `defaultModel` unresolvable on a fresh install before the async
+ * runtime discovery fires. Live `/v1/models` discovery is authoritative and
+ * replaces this seed.
+ */
+export const GMI_CLOUD_STATIC_MODELS: readonly ModelSpec<"openai-completions">[] = [
+	{
+		id: "deepseek-ai/DeepSeek-V4-Flash",
+		name: "DeepSeek V4 Flash",
+		api: "openai-completions",
+		provider: "gmi-cloud",
+		baseUrl: GMI_CLOUD_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0.14, output: 0.28, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1048576,
+		maxTokens: 384000,
+		thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+	},
+];
+
+export interface GmiCloudModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function gmiCloudModelManagerOptions(
+	config?: GmiCloudModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions("gmi-cloud", GMI_CLOUD_BASE_URL, config);
+}
+
 // ---------------------------------------------------------------------------
 // 2. Groq
 // ---------------------------------------------------------------------------

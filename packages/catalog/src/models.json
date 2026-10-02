@@ -27924,6 +27924,27 @@
 			"supportsTools": true
 		}
 	},
+	"gmi-cloud": {
+		"deepseek-ai/DeepSeek-V4-Flash": {
+			"id": "deepseek-ai/DeepSeek-V4-Flash",
+			"name": "DeepSeek V4 Flash",
+			"api": "openai-completions",
+			"provider": "gmi-cloud",
+			"baseUrl": "https://api.gmi-serving.com/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.14,
+				"output": 0.28,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 384000
+		}
+	},
 	"google": {
 		"deep-research-max-preview-04-2026": {
 			"id": "deep-research-max-preview-04-2026",
