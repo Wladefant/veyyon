@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
-### Added
+### Fixed
+
+- Fixed file search silently clamping `limit` above 200 and then advising a `Use limit=` retry it would clamp straight back: a clamped request now says so, the suggestion is capped at 200, and at the cap the notice reports the count alone ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4997d101c2674e484595bf2b3d0dfa9e3d71c2db).
+- Fixed Windows stdio MCP servers launched through `.cmd`/`.bat` shims failing with `Transport closed`; the launch now builds a `cmd.exe /d /e:ON /v:OFF /c` command line escaped for `cmd.exe`'s parser and spawned with `windowsVerbatimArguments`, so the command runs and arguments (including `%VAR%`, quotes, and shell metacharacters) reach the server intact and cannot inject commands (BatBadBut / CVE-2024-24576) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 07889331103b8b0f3da532d7dc3ceb0a5c2c6de5).
+- Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
 - Hard-refusal fail-closed guard preventing any agent from merging a PR or pushing to `main` on `Bavariance/polysimulator` across `git push`, `gh pr merge`, `gh api` and the `github` tool ([#174](https://github.com/Wladefant/veyyon/pull/174)).
 - Terminate the mnemopi embedding worker subprocess after a configurable idle period (`mnemopi.embedIdleUnloadMs`, default 5 minutes, clamped to the 2147483647 ms a `setTimeout` delay can hold) and lazily relaunch it on the next embed request, releasing the loaded ONNX model's ~1.25 GB commit charge during idle periods ([#54](https://github.com/Wladefant/veyyon/issues/54)).
@@ -14,6 +18,7 @@
 
 ### Changed
 
+- Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch-facts` moved from `modes/` to `config/`, so the session reads its record of the project at rest without an allow-list entry in the session-does-not-import-the-UI gate ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -28,6 +33,7 @@
 
 ### Fixed
 - Fixed `veyyon --smoke-test` deleting sibling directories in temporary storage by scoping dead daemon runtime directory cleanup to the `daemons` container and 16-hex scope keys, and isolating distribution smoke test runtimes under a private parent ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed MCP reconnects erasing peer server outcomes, keeping connected and failed peer statuses intact when one server reconnects and tracking a dedicated reconnecting lifecycle event ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 735551bd8518ebad2877d127a07cd2296557f813).
 - Fixed authoritative providers (e.g. `openai-codex`) refreshing expired OAuth credentials when a fresh cache exists, preventing unsupported bundled models from remaining selectable ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed image generation auto-detection to fall through when an official OpenAI Codex API key lacks ChatGPT subscription account claims (oh-my-pi d124cf286e08829c8db41a9a11a560468ff9f113, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Codex web search now accepts valid email-only OAuth credentials without requiring or fabricating a ChatGPT-Account-Id header (oh-my-pi e3198485aa15c6178675f543d7f9e0b7f7c2c623, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
