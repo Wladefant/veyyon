@@ -27,6 +27,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Deferred projected native thinking end events in the leaked-thinking stream wrapper until their source block ends, preserving signatures on late completion ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 764a1f7e9c06ef40953e9b7a8bbafddc168fcd34).
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
