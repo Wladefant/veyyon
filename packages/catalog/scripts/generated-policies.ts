@@ -62,7 +62,7 @@ const CODEX_GPT_5_4_PRIORITY_BY_VARIANT: Partial<Record<OpenAIVariant, number>> 
 	nano: 2,
 };
 
-const CODEX_GPT_5_6_372K_MODEL_IDS: Record<string, true> = {
+const CODEX_GPT_5_6_1M_MODEL_IDS: Record<string, true> = {
 	"gpt-5.6-luna": true,
 	"gpt-5.6-sol": true,
 	"gpt-5.6-terra": true,
@@ -422,7 +422,7 @@ function applyOpenAICatalogPolicy(model: ModelSpec<Api>, parsedModel: OpenAIMode
 	// discovery under-reports it — omitting the field for some accounts and
 	// actively returning 272000 for others (#5705, #6259). Pin the true 372K
 	// input window on the bundled catalog; discovery enforces the same floor.
-	if (model.api === "openai-codex-responses" && CODEX_GPT_5_6_372K_MODEL_IDS[model.id]) {
-		model.contextWindow = 372000;
+	if (model.api === "openai-codex-responses" && CODEX_GPT_5_6_1M_MODEL_IDS[model.id]) {
+		model.contextWindow = Math.max(model.contextWindow ?? 0, 1_000_000);
 	}
 }

@@ -444,9 +444,9 @@ describe("generated model policies", () => {
 
 		applyGeneratedModelPolicies(models);
 
-		expect(models[0]?.contextWindow).toBe(372000);
-		expect(models[1]?.contextWindow).toBe(372000);
-		expect(models[2]?.contextWindow).toBe(372000);
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[1]?.contextWindow).toBe(1_000_000);
+		expect(models[2]?.contextWindow).toBe(1_000_000);
 		expect(models[3]?.contextWindow).toBe(1050000);
 		expect(models[4]?.contextWindow).toBe(272000);
 	});

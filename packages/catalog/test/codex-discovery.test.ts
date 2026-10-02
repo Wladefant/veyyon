@@ -215,7 +215,47 @@ describe("Codex model discovery", () => {
 		expect(future?.applyPatchToolType).toBeUndefined();
 	});
 
-	it("floors GPT-5.6 SKUs to 372K when upstream actively reports 272000 (#6259)", async () => {
+	it("floors GPT-5.6 luna/sol/terra at the 1M window when upstream omits context_window (#5705)", async () => {
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-5.6-sol",
+								display_name: "GPT-5.6-Sol",
+								default_reasoning_level: "medium",
+								supported_reasoning_levels: ["low", "medium", "high"],
+								input_modalities: ["text", "image"],
+								supported_in_api: true,
+							},
+							{
+								slug: "gpt-5.5",
+								display_name: "GPT-5.5",
+								default_reasoning_level: "high",
+								supported_reasoning_levels: ["low", "high"],
+								input_modalities: ["text"],
+								supported_in_api: true,
+							},
+						],
+					}),
+				),
+			{ preconnect() {} },
+		);
+		const result = await fetchCodexModels({
+			accessToken: "test-token",
+			baseUrl: "https://codex.example/backend-api",
+			clientVersion: "0.144.1",
+			fetchFn,
+		});
+
+		const sol = result?.models.find(model => model.id === "gpt-5.6-sol");
+		expect(sol?.contextWindow).toBe(1_000_000);
+		const legacy = result?.models.find(model => model.id === "gpt-5.5");
+		expect(legacy?.contextWindow).toBe(272_000);
+	});
+
+	it("floors stale reported windows for GPT-5.6 luna/sol/terra and honors reports above the floor", async () => {
 		const fetchFn: typeof fetch = Object.assign(
 			async () =>
 				new Response(
@@ -225,6 +265,15 @@ describe("Codex model discovery", () => {
 								slug: "gpt-5.6-sol",
 								display_name: "GPT-5.6-Sol",
 								context_window: 272_000,
+								default_reasoning_level: "medium",
+								supported_reasoning_levels: ["low", "medium", "high"],
+								input_modalities: ["text", "image"],
+								supported_in_api: true,
+							},
+							{
+								slug: "gpt-5.6-terra",
+								display_name: "GPT-5.6-Terra",
+								context_window: 1_050_000,
 								default_reasoning_level: "medium",
 								supported_reasoning_levels: ["low", "medium", "high"],
 								input_modalities: ["text", "image"],
@@ -251,9 +300,13 @@ describe("Codex model discovery", () => {
 			fetchFn,
 		});
 
+		// Registry still reports the pre-1M 272000 for sol; the floor must win.
 		const sol = result?.models.find(model => model.id === "gpt-5.6-sol");
-		expect(sol?.contextWindow).toBe(372_000);
-		// Non-5.6 SKUs still honor the reported value verbatim.
+		expect(sol?.contextWindow).toBe(1_000_000);
+		// Reports above the floor are honored as-is.
+		const terra = result?.models.find(model => model.id === "gpt-5.6-terra");
+		expect(terra?.contextWindow).toBe(1_050_000);
+		// Non-floored SKUs keep the actively reported value.
 		const legacy = result?.models.find(model => model.id === "gpt-5.5");
 		expect(legacy?.contextWindow).toBe(272_000);
 	});

@@ -17,13 +17,23 @@ const DEFAULT_MODEL_LIST_PATHS = ["/codex/models", "/models"] as const;
 const CODEX_DEFAULT_CONTEXT_WINDOW = 272_000;
 const CODEX_DEFAULT_MAX_TOKENS = 128_000;
 /**
- * GPT-5.6 luna/sol/terra hard context capacity. OpenAI's Codex model registry
- * declares context_window = max_context_window = 372000 (#5705), but Codex
- * discovery under-reports it — omitting the field for some accounts and
- * actively returning 272000 for others (#6259). Applied as a floor for these
- * SKUs so the reported/absent value never regresses the real window.
+ * Fallback for GPT-5.6-family SKUs when upstream omits `context_window`: the
+ * generic {@link CODEX_DEFAULT_CONTEXT_WINDOW} (272000) understates the registry's
+ * former 372000 hard capacity (#5705).
  */
 const GPT_5_6_CONTEXT_WINDOW = 372_000;
+/**
+ * OpenAI enabled a 1M-token window for subscription Codex on GPT-5.6
+ * luna/sol/terra (2026-08-16), but the Codex model registry still reports the
+ * stale 272000 — so the reported value must be floored, not just defaulted
+ * (openai/codex#38917; Codex CLI override `model_context_window = 1000000`).
+ */
+const GPT_5_6_1M_CONTEXT_WINDOW = 1_000_000;
+const CODEX_GPT_5_6_1M_SLUGS: Record<string, true> = {
+	"gpt-5.6-luna": true,
+	"gpt-5.6-sol": true,
+	"gpt-5.6-terra": true,
+};
 
 /**
  * The Codex model list, read field by field.
@@ -230,20 +240,17 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 	if (visibility === "hide" || visibility === "hidden") {
 		return null;
 	}
-
 	const name = toNonEmptyString(payload.display_name) ?? slug;
-	// GPT-5.6 luna/sol/terra have a 372000 hard window, but Codex discovery
-	// under-reports it: for some accounts the field is omitted, for others it is
-	// actively returned as 272000 (#6259). Treat GPT_5_6_CONTEXT_WINDOW as a
-	// floor for these SKUs so neither the omission nor the active under-report
-	// regresses the real capacity; other models honor the reported value with
-	// the generic 272000 fallback.
+	// Codex discovery historically omitted `context_window` for GPT-5.6-family
+	// SKUs (#5705); luna/sol/terra additionally floor the reported value at 1M
+	// because the registry still declares the pre-1M 272000 window (openai/codex#38917),
+	// while Daybreak rolling aliases keep the 372K floor.
 	const parsed = parseKnownModel(slug);
 	const isGpt56 = parsed.family === "openai" && semverEqual(parsed.version, "5.6");
-	const reportedContextWindow = toPositiveInt(payload.context_window);
-	const contextWindow = isGpt56
-		? Math.max(GPT_5_6_CONTEXT_WINDOW, reportedContextWindow ?? 0)
-		: (reportedContextWindow ?? CODEX_DEFAULT_CONTEXT_WINDOW);
+	const fallbackContextWindow = isGpt56 ? GPT_5_6_CONTEXT_WINDOW : CODEX_DEFAULT_CONTEXT_WINDOW;
+	const reportedContextWindow = toPositiveInt(payload.context_window) ?? fallbackContextWindow;
+	const gpt56Floor = CODEX_GPT_5_6_1M_SLUGS[slug] ? GPT_5_6_1M_CONTEXT_WINDOW : GPT_5_6_CONTEXT_WINDOW;
+	const contextWindow = isGpt56 ? Math.max(reportedContextWindow, gpt56Floor) : reportedContextWindow;
 	const maxTokens = Math.min(CODEX_DEFAULT_MAX_TOKENS, contextWindow);
 	const reasoning = supportsReasoning(payload.default_reasoning_level, payload.supported_reasoning_levels);
 	const reasoningOptions = reasoning ? declaredReasoningOptions(payload.supported_reasoning_levels) : undefined;
