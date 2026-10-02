@@ -134,14 +134,20 @@ fn clone_over(src: &Path, dst: &Path, metadata: &Metadata) -> io::Result<()> {
 		SEQUENCE.fetch_add(1, Ordering::Relaxed)
 	));
 	clone_new(src, &temp)?;
+	swap_clone(&temp, dst, metadata)
+}
+
+/// Applies destination metadata and atomically installs a completed clone.
+/// Failed swaps remove the temporary without touching the destination.
+fn swap_clone(temp: &Path, dst: &Path, metadata: &Metadata) -> io::Result<()> {
 	let swapped = (|| {
 		#[cfg(unix)]
-		take_owner(&temp, metadata)?;
-		fs::set_permissions(&temp, metadata.permissions())?;
-		fs::rename(&temp, dst)
+		take_owner(temp, metadata)?;
+		fs::set_permissions(temp, metadata.permissions())?;
+		fs::rename(temp, dst)
 	})();
 	if swapped.is_err() {
-		let _ = fs::remove_file(&temp);
+		let _ = fs::remove_file(temp);
 	}
 	swapped
 }
@@ -264,8 +270,8 @@ mod imp {
 
 	use windows_sys::Win32::{
 		Foundation::{
-			ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
-			ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
+			ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SAME_DEVICE,
+			ERROR_NOT_SUPPORTED,
 		},
 		Storage::FileSystem::{
 			BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_SPARSE_FILE, GetFileInformationByHandle,
@@ -292,11 +298,16 @@ mod imp {
 		/// The largest cloned region is under 4 GiB.
 		const MAX_REGION: u64 = (4 << 30) - 1;
 
+		let metadata = src.metadata()?;
+		let len = metadata.len();
+		// Empty files have no extents to share, even on non-cloning volumes.
+		if len == 0 {
+			return dst.set_len(0);
+		}
+
 		// Filesystems without block cloning fail here.
 		let mut integrity = FSCTL_GET_INTEGRITY_INFORMATION_BUFFER::default();
 		fsctl(src, FSCTL_GET_INTEGRITY_INFORMATION, &(), &mut integrity)?;
-		let metadata = src.metadata()?;
-		let len = metadata.len();
 		let cluster = u64::from(integrity.ClusterSizeInBytes).max(1);
 
 		// Best effort: some volumes (reportedly Dev Drive) refuse the change,
@@ -402,7 +413,6 @@ mod imp {
 					| ERROR_NOT_SUPPORTED
 					| ERROR_NOT_SAME_DEVICE
 					| ERROR_INVALID_PARAMETER
-					| ERROR_ACCESS_DENIED
 			)
 		})
 	}
@@ -411,6 +421,32 @@ mod imp {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn failed_swap_removes_the_clone_and_preserves_the_destination() {
+		let scratch = veyyon_test_scratch::scratch_dir("cow-swap");
+		let temp = scratch.join("clone");
+		let destination = scratch.join("destination");
+		fs::write(&temp, b"cloned bytes").unwrap();
+		let metadata = fs::metadata(&temp).unwrap();
+		fs::create_dir(&destination).unwrap();
+		fs::write(destination.join("original"), b"original bytes").unwrap();
+		assert!(swap_clone(&temp, &destination, &metadata).is_err());
+		assert!(!temp.exists(), "failed swaps must not strand cloned data");
+		assert_eq!(fs::read(destination.join("original")).unwrap(), b"original bytes");
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn permission_denied_is_not_a_clone_capability_failure() {
+		let err = io::Error::from_raw_os_error(5);
+		assert!(!is_unsupported(&err));
+		let scratch = veyyon_test_scratch::scratch_dir("cow-permission");
+		let err = clone_file(&scratch, &scratch.join("destination")).unwrap_err();
+		assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+		assert!(!is_unsupported(&err));
+		assert!(!scratch.join("destination").exists());
+	}
 
 	#[test]
 	fn unsupported_destination_kinds_fail_with_unsupported_error() {

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added cross-platform copy-on-write file cloning and atomic clone_over primitives in veyyon-iso ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 
