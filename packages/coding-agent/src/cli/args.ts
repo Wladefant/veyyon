@@ -484,6 +484,8 @@ export function getExtraHelpText(): string {
 			["CURSOR_ACCESS_TOKEN", "Cursor AI models"],
 			["AI_GATEWAY_API_KEY", "Vercel AI Gateway"],
 			["WAFER_SERVERLESS_API_KEY", "Wafer Serverless (pay-as-you-go)"],
+			["ABLITERATION_API_KEY", "Abliteration uncensored GLM models"],
+			["MODEL_API_KEY", "Meta Model API models"],
 		]),
 		...envSection("Cloud Providers", [
 			["AWS_PROFILE", "AWS Bedrock (or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)"],

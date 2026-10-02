@@ -245,6 +245,9 @@ export function resolveOpenAIRequestSetup(
 		setHeaderIfAbsent(headers, "http-referer", VERCEL_AI_GATEWAY_REFERER);
 		setHeaderIfAbsent(headers, "x-title", VERCEL_AI_GATEWAY_TITLE);
 	}
+	if (model.provider === "muse-code") {
+		setHeaderIfAbsent(headers, "x-api-version", "1.0.0");
+	}
 	if (model.provider === "coreweave") {
 		applyCoreWeaveProjectHeader(headers);
 	}
@@ -1093,6 +1096,20 @@ export function resolveZaiReasoningOutputClamp(
 	compat: ResolvedOpenAICompat,
 ): number | undefined {
 	return isZaiReasoningEffortDialect(model, compat) ? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS) : undefined;
+}
+
+/**
+ * Provider-specific Responses API output clamp.
+ *
+ * Meta documents a 131,072-token output limit for Muse Spark, so direct Model
+ * API and Muse Code requests may use the model's full advertised cap instead
+ * of the conservative 64k OpenAI-compatible default.
+ */
+export function resolveOpenAIResponsesOutputClamp(model: Pick<Model, "provider" | "maxTokens">): number | undefined {
+	if (model.provider === "meta" || model.provider === "muse-code") {
+		return model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS;
+	}
+	return undefined;
 }
 
 /**
@@ -3502,7 +3519,7 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 		params.max_output_tokens = Math.min(
 			options.maxTokens,
 			model.maxTokens ?? Number.POSITIVE_INFINITY,
-			OPENAI_MAX_OUTPUT_TOKENS,
+			resolveOpenAIResponsesOutputClamp(model) ?? OPENAI_MAX_OUTPUT_TOKENS,
 		);
 	}
 	if (options?.temperature !== undefined) params.temperature = options.temperature;

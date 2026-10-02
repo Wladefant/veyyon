@@ -1,4 +1,5 @@
 import type { KnownProvider } from "@veyyon/catalog";
+import { abliterationProvider } from "./abliteration";
 import { aimlApiProvider } from "./aimlapi";
 import { alibabaCodingPlanProvider } from "./alibaba-coding-plan";
 import { amazonBedrockProvider } from "./amazon-bedrock";
@@ -30,11 +31,13 @@ import { kimiCodeProvider } from "./kimi-code";
 import { litellmProvider } from "./litellm";
 import { llamaCppProvider } from "./llama-cpp";
 import { lmStudioProvider } from "./lm-studio";
+import { metaProvider } from "./meta";
 import { minimaxProvider } from "./minimax";
 import { minimaxCodeProvider } from "./minimax-code";
 import { minimaxCodeCnProvider } from "./minimax-code-cn";
 import { mistralProvider } from "./mistral";
 import { moonshotProvider } from "./moonshot";
+import { museCodeProvider } from "./muse-code";
 import { nanogptProvider } from "./nanogpt";
 import { nousResearchProvider } from "./nous-research";
 import { nousResearchApiKeyProvider } from "./nous-research-api-key";
@@ -81,6 +84,7 @@ import { zhipuCodingPlanProvider } from "./zhipu-coding-plan";
  */
 const ALL = [
 	azureProvider,
+	abliterationProvider,
 	openaiCodexProvider,
 	anthropicProvider,
 	zaiProvider,
@@ -148,6 +152,8 @@ const ALL = [
 	groqProvider,
 	mistralProvider,
 	minimaxProvider,
+	metaProvider,
+	museCodeProvider,
 	nousResearchProvider,
 	nousResearchApiKeyProvider,
 	amazonBedrockProvider,
