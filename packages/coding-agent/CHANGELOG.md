@@ -32,6 +32,7 @@
 
 ### Changed
 
+- Removed unused asynchronous file loading methods from ConfigFile; no user-visible effect ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16608553c9ce132fe4ce43084c0f0caa9dcc1022).
 - Parameterized MCP tool name sanitization and unified current and legacy name minting under one shared pipeline (oh-my-pi 24aa8aa6279e815e338623e9d9be3f7792f6c193, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared foreground-wait and auto-background helper primitives (`formatBackgroundNotice`, `resolveAutoBackgroundWaitMs`, `raceJobSettlement`) into `async/auto-background.ts` with cancellable threshold timers (oh-my-pi aeed1e6195abfa971b15e291c6c598bc9c1065b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
