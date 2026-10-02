@@ -10,11 +10,10 @@
 import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
-import type { Api, Model, Usage } from "../types";
+import type { Api, Model } from "../types";
 import type { AuthGatewayServerOptions } from "./types";
 
 export interface ClientUsageIdentity {
@@ -79,7 +78,7 @@ export async function resolveGatewayApiKey(
 	};
 }
 
-async function refreshGatewayApiKeyAfterAuthError(
+export async function refreshGatewayApiKeyAfterAuthError(
 	storage: AuthStorage,
 	model: Model<Api>,
 	sessionId: string,
@@ -101,84 +100,25 @@ async function refreshGatewayApiKeyAfterAuthError(
 			signal,
 		});
 		logger.debug("auth-gateway retrying provider request after usage-limit block", {
-			format, provider, peer, switched, retryAfterMs, retryAtMs, error: message,
+			format,
+			provider,
+			peer,
+			switched,
+			retryAfterMs,
+			retryAtMs,
+			error: message,
 		});
 		if (!switched) return undefined;
 		return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
 	}
 	await storage.invalidateCredentialMatching(provider, oldKey, { sessionId, signal });
 	logger.debug("auth-gateway retrying provider request after credential invalidation", {
-		format, provider, peer, error: message,
+		format,
+		provider,
+		peer,
+		error: message,
 	});
 	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
-}
-
-export function buildGatewayApiKeyResolver(
-	storage: AuthStorage,
-	model: Model<Api>,
-	sessionId: string,
-	initialKey: string,
-	requestSignal: AbortSignal,
-	format: string,
-	peer: string,
-	onResolvedKey?: (apiKey: string) => void,
-): ApiKeyResolver {
-	let lastKey = initialKey;
-	return async ({ lastChance, error, signal }) => {
-		const sig = signal ?? requestSignal;
-		if (error === undefined) {
-			lastKey = initialKey;
-			return initialKey;
-		}
-		if (!lastChance) {
-			const refreshed = await storage.getApiKey(model.provider, sessionId, {
-				modelId: model.id,
-				signal: sig,
-				forceRefresh: true,
-			});
-			lastKey = refreshed ?? lastKey;
-			if (refreshed) onResolvedKey?.(refreshed);
-			return refreshed;
-		}
-		const next = await refreshGatewayApiKeyAfterAuthError(
-			storage, model, sessionId, model.provider, lastKey, error, sig, format, peer,
-		);
-		lastKey = next ?? lastKey;
-		if (next) onResolvedKey?.(next);
-		return next;
-	};
-}
-
-export type GatewayStorage = AuthStorage & {
-	recordObservedUsage?(entry: {
-		provider: string;
-		model: string;
-		at?: number;
-		usage: { input: number; output: number; cacheRead: number; cacheWrite: number };
-		costUsd: number;
-		client: ClientUsageIdentity;
-	}): void;
-};
-
-export function recordGatewayUsage(
-	storage: GatewayStorage,
-	model: Model<Api>,
-	client: ClientUsageIdentity,
-	usage: Usage,
-	at?: number,
-): void {
-	if (usage.input + usage.output + usage.cacheRead + usage.cacheWrite === 0) return;
-	storage.recordObservedUsage?.({
-		provider: model.provider,
-		model: model.id,
-		at,
-		usage: { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite },
-		costUsd: usage.cost.total,
-		client,
-	});
-	if (usage.cost.total > 0) {
-		storage.recordUsageCost?.(model.provider, usage.cost.total, at !== undefined ? { recordedAt: at } : undefined);
-	}
 }
 
 export function mirrorRequestAbort(req: Request): AbortController {

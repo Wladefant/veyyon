@@ -19,12 +19,10 @@
  */
 
 import { Effort } from "@veyyon/catalog/effort";
-import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
-import * as AIError from "../error";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
@@ -34,7 +32,12 @@ import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
-import { type AuthGatewayBootOptions, mirrorRequestAbort, resolveGatewayApiKey } from "./dispatch";
+import {
+	type AuthGatewayBootOptions,
+	mirrorRequestAbort,
+	refreshGatewayApiKeyAfterAuthError,
+	resolveGatewayApiKey,
+} from "./dispatch";
 import {
 	captureRequestHeaders,
 	corsHeaders,
@@ -52,7 +55,6 @@ import type {
 import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 
 // ParsedFormatRequest / ParsedFormatOptions / FormatModule come from ./types.
-
 
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
@@ -227,71 +229,6 @@ export function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal
 }
 
 /**
- * Hook fired by {@link streamSimple} when the upstream request fails in a
- * way that's rotatable — today that's HTTP 401 (credential is bad) and
- * usage-limit phrasing matched by {@link isUsageLimitError} (Codex's
- * `usage_limit_reached`, Anthropic's `usage_limit_reached`, Google's
- * `resource_exhausted`, …). The two cases need different storage actions:
- *
- * - **usage-limit** → {@link AuthStorage.markUsageLimitReached}. Marks just
- *   the current session's credential as temporarily blocked (honouring
- *   `retry-after` / `resets_at` hints when present) and returns `true` only
- *   when a sibling credential is still available. Burning the credential
- *   with `invalidateCredentialMatching` here would orphan accounts whose
- *   reset window is several hours away — exactly the bug this helper exists
- *   to avoid.
- * - **auth-failure** → {@link AuthStorage.invalidateCredentialMatching}.
- *   Suspect/delete the row so it doesn't get re-picked next request.
- *
- * In both branches we return the next `getApiKey` result (sticky on the
- * same `sessionId`) so streamSimple can transparently retry the pre-emit
- * failure with a fresh credential. Returning `undefined` aborts the retry
- * and surfaces the original error to the caller.
- */
-async function refreshGatewayApiKeyAfterAuthError(
-	storage: AuthStorage,
-	model: Model<Api>,
-	sessionId: string,
-	provider: string,
-	oldKey: string,
-	error: unknown,
-	signal: AbortSignal,
-	format: string,
-	peer: string,
-): Promise<string | undefined> {
-	const message = errorMessage(error);
-	if (AIError.isUsageLimit(error)) {
-		const retryAfterMs = extractRetryHint(undefined, message);
-		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
-			retryAfterMs,
-			baseUrl: model.baseUrl,
-			modelId: model.id,
-			apiKey: oldKey,
-			signal,
-		});
-		logger.debug("auth-gateway retrying provider request after usage-limit block", {
-			format,
-			provider,
-			peer,
-			switched,
-			retryAfterMs,
-			retryAtMs,
-			error: message,
-		});
-		if (!switched) return undefined;
-		return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
-	}
-	await storage.invalidateCredentialMatching(provider, oldKey, { sessionId, signal });
-	logger.debug("auth-gateway retrying provider request after credential invalidation", {
-		format,
-		provider,
-		peer,
-		error: message,
-	});
-	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
-}
-
-/**
  * Build the {@link ApiKeyResolver} handed to `streamSimple` for a gateway
  * request. Drives the central a/b/c auth-retry policy server-side:
  *
@@ -348,7 +285,6 @@ function buildGatewayApiKeyResolver(
 function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
 }
-
 
 /** The SSE encoder's cancel hook: a client that closes the response aborts the upstream call once. */
 function abortOnClientClose(controller: AbortController): (reason?: unknown) => void {
@@ -434,8 +370,7 @@ async function handleFormatEndpoint(
 	// broker override on AuthStorage when needed).
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return clientClosedResponse(route);
-	if (typeof apiKey !== "string")
-		return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
+	if (typeof apiKey !== "string") return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
@@ -578,8 +513,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return aborted();
-	if (typeof apiKey !== "string")
-		return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+	if (typeof apiKey !== "string") return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
