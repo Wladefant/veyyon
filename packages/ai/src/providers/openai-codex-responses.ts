@@ -189,6 +189,14 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	 */
 	clientMetadata?: Record<string, string>;
 	/**
+	 * Turn id of the initiating (parent) Codex turn for nested requests such as
+	 * subagent spawns (codex-rs `parent_turn_id`, #35835). Emitted both as the
+	 * flat `client_metadata.parent_turn_id` key and inside the
+	 * `x-codex-turn-metadata` JSON blob; blank values are ignored. The key is
+	 * reserved: `clientMetadata` extras cannot supply it.
+	 */
+	parentTurnId?: string;
+	/**
 	 * Invoked when the server streams a `response.metadata` event carrying
 	 * ChatGPT moderation metadata (`metadata.openai_chatgpt_moderation_metadata`)
 	 * for first-party presentation parity. Diagnostic observer: failures are
@@ -206,6 +214,8 @@ export interface OpenAICodexCompatibilityMetadataOptions {
 	startNewTurn?: boolean;
 	turnStartedAtUnixMs?: number;
 	clientMetadata?: Readonly<Record<string, string>>;
+	/** Parent Codex turn id for nested requests; see {@link OpenAICodexResponsesOptions.parentTurnId}. */
+	parentTurnId?: string;
 	/** Add the direct installation header a non-turn codex call requires. */
 	includeInstallationHeader?: boolean;
 }
@@ -505,6 +515,7 @@ const CODEX_RESERVED_METADATA_KEYS: Record<string, true> = {
 	turn_started_at_unix_ms: true,
 	forked_from_thread_id: true,
 	parent_thread_id: true,
+	parent_turn_id: true,
 	// Codex protocol metadata key; spelled as codex-rs spells it.
 	subagent_kind: true,
 	thread_source: true,
@@ -577,6 +588,7 @@ function createCodexRequestMetadata(
 		startNewTurn: boolean;
 		turnStartedAtUnixMs?: number;
 		clientMetadata?: Readonly<Record<string, string>>;
+		parentTurnId?: string;
 		compaction?: CodexCompactionRequestContext;
 	},
 ): CodexRequestMetadata {
@@ -585,6 +597,9 @@ function createCodexRequestMetadata(
 		session.turnStartedAtUnixMs = options.turnStartedAtUnixMs;
 	}
 	const identity = createCodexCompatibilityIdentity(session);
+	// codex-rs `set_parent_turn_id` ignores blank values; keep the original
+	// spelling when non-blank.
+	const parentTurnId = options.parentTurnId?.trim() ? options.parentTurnId : undefined;
 	const extra: Record<string, string> = {};
 	const callerMetadata = options.clientMetadata;
 	if (callerMetadata) {
@@ -606,6 +621,7 @@ function createCodexRequestMetadata(
 		window_id: identity.windowId,
 		request_kind: requestKind,
 	};
+	if (parentTurnId) turnMetadata.parent_turn_id = parentTurnId;
 	if (options.compaction) {
 		turnMetadata.compaction = {
 			trigger: options.compaction.trigger,
@@ -624,14 +640,20 @@ function createCodexRequestMetadata(
 		...identity,
 		turnId: session.turnId,
 		turnMetadataJson,
-		clientMetadata: {
-			[OPENAI_HEADERS.INSTALLATION_ID]: identity.installationId,
-			session_id: identity.sessionId,
-			thread_id: identity.threadId,
-			[OPENAI_HEADERS.WINDOW_ID]: identity.windowId,
-			turn_id: session.turnId,
-			[OPENAI_HEADERS.TURN_METADATA]: turnMetadataJson,
-		},
+		clientMetadata: (() => {
+			const clientMetadata: Record<string, string> = {
+				[OPENAI_HEADERS.INSTALLATION_ID]: identity.installationId,
+				session_id: identity.sessionId,
+				thread_id: identity.threadId,
+				[OPENAI_HEADERS.WINDOW_ID]: identity.windowId,
+				turn_id: session.turnId,
+			};
+			// Both projections, mirroring codex-rs `CodexResponsesMetadata::to_client_metadata`:
+			// the flat key above/below AND the field inside the turn-metadata JSON.
+			if (parentTurnId) clientMetadata.parent_turn_id = parentTurnId;
+			clientMetadata[OPENAI_HEADERS.TURN_METADATA] = turnMetadataJson;
+			return clientMetadata;
+		})(),
 	};
 }
 
@@ -676,6 +698,7 @@ export function createOpenAICodexCompatibilityMetadata(
 		startNewTurn,
 		turnStartedAtUnixMs: options.turnStartedAtUnixMs ?? (startNewTurn || !session.turnId ? Date.now() : undefined),
 		clientMetadata: options.clientMetadata,
+		parentTurnId: options.parentTurnId,
 		compaction: options.compaction,
 	});
 	const headers = new Headers();
@@ -1450,6 +1473,7 @@ async function buildCodexRequestContext(
 				: undefined
 			: getCodexTurnStartedAtUnixMs(context),
 		clientMetadata: transformedBody.client_metadata,
+		parentTurnId: options?.parentTurnId,
 		compaction,
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
@@ -2049,6 +2073,12 @@ class CodexStreamProcessor {
 				this.#handleResponseCompleted(rawEvent);
 				return;
 			case "response.metadata":
+				// The WebSocket transport has no per-response HTTP headers; codex-rs
+				// mirrors them into this event's `headers` and reads
+				// `x-codex-turn-state` from there (ResponsesStreamEvent::turn_state).
+				// Pick up the refresh so same-turn follow-ups echo the latest turn
+				// state on either transport.
+				updateCodexSessionMetadataFromHeaders(this.requestContext.websocketState, toCodexHeaders(rawEvent.headers));
 				this.#reportModerationMetadata(rawEvent);
 				return;
 			case "error":
@@ -2313,12 +2343,15 @@ class CodexStreamProcessor {
 				// took for this attempt and nothing mutates it; a retry replaces it
 				// with a fresh one. Adopting it saves a second full clone per turn.
 				state.lastRequest = runtime.requestBodyForState;
-				if (responseId) {
+				const replayableResponseItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+					structuredCloneJSON(runtime.nativeOutputItems),
+				);
+				if (responseId && replayableResponseItems) {
 					state.lastResponseId = responseId;
-					state.lastResponseItems = stripInputItemIds(structuredCloneJSON(runtime.nativeOutputItems));
+					state.lastResponseItems = replayableResponseItems;
 					state.canAppend = rawEvent.type === "response.done" || rawEvent.type === "response.completed";
 				} else {
-					// Without a response id the append baseline cannot be trusted.
+					// Without both a response id and replayable output, the append baseline cannot be trusted.
 					state.canAppend = false;
 				}
 			}
@@ -3129,14 +3162,6 @@ export function getOpenAICodexTransportDetails(
 		hasTurnState: state?.turnState !== undefined,
 		lastFallbackAt: state?.lastFallbackAt,
 	};
-}
-
-function stripInputItemIds(items: Array<Record<string, unknown>>): InputItem[] {
-	return items.map(item => {
-		if (item.id == null) return item as InputItem;
-		const { id: _id, ...rest } = item;
-		return rest as InputItem;
-	});
 }
 
 /**
