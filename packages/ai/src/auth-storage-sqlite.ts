@@ -17,21 +17,18 @@
  * `auth-storage.ts` re-exports this class, so every existing importer of `@veyyon/ai/auth-storage` or of
  * the package barrel is unaffected.
  */
-import { constants, Database, type Statement } from "bun:sqlite";
+import { constants, type Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { scheduler } from "node:timers/promises";
-import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getAgentDbPath } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
-import { SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
+import { openSqliteDatabase, SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import {
 	AUTH_SCHEMA_VERSION,
 	type AuthRow,
 	type CredentialBlockRow,
 	deserializeCredential,
-	isSqliteBusyError,
 	matchesReplacementCredential,
 	normalizeDisabledCause,
 	resolveCredentialIdentityKey,
@@ -54,7 +51,6 @@ import {
 	isRecordFromFutureClock,
 	msToEpochSeconds,
 } from "./credential-clock";
-import { ConfigurationError } from "./error/validation";
 import type { OAuthCredentials } from "./registry/oauth/types";
 import type { Provider } from "./types";
 import type { UsageCostHistoryEntry, UsageCostHistoryQuery, UsageHistoryEntry, UsageHistoryQuery } from "./usage";
@@ -265,6 +261,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#deleteProviderSelectionStmt = this.#db.prepare("DELETE FROM auth_provider_selection WHERE provider = ?");
 	}
 
+	/** Opens credential storage with bounded busy retries and path-attributed initialization errors. */
 	static async open(dbPath: string = getAgentDbPath()): Promise<SqliteAuthCredentialStore> {
 		const dir = path.dirname(dbPath);
 		// Fails CLOSED into the `mkdir` below: an unstattable parent is treated as absent, and `mkdir` then
@@ -279,38 +276,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 		}
 
-		// Concurrent veyyon startups can race against WAL recovery and the schema
-		// init's first lock-taking statement. Bun's default `busy_timeout` is 0,
-		// so retry the open on `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY` with bounded
-		// exponential backoff before surfacing the failure. See issue #2421.
-		const maxAttempts = 4;
-		const baseDelayMs = 100;
-		let lastBusyError: Error | undefined;
-		for (let attempt = 0; attempt < maxAttempts; attempt++) {
-			let db: Database | undefined;
+		return openSqliteDatabase(dbPath, async db => {
 			try {
-				db = new Database(dbPath);
-				try {
-					await fs.chmod(dbPath, 0o600);
-				} catch {
-					// Ignore chmod failures (e.g., Windows)
-				}
-				return new SqliteAuthCredentialStore(db);
-			} catch (err) {
-				db?.close();
-				if (!isSqliteBusyError(err)) {
-					throw err;
-				}
-				lastBusyError = err instanceof Error ? err : new Error(String(err));
-				if (attempt < maxAttempts - 1) {
-					await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: baseDelayMs, jitter: 0 }));
-				}
+				await fs.chmod(dbPath, 0o600);
+			} catch {
+				// Ignore chmod failures (e.g., Windows)
 			}
-		}
-		throw new ConfigurationError(
-			`Failed to open auth database at '${dbPath}' after ${maxAttempts} attempts: ${lastBusyError?.message}`,
-			{ cause: lastBusyError },
-		);
+			return new SqliteAuthCredentialStore(db);
+		});
 	}
 
 	#initializeSchema(): void {
