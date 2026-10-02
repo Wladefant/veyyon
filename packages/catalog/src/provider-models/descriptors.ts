@@ -66,6 +66,7 @@ import {
 	gitLabDuoWorkflowModelManagerOptions,
 	resolveCursorCacheProviderId,
 	resolveGitLabDuoWorkflowCacheProviderId,
+	typesafeModelManagerOptions,
 	zaiModelManagerOptions,
 } from "./special";
 
@@ -516,6 +517,13 @@ export const CATALOG_PROVIDERS = [
 		envVars: ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) =>
 			xiaomiModelManagerOptions({ ...config, providerId: "xiaomi-token-plan-sgp", tokenPlanRegion: "sgp" }),
+	},
+	{
+		id: "typesafe",
+		defaultModel: "jev-latest",
+		envVars: ["TYPESAFE_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => typesafeModelManagerOptions(config),
+		catalogDiscovery: { label: "TypeSafe" },
 	},
 	{
 		id: "zai",

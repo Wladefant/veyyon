@@ -1,6 +1,7 @@
 import { lazy } from "@veyyon/utils/abortable";
 import { type CodexModelDiscoveryResult, fetchCodexModels } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
+import { fetchTypeSafeModels, TYPESAFE_DEFAULT_BASE_URL } from "../discovery/typesafe";
 import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
 import type { ModelManagerOptions } from "../model-manager";
 import type { FetchImpl, ModelSpec } from "../types";
@@ -224,4 +225,54 @@ export interface ZaiModelManagerConfig {}
 
 export function zaiModelManagerOptions(_config: ZaiModelManagerConfig = {}): ModelManagerOptions<"anthropic-messages"> {
 	return { providerId: "zai" };
+}
+
+// ---------------------------------------------------------------------------
+// TypeSafe
+// ---------------------------------------------------------------------------
+
+export const TYPESAFE_STATIC_MODELS: readonly ModelSpec<"typesafe">[] = [
+	{
+		id: "jev-latest",
+		name: "TypeSafe jev",
+		api: "typesafe",
+		provider: "typesafe",
+		baseUrl: TYPESAFE_DEFAULT_BASE_URL,
+		kind: "judge",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+];
+
+/** Credentials and endpoint overrides for the TypeSafe catalog manager. */
+export interface TypeSafeModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/** Discover account-visible judge models while keeping the bundled offline seed. */
+export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig = {}): ModelManagerOptions<"typesafe"> {
+	const { apiKey } = config;
+	const envBaseUrl = Bun.env.TYPESAFE_BASE_URL?.trim();
+	const baseUrl = (config.baseUrl ?? (envBaseUrl || TYPESAFE_DEFAULT_BASE_URL)).replace(/\/+$/, "");
+	const staticModels = TYPESAFE_STATIC_MODELS.map(model => ({ ...model, baseUrl }));
+	return {
+		providerId: "typesafe",
+		staticModels,
+		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
+		...(apiKey
+			? {
+					fetchDynamicModels: () =>
+						fetchTypeSafeModels({
+							apiKey,
+							baseUrl,
+							fetch: config.fetch,
+						}),
+				}
+			: undefined),
+	};
 }
