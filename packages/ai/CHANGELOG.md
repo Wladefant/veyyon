@@ -22,6 +22,8 @@
 - `aws-credentials.ts` persists a refreshed SSO cache token through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the write stays atomic and the file stays mode `0600`.
 - The Antigravity usage label normalizer collapses whitespace through the shared `collapseWhitespace` helper; no behavior change.
 - Extended the Codex WebSocket first-event timeout default and generic stream idle/first-event watchdog defaults to 300 seconds ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- OpenCode Go usage now reads the real rolling, weekly and monthly percent quotas from `GET /zen/go/v1/usage` (resets included) instead of dollar limits computed from locally recorded request costs, and the local cost ledger (`recordUsageCost`, `listUsageCosts`) is removed. A 401 or 403 from the endpoint fails the credential check and purges the stale cached quota; a malformed or partial payload keeps serving the last good report. Multi-key pools rank on the rolling and weekly windows; monthly is display-only ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9eff02d36c, 990984f19b, 2dbb36ff26).
+- Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

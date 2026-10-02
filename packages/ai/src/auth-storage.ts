@@ -173,7 +173,6 @@ import type { Provider } from "./types";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
-	UsageCostHistoryEntry,
 	UsageCredential,
 	UsageFetchContext,
 	UsageFetchParams,
@@ -2210,7 +2209,6 @@ export class AuthStorage {
 			const report = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
 				logger: this.#usageLogger,
-				listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 			});
 			// Attribute the report to the credential's organization. The orgId and
 			// orgName fallbacks apply independently: Claude's usage endpoint stamps
@@ -2232,6 +2230,13 @@ export class AuthStorage {
 			}
 			return report;
 		} catch (error) {
+			if (error instanceof AIError.ProviderHttpError && (error.status === 401 || error.status === 403)) {
+				// Definitive auth failure (revoked key, lapsed subscription): purge the
+				// last-good report so #fetchUsageCached's failure branch cannot keep
+				// rendering and ranking from stale quota the way it does for transient
+				// failures.
+				this.#usageCache.set(buildUsageReportCacheKey(request), { value: null, expiresAt: 0 });
+			}
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
 				error: String(error),
@@ -2328,64 +2333,6 @@ export class AuthStorage {
 	 */
 	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
 		return this.#store.listUsageHistory?.(query) ?? [];
-	}
-
-	/** Record one observed provider request cost for later local usage aggregation. */
-	recordUsageCost(
-		provider: Provider,
-		costUsd: number,
-		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
-	): boolean {
-		if (!Number.isFinite(costUsd) || costUsd <= 0) return false;
-		const record = this.#store.recordUsageCosts;
-		if (!record) return false;
-		const credential = this.#resolveObservedUsageCredential(provider, options?.sessionId);
-		if (!credential) return false;
-		const entry: UsageCostHistoryEntry = {
-			recordedAt: options?.recordedAt ?? Date.now(),
-			provider,
-			accountKey: buildUsageCacheIdentity(credential),
-			costUsd,
-		};
-		try {
-			record.call(this.#store, [entry]);
-			const cacheKey = buildUsageReportCacheKey({
-				provider,
-				credential,
-				baseUrl: options?.baseUrl,
-			});
-			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
-			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: Date.now() - 1 });
-			return true;
-		} catch (error) {
-			this.#usageLogger?.debug("usage cost record failed", {
-				provider,
-				error: String(error),
-			});
-			return false;
-		}
-	}
-
-	#resolveObservedUsageCredential(provider: Provider, sessionId?: string): UsageCredential | undefined {
-		const entries = this.#getStoredCredentials(provider);
-		const sessionCredential = this.#routing.getSessionCredential(provider, sessionId);
-		if (sessionCredential) {
-			const credential = entries[sessionCredential.index]?.credential;
-			if (credential) {
-				return credential.type === "api_key"
-					? { type: "api_key", apiKey: credential.key }
-					: buildUsageCredential(credential);
-			}
-		}
-		if (entries.length === 1) {
-			const credential = entries[0]!.credential;
-			return credential.type === "api_key"
-				? { type: "api_key", apiKey: credential.key }
-				: buildUsageCredential(credential);
-		}
-		const envKey = getEnvApiKey(provider);
-		if (envKey) return { type: "api_key", apiKey: envKey };
-		return undefined;
 	}
 
 	ingestUsageHeaders(
@@ -2735,7 +2682,6 @@ export class AuthStorage {
 		const ctx: UsageFetchContext = {
 			fetch: this.#usageFetch,
 			logger: this.#usageLogger,
-			listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 		};
 
 		const results: CredentialHealthResult[] = [];

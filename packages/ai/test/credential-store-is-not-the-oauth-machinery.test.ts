@@ -479,28 +479,6 @@ describe("the store works when imported from its own module", () => {
 	});
 
 	/**
-	 * The usage-cost table, the store's third job. Filtered by provider, because the query builds its
-	 * WHERE clause from optional parameters and an ignored filter returns every provider's spend.
-	 */
-	it("records and filters observed request costs", async () => {
-		const store = await openStore();
-		try {
-			store.recordUsageCosts([
-				{ recordedAt: 1_700_000_000_000, provider: "anthropic", accountKey: "account:one", costUsd: 0.25 },
-				{ recordedAt: 1_700_000_001_000, provider: "openai", accountKey: "account:two", costUsd: 0.5 },
-			]);
-
-			const anthropic = store.listUsageCosts({ provider: "anthropic", sinceMs: 0 });
-			expect(anthropic).toHaveLength(1);
-			expect(anthropic[0]?.costUsd).toBe(0.25);
-			expect(anthropic[0]?.accountKey).toBe("account:one");
-			expect(store.listUsageCosts({ sinceMs: 0 })).toHaveLength(2);
-		} finally {
-			store.close();
-		}
-	});
-
-	/**
 	 * Reopening the same file sees the rows. The migrations run in the constructor path, so this is what
 	 * proves the schema the moved class creates is the schema it later reads: a store that recreated
 	 * tables on open would pass every case above and lose every credential between processes.

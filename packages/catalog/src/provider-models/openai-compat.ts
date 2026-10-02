@@ -1,3 +1,4 @@
+import { getInstallId } from "@veyyon/utils/dirs";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "../discovery/failure";
@@ -42,7 +43,7 @@ import {
 	PERSONAL_GITHUB_COPILOT_BASE_URL,
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
-import { getOpenCodeUserAgent } from "../wire/opencode-headers";
+import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
@@ -2413,8 +2414,13 @@ function openCodeModelManagerOptions(
 					baseUrl: discoveryBaseUrl,
 					apiKey,
 					// The gateway flags traffic with no client user agent, and discovery
-					// reads it with the same key as a completion request.
-					headers: { "User-Agent": getOpenCodeUserAgent() },
+					// reads it with the same key as a completion request. Discovery runs
+					// outside any conversation, so the session header carries the stable
+					// install id.
+					headers: {
+						"User-Agent": getOpenCodeUserAgent(),
+						"x-opencode-session": openCodeSessionHeaderValue(getInstallId()),
+					},
 					mapModel: (entry, defaults) => {
 						const reference = modelsDevReferences.get(defaults.id) ?? bundledReferences.get(defaults.id);
 						const name = toModelName(entry.name, reference?.name ?? defaults.name);
