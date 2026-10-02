@@ -2811,7 +2811,6 @@ export class AgentSession {
 			this.#skipPostTurnMaintenanceAssistantTimestamp = message.timestamp;
 		}
 		await this.#retry.closeRecovered(message);
-		this.#usage.recordTurnCost(message);
 	}
 
 	/** Settle-time effects of a persisted tool result: todo write outcome and checkpoint/rewind state. */
