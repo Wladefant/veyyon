@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Sanitized client-visible assistant native history payloads during Codex replay while keeping opaque signed reasoning intact ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6f0d61f7ca170788f2b97c7ab1a7753e6c2544d9).
 - Dropped stale thinking signatures after credential redaction in outbound messages, instructions, and native history replay to avoid provider rejection on replay ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex stream close retries gating on committed visible content and emitted deltas rather than open empty blocks, emitting balancing end events before replay and classifying premature closes as stream corruption ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Corrected auth gateway video modality types and merged Codex continuation fixtures; provider behavior is unchanged.
