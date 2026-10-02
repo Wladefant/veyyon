@@ -10,6 +10,7 @@
 import type { Effort } from "@veyyon/catalog/effort";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@veyyon/catalog/model-thinking";
 import { calculateCost } from "@veyyon/catalog/models";
+import { isAnthropicOpus55Model } from "@veyyon/catalog/identity/family";
 import { $env, $flag } from "@veyyon/utils/env";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import { renderDemotedThinking } from "../dialect/demotion";
@@ -369,15 +370,23 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				const cacheRetention = resolveCacheRetention(options.cacheRetention);
 				const convertedMessages = convertMessages(context, model, cacheRetention);
 				const toolPlan = planToolConfig(context.tools, options.toolChoice, convertedMessages);
-				const toolConfig = toolPlan.toolConfig;
+				let toolConfig = toolPlan.toolConfig;
 				sentinelInjected = toolPlan.sentinelInjected;
 				let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 
-				// Bedrock rejects thinking + forced tool_choice ("any" or specific tool).
-				// When tool_choice forces tool use, disable thinking to avoid API errors.
-				if (toolConfig?.toolChoice && additionalModelRequestFields) {
-					const tc = toolConfig.toolChoice;
-					if (tc.any || tc.tool) additionalModelRequestFields = undefined;
+				// Some models (Opus/Sonnet 5.5) reject forced tool use outright; keep the
+				// tools offered under `auto` and leave thinking intact.
+				const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
+				const id = model.id.toLowerCase();
+				const isOpusOrSonnet55 = isAnthropicOpus55Model(model.id) || id.includes("claude-sonnet-5-5") || id.includes("claude-3-7-sonnet-5-5");
+				const supportsForcedToolChoice =
+					(model.compat as { supportsForcedToolChoice?: boolean } | undefined)?.supportsForcedToolChoice ??
+					!isOpusOrSonnet55;
+				if (toolConfig && forcedChoice && !supportsForcedToolChoice) {
+					toolConfig = { ...toolConfig, toolChoice: { auto: {} } };
+				} else if (toolConfig && forcedChoice && additionalModelRequestFields) {
+					// Bedrock rejects thinking + forced tool_choice.
+					additionalModelRequestFields = undefined;
 				}
 
 				let commandInput: ConverseStreamRequest = {
