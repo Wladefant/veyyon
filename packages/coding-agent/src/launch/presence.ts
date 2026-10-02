@@ -9,6 +9,7 @@ import {
 	daemonPresenceEntryPath,
 	daemonRuntimeDir,
 } from "./paths";
+
 /**
  * Basename of the container holding per-project daemon scopes
  * (`<state>/run/daemons`). {@link pruneDeadDaemonRuntimeDirs} refuses to sweep
