@@ -21,6 +21,13 @@
 
 ### Fixed
 
+- Synthesized required reasoning items for DeepSeek-family Responses targets when replaying turns lacking thinking content ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 76f83958b1150e9b429782d8e7b5692a13d7b12f).
+
+- Scoped Responses tool batch message hoisting to interrupted batches ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a2198912e3eac86f043a3a90db6a598bb0e2341a).
+- Stored replay-sanitized Codex response items as the WebSocket append baseline, disabling append state when responses lack replayable assistant output ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed `forceReasoningOff` being ignored by Anthropic and Google transports, which allowed native thinking alongside a caller-supplied external scratchpad ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 19c0afcc0d2e8a738f7a67499bb7a8b5a7ae2e3b).
+
+- Fixed Codex OAuth selection to keep chat and Spark quotas independent, preserve legacy shared blocks from older brokers, and avoid treating incomplete usage reports as uncapped ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Codex Responses ignoring disabled cache retention when deriving prompt_cache_key, while preserving transport session identity ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi eb5bfbfb11c598826b0d2da3255347a244004e0e).
 - Fixed Codex Responses dropping native image-generation results from assistant content and replay when terminal output items retained a stale `generating` status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a3d1f35099fa).
 - Preserved workspace-scoped credential identity and usage report partitioning for OpenAI Codex ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0eeb6c38149905a7c1d9a8ae4bd98cff882721b8).

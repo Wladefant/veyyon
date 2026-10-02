@@ -11,6 +11,7 @@
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
 
 ### Fixed
+- Aligned runtime model discovery with generation-time exclusion policies for Amazon Bedrock, Z.AI, Fireworks, and Xiaomi, and relaxed literal ZenMux default model assertions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog and forward the configured transport fetch ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Invalidated stale paid-xAI model-cache rows written under Chat Completions so the Responses migration takes effect immediately instead of waiting for TTL expiry ([#107](https://github.com/Wladefant/veyyon/issues/107)).
