@@ -1179,13 +1179,14 @@ export function redactSensitiveCredentials(text: string): string {
 	return text.replace(SENSITIVE_TOKEN_RE, match => {
 		if (!hasPlausibleCredentialEntropy(match)) return match;
 		const lower = match.toLowerCase();
-		const tag = lower.startsWith("gh") || lower.startsWith("github_pat_")
-			? "github"
-			: lower.startsWith("glpat-")
-				? "gitlab"
-				: lower.startsWith("sk-ant-")
-					? "anthropic"
-					: "openai";
+		const tag =
+			lower.startsWith("gh") || lower.startsWith("github_pat_")
+				? "github"
+				: lower.startsWith("glpat-")
+					? "gitlab"
+					: lower.startsWith("sk-ant-")
+						? "anthropic"
+						: "openai";
 		return `[${tag}_token_redacted]`;
 	});
 }
