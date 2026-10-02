@@ -1527,7 +1527,18 @@ exec ${JSON.stringify(realGit)} "$@"
 		expect(text).toBe('{"version":"16.3.11"}\n');
 		expect(jsonSpy).toHaveBeenCalledWith(
 			"/tmp/test",
-			["api", "/repos/can1357/oh-my-pi/contents/packages/coding-agent/package.json", "--method", "GET", "-H", "Accept: application/vnd.github+json", "-H", "Accept-Encoding: identity", "-f", "ref=main"],
+			[
+				"api",
+				"/repos/can1357/oh-my-pi/contents/packages/coding-agent/package.json",
+				"--method",
+				"GET",
+				"-H",
+				"Accept: application/vnd.github+json",
+				"-H",
+				"Accept-Encoding: identity",
+				"-f",
+				"ref=main",
+			],
 			undefined,
 			{ repoProvided: true, trimOutput: false },
 		);
@@ -1543,8 +1554,15 @@ exec ${JSON.stringify(realGit)} "$@"
 			content: tinyPngBase64,
 			html_url: "https://github.com/anomalyco/opencode/blob/main/packages/web/src/assets/lander/screenshot.png",
 		});
-		const tool = new GithubTool(createSession("/tmp/test", Settings.isolated({ "github.enabled": true, "images.autoResize": false })));
-		const result = await tool.execute("file-read", { op: "file_read", repo: "anomalyco/opencode", branch: "main", path: "packages/web/src/assets/lander/screenshot.png" });
+		const tool = new GithubTool(
+			createSession("/tmp/test", Settings.isolated({ "github.enabled": true, "images.autoResize": false })),
+		);
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "anomalyco/opencode",
+			branch: "main",
+			path: "packages/web/src/assets/lander/screenshot.png",
+		});
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("Image file: packages/web/src/assets/lander/screenshot.png");
@@ -1564,7 +1582,12 @@ exec ${JSON.stringify(realGit)} "$@"
 			html_url: sourceUrl,
 		});
 		const tool = new GithubTool(createSession());
-		const result = await tool.execute("file-read", { op: "file_read", repo: "anomalyco/opencode", branch: "main", path: "packages/web/src/assets/lander/screenshot.png" });
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "anomalyco/opencode",
+			branch: "main",
+			path: "packages/web/src/assets/lander/screenshot.png",
+		});
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("GitHub did not return file bytes");
 		expect(text).toContain("packages/web/src/assets/lander/screenshot.png");
@@ -1581,7 +1604,12 @@ exec ${JSON.stringify(realGit)} "$@"
 			html_url: "https://github.com/owner/repo/blob/main/data.bin",
 		});
 		const tool = new GithubTool(createSession());
-		const result = await tool.execute("file-read", { op: "file_read", repo: "owner/repo", branch: "main", path: "data.bin" });
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "owner/repo",
+			branch: "main",
+			path: "data.bin",
+		});
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Cannot read binary file 'data.bin'");
 		expect(text).toContain("https://github.com/owner/repo/blob/main/data.bin");
@@ -1593,6 +1621,13 @@ exec ${JSON.stringify(realGit)} "$@"
 			{ type: "file", name: "b.ts" },
 		]);
 		const tool = new GithubTool(createSession());
-		await expect(tool.execute("file-read", { op: "file_read", repo: "owner/repo", branch: "main", path: "packages/coding-agent" })).rejects.toThrow("GitHub path 'packages/coding-agent' is not a file.");
+		await expect(
+			tool.execute("file-read", {
+				op: "file_read",
+				repo: "owner/repo",
+				branch: "main",
+				path: "packages/coding-agent",
+			}),
+		).rejects.toThrow("GitHub path 'packages/coding-agent' is not a file.");
 	});
 });

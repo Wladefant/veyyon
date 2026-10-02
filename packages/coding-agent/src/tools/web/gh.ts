@@ -29,10 +29,10 @@ import {
 import { isProbablyBinaryHeader } from "@veyyon/utils/binary";
 import { formatBytes } from "@veyyon/utils/format";
 import { parseImageMetadata } from "@veyyon/utils/mime";
-import { loadImageAttachmentInput, webpExclusionForModel } from "../../utils/image-loading";
 import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import * as git from "../../utils/git";
+import { loadImageAttachmentInput, webpExclusionForModel } from "../../utils/image-loading";
 import type { ToolSession } from "..";
 import { abortedPartway } from "../core/aborted-partway";
 import {
@@ -2031,7 +2031,6 @@ type GitHubContentsResponse = GitHubContentsFile | GitHubContentsFile[];
 function isGitHubContentsFile(response: GitHubContentsResponse): response is GitHubContentsFile {
 	return !Array.isArray(response) && response.type === "file";
 }
-
 
 async function executeFileRead(
 	session: ToolSession,
