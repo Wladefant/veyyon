@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -32,6 +33,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Preserved live macOS update backups held by active sessions and tolerated EPERM/EACCES during project directory canonicalization ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Cursor MCP calls named `StrReplace`/`Edit` (or `edit` with `old_string`/`new_string`) 404ing after the server injected CLI tool instructions by routing them as replace-mode edit calls (oh-my-pi 143aded8452dde605ed785e0eee9af3f99e59fe0, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `veyyon --smoke-test` deleting sibling directories in temporary storage by scoping dead daemon runtime directory cleanup to the `daemons` container and 16-hex scope keys, and isolating distribution smoke test runtimes under a private parent ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed MCP reconnects erasing peer server outcomes, keeping connected and failed peer statuses intact when one server reconnects and tracking a dedicated reconnecting lifecycle event ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 735551bd8518ebad2877d127a07cd2296557f813).
