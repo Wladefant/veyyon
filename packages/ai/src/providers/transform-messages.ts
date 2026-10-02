@@ -1155,6 +1155,112 @@ class ToolResultPairing {
 	}
 }
 
+const SENSITIVE_TOKEN_RE =
+	/(?<![a-zA-Z0-9_*-])(gh[opusr]_[a-zA-Z0-9_*]{36,}|github_pat_[a-zA-Z0-9_*]{36,}|glpat-[a-zA-Z0-9_*-]{20,}|sk-proj-[a-zA-Z0-9_*-]{36,}|sk-ant-[a-zA-Z0-9_*-]{36,}|sk-[a-zA-Z0-9_*-]{48,})(?![a-zA-Z0-9_*-])/gi;
+
+function hasPlausibleCredentialEntropy(token: string): boolean {
+	const lower = token.toLowerCase();
+	const prefixLen = lower.startsWith("github_pat_")
+		? 11
+		: lower.startsWith("glpat-")
+			? 6
+			: lower.startsWith("sk-proj-")
+				? 8
+				: lower.startsWith("sk-ant-")
+					? 7
+					: lower.startsWith("gh")
+						? 4
+						: 3;
+	const secret = token.slice(prefixLen);
+	return /^\*+$/.test(secret) || [/[a-z]/, /[A-Z]/, /\d/, /[_-]/].filter(p => p.test(secret)).length >= 2;
+}
+
+export function redactSensitiveCredentials(text: string): string {
+	return text.replace(SENSITIVE_TOKEN_RE, match => {
+		if (!hasPlausibleCredentialEntropy(match)) return match;
+		const lower = match.toLowerCase();
+		const tag = lower.startsWith("gh") || lower.startsWith("github_pat_")
+			? "github"
+			: lower.startsWith("glpat-")
+				? "gitlab"
+				: lower.startsWith("sk-ant-")
+					? "anthropic"
+					: "openai";
+		return `[${tag}_token_redacted]`;
+	});
+}
+
+export function redactSensitiveInObject(val: unknown): { result: unknown; changed: boolean } {
+	if (typeof val === "string") {
+		const result = redactSensitiveCredentials(val);
+		return { result, changed: result !== val };
+	}
+	if (Array.isArray(val)) {
+		let changed = false;
+		const result = val.map(i => {
+			const r = redactSensitiveInObject(i);
+			if (r.changed) changed = true;
+			return r.result;
+		});
+		return { result, changed };
+	}
+	if (val !== null && typeof val === "object") {
+		let changed = false;
+		const result: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(val)) {
+			const r = redactSensitiveInObject(v);
+			if (r.changed) changed = true;
+			result[k] = r.result;
+		}
+		return { result, changed };
+	}
+	return { result: val, changed: false };
+}
+
+function redactBlocks<T extends { type: string }>(
+	blocks: T[],
+	isAssistant?: boolean,
+): { blocks: T[]; changed: boolean } {
+	let changed = false;
+	const res = blocks.map(b => {
+		if (b.type === "text") {
+			const r = redactSensitiveCredentials((b as unknown as TextContent).text);
+			if (r !== (b as unknown as TextContent).text) {
+				changed = true;
+				return { ...b, text: r };
+			}
+		} else if (isAssistant && b.type === "thinking") {
+			const r = redactSensitiveCredentials((b as unknown as ThinkingContent).thinking);
+			if (r !== (b as unknown as ThinkingContent).thinking) {
+				changed = true;
+				return { ...b, thinking: r, thinkingSignature: undefined };
+			}
+		} else if (isAssistant && b.type === "toolCall" && (b as unknown as ToolCall).arguments) {
+			const { result: args, changed: ch } = redactSensitiveInObject((b as unknown as ToolCall).arguments);
+			if (ch) {
+				changed = true;
+				return { ...b, arguments: args as Record<string, unknown>, thoughtSignature: undefined };
+			}
+		}
+		return b;
+	});
+	return { blocks: res, changed };
+}
+
+function redactSensitiveCredentialsInMessages(messages: Message[]): Message[] {
+	return messages.map((msg): Message => {
+		if ((msg.role === "user" || msg.role === "developer") && typeof msg.content === "string") {
+			const r = redactSensitiveCredentials(msg.content);
+			return r === msg.content ? msg : ({ ...msg, content: r } as Message);
+		}
+		if (Array.isArray(msg.content)) {
+			const { blocks, changed } = redactBlocks(msg.content, msg.role === "assistant");
+			return (changed ? { ...msg, content: blocks } : msg) as Message;
+		}
+		return msg;
+	});
+}
+
 /**
  * Normalize tool call ID for cross-provider compatibility.
  * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
@@ -1172,6 +1278,10 @@ export function transformMessages<TApi extends Api>(
 	duplicateToolCallIdSuffixPrefix = "_dup",
 	targetCompat: Model<TApi>["compat"] = model.compat,
 ): Message[] {
+	// Redact sensitive credential-like patterns from all outbound messages
+	// to prevent security block errors from LLM providers (e.g. invalid_prompt).
+	messages = redactSensitiveCredentialsInMessages(messages);
+
 	// Sessions recorded before the repair rode `role: "user"` hold the note as
 	// real assistant text, because the model reproduced it and the reply was
 	// persisted like any other. Replaying one primes the same imitation again,
