@@ -10,6 +10,7 @@ import { resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
+import type { SessionManagerStateSnapshot } from "@veyyon/kernel/session/session-manager";
 import { Loader, Markdown, type OverlayHandle, Spacer, Text } from "@veyyon/tui";
 import {
 	APP_NAME,
@@ -27,6 +28,7 @@ import { padding } from "@veyyon/utils/padding";
 import { visibleWidth } from "@veyyon/utils/width";
 import { advisorStatusNextStep } from "../../../advisor/messages";
 import { shouldEnableAppendOnlyContext } from "../../../config/append-only-context-mode";
+import { type BashResult, isPersistentShellCdCommand } from "../../../exec/bash-executor";
 import { type LoadedCustomShare, loadCustomShare } from "../../../export/custom-share";
 import { shareSession } from "../../../export/share";
 import type { CompactOptions } from "../../../extensibility/extensions/types";
@@ -1077,36 +1079,92 @@ export class CommandController {
 				this.ctx.showError(`Cannot create "${path.basename(resolvedPath)}": parent directory does not exist`);
 				return;
 			}
-			const confirmed = await this.ctx.showHookConfirm(
-				"Create directory?",
-				`"${path.basename(resolvedPath)}" does not exist. Create it?`,
-			);
-			if (!confirmed) return;
-			try {
-				await fs.mkdir(resolvedPath, { recursive: true });
-			} catch (err) {
-				this.ctx.showError(`Failed to create directory: ${errorMessage(err)}`);
-				return;
-			}
 		}
 
+		const moved = await this.#withSessionMove(async () => {
+			if (!isDirectory) {
+				const confirmed = await this.ctx.showHookConfirm(
+					"Create directory?",
+					`"${path.basename(resolvedPath)}" does not exist. Create it?`,
+				);
+				if (!confirmed) return false;
+				try {
+					await fs.mkdir(resolvedPath, { recursive: true });
+				} catch (err) {
+					this.ctx.showError(`Failed to create directory: ${errorMessage(err)}`);
+					return false;
+				}
+			}
+			return this.#relocateSession(resolvedPath);
+		});
+
+		if (moved) {
+			this.ctx.present([
+				new Spacer(1),
+				new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
+			]);
+		}
+	}
+
+	/** Save source settings before acquiring the gate for a complete relocation operation. */
+	async #withSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
+		try {
+			await this.ctx.settings.flush();
+		} catch (err) {
+			this.ctx.showError(`Failed to save settings: ${errorMessage(err)}`);
+			return false;
+		}
+
+		if (this.ctx.withBtwSessionMove) {
+			return this.ctx.withBtwSessionMove(operation);
+		}
+		return operation();
+	}
+
+	/** Relocate only while #withSessionMove holds the BTW gate; false means no successful move. */
+	async #relocateSession(resolvedPath: string): Promise<boolean> {
+		if (resolvedPath === path.resolve(this.ctx.sessionManager.getCwd())) return false;
+
+		const previousState = this.ctx.sessionManager.captureState();
 		try {
 			await this.ctx.sessionManager.moveTo(resolvedPath);
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${errorMessage(err)}`);
-			return;
+			return false;
 		}
-
-		await this.ctx.applyCwdChange(resolvedPath);
+		let applied = false;
+		try {
+			applied = await this.ctx.applyCwdChange(resolvedPath);
+		} catch (error) {
+			await this.#restoreAfterMoveFailure(previousState, error);
+			return false;
+		}
+		if (!applied) {
+			await this.#restoreAfterMoveFailure(previousState);
+			return false;
+		}
 
 		this.ctx.updateEditorBorderColor();
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender();
+		return true;
+	}
 
-		this.ctx.present([
-			new Spacer(1),
-			new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
-		]);
+	async #restoreAfterMoveFailure(
+		previousState: SessionManagerStateSnapshot,
+		error?: unknown,
+	): Promise<void> {
+		this.ctx.sessionManager.restoreState(previousState);
+		try {
+			await this.ctx.applyCwdChange(previousState.cwd);
+		} catch (restoreError) {
+			logger.error("Failed to restore previous working directory after move failure", {
+				error: restoreError,
+			});
+		}
+		if (error !== undefined) {
+			this.ctx.showError(`Move failed while applying directory change: ${errorMessage(error)}`);
+		}
 	}
 
 	async handleRenameCommand(title: string): Promise<void> {
@@ -1124,16 +1182,92 @@ export class CommandController {
 	}
 
 	async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
+		const isDeferred = this.ctx.session.isStreaming;
+		const shouldPersistCwd = isPersistentShellCdCommand(command);
+		if (isDeferred && shouldPersistCwd) {
+			this.ctx.showWarning("Wait for the current response to finish or abort it before changing directories.");
+			return;
+		}
+
+		if (shouldPersistCwd) {
+			await this.#withSessionMove(() => this.#executeBashCommand(command, excludeFromContext, isDeferred, true));
+		} else {
+			await this.#executeBashCommand(command, excludeFromContext, isDeferred, false);
+		}
+	}
+
+	/** Returns whether shell execution committed a cwd relocation, not whether the shell command succeeded. */
+	async #executeBashCommand(
+		command: string,
+		excludeFromContext: boolean,
+		isDeferred: boolean,
+		shouldPersistCwd: boolean,
+	): Promise<boolean> {
 		this.ctx.bashComponent = new BashExecutionComponent(command, this.ctx.ui, excludeFromContext);
-		await this.#runShortcutExecution(
-			this.ctx.bashComponent,
-			"bashComponent",
-			this.ctx.pendingBashComponents,
-			onChunk => this.ctx.session.executeBash(command, onChunk, { excludeFromContext, useUserShell: true }),
-			"Bash command failed",
-		);
-		this.ctx.bashComponent = undefined;
+
+		if (isDeferred) {
+			this.ctx.pendingMessagesContainer.addChild(this.ctx.bashComponent);
+			this.ctx.pendingBashComponents.push(this.ctx.bashComponent);
+		} else {
+			this.ctx.present(this.ctx.bashComponent);
+		}
 		this.ctx.ui.requestRender();
+
+		try {
+			const result = await this.ctx.session.executeBash(
+				command,
+				chunk => {
+					if (this.ctx.bashComponent) {
+						this.ctx.bashComponent.appendOutput(chunk);
+					}
+				},
+				{
+					excludeFromContext,
+					useUserShell: true,
+				},
+			);
+			if (this.ctx.bashComponent) {
+				const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
+				this.ctx.bashComponent.setComplete(result.exitCode, result.cancelled, {
+					output: result.output,
+					meta,
+				});
+			}
+			try {
+				if (shouldPersistCwd) return await this.#applyBashResultCwd(result);
+			} catch (error) {
+				this.ctx.showError(
+					`Bash command completed, but ${APP_NAME} failed to update its working directory: ${errorMessage(error)}`,
+				);
+			}
+		} catch (error) {
+			if (this.ctx.bashComponent) {
+				this.ctx.bashComponent.setComplete(undefined, false);
+			}
+			this.ctx.showError(`Bash command failed: ${errorMessage(error)}`);
+		} finally {
+			this.ctx.bashComponent = undefined;
+			this.ctx.ui.requestRender();
+		}
+		return false;
+	}
+
+	async #applyBashResultCwd(result: BashResult): Promise<boolean> {
+		if (result.cancelled || result.exitCode !== 0 || !result.workingDir) return false;
+		if (!path.isAbsolute(result.workingDir)) return false;
+
+		const resolvedPath = path.resolve(result.workingDir);
+		if (resolvedPath === path.resolve(this.ctx.sessionManager.getCwd())) return false;
+
+		let isDirectory = false;
+		try {
+			isDirectory = (await fs.stat(resolvedPath)).isDirectory();
+		} catch {
+			isDirectory = false;
+		}
+		if (!isDirectory) return false;
+
+		return this.#relocateSession(resolvedPath);
 	}
 
 	async handlePythonCommand(code: string, excludeFromContext = false): Promise<void> {
