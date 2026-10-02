@@ -3581,12 +3581,11 @@ class CodexWebSocketConnection {
 			if (signal) signal.removeEventListener("abort", onAbort);
 		};
 		const onAbort = () => {
-			socket.close(1000, "aborted");
 			if (!settled) {
 				settled = true;
-				clearPending();
 				reject(new CodexWebSocketTransportError(`request was aborted`, { cause: signal?.reason }));
 			}
+			this.close("aborted");
 		};
 		if (signal) {
 			if (signal.aborted) {
