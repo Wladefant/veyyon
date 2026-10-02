@@ -1,8 +1,12 @@
 import { Database } from "bun:sqlite";
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import { scheduler } from "node:timers/promises";
 import { exponentialBackoffDelay } from "./backoff";
 import { getDbBusyTimeoutMs } from "./env";
-
+import { withFileLockSync } from "./file-lock";
+import { isEnoent } from "./fs-error";
+import * as logger from "./logger";
 /**
  * True when a queryable object named `table` exists in the database, whether it
  * is a regular table, a virtual table (FTS5/vec register in `sqlite_master`
@@ -65,30 +69,167 @@ export function escapeLike(value: string): string {
 	return value.replace(/[\\%_]/g, "\\$&");
 }
 
-/**
- * Opens and initializes a store, retrying BUSY failures up to four total attempts.
- * Installs the busy handler before initialization and closes failed connections.
- * The initializer may run again on a fresh connection; on success it owns the handle.
- * Final failures retain their SQLite codes and include the database path.
- */
-export async function openSqliteDatabase<T>(dbPath: string, initialize: (db: Database) => T | Promise<T>): Promise<T> {
-	const maxAttempts = 4;
-	const baseDelayMs = 100;
+const BUSY_MAX_ATTEMPTS = 4;
+const BUSY_BASE_DELAY_MS = 100;
+const SQLITE_STORE_SUFFIXES = ["-wal", "-shm", "-journal", ""];
+
+type SqliteFileIdentity = string | null | undefined;
+
+class SqliteAttemptFailure extends Error {
+	readonly canRecover: boolean;
+	readonly db?: Database;
+	constructor(
+		readonly original: unknown,
+		readonly identity: SqliteFileIdentity,
+		options: { canRecover?: boolean; db?: Database } = {},
+	) {
+		super(original instanceof Error ? original.message : String(original));
+		this.canRecover = options.canRecover ?? true;
+		this.db = options.db;
+	}
+}
+
+function sqliteFileIdentity(dbPath: string): SqliteFileIdentity {
+	try {
+		const s = fs.statSync(dbPath);
+		return `${s.dev}:${s.ino}:${s.birthtimeMs}`;
+	} catch (e) { return isEnoent(e) ? null : undefined; }
+}
+
+function closeFailedDatabase(db: Database | undefined, error: unknown, identity: SqliteFileIdentity): void {
+	try { db?.close(); }
+	catch (closeError) {
+		const orig = error instanceof Error ? error : new Error(String(error));
+		orig.message += `; failed to close the SQLite handle: ${closeError instanceof Error ? closeError.message : String(closeError)}`;
+		throw new SqliteAttemptFailure(orig, identity, { canRecover: false });
+	}
+}
+
+export interface SqliteOpenOptions {
+	recoverCorruption?: boolean;
+	onCorruptionPreserved?: (backupPath: string, error: unknown) => void;
+}
+
+function handleOpenError(db: Database | undefined, error: unknown, identity: SqliteFileIdentity, recover?: boolean): never {
+	if (recover && isSqliteCorruptionError(error)) throw new SqliteAttemptFailure(error, identity, { db });
+	closeFailedDatabase(db, error, identity);
+	throw new SqliteAttemptFailure(error, identity);
+}
+
+async function openWithBusyRetries<T>(
+	dbPath: string,
+	initialize: (db: Database) => T | Promise<T>,
+	options: SqliteOpenOptions,
+): Promise<T> {
 	for (let attempt = 0; ; attempt++) {
 		let db: Database | undefined;
+		const identity = sqliteFileIdentity(dbPath);
 		try {
 			db = new Database(dbPath);
-			// WAL recovery can bypass the busy handler; both it and retries are needed (#2421).
 			db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 			return await initialize(db);
 		} catch (error) {
-			db?.close();
-			if (!isSqliteBusyError(error) || attempt + 1 >= maxAttempts) {
-				throw annotateSqliteError(error, dbPath);
+			if (!isSqliteBusyError(error) || attempt + 1 >= BUSY_MAX_ATTEMPTS) {
+				handleOpenError(db, error, identity, options.recoverCorruption);
 			}
-			await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: baseDelayMs, jitter: 0 }));
+			closeFailedDatabase(db, error, identity);
+			await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: BUSY_BASE_DELAY_MS, jitter: 0 }));
 		}
 	}
+}
+
+function openOnce<T>(dbPath: string, initialize: (db: Database) => T, options: SqliteOpenOptions): T {
+	let db: Database | undefined;
+	const identity = sqliteFileIdentity(dbPath);
+	try {
+		db = new Database(dbPath);
+		db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
+		return initialize(db);
+	} catch (error) {
+		handleOpenError(db, error, identity, options.recoverCorruption);
+	}
+}
+
+function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined): string {
+	const backupPath = `${dbPath}.corrupt-${Date.now()}-${crypto.randomUUID()}`;
+	const preserved: string[] = [];
+	for (const suffix of SQLITE_STORE_SUFFIXES) {
+		try {
+			try { fs.chmodSync(`${dbPath}${suffix}`, 0o600); } catch {}
+			fs.copyFileSync(`${dbPath}${suffix}`, `${backupPath}${suffix}`, fs.constants.COPYFILE_EXCL);
+			preserved.push(suffix);
+		} catch (error) {
+			if (isEnoent(error) && suffix !== "") continue;
+			throw error;
+		}
+	}
+	db?.close();
+	const removed: string[] = [];
+	try {
+		for (const s of preserved) {
+			try { fs.unlinkSync(`${dbPath}${s}`); removed.push(s); }
+			catch (err) { if (!isEnoent(err)) throw err; }
+		}
+	} catch (error) {
+		for (const s of removed) {
+			try { fs.copyFileSync(`${backupPath}${s}`, `${dbPath}${s}`, fs.constants.COPYFILE_EXCL); } catch (rb) {
+				logger.error("SQLite quarantine rollback failed; original preserved at backup path", { path: `${dbPath}${s}`, backupPath: `${backupPath}${s}`, error: String(rb) });
+			}
+		}
+		throw error;
+	}
+	return backupPath;
+}
+
+function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteOpenOptions): void {
+	if (!(error instanceof SqliteAttemptFailure)) throw annotateSqliteError(error, dbPath);
+	const failure = error;
+	if (!options.recoverCorruption || !failure.canRecover || !isSqliteCorruptionError(failure.original)) {
+		throw annotateSqliteError(failure.original, dbPath);
+	}
+	let backupPath: string | null;
+	try {
+		try {
+			backupPath = withFileLockSync(`${dbPath}.recovery`, () => {
+				const currentIdentity = sqliteFileIdentity(dbPath);
+				if (failure.identity === undefined || currentIdentity === undefined) {
+					throw new Error("could not verify the corrupt database file identity");
+				}
+				return currentIdentity === failure.identity ? quarantineCorruptSqliteStore(dbPath, failure.db) : null;
+			});
+		} finally { closeFailedDatabase(failure.db, failure.original, failure.identity); }
+	} catch (preservationError) {
+		const annotated = annotateSqliteError(failure.original, dbPath);
+		annotated.message += `; failed to preserve the corrupt database: ${preservationError instanceof Error ? preservationError.message : String(preservationError)}`;
+		throw annotated;
+	}
+	if (backupPath === null) return;
+	logger.warn("SQLite database corrupt; preserved damaged store before recreating it", {
+		path: dbPath, backupPath, warning: "Stored credentials from this database may require re-login.",
+	});
+	options.onCorruptionPreserved?.(backupPath, failure.original);
+}
+
+export async function openSqliteDatabase<T>(
+	dbPath: string,
+	initialize: (db: Database) => T | Promise<T>,
+	options: SqliteOpenOptions = {},
+): Promise<T> {
+	try { return await openWithBusyRetries(dbPath, initialize, options); }
+	catch (error) { recoverCorruptDatabase(dbPath, error, options); }
+	try { return await openWithBusyRetries(dbPath, initialize, {}); }
+	catch (error) { throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath); }
+}
+
+export function openSqliteDatabaseSync<T>(
+	dbPath: string,
+	initialize: (db: Database) => T,
+	options: SqliteOpenOptions = {},
+): T {
+	try { return openOnce(dbPath, initialize, options); }
+	catch (error) { recoverCorruptDatabase(dbPath, error, options); }
+	try { return openOnce(dbPath, initialize, {}); }
+	catch (error) { throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath); }
 }
 
 /** Adds the failing store's path to an error without losing SQLite result codes or its original stack. */
