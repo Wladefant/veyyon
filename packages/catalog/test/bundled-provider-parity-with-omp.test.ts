@@ -94,7 +94,6 @@ const OMP_PROVIDER_OPT_OUTS: Readonly<Record<string, string>> = {
 	"cline-pass": "port pending (Refs #107)",
 	commandcode: 'same provider as the local "command-code" id; renaming would orphan saved credentials',
 	deepinfra: "open port, PR 354",
-	"gmi-cloud": "port pending (Refs #107)",
 	helmcode: "port pending (Refs #107)",
 	local: "open port, PR 351 (synthetic role provider)",
 	stepfun: "port pending (Refs #107)",

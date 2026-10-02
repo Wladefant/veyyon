@@ -19,6 +19,7 @@ import { fireworksProvider } from "./fireworks";
 import { githubCopilotProvider } from "./github-copilot";
 import { gitlabDuoProvider } from "./gitlab-duo";
 import { gitLabDuoWorkflowProvider } from "./gitlab-duo-workflow";
+import { gmiCloudProvider } from "./gmi-cloud";
 import { googleProvider } from "./google";
 import { googleAntigravityProvider } from "./google-antigravity";
 import { googleGeminiCliProvider } from "./google-gemini-cli";
@@ -157,6 +158,7 @@ const ALL = [
 	nousResearchProvider,
 	nousResearchApiKeyProvider,
 	amazonBedrockProvider,
+	gmiCloudProvider,
 ];
 
 export type RegistryDef = (typeof ALL)[number];
