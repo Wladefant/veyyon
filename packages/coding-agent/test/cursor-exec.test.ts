@@ -7,6 +7,12 @@ import type { AgentEvent, AnyAgentTool } from "@veyyon/agent-core";
 import { GrepArgsSchema, ReadArgsSchema, ShellArgsSchema } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CursorExecHandlers } from "@veyyon/coding-agent/cursor";
+import {
+	createBridgeEditTool,
+	cursorMcpPrefersReplaceEdit,
+	normalizeCursorReplaceArgs,
+} from "@veyyon/coding-agent/cursor-bridge-tools";
+import { EditTool } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
@@ -131,5 +137,138 @@ describe("CursorExecHandlers error results", () => {
 		expect(stdout).toEqual(["Enriched recovery guidance"]);
 		const end = events.find(event => event.type === "tool_execution_end");
 		expect(end?.isError).toBe(true);
+	});
+});
+
+describe("Cursor MCP StrReplace fallback", () => {
+	let cwd: string;
+
+	beforeEach(async () => {
+		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-mcp-strreplace-"));
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(cwd);
+	});
+
+	it("projects CLI and replacement fields onto replace kwargs", () => {
+		expect(
+			normalizeCursorReplaceArgs({ path: "/tmp/n.txt", old_text: "a", new_text: "b", replaceAll: true }),
+		).toEqual({
+			path: "/tmp/n.txt",
+			old_string: "a",
+			new_string: "b",
+			replace_all: true,
+		});
+		expect(normalizeCursorReplaceArgs({ path: "/tmp/n.txt", input: "[n]" })).toEqual({
+			path: "/tmp/n.txt",
+			input: "[n]",
+		});
+	});
+
+	it("routes injected CLI names and replace-shaped edit onto the bridge", () => {
+		expect(cursorMcpPrefersReplaceEdit("StrReplace", { path: "a", old_string: "x", new_string: "y" })).toBe(true);
+		expect(cursorMcpPrefersReplaceEdit("Edit", { path: "a", old_text: "x", new_text: "y" })).toBe(true);
+		expect(cursorMcpPrefersReplaceEdit("edit", { path: "a", old_string: "x", new_string: "y" })).toBe(true);
+		expect(cursorMcpPrefersReplaceEdit("edit", { input: "[a#0000]\nPUT 1.=1:\n+x\n" })).toBe(false);
+		expect(cursorMcpPrefersReplaceEdit("write", { path: "a", old_string: "x", new_string: "y" })).toBe(false);
+	});
+
+	it("edits a file when the server-injected StrReplace name arrives as MCP", async () => {
+		const target = path.join(cwd, "note.txt");
+		await Bun.write(target, "alpha\nbeta\n");
+		const session = createTestSession(cwd);
+		const handlers = new CursorExecHandlers({
+			cwd,
+			tools: new Map<string, AnyAgentTool>([["edit", new EditTool(session)]]),
+			getEditReplaceTool: () => createBridgeEditTool(session),
+		});
+
+		const result = await handlers.mcp({
+			name: "StrReplace",
+			providerIdentifier: "pi-agent",
+			toolName: "StrReplace",
+			toolCallId: "sr1",
+			args: { path: target, old_string: "beta", new_string: "gamma" },
+			rawArgs: {},
+		});
+
+		expect(await Bun.file(target).text()).toBe("alpha\ngamma\n");
+		expect(result.content.map(part => (part.type === "text" ? part.text : "")).join("")).not.toMatch(
+			/not found|not available/i,
+		);
+	});
+
+	it("runs replace-mode when advertised hashline edit is called with old_string", async () => {
+		const target = path.join(cwd, "note.txt");
+		await Bun.write(target, "alpha\nbeta\n");
+		const session = createTestSession(cwd);
+		const hashline = new EditTool(session);
+		expect(hashline.mode).not.toBe("replace");
+		const handlers = new CursorExecHandlers({
+			cwd,
+			tools: new Map<string, AnyAgentTool>([["edit", hashline]]),
+			getEditReplaceTool: () => createBridgeEditTool(session),
+		});
+
+		const result = await handlers.mcp({
+			name: "edit",
+			providerIdentifier: "pi-agent",
+			toolName: "edit",
+			toolCallId: "e-mix",
+			args: { path: target, old_text: "beta", new_text: "gamma" },
+			rawArgs: {},
+		});
+
+		expect(await Bun.file(target).text()).toBe("alpha\ngamma\n");
+		expect(result.content.map(part => (part.type === "text" ? part.text : "")).join("")).not.toMatch(
+			/not found|not available/i,
+		);
+	});
+
+	it("does not run replace-mode for a hashline edit payload", async () => {
+		const session = createTestSession(cwd);
+		let replaceBuilt = 0;
+		const handlers = new CursorExecHandlers({
+			cwd,
+			tools: new Map<string, AnyAgentTool>([["edit", new EditTool(session)]]),
+			getEditReplaceTool: () => {
+				replaceBuilt++;
+				return createBridgeEditTool(session);
+			},
+		});
+
+		await handlers.mcp({
+			name: "edit",
+			providerIdentifier: "pi-agent",
+			toolName: "edit",
+			toolCallId: "e-hl",
+			args: { input: "[missing.txt]\nPUT 1.=1:\n+x\n" },
+			rawArgs: {},
+		});
+
+		expect(replaceBuilt).toBe(0);
+	});
+
+	it("still 404s StrReplace when edit was not granted", async () => {
+		const target = path.join(cwd, "note.txt");
+		await Bun.write(target, "alpha\nbeta\n");
+		const handlers = new CursorExecHandlers({
+			cwd,
+			tools: new Map<string, AnyAgentTool>(),
+			getEditReplaceTool: () => undefined,
+		});
+
+		const result = await handlers.mcp({
+			name: "StrReplace",
+			providerIdentifier: "pi-agent",
+			toolName: "StrReplace",
+			toolCallId: "sr-deny",
+			args: { path: target, old_string: "beta", new_string: "gamma" },
+			rawArgs: {},
+		});
+
+		expect(result.isError).toBe(true);
+		expect(await Bun.file(target).text()).toBe("alpha\nbeta\n");
 	});
 });

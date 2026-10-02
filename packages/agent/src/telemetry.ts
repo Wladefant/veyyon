@@ -1313,6 +1313,9 @@ function assistantContentToOtelParts(content: AssistantMessage["content"]): Otel
 			case "toolCall":
 				parts.push({ type: "tool_call", id: part.id, name: part.name, arguments: part.arguments });
 				break;
+			case "image":
+				parts.push({ type: "blob", modality: "image", mime_type: part.mimeType, content: part.data });
+				break;
 		}
 	}
 	return parts;
