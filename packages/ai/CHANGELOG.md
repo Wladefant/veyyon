@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Preserved Anthropic's shared harness cache breakpoint across PROJECT, SHORTHAND, HANDLES and memory recall suffixes while reserving a marker for the newest message ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1488be016d5d7925e0a7071561af23b98c13ca3b, 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
 - Downgraded forced tool choice to auto for Claude Opus 5.5 and Sonnet 5.5 on Bedrock Converse to prevent 400 rejection while keeping thinking intact ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 8e4fb1a1e0e3838d7b33d9dd02bafe9365400401).
 - Demoted credit-funded OpenAI Codex accounts behind siblings with renewable allowance and evicted automatic session pins whose allowance is spent when an unblocked sibling has quota ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Synthesized required reasoning items for DeepSeek-family Responses targets when replaying turns lacking thinking content ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 76f83958b1150e9b429782d8e7b5692a13d7b12f).

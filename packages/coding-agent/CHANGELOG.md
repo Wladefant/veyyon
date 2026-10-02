@@ -35,6 +35,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Fixed memory recall blocks invalidating the prompt cache across refreshes by stripping volatile current time timestamps from recall preambles ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
 - Preserved plan mode state, model state, and active tool set when exiting plan mode encounters a restoration failure, preventing corrupted session state on failed plan exits (oh-my-pi 8a8ff498b3dd2f9cfb751dc44d73718e3cfd033c, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved live macOS update backups held by active sessions and tolerated EPERM/EACCES during project directory canonicalization ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Cursor MCP calls named `StrReplace`/`Edit` (or `edit` with `old_string`/`new_string`) 404ing after the server injected CLI tool instructions by routing them as replace-mode edit calls (oh-my-pi 143aded8452dde605ed785e0eee9af3f99e59fe0, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
