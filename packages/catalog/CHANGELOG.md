@@ -5,6 +5,9 @@
 ### Added
 
 - Added the `openai-codex` subscription fields: 1M context for `gpt-5.6-*`, a `maxContextWindow` ceiling (872K, 922K for Astra and GPT-6.1 Sol), `longContext` pricing above 272K, `serviceTierCost` for flex and priority, zero cache-write cost for GPT-6 subscription models, the `gpt-daybreak-blue-latest` price, and the hidden `gpt-image-2` image runner ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+### Changed
+
+- OpenCode gateway model discovery now sends the `x-opencode-session` header derived from the install id alongside the Veyyon user agent ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Removed
 
@@ -12,6 +15,7 @@
 - Removed redundant `grok-composer-2.5-fast` OAuth contract test from `xai-oauth-bundle.test.ts` as curated seed parity loops already verify its properties ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Typed the Antigravity discovery `fetcher` option as `FetchImpl`, so a caller's fetch override type-checks without a `preconnect` adapter ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Discovered Antigravity image generation models from account capabilities and selected advertised models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Defaulted paid xAI and SuperGrok model selection to Grok 4.6.
 - Versioned the GitHub Copilot model cache per credential and endpoint so stale routing rows are refetched.

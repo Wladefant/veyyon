@@ -251,6 +251,85 @@ describe("runIsolatedSubprocess", () => {
 		expect(outcome.error).toContain("Merge failed: git apply --3way failed");
 		expect(outcome.error).not.toContain("preserved on branch");
 	});
+
+	for (const { label, blocked, id } of [
+		{ label: "writes nested-repo patches before teardown", blocked: false, id: "NestedPersist" },
+		{ label: "retains workspace when write fails", blocked: true, id: "RetainOnFailure" },
+	]) {
+		it(label, async () => {
+			const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-iso-"));
+			tempRoots.push(tmp);
+			const artifactsDir = blocked ? path.join(tmp, "artifacts") : tmp;
+			if (blocked) await Bun.write(artifactsDir, "not a directory");
+			const nestedPatch = "diff --git a/b.txt b/b.txt\n+hi\n";
+			vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
+				mergedDir: "/repo/isolated",
+				backend: natives.IsoBackendKind.Rcopy,
+				fellBack: false,
+				fallbackReason: null,
+			});
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result({ id }));
+			vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({
+				rootPatch: "",
+				nestedPatches: [{ relativePath: "inner", patch: nestedPatch }],
+			});
+			vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+			const outcome = await runIsolatedSubprocess({
+				baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id },
+				context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
+				agentId: id,
+				mergeMode: "patch",
+				artifactsDir,
+				buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+			});
+			if (blocked) {
+				expect(outcome.error).toContain("Isolation workspace retained at /repo/isolated");
+				expect(outcome.nestedPatchPaths).toBeUndefined();
+			} else {
+				const nestedPath = path.join(artifactsDir, `${id}.nested-0-inner.patch`);
+				expect(outcome.hasRootChanges).toBe(false);
+				expect(outcome.nestedPatchPaths).toEqual([nestedPath]);
+				expect(await Bun.file(nestedPath).text()).toBe(nestedPatch);
+			}
+		});
+	}
+
+	it("removes the nested patches already written when a later one cannot be written, and retains the workspace", async () => {
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-iso-"));
+		tempRoots.push(tmp);
+		const id = "PartialNested";
+		// A directory squatting on the second destination makes that write fail
+		// after the first nested patch has already landed.
+		await fs.mkdir(path.join(tmp, `${id}.nested-1-second.patch`));
+		vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
+			mergedDir: "/repo/isolated",
+			backend: natives.IsoBackendKind.Rcopy,
+			fellBack: false,
+			fallbackReason: null,
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result({ id }));
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({
+			rootPatch: "diff --git a/a.txt b/a.txt\n+root\n",
+			nestedPatches: [
+				{ relativePath: "first", patch: "diff --git a/b.txt b/b.txt\n+1\n" },
+				{ relativePath: "second", patch: "diff --git a/c.txt b/c.txt\n+2\n" },
+			],
+		});
+		vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+
+		const outcome = await runIsolatedSubprocess({
+			baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id },
+			context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
+			agentId: id,
+			mergeMode: "patch",
+			artifactsDir: tmp,
+			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+		});
+
+		expect(outcome.error).toContain("Isolation workspace retained at /repo/isolated");
+		expect(outcome.nestedPatchPaths).toBeUndefined();
+		expect(await Bun.file(path.join(tmp, `${id}.nested-0-first.patch`)).exists()).toBe(false);
+	});
 });
 
 describe("mergeIsolatedChanges", () => {

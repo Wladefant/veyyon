@@ -85,7 +85,7 @@ describe("host allowlist on every input route", () => {
 		await expect(new PrProtocolHandler().resolve(parseInternalUrl("pr://attacker/o/r/7"))).rejects.toThrow(
 			/"attacker".*not allowed/,
 		);
-		for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+		for (const spy of spies) expect(spy.mock.calls).toEqual([]);
 	});
 
 	it("accepts github.com on every route", () => {
@@ -101,7 +101,7 @@ describe("host allowlist on every input route", () => {
 		expect(parseRepoRef("ghe.corp/o/r").host).toBe("ghe.corp");
 		const spy = vi.spyOn(git.github, "json").mockResolvedValue([]);
 		await new PrProtocolHandler().resolve(parseInternalUrl("pr://ghe.corp/o/r"));
-		expect(spy).toHaveBeenCalled();
+		expect(spy.mock.calls).toHaveLength(1);
 
 		delete process.env.GH_HOST;
 		expect(() => parsePrUrl("https://ghe.corp/o/r/pull/2")).toThrow(/not allowed/);

@@ -57,7 +57,7 @@ import {
 import { ConfigurationError } from "./error/validation";
 import type { OAuthCredentials } from "./registry/oauth/types";
 import type { Provider } from "./types";
-import type { UsageCostHistoryEntry, UsageCostHistoryQuery, UsageHistoryEntry, UsageHistoryQuery } from "./usage";
+import type { UsageHistoryEntry, UsageHistoryQuery } from "./usage";
 
 /**
  * Default SQLite-backed implementation of {@link AuthCredentialStore}.
@@ -98,8 +98,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#releaseCredentialRefreshLeaseStmt: Statement;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
 	#insertUsageHistoryStmt: Statement;
-	#insertUsageCostStmt: Statement;
-	#listUsageCostsStmt: Statement;
 	#getAccountNameStmt: Statement;
 	#listAccountNamesStmt: Statement;
 	#upsertAccountNameStmt: Statement;
@@ -242,12 +240,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#listUsageHistoryStmt = this.#db.prepare(
 			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
 		);
-		this.#insertUsageCostStmt = this.#db.prepare(
-			"INSERT INTO usage_cost_history (recorded_at, provider, account_key, cost_usd) VALUES (?, ?, ?, ?)",
-		);
-		this.#listUsageCostsStmt = this.#db.prepare(
-			"SELECT recorded_at, provider, account_key, cost_usd FROM usage_cost_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) AND (? IS NULL OR account_key = ?) ORDER BY recorded_at ASC",
-		);
 		this.#getAccountNameStmt = this.#db.prepare("SELECT name FROM auth_account_names WHERE identity = ?");
 		this.#listAccountNamesStmt = this.#db.prepare("SELECT identity, name FROM auth_account_names");
 		this.#upsertAccountNameStmt = this.#db.prepare(
@@ -352,14 +344,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				resets_at INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_series ON usage_history(provider, account_key, limit_id, recorded_at);
-			CREATE TABLE IF NOT EXISTS usage_cost_history (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				recorded_at INTEGER NOT NULL,
-				provider TEXT NOT NULL,
-				account_key TEXT NOT NULL,
-				cost_usd REAL NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS idx_usage_cost_history_lookup ON usage_cost_history(provider, account_key, recorded_at);
 			CREATE TABLE IF NOT EXISTS auth_account_names (
 				identity TEXT PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -1295,54 +1279,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			return [];
 		}
 	}
-	recordUsageCosts(entries: UsageCostHistoryEntry[]): void {
-		try {
-			for (const entry of entries) {
-				this.#insertUsageCostStmt.run(entry.recordedAt, entry.provider, entry.accountKey, entry.costUsd);
-			}
-		} catch (error) {
-			// Still not fatal to the request, but this is money: a dropped batch makes
-			// the cost view under-report spend, and an under-report is indistinguishable
-			// from cheap usage unless the drop is named.
-			logger.warn("Usage costs could not be recorded; the cost view will under-report this spend", {
-				entries: entries.length,
-				error: errorMessage(error),
-			});
-		}
-	}
-
-	listUsageCosts(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[] {
-		try {
-			const provider = query?.provider ?? null;
-			const accountKey = query?.accountKey ?? null;
-			const rows = this.#listUsageCostsStmt.all(
-				query?.sinceMs ?? 0,
-				provider,
-				provider,
-				accountKey,
-				accountKey,
-			) as Array<{
-				recorded_at: number;
-				provider: string;
-				account_key: string;
-				cost_usd: number;
-			}>;
-			return rows.map(row => ({
-				recordedAt: row.recorded_at,
-				provider: row.provider as Provider,
-				accountKey: row.account_key,
-				costUsd: row.cost_usd,
-			}));
-		} catch (error) {
-			// Same as `listUsageHistory`: zero recorded cost and an unreadable cost table are the same empty
-			// list, and reporting a total of $0 for a database that could not be queried is worse than saying
-			// so. The empty list is still returned so the view renders.
-			logger.warn("Usage cost history could not be read; the reported totals are missing all of it", {
-				error: errorMessage(error),
-			});
-			return [];
-		}
-	}
 
 	// ─── Convenience methods for CLI ────────────────────────────────────────
 
@@ -1445,8 +1381,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#lastUsageHistoryStmt.finalize();
 		this.#listUsageHistoryStmt.finalize();
 		this.#updateUsageHistoryStmt.finalize();
-		this.#insertUsageCostStmt.finalize();
-		this.#listUsageCostsStmt.finalize();
 		this.#getAccountNameStmt.finalize();
 		this.#listAccountNamesStmt.finalize();
 		this.#upsertAccountNameStmt.finalize();

@@ -5244,7 +5244,7 @@ describe("openai-codex streaming", () => {
 		let closeCalls = 0;
 
 		class StaleOpenWebSocket extends MockWebSocket {
-			constructor(url: string, options?: WsOptions) {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
 				super(url, options);
 				this.scheduleOpen();
 			}

@@ -503,7 +503,7 @@ describe("AgentSession.branchFromBtw", () => {
 			// Not stuck "in progress": Esc dismisses the panel instead of being refused.
 			expect(controller.handleEscape()).toBe(true);
 			expect(controller.hasActiveRequest()).toBe(false);
-			expect(showStatus).not.toHaveBeenCalledWith("/btw branch is in progress", { dim: true });
+			expect(showStatus.mock.calls.some(([msg]) => msg === "/btw branch is in progress")).toBe(false);
 		});
 	});
 

@@ -1,6 +1,6 @@
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import type { ModelSpec } from "../types";
+import type { FetchImpl, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toStringArray, toStringValue } from "../utils";
 import {
 	ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
@@ -180,7 +180,7 @@ export interface FetchAntigravityDiscoveryModelsOptions {
 	/** Optional abort signal for request cancellation. */
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
-	fetcher?: typeof fetch;
+	fetcher?: FetchImpl;
 	/**
 	 * Hand collapse table to apply to the discovered list. Defaults to the
 	 * Antigravity (budget-transport) table; `googleGeminiCli` passes the
