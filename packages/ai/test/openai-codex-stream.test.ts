@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { STREAM_NO_TERMINAL_REASON_PATTERN } from "@veyyon/ai/error/domains/network";
 import {
 	buildTransformedCodexRequestBody,
 	getOpenAICodexTransportDetails,
@@ -4946,7 +4947,7 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("replays over SSE when websocket closes after buffered output without a terminal event", async () => {
+	it("preserves buffered output and surfaces socket failure without SSE replay", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
@@ -5019,9 +5020,9 @@ describe("openai-codex streaming", () => {
 			},
 		).result();
 
-		expect(result.stopReason).toBe("stop");
-		expect(result.content.find(c => c.type === "text")?.text).toBe("Replay succeeded");
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.content.find(c => c.type === "text")?.text).toBe("Partial output");
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("resets append state and stale turn headers when websocket requests diverge", async () => {
@@ -5535,9 +5536,11 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 			const controller = new AbortController();
 			const abortReason = isTimeout ? new DOMException("The operation timed out.", "TimeoutError") : undefined;
 			const providerSessionState = new Map<string, ProviderSessionState>();
-			const fetchMock = vi.fn<FetchImpl>(() => {
+			let httpRequests = 0;
+			const fetchMock: FetchImpl = () => {
+				httpRequests += 1;
 				throw new Error("Aborted stream must not fall back to SSE");
-			});
+			};
 
 			if (phase === "during debug await") {
 				vi.spyOn(requestDebug, "isRequestDebugEnabled").mockReturnValue(true);
@@ -5591,7 +5594,7 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 				const result = await stream.result();
 				expect(result.stopReason).toBe("aborted");
 				expect(AIError.is(result.errorId!, AIError.Flag.Timeout)).toBe(isTimeout);
-				expect(fetchMock).not.toHaveBeenCalled();
+				expect(httpRequests).toBe(0);
 			} finally {
 				for (const state of providerSessionState.values()) state.close();
 			}
@@ -5683,5 +5686,142 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 		expect(requestCount).toBe(1);
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("timed out");
+	});
+});
+
+describe("openai-codex stream retry guards and balancing end events", () => {
+	it("classifies premature Codex stream close as stream corruption without a terminal event", () => {
+		expect(STREAM_NO_TERMINAL_REASON_PATTERN.test("Codex stream ended before terminal completion event")).toBe(true);
+		expect(
+			STREAM_NO_TERMINAL_REASON_PATTERN.test(
+				"OpenAI responses stream closed before a terminal response event was received",
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		{ kind: "text", failure: "socket" },
+		{ kind: "thinking", failure: "socket" },
+		{ kind: "text", failure: "provider" },
+		{ kind: "thinking", failure: "provider" },
+	])("balances empty $kind across $failure retry", async ({ kind, failure }) => {
+		const tempDir = TempDir.createSync("@veyyon-codex-stream-");
+		setAgentDir(tempDir.path());
+		let wsAttempt = 0;
+		const eventsSeen: string[] = [];
+
+		class RetryEmptyBlockWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+			override send(): void {
+				wsAttempt += 1;
+				if (wsAttempt === 1) {
+					this.sendJson({
+						type: "response.output_item.added",
+						item:
+							kind === "thinking"
+								? { id: "msg_empty", type: "reasoning", summary: [] }
+								: { id: "msg_empty", type: "message", role: "assistant", content: [] },
+						output_index: 0,
+					});
+					if (failure === "provider") this.sendJson({ type: "error", code: "server_error", message: "retry" });
+					else queueMicrotask(() => this.emit("close", { code: 1006 } as unknown as Event));
+				} else {
+					this.emitCodexResponse({ messageId: "msg_ok", responseId: "resp_ok", text: "Retried and succeeded" });
+				}
+			}
+		}
+
+		global.WebSocket = RetryEmptyBlockWebSocket as unknown as typeof WebSocket;
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const stream = streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: createCodexTestToken(),
+				sessionId: `empty-${kind}-${failure}`,
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				fetch: (async () => {
+					throw new Error("SSE fallback should not be called");
+				}) as FetchImpl,
+			},
+		);
+		const consumerPromise = (async () => {
+			for await (const event of stream) {
+				if (["text_start", "text_end", "thinking_start", "thinking_end"].includes(event.type))
+					eventsSeen.push(event.type);
+			}
+		})();
+		const result = await stream.result();
+		await consumerPromise;
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "Retried and succeeded" })]);
+		expect(wsAttempt).toBe(2);
+		expect(eventsSeen).toEqual([`${kind}_start`, `${kind}_end`, "text_start", "text_end"]);
+	});
+
+	it.each([
+		{ kind: "text", delta: "hello" },
+		{ kind: "text", delta: "   " },
+		{ kind: "thinking", delta: "thinking step" },
+		{ kind: "toolCall", delta: "{}" },
+	])("never replays committed $kind ($delta) through either transport", async ({ kind, delta }) => {
+		setAgentDir(TempDir.createSync("@veyyon-codex-stream-").path());
+		let physicalRequests = 0;
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		class CommittedWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+			override send(): void {
+				physicalRequests += 1;
+				const item =
+					kind === "toolCall"
+						? { id: "item", type: "function_call", call_id: "call", name: "todo", arguments: "" }
+						: kind === "thinking"
+							? { id: "item", type: "reasoning", summary: [] }
+							: { id: "item", type: "message", role: "assistant", content: [] };
+				this.sendJson({ type: "response.output_item.added", item, output_index: 0 });
+				this.sendJson({
+					type:
+						kind === "toolCall"
+							? "response.function_call_arguments.delta"
+							: kind === "thinking"
+								? "response.reasoning_text.delta"
+								: "response.output_text.delta",
+					item_id: "item",
+					delta,
+					output_index: 0,
+				});
+				queueMicrotask(() => this.emit("close", { code: 1006 } as unknown as Event));
+			}
+		}
+		global.WebSocket = CommittedWebSocket as unknown as typeof WebSocket;
+		const result = await streamOpenAICodexResponses(createCodexTestModel(), createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			sessionId: `committed-${kind}-${delta}`,
+			providerSessionState: new Map<string, ProviderSessionState>(),
+			fetch: async () => {
+				physicalRequests += 1;
+				return new Response(createCompletedCodexSse("REPLAYED"), {
+					headers: { "content-type": "text/event-stream" },
+				});
+			},
+		}).result();
+		expect(result.stopReason).toBe("error");
+		expect(physicalRequests).toBe(1);
+		expect(result.content).toEqual([
+			expect.objectContaining(
+				kind === "toolCall"
+					? { type: kind, name: "todo", arguments: {} }
+					: kind === "thinking"
+						? { type: kind, thinking: delta }
+						: { type: kind, text: delta },
+			),
+		]);
 	});
 });

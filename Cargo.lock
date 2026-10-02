@@ -10277,6 +10277,7 @@ dependencies = [
 name = "veyyon-uutils-ctx"
 version = "1.5.5"
 dependencies = [
+ "brush-core",
  "libc",
  "veyyon-test-scratch",
 ]

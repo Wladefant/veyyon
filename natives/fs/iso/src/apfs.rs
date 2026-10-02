@@ -16,7 +16,7 @@ declare_backend!(
 
 #[cfg(target_os = "macos")]
 mod imp {
-	use std::{ffi::CString, fs, os::unix::ffi::OsStrExt, path::Path};
+	use std::{fs, path::Path};
 
 	use crate::{IsoError, IsoResult, ProbeResult, canonical_existing_dir};
 
@@ -38,21 +38,11 @@ mod imp {
 			})?;
 		}
 
-		let src_c = to_cstring(lower.as_os_str().as_bytes(), "lower")?;
-		let dst_c = to_cstring(merged.as_os_str().as_bytes(), "merged")?;
-
-		// SAFETY: both pointers are valid CStrings whose backing storage lives
-		// until after the call. `clonefile` with `flags = 0` performs a
-		// recursive reflink clone and does not retain the pointers past the
-		// syscall.
-		let rc = unsafe { libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0) };
-		if rc == 0 {
-			return Ok(());
-		}
-		let err = std::io::Error::last_os_error();
-		if let Some(code) = err.raw_os_error()
-			&& matches!(code, libc::ENOTSUP | libc::EOPNOTSUPP | libc::EXDEV)
-		{
+		let err = match crate::cow::clonefile(&lower, merged, 0) {
+			Ok(()) => return Ok(()),
+			Err(err) => err,
+		};
+		if crate::cow::is_unsupported(&err) {
 			return Err(IsoError::unavailable(format!(
 				"APFS clonefile unsupported on this volume ({err}); {} -> {}",
 				lower.display(),
@@ -71,10 +61,5 @@ mod imp {
 				merged.display()
 			))),
 		}
-	}
-
-	fn to_cstring(bytes: &[u8], label: &str) -> IsoResult<CString> {
-		CString::new(bytes)
-			.map_err(|err| IsoError::other(format!("{label} path contains NUL byte: {err}")))
 	}
 }

@@ -9,6 +9,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CursorExecHandlers } from "@veyyon/coding-agent/cursor";
 import {
 	createBridgeEditTool,
+	createBridgeEditToolProvider,
 	cursorMcpPrefersReplaceEdit,
 	normalizeCursorReplaceArgs,
 } from "@veyyon/coding-agent/cursor-bridge-tools";
@@ -178,10 +179,11 @@ describe("Cursor MCP StrReplace fallback", () => {
 		const target = path.join(cwd, "note.txt");
 		await Bun.write(target, "alpha\nbeta\n");
 		const session = createTestSession(cwd);
+		const tools = new Map<string, AnyAgentTool>([["edit", new EditTool(session)]]);
 		const handlers = new CursorExecHandlers({
 			cwd,
-			tools: new Map<string, AnyAgentTool>([["edit", new EditTool(session)]]),
-			getEditReplaceTool: () => createBridgeEditTool(session),
+			tools,
+			getEditReplaceTool: createBridgeEditToolProvider(tools, session),
 		});
 
 		const result = await handlers.mcp({
