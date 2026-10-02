@@ -29,7 +29,7 @@ describe("paid xai (XAI_API_KEY) Responses contract", () => {
 	it("registers xai on the catalog Responses discovery path", async () => {
 		const entry = CATALOG_PROVIDERS.find(provider => provider.id === "xai");
 		expect(entry, "xai catalog descriptor").toBeDefined();
-		expect(entry!.defaultModel).toBe("grok-4.5");
+		expect(entry!.defaultModel).toBe("grok-4.6");
 		expect(entry!.envVars).toContain("XAI_API_KEY");
 		const options = xaiModelManagerOptions({
 			apiKey: "test-key",

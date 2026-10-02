@@ -96,6 +96,7 @@ pub(crate) fn canonical_existing_dir(
 }
 mod apfs;
 mod btrfs;
+pub mod cow;
 mod diff;
 mod linux_reflink;
 mod overlayfs;
