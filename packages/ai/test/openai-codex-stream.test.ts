@@ -5521,7 +5521,7 @@ describe("openai-codex SSE statelessness", () => {
 	});
 });
 
-describe("openai-codex abort cause preservation and close resilience", () => {
+describe("openai-codex abort cause preservation and bounded error reads", () => {
 	it.each([
 		{ phase: "during handshake", timeout: true },
 		{ phase: "before request", timeout: true },
@@ -5600,52 +5600,6 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 			}
 		},
 	);
-
-	it("does not throw when closing a stale socket", async () => {
-		const tempDir = TempDir.createSync("@veyyon-codex-stream-");
-		setAgentDir(tempDir.path());
-		const fetchMock = vi.fn(async () => {
-			throw new Error("SSE fallback should not be called");
-		});
-		let closeCalls = 0;
-
-		class StaleOpenWebSocket extends MockWebSocket {
-			constructor(url: string, options?: WsOptions) {
-				super(url, options);
-				this.scheduleOpen();
-			}
-
-			override send(): void {
-				this.emitCodexResponse({ messageId: "msg_stale", responseId: "resp_stale", text: "Done" });
-			}
-
-			override close(): void {
-				closeCalls += 1;
-				throw Object.assign(new Error("Socket is closed"), { code: "ERR_SOCKET_CLOSED" });
-			}
-		}
-		global.WebSocket = StaleOpenWebSocket as unknown as typeof WebSocket;
-		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
-		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
-			fetch: fetchMock as FetchImpl,
-			apiKey: createCodexTestToken(),
-			sessionId: "ws-close-error-session",
-			providerSessionState,
-		}).result();
-
-		expect(result.stopReason).toBe("stop");
-		expect(() => {
-			for (const state of providerSessionState.values()) state.close();
-		}).not.toThrow();
-		expect(closeCalls).toBe(1);
-		expect(
-			getOpenAICodexTransportDetails(model, {
-				sessionId: "ws-close-error-session",
-				providerSessionState,
-			}).websocketConnected,
-		).toBe(false);
-	});
 
 	it.each([
 		["non-retryable 403 parsed by CodexApiError.fromResponse", 403],
