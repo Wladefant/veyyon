@@ -19,12 +19,10 @@
  */
 
 import { Effort } from "@veyyon/catalog/effort";
-import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
-import * as AIError from "../error";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
@@ -34,7 +32,12 @@ import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
-import { type AuthGatewayBootOptions, mirrorRequestAbort, resolveGatewayApiKey } from "./dispatch";
+import {
+	type AuthGatewayBootOptions,
+	mirrorRequestAbort,
+	refreshGatewayApiKeyAfterAuthError,
+	resolveGatewayApiKey,
+} from "./dispatch";
 import {
 	captureRequestHeaders,
 	corsHeaders,
@@ -223,71 +226,6 @@ export function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal
 		reportDroppedTypedOptions(api, droppedTypedOptions);
 	}
 	return opts;
-}
-
-/**
- * Hook fired by {@link streamSimple} when the upstream request fails in a
- * way that's rotatable — today that's HTTP 401 (credential is bad) and
- * usage-limit phrasing matched by {@link isUsageLimitError} (Codex's
- * `usage_limit_reached`, Anthropic's `usage_limit_reached`, Google's
- * `resource_exhausted`, …). The two cases need different storage actions:
- *
- * - **usage-limit** → {@link AuthStorage.markUsageLimitReached}. Marks just
- *   the current session's credential as temporarily blocked (honouring
- *   `retry-after` / `resets_at` hints when present) and returns `true` only
- *   when a sibling credential is still available. Burning the credential
- *   with `invalidateCredentialMatching` here would orphan accounts whose
- *   reset window is several hours away — exactly the bug this helper exists
- *   to avoid.
- * - **auth-failure** → {@link AuthStorage.invalidateCredentialMatching}.
- *   Suspect/delete the row so it doesn't get re-picked next request.
- *
- * In both branches we return the next `getApiKey` result (sticky on the
- * same `sessionId`) so streamSimple can transparently retry the pre-emit
- * failure with a fresh credential. Returning `undefined` aborts the retry
- * and surfaces the original error to the caller.
- */
-async function refreshGatewayApiKeyAfterAuthError(
-	storage: AuthStorage,
-	model: Model<Api>,
-	sessionId: string,
-	provider: string,
-	oldKey: string,
-	error: unknown,
-	signal: AbortSignal,
-	format: string,
-	peer: string,
-): Promise<string | undefined> {
-	const message = errorMessage(error);
-	if (AIError.isUsageLimit(error)) {
-		const retryAfterMs = extractRetryHint(undefined, message);
-		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
-			retryAfterMs,
-			baseUrl: model.baseUrl,
-			modelId: model.id,
-			apiKey: oldKey,
-			signal,
-		});
-		logger.debug("auth-gateway retrying provider request after usage-limit block", {
-			format,
-			provider,
-			peer,
-			switched,
-			retryAfterMs,
-			retryAtMs,
-			error: message,
-		});
-		if (!switched) return undefined;
-		return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
-	}
-	await storage.invalidateCredentialMatching(provider, oldKey, { sessionId, signal });
-	logger.debug("auth-gateway retrying provider request after credential invalidation", {
-		format,
-		provider,
-		peer,
-		error: message,
-	});
-	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
 }
 
 /**

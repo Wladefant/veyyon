@@ -7,8 +7,11 @@
  * auth rotation, and usage recording live here so each route drives the same
  * broker-backed policies.
  */
+import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import * as logger from "@veyyon/utils/logger";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import type { AuthStorage } from "../auth-storage";
+import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
 import type { Api, Model } from "../types";
 import type { AuthGatewayServerOptions } from "./types";
@@ -73,6 +76,49 @@ export async function resolveGatewayApiKey(
 		type: "authentication_error",
 		message: `No credential available for provider ${model.provider}`,
 	};
+}
+
+export async function refreshGatewayApiKeyAfterAuthError(
+	storage: AuthStorage,
+	model: Model<Api>,
+	sessionId: string,
+	provider: string,
+	oldKey: string,
+	error: unknown,
+	signal: AbortSignal,
+	format: string,
+	peer: string,
+): Promise<string | undefined> {
+	const message = errorMessage(error);
+	if (AIError.isUsageLimit(error)) {
+		const retryAfterMs = extractRetryHint(undefined, message);
+		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
+			retryAfterMs,
+			baseUrl: model.baseUrl,
+			modelId: model.id,
+			apiKey: oldKey,
+			signal,
+		});
+		logger.debug("auth-gateway retrying provider request after usage-limit block", {
+			format,
+			provider,
+			peer,
+			switched,
+			retryAfterMs,
+			retryAtMs,
+			error: message,
+		});
+		if (!switched) return undefined;
+		return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
+	}
+	await storage.invalidateCredentialMatching(provider, oldKey, { sessionId, signal });
+	logger.debug("auth-gateway retrying provider request after credential invalidation", {
+		format,
+		provider,
+		peer,
+		error: message,
+	});
+	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
 }
 
 export function mirrorRequestAbort(req: Request): AbortController {
