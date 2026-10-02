@@ -1,3 +1,5 @@
+import { formatRepoRef } from "./gh-format";
+
 /**
  * Shared GitHub issue/PR URL parsing. Single source for the stricter,
  * case-insensitive, query/fragment-tolerant regex so the `gh` fetch path
@@ -7,8 +9,8 @@
 
 // `[^/\s]+` (not `[^/]+`) so whitespace inside owner/repo is rejected rather
 // than silently matched.
-const PR_URL_PATTERN = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/(\d+)(?:[/?#].*)?$/i;
-const ISSUE_URL_PATTERN = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+)(?:[/?#].*)?$/i;
+const PR_URL_PATTERN = /^https:\/\/([^/\s]+)\/([^/\s]+\/[^/\s]+)\/pull\/(\d+)(?:[/?#].*)?$/i;
+const ISSUE_URL_PATTERN = /^https:\/\/([^/\s]+)\/([^/\s]+\/[^/\s]+)\/issues\/(\d+)(?:[/?#].*)?$/i;
 
 /** Parse a GitHub PR URL, tolerating trailing query strings/fragments and mixed-case hosts. */
 export function parsePrUrl(value: string | undefined): { repo?: string; prNumber?: number } {
@@ -16,7 +18,7 @@ export function parsePrUrl(value: string | undefined): { repo?: string; prNumber
 	if (!normalized) return {};
 	const match = normalized.match(PR_URL_PATTERN);
 	if (!match) return {};
-	return { repo: match[1], prNumber: Number(match[2]) };
+	return { repo: formatRepoRef(match[1], match[2]), prNumber: Number(match[3]) };
 }
 
 /** Parse a GitHub issue URL, tolerating trailing query strings/fragments and mixed-case hosts. */
@@ -25,5 +27,5 @@ export function parseIssueUrl(value: string | undefined): { repo?: string; issue
 	if (!normalized) return {};
 	const match = normalized.match(ISSUE_URL_PATTERN);
 	if (!match) return {};
-	return { repo: match[1], issueNumber: Number(match[2]) };
+	return { repo: formatRepoRef(match[1], match[2]), issueNumber: Number(match[3]) };
 }

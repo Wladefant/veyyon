@@ -61,11 +61,81 @@ export function requireNonEmpty(value: string | null | undefined, label: string)
 }
 
 export function appendRepoFlag(args: string[], repo: string | undefined, identifier?: string): void {
-	if (!repo || looksLikeGitHubUrl(identifier)) {
+	// A full URL identifier already names host, repo, and number; `gh` derives
+	// all three from it and rejects a competing `--repo`.
+	if (!repo || identifier?.startsWith("https://")) {
 		return;
 	}
 
 	args.push("--repo", repo);
+}
+
+/** The host `gh` assumes when a ref names none and `GH_HOST` is unset. */
+export const GITHUB_HOST = "github.com";
+
+/**
+ * A repository in the GitHub CLI's `[HOST/]OWNER/REPO` form. A ref that names
+ * no host is left for `gh` to resolve against `GH_HOST` (github.com by
+ * default), so a host that is known — including github.com itself — is worth
+ * keeping: it is what pins the request to the right instance.
+ */
+export interface GhRepoRef {
+	/** Host this repo lives on, or undefined when unknown. */
+	host?: string;
+	/** `OWNER/REPO`, never host-qualified. */
+	slug: string;
+}
+
+/** Split `[HOST/]OWNER/REPO`; anything with another shape is taken as a slug. */
+export function parseRepoRef(repo: string): GhRepoRef {
+	const firstSlash = repo.indexOf("/");
+	if (firstSlash < 0) return { slug: repo };
+	const secondSlash = repo.indexOf("/", firstSlash + 1);
+	if (secondSlash < 0 || repo.includes("/", secondSlash + 1)) return { slug: repo };
+	return { host: repo.slice(0, firstSlash), slug: repo.slice(firstSlash + 1) };
+}
+
+/** Join a known host and `OWNER/REPO` into the form `--repo` accepts. */
+export function formatRepoRef(host: string | undefined, slug: string): string {
+	return host ? `${host}/${slug}` : slug;
+}
+
+/**
+ * `gh api` endpoint paths carry no host, so a ref has to name its host with a
+ * flag instead.
+ */
+export function ghApiHostArgs(ref: GhRepoRef): string[] {
+	return ref.host ? ["--hostname", ref.host] : [];
+}
+
+const REPO_URL_PATTERN = /^https?:\/\/([^/]+)\/([^/]+)\/([^/?#]+)/;
+
+/**
+ * `https://HOST/OWNER/REPO` → the repository's identity: `OWNER/REPO` on
+ * github.com, `HOST/OWNER/REPO` anywhere else. Used for the session
+ * checkout, whose identity should read the way users write it.
+ */
+export function repoFromUrl(value: string | undefined): string | undefined {
+	const match = REPO_URL_PATTERN.exec(value?.trim() ?? "");
+	if (!match) return undefined;
+	const host = match[1].toLowerCase();
+	const slug = `${match[2]}/${match[3]}`;
+	return host === GITHUB_HOST ? slug : formatRepoRef(host, slug);
+}
+
+/**
+ * Case-insensitive repo comparison. Hosts are compared only when both sides
+ * name one: a host-less ref means "wherever `gh` resolves it", so it must not
+ * be declared a mismatch against the same slug on a named host.
+ */
+export function githubRepoSlugEquals(left: string | undefined, right: string): boolean {
+	if (left === undefined) return false;
+	const leftRef = parseRepoRef(left);
+	const rightRef = parseRepoRef(right);
+	if (leftRef.host && rightRef.host && leftRef.host.toLowerCase() !== rightRef.host.toLowerCase()) {
+		return false;
+	}
+	return leftRef.slug.toLowerCase() === rightRef.slug.toLowerCase();
 }
 
 export function formatAuthor(author: GhUser | null | undefined): string | undefined {
@@ -98,6 +168,3 @@ export function parsePositiveDecimalInt(value: string | undefined): number | und
 	return num;
 }
 
-export function looksLikeGitHubUrl(value: string | undefined): boolean {
-	return value?.startsWith("https://github.com/") ?? false;
-}

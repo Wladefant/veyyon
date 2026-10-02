@@ -20,6 +20,7 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { GITHUB_HOST } from "./gh-format";
 import { getGithubCacheDbPath } from "@veyyon/utils/dirs";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import * as logger from "@veyyon/utils/logger";
@@ -204,7 +205,7 @@ const authKeyMemo = new Map<string, AuthKeyMemoEntry>();
  * The DB stores only a hash, never the token or hosts.yml contents. If no
  * credential source is visible, callers should pass `null` to bypass caching.
  */
-export function resolveGithubCacheAuthKey(host: string = process.env.GH_HOST || "github.com"): string | undefined {
+export function resolveGithubCacheAuthKey(host: string = process.env.GH_HOST || GITHUB_HOST): string | undefined {
 	const hostsPath = path.join(getGhConfigDir(), "hosts.yml");
 	let envSig = "";
 	for (const name of AUTH_KEY_TOKEN_ENV_VARS) {
@@ -244,8 +245,13 @@ export function resolveGithubCacheAuthKey(host: string = process.env.GH_HOST || 
 	return value;
 }
 
+/**
+ * Row identity for a repo. An explicit `github.com/` prefix is dropped so the
+ * host-qualified and bare spellings of the same repository share one row.
+ */
 function normalizeRepo(repo: string): string {
-	return repo.toLowerCase();
+	const lower = repo.toLowerCase();
+	return lower.startsWith("github.com/") ? lower.slice("github.com/".length) : lower;
 }
 
 export function getCached<T = unknown>(
