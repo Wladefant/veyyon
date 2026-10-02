@@ -936,6 +936,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#mcpPendingServers.delete(event.serverName);
 			this.#mcpFailedServers.delete(event.serverName);
 			this.#mcpConnectedServers.add(event.serverName);
+		} else if (event.type === "reconnecting") {
+			this.#mcpConnectedServers.delete(event.serverName);
+			this.#mcpFailedServers.delete(event.serverName);
+			this.#mcpPendingServers.add(event.serverName);
 		} else {
 			this.#mcpPendingServers.delete(event.serverName);
 			this.#mcpConnectedServers.delete(event.serverName);
@@ -2662,13 +2666,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.planModeEnabled) {
 			return;
 		}
-
-		const previousTools = this.#planModePreviousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.session.setActiveToolsByName(previousTools);
-		}
-		if (this.#planModePreviousModelState) {
-			if (!options?.deferModelRestore) {
+		const planModeState = this.session.getPlanModeState();
+		const planModeTools = this.session.getActiveToolNames();
+		const planModeModelState = this.session.model
+			? { model: this.session.model, thinkingLevel: this.session.configuredThinkingLevel() }
+			: undefined;
+		this.session.setPlanModeState(undefined);
+		try {
+			const previousTools = this.#planModePreviousTools;
+			if (previousTools && previousTools.length > 0) {
+				await this.session.setActiveToolsByName(previousTools);
+			}
+			if (this.#planModePreviousModelState && !options?.deferModelRestore) {
 				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
 			}
 			// If #applyPlanModeModel queued a deferred switch to the plan-role model
@@ -2687,9 +2696,33 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.#pendingModelSwitch = undefined;
 				}
 			}
+		} catch (error) {
+			this.session.setPlanModeState(planModeState);
+			if (
+				planModeModelState &&
+				(!modelsAreEqual(this.session.model, planModeModelState.model) ||
+					this.session.configuredThinkingLevel() !== planModeModelState.thinkingLevel)
+			) {
+				try {
+					await this.#restorePlanPreviousModel(planModeModelState);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore plan model after plan exit failure", { error: String(rollbackError) });
+				}
+			}
+			const enabledTools = this.session.getActiveToolNames();
+			if (
+				enabledTools.length !== planModeTools.length ||
+				enabledTools.some((name, index) => name !== planModeTools[index])
+			) {
+				try {
+					await this.session.setActiveToolsByName(planModeTools);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore plan tools after plan exit failure", { error: String(rollbackError) });
+				}
+			}
+			throw error;
 		}
 		this.session.setStandingResolveHandler?.(null);
-		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
 		// Suppress cache-miss marker on the next turn: plan exit changes the system
 		// prompt, which predictably invalidates the cache.

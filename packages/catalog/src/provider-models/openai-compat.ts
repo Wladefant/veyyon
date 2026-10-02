@@ -45,6 +45,7 @@ import {
 import { getOpenCodeUserAgent } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
+import { filterModelsDevCatalogRows } from "./models-dev-policies";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 
@@ -2083,7 +2084,9 @@ async function loadModelsDevReferences<TApi extends Api>(fetchImpl?: FetchImpl):
 	try {
 		const payload = await fetchModelsDevPayload(fetchImpl);
 		return createModelsDevReferenceMap<TApi>(
-			mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS),
+			filterModelsDevCatalogRows(
+				mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS),
+			),
 		);
 	} catch {
 		return new Map<string, ModelSpec<TApi>>();
@@ -2382,7 +2385,8 @@ async function loadOpenCodeModelsDevReferences(
 	const payload = await fetchModelsDevPayload(fetchImpl);
 	if (!isRecord(payload)) return references;
 	const descriptors = MODELS_DEV_PROVIDER_DESCRIPTORS.filter(descriptor => descriptor.providerId === providerId);
-	for (const model of mapModelsDevToModels(payload, descriptors)) references.set(model.id, model);
+	for (const model of filterModelsDevCatalogRows(mapModelsDevToModels(payload, descriptors)))
+		references.set(model.id, model);
 	return references;
 }
 
@@ -4484,6 +4488,8 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	const resolveReference = createReferenceResolver(providerRefs);
 	return {
 		providerId: "github-copilot",
+		// Version the credential/endpoint-scoped namespace so stale cross-provider routing rows are never restored.
+		cacheProviderId: `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`,
 		...(apiKey && {
 			fetchDynamicModels: async hooks => {
 				const longContextVariants: ModelSpec<Api>[] = [];
