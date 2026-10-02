@@ -3495,6 +3495,7 @@ describe("agentLoop streaming snapshots", () => {
 		);
 		expect(update).toBeDefined();
 		if (update?.assistantMessageEvent.type !== "image_end") throw new Error("missing image completion");
+		if (update.message.role !== "assistant") throw new Error("expected assistant image message");
 		expect(update.assistantMessageEvent.content).toEqual({ type: "image", data: "SU1H", mimeType: "image/png" });
 		expect(update.message.content).toEqual([{ type: "image", data: "SU1H", mimeType: "image/png" }]);
 		expect(update.assistantMessageEvent.partial).toBe(update.message);

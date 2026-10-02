@@ -371,8 +371,7 @@ function extractCodexSseError(rawEvent: Record<string, unknown>): { code: string
 	return { code, message };
 }
 
-function acceptsNamedToolChoice(model: Pick<CodexSearchModel, "compat">): boolean {
-	const compat = model.compat;
+function acceptsNamedToolChoice(compat: CodexSearchModel["compat"] | undefined): boolean {
 	return !(compat && "supportsNamedToolChoice" in compat && compat.supportsNamedToolChoice === false);
 }
 
@@ -429,7 +428,7 @@ async function callCodexSearch(
 				search_context_size: options.searchContextSize ?? "high",
 			},
 		],
-		tool_choice: acceptsNamedToolChoice(candidateModel) ? { type: "web_search" } : "required",
+		tool_choice: acceptsNamedToolChoice(options.model.catalogModel?.compat) ? { type: "web_search" } : "required",
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
 	if (usesResponsesLite) {
