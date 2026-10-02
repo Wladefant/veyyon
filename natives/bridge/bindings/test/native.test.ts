@@ -671,9 +671,13 @@ describe("veyyon-natives", () => {
 				}
 				const exact = await listWorkspace({ path: root, maxDepth: 2, collectAgentsMd: true });
 				expect(exact.agentsMdFiles).toEqual(paths);
-				expect(exact.entries.filter(entry => entry.path.endsWith("/AGENTS.md")).map(entry => entry.path)).toEqual(paths);
+				expect(exact.entries.filter(entry => entry.path.endsWith("/AGENTS.md")).map(entry => entry.path)).toEqual(
+					paths,
+				);
 				const firstRulesStat = await fs.stat(path.join(root, paths[0]!));
-				expect(exact.entries.find(entry => entry.path === paths[0])?.mtime).toBe(Math.trunc(firstRulesStat.mtimeMs));
+				expect(exact.entries.find(entry => entry.path === paths[0])?.mtime).toBe(
+					Math.trunc(firstRulesStat.mtimeMs),
+				);
 				expect(exact.truncated).toBe(false);
 				await fs.mkdir(path.join(root, "zzz"), { recursive: true });
 				await fs.writeFile(path.join(root, "zzz/AGENTS.md"), "overflow");
@@ -686,26 +690,29 @@ describe("veyyon-natives", () => {
 			}
 		});
 
-		it.skipIf(process.platform === "win32")("finds file symlink rules without traversing directory symlinks", async () => {
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-symlinks-"));
-			try {
-				await fs.mkdir(path.join(root, "source"), { recursive: true });
-				await fs.writeFile(path.join(root, "source/rules.txt"), "rules");
-				await fs.symlink("rules.txt", path.join(root, "source/AGENTS.md"));
-				await fs.symlink("source", path.join(root, "linked"));
-				const result = await listWorkspace({ path: root, maxDepth: 3, collectAgentsMd: true });
-				expect(result.entries.map(entry => entry.path)).toEqual([
-					"linked",
-					"source",
-					"source/AGENTS.md",
-					"source/rules.txt",
-				]);
-				expect(result.agentsMdFiles).toEqual(["source/AGENTS.md"]);
-				expect(result.entries.find(entry => entry.path === "source/AGENTS.md")?.fileType).toBe(FileType.Symlink);
-			} finally {
-				await fs.rm(root, { recursive: true, force: true });
-			}
-		});
+		it.skipIf(process.platform === "win32")(
+			"finds file symlink rules without traversing directory symlinks",
+			async () => {
+				const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-symlinks-"));
+				try {
+					await fs.mkdir(path.join(root, "source"), { recursive: true });
+					await fs.writeFile(path.join(root, "source/rules.txt"), "rules");
+					await fs.symlink("rules.txt", path.join(root, "source/AGENTS.md"));
+					await fs.symlink("source", path.join(root, "linked"));
+					const result = await listWorkspace({ path: root, maxDepth: 3, collectAgentsMd: true });
+					expect(result.entries.map(entry => entry.path)).toEqual([
+						"linked",
+						"source",
+						"source/AGENTS.md",
+						"source/rules.txt",
+					]);
+					expect(result.agentsMdFiles).toEqual(["source/AGENTS.md"]);
+					expect(result.entries.find(entry => entry.path === "source/AGENTS.md")?.fileType).toBe(FileType.Symlink);
+				} finally {
+					await fs.rm(root, { recursive: true, force: true });
+				}
+			},
+		);
 	});
 
 	describe("text tab width", () => {
