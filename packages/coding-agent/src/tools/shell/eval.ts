@@ -375,6 +375,42 @@ function formatEvalInputLanguage(value: string): string {
 	return value;
 }
 
+/** All reuse-chain examples; the `examples` getter filters by enabled languages. */
+const ALL_EXAMPLES: readonly ToolExample<typeof evalSchema.value.infer>[] = [
+	{
+		caption: "First call — set up once",
+		call: {
+			language: "py",
+			title: "imports",
+			code: "import json\nfrom pathlib import Path",
+		},
+	},
+	{
+		caption: "Second call — reuse, do NOT re-import",
+		call: {
+			language: "py",
+			title: "load config",
+			code: "data = json.loads(read('package.json'))\ndisplay(data)",
+		},
+	},
+	{
+		caption: "Ruby first call — set up once",
+		call: {
+			language: "rb",
+			title: "setup",
+			code: "require 'json'\npkg_path = 'package.json'",
+		},
+	},
+	{
+		caption: "Ruby second call — reuse, do NOT re-require",
+		call: {
+			language: "rb",
+			title: "load config",
+			code: "pkg = JSON.parse(read(pkg_path))\ndisplay(pkg.keys.sort)",
+		},
+	},
+];
+
 export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDetails> {
 	readonly name = "eval";
 	// Eval runs model-authored code in a persistent kernel with full runtime
@@ -408,44 +444,9 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 			effectiveDefaultAgent: catalog.defaultAgent,
 		});
 	}
-	/** All reuse-chain examples; the `examples` getter filters by enabled languages. */
-	static readonly #ALL_EXAMPLES: readonly ToolExample<typeof evalSchema.value.infer>[] = [
-		{
-			caption: "First call — set up once",
-			call: {
-				language: "py",
-				title: "imports",
-				code: "import json\nfrom pathlib import Path",
-			},
-		},
-		{
-			caption: "Second call — reuse, do NOT re-import",
-			call: {
-				language: "py",
-				title: "load config",
-				code: "data = json.loads(read('package.json'))\ndisplay(data)",
-			},
-		},
-		{
-			caption: "Ruby first call — set up once",
-			call: {
-				language: "rb",
-				title: "setup",
-				code: "require 'json'\npkg_path = 'package.json'",
-			},
-		},
-		{
-			caption: "Ruby second call — reuse, do NOT re-require",
-			call: {
-				language: "rb",
-				title: "load config",
-				code: "pkg = JSON.parse(read(pkg_path))\ndisplay(pkg.keys.sort)",
-			},
-		},
-	];
 	get examples(): readonly ToolExample<typeof evalSchema.value.infer>[] {
 		const langs = new Set(this.#enabledLanguages());
-		return EvalTool.#ALL_EXAMPLES.filter(ex => "call" in ex && langs.has(ex.call.language as EvalLanguageToken));
+		return ALL_EXAMPLES.filter(ex => "call" in ex && langs.has(ex.call.language as EvalLanguageToken));
 	}
 	get parameters(): typeof evalSchema.value {
 		return evalSchemaFor(this.#enabledLanguages());

@@ -1,16 +1,21 @@
 /**
  * The durable records a session writes about its own start, so a transcript states what the run
  * was configured with rather than leaving a reader to reconstruct it: the system prompt and active
- * tools of a new top-level session, the effective settings of every new session, and the outcome of
- * arming the launch project's argot shorthand.
+ * tools of a new top-level session, the effective settings of every new session, the at-rest reading
+ * a top-level session files for the next launch, and the outcome of arming the launch project's argot
+ * shorthand.
  */
 
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger } from "@veyyon/utils";
 import type { ArgotSession } from "argot";
 import { armArgotAfterStartup, shouldAutoloadArgotAtStartup } from "../argot-cache";
+import { measureContextGauge } from "../config/compaction-strategy";
+import { recordRestLaunchFacts } from "../config/launch-facts";
 import type { Settings } from "../config/settings";
 import { ARGOT_HANDLES_BANNER } from "../system-prompt-builder/section-registry";
+import type { AgentSession } from "./agent-session";
+import { computeSystemContextTokens, releaseAtRestReading } from "./non-message-tokens";
 
 type StartRecorder = Pick<SessionManager, "appendSessionInit" | "appendSettingsSnapshot" | "appendCustomMessageEntry">;
 
@@ -41,6 +46,60 @@ export function recordNewSessionStart(input: NewSessionStartInput): void {
 		});
 	}
 	input.sessionManager.appendSettingsSnapshot(input.settings.getEffectiveSnapshot());
+}
+
+/** What a top-level session reads at rest: what the launch card files for the next launch. */
+export interface AtRestLaunchReading {
+	model: AgentSession["state"]["model"];
+	thinkingLevel: string | null;
+	isAutoThinking: boolean;
+	messageCount: number;
+	/** The project's own context weight, subtracted for the model-floor reading. */
+	systemContextTokens: number;
+	contextPercent: number | null;
+	contextLimit: number;
+}
+
+/** Measure the at-rest reading of a top-level session. */
+function measureAtRestLaunch(session: AgentSession, settings: Settings): AtRestLaunchReading {
+	const usage = session.getContextUsage();
+	const gauge = measureContextGauge(
+		usage?.tokens ?? null,
+		usage?.contextWindow ?? session.model?.contextWindow ?? 0,
+		session.autoCompactionEnabled ? settings.getGroup("compaction") : undefined,
+	);
+	return {
+		model: session.state.model,
+		thinkingLevel: session.state.thinkingLevel ?? null,
+		isAutoThinking: session.isAutoThinking,
+		messageCount: session.messages?.length ?? 0,
+		systemContextTokens: computeSystemContextTokens(session),
+		contextPercent: gauge.contextPercent,
+		contextLimit: gauge.contextLimit,
+	};
+}
+
+/**
+ * Measure the at-rest reading of a top-level session and file it for the next launch's card, as soon
+ * as the session exists rather than when the status row first renders. The launch card reads the
+ * recorded file on every render and repaints when a record lands, so on a cold launch (no recording
+ * from a previous session) the hero's model name and provider and the context gauge arrive with the
+ * session, and the next launch states them from the first frame. The row re-records the same decision
+ * on its own renders against the same gauge; a record that changes nothing does not write.
+ *
+ * The interactive host creates its session with the reading held (`deferAtRestReading`) and calls
+ * this when the session leaves rest, at the first composer edit or prompt, because the reading builds
+ * every tool's schema. This ends the hold, so the status row measures from its next render.
+ *
+ * A spawned agent files nothing, so the caller records only a top-level session. The card describes
+ * the top-level session a launch opens. A spawned agent can run the default model with its own system
+ * prompt, tools and effort, and filing its reading would hand the next launch a gauge and a rung
+ * measured on a prompt that launch never builds.
+ */
+export function recordAtRestLaunch(session: AgentSession, settings: Settings): void {
+	releaseAtRestReading(session);
+	const atRest = measureAtRestLaunch(session, settings);
+	void recordRestLaunchFacts(atRest, atRest.contextPercent, atRest.contextLimit);
 }
 
 /** What {@link armLaunchArgot} reads. */

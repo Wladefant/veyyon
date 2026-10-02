@@ -8,12 +8,19 @@
 
 ### Fixed
 
+- On Windows, embedded utilities accept MSYS and WSL drive aliases, preserving Unicode path components in file, script and in-place-edit operands ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- On Windows, embedded `fd` and `find` print and match forward-slash paths while filesystem actions still use the original paths ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
+- Fixed the edit tool's block-range detection across comment-only lines and trailing comments in indentation-based and end-delimited languages ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 - On Windows, the embedded `tail` builtin no longer exits the host process when its output pipe is closed (a timed-out or cancelled `cmd | tail -N` pipeline), which silently killed Veyyon and every lane ([#73](https://github.com/Wladefant/veyyon/issues/73)). A workspace `clippy.toml` now rejects `std::process::exit`, `std::process::abort` and their `libc` equivalents in every crate, including the out-of-workspace shell crates `brush-core` and `brush-builtins` through `check:rs` and `lint:rs`, so no builtin can reintroduce it.
 - The launch-time prune of old addon caches routes non-removable directories through `attachNativeNoticeSink` instead of stderr.
 - On Unix, the embedded shell's `kill` refuses any real signal that would reach the host process, one of its threads, an ancestor, or a process group holding one of them (signal 0 still probes), and cancelling a command no longer SIGKILLs a PID that is no longer its child ([#106](https://github.com/Wladefant/veyyon/issues/106)).
 - On Unix, the embedded shell's `suspend` fails with the same refusal instead of stopping the host process ([#106](https://github.com/Wladefant/veyyon/issues/106)).
 
 ### Changed
+
+- Workspace startup scans skip excluded build directories and retain a bounded set of entries and directory rules ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Merged upstream v1.5.0.
 ### Added
@@ -29,6 +36,7 @@
 - `wrapTextWithAnsi` reads the words of a line as slices of it instead of copying each into its own buffer, which cuts wrapping a line wider than its target by 50 to 66% (a line of 40 to 100 words from 8.6 µs to 3.0 µs) and the first render of a 13,470-entry transcript at 120 columns from 291 ms to 234 ms, with identical rows.
 - `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth` and `extractSegments` return a result whose characters all fit in Latin-1 as a one-byte string instead of a two-byte one, which moves 2.9M characters of a rendered 13,470-entry transcript to one byte each and cuts the heap the render holds from 47.1 MiB to 44.4 MiB.
 - The addon runs its async exports on a Tokio runtime of at most four scheduler workers on every platform instead of napi-rs's default of one per CPU, which cuts an idle `vey` on a 32-thread host from 54 threads to 26 and the anonymous memory the addon's load and first async call add from 3.6 MiB to 3.1 MiB.
+- The first launch of a version inflates the embedded addon archive into one buffer sized from the addon metadata instead of 16 KiB chunks joined by a copy, which cuts that launch on linux-x64 from 575 ms to 485 ms to a ready status line and its peak resident memory from 449 MiB to 305 MiB (median of seven).
 
 ## [1.5.5] - 2026-09-25
 

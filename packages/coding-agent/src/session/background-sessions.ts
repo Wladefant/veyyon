@@ -271,7 +271,7 @@ export class BackgroundSessions {
 				this.#quietWaits.get(entry.session)?.abort();
 				this.#discard(entry.session, entry.handoff);
 			}
-			await Promise.all(abandoned.map(entry => this.#dispose(entry.session, entry.sessionId)));
+			await Promise.all(abandoned.map(entry => dispose(entry.session, entry.sessionId)));
 		}
 	}
 
@@ -294,15 +294,15 @@ export class BackgroundSessions {
 		// Reclaimed by `/resume`, or taken over by shutdown's drain: this entry no longer owns it.
 		if (this.#kept.get(session)?.handoff !== handoff) return;
 		this.#discard(session, handoff);
-		await this.#dispose(session, sessionId);
+		await dispose(session, sessionId);
 	}
+}
 
-	async #dispose(session: AgentSession, sessionId: string): Promise<void> {
-		try {
-			await session.dispose();
-		} catch (error) {
-			logger.warn("Handed-off session failed to dispose", { sessionId, error: errorMessage(error) });
-		}
+async function dispose(session: AgentSession, sessionId: string): Promise<void> {
+	try {
+		await session.dispose();
+	} catch (error) {
+		logger.warn("Handed-off session failed to dispose", { sessionId, error: errorMessage(error) });
 	}
 }
 

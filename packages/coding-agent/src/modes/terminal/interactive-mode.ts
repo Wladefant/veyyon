@@ -60,6 +60,7 @@ import chalk from "chalk";
 import type { CollabGuestLink } from "../../collab/guest";
 import type { CollabHost } from "../../collab/host";
 import { KeybindingsManager } from "../../config/keybindings";
+import { recordLaunchFacts } from "../../config/launch-facts";
 import {
 	isSettingsInitialized,
 	type QuarantinedSettingsFile,
@@ -113,6 +114,8 @@ import {
 	type KeptSession,
 } from "../../session/background-sessions";
 import { setImageDisplayProbe } from "../../session/image-visibility";
+import { isAtRestReadingDeferred } from "../../session/non-message-tokens";
+import { recordAtRestLaunch } from "../../session/startup-records";
 import { VibeSessionRegistry } from "../../session/vibe-runtime";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../../slash-commands/builtin-declarations";
 import { buildTuiBuiltinSlashCommands } from "../../slash-commands/builtin-registry";
@@ -143,7 +146,6 @@ import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { messageHasDisplayableThinking } from "../../utils/thinking-display";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
-import { recordLaunchFacts } from "../launch-facts";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -427,6 +429,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#transcriptComposer.localEchoSignatures;
 	}
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
+	/** Whether an edit queued the held at-rest reading for the next committed frame. */
+	#atRestReadingQueued = false;
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
 	lastLeftTapTime = 0;
@@ -932,6 +936,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#mcpPendingServers.delete(event.serverName);
 			this.#mcpFailedServers.delete(event.serverName);
 			this.#mcpConnectedServers.add(event.serverName);
+		} else if (event.type === "reconnecting") {
+			this.#mcpConnectedServers.delete(event.serverName);
+			this.#mcpFailedServers.delete(event.serverName);
+			this.#mcpPendingServers.add(event.serverName);
 		} else {
 			this.#mcpPendingServers.delete(event.serverName);
 			this.#mcpConnectedServers.delete(event.serverName);
@@ -1719,7 +1727,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
 		const tail = parsed.prompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${limitSuffix}${remainingSuffix} ${tail} Esc cancels the current iteration; /loop again to disable.`,
+			`Loop mode enabled.${limitSuffix}${remainingSuffix} ${tail} Esc suspends the ongoing loop; enter a new prompt to resume, or /loop again to disable.`,
 		);
 		// Hand any inline prompt back to the dispatcher so the normal submit flow
 		// runs the first iteration — it records the text as the loop prompt and
@@ -1760,6 +1768,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		display?: boolean;
 		streamingBehavior?: "steer" | "followUp";
 	}): SubmittedUserInput {
+		this.takeAtRestReading();
 		const submission: SubmittedUserInput = {
 			text: input.text,
 			images: input.images,
@@ -1967,18 +1976,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#todoAutoClearTimer = undefined;
 	}
 
-	#isClosedTodo(task: TodoItem): boolean {
-		return isTerminalTodoStatus(task.status);
-	}
-
 	#hasClosedTodos(phases: TodoPhase[]): boolean {
-		return phases.some(phase => phase.tasks.some(task => this.#isClosedTodo(task)));
+		return phases.some(phase => phase.tasks.some(task => isClosedTodo(task)));
 	}
 
 	#removeClosedTodos(phases: TodoPhase[]): TodoPhase[] {
 		const next: TodoPhase[] = [];
 		for (const phase of phases) {
-			const tasks = phase.tasks.filter(task => !this.#isClosedTodo(task));
+			const tasks = phase.tasks.filter(task => !isClosedTodo(task));
 			if (tasks.length > 0) next.push({ name: phase.name, tasks });
 		}
 		return next;
@@ -2661,13 +2666,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.planModeEnabled) {
 			return;
 		}
-
-		const previousTools = this.#planModePreviousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.session.setActiveToolsByName(previousTools);
-		}
-		if (this.#planModePreviousModelState) {
-			if (!options?.deferModelRestore) {
+		const planModeState = this.session.getPlanModeState();
+		const planModeTools = this.session.getActiveToolNames();
+		const planModeModelState = this.session.model
+			? { model: this.session.model, thinkingLevel: this.session.configuredThinkingLevel() }
+			: undefined;
+		this.session.setPlanModeState(undefined);
+		try {
+			const previousTools = this.#planModePreviousTools;
+			if (previousTools && previousTools.length > 0) {
+				await this.session.setActiveToolsByName(previousTools);
+			}
+			if (this.#planModePreviousModelState && !options?.deferModelRestore) {
 				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
 			}
 			// If #applyPlanModeModel queued a deferred switch to the plan-role model
@@ -2686,9 +2696,33 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.#pendingModelSwitch = undefined;
 				}
 			}
+		} catch (error) {
+			this.session.setPlanModeState(planModeState);
+			if (
+				planModeModelState &&
+				(!modelsAreEqual(this.session.model, planModeModelState.model) ||
+					this.session.configuredThinkingLevel() !== planModeModelState.thinkingLevel)
+			) {
+				try {
+					await this.#restorePlanPreviousModel(planModeModelState);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore plan model after plan exit failure", { error: String(rollbackError) });
+				}
+			}
+			const enabledTools = this.session.getActiveToolNames();
+			if (
+				enabledTools.length !== planModeTools.length ||
+				enabledTools.some((name, index) => name !== planModeTools[index])
+			) {
+				try {
+					await this.session.setActiveToolsByName(planModeTools);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore plan tools after plan exit failure", { error: String(rollbackError) });
+				}
+			}
+			throw error;
 		}
 		this.session.setStandingResolveHandler?.(null);
-		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
 		// Suppress cache-miss marker on the next turn: plan exit changes the system
 		// prompt, which predictably invalidates the cache.
@@ -2807,15 +2841,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#hidePlanReview();
 	}
 
-	#getEditorTerminalPath(): string | null {
-		if (process.platform === "win32") {
-			return null;
-		}
-		return "/dev/tty";
-	}
-
 	async #openEditorTerminalHandle(): Promise<fs.FileHandle | null> {
-		const terminalPath = this.#getEditorTerminalPath();
+		const terminalPath = getEditorTerminalPath();
 		if (!terminalPath) {
 			return null;
 		}
@@ -2836,19 +2863,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			return this.session.getContextUsage({ contextWindow });
 		}
 		return this.session.getContextUsage();
-	}
-
-	#formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
-		if (!contextUsage) {
-			return "Approve and keep context";
-		}
-		const tokens = formatContextTokenCount(contextUsage.tokens);
-		const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
-		return `Approve and keep context (~${tokens} / ${contextWindow})`;
-	}
-
-	#isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
-		return contextUsage !== undefined && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
 	}
 
 	async #copyPlanToClipboard(content: string): Promise<void> {
@@ -3341,8 +3355,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		const contextUsage = this.#getPlanApprovalContextUsage();
-		const keepContextLabel = this.#formatKeepContextLabel(contextUsage);
-		const keepContextDisabled = this.#isKeepContextDisabled(contextUsage);
+		const keepContextLabel = formatKeepContextLabel(contextUsage);
+		const keepContextDisabled = isKeepContextDisabled(contextUsage);
 
 		// Model-tier slider: let the operator pick which configured role model
 		// (smol/default/slow/…) executes the approved plan. The slider always starts
@@ -3961,9 +3975,48 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Remove the startup welcome card (and its spacers) — the first real
 	 *  keystroke ends the hero moment. Idempotent; the bottom anchor stays so
-	 *  the composer does not jump until a conversation turn scrolls in. */
+	 *  the composer does not jump until a conversation turn scrolls in. The
+	 *  keystroke also begins the prompt that needs the tool schemas the held
+	 *  at-rest reading builds, so it queues that reading. */
 	dismissWelcome(): void {
 		this.#welcomeController.dismiss();
+		this.#takeAtRestReadingAfterNextFrame();
+	}
+
+	/**
+	 * Take the at-rest reading the launch held, after the frame that draws the current edit. The
+	 * reading builds every active tool's schema, which the prompt the edit begins needs anyway; taking
+	 * it after the frame keeps the build out of the keystroke's echo. A session that is never edited or
+	 * prompted builds no schema.
+	 */
+	#takeAtRestReadingAfterNextFrame(): void {
+		if (this.#atRestReadingQueued || !isAtRestReadingDeferred(this.session)) return;
+		this.#atRestReadingQueued = true;
+		const previous = this.ui.onFrameComposed;
+		let fired = false;
+		const hook = (): void => {
+			if (this.ui.onFrameComposed === hook) this.ui.onFrameComposed = previous;
+			previous?.();
+			if (fired) return;
+			fired = true;
+			setImmediate(() => {
+				this.#atRestReadingQueued = false;
+				this.takeAtRestReading();
+			});
+		};
+		this.ui.onFrameComposed = hook;
+	}
+
+	/**
+	 * Take the session's held at-rest reading now and redraw the gauge it measures; a no-op once taken
+	 * or when the session was created without the hold. A prompt calls this before it appends its
+	 * message, since the reading is at rest only before the first one.
+	 */
+	takeAtRestReading(): void {
+		const session = this.session;
+		if (!isAtRestReadingDeferred(session)) return;
+		recordAtRestLaunch(session, session.settings);
+		this.ui.requestRender();
 	}
 
 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
@@ -3982,11 +4035,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#uiHelpers.isKnownSlashCommand(text);
 	}
 
-	addMessageToChat(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[] {
+	addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
+	): Component[] {
 		return this.#uiHelpers.addMessageToChat(message, options);
 	}
 
-	renderSessionContext(sessionContext: SessionContext, options?: { updateFooter?: boolean }): void {
+	renderSessionContext(
+		sessionContext: SessionContext,
+		options?: { updateFooter?: boolean; populateHistory?: boolean },
+	): void {
 		for (const message of sessionContext.messages) {
 			this.noteDisplayableThinkingContent(message);
 		}
@@ -4371,8 +4430,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleEscape();
 	}
 
-	canBranchBtw(): boolean {
-		return this.#btwController.canBranch();
+	handlesBtwBranchKey(): boolean {
+		return this.#btwController.handlesBranchKey();
 	}
 
 	handleBtwBranchKey(): Promise<boolean> {
@@ -4387,9 +4446,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleCopy();
 	}
 
-	async handleBtwBranch(question: string, assistantMessage: AssistantMessage): Promise<void> {
+	async handleBtwBranch(
+		question: string,
+		assistantMessage: AssistantMessage,
+		leafId: string,
+		sessionId: string,
+	): Promise<void> {
 		try {
-			const result = await this.session.branchFromBtw(question, assistantMessage);
+			const result = await this.session.branchFromBtw(question, assistantMessage, leafId, sessionId);
 			if (result.cancelled) {
 				this.showStatus("/btw branch cancelled", { dim: true });
 				return;
@@ -4609,4 +4673,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (next.isStreaming) void this.#eventController.handleEvent({ type: "agent_start" });
 		return kept;
 	}
+}
+
+function isClosedTodo(task: TodoItem): boolean {
+	return isTerminalTodoStatus(task.status);
+}
+
+function getEditorTerminalPath(): string | null {
+	if (process.platform === "win32") {
+		return null;
+	}
+	return "/dev/tty";
+}
+
+function formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
+	if (!contextUsage) {
+		return "Approve and keep context";
+	}
+	const tokens = formatContextTokenCount(contextUsage.tokens);
+	const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
+	return `Approve and keep context (~${tokens} / ${contextWindow})`;
+}
+
+function isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
+	return contextUsage !== undefined && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
 }

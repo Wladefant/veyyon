@@ -309,7 +309,10 @@ export interface InteractiveModeContext {
 	updatePendingMessagesDisplay(): void;
 	/** Recompute the composer's contextual shortcut chips from current draft/busy/queue state and repaint. */
 	refreshComposerShortcuts(): void;
-	/** Remove the startup welcome card; the first real keystroke ends the hero moment. Idempotent. */
+	/**
+	 * The first real keystroke: remove the startup welcome card, and take the at-rest reading the
+	 * launch held once the frame that draws the edit is committed. Idempotent.
+	 */
 	dismissWelcome(): void;
 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void;
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void>;
@@ -350,8 +353,14 @@ export interface InteractiveModeContext {
 		options?: { imageLinks?: readonly (string | undefined)[] },
 	): void;
 	isKnownSlashCommand(text: string): boolean;
-	addMessageToChat(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[];
-	renderSessionContext(sessionContext: SessionContext, options?: { updateFooter?: boolean }): void;
+	addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
+	): Component[];
+	renderSessionContext(
+		sessionContext: SessionContext,
+		options?: { updateFooter?: boolean; populateHistory?: boolean },
+	): void;
 	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
@@ -473,10 +482,16 @@ export interface InteractiveModeContext {
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
 	handleBtwBranchKey(): Promise<boolean>;
-	canBranchBtw(): boolean;
+	/** Whether plain `b` is reserved for a completed or pending /btw branch, even one refused right now. */
+	handlesBtwBranchKey(): boolean;
 	canCopyBtw(): boolean;
 	handleBtwCopyKey(): Promise<boolean>;
-	handleBtwBranch(question: string, assistantMessage: AssistantMessage): Promise<void>;
+	handleBtwBranch(
+		question: string,
+		assistantMessage: AssistantMessage,
+		leafId: string,
+		sessionId: string,
+	): Promise<void>;
 	handleOmfgCommand(complaint: string): Promise<void>;
 	hasActiveOmfg(): boolean;
 	handleOmfgEscape(): boolean;

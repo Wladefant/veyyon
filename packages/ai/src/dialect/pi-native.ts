@@ -202,11 +202,11 @@ class PiNativeInbandScanner implements InbandScanner {
 		if (close === -1) {
 			const hold = final ? 0 : partialSuffixOverlapAny(combined, [call.closer]);
 			const keep = Math.max(call.body.length, combined.length - hold);
-			this.#appendBody(call, combined.slice(call.body.length, keep), events);
+			appendBody(call, combined.slice(call.body.length, keep), events);
 			this.#buffer = combined.slice(keep);
 			return false;
 		}
-		this.#appendBody(call, combined.slice(call.body.length, close), events);
+		appendBody(call, combined.slice(call.body.length, close), events);
 		this.#buffer = combined.slice(close + call.closer.length);
 		call.rawBlock += call.closer;
 		const args = finalizeCall(call);
@@ -223,37 +223,37 @@ class PiNativeInbandScanner implements InbandScanner {
 		this.#state = "outside";
 		return true;
 	}
+}
 
-	#appendBody(call: OpenCall, chunk: string, events: InbandScanEvent[]): void {
-		if (chunk.length === 0) return;
-		call.body += chunk;
-		call.rawBlock += chunk;
-		if (call.bodyMode === "unknown") {
-			const probe = call.body.replace(/^[\s]*/, "");
-			if (probe.length === 0) return;
-			// Element form when the body's first non-whitespace content is a child
-			// tag; otherwise the verbatim inline body (spec "Element form vs inline
-			// body"). `<` followed by a name char is the child-tag signature.
-			if (probe[0] === "<") {
-				if (probe.length < 2) return;
-				call.bodyMode = /[A-Za-z_]/.test(probe[1]!) ? "elements" : "inline";
-			} else {
-				call.bodyMode = "inline";
-			}
+function appendBody(call: OpenCall, chunk: string, events: InbandScanEvent[]): void {
+	if (chunk.length === 0) return;
+	call.body += chunk;
+	call.rawBlock += chunk;
+	if (call.bodyMode === "unknown") {
+		const probe = call.body.replace(/^[\s]*/, "");
+		if (probe.length === 0) return;
+		// Element form when the body's first non-whitespace content is a child
+		// tag; otherwise the verbatim inline body (spec "Element form vs inline
+		// body"). `<` followed by a name char is the child-tag signature.
+		if (probe[0] === "<") {
+			if (probe.length < 2) return;
+			call.bodyMode = /[A-Za-z_]/.test(probe[1]!) ? "elements" : "inline";
+		} else {
+			call.bodyMode = "inline";
 		}
-		if (call.bodyMode === "inline" && call.inlineKey !== null) {
-			// Stream the verbatim body as arg deltas against the inline target
-			// parameter, holding back the block-delimiter newlines: the leading
-			// one is skipped, and a trailing one stays unstreamed until the next
-			// chunk proves it is interior (the closer's newline is not value).
-			let text = call.body;
-			if (text.startsWith("\n")) text = text.slice(1);
-			const streamEnd = text.endsWith("\n") ? text.length - 1 : text.length;
-			const delta = text.slice(call.streamedInline, streamEnd);
-			if (delta.length > 0) {
-				call.streamedInline = streamEnd;
-				events.push({ type: "toolArgDelta", id: call.id, name: call.name, key: call.inlineKey, delta });
-			}
+	}
+	if (call.bodyMode === "inline" && call.inlineKey !== null) {
+		// Stream the verbatim body as arg deltas against the inline target
+		// parameter, holding back the block-delimiter newlines: the leading
+		// one is skipped, and a trailing one stays unstreamed until the next
+		// chunk proves it is interior (the closer's newline is not value).
+		let text = call.body;
+		if (text.startsWith("\n")) text = text.slice(1);
+		const streamEnd = text.endsWith("\n") ? text.length - 1 : text.length;
+		const delta = text.slice(call.streamedInline, streamEnd);
+		if (delta.length > 0) {
+			call.streamedInline = streamEnd;
+			events.push({ type: "toolArgDelta", id: call.id, name: call.name, key: call.inlineKey, delta });
 		}
 	}
 }

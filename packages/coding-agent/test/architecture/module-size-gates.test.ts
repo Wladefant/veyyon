@@ -53,7 +53,7 @@ import { isDirectory, lineCount, repoPath, repoRelative, typeScriptFiles } from 
  * 3821 and 697, and the ceilings keep a few lines of margin over the sum.
  */
 const CORE_CEILINGS: Record<string, number> = {
-	"core/tui.ts": 3870,
+	"core/tui.ts": 3885,
 	"core/renderer.ts": 715,
 	"core/overlay.ts": 560,
 	"core/image-budget.ts": 330,

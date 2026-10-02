@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { normalizeAnthropicToolSchema } from "@veyyon/ai/providers/anthropic";
 import type { Tool } from "@veyyon/ai/types";
 import {
@@ -13,6 +14,9 @@ import {
 	toolWireSchema,
 	zodToWireSchema,
 } from "@veyyon/ai/utils/schema";
+// `wire.ts` holds no Zod value; the barrels install Zod's core converter for their callers. This file
+// imports subpaths only, so it installs the converter the way a barrel does.
+import "@veyyon/ai/utils/schema/zod-core";
 import { type } from "arktype";
 import * as zm from "zod/mini";
 import { z } from "zod/v4";
@@ -119,6 +123,35 @@ describe("zodToWireSchema — every Zod flavor", () => {
 			expect(zodToWireSchema(mini as z.ZodType)).toEqual(zodToWireSchema(classic as z.ZodType));
 		});
 	}
+});
+
+// The barrels install the converter and `wire.ts` never loads Zod, so the compiled CLI holds no Zod
+// copy at startup. A process that imports the schema subpath and no barrel converts a classic schema
+// through the schema's own `toJSONSchema`, to the same wire, and rejects a mini schema by naming the
+// import that installs the converter.
+describe("zodToWireSchema — in a process that loaded no barrel", () => {
+	it("converts a classic schema to the converter's wire and rejects a mini schema", () => {
+		const script = `
+			import { zodToWireSchema } from "@veyyon/ai/utils/schema";
+			import { z } from "zod/v4";
+			import * as zm from "zod/mini";
+			const classic = zodToWireSchema(z.object({ name: z.string(), limit: z.number().optional() }));
+			let mini;
+			try {
+				zodToWireSchema(zm.object({ name: zm.string() }));
+				mini = "converted";
+			} catch (error) {
+				mini = error.message;
+			}
+			console.log(JSON.stringify({ classic, mini }));
+		`;
+		const run = spawnSync(process.execPath, ["-e", script], { cwd: import.meta.dirname, encoding: "utf8" });
+		expect(run.stderr).toBe("");
+		expect(JSON.parse(run.stdout)).toEqual({
+			classic: zodToWireSchema(z.object({ name: z.string(), limit: z.number().optional() })),
+			mini: "Cannot convert a Zod schema that has no toJSONSchema method (zod/mini): Zod's core converter is not installed. Import @veyyon/ai or @veyyon/ai/utils/schema/zod-core before converting it.",
+		});
+	});
 });
 
 describe("zodToWireSchema — nullable scalar normalization", () => {

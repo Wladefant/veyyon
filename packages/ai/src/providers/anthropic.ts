@@ -86,6 +86,8 @@ import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
+import { isForcedToolChoice } from "../utils/tool-choice";
+import { getVercelAiGatewayHeaders } from "../utils/vercel-headers";
 import {
 	AnthropicApiError,
 	AnthropicConnectionTimeoutError,
@@ -148,6 +150,22 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 		}
 	}
 	return result.join(",");
+}
+
+/**
+ * Merge an extra Anthropic beta into a caller-provided `anthropic-beta` header,
+ * preserving the caller's key casing and deduping the tokens. Returns a
+ * single-entry header record for a per-request `headers` override — used to
+ * attach a required beta to injected SDK clients that bypass the client-level
+ * beta construction.
+ */
+function mergeAnthropicBetaHeader(callerHeaders: Record<string, string>, beta: string): Record<string, string> {
+	for (const key in callerHeaders) {
+		if (key.toLowerCase() === "anthropic-beta") {
+			return { [key]: buildBetaHeader(normalizeExtraBetas(callerHeaders[key]), [beta]) };
+		}
+	}
+	return { "anthropic-beta": beta };
 }
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
@@ -2644,11 +2662,19 @@ function buildAnthropicStreamBetas(
 	if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
 		extraBetas.push(taskBudgetBeta);
 	}
+	// `output_config.effort` ships on thinking-on requests, explicit
+	// thinking-off adaptive pins, and forced-tool adaptive pins. The beta
+	// must accompany the field even when direct streamAnthropic callers omit
+	// thinkingEnabled (#6589). MiniMax uses `thinking.type:"adaptive"` itself
+	// as the control surface, so the sentinel "adaptive" value intentionally
+	// sends no output_config. Skip Vertex rawPredict: that adapter needs betas
+	// in the body (`anthropic_beta`), not as an `anthropic-beta` HTTP header,
+	// so the effort field is dropped from the body there too (see buildParams)
+	// and advertising the beta would only earn a 400 (#5614).
 	const sendsAdaptiveEffortPin =
-		options?.thinkingEnabled === false &&
-		model.thinking?.mode === "anthropic-adaptive" &&
-		!model.compat.disableAdaptiveThinking &&
-		!usesAdaptiveThinkingTagOnly(model);
+		isAdaptiveOnlyThinking(model) &&
+		(options?.thinkingEnabled === false ||
+			(model.compat.supportsForcedToolChoice && isForcedToolChoice(options?.toolChoice)));
 	if (
 		model.reasoning &&
 		((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
@@ -2796,12 +2822,12 @@ function createAnthropicStreamRequest(
 	isOAuthToken: boolean,
 	requestSignal: AbortSignal,
 	requestTimeoutMs: number | undefined,
-	umansGatewayWebSearchHeader: Record<string, string> | undefined,
+	perRequestHeaders: Record<string, string> | undefined,
 ): unknown {
 	const requestOptions = {
 		...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs),
 		maxRetries: 0,
-		...(umansGatewayWebSearchHeader ? { headers: umansGatewayWebSearchHeader } : {}),
+		...(perRequestHeaders ? { headers: perRequestHeaders } : {}),
 		// An injected SDK client serializes `params` itself; only this package's client takes the bytes.
 		...(client instanceof AnthropicMessagesClient ? { serializedBody } : {}),
 	};
@@ -2971,6 +2997,23 @@ const streamAnthropicOnce = (
 				// to zero even when no watchdog timeout is configured (the helper only
 				// pins it alongside a timeout; a client retry budget of 5 would otherwise
 				// multiply with PROVIDER_MAX_RETRIES into up to 66 wire attempts).
+				// Injected SDK clients (`options.client`) bypass the client-level
+				// `anthropic-beta` construction below, so any `output_config.effort` the
+				// body carries — the adaptive-only thinking-off / forced-tool pins and
+				// enabled-effort turns alike — would reach Anthropic without the required
+				// `effort-2025-11-24` beta and 400. `create()` accepts per-request headers
+				// (already used for the gateway web-search header), so merge the beta with
+				// any caller-provided `anthropic-beta` (deduped) and attach it there. Vertex
+				// never carries the effort field (dropped in buildParams), so it is unaffected.
+				const injectedClientEffortHeaders =
+					options?.client !== undefined &&
+					(params.output_config as AnthropicOutputConfig | undefined)?.effort !== undefined
+						? mergeAnthropicBetaHeader(mergedCallerHeaders, effortBeta)
+						: undefined;
+				const perRequestHeaders =
+					umansGatewayWebSearchHeader || injectedClientEffortHeaders
+						? { ...umansGatewayWebSearchHeader, ...injectedClientEffortHeaders }
+						: undefined;
 				const anthropicRequest = createAnthropicStreamRequest(
 					client,
 					params,
@@ -2978,7 +3021,7 @@ const streamAnthropicOnce = (
 					isOAuthToken,
 					requestSignal,
 					requestTimeoutMs,
-					umansGatewayWebSearchHeader,
+					perRequestHeaders,
 				);
 				// Created before the request so the catch below reads what this attempt
 				// already streamed: the event loop can throw mid-stream, and a retry
@@ -3139,16 +3182,48 @@ type SystemBlockOptions = {
 };
 
 /**
- * Place system-block cache breakpoints that survive a volatile trailing block.
+ * Trailing system-prompt segments carrying per-turn volatile content (memory
+ * recall blocks). They are rendered by the coding agent as their own
+ * `systemPrompt` array elements and always appended last, so on the wire they
+ * form a volatile suffix after the stable prefix. The system cache breakpoint
+ * anchors on the last stable segment instead of the array tail, so a recall
+ * refresh re-bills only the suffix and the message tail for one turn while
+ * the tools+stable-system prefix stays a cache hit.
  *
- * veyyon appends per-request project context (cwd, date, workspace tree) as the
- * final system block, so a single trailing breakpoint hashes the whole prefix
- * *including* that block — a new cwd or a midnight rollover then re-writes the
- * entire system cache (issue #7324). This caches the trailing block (full-match
- * reuse when nothing changed) AND the stable harness prefix at `firstCacheableIndex`
- * (preserving the shared prompt prefix across suffix/assignment changes).
+ * Detection is by our own markup, not model identity: recall blocks always
+ * open with `<memories>`. Stable segments containing recalled text elsewhere
+ * (e.g. quoted in conversation) are unaffected — only a leading tag counts.
+ */
+export const VOLATILE_SYSTEM_SEGMENT_MARKERS = ["<memories>"];
+
+export function stableSystemSuffixStart(systemBlocks: readonly AnthropicSystemBlock[]): number {
+	for (let index = 0; index < systemBlocks.length; index++) {
+		const text = systemBlocks[index]?.text ?? "";
+		if (VOLATILE_SYSTEM_SEGMENT_MARKERS.some(marker => text.startsWith(marker))) return index;
+	}
+	return systemBlocks.length;
+}
+
+/**
+ * Place system-block cache breakpoints that survive volatile project context
+ * and volatile memory recall suffixes.
  *
- * @returns breakpoints placed (0-2, capped by `maxBreakpoints`).
+ * veyyon normally appends its project footer (cwd, date, workspace tree) after the
+ * stable system prefix. When cwd is outside a single direct child repository,
+ * an active-repo context block follows that footer. Preserve the first eligible
+ * block (the shared harness), then cache the newest eligible blocks to cover:
+ *
+ * - stable prefix, project footer
+ * - stable prefix, project footer, active-repo context
+ *
+ * When volatile recall blocks (like `<memories>`) follow the stable prefix,
+ * caching anchors on the stable prefix ending before `stableSystemSuffixStart(blocks)`
+ * so recall refreshes do not invalidate the stable system cache.
+ *
+ * A footer change can then fall back to the stable-prefix entry instead of
+ * re-writing the entire system cache (issue #7324).
+ *
+ * @returns breakpoints placed, capped by `maxBreakpoints`.
  */
 function cacheSystemPrefixBreakpoints(
 	blocks: AnthropicSystemBlock[],
@@ -3158,15 +3233,21 @@ function cacheSystemPrefixBreakpoints(
 ): number {
 	if (!cacheControl || maxBreakpoints <= 0) return 0;
 	let placed = 0;
-	const lastIndex = blocks.length - 1;
-	if (lastIndex >= firstCacheableIndex && blocks[lastIndex].cache_control == null) {
-		blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
+	const suffixStart = stableSystemSuffixStart(blocks);
+	const startIndex =
+		suffixStart < blocks.length && suffixStart > firstCacheableIndex ? suffixStart - 1 : blocks.length - 1;
+	// Runtime sections can outnumber the marker budget. Never evict the shared
+	// harness anchor to make room for a project-specific suffix.
+	if (firstCacheableIndex <= startIndex && blocks[firstCacheableIndex].cache_control == null) {
+		blocks[firstCacheableIndex] = {
+			...blocks[firstCacheableIndex],
+			cache_control: cloneAnthropicCacheControl(cacheControl),
+		};
 		placed++;
 	}
-	if (placed >= maxBreakpoints) return placed;
-	const stableIndex = firstCacheableIndex;
-	if (stableIndex < lastIndex && blocks[stableIndex].cache_control == null) {
-		blocks[stableIndex] = { ...blocks[stableIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
+	for (let index = startIndex; index >= firstCacheableIndex && placed < maxBreakpoints; index--) {
+		if (blocks[index].cache_control != null) continue;
+		blocks[index] = { ...blocks[index], cache_control: cloneAnthropicCacheControl(cacheControl) };
 		placed++;
 	}
 	return placed;
@@ -3205,7 +3286,7 @@ export function buildAnthropicSystemBlocks(
 		for (const prompt of sanitizedPrompts) {
 			blocks.push({ type: "text", text: prompt });
 		}
-		cacheSystemPrefixBreakpoints(blocks, cacheControl, 2, firstCacheableSystemIndex(blocks));
+		cacheSystemPrefixBreakpoints(blocks, cacheControl, 3, firstCacheableSystemIndex(blocks));
 
 		return blocks;
 	}
@@ -3307,6 +3388,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	}
 
 	// First in the merge below, so a caller-supplied header still wins.
+	const vercelHeaders = model.provider === "vercel-ai-gateway" ? getVercelAiGatewayHeaders() : undefined;
 	const openCodeHeaders = isOpenCodeProvider(model.provider) ? getOpenCodeHeaders(conversationId) : undefined;
 	const defaultHeaders = buildAnthropicHeaders({
 		apiKey,
@@ -3315,6 +3397,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		extraBetas: betaFeatures,
 		stream,
 		modelHeaders: mergeHeaders(
+			vercelHeaders,
 			openCodeHeaders,
 			model.headers,
 			foundryCustomHeaders,
@@ -3423,8 +3506,10 @@ function disableThinkingIfToolChoiceForced(
 	// omission defaults to adaptive thinking ON, so a forced-tool turn would still
 	// reason instead of calling the tool (#6589). Pin the lowest adaptive effort
 	// instead of dropping it, mirroring the disable branch in buildParams. Vertex
-	// rawPredict can't carry the effort beta as an HTTP header, so it keeps the
-	// delete behavior (the field is stripped there anyway; see buildParams).
+	// rawPredict is the sole exception: it can only carry the effort beta in the
+	// body (dropped there too, see buildParams), so it keeps the delete behavior.
+	// The effort beta itself is attached at the request site — including per-request
+	// for injected SDK clients that bypass client-level beta construction.
 	if (isAdaptiveOnlyThinking(model) && model.provider !== "google-vertex") {
 		const outputConfig = (params.output_config as AnthropicOutputConfig | undefined) ?? {};
 		outputConfig.effort = "low";
@@ -3506,17 +3591,18 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		isCCLayout =
 			params.system.length >= 3 &&
 			(params.system[0] as { text?: string }).text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX) === true;
+		const maxSystemBreakpoints = Math.min(3, MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed);
 		cacheBreakpointsUsed += cacheSystemPrefixBreakpoints(
 			params.system as AnthropicSystemBlock[],
 			cacheControl,
-			MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed,
+			maxSystemBreakpoints,
 			isCCLayout ? firstCacheableSystemIndex(params.system as AnthropicSystemBlock[]) : 0,
 		);
 	}
 	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
 
 	const start = isCCLayout ? Math.max(0, params.messages.length - 1) : Math.max(0, params.messages.length - 2);
-	for (let i = start; i < params.messages.length; i++) {
+	for (let i = params.messages.length - 1; i >= start; i--) {
 		if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) break;
 		const message = params.messages[i];
 		if (!message) continue;

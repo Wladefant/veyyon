@@ -43,6 +43,10 @@ const ALLOWED = new Map<string, string>([
 		"modes/keywords/workflow-keyword",
 		"Detection half of the `workflowz` keyword, plus the notice renderer. The gradient stays in `modes/keywords/workflow`.",
 	],
+	// `modes/launch-facts` was added here by the santhreal sync under the claim that it "imports
+	// nothing". It imports settings, the thinking constants and seven packages, and it is not
+	// drawing anything: it is the session's record of the project at rest. It lives in
+	// `config/launch-facts.ts` now, so this list does not carry it.
 	// `modes/turn-budget` and `modes/terminal/utils/context-usage` used to be here. Neither
 	// was a leaf of anything: the first is a directive parser and the second is token
 	// accounting, and both were in `modes/` only because the surfaces that DISPLAY

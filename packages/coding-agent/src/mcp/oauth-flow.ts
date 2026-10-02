@@ -359,10 +359,10 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		ctrl: OAuthController,
 	) {
 		super(ctrl, resolveCallbackOptions(config));
-		this.#resolvedClientId = this.#resolveClientId(config);
+		this.#resolvedClientId = resolveClientId(config);
 		this.#fetch = config.fetch ?? ctrl.fetch ?? fetch;
 		this.#resource = this.#filterResourceIndicator(
-			resolveResourceUri(config.resource ?? this.#resourceFromAuthorizationUrl(config.authorizationUrl)),
+			resolveResourceUri(config.resource ?? resourceFromAuthorizationUrl(config.authorizationUrl)),
 		);
 	}
 
@@ -523,7 +523,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	#generateCodeVerifier(): string {
 		const bytes = new Uint8Array(32);
 		crypto.getRandomValues(bytes);
-		return this.#base64UrlEncode(bytes);
+		return base64UrlEncode(bytes);
 	}
 
 	/**
@@ -533,28 +533,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		const encoder = new TextEncoder();
 		const data = encoder.encode(verifier);
 		const hash = await crypto.subtle.digest("SHA-256", data);
-		return this.#base64UrlEncode(new Uint8Array(hash));
-	}
-
-	/**
-	 * Base64 URL encode (without padding).
-	 */
-	#base64UrlEncode(bytes: Uint8Array): string {
-		const base64 = btoa(String.fromCharCode(...bytes));
-		return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-	}
-
-	#resolveClientId(config: MCPOAuthConfig): string | undefined {
-		return staticClientIdFromConfig(config);
-	}
-	#resourceFromAuthorizationUrl(authorizationUrl: string): string | undefined {
-		try {
-			return new URL(authorizationUrl).searchParams.get("resource") ?? undefined;
-		} catch {
-			// An optional RFC 8707 hint. Undefined means "not advertised in the URL", which is also what a
-			// parseable URL without the parameter gives, and the request omits `resource` in both cases.
-			return undefined;
-		}
+		return base64UrlEncode(new Uint8Array(hash));
 	}
 
 	/**
@@ -737,6 +716,28 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			`OAuth provider requires client_id, and dynamic client registration was rejected ` +
 				`(POST ${failure.endpoint} → ${outcome}). The server likely restricts registration to pre-approved clients. ${manualHint}`,
 		);
+	}
+}
+
+/**
+ * Base64 URL encode (without padding).
+ */
+function base64UrlEncode(bytes: Uint8Array): string {
+	const base64 = btoa(String.fromCharCode(...bytes));
+	return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+function resolveClientId(config: MCPOAuthConfig): string | undefined {
+	return staticClientIdFromConfig(config);
+}
+
+function resourceFromAuthorizationUrl(authorizationUrl: string): string | undefined {
+	try {
+		return new URL(authorizationUrl).searchParams.get("resource") ?? undefined;
+	} catch {
+		// An optional RFC 8707 hint. Undefined means "not advertised in the URL", which is also what a
+		// parseable URL without the parameter gives, and the request omits `resource` in both cases.
+		return undefined;
 	}
 }
 

@@ -3,15 +3,15 @@ import type { Model } from "@veyyon/ai";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
+import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
+import { removeWithRetries } from "@veyyon/utils";
 import {
 	getImageGenTools,
 	getImageGenToolsWithRegistry,
 	imageGenTool,
 	isImageProviderPreference,
 	setPreferredImageProvider,
-} from "@veyyon/coding-agent/tools/web/image-gen";
-import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
-import { removeWithRetries } from "@veyyon/utils";
+} from "../../src/tools/web/image-gen";
 
 /**
  * isImageProviderPreference guards the persisted image-provider setting so an unknown or
@@ -360,6 +360,192 @@ describe("imageGenTool", () => {
 		expect(result.details?.imageCount).toBe(1);
 	});
 
+	it("falls back to antigravity when an openai-codex API key lacks a subscription account claim", async () => {
+		const antigravityCredentials = JSON.stringify({ token: "test-antigravity-token", projectId: "test-project" });
+		let requestUrl: string | undefined;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request) => {
+			requestUrl = input.toString();
+			return new Response(
+				`data: ${JSON.stringify({
+					response: {
+						candidates: [
+							{
+								content: {
+									parts: [
+										{
+											inlineData: {
+												data: Buffer.from("fallback-image").toString("base64"),
+												mimeType: "image/png",
+											},
+										},
+									],
+								},
+							},
+						],
+					},
+				})}\n\n`,
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex",
+			name: "GPT Codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "plain-openai-key-no-claims",
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "openai-codex") return "plain-openai-key-no-claims";
+					if (provider === "google-antigravity") return antigravityCredentials;
+					return undefined;
+				},
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: (provider: string) => async () =>
+					provider === "google-antigravity" ? antigravityCredentials : "plain-openai-key-no-claims",
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-key-fallback", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
+	it("does not fall back to antigravity when an openai-codex API key has valid subscription account claims", async () => {
+		const tokenPayload = Buffer.from(
+			JSON.stringify({
+				"https://api.openai.com/auth": { chatgpt_account_id: "acc_valid" },
+			}),
+		).toString("base64");
+		const validCodexJwt = `header.${tokenPayload}.signature`;
+		const antigravityCredentials = JSON.stringify({ token: "test-antigravity-token", projectId: "test-project" });
+		let requestUrl: string | undefined;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request) => {
+			requestUrl = input.toString();
+			return new Response(
+				[
+					"event: response.output_item.done",
+					`data: ${JSON.stringify({
+						type: "response.output_item.done",
+						item: {
+							type: "image_generation_call",
+							result: Buffer.from("fake-codex-jwt-webp").toString("base64"),
+							status: "completed",
+						},
+					})}`,
+					"",
+					"event: response.completed",
+					`data: ${JSON.stringify({
+						type: "response.completed",
+						response: { output: [], status: "completed", error: null },
+					})}`,
+					"",
+				].join("\n"),
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex",
+			name: "GPT Codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => validCodexJwt,
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "openai-codex") return validCodexJwt;
+					if (provider === "google-antigravity") return antigravityCredentials;
+					return undefined;
+				},
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => validCodexJwt,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-valid-key", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+		expect(result.details?.provider).toBe("openai-codex");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
+	// A provider preference must not block a credentialed provider that supports
+	// the requested ratio; this does not cover HTTP-error fallback.
+	it("skips a credentialed preferred provider with an incompatible aspect ratio", async () => {
+		setPreferredImageProvider("gemini");
+		const requestUrls: string[] = [];
+		const ctx: CustomToolContext = {
+			fetch: async input => {
+				requestUrls.push(input.toString());
+				return new Response(
+					JSON.stringify({ data: [{ b64_json: Buffer.from("ratio-fallback-image").toString("base64") }] }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			},
+			sessionManager: {
+				getCwd: () => "/repo",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "google") return "test-gemini-token";
+					if (provider === "xai-oauth") return "test-xai-token";
+					return undefined;
+				},
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => async () =>
+					provider === "google" ? "test-gemini-token" : "test-xai-token",
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-ratio-fallback",
+			{ subject: "a cat", aspect_ratio: "3:2" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+		expect(requestUrls).toEqual(["https://api.x.ai/v1/images/generations"]);
+		expect(result.details?.provider).toBe("xai");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
 	it("routes xAI image generation with xAI-only aspect ratios", async () => {
 		setPreferredImageProvider("xai");
 		let requestUrl: string | undefined;
@@ -425,5 +611,376 @@ describe("imageGenTool", () => {
 		const savedPath = result.details?.imagePaths[0];
 		if (!savedPath) throw new Error("Expected generated image path");
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("fake-xai-image"));
+	});
+
+	it("uses the Antigravity image model advertised for the account", async () => {
+		setPreferredImageProvider("antigravity");
+		const requestUrls: string[] = [];
+		const requestedModels: string[] = [];
+		let capturedRankingContext: { modelId?: string } | undefined;
+		const fetchMock = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = input.toString();
+			requestUrls.push(url);
+			if (url.includes(":fetchAvailableModels")) {
+				return new Response(JSON.stringify({ imageGenerationModelIds: ["gemini-3.1-flash-image"] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			if (url.includes("streamGenerateContent")) {
+				const request = JSON.parse(String(init?.body)) as { model?: string };
+				if (request.model) requestedModels.push(request.model);
+				if (request.model !== "gemini-3.1-flash-image") {
+					return new Response(JSON.stringify({ error: { message: "Requested entity was not found." } }), {
+						status: 404,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(
+					`data: ${JSON.stringify({
+						response: {
+							candidates: [
+								{
+									content: {
+										parts: [
+											{
+												inlineData: {
+													data: Buffer.from("advertised-antigravity-image").toString("base64"),
+													mimeType: "image/png",
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					})}\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			}
+			return new Response(
+				JSON.stringify({ data: [{ b64_json: Buffer.from("unexpected-xai-fallback").toString("base64") }] }),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		const creds = JSON.stringify({ token: "test-token", projectId: "test-project" });
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string, _sessionId?: string, context?: { modelId?: string }) => {
+					if (provider === "google-antigravity") {
+						capturedRankingContext = context;
+						return creds;
+					}
+					return undefined;
+				},
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: () => false,
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => (provider === "google-antigravity" ? () => creds : () => "test-xai-token"),
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-advertised-antigravity-model",
+			{ subject: "a cat" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual([
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+		]);
+		expect(requestedModels).toEqual(["gemini-3.1-flash-image"]);
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+		expect(capturedRankingContext?.modelId).toBeUndefined();
+	});
+
+	it("re-discovers the image model when withAuth rotates to a sibling Antigravity account", async () => {
+		setPreferredImageProvider("antigravity");
+		const credsA = JSON.stringify({ token: "token-A", projectId: "proj-A" });
+		const credsB = JSON.stringify({ token: "token-B", projectId: "proj-B" });
+		const streamAttempts: Array<{ token: string; model: string }> = [];
+		const fetchMock = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = input.toString();
+			const auth = new Headers(init?.headers).get("authorization");
+			if (url.includes(":fetchAvailableModels")) {
+				// Account A still carries the legacy pro model; the rotated sibling B
+				// only advertises the flash model.
+				const modelId = auth === "Bearer token-B" ? "gemini-3.1-flash-image" : "gemini-3-pro-image";
+				return new Response(JSON.stringify({ imageGenerationModelIds: [modelId] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			if (url.includes("streamGenerateContent")) {
+				const token = auth?.replace("Bearer ", "") ?? "";
+				const request = JSON.parse(String(init?.body)) as { model?: string };
+				streamAttempts.push({ token, model: request.model ?? "" });
+				// Account A is out of quota, forcing withAuth to rotate to sibling B.
+				if (token === "token-A") {
+					return new Response(JSON.stringify({ error: { message: "resource exhausted" } }), {
+						status: 403,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				// Sibling B only serves its advertised model.
+				if (request.model !== "gemini-3.1-flash-image") {
+					return new Response(JSON.stringify({ error: { message: "Requested entity was not found." } }), {
+						status: 404,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(
+					`data: ${JSON.stringify({
+						response: {
+							candidates: [
+								{
+									content: {
+										parts: [
+											{
+												inlineData: {
+													data: Buffer.from("sibling-antigravity-image").toString("base64"),
+													mimeType: "image/png",
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					})}\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			}
+			throw new Error(`Unexpected provider request: ${url}`);
+		}) as unknown as typeof fetch;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => (provider === "google-antigravity" ? credsA : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: () => false,
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) =>
+					provider === "google-antigravity"
+						? (rctx: { lastChance?: boolean }) => (rctx.lastChance ? credsB : credsA)
+						: () => "test-xai-token",
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-antigravity-rotation", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(streamAttempts).toEqual([
+			{ token: "token-A", model: "gemini-3-pro-image" },
+			{ token: "token-B", model: "gemini-3.1-flash-image" },
+		]);
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+	});
+
+	it("fails over to the sandbox endpoint in auto mode after a production 5xx", async () => {
+		setPreferredImageProvider("antigravity");
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes(":fetchAvailableModels")) {
+				requestUrls.push(url);
+				return new Response(JSON.stringify({ imageGenerationModelIds: ["gemini-3.1-flash-image"] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			if (url.includes("streamGenerateContent")) {
+				requestUrls.push(url);
+				if (url.startsWith("https://daily-cloudcode-pa.googleapis.com/")) {
+					return new Response(JSON.stringify({ error: { message: "backend unavailable" } }), {
+						status: 503,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(
+					`data: ${JSON.stringify({
+						response: {
+							candidates: [
+								{
+									content: {
+										parts: [
+											{
+												inlineData: {
+													data: Buffer.from("sandbox-antigravity-image").toString("base64"),
+													mimeType: "image/png",
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					})}\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			}
+			throw new Error(`Unexpected provider request: ${url}`);
+		}) as unknown as typeof fetch;
+		const creds = JSON.stringify({ token: "test-token", projectId: "test-project" });
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => (provider === "google-antigravity" ? creds : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: () => false,
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => (provider === "google-antigravity" ? () => creds : () => "test-xai-token"),
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-antigravity-failover", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual([
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+			"https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+		]);
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+		const savedPath = result.details?.imagePaths[0];
+		if (!savedPath) throw new Error("Expected generated image path");
+		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("sandbox-antigravity-image"));
+	});
+
+	it("prioritizes the advertised endpoint when discovered on a fallback host", async () => {
+		setPreferredImageProvider("antigravity");
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			if (url.includes(":fetchAvailableModels")) {
+				requestUrls.push(url);
+				if (url.startsWith("https://daily-cloudcode-pa.googleapis.com/")) {
+					return new Response(JSON.stringify({ error: { message: "primary discovery unavailable" } }), {
+						status: 503,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(JSON.stringify({ imageGenerationModelIds: ["gemini-3.1-flash-image"] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			if (url.includes("streamGenerateContent")) {
+				requestUrls.push(url);
+				if (url.startsWith("https://daily-cloudcode-pa.googleapis.com/")) {
+					return new Response(JSON.stringify({ error: { message: "primary host was not advertised" } }), {
+						status: 404,
+						headers: { "content-type": "application/json" },
+					});
+				}
+				return new Response(
+					`data: ${JSON.stringify({
+						response: {
+							candidates: [
+								{
+									content: {
+										parts: [
+											{
+												inlineData: {
+													data: Buffer.from("sandbox-advertised-image").toString("base64"),
+													mimeType: "image/png",
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					})}\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			}
+			throw new Error(`Unexpected provider request: ${url}`);
+		}) as unknown as typeof fetch;
+		const creds = JSON.stringify({ token: "test-token", projectId: "test-project" });
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => (provider === "google-antigravity" ? creds : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: () => false,
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => (provider === "google-antigravity" ? () => creds : () => "test-xai-token"),
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-antigravity-sandbox-advertised",
+			{ subject: "a cat" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual([
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+			"https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
+			"https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+		]);
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.model).toBe("gemini-3.1-flash-image");
+		const savedPath = result.details?.imagePaths[0];
+		if (!savedPath) throw new Error("Expected generated image path");
+		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("sandbox-advertised-image"));
 	});
 });

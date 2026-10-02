@@ -19,6 +19,7 @@ import {
 	getBundledModels,
 	getBundledProviders,
 	iterateBundledModelMetadata,
+	readBundledModelKeys,
 } from "@veyyon/catalog/models";
 
 export interface CatalogReachability {
@@ -92,6 +93,8 @@ async function reachable(refs: readonly WeakRef<object>[]): Promise<number> {
 
 function readEveryPath(): string | undefined {
 	const reference = resolveBundledModelReference(REFERENCE_ID)?.id;
+	const keys = readBundledModelKeys();
+	keys.candidateAt(keys.ids.length - 1);
 	for (const provider of getBundledProviders()) {
 		const models = getBundledModels(provider as GeneratedProvider);
 		const first = models[0];

@@ -43,7 +43,7 @@ import {
 	CodexWebSocketTransportError,
 	CodexWhitespaceToolCallLoopError,
 } from "../error/classes";
-import { getEnvApiKey } from "../stream";
+import { getEnvApiKey, isOfficialCodexApiUrl } from "../stream";
 import type {
 	Api,
 	AssistantMessage,
@@ -76,7 +76,7 @@ import {
 	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 } from "../utils";
 import { clearStreamingPartialJson, kStreamingLastParseLen, kStreamingPartialJson } from "../utils/block-symbols";
-import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
+import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import {
 	type FirstEventBudget,
@@ -84,6 +84,7 @@ import {
 	openStallLadderBudget,
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
@@ -119,6 +120,7 @@ import type {
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
+	ResponseOutputItem,
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 	ResponseStatus,
@@ -131,6 +133,7 @@ import {
 	appendReasoningSummaryPart,
 	appendReasoningSummaryPartDone,
 	appendReasoningSummaryTextDelta,
+	appendResponsesImageResult,
 	appendResponsesToolResultMessages,
 	applyOpenAIServiceTier,
 	applyReasoningSummaryDone,
@@ -140,11 +143,13 @@ import {
 	createSequentialCutoffSummaryState,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
+	escapeReplayedClientText,
 	finalizeCustomToolCallInputDone,
 	finalizeMessageText,
 	finalizePendingResponsesToolCalls,
 	finalizeReasoningThinking,
 	finalizeToolCallArgumentsDone,
+	getOpenAIPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
 	normalizeOpenAIPromptCacheKey,
@@ -184,6 +189,14 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	 */
 	clientMetadata?: Record<string, string>;
 	/**
+	 * Turn id of the initiating (parent) Codex turn for nested requests such as
+	 * subagent spawns (codex-rs `parent_turn_id`, #35835). Emitted both as the
+	 * flat `client_metadata.parent_turn_id` key and inside the
+	 * `x-codex-turn-metadata` JSON blob; blank values are ignored. The key is
+	 * reserved: `clientMetadata` extras cannot supply it.
+	 */
+	parentTurnId?: string;
+	/**
 	 * Invoked when the server streams a `response.metadata` event carrying
 	 * ChatGPT moderation metadata (`metadata.openai_chatgpt_moderation_metadata`)
 	 * for first-party presentation parity. Diagnostic observer: failures are
@@ -201,6 +214,8 @@ export interface OpenAICodexCompatibilityMetadataOptions {
 	startNewTurn?: boolean;
 	turnStartedAtUnixMs?: number;
 	clientMetadata?: Readonly<Record<string, string>>;
+	/** Parent Codex turn id for nested requests; see {@link OpenAICodexResponsesOptions.parentTurnId}. */
+	parentTurnId?: string;
 	/** Add the direct installation header a non-turn codex call requires. */
 	includeInstallationHeader?: boolean;
 }
@@ -272,7 +287,7 @@ const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_IDLE_
  * SSE. Generous default so legitimately slow first-token providers still get
  * a chance on the WS transport before falling through.
  */
-const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 60_000);
+const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 300_000);
 const CODEX_WEBSOCKET_RETRY_BUDGET = Number($env.VEYYON_CODEX_WEBSOCKET_RETRY_BUDGET || CODEX_MAX_RETRIES);
 const CODEX_WEBSOCKET_RETRY_DELAY_MS = Number($env.VEYYON_CODEX_WEBSOCKET_RETRY_DELAY_MS || CODEX_RETRY_DELAY_MS);
 // The codes Codex sends for a failure a replay can survive. A code is this provider's own vocabulary;
@@ -339,7 +354,12 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 }
 
 type CodexTransport = "sse" | "websocket";
-type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
+type CodexEventItem =
+	| ResponseReasoningItem
+	| ResponseOutputMessage
+	| ResponseFunctionToolCall
+	| ResponseCustomToolCall
+	| ResponseOutputItem.ImageGenerationCall;
 type CodexOutputBlock =
 	| ThinkingContent
 	| TextContent
@@ -495,6 +515,7 @@ const CODEX_RESERVED_METADATA_KEYS: Record<string, true> = {
 	turn_started_at_unix_ms: true,
 	forked_from_thread_id: true,
 	parent_thread_id: true,
+	parent_turn_id: true,
 	// Codex protocol metadata key; spelled as codex-rs spells it.
 	subagent_kind: true,
 	thread_source: true,
@@ -567,6 +588,7 @@ function createCodexRequestMetadata(
 		startNewTurn: boolean;
 		turnStartedAtUnixMs?: number;
 		clientMetadata?: Readonly<Record<string, string>>;
+		parentTurnId?: string;
 		compaction?: CodexCompactionRequestContext;
 	},
 ): CodexRequestMetadata {
@@ -575,6 +597,9 @@ function createCodexRequestMetadata(
 		session.turnStartedAtUnixMs = options.turnStartedAtUnixMs;
 	}
 	const identity = createCodexCompatibilityIdentity(session);
+	// codex-rs `set_parent_turn_id` ignores blank values; keep the original
+	// spelling when non-blank.
+	const parentTurnId = options.parentTurnId?.trim() ? options.parentTurnId : undefined;
 	const extra: Record<string, string> = {};
 	const callerMetadata = options.clientMetadata;
 	if (callerMetadata) {
@@ -596,6 +621,7 @@ function createCodexRequestMetadata(
 		window_id: identity.windowId,
 		request_kind: requestKind,
 	};
+	if (parentTurnId) turnMetadata.parent_turn_id = parentTurnId;
 	if (options.compaction) {
 		turnMetadata.compaction = {
 			trigger: options.compaction.trigger,
@@ -614,14 +640,20 @@ function createCodexRequestMetadata(
 		...identity,
 		turnId: session.turnId,
 		turnMetadataJson,
-		clientMetadata: {
-			[OPENAI_HEADERS.INSTALLATION_ID]: identity.installationId,
-			session_id: identity.sessionId,
-			thread_id: identity.threadId,
-			[OPENAI_HEADERS.WINDOW_ID]: identity.windowId,
-			turn_id: session.turnId,
-			[OPENAI_HEADERS.TURN_METADATA]: turnMetadataJson,
-		},
+		clientMetadata: (() => {
+			const clientMetadata: Record<string, string> = {
+				[OPENAI_HEADERS.INSTALLATION_ID]: identity.installationId,
+				session_id: identity.sessionId,
+				thread_id: identity.threadId,
+				[OPENAI_HEADERS.WINDOW_ID]: identity.windowId,
+				turn_id: session.turnId,
+			};
+			// Both projections, mirroring codex-rs `CodexResponsesMetadata::to_client_metadata`:
+			// the flat key above/below AND the field inside the turn-metadata JSON.
+			if (parentTurnId) clientMetadata.parent_turn_id = parentTurnId;
+			clientMetadata[OPENAI_HEADERS.TURN_METADATA] = turnMetadataJson;
+			return clientMetadata;
+		})(),
 	};
 }
 
@@ -666,6 +698,7 @@ export function createOpenAICodexCompatibilityMetadata(
 		startNewTurn,
 		turnStartedAtUnixMs: options.turnStartedAtUnixMs ?? (startNewTurn || !session.turnId ? Date.now() : undefined),
 		clientMetadata: options.clientMetadata,
+		parentTurnId: options.parentTurnId,
 		compaction: options.compaction,
 	});
 	const headers = new Headers();
@@ -1378,7 +1411,7 @@ async function buildCodexRequestContext(
 	const accountId = getCodexAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
-	const promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+	const promptCacheKey = getOpenAIPromptCacheKey(options);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
 	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
@@ -1440,6 +1473,7 @@ async function buildCodexRequestContext(
 				: undefined
 			: getCodexTurnStartedAtUnixMs(context),
 		clientMetadata: transformedBody.client_metadata,
+		parentTurnId: options?.parentTurnId,
 		compaction,
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
@@ -1497,7 +1531,7 @@ export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
-	promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+	promptCacheKey = getOpenAIPromptCacheKey(options),
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
@@ -1957,6 +1991,19 @@ class CodexStreamProcessor {
 					this.#handleStreamEvent(rawEvent);
 					if (this.runtime.sawTerminalEvent) break;
 				}
+				if (!this.runtime.sawTerminalEvent) {
+					CODEX_DEBUG &&
+						logger.debug("[codex] codex stream ended unexpectedly", {
+							transport: this.runtime.transport,
+							terminalEventSeen: false,
+							unexpectedStreamEnd: true,
+							sentTurnStateHeader: Boolean(this.requestContext.websocketState?.turnState),
+							sentModelsEtagHeader: Boolean(this.requestContext.websocketState?.modelsEtag),
+						});
+					throw new CodexProviderStreamError("Codex stream ended before terminal completion event", {
+						retryable: true,
+					});
+				}
 				return { firstTokenTime: this.#attemptFirstTokenTime };
 			} catch (error) {
 				const recovered = await this.#recoverStreamError(error);
@@ -2039,6 +2086,12 @@ class CodexStreamProcessor {
 				this.#handleResponseCompleted(rawEvent);
 				return;
 			case "response.metadata":
+				// The WebSocket transport has no per-response HTTP headers; codex-rs
+				// mirrors them into this event's `headers` and reads
+				// `x-codex-turn-state` from there (ResponsesStreamEvent::turn_state).
+				// Pick up the refresh so same-turn follow-ups echo the latest turn
+				// state on either transport.
+				updateCodexSessionMetadataFromHeaders(this.requestContext.websocketState, toCodexHeaders(rawEvent.headers));
 				this.#reportModerationMetadata(rawEvent);
 				return;
 			case "error":
@@ -2180,6 +2233,7 @@ class CodexStreamProcessor {
 		const rawItem = rawEvent.item;
 		if (!rawItem || typeof rawItem !== "object") return;
 		const item = structuredCloneJSON(rawItem) as CodexEventItem;
+		if (item.type === "image_generation_call" && item.result) item.status = "completed";
 		runtime.nativeOutputItems.push(item as unknown as Record<string, unknown>);
 
 		// Match the finalization to the OPEN ITEM that started this block, not the
@@ -2191,6 +2245,12 @@ class CodexStreamProcessor {
 		const entry = (itemId ? runtime.openItems.get(itemId) : null) ?? runtime.openItemForEvent(rawEvent);
 		const block = entry?.block ?? null;
 		const contentIndex = entry?.contentIndex ?? output.content.length - 1;
+
+		if (item.type === "image_generation_call" && item.result) {
+			appendResponsesImageResult(output, stream, item.result);
+			runtime.closeOpenItem(entry);
+			return;
+		}
 
 		if (item.type === "reasoning" && block?.type === "thinking") {
 			this.#flushSummaryDeltas(entry);
@@ -2296,12 +2356,15 @@ class CodexStreamProcessor {
 				// took for this attempt and nothing mutates it; a retry replaces it
 				// with a fresh one. Adopting it saves a second full clone per turn.
 				state.lastRequest = runtime.requestBodyForState;
-				if (responseId) {
+				const replayableResponseItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+					structuredCloneJSON(runtime.nativeOutputItems),
+				);
+				if (responseId && replayableResponseItems) {
 					state.lastResponseId = responseId;
-					state.lastResponseItems = stripInputItemIds(structuredCloneJSON(runtime.nativeOutputItems));
+					state.lastResponseItems = replayableResponseItems;
 					state.canAppend = rawEvent.type === "response.done" || rawEvent.type === "response.completed";
 				} else {
-					// Without a response id the append baseline cannot be trusted.
+					// Without both a response id and replayable output, the append baseline cannot be trusted.
 					state.canAppend = false;
 				}
 			}
@@ -2500,10 +2563,10 @@ class CodexStreamProcessor {
 			!this.runtime.sawTerminalEvent &&
 			!this.options?.signal?.aborted;
 		if (!canReplay) return false;
+		if (this.#hasCommittedOutput()) return false;
 
 		const state = websocketState;
 		const streamError = error instanceof Error ? error : new Error(String(error));
-		const replayingBufferedOutputOverSse = this.output.content.length > 0;
 		const fatalWebSocketMessage = streamError.message.toLowerCase();
 		const isFatal = CODEX_WEBSOCKET_FATAL_PATTERNS.some(pattern =>
 			fatalWebSocketMessage.includes(pattern.toLowerCase()),
@@ -2520,18 +2583,13 @@ class CodexStreamProcessor {
 		const isStall = isCodexWebSocketStallError(streamError);
 		const stallLadderExhausted = isStall && this.runtime.websocketStallRetries >= PRE_RESPONSE_STALL_ATTEMPTS - 1;
 		const activateFallback =
-			replayingBufferedOutputOverSse ||
-			isFatal ||
-			stallLadderExhausted ||
-			this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
+			isFatal || stallLadderExhausted || this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
 		recordCodexWebSocketFailure(state, activateFallback, {
-			cause: replayingBufferedOutputOverSse
-				? "stream-failed-while-replaying-over-sse"
-				: isFatal
-					? "fatal-stream-error"
-					: stallLadderExhausted
-						? "stall-ladder-exhausted"
-						: "stream-retry-budget-exhausted",
+			cause: isFatal
+				? "fatal-stream-error"
+				: stallLadderExhausted
+					? "stall-ladder-exhausted"
+					: "stream-retry-budget-exhausted",
 			error: streamError.message,
 		});
 		CODEX_DEBUG &&
@@ -2541,16 +2599,15 @@ class CodexStreamProcessor {
 				retryBudget: CODEX_WEBSOCKET_RETRY_BUDGET,
 				activated: activateFallback,
 				fatal: isFatal,
-				replayedBufferedOutput: replayingBufferedOutputOverSse,
 			});
 
 		if (!activateFallback) {
+			this.#closeOpenBlocksForReplay();
 			this.runtime.websocketStreamRetries += 1;
 			if (isStall) this.runtime.websocketStallRetries += 1;
-			// Full re-send on a fresh socket: clear accumulator state from the failed
-			// attempt. Content is empty here, but blockless native items (e.g.
-			// web_search_call) may already have accumulated.
 			this.runtime.resetAccumulators();
+			this.runtime.sawTerminalEvent = false;
+			resetOutputState(this.model, this.output);
 			this.firstTokenTime = undefined;
 			await scheduler.wait(CODEX_WEBSOCKET_RETRY_DELAY_MS * Math.max(1, this.runtime.websocketStreamRetries), {
 				signal: this.requestSetup.requestSignal,
@@ -2559,12 +2616,52 @@ class CodexStreamProcessor {
 			return true;
 		}
 
+		this.#closeOpenBlocksForReplay();
 		this.runtime.resetAccumulators();
 		resetOutputState(this.model, this.output);
 		this.firstTokenTime = undefined;
 
 		await this.#reopenSseStream(state);
 		return true;
+	}
+
+	/**
+	 * Emit balancing `*_end` events for every block that opened (pushed a
+	 * `*_start`) but never committed visible content, so a retry that resets
+	 * `output` and replays cannot leave the consumer with an orphaned
+	 * `text_start`/`thinking_start` from the abandoned attempt. Only reachable
+	 * blocks are empty text/reasoning ones — a committed tool/text block blocks
+	 * the retry upstream.
+	 */
+	#closeOpenBlocksForReplay(): void {
+		const { runtime, output, stream } = this;
+		const open = new Set<CodexOpenItem>(runtime.openItems.values());
+		for (const entry of runtime.openItemsByOutputIndex.values()) open.add(entry);
+		if (runtime.currentEntry) open.add(runtime.currentEntry);
+		for (const entry of open) {
+			const block = entry.block;
+			if (block?.type === "thinking") {
+				stream.push({
+					type: "thinking_end",
+					contentIndex: entry.contentIndex,
+					content: block.thinking,
+					partial: output,
+				});
+			} else if (block?.type === "text") {
+				stream.push({ type: "text_end", contentIndex: entry.contentIndex, content: block.text, partial: output });
+			}
+		}
+	}
+
+	#hasCommittedOutput(): boolean {
+		return (
+			hasVisibleAssistantContent(this.output) ||
+			this.output.content.some(
+				block =>
+					(block.type === "text" && block.text.length > 0) ||
+					(block.type === "thinking" && block.thinking.length > 0),
+			)
+		);
 	}
 
 	async #tryRetryProviderError(error: unknown): Promise<boolean> {
@@ -2574,13 +2671,19 @@ class CodexStreamProcessor {
 		const stallOutlivedBudget = isPreResponseStall(error) && this.requestSetup.firstEventBudget.spent();
 		if (
 			!(error instanceof CodexProviderStreamError && error.retryable) ||
-			this.output.content.length > 0 ||
+			this.#hasCommittedOutput() ||
+			!this.runtime.canSafelyReplayWebsocketOverSse ||
 			this.runtime.providerRetryAttempt >= CODEX_MAX_RETRIES ||
 			stallOutlivedBudget ||
 			this.options?.signal?.aborted
 		) {
 			return false;
 		}
+
+		// A leading `output_item.added` already pushed a `*_start` for the (empty)
+		// open block; balance it with the matching end before the reset+replay so
+		// consumers never see an orphaned start from the abandoned attempt.
+		this.#closeOpenBlocksForReplay();
 
 		this.runtime.providerRetryAttempt += 1;
 		const websocketState = this.requestContext.websocketState;
@@ -3114,14 +3217,6 @@ export function getOpenAICodexTransportDetails(
 	};
 }
 
-function stripInputItemIds(items: Array<Record<string, unknown>>): InputItem[] {
-	return items.map(item => {
-		if (item.id == null) return item as InputItem;
-		const { id: _id, ...rest } = item;
-		return rest as InputItem;
-	});
-}
-
 /**
  * UTF-8 byte length of `request.input` as JSON, read off `requestJson`, the request as serialized,
  * instead of serializing the input a second time. Serialization composes: the request with
@@ -3451,14 +3546,19 @@ class CodexWebSocketConnection {
 	}
 
 	close(reason = "done"): void {
-		if (
-			this.#socket &&
-			(this.#socket.readyState === WebSocket.OPEN || this.#socket.readyState === WebSocket.CONNECTING)
-		) {
-			this.#socket.close(1000, reason);
-		}
+		const socket = this.#socket;
 		this.#socket = null;
 		this.#stopHeartbeat();
+		if (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING)) return;
+		try {
+			socket.close(1000, reason);
+		} catch (error) {
+			CODEX_DEBUG &&
+				logger.debug("[codex] codex websocket close failed", {
+					error: error instanceof Error ? error.message : String(error),
+					reason,
+				});
+		}
 	}
 
 	async connect(signal?: AbortSignal): Promise<void> {
@@ -3486,7 +3586,7 @@ class CodexWebSocketConnection {
 			if (signal) signal.removeEventListener("abort", onAbort);
 		};
 		const onAbort = () => {
-			socket.close(1000, "aborted");
+			this.close("aborted");
 			if (!settled) {
 				settled = true;
 				clearPending();
@@ -3502,7 +3602,7 @@ class CodexWebSocketConnection {
 		}
 		if (!settled) {
 			timeout = setTimeout(() => {
-				socket.close(1000, "connect-timeout");
+				this.close("connect-timeout");
 				if (!settled) {
 					settled = true;
 					clearPending();
@@ -4002,6 +4102,24 @@ async function getOrCreateCodexWebSocketConnection(
 	return state.connection;
 }
 
+/**
+ * Compress an SSE request body with zstd. Returns `undefined` when
+ * compression is disabled or fails, in which case the caller sends the
+ * plain JSON string without a `content-encoding` header.
+ */
+function compressCodexRequestBody(bodyJson: string, baseUrl: string): Uint8Array | undefined {
+	if (!isOfficialCodexApiUrl(baseUrl) || !$flag("PI_CODEX_ZSTD", true)) return undefined;
+	try {
+		return Bun.zstdCompressSync(bodyJson, { level: 3 });
+	} catch (error) {
+		CODEX_DEBUG &&
+			logger.debug("[codex] codex request body compression failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		return undefined;
+	}
+}
+
 async function openCodexSseEventStream(
 	url: string,
 	requestHeaders: Record<string, string> | undefined,
@@ -4061,31 +4179,46 @@ async function openCodexSseEventStream(
 			clearPreResponseTimeout = undefined;
 		}
 	};
-	let response: Response;
-	try {
-		response = await fetchProviderWithRetry(url, {
+	let lastSentBody: string | Uint8Array | undefined;
+	const send = (allowCompression: boolean): Promise<Response> =>
+		fetchProviderWithRetry(url, {
 			method: "POST",
 			headers,
 			signal,
 			prepareInit: async () => {
 				const bodyJson = await serializeBody();
+				const compressedBody = allowCompression ? compressCodexRequestBody(bodyJson, url) : undefined;
+				if (compressedBody !== undefined) {
+					headers.set("content-encoding", "zstd");
+				} else {
+					headers.delete("content-encoding");
+				}
+				lastSentBody = compressedBody ?? bodyJson;
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
-				return { body: bodyJson, signal: watchdog.signal };
+				return { body: lastSentBody, signal: watchdog.signal };
 			},
 			maxAttempts: CODEX_MAX_RETRIES + 1,
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
-			// The caller's declared cap wins. Codex's own five-minute budget is
-			// what a ChatGPT-plan rate limit needs when nobody said otherwise,
-			// but a caller that declares `maxRetryDelayMs` has named the longest
-			// wait it will tolerate, and a hardcoded ceiling above it turned a
-			// `retry-after: 120` into two minutes of silence the caller had
-			// forbidden.
 			maxDelayMs: maxRetryDelayMs ?? CODEX_RATE_LIMIT_BUDGET_MS,
 			shouldRetryError: error => !(isPreResponseStall(error) && firstEventBudget.spent()),
 			fetch: fetchAttempt,
 			timeout: false,
 		});
+	let response: Response;
+	try {
+		response = await send(true);
+		if (lastSentBody instanceof Uint8Array && (response.status === 400 || response.status === 415)) {
+			const rejectedStatus = response.status;
+			await response.body?.cancel();
+			headers.delete("content-encoding");
+			CODEX_DEBUG &&
+				logger.debug("[codex] retrying request without zstd after encoding rejection", {
+					url,
+					status: rejectedStatus,
+				});
+			response = await send(false);
+		}
 	} finally {
 		clearPreResponseTimeout?.();
 	}
@@ -4263,7 +4396,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						customCallIds.add(maybe.call_id);
 					}
 				}
-				for (let hi = 0; hi < historyItems.length; hi++) messages.push(historyItems[hi]!);
+				const replayItems = isHarmonyDialectModel(model) ? escapeReplayedClientText(historyItems) : historyItems;
+				for (let hi = 0; hi < replayItems.length; hi++) messages.push(replayItems[hi]!);
 				msgIndex += 1;
 				continue;
 			}
@@ -4365,14 +4499,23 @@ function normalizeInputMessageContent(
 	model: Model<"openai-codex-responses">,
 	content: string | Array<TextContent | ImageContent | VideoContent>,
 ): ResponseInputContent[] {
+	// gpt-5.x codex rejects reserved Harmony control-token spellings in input
+	// data; escape the transport copy of untrusted user text so ordinary docs or
+	// grep results cannot poison the session (#6913). History is left untouched.
+	const escapeControlTokens = isHarmonyDialectModel(model);
 	if (typeof content === "string") {
 		if (!content || content.trim() === "") return [];
-		return [{ type: "input_text", text: content.toWellFormed() }];
+		const text = content.toWellFormed();
+		return [{ type: "input_text", text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text }];
 	}
 
 	return (
-		convertResponsesInputContent(content, model.input.includes("image"), model.compat.supportsImageDetailOriginal) ??
-		[]
+		convertResponsesInputContent(
+			content,
+			model.input.includes("image"),
+			model.compat.supportsImageDetailOriginal,
+			escapeControlTokens,
+		) ?? []
 	);
 }
 

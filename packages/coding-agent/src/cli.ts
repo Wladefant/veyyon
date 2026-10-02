@@ -141,6 +141,14 @@ async function runSmokeTest(): Promise<void> {
 	}
 	process.stderr.write("[smoke] arktype jitless\n");
 
+	// The bundled themes are embedded as file assets and read on demand, so only a distribution
+	// build can drop one: read a root theme and a shipped theme through the embedded path.
+	const { getBuiltinTheme } = await import("./theme/builtin-themes");
+	for (const name of ["dark", "dark-nord"]) {
+		if (!getBuiltinTheme(name)) throw new Error(`theme smoke failed: bundled theme "${name}" is not embedded`);
+	}
+	process.stderr.write("[smoke] bundled themes read\n");
+
 	process.stderr.write("[smoke] importing stats\n");
 	const { smokeTestSyncWorker, startServer } = await import("@veyyon/stats");
 	process.stderr.write("[smoke] stats imported\n");
@@ -526,7 +534,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	if (isProcessEntry && resolved.argv[0] === "launch") {
 		// Deferred import: loading supervisor at module load would evaluate its
 		// dependency graph before setProfile() runs, breaking profile selection.
-		const { shouldSuperviseLaunch, superviseProcess } = await import("./supervisor/process");
+		const { shouldSuperviseLaunch, superviseProcess } = await import("./cli/supervisor/process");
 		if (shouldSuperviseLaunch(resolved.argv.slice(1))) {
 			const { exitCode } = await superviseProcess();
 			process.exitCode = exitCode;

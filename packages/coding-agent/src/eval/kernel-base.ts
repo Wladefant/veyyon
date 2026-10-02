@@ -898,7 +898,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
-					const text = decoder.decode(value);
+					const text = decoder.decode(value, { stream: true });
 					if (text.trim()) {
 						logger.warn(`${this.#options.languageName} runner stderr`, { text });
 					}

@@ -240,7 +240,7 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 			} catch (error) {
 				if (callerSignal?.aborted) throw createAbortError();
 				if (attempt < maxRetries) {
-					await this.#backoff(attempt, undefined, callerSignal);
+					await backoff(attempt, undefined, callerSignal);
 					continue;
 				}
 				if (error instanceof AIError.AnthropicConnectionTimeoutError) throw error;
@@ -263,7 +263,7 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 					// Cancelling a body no one will read. The error that matters is raised around this line, and a stream
 					// that refuses to cancel -- usually because it already ended -- changes nothing about it.
 					await response.body?.cancel().catch(() => {});
-					await this.#backoff(attempt, response.headers, callerSignal);
+					await backoff(attempt, response.headers, callerSignal);
 					continue;
 				}
 			}
@@ -303,17 +303,17 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 			callerSignal?.removeEventListener("abort", onAbort);
 		}
 	}
+}
 
-	async #backoff(
-		attempt: number,
-		responseHeaders: Headers | undefined,
-		signal: AbortSignal | undefined,
-	): Promise<void> {
-		const delayMs = retryDelayFromHeaders(responseHeaders) ?? calculateAnthropicRetryDelayMs(attempt);
-		try {
-			await scheduler.wait(delayMs, { signal });
-		} catch {
-			throw createAbortError();
-		}
+async function backoff(
+	attempt: number,
+	responseHeaders: Headers | undefined,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	const delayMs = retryDelayFromHeaders(responseHeaders) ?? calculateAnthropicRetryDelayMs(attempt);
+	try {
+		await scheduler.wait(delayMs, { signal });
+	} catch {
+		throw createAbortError();
 	}
 }

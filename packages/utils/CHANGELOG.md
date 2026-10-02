@@ -21,6 +21,7 @@
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
+- `IdleTrim` accepts `release`, which runs on the first quiet sampling window after a busy one and again after each trim; a `release` that throws is not called again and the trim continues.
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
 - `@veyyon/utils/prompt` exports `renderSequence(templates, context, options)`, which returns what `render` returns for the joined templates and renders each precompiled template on its own when no boundary changes the bytes, so the joined text is not parsed.
@@ -39,6 +40,7 @@
 
 ### Changed
 
+- Six class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `@veyyon/utils/json-snapshot` frames each snapshot with a layout version, payload byte length and CRC-32 instead of a SHA-256 digest, and rejects snapshots framed by the previous layout.
 - `utf8ByteLength` measures a whole string, or a range longer than 64 code units, with `Buffer.byteLength`, and `isWellFormedUtf16` answers with `String.prototype.isWellFormed`, instead of looping over code units, cutting a 3 KB ASCII string from 11.1 µs to 28 ns and from 1.3 µs to 4.5 ns with identical answers.
 - `wrapTextWithAnsi` returns a fitting row holding one-cell punctuation, arrows, box drawing, geometric shapes, dingbats or Latin-1, or a leading indent after an SGR sequence, without calling the native wrapper, cutting such a row from about 620 ns to 70 ns and a 13,470-entry transcript's first frame from 197.3 ms to 190.7 ms with rows identical to the native wrapper's across 300,000 generated lines.
@@ -57,6 +59,7 @@
 - `RotatingLogFile` writes a gzipped generation through `atomicWriteFileWith`, staged as the hidden `.<file>.gz.<pid>.<n>.tmp` sibling, and deletes one that a process which exited mid-copy left for a minute.
 - `stallSampler` checks inspector profile payloads with the shared `isRecord`; no user-visible change.
 - `@veyyon/utils/prompt` loads the Handlebars parser and compiler through `@veyyon/utils/prompt-handlebars` on the first template no build precompiled, so a process that renders only precompiled templates evaluates the Handlebars runtime alone.
+- `prompt.format` returns text it rewrites no line of as a cut of its input, without the blank lines at its end, instead of a joined copy; creating an idle main session copies 188,952 fewer characters (347,436 bytes over 65 calls), and a prompt with no mustache holds one buffer for its template and its render.
 
 ### Fixed
 
@@ -69,7 +72,7 @@
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - Unhandled ENOSPC errors on log, session, or artifact writes are now caught and logged as warnings rather than crashing the process, preventing session loss when a disk fills ([#73](https://github.com/Wladefant/veyyon/issues/73), [#114](https://github.com/Wladefant/veyyon/pull/114)).
 - `postmortem.quit` accepts `drainStdout: false` to skip waiting for stdout drain when terminating a process whose terminal host is already gone ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Made malformed advanced-serialization frames from a worker subprocess non-fatal: Bun surfaces an undecodable IPC frame as a process-level `uncaughtException` in the parent (oven-sh/bun#37287), which the postmortem handler treated as fatal and tore down every active session and subagent. The handler now recognizes the decode failure (`isWorkerIpcDeserializeError`) and logs-and-continues, faulting only the offending worker via its own exit/error path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Made malformed advanced-serialization frames from a worker subprocess non-fatal: Bun surfaces an undecodable IPC frame as a process-level `uncaughtException` in the parent (oven-sh/bun#37287), which the postmortem handler treated as fatal and tore down every active session and subagent. The handler now recognizes the decode failure and, keeping the session alive, faults the active advanced-IPC worker subsystems so their clients reject in-flight requests and recycle the subprocess instead of awaiting forever — mirroring the existing ipc-send EPIPE containment ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 - Mermaid `colorMode: "html"` output escapes `"` and `'` in diagram text and in each span's color attribute, and escapes uncolored xychart text.
 - `extractRetryHint` reads `retry-after: <date>` in an error message as a wait until that instant instead of a wait of the year's number of seconds, and reads `x-ratelimit-reset-ms`, `x-ratelimit-reset` and `x-ratelimit-reset-after` written into a message as it reads those headers; `RETRY_HINT_HEADERS` exports the header forms both readings share.

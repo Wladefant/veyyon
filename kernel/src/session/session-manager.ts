@@ -339,7 +339,7 @@ function nextSessionSequence(entries: readonly SessionEntry[]): number {
  * cannot truncate the prior good file.
  */
 export class SessionManager {
-	#cwd: string;
+	#absoluteCwd = "";
 	#sessionDir: string;
 	readonly #persist: boolean;
 	readonly #storage: SessionStorage;
@@ -424,8 +424,9 @@ export class SessionManager {
 	#atomicRewriteDirty = false;
 
 	/**
-	 * Every entry id this manager has ever held for the CURRENT session file:
-	 * what it loaded, plus everything it appended since.
+	 * Raw lines of the current file that belong to another writer, in file order,
+	 * carried through every full-file publish so a rewrite cannot delete them.
+	 * Refreshed from disk before each atomic publish.
 	 *
 	 * A full-file publish writes only the entries this manager holds, so a line
 	 * some OTHER process appended after we read the file is deleted by our next
@@ -435,16 +436,7 @@ export class SessionManager {
 	 * from disk and from every later reader. Nothing surfaces it, because the
 	 * process that lost the work is not the process that wrote the file.
 	 *
-	 * So a line is foreign only when its id was never ours. An entry we loaded and
-	 * then deliberately dropped (incarnation telemetry, a branch compacted to its
-	 * path) stays in this set, which is what stops the merge below from
-	 * resurrecting it.
-	 */
-	#idsEverSeen = new Set<string>();
-	/**
-	 * Raw lines of the current file that belong to another writer, in file order,
-	 * carried through every full-file publish so a rewrite cannot delete them.
-	 * Refreshed from disk before each atomic publish.
+	 * So a line is foreign only when its id was never ours: see {@link #isOwnId}.
 	 */
 	#foreignLines: string[] = [];
 	/** One warning per file: a foreign writer stays foreign for the whole session. */
@@ -517,10 +509,8 @@ export class SessionManager {
 		operatorNotices?: OperatorNotices,
 		instrumentation?: InstrumentationLevel,
 	) {
-		// The session cwd is the single authority every tool resolves against, so it
-		// must be absolute from the start; a relative seed would make later
-		// `path.resolve(this.#cwd, target)` fall back to the OS process dir.
-		this.#cwd = path.resolve(cwd);
+		// The `#cwd` setter resolves the seed, so the field is absolute from the start.
+		this.#cwd = cwd;
 		this.#sessionDir = sessionDir;
 		this.#sessionDirPinned = sessionDirPinned;
 		this.#persist = persist;
@@ -543,7 +533,8 @@ export class SessionManager {
 
 	#rememberBreadcrumb(cwd: string, sessionFile: string, fresh = false): void {
 		this.#breadcrumbFresh = fresh;
-		if (!this.#suppressBreadcrumb) writeTerminalBreadcrumb(cwd, sessionFile, fresh);
+		if (this.#suppressBreadcrumb) return;
+		writeTerminalBreadcrumb(cwd, sessionFile, fresh);
 	}
 
 	/**
@@ -706,7 +697,7 @@ export class SessionManager {
 	/**
 	 * The whole file as this manager would publish it: the title slot, the header,
 	 * our entries, and finally any line another writer appended (see
-	 * {@link #idsEverSeen}). The foreign tail goes last because its entries hang
+	 * {@link #foreignLines}). The foreign tail goes last because its entries hang
 	 * off ids we already emitted, so parents still precede children.
 	 *
 	 * A factory over chunks rather than one string, because the joined body is a
@@ -826,9 +817,17 @@ export class SessionManager {
 		);
 	}
 
-	/** Remember an id as ours, so a line carrying it is never treated as foreign. */
-	#noteIdSeen(id: string | undefined): void {
-		if (id) this.#idsEverSeen.add(id);
+	/**
+	 * Whether an entry id is one this manager holds for the current file: what it
+	 * loaded, plus everything it appended since. The entry list only grows while
+	 * one file is current; a load, a fork, a branch and a new session replace it
+	 * together with the file, so the id index answers this without a second set
+	 * of every id. An entry the publish leaves out of the file (incarnation
+	 * telemetry) is still in the list, which is what stops the foreign-line merge
+	 * from resurrecting it.
+	 */
+	#isOwnId(id: string): boolean {
+		return this.#index.has(id);
 	}
 
 	/**
@@ -836,19 +835,16 @@ export class SessionManager {
 	 * file's foreign tail is not ours to publish, and everything we hold at this
 	 * moment is ours in the new file.
 	 *
-	 * The reseed is what keeps a fork or a branch from duplicating its own
-	 * history: those paths carry the source entries into a fresh file, and an id
-	 * that is not marked ours reads back as foreign on the next publish.
+	 * A fork or a branch carries the source entries into a fresh file; they stay
+	 * in the id index, so they read back as ours rather than as a foreign tail
+	 * that would duplicate the history on the next publish.
 	 */
 	#forgetForeignWriter(): void {
-		this.#idsEverSeen.clear();
 		this.#foreignLines = [];
 		this.#reportedForeignWriter = false;
 		// A different file: how many bytes are at the new path is not known until we
 		// publish it.
 		this.#publishedFileState = null;
-		this.#noteIdSeen(this.#header.id);
-		for (const entry of this.#entries) this.#noteIdSeen(entry.id);
 	}
 
 	/**
@@ -950,7 +946,7 @@ export class SessionManager {
 			// and a header belongs to whoever owns the file's identity.
 			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE || parsed.type === "session") continue;
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
-			if (!id || this.#idsEverSeen.has(id)) continue;
+			if (!id || this.#isOwnId(id)) continue;
 			foreign.push(raw);
 			if (parsed.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries += 1;
 		}
@@ -1390,12 +1386,21 @@ export class SessionManager {
 			return;
 		}
 
+		// The entry is in `#entries` already, so a whole-file publish that runs after this point writes
+		// it, and its title slot, with the rest. A publish in progress may have serialized its body
+		// before the entry arrived: marking it dirty makes it publish again, as an append landing
+		// inside the rewrite does. The task below then finds the file replaced since it was scheduled
+		// and writes nothing, since appending the line a publish wrote records the change twice.
+		if (this.#atomicRewriteFenceEpoch !== null && this.#atomicRewriteFenceEpoch === this.#diskEpoch) {
+			this.#atomicRewriteDirty = true;
+		}
 		const epoch = this.#diskEpoch;
+		const published = this.#publishedFileState;
 		const line = this.#lineFor(entry);
 		await this.#scheduleDiskWork(
 			async () => {
 				const sessionFile = this.#sessionFile;
-				if (!sessionFile) return;
+				if (!sessionFile || this.#publishedFileState !== published) return;
 				try {
 					await this.#appendWriter().append(line);
 					if (this.#publishedFileState !== null) {
@@ -1525,7 +1530,6 @@ export class SessionManager {
 				this.#nextSequence = Math.max(this.#nextSequence, entry.sequence + 1);
 			}
 		}
-		this.#noteIdSeen(entry.id);
 		this.#entries.push(entry);
 		this.#index.insert(entry);
 		this.#appendToSessionFile(entry);
@@ -1648,13 +1652,6 @@ export class SessionManager {
 		}
 	}
 
-	static #cleanTitle(raw: string): string {
-		return raw
-			.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-			.replace(/ +/g, " ")
-			.trim();
-	}
-
 	/** Puts a binary blob into the blob store and returns the blob reference. */
 	async putBlob(data: Buffer, options?: BlobPutOptions): Promise<BlobPutResult> {
 		return this.#blobs.put(data, options);
@@ -1693,10 +1690,9 @@ export class SessionManager {
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 
-		// Resolved like every other write to this field. A snapshot normally round-trips a value that
-		// was already absolute, but it is plain data a caller can build, and this is the one assignment
-		// here that takes a cwd from outside the class.
-		this.#cwd = path.resolve(snapshot.cwd);
+		// A snapshot is plain data a caller can build; the `#cwd` setter resolves it like every other
+		// write to the field.
+		this.#cwd = snapshot.cwd;
 		this.#sessionDir = snapshot.sessionDir;
 		this.#sessionFile = snapshot.sessionFile;
 		this.#fileIsCurrent = snapshot.onDisk;
@@ -1755,7 +1751,7 @@ export class SessionManager {
 			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
-			if (headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryExists(headerCwd))) {
+			if (headerCwd && headerCwd !== this.#cwd && (await directoryExists(headerCwd))) {
 				adoptedCwd = headerCwd;
 			}
 		}
@@ -1905,10 +1901,7 @@ export class SessionManager {
 		// resolve.)
 		const resolvedCwd = path.resolve(this.#cwd, newCwd);
 		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
-		if (
-			resolvedCwd === path.resolve(this.#cwd) &&
-			(!resolvedTargetDir || resolvedTargetDir === path.resolve(this.#sessionDir))
-		) {
+		if (resolvedCwd === this.#cwd && (!resolvedTargetDir || resolvedTargetDir === path.resolve(this.#sessionDir))) {
 			return;
 		}
 
@@ -2165,21 +2158,33 @@ export class SessionManager {
 	}
 
 	/**
-	 * The session's working directory, ALWAYS as an absolute path.
+	 * The session cwd. Every write resolves the value, so the field is absolute from the constructor
+	 * on and no assignment in this class can store a relative one.
 	 *
-	 * The constructor resolves its seed, but nothing kept the field resolved after that, and every
-	 * caller in the process reads the cwd through here: the two `ToolSession.cwd` getters in `sdk.ts`
-	 * return this directly, so a relative value reached every tool at once. It surfaced as `set_cwd`
-	 * answering `Session cwd is now . (previously .)` on a successful re-root, which tells the model
-	 * nothing and reads as a failure, and it is the harmless-looking half of a worse one: a relative
-	 * cwd makes `resolveToCwd(target, session.cwd)` rebase silently on `process.cwd()`, so the tools
+	 * The session cwd is the single authority every tool resolves against: the two `ToolSession.cwd`
+	 * getters in `sdk.ts` return {@link getCwd} directly, so a relative value would reach every tool at
+	 * once. A relative cwd makes `set_cwd` answer `Session cwd is now . (previously .)` on a successful
+	 * re-root, and makes `resolveToCwd(target, session.cwd)` rebase on `process.cwd()`, so the tools
 	 * and the session disagree about where the session is the moment those two differ.
-	 *
-	 * Resolved on the way OUT as well as on the way in, so no assignment anywhere in this class can
-	 * reintroduce it. `path.resolve` on an already-absolute path is a normalization, not a change.
+	 */
+	get #cwd(): string {
+		return this.#absoluteCwd;
+	}
+
+	set #cwd(cwd: string) {
+		const resolved = path.resolve(cwd);
+		// An already resolved value is kept as given, so the header, the cwd listeners and the value
+		// `setCwd` returns share the one string the field holds.
+		this.#absoluteCwd = resolved === cwd ? cwd : resolved;
+	}
+
+	/**
+	 * The session's working directory, ALWAYS as an absolute path. Every read returns the one string
+	 * the session holds, so a transcript row or a tool that keeps the cwd shares it rather than
+	 * holding its own copy.
 	 */
 	getCwd(): string {
-		return path.resolve(this.#cwd);
+		return this.#cwd;
 	}
 
 	/**
@@ -2248,21 +2253,13 @@ export class SessionManager {
 			}
 		}
 
-		// `resolvedCwd`, not `this.#cwd`. Both sides of the comparison are resolved, so returning the
-		// raw field here was the one path that could hand a caller a relative cwd it had just proved
-		// was the same directory: `set_cwd /abs/path/keyhog` on a session whose field held `.` matched,
-		// took this branch, and answered `Session cwd is . `, which is false twice over and reads as a
-		// failed call. The declared contract is "returns the resolved absolute path" and this is the
-		// same directory either way, so there is nothing to weigh.
-		if (resolvedCwd === path.resolve(this.#cwd)) {
-			// The field is normalized, but the header is deliberately left alone: this branch is the
-			// no-move case, so there is no change to persist, and the header does not exist yet on a
-			// manager that has not been initialized.
-			this.#cwd = resolvedCwd;
-			return resolvedCwd;
-		}
+		// The field is always resolved, so a target naming the current directory, relative or not,
+		// matches here and the call reports the absolute path it already holds. The header is left
+		// alone: this is the no-move case, so there is no change to persist, and the header does not
+		// exist yet on a manager that has not been initialized.
+		if (resolvedCwd === this.#cwd) return this.#cwd;
 
-		const previous = path.resolve(this.#cwd);
+		const previous = this.#cwd;
 		const previousHeaderCwd = this.#header.cwd;
 		const previousForceFileCreation = this.#forceFileCreation;
 		const previousFileIsCurrent = this.#fileIsCurrent;
@@ -2293,8 +2290,8 @@ export class SessionManager {
 			throw error;
 		}
 
-		this.#notifyCwdListeners(previous, resolvedCwd);
-		return resolvedCwd;
+		this.#notifyCwdListeners(previous, this.#cwd);
+		return this.#cwd;
 	}
 
 	getUsageStatistics(): UsageStatistics {
@@ -2469,7 +2466,7 @@ export class SessionManager {
 	async setSessionName(name: string, source: SessionTitleSource = "auto", trigger?: string): Promise<boolean> {
 		if (this.#titleSource === "user" && source === "auto") return false;
 
-		const title = SessionManager.#cleanTitle(name);
+		const title = cleanTitle(name);
 		if (!title) return false;
 
 		const previousTitle = this.#sessionName;
@@ -2489,7 +2486,6 @@ export class SessionManager {
 		};
 		if (previousTitle) entry.previousTitle = previousTitle;
 		if (trigger) entry.trigger = trigger;
-		this.#noteIdSeen(entry.id);
 		this.#entries.push(entry);
 		this.#index.insert(entry);
 		this.#notifyEntryAppended(entry);
@@ -2725,9 +2721,9 @@ export class SessionManager {
 		return this.#index.get(id);
 	}
 
-	/** All direct children of an entry. */
+	/** All direct children of an entry, in the order they were recorded. */
 	getChildren(parentId: string): SessionEntry[] {
-		return this.#index.childrenOf(parentId);
+		return this.#entries.filter(entry => entry.parentId === parentId);
 	}
 
 	getLabel(id: string): string | undefined {
@@ -3369,6 +3365,13 @@ export class SessionManager {
 	static listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
 		return listAllSessions(storage);
 	}
+}
+
+function cleanTitle(raw: string): string {
+	return raw
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+		.replace(/ +/g, " ")
+		.trim();
 }
 
 /**

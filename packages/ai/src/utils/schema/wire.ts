@@ -14,8 +14,9 @@
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { ArkErrors, Type } from "arktype";
 // Type-only: marker checks rely on the `_zod` property every Zod v4 schema instance carries, and
-// conversion loads Zod's core on the first Zod schema converted (see `zodToWireSchema`), so a
-// process whose tools are all ArkType never evaluates Zod.
+// conversion runs through a converter of a Zod copy that is already loaded (see `zodToWireSchema`).
+// A `require` of Zod here, even one that never runs, would put a CommonJS copy of Zod into the
+// compiled binary's startup chunk.
 import type { ZodType } from "zod/v4";
 import type * as ZodCore from "zod/v4/core";
 import type { Tool, TSchema } from "../../types";
@@ -551,18 +552,41 @@ export function normalizeEmptySchemas(node: unknown): void {
 	for (const k in obj) normalizeEmptySchemas(obj[k]);
 }
 
+type ZodCoreToJSONSchema = typeof ZodCore.toJSONSchema;
+
+/** Zod's core converter, installed by `./zod-core` when a barrel that hands out Zod is evaluated. */
+let zodCoreToJSONSchema: ZodCoreToJSONSchema | undefined;
+
+/**
+ * Install Zod's core JSON Schema converter. `./zod-core` is the caller: the barrels that hand Zod to
+ * an extension, a custom tool, a custom command or an SDK caller import it, so the converter is
+ * installed before any code outside this repository can build a Zod schema.
+ */
+export function installZodCoreConverter(convert: ZodCoreToJSONSchema): void {
+	zodCoreToJSONSchema = convert;
+}
+
+/**
+ * Emit draft-2020-12 for a Zod schema. Zod's core converter handles every flavor: classic
+ * (`zod/v4`) and mini (`zod/mini`) schemas share it. Without it, a classic schema converts through
+ * its own `toJSONSchema` method, which the Zod copy that built the schema bound to the same
+ * converter; a mini schema has no such method.
+ */
+function zodJsonSchema(schema: ZodType): Record<string, unknown> {
+	// `target: "draft-2020-12"` matches what Anthropic's `input_schema` validator
+	// requires out of the box; our other provider sanitizers (OpenAI strict,
+	// Google, Anthropic CCA) already handle the superset structurally.
+	const params = { target: "draft-2020-12" } as const;
+	if (zodCoreToJSONSchema) return zodCoreToJSONSchema(schema, params) as Record<string, unknown>;
+	if (typeof schema.toJSONSchema === "function") return schema.toJSONSchema(params) as Record<string, unknown>;
+	throw new Error(
+		"Cannot convert a Zod schema that has no toJSONSchema method (zod/mini): Zod's core converter is not installed. Import @veyyon/ai or @veyyon/ai/utils/schema/zod-core before converting it.",
+	);
+}
+
 /** Convert a Zod schema into the JSON Schema shape providers consume. */
 export function zodToWireSchema(schema: ZodType): Record<string, unknown> {
-	return stamp(schema, kZodWireSchema, s => {
-		// `target: "draft-2020-12"` matches what Anthropic's `input_schema` validator
-		// requires out of the box; our other provider sanitizers (OpenAI strict,
-		// Google, Anthropic CCA) already handle the superset structurally.
-		// Zod's core converter, which classic (`zod/v4`) and mini (`zod/mini`) schemas share. A Zod
-		// schema is built by a caller that has loaded Zod already, so this reads a loaded module.
-		const { toJSONSchema } = require("zod/v4/core") as typeof ZodCore;
-		const raw = toJSONSchema(s, { target: "draft-2020-12" }) as Record<string, unknown>;
-		return postProcess(raw);
-	});
+	return stamp(schema, kZodWireSchema, s => postProcess(zodJsonSchema(s)));
 }
 
 /**

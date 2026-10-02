@@ -19,6 +19,11 @@ export interface IdleTrimOptions {
 	schedule?: (cb: () => void, ms: number) => IdleTrimTimer;
 	/** The trim itself; injectable for tests and for a caller that releases more. Default `trimEngine`. */
 	trim?: () => void;
+	/**
+	 * Work cheap enough to run on every quiet stretch: on the first quiet window after a busy one,
+	 * and again after each trim. Default none.
+	 */
+	release?: () => void;
 }
 
 /**
@@ -58,6 +63,10 @@ interface IdleTrimTimer {
  * process stays trimmed until a busy window is seen, so an idle process trims once rather than
  * every `quietMs`. The window holding the trim is not judged: its CPU is the trim's own collection.
  *
+ * `release` runs on the first quiet window after work, so a session whose turns come less than
+ * `quietMs` apart still drops what the release covers between them, and once more after each trim.
+ * A release that throws is not called again; sampling and the trim continue.
+ *
  * The sampling timer is `unref`'d and never keeps the process alive; stop() cancels it.
  */
 export class IdleTrim {
@@ -68,6 +77,7 @@ export class IdleTrim {
 	#cpuUsage: () => { user: number; system: number };
 	#schedule: (cb: () => void, ms: number) => IdleTrimTimer;
 	#trim: () => void;
+	#release: (() => void) | undefined;
 	#running = false;
 	// Bumped by stop(); a tick armed under an older generation no-ops, so start()→stop()→start()
 	// never leaves two sampling chains running.
@@ -82,6 +92,8 @@ export class IdleTrim {
 	#trimmed = false;
 	/** The armed window holds the trim's own collection and is not judged. */
 	#skipWindow = false;
+	/** The release ran and no busy window has been seen since. */
+	#released = false;
 
 	constructor(options: IdleTrimOptions = {}) {
 		this.#quietMs = options.quietMs ?? 30_000;
@@ -96,6 +108,7 @@ export class IdleTrim {
 				return { unref: () => timer.unref?.(), cancel: () => clearTimeout(timer) };
 			});
 		this.#trim = options.trim ?? trimEngine;
+		this.#release = options.release;
 	}
 
 	/** Start sampling. The quiet period starts now. Idempotent. */
@@ -103,6 +116,7 @@ export class IdleTrim {
 		if (this.#running) return;
 		this.#running = true;
 		this.#trimmed = false;
+		this.#released = false;
 		this.#skipWindow = false;
 		this.#quietSinceMs = this.#now();
 		this.#arm();
@@ -140,19 +154,39 @@ export class IdleTrim {
 		} else if (cpuMs > wallMs * this.#busyCpuRatio) {
 			this.#quietSinceMs = now;
 			this.#trimmed = false;
-		} else if (!this.#trimmed && now - this.#quietSinceMs >= this.#quietMs) {
-			try {
-				this.#trim();
-			} catch (error) {
-				// The engine offers no trim; sampling for one that can never run is waste.
-				logger.warn("Idle trim failed; sampling stopped", { error: errorMessage(error) });
-				this.stop();
-				return;
+			this.#released = false;
+		} else {
+			if (!this.#released) {
+				this.#released = true;
+				this.#runRelease();
 			}
-			this.#trimmed = true;
-			this.#skipWindow = true;
-			logger.debug("Idle trim ran", { quietMs: Math.round(now - this.#quietSinceMs) });
+			if (!this.#trimmed && now - this.#quietSinceMs >= this.#quietMs) {
+				try {
+					this.#trim();
+				} catch (error) {
+					// The engine offers no trim; sampling for one that can never run is waste.
+					logger.warn("Idle trim failed; sampling stopped", { error: errorMessage(error) });
+					this.stop();
+					return;
+				}
+				this.#trimmed = true;
+				this.#skipWindow = true;
+				logger.debug("Idle trim ran", { quietMs: Math.round(now - this.#quietSinceMs) });
+				this.#runRelease();
+			}
 		}
 		this.#arm();
+	}
+
+	#runRelease(): void {
+		const release = this.#release;
+		if (!release) return;
+		try {
+			release();
+		} catch (error) {
+			// A release that fails here fails on every quiet stretch; the trim does not depend on it.
+			this.#release = undefined;
+			logger.warn("Idle release failed; release stopped", { error: errorMessage(error) });
+		}
 	}
 }

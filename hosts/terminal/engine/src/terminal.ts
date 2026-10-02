@@ -791,7 +791,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	onBackgroundColorChange(callback: (hex: string) => void): void {
-		this.#subscribeWithReplay(this.#backgroundColorCallbacks, callback, this.#backgroundColorHex, "background-color");
+		subscribeWithReplay(this.#backgroundColorCallbacks, callback, this.#backgroundColorHex, "background-color");
 	}
 
 	setBackgroundColor(hex: string): void {
@@ -814,28 +814,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
-		this.#subscribeWithReplay(this.#appearanceCallbacks, callback, this.#appearance, "appearance-change");
-	}
-
-	/**
-	 * Register `callback` and replay the value already detected: the startup OSC 11 response can
-	 * arrive before a consumer (the theme bridge, the painted-ground consumer) subscribes, and the
-	 * dedup in #handleOsc11Response would otherwise suppress the value for it forever (#4731). A
-	 * throwing subscriber is a broken feature and is logged, so the other subscribers stay alive.
-	 */
-	#subscribeWithReplay<T>(
-		callbacks: ((value: T) => void)[],
-		callback: (value: T) => void,
-		current: T | undefined,
-		subscriber: string,
-	): void {
-		callbacks.push(callback);
-		if (current === undefined) return;
-		try {
-			callback(current);
-		} catch (error) {
-			logger.error(`${subscriber} subscriber threw during replay`, { error: errorMessage(error) });
-		}
+		subscribeWithReplay(this.#appearanceCallbacks, callback, this.#appearance, "appearance-change");
 	}
 
 	onPrivateModeReport(callback: (mode: number, supported: boolean) => void): void {
@@ -1322,17 +1301,12 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite("\x1b[c"); // DA1 sentinel
 	}
 
-	#shouldQueryOsc99Support(): boolean {
-		if (TERMINAL.notifyProtocol !== NotifyProtocol.Osc99) return false;
-		return !isBunTestRuntime() || $env.VEYYON_TUI_OSC99_PROBE === "1";
-	}
-
 	#queryOsc99Support(): void {
 		setOsc99Supported(false);
 		this.#osc99Capabilities.clear();
 		this.#osc99PendingId = undefined;
 		this.#osc99ResponseBuffer = "";
-		if (this.#dead || !this.#shouldQueryOsc99Support()) return;
+		if (this.#dead || !shouldQueryOsc99Support()) return;
 
 		const id = `veyyon-probe-${nextOsc99ProbeId++}`;
 		this.#osc99PendingId = id;
@@ -1755,17 +1729,22 @@ export class ProcessTerminal implements Terminal {
 		process.stdin.removeListener("error", this.#stdinErrorHandler);
 		this.#disconnectHandler = undefined;
 
-		// Restore raw mode state, best-effort: a revoked pty (pane recycled, ssh
-		// dropped) is no longer a tty and Bun's node:tty shim throws ENOENT.
+		// Restore raw mode state. On a disconnected terminal (pane recycled, ssh
+		// dropped) the fd is no longer a tty and Bun's node:tty shim throws ENOENT;
+		// there is nothing left to restore, and throwing would abort the caller. On
+		// a live terminal the failure surfaces, after the rest of the teardown,
+		// because swallowing it would silently leave stdin in raw mode.
+		let restoreError: unknown;
 		if (process.stdin.setRawMode) {
 			try {
 				process.stdin.setRawMode(this.#wasRaw);
-			} catch {
-				// Terminal already gone
+			} catch (err) {
+				if (!this.#dead) restoreError = err;
 			}
 		}
 		this.#stdoutErrorCleanup?.();
 		this.#stdoutErrorCleanup = undefined;
+		if (restoreError !== undefined) throw restoreError;
 	}
 
 	#ensureStdoutErrorHandler(): void {
@@ -1941,4 +1920,30 @@ export class ProcessTerminal implements Terminal {
 		this.#progressTimer = undefined;
 		return true;
 	}
+}
+
+/**
+ * Register `callback` and replay the value already detected: the startup OSC 11 response can
+ * arrive before a consumer (the theme bridge, the painted-ground consumer) subscribes, and the
+ * dedup in #handleOsc11Response would otherwise suppress the value for it forever (#4731). A
+ * throwing subscriber is a broken feature and is logged, so the other subscribers stay alive.
+ */
+function subscribeWithReplay<T>(
+	callbacks: ((value: T) => void)[],
+	callback: (value: T) => void,
+	current: T | undefined,
+	subscriber: string,
+): void {
+	callbacks.push(callback);
+	if (current === undefined) return;
+	try {
+		callback(current);
+	} catch (error) {
+		logger.error(`${subscriber} subscriber threw during replay`, { error: errorMessage(error) });
+	}
+}
+
+function shouldQueryOsc99Support(): boolean {
+	if (TERMINAL.notifyProtocol !== NotifyProtocol.Osc99) return false;
+	return !isBunTestRuntime() || $env.VEYYON_TUI_OSC99_PROBE === "1";
 }

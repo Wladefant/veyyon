@@ -151,7 +151,7 @@ function isLeakedThinkingHealExempt(model: Model<Api>): boolean {
 }
 
 /** Strict official-Codex endpoint check; exact origin or a path boundary after {@link CODEX_BASE_URL}. */
-function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
+export function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return true;
 	const lower = trimTrailingSlashes(baseUrl.toLowerCase());
 	return lower === CODEX_BASE_URL || lower.startsWith(`${CODEX_BASE_URL}/`);
@@ -1445,7 +1445,7 @@ export function mapOptionsForApi<TApi extends Api>(
 ): OptionsForApi<TApi> {
 	const selection = resolveReasoningSelection(model, {
 		effort: rawOptions?.reasoning,
-		disabled: rawOptions?.disableReasoning,
+		disabled: rawOptions?.disableReasoning || rawOptions?.forceReasoningOff,
 	});
 	const options = applyReasoningSelection(rawOptions, selection) ?? NO_OPTIONS;
 	return optionsForApi({
@@ -1586,7 +1586,8 @@ function anthropicThinkingOff({ model, options, base }: OptionsMapping): Options
 function anthropicMessagesOptions(mapping: OptionsMapping): OptionsForApi<"anthropic-messages"> {
 	const { model, options, selection, base } = mapping;
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning) return anthropicThinkingOff(mapping);
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff)
+		return anthropicThinkingOff(mapping);
 	let thinkingBudget = resolveThinkingBudget(reasoning, ANTHROPIC_THINKING_BUDGETS, options.thinkingBudgets);
 	if (thinkingBudget <= 0) return anthropicThinkingOff(mapping);
 
@@ -1618,24 +1619,37 @@ function anthropicMessagesOptions(mapping: OptionsMapping): OptionsForApi<"anthr
 		};
 	}
 	if (ANTHROPIC_USE_INTERLEAVED_THINKING) {
-		return {
-			...base,
-			maxTokens: maxTokensWithThinking,
-			requestModelId: selection.wireModelId,
-			thinkingEnabled: true,
-			thinkingBudgetTokens: thinkingBudget,
-			effort,
-			toolChoice,
-			thinkingDisplay,
-			serviceTier: options.serviceTier,
-		};
+		if (
+			model.maxTokens !== null &&
+			model.maxTokens !== undefined &&
+			model.maxTokens < thinkingBudget + OUTPUT_FALLBACK_BUFFER
+		) {
+			thinkingBudget = model.maxTokens - OUTPUT_FALLBACK_BUFFER;
+		}
+		if (thinkingBudget >= ANTHROPIC_THINKING_BUDGETS.minimal) {
+			return {
+				...base,
+				maxTokens: maxTokensWithThinking,
+				requestModelId: selection.wireModelId,
+				thinkingEnabled: true,
+				thinkingBudgetTokens: thinkingBudget,
+				effort,
+				toolChoice,
+				thinkingDisplay,
+				serviceTier: options.serviceTier,
+			};
+		}
 	}
 
 	// Caller's maxTokens is desired output, so add thinking budget on top. With no caller/model cap, use a finite total fallback.
 	const maxTokens = maxTokensWithThinkingBudget(base.maxTokens, model.maxTokens, thinkingBudget);
-	// If not enough room for thinking + output, reduce thinking budget; too little left disables thinking.
-	if (maxTokens <= thinkingBudget) thinkingBudget = maxTokens - MIN_OUTPUT_TOKENS;
-	if (thinkingBudget <= 0) return anthropicThinkingOff(mapping);
+	// Keep the provider's output buffer after thinking, reducing the
+	// budget before its wire-level clamp could fall below the API minimum.
+	if (maxTokens < thinkingBudget + OUTPUT_FALLBACK_BUFFER) {
+		thinkingBudget = maxTokens - OUTPUT_FALLBACK_BUFFER;
+	}
+	// If thinking budget is too low, disable thinking
+	if (thinkingBudget < ANTHROPIC_THINKING_BUDGETS.minimal) return anthropicThinkingOff(mapping);
 	return {
 		...base,
 		maxTokens,
@@ -1746,7 +1760,7 @@ function googleGenerativeOptions({
 }: OptionsMapping): OptionsForApi<"google-generative-ai"> {
 	const toolChoice = mapGoogleToolChoice(options.toolChoice);
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning) {
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff) {
 		return { ...base, serviceTier: options.serviceTier, thinking: { enabled: false }, toolChoice };
 	}
 	const googleModel = model as Model<"google-generative-ai">;
@@ -1772,7 +1786,7 @@ function googleGenerativeOptions({
 function googleVertexOptions({ model, options, selection, base }: OptionsMapping): OptionsForApi<"google-vertex"> {
 	const toolChoice = mapGoogleToolChoice(options.toolChoice);
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning) {
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff) {
 		return { ...base, serviceTier: options.serviceTier, thinking: { enabled: false }, toolChoice };
 	}
 	const vertexModel = model as Model<"google-vertex">;
@@ -1806,7 +1820,7 @@ function googleGeminiCliOptions(mapping: OptionsMapping): OptionsForApi<"google-
 	const { model, options, selection, base } = mapping;
 	const toolChoice = mapGoogleToolChoice(options.toolChoice);
 	const reasoning = selection.effort;
-	if (selection.enabled && reasoning) {
+	if (selection.enabled && reasoning && !options.disableReasoning && !options.forceReasoningOff) {
 		const thinkingOn = geminiCliThinkingOn(mapping, requireSupportedEffort(model, reasoning), toolChoice);
 		if (thinkingOn) return thinkingOn;
 	}

@@ -604,11 +604,6 @@ export class SecretObfuscator {
 		this.#rejections.push(rejection);
 		this.#onRejection?.(rejection);
 	}
-	#assertValidExpiry(expiresAt: number | null | undefined): void {
-		if (expiresAt !== undefined && expiresAt !== null && !Number.isSafeInteger(expiresAt)) {
-			throw new Error("Refusing a secret expiry that is not a finite safe-integer epoch timestamp.");
-		}
-	}
 
 	#registerAlias(alias: string, entryIndex: number): void {
 		assertBoundedSecretString(alias);
@@ -718,7 +713,7 @@ export class SecretObfuscator {
 			if (configuredBytes > MAX_CONFIGURED_SECRET_BYTES) {
 				throw new Error("Refusing a secret registry above the cumulative byte limit.");
 			}
-			this.#assertValidExpiry(entry.expiresAt);
+			assertValidExpiry(entry.expiresAt);
 			const mode = entry.mode ?? "obfuscate";
 			if (entry.replacement !== undefined && mode !== "replace") {
 				throw new Error('Refusing a "replacement" on a secret outside "replace" mode.');
@@ -887,7 +882,7 @@ export class SecretObfuscator {
 		displayRestorable = false,
 	): void {
 		assertBoundedSecretString(secret);
-		this.#assertValidExpiry(expiresAt);
+		assertValidExpiry(expiresAt);
 		const existing = this.#deobfuscateMap.get(placeholder);
 		if (existing !== undefined && existing !== secret) this.#forgetPlaceholder(placeholder);
 		this.#retiredPlaceholders.delete(placeholder);
@@ -992,7 +987,7 @@ export class SecretObfuscator {
 	 */
 	addNamedSecret(name: string, value: string, expiresAt?: number | null): string {
 		assertBoundedSecretString(value);
-		this.#assertValidExpiry(expiresAt);
+		assertValidExpiry(expiresAt);
 		if (!canObfuscatePlainValue(value)) {
 			throw new Error(
 				`Refusing to add ${name}: the value is ${secretCharacterLength(value)} characters, under the ` +
@@ -1024,7 +1019,7 @@ export class SecretObfuscator {
 	 * the old deadline and drop the secret at it.
 	 */
 	#trackExpiry(placeholder: string, expiresAt: number | null | undefined): void {
-		this.#assertValidExpiry(expiresAt);
+		assertValidExpiry(expiresAt);
 		const previous = this.#expiryByPlaceholder.get(placeholder);
 		if (expiresAt === undefined || expiresAt === null) {
 			this.#expiryByPlaceholder.delete(placeholder);
@@ -1323,7 +1318,7 @@ export class SecretObfuscator {
 			}
 			entry.regex.lastIndex = 0;
 
-			if (replacements.length > 0) state = this.#applyProtectedReplacements(state, replacements);
+			if (replacements.length > 0) state = applyProtectedReplacements(state, replacements);
 		}
 
 		// The second plain pass handles literals a regex replacement moved or exposed. When neither
@@ -1379,56 +1374,6 @@ export class SecretObfuscator {
 		return merged;
 	}
 
-	/** Apply non-overlapping replacements while carrying protected output spans forward. */
-	#applyProtectedReplacements(state: ProtectedText, replacements: readonly TextReplacement[]): ProtectedText {
-		let outputBytes = utf8ByteLength(state.text);
-		for (const replacement of replacements) {
-			outputBytes +=
-				utf8ByteLength(replacement.replacement) - utf8ByteLength(state.text, replacement.start, replacement.end);
-			if (outputBytes > MAX_TRANSFORMED_TEXT_BYTES) {
-				throw new Error("Refusing a secret transformation above the output byte limit.");
-			}
-		}
-
-		const chunks: string[] = [];
-		const spans: ProtectedSpan[] = [];
-		let outputLength = 0;
-		let cursor = 0;
-		let spanIndex = 0;
-		let replacementIndex = 0;
-		const append = (part: string): void => {
-			chunks.push(part);
-			outputLength += part.length;
-		};
-
-		while (spanIndex < state.spans.length || replacementIndex < replacements.length) {
-			const span = state.spans[spanIndex];
-			const replacement = replacements[replacementIndex];
-			const useSpan = replacement === undefined || (span !== undefined && span.start <= replacement.start);
-			const event = useSpan ? span : replacement;
-			if (event === undefined) break;
-			append(state.text.slice(cursor, event.start));
-			const protectedStart = outputLength;
-			if (useSpan) {
-				append(state.text.slice(event.start, event.end));
-				spanIndex++;
-			} else {
-				append(replacement.replacement);
-				replacementIndex++;
-			}
-			if (outputLength > protectedStart) {
-				spans.push({
-					start: protectedStart,
-					end: outputLength,
-					allowContainingLiteral: useSpan ? span.allowContainingLiteral : false,
-				});
-			}
-			cursor = event.end;
-		}
-		append(state.text.slice(cursor));
-		return { text: chunks.join(""), spans };
-	}
-
 	/**
 	 * Apply every literal rule against the same input view.
 	 *
@@ -1468,7 +1413,7 @@ export class SecretObfuscator {
 			replacements.push(candidate);
 			cursor = candidate.end;
 		}
-		return replacements.length === 0 ? state : this.#applyProtectedReplacements(state, replacements);
+		return replacements.length === 0 ? state : applyProtectedReplacements(state, replacements);
 	}
 
 	/**
@@ -1647,6 +1592,62 @@ export class SecretObfuscator {
 		PLACEHOLDER_RE.lastIndex = 0;
 		return text.replace(PLACEHOLDER_RE, match => resolve(match) ?? match);
 	}
+}
+
+function assertValidExpiry(expiresAt: number | null | undefined): void {
+	if (expiresAt !== undefined && expiresAt !== null && !Number.isSafeInteger(expiresAt)) {
+		throw new Error("Refusing a secret expiry that is not a finite safe-integer epoch timestamp.");
+	}
+}
+
+/** Apply non-overlapping replacements while carrying protected output spans forward. */
+function applyProtectedReplacements(state: ProtectedText, replacements: readonly TextReplacement[]): ProtectedText {
+	let outputBytes = utf8ByteLength(state.text);
+	for (const replacement of replacements) {
+		outputBytes +=
+			utf8ByteLength(replacement.replacement) - utf8ByteLength(state.text, replacement.start, replacement.end);
+		if (outputBytes > MAX_TRANSFORMED_TEXT_BYTES) {
+			throw new Error("Refusing a secret transformation above the output byte limit.");
+		}
+	}
+
+	const chunks: string[] = [];
+	const spans: ProtectedSpan[] = [];
+	let outputLength = 0;
+	let cursor = 0;
+	let spanIndex = 0;
+	let replacementIndex = 0;
+	const append = (part: string): void => {
+		chunks.push(part);
+		outputLength += part.length;
+	};
+
+	while (spanIndex < state.spans.length || replacementIndex < replacements.length) {
+		const span = state.spans[spanIndex];
+		const replacement = replacements[replacementIndex];
+		const useSpan = replacement === undefined || (span !== undefined && span.start <= replacement.start);
+		const event = useSpan ? span : replacement;
+		if (event === undefined) break;
+		append(state.text.slice(cursor, event.start));
+		const protectedStart = outputLength;
+		if (useSpan) {
+			append(state.text.slice(event.start, event.end));
+			spanIndex++;
+		} else {
+			append(replacement.replacement);
+			replacementIndex++;
+		}
+		if (outputLength > protectedStart) {
+			spans.push({
+				start: protectedStart,
+				end: outputLength,
+				allowContainingLiteral: useSpan ? span.allowContainingLiteral : false,
+			});
+		}
+		cursor = event.end;
+	}
+	append(state.text.slice(cursor));
+	return { text: chunks.join(""), spans };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1905,6 +1906,9 @@ function obfuscateAssistantContentForProvider(
 			if (from === block.from.model && to === block.to.model) return block;
 			changed = true;
 			return { ...block, from: { model: from }, to: { model: to } };
+		}
+		if (block.type === "image") {
+			return block;
 		}
 		assertOpaqueProviderFieldSafe(obfuscator, block.thoughtSignature, "tool-thought-signature");
 		const [mapped] = mapAssistantContentStrings([block], text => obfuscator.obfuscate(text), {

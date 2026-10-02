@@ -25,6 +25,7 @@ import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { stringifyJson, structuredCloneJSON } from "@veyyon/utils/json";
 import { classifyJsonPrefix, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
+import { parseImageMetadata } from "@veyyon/utils/mime";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
 import {
@@ -67,10 +68,12 @@ import {
 	kStreamingPartialJson,
 } from "../utils/block-symbols";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import type { CapturedHttpErrorResponse } from "../utils/http-inspector";
 import { getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
 import { getOpenRouterHeaders } from "../utils/openrouter-headers";
 import { isForcedToolChoice } from "../utils/tool-choice";
+import { VERCEL_AI_GATEWAY_REFERER, VERCEL_AI_GATEWAY_TITLE } from "../utils/vercel-headers";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -237,6 +240,11 @@ export function resolveOpenAIRequestSetup(
 		}
 	}
 	Object.assign(headers, options.extraHeaders);
+	if (model.provider === "vercel-ai-gateway") {
+		// Vercel AI Gateway app attribution; caller/config headers take precedence.
+		setHeaderIfAbsent(headers, "http-referer", VERCEL_AI_GATEWAY_REFERER);
+		setHeaderIfAbsent(headers, "x-title", VERCEL_AI_GATEWAY_TITLE);
+	}
 	if (model.provider === "coreweave") {
 		applyCoreWeaveProjectHeader(headers);
 	}
@@ -1427,11 +1435,25 @@ type ResponsesBatchItemKind = "call" | "output" | "assistant-message" | "other";
 
 /** Classify a Responses input item for tool-call/output batch normalization. */
 function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
-	const type = "type" in item ? item.type : undefined;
+	const type = "type" in item && typeof item.type === "string" ? item.type : undefined;
 	if (type === "function_call" || type === "custom_tool_call") return "call";
 	if (type === "function_call_output" || type === "custom_tool_call_output") return "output";
-	const role = "role" in item ? item.role : undefined;
-	if (type === "message" && role === "assistant") return "assistant-message";
+	const role = "role" in item && typeof item.role === "string" ? item.role : undefined;
+	if (type === "message") {
+		if (role === "assistant") return "assistant-message";
+		if (
+			role === "user" &&
+			"content" in item &&
+			typeof item.content === "string" &&
+			(item.content.startsWith("<stale-tool-result") ||
+				item.content.startsWith("[Orphan ") ||
+				item.content.startsWith("[Previous ") ||
+				item.content.startsWith("[stale tool result") ||
+				item.content.includes("tool result; call_id="))
+		) {
+			return "assistant-message";
+		}
+	}
 	return "other";
 }
 
@@ -1452,44 +1474,90 @@ function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
  * strict validator. See #8789.
  */
 export function hoistInterleavedResponsesToolBatchMessages<T extends object>(items: readonly T[]): T[] {
-	const moved = new Set<number>();
+	const callIdOf = (item: T): string | undefined =>
+		"call_id" in item && typeof item.call_id === "string" ? item.call_id : undefined;
+	// Does a call with `callId` precede `index` within the same contiguous batch body?
+	const hasEarlierBatchCall = (index: number, callId: string): boolean => {
+		for (let probe = index - 1; probe >= 0; probe--) {
+			const kind = classifyResponsesBatchItem(items[probe]!);
+			if (kind === "other") return false;
+			if (kind === "call" && callIdOf(items[probe]!) === callId) return true;
+		}
+		return false;
+	};
+	const bucketOf = new Map<number, number>();
 	const insertBefore = new Map<number, number[]>();
 	for (let index = 0; index < items.length; index++) {
-		if (classifyResponsesBatchItem(items[index]) !== "output") continue;
+		if (classifyResponsesBatchItem(items[index]!) !== "output") continue;
 		// Only anchor on the first output of a run.
-		if (index > 0 && classifyResponsesBatchItem(items[index - 1]) === "output") continue;
-		// Walk back over the batch body (calls interleaved with assistant messages).
+		if (index > 0 && classifyResponsesBatchItem(items[index - 1]!) === "output") continue;
+		// Calls the batch still owns further back: the anchor run's outputs, plus
+		// any earlier output crossed on the way.
+		const pending = new Set<string>();
+		for (let probe = index; probe < items.length; probe++) {
+			if (classifyResponsesBatchItem(items[probe]!) !== "output") break;
+			const callId = callIdOf(items[probe]!);
+			if (callId) pending.add(callId);
+		}
+		// Walk back over the batch body (calls and outputs interleaved with assistant messages).
+		// An earlier output is crossed only when it and a call the batch still owns
+		// both pair with calls further back — i.e. the output belongs to this same
+		// interrupted batch (#13083). Otherwise it closes a completed prior round,
+		// whose trailing messages stay put.
 		let start = index;
 		let sawCall = false;
 		const messageIndexes: number[] = [];
 		while (start > 0) {
-			const kind = classifyResponsesBatchItem(items[start - 1]);
+			const item = items[start - 1]!;
+			const kind = classifyResponsesBatchItem(item);
 			if (kind === "call") {
 				sawCall = true;
+				const callId = callIdOf(item);
+				if (callId) pending.delete(callId);
+			} else if (kind === "output") {
+				const callId = callIdOf(item);
+				if (!callId || !hasEarlierBatchCall(start - 1, callId)) break;
+				let ownsEarlierCall = false;
+				for (const owned of pending) {
+					if (hasEarlierBatchCall(start - 1, owned)) {
+						ownsEarlierCall = true;
+						break;
+					}
+				}
+				if (!ownsEarlierCall) break;
+				pending.add(callId);
 			} else if (kind === "assistant-message") {
 				messageIndexes.push(start - 1);
 			} else {
 				break;
 			}
-			start -= 1;
+			start--;
 		}
-		// Nothing to hoist unless a message actually sits among the calls.
+		// Nothing to hoist unless we actually crossed at least one call.
 		if (!sawCall || messageIndexes.length === 0) continue;
 		messageIndexes.reverse();
 		const target = insertBefore.get(start) ?? [];
 		for (const messageIndex of messageIndexes) {
-			moved.add(messageIndex);
+			// A wider batch can re-collect a message an earlier anchor already
+			// scheduled; move it rather than emitting it twice.
+			const previousStart = bucketOf.get(messageIndex);
+			if (previousStart !== undefined) {
+				const previous = insertBefore.get(previousStart);
+				const slot = previous?.indexOf(messageIndex) ?? -1;
+				if (previous && slot >= 0) previous.splice(slot, 1);
+			}
+			bucketOf.set(messageIndex, start);
 			target.push(messageIndex);
 		}
 		insertBefore.set(start, target);
 	}
-	if (moved.size === 0) return items.slice();
+	if (bucketOf.size === 0) return items.slice();
 	const result: T[] = [];
 	for (let index = 0; index < items.length; index++) {
 		const pending = insertBefore.get(index);
-		if (pending) for (const messageIndex of pending) result.push(items[messageIndex]);
-		if (moved.has(index)) continue;
-		result.push(items[index]);
+		if (pending) for (const messageIndex of pending) result.push(items[messageIndex]!);
+		if (bucketOf.has(index)) continue;
+		result.push(items[index]!);
 	}
 	return result;
 }
@@ -1512,10 +1580,17 @@ export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent | VideoContent>,
 	supportsImages: boolean,
 	supportsImageDetailOriginal: boolean,
+	escapeControlTokens = false,
 ): ResponseInputContent[] | undefined {
 	if (typeof content === "string") {
 		if (content.trim().length === 0) return undefined;
-		return [{ type: "input_text", text: content.toWellFormed() } satisfies ResponseInputText];
+		const text = content.toWellFormed();
+		return [
+			{
+				type: "input_text",
+				text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text,
+			} satisfies ResponseInputText,
+		];
 	}
 
 	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
@@ -1526,7 +1601,7 @@ export function convertResponsesInputContent(
 		if (text.trim().length === 0) continue;
 		normalizedContent.push({
 			type: "input_text",
-			text,
+			text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text,
 		} satisfies ResponseInputText);
 	}
 	for (const item of imageBlocks) {
@@ -1626,6 +1701,45 @@ export interface BuildResponsesInputOptions<TApi extends Api> {
 	repairOrphanOutputs?: boolean;
 	/** Preserve assistant message item IDs from text signatures during fallback replay. */
 	preserveAssistantMessageIds?: boolean;
+	/**
+	 * Synthesize a reasoning item for every replayed assistant turn that carries
+	 * content but no reasoning item. Set for DeepSeek-family Responses targets
+	 * that reject a thinking-mode continuation lacking `reasoning_text`.
+	 */
+	requiresReasoningReplayForAllTurns?: boolean;
+	/** As {@link requiresReasoningReplayForAllTurns}, but only for turns that contain a tool call. */
+	requiresReasoningReplayForToolCalls?: boolean;
+}
+
+/**
+ * Escape reserved Harmony control tokens in the client-boundary text of
+ * replayed Responses input items — user/developer/system message text and
+ * tool-result output. Model-owned items (assistant output, reasoning, tool-call
+ * arguments) carry no client data and are returned untouched.
+ *
+ * Native history replay pushes stored `providerPayload` items straight onto the
+ * wire, bypassing {@link convertResponsesInputContent}; without this a stored
+ * `input_text` carrying `<|channel|>analysis` still reaches gpt-5.x raw (#6913).
+ * Callers gate on {@link isHarmonyDialectModel}. Items are copied, not mutated.
+ */
+export function escapeReplayedClientText(items: ResponseInput): ResponseInput {
+	return items.map(item => {
+		if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+			return typeof item.output === "string" ? { ...item, output: escapeHarmonyControlTokens(item.output) } : item;
+		}
+		if (item.type === "message" && (item.role === "user" || item.role === "developer" || item.role === "system")) {
+			if (typeof item.content === "string") {
+				return { ...item, content: escapeHarmonyControlTokens(item.content) };
+			}
+			return {
+				...item,
+				content: item.content.map(part =>
+					part.type === "input_text" ? { ...part, text: escapeHarmonyControlTokens(part.text) } : part,
+				),
+			};
+		}
+		return item;
+	});
 }
 
 export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInputOptions<TApi>): ResponseInput {
@@ -1646,6 +1760,11 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		: buildCustomToolWireNameMap(options.context.tools);
 	let knownCallIds = new Set<string>();
 	const customCallIds = new Set<string>();
+	// Harmony-server models (gpt-5.x) reject requests whose input data reproduces
+	// reserved control-token spellings; escape the transport copy of untrusted
+	// user/tool text so ordinary docs, code, or grep results cannot poison the
+	// session (#6913). The persisted transcript is never touched.
+	const escapeControlTokens = isHarmonyDialectModel(options.model);
 	const transformedMessages = transformMessages(
 		options.context.messages,
 		options.model,
@@ -1674,9 +1793,12 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				const sanitizedItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems), {
 					supportsImageDetailOriginal,
 				});
-				messages.push(
-					...adaptResponsesReplayItemsForModel(sanitizedItems, supportsCustomToolCalls, customToolWireNameMap),
+				const replayItems = adaptResponsesReplayItemsForModel(
+					sanitizedItems,
+					supportsCustomToolCalls,
+					customToolWireNameMap,
 				);
+				messages.push(...(escapeControlTokens ? escapeReplayedClientText(replayItems) : replayItems));
 				knownCallIds = collectKnownCallIds(messages);
 				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
@@ -1692,28 +1814,40 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					msg.content.filter((item): item is TextContent => item.type === "text"),
 					false,
 					supportsImageDetailOriginal,
+					escapeControlTokens,
 				);
 				const imageContent = convertResponsesInputContent(
 					msg.content.filter((item): item is ImageContent => item.type === "image"),
 					options.model.input.includes("image"),
 					supportsImageDetailOriginal,
+					escapeControlTokens,
 				);
 				if (textContent) messages.push({ role: "developer", content: textContent });
 				if (imageContent) messages.push({ role: "user", content: imageContent });
+				continue;
+			}
+			const developerText =
+				options.developerStringContent && msg.role === "developer" && typeof msg.content === "string"
+					? msg.content.toWellFormed()
+					: undefined;
+			if (developerText) {
+				messages.push({
+					role: "developer",
+					content: escapeControlTokens ? escapeHarmonyControlTokens(developerText) : developerText,
+				});
+				msgIndex++;
 				continue;
 			}
 			const content = convertResponsesInputContent(
 				msg.content,
 				options.model.input.includes("image"),
 				supportsImageDetailOriginal,
+				escapeControlTokens,
 			);
 			if (!content) continue;
 			messages.push({
 				role: msg.role === "developer" && options.supportsDeveloperRole ? "developer" : "user",
-				content:
-					options.developerStringContent && msg.role === "developer" && typeof msg.content === "string"
-						? msg.content.toWellFormed()
-						: content,
+				content,
 			});
 		} else if (msg.role === "assistant") {
 			const assistantMsg = msg as AssistantMessage;
@@ -1738,10 +1872,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					{ supportsImageDetailOriginal },
 				);
 				const sanitizedHistoryItems = rawSanitizedHistoryItems
-					? adaptResponsesReplayItemsForModel(
-							rawSanitizedHistoryItems,
-							supportsCustomToolCalls,
-							customToolWireNameMap,
+					? ensureRequiredResponsesReasoningReplay(
+							adaptResponsesReplayItemsForModel(
+								rawSanitizedHistoryItems,
+								supportsCustomToolCalls,
+								customToolWireNameMap,
+							),
+							assistantMsg.stopReason,
+							options.requiresReasoningReplayForAllTurns ?? false,
+							options.requiresReasoningReplayForToolCalls ?? false,
 						)
 					: undefined;
 				if (nativeReplayEnabled && sanitizedHistoryItems) {
@@ -1768,6 +1907,8 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				options.preserveAssistantMessageIds,
 				supportsCustomToolCalls,
 				customToolWireNameMap,
+				options.requiresReasoningReplayForAllTurns ?? false,
+				options.requiresReasoningReplayForToolCalls ?? false,
 			);
 			const outputItems = suppressHiddenEmptyFallback
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
@@ -1789,9 +1930,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		msgIndex++;
 	}
 
-	const hoisted = hoistInterleavedResponsesToolBatchMessages(messages);
-	const withRepairedOutputs = options.repairOrphanOutputs ? repairOrphanResponsesToolOutputs(hoisted) : hoisted;
-	return repairOrphanResponsesToolCalls(withRepairedOutputs);
+	// Repair orphan outputs/calls first: both can inject a message
+	// (an orphan result note, a computer call interrupted note) in place
+	// of, or beside, a tool item — wedging it between another call's
+	// function_call and function_call_output. Hoist runs last so it relocates
+	// any wedged message — model-streamed or repair-injected — out of the batch,
+	// preserving the Responses call→output pairing (#11473, extends #8789).
+	const withRepairedOutputs = options.repairOrphanOutputs ? repairOrphanResponsesToolOutputs(messages) : messages;
+	const withRepairedCalls = repairOrphanResponsesToolCalls(withRepairedOutputs);
+	return hoistInterleavedResponsesToolBatchMessages(withRepairedCalls);
 }
 
 type ResponsesReplayAssistantMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -1811,6 +1958,74 @@ function parseResponseReasoningReplayItem(signature: string | undefined): Respon
 	}
 }
 
+export const SYNTHETIC_REASONING_REPLAY_PLACEHOLDER = "reasoning unavailable";
+
+function createSyntheticResponsesReasoningItem(
+	text = SYNTHETIC_REASONING_REPLAY_PLACEHOLDER,
+	id?: string,
+): ResponseReasoningItem {
+	const item = {
+		type: "reasoning",
+		...(id ? { id } : {}),
+		summary: [],
+		content: [{ type: "reasoning_text", text }],
+	} satisfies Omit<ResponseReasoningItem, "id"> & Partial<Pick<ResponseReasoningItem, "id">>;
+	// The vendored SDK type marks `id` required; the wire accepts its absence.
+	return item as ResponseReasoningItem;
+}
+
+function isResponsesAssistantTurnBoundary(item: ResponseInput[number]): boolean {
+	const type = "type" in item && typeof item.type === "string" ? item.type : undefined;
+	if (type === "function_call_output" || type === "custom_tool_call_output") return true;
+	if (type === "compaction") return true;
+	return "role" in item && item.role !== "assistant";
+}
+
+function ensureRequiredResponsesReasoningReplay(
+	items: ResponseInput,
+	stopReason: AssistantMessage["stopReason"],
+	requiresAllTurns: boolean,
+	requiresToolCalls: boolean,
+): ResponseInput {
+	if (stopReason === "error" || (!requiresAllTurns && !requiresToolCalls)) return items;
+
+	const insertBefore: number[] = [];
+	let turnStart = 0;
+	for (let index = 0; index <= items.length; index++) {
+		if (index < items.length && !isResponsesAssistantTurnBoundary(items[index]!)) continue;
+
+		let hasContent = false;
+		let hasReasoning = false;
+		let hasToolCall = false;
+		for (let turnIndex = turnStart; turnIndex < index; turnIndex++) {
+			const item = items[turnIndex]!;
+			const itemType = "type" in item && typeof item.type === "string" ? item.type : undefined;
+			if (itemType === "reasoning") {
+				hasReasoning = true;
+				continue;
+			}
+			hasContent = true;
+			if (classifyResponsesBatchItem(item) === "call") hasToolCall = true;
+		}
+		if (hasContent && !hasReasoning && (requiresAllTurns || (requiresToolCalls && hasToolCall))) {
+			insertBefore.push(turnStart);
+		}
+		turnStart = index + 1;
+	}
+	if (insertBefore.length === 0) return items;
+
+	const repaired: ResponseInput = [];
+	let insertionIndex = 0;
+	for (let index = 0; index < items.length; index++) {
+		if (insertBefore[insertionIndex] === index) {
+			repaired.push(createSyntheticResponsesReasoningItem());
+			insertionIndex++;
+		}
+		repaired.push(items[index]!);
+	}
+	return repaired;
+}
+
 export function convertResponsesAssistantMessage<TApi extends Api>(
 	assistantMsg: AssistantMessage,
 	model: Model<TApi>,
@@ -1821,6 +2036,8 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	preserveMessageIds = false,
 	supportsCustomToolCalls = true,
 	customToolWireNameMap?: ReadonlyMap<string, string>,
+	requiresReasoningReplayForAllTurns = false,
+	requiresReasoningReplayForToolCalls = false,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	let unsignedTextBlocks = 0;
@@ -1833,13 +2050,28 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	const isDifferentModel =
 		assistantMsg.model !== model.id && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
 
+	const requiresReasoningItem =
+		assistantMsg.stopReason !== "error" &&
+		(requiresReasoningReplayForAllTurns ||
+			(requiresReasoningReplayForToolCalls && assistantMsg.content.some(block => block.type === "toolCall")));
+	let reasoningItemEmitted = false;
+	const carriedReasoningTexts: string[] = [];
+	let synthesizedReasoningItemId: string | undefined;
+
 	for (const block of assistantMsg.content) {
 		if (block.type === "thinking" && assistantMsg.stopReason !== "error") {
+			if (requiresReasoningItem) {
+				if (block.itemId) synthesizedReasoningItemId ??= block.itemId;
+				if (block.thinking.trim().length > 0) carriedReasoningTexts.push(block.thinking);
+			}
 			if (!includeThinkingSignatures) {
 				continue;
 			}
 			const reasoningItem = parseResponseReasoningReplayItem(block.thinkingSignature);
-			if (reasoningItem) outputItems.push(reasoningItem);
+			if (reasoningItem) {
+				outputItems.push(reasoningItem);
+				reasoningItemEmitted = true;
+			}
 			continue;
 		}
 
@@ -1917,6 +2149,13 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 		});
 	}
 
+	if (requiresReasoningItem && !reasoningItemEmitted && outputItems.length > 0) {
+		const carriedReasoningText = carriedReasoningTexts.join("\n");
+		const reasoningText =
+			carriedReasoningText.length > 0 ? carriedReasoningText : SYNTHETIC_REASONING_REPLAY_PLACEHOLDER;
+		outputItems.unshift(createSyntheticResponsesReasoningItem(reasoningText, synthesizedReasoningItemId));
+	}
+
 	return outputItems;
 }
 
@@ -1943,7 +2182,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	// genuinely empty text result (empty file read, silent tool) must stay
 	// empty — the placeholder sent models chasing an attachment that never
 	// existed.
-	const output = (
+	const rawOutput = (
 		omittedImages
 			? joinTextWithImagePlaceholder(textResult, true)
 			: textResult.length > 0
@@ -1952,6 +2191,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 					? "(see attached image)"
 					: ""
 	).toWellFormed();
+	const output = isHarmonyDialectModel(model) ? escapeHarmonyControlTokens(rawOutput) : rawOutput;
 	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
 		// Strict backends (Azure, Copilot) reject unpaired outputs outright, but
 		// silently dropping the result loses information the model needs. Fold it
@@ -2964,6 +3204,11 @@ class ResponsesStreamDecoder<TApi extends Api> {
 			case "custom_tool_call":
 				this.#finishCustomToolCall(item, event.output_index);
 				return;
+			case "image_generation_call":
+				if (item.status === "completed" && item.result) {
+					appendResponsesImageResult(this.#output, this.#stream, item.result);
+				}
+				return;
 		}
 	}
 
@@ -3113,6 +3358,26 @@ class ResponsesStreamDecoder<TApi extends Api> {
 		promoteResponsesToolUseStopReason(output, (response as { end_turn?: boolean } | undefined)?.end_turn);
 		this.#options?.onCompleted?.();
 	}
+}
+
+/** Append a native Responses image result and emit its completion event. */
+export function appendResponsesImageResult(
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	result: string,
+): void {
+	const image: ImageContent = {
+		type: "image",
+		data: result,
+		mimeType: parseImageMetadata(Buffer.from(result, "base64"))?.mimeType ?? "image/png",
+	};
+	output.content.push(image);
+	stream.push({
+		type: "image_end",
+		contentIndex: output.content.length - 1,
+		content: image,
+		partial: output,
+	});
 }
 
 export async function processResponsesStream<TApi extends Api>(
@@ -3464,6 +3729,27 @@ const TOP_LEVEL_EXCLUDE_MAP = {
 };
 
 /**
+ * Output-only lifecycle metadata excluded from per-item prefix identity:
+ * replay sanitization strips `status` from message/function_call/custom
+ * tool items (they reject output lifecycle fields), so raw response items
+ * must not be distinguished from their sanitized replay form.
+ */
+const ITEM_LIFECYCLE_EXCLUDE_MAP = {
+	status: true,
+};
+
+/**
+ * Replay sanitization strips output item IDs from message/function/custom
+ * assistant items. A live transcript rebuilt from the corresponding agent
+ * message may still retain that ID; it is output-only identity, while call_id
+ * remains the semantic tool/result pairing key.
+ */
+const REPLAY_SANITIZED_ITEM_EXCLUDE_MAP = {
+	status: true,
+	id: true,
+};
+
+/**
  * Strict-prefix delta for stateful `previous_response_id` chaining (used by the
  * platform Responses provider and the Codex provider on both transports):
  * returns the input items the current request appends beyond the previous
@@ -3490,7 +3776,12 @@ export function buildResponsesDeltaInput<TItem extends ResponseInputItem | Input
 	for (const series of [previous.input, previousResponseItems]) {
 		if (!series) continue;
 		for (const item of series) {
-			if (deepEqualsWithout(item, current.input[index])) {
+			const type = (item as { type?: unknown }).type;
+			const omitKeys =
+				type === "message" || type === "function_call" || type === "custom_tool_call"
+					? REPLAY_SANITIZED_ITEM_EXCLUDE_MAP
+					: ITEM_LIFECYCLE_EXCLUDE_MAP;
+			if (deepEqualsWithout(item, current.input[index], omitKeys)) {
 				index++;
 			} else {
 				return null;

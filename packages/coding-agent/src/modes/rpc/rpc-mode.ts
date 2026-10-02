@@ -182,26 +182,7 @@ export class RpcExtensionUserMessageTracker {
 
 	trackAgentMessageTask(task: Promise<unknown>): void {
 		for (const scope of this.#activePromptScopes) {
-			this.#trackAgentMessageTaskForScope(scope, task);
-		}
-	}
-
-	#trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<unknown>): void {
-		const scopedTask = task.then(
-			() => {
-				scope.hasAgentMessageTask = true;
-			},
-			() => {},
-		);
-		scope.pendingAgentMessageTasks.add(scopedTask);
-		void scopedTask.finally(() => {
-			scope.pendingAgentMessageTasks.delete(scopedTask);
-		});
-	}
-
-	async #waitForAgentMessageTasks(scope: RpcExtensionUserMessageScope): Promise<void> {
-		while (scope.pendingAgentMessageTasks.size > 0) {
-			await Promise.allSettled(Array.from(scope.pendingAgentMessageTasks));
+			trackAgentMessageTaskForScope(scope, task);
 		}
 	}
 
@@ -227,8 +208,27 @@ export class RpcExtensionUserMessageTracker {
 				this.#activePromptScopes.delete(scope);
 			}),
 			hasAgentMessageTask: () => scope.hasAgentMessageTask,
-			waitForAgentMessageTasks: () => this.#waitForAgentMessageTasks(scope),
+			waitForAgentMessageTasks: () => waitForAgentMessageTasks(scope),
 		};
+	}
+}
+
+function trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<unknown>): void {
+	const scopedTask = task.then(
+		() => {
+			scope.hasAgentMessageTask = true;
+		},
+		() => {},
+	);
+	scope.pendingAgentMessageTasks.add(scopedTask);
+	void scopedTask.finally(() => {
+		scope.pendingAgentMessageTasks.delete(scopedTask);
+	});
+}
+
+async function waitForAgentMessageTasks(scope: RpcExtensionUserMessageScope): Promise<void> {
+	while (scope.pendingAgentMessageTasks.size > 0) {
+		await Promise.allSettled(Array.from(scope.pendingAgentMessageTasks));
 	}
 }
 

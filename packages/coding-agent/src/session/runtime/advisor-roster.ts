@@ -217,6 +217,8 @@ export class AdvisorRoster {
 	#yieldQueueUnsubscribe: (() => void) | undefined;
 	/** Live advisors. Empty when no advisor is active. */
 	#advisors: ActiveAdvisor[] = [];
+	/** Headless print-mode drain preserves advice without starting hidden turns. */
+	#preserveAdvice = false;
 	/** Provider-facing UUIDv7 identities keyed by primary provider session and advisor slug. */
 	readonly #providerSessionIds = new Map<string, string>();
 	/** Aggregate of the most recent stop's recorder closes; awaited by dispose() and
@@ -374,6 +376,26 @@ export class AdvisorRoster {
 		this.#autoResumeSuppressed = false;
 	}
 
+	/** Prevent advisor notes from starting hidden primary turns during headless drain. */
+	prepareForHeadlessDrain(): void {
+		this.#preserveAdvice = true;
+	}
+
+	/**
+	 * Wait for active advisor reviews to drain before shutdown.
+	 */
+	async waitForCatchup(timeoutMs: number): Promise<{
+		results: boolean[];
+		abandoned: Array<{ name: string; backlog: number }>;
+	}> {
+		const results = await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(timeoutMs, 1)));
+		const abandoned = this.#advisors
+			.map((advisor, index) => ({ name: advisor.name, backlog: advisor.runtime.backlog, caughtUp: results[index] }))
+			.filter(a => a.caughtUp === false && a.backlog > 0)
+			.map(({ name, backlog }) => ({ name, backlog }));
+		return { results, abandoned };
+	}
+
 	/** Remove advisor concern/blocker cards from the agent-core steer/follow-up
 	 *  queues and return them. Used on a deliberate user interrupt so the post-abort
 	 *  stranded-message drain cannot auto-resume the run on an advisor card that was
@@ -440,7 +462,7 @@ export class AdvisorRoster {
 			a.runtime.reset();
 			a.adviseTool.resetDeliveredNotes();
 			a.emissionGuard.reset();
-			this.#attachRecorderFeed(a);
+			attachRecorderFeed(a);
 		}
 		this.#primaryTurnsCompleted = 0;
 		this.#interruptImmuneTurnStart = undefined;
@@ -624,7 +646,7 @@ export class AdvisorRoster {
 
 		for (const descriptor of descriptors) {
 			const advisor = this.#instantiate(descriptor, advisorServiceTierResolver);
-			this.#attachRecorderFeed(advisor);
+			attachRecorderFeed(advisor);
 			if (seedToCurrent) advisor.runtime.seedTo(host.agent.state.messages.length);
 			this.#advisors.push(advisor);
 		}
@@ -888,15 +910,6 @@ export class AdvisorRoster {
 		return advisorRef;
 	}
 
-	/** Subscribe the advisor agent's finalized messages into the transcript recorder.
-	 *  Idempotent-by-replacement: callers detach the prior feed first. Kept separate
-	 *  so the re-prime path can mute the feed across an abort-driven reset. */
-	#attachRecorderFeed(advisor: ActiveAdvisor): void {
-		advisor.agentUnsubscribe = advisor.agent.subscribe(event => {
-			if (event.type === "message_end") advisor.recorder.record(event.message);
-		});
-	}
-
 	// ------------------------------------------------------------ delivery
 
 	/**
@@ -929,6 +942,7 @@ export class AdvisorRoster {
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
 			autoResumeSuppressed: this.#autoResumeSuppressed,
+			preserveOnly: this.#preserveAdvice,
 			// Key on the live agent-core loop, not session `isStreaming` (which also
 			// counts in-flight prompts during post-turn unwind). Only a running
 			// loop consumes a steer at its next boundary.
@@ -958,6 +972,15 @@ export class AdvisorRoster {
 			.steerAdvice(formatAdvisorBatchContent(notes), details)
 			.catch(err => logger.debug("advisor delivery failed", { err: errorMessage(err) }));
 	}
+}
+
+/** Subscribe the advisor agent's finalized messages into the transcript recorder.
+ *  Idempotent-by-replacement: callers detach the prior feed first. Kept separate
+ *  so the re-prime path can mute the feed across an abort-driven reset. */
+function attachRecorderFeed(advisor: ActiveAdvisor): void {
+	advisor.agentUnsubscribe = advisor.agent.subscribe(event => {
+		if (event.type === "message_end") advisor.recorder.record(event.message);
+	});
 }
 
 /** A visible advisor card carrying `notes`, as the aside batch and a preserved note both record it. */

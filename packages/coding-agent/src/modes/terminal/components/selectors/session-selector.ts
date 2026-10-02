@@ -877,7 +877,7 @@ export class SessionSelectorComponent extends Container {
 		this.#globalSessions = options.allSessions ?? null;
 		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		this.#fillHeight = options.fillHeight ?? false;
-		this.#headerText = new Text(this.#headerLabel(), 1, 0);
+		this.#headerText = new Text(headerLabel(), 1, 0);
 		this.addChild(this.#headerText);
 		this.addChild(this.#messageContainer);
 		// Create session list in folder scope; the empty-state hint invites the
@@ -920,10 +920,6 @@ export class SessionSelectorComponent extends Container {
 		this.addChild(this.#contentSlot);
 	}
 
-	#headerLabel(): string {
-		return "";
-	}
-
 	/**
 	 * Toggle between current-folder and all-projects scope. The global list is
 	 * loaded lazily on first switch and cached, so the common folder-scope path
@@ -957,7 +953,7 @@ export class SessionSelectorComponent extends Container {
 			this.#scope = "folder";
 			this.#sessionList.setSessions(this.#folderSessions, false);
 		}
-		this.#headerText.setText(this.#headerLabel());
+		this.#headerText.setText(headerLabel());
 		this.#onRequestRender?.();
 	}
 
@@ -1248,4 +1244,8 @@ export class SessionSelectorComponent extends Container {
 	getSessionList(): SessionList {
 		return this.#sessionList;
 	}
+}
+
+function headerLabel(): string {
+	return "";
 }

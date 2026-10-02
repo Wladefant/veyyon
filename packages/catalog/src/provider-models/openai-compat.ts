@@ -1,3 +1,4 @@
+import { getInstallId } from "@veyyon/utils/dirs";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "../discovery/failure";
@@ -42,9 +43,10 @@ import {
 	PERSONAL_GITHUB_COPILOT_BASE_URL,
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
-import { getOpenCodeUserAgent } from "../wire/opencode-headers";
+import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
+import { filterModelsDevCatalogRows } from "./models-dev-policies";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 
@@ -1317,7 +1319,15 @@ export interface XaiModelManagerConfig {
 }
 
 export function xaiModelManagerOptions(config?: XaiModelManagerConfig): ModelManagerOptions<"openai-responses"> {
-	return createSimpleOpenAIResponsesOptions("xai", "https://api.x.ai/v1", config);
+	return {
+		...createSimpleOpenAIResponsesOptions("xai", "https://api.x.ai/v1", config),
+		// Completions → Responses migration: a fresh authoritative cache written
+		// by the old resolver stores `api: "openai-completions"` for these ids.
+		// Without a drop list, `online-if-uncached` skips the network and
+		// `mergeDynamicModel` lets the cached api win over the new static
+		// Responses entries until TTL expiry.
+		dropCachedModelIdsOnStaticMismatch: getBundledModels("xai").map(model => model.id),
+	};
 }
 
 export interface XaiOAuthModelManagerConfig {
@@ -1427,6 +1437,36 @@ function withXaiOAuthCompatDefaults(model: ModelSpec<"openai-responses">): Model
 // `resolveModelThinking` folds this into `model.thinking.effortMap`, downstream
 // of the omitReasoningEffort gate in pi-ai's stream.ts.
 const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
+
+/**
+ * Bake first-party xAI Responses effort-dial metadata onto a catalog spec.
+ *
+ * models.dev marks many Grok SKUs as reasoners and the thinking rebake would
+ * otherwise emit a default `minimal/low/medium/high` dial. api.x.ai only
+ * accepts `reasoning.effort` for {@link isGrokReasoningEffortCapable} ids —
+ * off-allowlist reasoners (`grok-code-fast-1`, `grok-build-0.1`,
+ * `grok-4.20-0309-reasoning`, …) 400 if the param is sent. SuperGrok
+ * (`xai-oauth`) already curates this via {@link mergeCuratedIntoModel}; paid
+ * `xai` rows come from stencil.so and need the same wire facts in the exported
+ * `models.json` so direct catalog readers do not present an unsupported dial.
+ *
+ * Explicit `compat.supportsReasoningEffort` / `omitReasoningEffort` win.
+ */
+export function applyXaiResponsesThinkingPolicy(model: ModelSpec<"openai-responses">): ModelSpec<"openai-responses"> {
+	const effortCapable = model.compat?.supportsReasoningEffort ?? isGrokReasoningEffortCapable(model.id);
+	return {
+		...model,
+		compat: {
+			...(model.compat ?? {}),
+			reasoningEffortMap: {
+				...XAI_REASONING_EFFORT_MAP,
+				...(model.compat?.reasoningEffortMap ?? {}),
+			},
+			supportsReasoningEffort: effortCapable,
+			omitReasoningEffort: model.compat?.omitReasoningEffort ?? !effortCapable,
+		},
+	};
+}
 
 // xai-oauth's /v1/models exposes no per-request output limit on the OAuth
 // (Grok Build / SuperGrok) surface, so the curated catalog owns `maxTokens`
@@ -2045,7 +2085,9 @@ async function loadModelsDevReferences<TApi extends Api>(fetchImpl?: FetchImpl):
 	try {
 		const payload = await fetchModelsDevPayload(fetchImpl);
 		return createModelsDevReferenceMap<TApi>(
-			mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS),
+			filterModelsDevCatalogRows(
+				mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS),
+			),
 		);
 	} catch {
 		return new Map<string, ModelSpec<TApi>>();
@@ -2344,7 +2386,8 @@ async function loadOpenCodeModelsDevReferences(
 	const payload = await fetchModelsDevPayload(fetchImpl);
 	if (!isRecord(payload)) return references;
 	const descriptors = MODELS_DEV_PROVIDER_DESCRIPTORS.filter(descriptor => descriptor.providerId === providerId);
-	for (const model of mapModelsDevToModels(payload, descriptors)) references.set(model.id, model);
+	for (const model of filterModelsDevCatalogRows(mapModelsDevToModels(payload, descriptors)))
+		references.set(model.id, model);
 	return references;
 }
 
@@ -2371,8 +2414,13 @@ function openCodeModelManagerOptions(
 					baseUrl: discoveryBaseUrl,
 					apiKey,
 					// The gateway flags traffic with no client user agent, and discovery
-					// reads it with the same key as a completion request.
-					headers: { "User-Agent": getOpenCodeUserAgent() },
+					// reads it with the same key as a completion request. Discovery runs
+					// outside any conversation, so the session header carries the stable
+					// install id.
+					headers: {
+						"User-Agent": getOpenCodeUserAgent(),
+						"x-opencode-session": openCodeSessionHeaderValue(getInstallId()),
+					},
 					mapModel: (entry, defaults) => {
 						const reference = modelsDevReferences.get(defaults.id) ?? bundledReferences.get(defaults.id);
 						const name = toModelName(entry.name, reference?.name ?? defaults.name);
@@ -3634,7 +3682,9 @@ export function xiaomiModelManagerOptions(
 	// Token-plan keys always use a TP cluster; config?.baseUrl (from catalog)
 	// would incorrectly pin to the standard endpoint (api.xiaomimimo.com).
 	const baseUrl = isTokenPlanKey ? tokenPlanBaseUrls[0] : (config?.baseUrl ?? XIAOMI_STANDARD_BASE_URL);
-	const references = createBundledReferenceMap<"openai-completions">("xiaomi");
+	// Built on the first model a fetch returns: a Token Plan provider's manager reads the standard
+	// provider's bundled models, which a launch whose discovery never lists a model does not need.
+	let references: Map<string, ModelSpec<"openai-completions">> | undefined;
 	const fetchModels = (url: string, hooks: DiscoveryHooks | undefined) =>
 		fetchOpenAICompatibleModels({
 			onFailure: hooks?.onFailure,
@@ -3644,6 +3694,7 @@ export function xiaomiModelManagerOptions(
 			apiKey,
 			filterModel: (_entry, model) => !model.id.includes("-tts") && !model.id.includes("-asr"),
 			mapModel: (entry, defaults) => {
+				references ??= createBundledReferenceMap<"openai-completions">("xiaomi");
 				const reference = references.get(defaults.id);
 				const model = mapWithBundledReference(entry, defaults, reference);
 				return {
@@ -3917,10 +3968,11 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 	const compat: OpenAICompat = {
 		supportsStore: false,
 		supportsDeveloperRole: false,
-		supportsReasoningEffort:
-			supportedOpenAIParams !== undefined
-				? supportedOpenAIParams.includes("reasoning_effort")
-				: (referenceCompat?.supportsReasoningEffort ?? false),
+		...(supportedOpenAIParams !== undefined
+			? { supportsReasoningEffort: supportedOpenAIParams.includes("reasoning_effort") }
+			: referenceCompat?.supportsReasoningEffort !== undefined
+				? { supportsReasoningEffort: referenceCompat.supportsReasoningEffort }
+				: {}),
 		...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
 		...(referenceCompat?.omitReasoningEffort !== undefined
 			? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
@@ -4442,6 +4494,8 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	const resolveReference = createReferenceResolver(providerRefs);
 	return {
 		providerId: "github-copilot",
+		// Version the credential/endpoint-scoped namespace so stale cross-provider routing rows are never restored.
+		cacheProviderId: `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`,
 		...(apiKey && {
 			fetchDynamicModels: async hooks => {
 				const longContextVariants: ModelSpec<Api>[] = [];
@@ -5098,7 +5152,9 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		defaultContextWindow: 131072,
 	}),
 	// --- xAI ---
-	simpleModelsDevDescriptor("xai", "xai", "openai-responses", "https://api.x.ai/v1"),
+	simpleModelsDevDescriptor("xai", "xai", "openai-responses", "https://api.x.ai/v1", {
+		transformModel: model => applyXaiResponsesThinkingPolicy(model as ModelSpec<"openai-responses">),
+	}),
 	// --- OAuth twins: surfaces models.dev catalogs only under the API-key twin ---
 	// These exist so LIVE discovery rows pick up the declared reasoning surface;
 	// without them the twin knowledge sat only in the bundle generator, and a

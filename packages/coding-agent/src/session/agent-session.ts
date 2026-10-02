@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -79,7 +80,6 @@ import type {
 import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic";
-import { elidedSignatureBytes, signaturePolicy } from "@veyyon/ai/providers/google-shared";
 import { streamSimple } from "@veyyon/ai/stream";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
@@ -382,17 +382,13 @@ import {
 	isEmptyErrorTurn,
 	isUserInterruptAbort,
 	normalizeCustomMessagePayload,
-	replaceLostBlobPayloads,
 	SILENT_ABORT_MARKER,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "./non-message-tokens";
 import { SESSION_STATE_MESSAGE_TYPE, SESSION_STOP_CONTINUATION_CAP } from "./nudges";
-import { ProviderContextCanonicalizer } from "./provider-context-canonicalizer";
-import { applyProviderImagePolicy } from "./provider-image-budget";
 import { didSessionMessagesChange } from "./provider-replay-projection";
-import { normalizeRoots } from "./relativize-paths";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
@@ -409,6 +405,7 @@ import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { ProviderSessions } from "./runtime/provider-sessions";
 import { ProviderUsage } from "./runtime/provider-usage";
+import { ProviderWire } from "./runtime/provider-wire";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { SessionApprovals } from "./runtime/session-approvals";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
@@ -554,11 +551,15 @@ function sessionStopContinuationContext(result: SessionStopEventResult | undefin
 			? result.additionalContext
 			: undefined;
 	const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
+	if (result.decision === "block") {
+		return (
+			reason ??
+			additionalContext ??
+			"A session_stop handler blocked completion without a reason. Resolve the outstanding work before finishing."
+		);
+	}
 	if (result.continue === true) {
 		return additionalContext ?? reason;
-	}
-	if (result.decision === "block") {
-		return reason ?? additionalContext;
 	}
 	return undefined;
 }
@@ -584,6 +585,8 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 }
 
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
+/** Bound on draining post-prompt work before a /btw branch; a hung task must not hold the promotion forever. */
+const BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
 
 /**
  * Emit a warn-level log for a turn that ended in a provider error so recurring
@@ -664,6 +667,8 @@ export class AgentSession {
 	#goalRuntime: GoalRuntime;
 	/** The advisors watching this session's turns; see {@link AdvisorRoster}. */
 	readonly #advisorRoster: AdvisorRoster;
+	/** Async lifecycle handlers for visible advisor cards emitted outside the primary loop. */
+	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#goalTurnCounter = 0;
 	/** Spend over the summarized prefix, tallied once per compaction boundary. */
 	readonly #spendLedger = new SessionSpendLedger();
@@ -799,14 +804,8 @@ export class AgentSession {
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
-	#transformProviderContext:
-		| ((context: Context, model: Model, runtime?: SecretRuntimeLease) => Context | Promise<Context>)
-		| undefined;
-	/** Session-local provider-ID → `tc_<n>` map; rebuilt from history on resume. */
-	#toolCallIdMap = new Map<string, string>();
-	#toolCallIdCounter = 0;
-	/** Active session cwd root for outbound wire path relativization. */
-	#wirePathRoots: string[] = [];
+	/** Per-request provider shaping every request of this session goes out through. */
+	readonly #wire: ProviderWire;
 	/**
 	 * Directory {@link AgentSession.rescopeToCwd} last re-scoped to, so the two
 	 * callers of one move (this session, then the TUI's `cwd_changed` handler) do
@@ -819,9 +818,6 @@ export class AgentSession {
 	 */
 	#scopeTransitionTail: Promise<void> = Promise.resolve();
 	#scopeTransitionRevision = 0;
-	/** Cumulative outbound bytes elided by path relativization this session. */
-	#wirePathBytesSaved = 0;
-	#thoughtSignatureBytesSaved = 0;
 	#sideStreamFn: StreamFn;
 	/**
 	 * The transport every SIDE request shares, in the `completeImpl` shape
@@ -928,6 +924,7 @@ export class AgentSession {
 	/** Stale-result and overflow prunes, image drops, shake and dedup of the recorded history. */
 	readonly #rewrites: HistoryRewrites;
 	#promptGeneration = 0;
+	#activeAgentPromptGeneration = this.#promptGeneration;
 	/**
 	 * Prompts refused as busy and waiting for the agent to go idle. Each is a
 	 * turn already committed to, held by nothing the queues can see: the hidden
@@ -1376,77 +1373,15 @@ export class AgentSession {
 		this.#createVibeTools = config.createVibeTools;
 		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
-		// Canonicalize provider tool-call IDs to short session-local handles before
-		// obfuscation / provider serialization. Runs once per request
-		// after convertToLlm; map is session-stable so prior history serializes
-		// byte-identically (prompt cache preserved). On resume the map rebuilds from
-		// stored history by walking messages in order (no schema change).
-		const upstreamTransformProviderContext = config.transformProviderContext;
-		// Outbound wire-path canonicalization (TW-10): render paths under the active
-		// session cwd relative to that root. Only the active cwd is a root; accumulating
-		// prior cwds would strip paths from previous directories to "." as well, making
-		// distinct absolute paths indistinguishable.
-		this.#wirePathRoots = normalizeRoots(this.sessionManager.getCwd());
-		const providerContextCanonicalizer = new ProviderContextCanonicalizer(this.#toolCallIdMap, () => {
-			this.#toolCallIdCounter += 1;
-			return `tc_${this.#toolCallIdCounter}`;
+		this.#wire = new ProviderWire({
+			settings: this.settings,
+			cwd: this.sessionManager.getCwd(),
+			upstream: config.transformProviderContext,
+			secrets: this.#secrets,
 		});
-		const canonicalizeProviderContext = (
-			context: Context,
-			model: Model,
-			runtime?: SecretRuntimeLease,
-		): Context | Promise<Context> => {
-			const canonicalized = providerContextCanonicalizer.transform(context.messages, this.#wirePathRoots);
-			this.#wirePathBytesSaved += canonicalized.bytesSaved;
-			const messages = canonicalized.messages;
-			// Read per request: the retention window is a live setting, and a session
-			// that changes it must take effect on the next turn, not on restart.
-			const thoughtSignatureRetention = this.settings.get("context.thoughtSignatureRetention");
-			const thoughtSignatureMaxLength = this.settings.get("context.thoughtSignatureMaxLength");
-			const thinkingRetention = this.settings.get("context.thinkingRetention");
-			// Both signature rules resolve through one owner, so the bytes reported here
-			// are the bytes the request actually leaves out. Accounting that knew about
-			// only one rule would report a saving the request did not make.
-			this.#thoughtSignatureBytesSaved += elidedSignatureBytes(
-				messages,
-				signaturePolicy(messages, { thoughtSignatureRetention, thoughtSignatureMaxLength }),
-				message => message.provider === model.provider && message.model === model.id,
-			);
-			const next =
-				messages === context.messages &&
-				thoughtSignatureRetention === context.thoughtSignatureRetention &&
-				thoughtSignatureMaxLength === context.thoughtSignatureMaxLength &&
-				thinkingRetention === context.thinkingRetention
-					? context
-					: {
-							...context,
-							messages,
-							thoughtSignatureRetention,
-							thoughtSignatureMaxLength,
-							thinkingRetention,
-						};
-			// A payload the blob store no longer has is still a reference after the
-			// load put back everything it could, and a reference is not content: an
-			// image block whose data is a hash is not base64, so the provider refuses
-			// the request and every later turn of the session refuses the same way.
-			// The transcript keeps the reference, so restoring the blobs directory
-			// restores the payload; the request states the loss instead of the hash.
-			const recovered = replaceLostBlobPayloads(next.messages);
-			const carried = recovered === next.messages ? next : { ...next, messages: recovered };
-			// The model serving THIS request decides which images it can read. The
-			// main turn, a side request, compaction and an advisor each dispatch
-			// their own model, and this is the only seam that sees which one is
-			// going out, so the whole image policy resolves here.
-			const shaped = applyProviderImagePolicy(carried, model, {
-				blockImages: Boolean(this.settings.get("images.blockImages")),
-			});
-			if (upstreamTransformProviderContext) return upstreamTransformProviderContext(shaped, model, runtime);
-			return this.#secrets.obfuscateContext(shaped, runtime);
-		};
-		this.#transformProviderContext = canonicalizeProviderContext;
-		// Agent was constructed before AgentSession; install the wrapped hook so the
-		// main loop / side requests / advisors share the same session-local map.
-		this.agent.setTransformProviderContext(canonicalizeProviderContext);
+		// Agent was constructed before AgentSession; install the wire so the main loop, side
+		// requests and advisors share one session-local tool-call id map.
+		this.agent.setTransformProviderContext(this.#wire.transform);
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
 		this.#preferWebsockets = config.preferWebsockets;
 		this.#onPayload = config.onPayload;
@@ -1804,7 +1739,7 @@ export class AgentSession {
 				onPayload: this.#onPayload,
 				onResponse: this.#onResponse,
 				onSseEvent: this.#onSseEvent,
-				transformProviderContext: this.#transformProviderContext,
+				transformProviderContext: this.#wire.transform,
 				resolveSecretRuntimeLeaseForContext: this.#secrets.resolveLeaseForContext,
 			},
 			sessionFile: () => this.sessionManager.getSessionFile(),
@@ -2545,7 +2480,16 @@ export class AgentSession {
 	 */
 	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type !== "agent_end") {
-			return this.#processAgentEvent(event);
+			const processing = this.#processAgentEvent(event);
+			if ((event.type === "message_start" || event.type === "message_end") && isAdvisorCard(event.message)) {
+				this.#pendingAdvisorCardEvents.add(processing);
+				void processing
+					.finally(() => this.#pendingAdvisorCardEvents.delete(processing))
+					.catch(error => {
+						logger.debug("Advisor card event processing failed", { error });
+					});
+			}
+			return processing;
 		}
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#postPrompt.track(promise);
@@ -2610,6 +2554,7 @@ export class AgentSession {
 	 * before its `message_end` handler resumes.
 	 */
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type === "agent_start") this.#activeAgentPromptGeneration = this.#promptGeneration;
 		// Paired with the mark in `#recordToolExecutionStart`, and cleared before the
 		// awaited subscribers below: a listener that throws would otherwise leave this
 		// process looking like it died inside a call that had already returned.
@@ -2866,7 +2811,6 @@ export class AgentSession {
 			this.#skipPostTurnMaintenanceAssistantTimestamp = message.timestamp;
 		}
 		await this.#retry.closeRecovered(message);
-		this.#usage.recordTurnCost(message);
 	}
 
 	/** Settle-time effects of a persisted tool result: todo write outcome and checkpoint/rewind state. */
@@ -3355,7 +3299,7 @@ export class AgentSession {
 		messages: AgentMessage[],
 		lastAssistantMessage = this.getLastAssistantMessage(),
 	): Promise<void> {
-		if (this.#abortInProgress || this.#isDisposed) {
+		if (this.#abortInProgress || this.#isDisposed || this.#activeAgentPromptGeneration !== this.#promptGeneration) {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
@@ -3378,7 +3322,7 @@ export class AgentSession {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
-		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
+		if (result?.decision !== "block" && this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
 			logger.warn("session_stop continuation cap reached", {
 				sessionId: this.sessionId,
 				cap: SESSION_STOP_CONTINUATION_CAP,
@@ -3386,7 +3330,7 @@ export class AgentSession {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
-		this.#sessionStopContinuationCount++;
+		if (result?.decision !== "block") this.#sessionStopContinuationCount++;
 		this.#sessionStopHookActive = true;
 		this.#queueHiddenNextTurnMessage(
 			{
@@ -3685,7 +3629,7 @@ export class AgentSession {
 	}
 
 	#recordCwdChange(previous: string, cwd: string): void {
-		this.#wirePathRoots = normalizeRoots(cwd);
+		this.#wire.rootAt(cwd);
 		const note = `Session working directory changed: ${previous} → ${cwd}`;
 		const details = { previous, cwd };
 		this.agent.appendMessage({
@@ -3703,7 +3647,7 @@ export class AgentSession {
 
 	/** Cumulative outbound bytes elided by wire path relativization (TW-10). */
 	get wirePathBytesSaved(): number {
-		return this.#wirePathBytesSaved;
+		return this.#wire.pathBytesSaved;
 	}
 
 	/**
@@ -3715,7 +3659,7 @@ export class AgentSession {
 	 * single trimmed turn saves is paid again on the next one and the next.
 	 */
 	get thoughtSignatureBytesSaved(): number {
-		return this.#thoughtSignatureBytesSaved;
+		return this.#wire.thoughtSignatureBytesSaved;
 	}
 
 	subscribe(listener: AgentSessionEventListener): () => void {
@@ -4184,6 +4128,51 @@ export class AgentSession {
 			unsubscribe();
 			signal?.removeEventListener("abort", wake);
 		}
+	}
+
+	/**
+	 * Prevent advisor notes from starting hidden primary turns while a headless
+	 * caller prints and drains the final primary response.
+	 */
+	prepareForHeadlessAdvisorDrain(): void {
+		this.#advisorRoster.prepareForHeadlessDrain();
+	}
+
+	async #waitForPendingAdvisorCardEvents(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + Math.max(0, timeoutMs);
+		while (this.#pendingAdvisorCardEvents.size > 0) {
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) return false;
+			const settled = Promise.allSettled([...this.#pendingAdvisorCardEvents]).then(() => true as const);
+			const { promise: timedOut, resolve } = Promise.withResolvers<false>();
+			const timer = setTimeout(() => resolve(false), remainingMs);
+			try {
+				if (!(await Promise.race([settled, timedOut]))) return false;
+			} finally {
+				clearTimeout(timer);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Wait for active advisor reviews and their emitted card events before a
+	 * headless caller disposes the session. Returns `false` and logs work disposal
+	 * will abandon when the shared deadline expires or an advisor fails.
+	 */
+	async waitForAdvisorCatchup(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		const { abandoned } = await this.#advisorRoster.waitForCatchup(timeoutMs);
+		const cardEventsCaughtUp = await this.#waitForPendingAdvisorCardEvents(Math.max(0, deadline - Date.now()));
+		if (abandoned.length > 0 || !cardEventsCaughtUp) {
+			logger.warn("advisor shutdown drain incomplete; disposal will abandon reviews or cards", {
+				timeoutMs,
+				advisors: abandoned,
+				pendingAdvisorCards: this.#pendingAdvisorCardEvents.size,
+			});
+			return false;
+		}
+		return true;
 	}
 
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
@@ -4718,9 +4707,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Compose a stable signature for the inputs that `rebuildSystemPrompt` reads.
-	 * Two calls producing identical signatures are guaranteed to produce identical
-	 * system prompt bytes, so the rebuild can be skipped.
+	 * Compose a SHA-256 digest of the inputs that `rebuildSystemPrompt` reads.
+	 * Two calls producing the same digest produce identical system prompt bytes,
+	 * so the rebuild can be skipped.
+	 *
+	 * The session holds the digest, not the text it was computed from: the inputs
+	 * include every active tool's description, so the text is the size of the
+	 * whole tool catalog and a held copy of it would stay on the heap for the life
+	 * of every session and every live subagent. Each input is fed to the hash in
+	 * order, separators included, so the digest is that of the joined text without
+	 * the joined text being built.
 	 *
 	 * The signature covers:
 	 *   1. Active tool names in order (the prompt renders them in this order).
@@ -4759,36 +4755,42 @@ export class AgentSession {
 	 * reconnects would keep yesterday's date indefinitely.
 	 */
 	#computeAppliedToolSignature(toolNames: string[], tools: AgentTool[]): string {
-		// Order-preserving join: any reorder must produce a different signature so
-		// the rebuild fires and the new tool list reaches the API.
-		const nameSegment = toolNames.join("\u0001");
+		const hash = createHash("sha256");
+		const feedJoined = (parts: readonly string[], separator: string): void => {
+			for (let index = 0; index < parts.length; index++) {
+				if (index > 0) hash.update(separator);
+				hash.update(parts[index]);
+			}
+		};
 		const describeTool = (tool: AgentTool): string =>
 			`${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}|${tool.customWireName ?? ""}`;
-		const descriptionSegment = tools.map(describeTool).join("\u0002");
-		let registrySegment = "";
+		// Order-preserving: any reorder must produce a different digest so the
+		// rebuild fires and the new tool list reaches the API.
+		feedJoined(toolNames, "\u0001");
+		hash.update("\u0003");
+		feedJoined(tools.map(describeTool), "\u0002");
+		hash.update("\u0005");
 		if (this.#discovery.mcpEnabled) {
 			// Registry iteration order is not load-bearing for the prompt content, so we
-			// sort to keep the signature insensitive to incidental insertion order.
+			// sort to keep the digest insensitive to incidental insertion order.
 			const entries: string[] = [];
 			for (const tool of this.#toolRegistry.values()) {
 				entries.push(describeTool(tool));
 			}
-			entries.sort();
-			registrySegment = entries.join("\u0004");
+			feedJoined(entries.sort(), "\u0004");
 		}
-		let instructionsSegment = "";
+		hash.update("\u0007");
 		const serverInstructions = this.#getMcpServerInstructions?.();
 		if (serverInstructions && serverInstructions.size > 0) {
-			// Sort by server name so transport flap order does not perturb the signature.
+			// Sort by server name so transport flap order does not perturb the digest.
 			const entries: string[] = [];
 			for (const [server, instructions] of serverInstructions) {
 				entries.push(`${server}=${instructions}`);
 			}
-			entries.sort();
-			instructionsSegment = entries.join("\u0006");
+			feedJoined(entries.sort(), "\u0006");
 		}
-		const date = this.#getLocalCalendarDate();
-		return `${nameSegment}\u0003${descriptionSegment}\u0005${registrySegment}\u0007${instructionsSegment}|${date}`;
+		hash.update(`|${this.#getLocalCalendarDate()}`);
+		return hash.digest("base64");
 	}
 
 	/**
@@ -9410,7 +9412,7 @@ export class AgentSession {
 		// from the target branch. On rollback it must be restored, or a failed switch
 		// leaks the target session's checkpoint state.
 		const previousCheckpoint = this.#checkpoint.snapshot();
-		const previousWirePathRoots = this.#wirePathRoots;
+		const previousWirePathRoots = this.#wire.roots;
 
 		let scopeTransitionAttempted = false;
 
@@ -9443,7 +9445,7 @@ export class AgentSession {
 			if (path.resolve(targetCwd) !== path.resolve(previousSessionState.cwd)) {
 				scopeTransitionAttempted = true;
 				await this.#rescopeToCwd(targetCwd);
-				this.#wirePathRoots = normalizeRoots(targetCwd);
+				this.#wire.rootAt(targetCwd);
 			}
 
 			if (switchingToDifferentSession) {
@@ -9575,7 +9577,7 @@ export class AgentSession {
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
-			this.#wirePathRoots = previousWirePathRoots;
+			this.#wire.restoreRoots(previousWirePathRoots);
 			let restoreScopeError: unknown;
 			if (scopeTransitionAttempted) {
 				this.#lastRescopedCwd = undefined;
@@ -9734,21 +9736,30 @@ export class AgentSession {
 		return { selectedText, cancelled: false };
 	}
 
+	/** Promotes a completed /btw answer from the explicitly authorized session and leaf. */
 	async branchFromBtw(
 		question: string,
 		assistantMessage: AssistantMessage,
+		leafId: string,
+		sessionId: string,
 	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
 		const previousSessionFile = this.sessionFile;
 		if (!this.sessionManager.getSessionFile()) {
 			throw new Error("Cannot branch /btw: session is not persisted");
 		}
 
-		const leafId = this.sessionManager.getLeafId();
-		if (!leafId) {
-			throw new Error("Cannot branch /btw: current session has no leaf");
+		// The user authorized THIS answer at THIS leaf of THIS session. A resumed or branched session
+		// keeps entry ids, so the leaf alone matches a session the answer never saw.
+		const authorized = () =>
+			this.sessionManager.getSessionId() === sessionId && this.sessionManager.getLeafId() === leafId;
+		if (!leafId || !authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 
+		// A promotion never parks behind or aborts a running turn: that turn's reply would land on
+		// the old leaf, or be thrown away, after the user chose to keep it.
 		if (
+			this.isStreaming ||
 			this.isBashRunning ||
 			this.isEvalRunning ||
 			this.isCompacting ||
@@ -9769,8 +9780,19 @@ export class AgentSession {
 			}
 		}
 
-		await this.#cancelPostPromptTasks();
+		// Leaf and session are re-checked after every await: an extension hook or the post-prompt
+		// drain can append to the transcript while this is suspended.
+		if (!authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
+		}
+
+		await withTimeout(
+			this.#cancelPostPromptTasks(),
+			BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS,
+			"Timed out draining post-prompt tasks before /btw branch",
+		);
 		if (
+			this.isStreaming ||
 			this.isBashRunning ||
 			this.isEvalRunning ||
 			this.isCompacting ||
@@ -9783,13 +9805,12 @@ export class AgentSession {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 		this.agent.replaceQueues([], []);
-		if (this.isStreaming) {
-			await this.abort({ goalReason: "internal", reason: "branching /btw" });
-			this.agent.replaceQueues([], []);
-		}
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
 
+		if (!authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
+		}
 		this.sessionManager.createBranchedSession(leafId);
 
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
@@ -10119,6 +10140,15 @@ export class AgentSession {
 
 	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
 		return this.#context.usage(options);
+	}
+
+	/**
+	 * Context usage with the non-message size the newest usage anchor recorded standing in for a
+	 * measurement, so reading it builds no tool schema. Undefined when no anchor recorded that size or
+	 * a prompt is in flight. See `ContextAccounting.restingUsage`.
+	 */
+	getRestingContextUsage(): ContextUsage | undefined {
+		return this.#context.restingUsage();
 	}
 
 	/**

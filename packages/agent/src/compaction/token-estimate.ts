@@ -56,12 +56,22 @@ const IMAGE_TOKEN_ESTIMATE = 1200;
  * The two option variants (`default` vs `excludeEncryptedReasoning`) can
  * disagree for a message with encrypted reasoning, and they also walk different
  * fragments, so each keeps its own value and its own digest rather than sharing
- * one slot.
+ * one slot. Both variants live in one flat record per message, so a cached
+ * message costs one object rather than a holder and an object per variant.
  */
-const tokenEstimateCache = new WeakMap<
-	AgentMessage,
-	{ default?: { value: number; shape: number }; noReasoning?: { value: number; shape: number } }
->();
+interface TokenEstimateSlots {
+	/** Estimate of the default variant, or {@link UNMEASURED} before it is measured. */
+	defaultValue: number;
+	defaultShape: number;
+	/** Estimate of the `excludeEncryptedReasoning` variant, or {@link UNMEASURED}. */
+	noReasoningValue: number;
+	noReasoningShape: number;
+}
+
+/** A token estimate is a non-negative count, so a negative value marks a variant not yet measured. */
+const UNMEASURED = -1;
+
+const tokenEstimateCache = new WeakMap<AgentMessage, TokenEstimateSlots>();
 
 /**
  * Estimate token count for a message using cl100k_base via the native
@@ -76,17 +86,19 @@ const tokenEstimateCache = new WeakMap<
  * content) excludes them to avoid false triggers on thinking-heavy turns.
  */
 export function estimateTokens(message: AgentMessage, options?: { excludeEncryptedReasoning?: boolean }): number {
-	const slotKey = options?.excludeEncryptedReasoning ? "noReasoning" : "default";
+	const noReasoning = Boolean(options?.excludeEncryptedReasoning);
 	const cached = tokenEstimateCache.get(message);
-	const hit = cached?.[slotKey];
 	// A cached number is checked with one walk that tokenizes nothing: the sink folds fragment
 	// lengths instead of keeping the strings.
-	if (hit !== undefined) {
-		let shape = 0;
-		const extra = walkCountedFragments(message, options, text => {
-			shape = (shape * 31 + text.length) | 0;
-		});
-		if (hit.shape === ((shape * 31 + extra) | 0)) return hit.value;
+	if (cached !== undefined) {
+		const value = noReasoning ? cached.noReasoningValue : cached.defaultValue;
+		if (value !== UNMEASURED) {
+			let shape = 0;
+			const extra = walkCountedFragments(message, options, text => {
+				shape = (shape * 31 + text.length) | 0;
+			});
+			if ((noReasoning ? cached.noReasoningShape : cached.defaultShape) === ((shape * 31 + extra) | 0)) return value;
+		}
 	}
 	// A message measured for the first time, or whose shape moved, is walked once: the same walk
 	// collects the fragments to tokenize and folds the digest the next check compares against.
@@ -98,8 +110,20 @@ export function estimateTokens(message: AgentMessage, options?: { excludeEncrypt
 	for (const text of fragments) shape = (shape * 31 + text.length) | 0;
 	shape = (shape * 31 + extra) | 0;
 	const value = fragments.length === 0 ? extra : extra + countTokens(fragments);
-	if (cached) cached[slotKey] = { value, shape };
-	else tokenEstimateCache.set(message, { [slotKey]: { value, shape } });
+	const slots = cached ?? {
+		defaultValue: UNMEASURED,
+		defaultShape: 0,
+		noReasoningValue: UNMEASURED,
+		noReasoningShape: 0,
+	};
+	if (noReasoning) {
+		slots.noReasoningValue = value;
+		slots.noReasoningShape = shape;
+	} else {
+		slots.defaultValue = value;
+		slots.defaultShape = shape;
+	}
+	if (cached === undefined) tokenEstimateCache.set(message, slots);
 	return value;
 }
 

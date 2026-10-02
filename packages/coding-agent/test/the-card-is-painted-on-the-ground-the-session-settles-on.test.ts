@@ -41,10 +41,10 @@ import * as path from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
-import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/modes/launch-facts";
 import { paintFirstFrame, takeFirstFrame } from "@veyyon/coding-agent/modes/terminal/first-frame";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -175,7 +175,9 @@ async function recordGround(hex: string): Promise<void> {
 
 /** The card, painted for real, with the bytes it wrote. */
 async function paintCard(): Promise<string> {
-	return await bytesFrom(() => paintFirstFrame("9.9.9"));
+	const card = await bytesFrom(() => paintFirstFrame("9.9.9"));
+	process.stdin.emit("data", "\x1b[?0u");
+	return card;
 }
 
 /** What the terminal answers, through its own parser. */

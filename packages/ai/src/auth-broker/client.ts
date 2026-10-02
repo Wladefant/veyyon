@@ -99,7 +99,7 @@ export class AuthBrokerClient {
 		if (response.status === 304) {
 			return { status: 304, generation: etagGeneration ?? opts.ifGenerationGt ?? 0 };
 		}
-		const raw = this.#parseJson(response.text, response.status);
+		const raw = parseJson(response.text, response.status);
 		const validated = wireSchemas().snapshotResponseSchema(raw);
 		if (validated instanceof type.errors) {
 			throw new AuthBrokerError("Auth broker response failed schema validation", {
@@ -268,7 +268,7 @@ export class AuthBrokerClient {
 		opts: { schema: (input: unknown) => unknown; auth?: boolean; body?: unknown; signal?: AbortSignal },
 	): Promise<t> {
 		const response = await this.#fetchRaw(method, path, opts);
-		const raw = this.#parseJson(response.text, response.status);
+		const raw = parseJson(response.text, response.status);
 		const validated = opts.schema(raw);
 		if (validated instanceof type.errors) {
 			throw new AuthBrokerError("Auth broker response failed schema validation", {
@@ -277,18 +277,6 @@ export class AuthBrokerClient {
 			});
 		}
 		return validated as t;
-	}
-
-	#parseJson(text: string, status: number): unknown {
-		try {
-			return text.length === 0 ? null : JSON.parse(text);
-		} catch (parseError) {
-			throw new AuthBrokerError("Auth broker returned malformed JSON", {
-				status,
-				body: text,
-				cause: parseError,
-			});
-		}
 	}
 
 	async #fetchRaw(
@@ -357,6 +345,18 @@ export class AuthBrokerClient {
 		}
 		throw new AuthBrokerError(`Auth broker request failed after ${this.#maxRetries + 1} attempt(s)`, {
 			cause: lastError,
+		});
+	}
+}
+
+function parseJson(text: string, status: number): unknown {
+	try {
+		return text.length === 0 ? null : JSON.parse(text);
+	} catch (parseError) {
+		throw new AuthBrokerError("Auth broker returned malformed JSON", {
+			status,
+			body: text,
+			cause: parseError,
 		});
 	}
 }

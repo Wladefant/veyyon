@@ -65,12 +65,10 @@ describe("A failed session directory migration is reported", () => {
 		const cwd = path.join(home, "proj");
 		fs.mkdirSync(cwd, { recursive: true });
 		const legacy = path.join(sessionsRoot, legacyName("proj"));
-		fs.mkdirSync(legacy, { recursive: true });
-		fs.writeFileSync(path.join(legacy, "old-session.jsonl"), "{}\n");
+		fs.writeFileSync(legacy, "not-a-directory\n");
 		// The merge target already exists, so the migration reads the legacy
-		// directory, and an unreadable legacy directory makes that read throw.
+		// directory, and an unreadable or non-directory legacy entry makes that read throw.
 		fs.mkdirSync(path.join(sessionsRoot, "-proj"), { recursive: true });
-		fs.chmodSync(legacy, 0o000);
 
 		const dir = computeDefaultSessionDir(cwd, storage, sessionsRoot);
 
@@ -96,9 +94,8 @@ describe("A failed session directory migration is reported", () => {
 		const cwd = path.join(home, "proj");
 		fs.mkdirSync(cwd, { recursive: true });
 		const legacy = path.join(sessionsRoot, legacyName("proj"));
-		fs.mkdirSync(legacy, { recursive: true });
+		fs.writeFileSync(legacy, "not-a-directory\n");
 		fs.mkdirSync(path.join(sessionsRoot, "-proj"), { recursive: true });
-		fs.chmodSync(legacy, 0o000);
 
 		const dir = computeDefaultSessionDir(cwd, storage, sessionsRoot);
 

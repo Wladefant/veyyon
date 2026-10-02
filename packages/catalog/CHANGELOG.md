@@ -2,12 +2,30 @@
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode gateway model discovery now sends the `x-opencode-session` header derived from the install id alongside the Veyyon user agent ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
+
 ### Removed
 
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
+- Removed redundant `grok-composer-2.5-fast` OAuth contract test from `xai-oauth-bundle.test.ts` as curated seed parity loops already verify its properties ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Typed the Antigravity discovery `fetcher` option as `FetchImpl`, so a caller's fetch override type-checks without a `preconnect` adapter ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Discovered Antigravity image generation models from account capabilities and selected advertised models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Defaulted paid xAI and SuperGrok model selection to Grok 4.6.
+- Versioned the GitHub Copilot model cache per credential and endpoint so stale routing rows are refetched.
+- Aligned runtime model discovery with generation-time exclusion policies for Amazon Bedrock, Z.AI, Fireworks, and Xiaomi, and relaxed literal ZenMux default model assertions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Aborted OpenAI Codex catalog discovery when any account credential fails to refresh to keep bundled models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog and forward the configured transport fetch ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Invalidated stale paid-xAI model-cache rows written under Chat Completions so the Responses migration takes effect immediately instead of waiting for TTL expiry ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Stripped unsupported reasoning effort dials from off-allowlist paid xAI Responses models during catalog resolution ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Codex Daybreak aliases (e.g. `gpt-daybreak-blue-latest`) to classify under GPT-5.6 for wire capabilities without overwriting their reported context window in static catalog generation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed authenticated OpenAI Codex discovery dropping account-listed ChatGPT-only models such as GPT-5.3 Codex Spark when they are unavailable through the public API ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Preserved generic effort support for LiteLLM models when rich metadata and references omit it ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed `xai/grok-4.7` shipping without its effort ladder: it is on the effort-capable Grok allowlist, so the bundled row now bakes the declared low/medium/high/xhigh tiers.
 - Fixed LiteLLM discovery leaking a colliding bundled model's provider-specific transport onto custom endpoints: a discovered alias matching a bundled model no longer inherits that model's wire-id transform or tool-schema flavor.
 - Fixed `opencode-go/muse-spark-1.2` (and `muse-spark-1.2-contributor`) failing every tool-call turn with `OpenAI completions stream closed before a finish_reason was received` by routing them to the Responses API.
 - Fixed GitHub Copilot `grok-4.6` to route through the Responses API (`/responses`) instead of `/chat/completions`, which returned 400 unsupported_api_for_model.
@@ -36,6 +54,10 @@
 - GitLab Duo workflow discovery parses the available-models answer without Zod, and `@veyyon/catalog` no longer depends on `zod`; every answer resolves to the same models.
 - The parsed bundled catalog and the reference index built from it are released 30 seconds after the last read and parsed again on the next one, and the provider list is kept apart so listing providers never parses the catalog, which cut the settled idle heap of an interactive session from 39.96 MiB to 38.88 MiB and its live objects from 485,605 to 471,040 (median of 5 runs).
 - Cursor and Devin model discovery modules load through `lazy` from `@veyyon/utils`; no user-visible change.
+- A discovered model's reference resolver builds the index of every bundled provider's models on the first id its own provider's references miss instead of when the provider's model manager options are created, so a launch holding only a GitHub Copilot credential builds 566 model specs from 3 providers instead of 4,560 from 59 and settles at 28.96 MiB of heap instead of 30.36 MiB (median of 5).
+- The Xiaomi Token Plan model managers read the `xiaomi` provider's bundled models on the first model a discovery returns instead of when their options are created, so a launch holding a Token Plan credential builds no `xiaomi` model.
+- A read of one bundled provider parses that provider's object out of `models.json` instead of the whole 2.3 MB catalog, and listing providers parses none of it, which cut the heap of a default-role launch 3 seconds after start from 46.70 MiB to 44.47 MiB, its live objects from 418,889 to 371,624 and `createAgentSession` from 69.7 ms to 63.5 ms (median of 5 and 11 runs).
+- A custom or discovered model's bundled reference lookup scans the model ids out of `models.json` and parses only the models the id reaches instead of the whole catalog, which cut a custom-model launch's time to a ready session from 217.2 ms to 206.6 ms and its idle heap from 36.21 MiB to 33.71 MiB and live objects from 399,664 to 350,968 (median of 11 and 5 runs).
 
 ### Fixed
 

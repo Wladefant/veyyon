@@ -13,9 +13,13 @@
 
 ### Fixed
 
+- Preserved native generated images in streaming snapshots and telemetry, including image completion updates.
+- Restored contextual typing for remote compaction requests after the socket retry port without changing runtime behavior.
+- Fixed Codex remote compaction retrying transient unexpected socket closures instead of prematurely failing over to paid local compaction ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recovered tool-call turns from mid-stream envelope errors and transient stream-parse errors, not only stream-read errors.
 - Fixed tool calls that put their payload in the intent field `i` (for example a file body in `write`) silently running with leftover arguments; they now fail with a clear prompt to move the content into the tool's parameters ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed stream finalization when a provider ends without emitting a completion or error event, ensuring the final assistant message is preserved and corresponding message lifecycle events are emitted ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed chat request telemetry recording service tiers based on the target model rather than provider name alone, correctly emitting attributes for custom OpenAI relays and dropping unadvertised tiers ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 ### Breaking Changes
 
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
@@ -27,12 +31,15 @@
 
 ### Changed
 
+- Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
+- `Agent` reads its fallback Google model only when the initial state names no model, so a session that brings its own model no longer builds the Google provider's bundled models, and a launch with no credential builds 478 model specs instead of 521.
 - The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
 - `Agent` holds each system prompt section as the shared copy of its text, whether it arrives in the initial state or through `setSystemPrompt`, so live agents with equal sections hold one buffer of each.
 - `normalizeTools` holds a description with an appended examples block as the shared copy of its text, so live agents with the same tools hold one buffer of each, which cut the heap after 40 live subagents from 96.9 MiB to 95.4 MiB (median of 3 runs).
+- `estimateTokens` caches both option variants of a message in one record of four numbers instead of a holder object plus an object per variant, which cut the heap and extra memory of an idle resumed 600-turn session from 123,632 KiB to 123,399 KiB and its live objects from 708,261 to 702,908 (median of five).
 
 ## [1.5.4] - 2026-09-24
 

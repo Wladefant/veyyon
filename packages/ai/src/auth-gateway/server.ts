@@ -19,21 +19,24 @@
  */
 
 import { Effort } from "@veyyon/catalog/effort";
-import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
-import * as AIError from "../error";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
 import { completeSimple, streamSimple } from "../stream";
-import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
+import type { Api, AssistantMessageEventStream, Context, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
+import {
+	type AuthGatewayBootOptions,
+	buildGatewayApiKeyResolver,
+	mirrorRequestAbort,
+	resolveGatewayApiKey,
+} from "./dispatch";
 import {
 	captureRequestHeaders,
 	corsHeaders,
@@ -45,28 +48,12 @@ import {
 } from "./http";
 import type {
 	AuthGatewayServerHandle,
-	AuthGatewayServerOptions,
 	AuthGatewayFormatModule as FormatModule,
 	AuthGatewayParsedRequest as ParsedFormatRequest,
 } from "./types";
 import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 
 // ParsedFormatRequest / ParsedFormatOptions / FormatModule come from ./types.
-
-export type ModelResolver = (modelId: string) => Model<Api> | undefined;
-
-export interface AuthGatewayBootOptions extends AuthGatewayServerOptions {
-	/** Source of credentials. Caller wires this to a broker-backed AuthStorage. */
-	storage: AuthStorage;
-	/**
-	 * Resolve a client-requested model id to a pi-ai Model. Caller supplies
-	 * this from a ModelRegistry (lives in `coding-agent` to avoid an inverse
-	 * dependency in `pi-ai`).
-	 */
-	resolveModel: ModelResolver;
-	/** Optional supplier for `/v1/models` listing. Returns the full model array. */
-	listModels?: () => Iterable<Model<Api>>;
-}
 
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
@@ -240,137 +227,8 @@ export function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal
 	return opts;
 }
 
-/**
- * Hook fired by {@link streamSimple} when the upstream request fails in a
- * way that's rotatable — today that's HTTP 401 (credential is bad) and
- * usage-limit phrasing matched by {@link isUsageLimitError} (Codex's
- * `usage_limit_reached`, Anthropic's `usage_limit_reached`, Google's
- * `resource_exhausted`, …). The two cases need different storage actions:
- *
- * - **usage-limit** → {@link AuthStorage.markUsageLimitReached}. Marks just
- *   the current session's credential as temporarily blocked (honouring
- *   `retry-after` / `resets_at` hints when present) and returns `true` only
- *   when a sibling credential is still available. Burning the credential
- *   with `invalidateCredentialMatching` here would orphan accounts whose
- *   reset window is several hours away — exactly the bug this helper exists
- *   to avoid.
- * - **auth-failure** → {@link AuthStorage.invalidateCredentialMatching}.
- *   Suspect/delete the row so it doesn't get re-picked next request.
- *
- * In both branches we return the next `getApiKey` result (sticky on the
- * same `sessionId`) so streamSimple can transparently retry the pre-emit
- * failure with a fresh credential. Returning `undefined` aborts the retry
- * and surfaces the original error to the caller.
- */
-async function refreshGatewayApiKeyAfterAuthError(
-	storage: AuthStorage,
-	model: Model<Api>,
-	sessionId: string,
-	provider: string,
-	oldKey: string,
-	error: unknown,
-	signal: AbortSignal,
-	format: string,
-	peer: string,
-): Promise<string | undefined> {
-	const message = errorMessage(error);
-	if (AIError.isUsageLimit(error)) {
-		const retryAfterMs = extractRetryHint(undefined, message);
-		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
-			retryAfterMs,
-			baseUrl: model.baseUrl,
-			modelId: model.id,
-			apiKey: oldKey,
-			signal,
-		});
-		logger.debug("auth-gateway retrying provider request after usage-limit block", {
-			format,
-			provider,
-			peer,
-			switched,
-			retryAfterMs,
-			retryAtMs,
-			error: message,
-		});
-		if (!switched) return undefined;
-		return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
-	}
-	await storage.invalidateCredentialMatching(provider, oldKey, { sessionId, signal });
-	logger.debug("auth-gateway retrying provider request after credential invalidation", {
-		format,
-		provider,
-		peer,
-		error: message,
-	});
-	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
-}
-
-/**
- * Build the {@link ApiKeyResolver} handed to `streamSimple` for a gateway
- * request. Drives the central a/b/c auth-retry policy server-side:
- *
- * - initial resolve → the credential already resolved for this request.
- * - step (b) `!lastChance` → force-refresh the SAME session-sticky credential
- *   (a peer/broker may have rotated its token out from under our cached copy).
- * - step (c) `lastChance` → {@link refreshGatewayApiKeyAfterAuthError} switches
- *   to a sibling (usage-limit block vs credential invalidation by error class).
- *
- * `lastKey` tracks the most recent bearer so the switch step invalidates the
- * credential that actually failed.
- */
-function buildGatewayApiKeyResolver(
-	storage: AuthStorage,
-	model: Model<Api>,
-	sessionId: string,
-	initialKey: string,
-	requestSignal: AbortSignal,
-	format: string,
-	peer: string,
-): ApiKeyResolver {
-	let lastKey = initialKey;
-	return async ({ lastChance, error, signal }) => {
-		const sig = signal ?? requestSignal;
-		if (error === undefined) {
-			lastKey = initialKey;
-			return initialKey;
-		}
-		if (!lastChance) {
-			const refreshed = await storage.getApiKey(model.provider, sessionId, {
-				modelId: model.id,
-				signal: sig,
-				forceRefresh: true,
-			});
-			lastKey = refreshed ?? lastKey;
-			return refreshed;
-		}
-		const next = await refreshGatewayApiKeyAfterAuthError(
-			storage,
-			model,
-			sessionId,
-			model.provider,
-			lastKey,
-			error,
-			sig,
-			format,
-			peer,
-		);
-		lastKey = next ?? lastKey;
-		return next;
-	};
-}
-
 function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
-}
-
-function mirrorRequestAbort(req: Request): AbortController {
-	const controller = new AbortController();
-	if (req.signal.aborted) {
-		controller.abort(req.signal.reason);
-	} else {
-		req.signal.addEventListener("abort", () => controller.abort(req.signal.reason), { once: true });
-	}
-	return controller;
 }
 
 /** The SSE encoder's cancel hook: a client that closes the response aborts the upstream call once. */
@@ -455,28 +313,12 @@ async function handleFormatEndpoint(
 	// expected to resolve the credential and pass it as `options.apiKey`.
 	// For OAuth providers this returns the access token (refreshed via the
 	// broker override on AuthStorage when needed).
-	let apiKey: string | undefined;
-	try {
-		apiKey = await bootOpts.storage.getApiKey(model.provider, sessionId, {
-			modelId: model.id,
-			signal: controller.signal,
-		});
-	} catch (error) {
-		if (controller.signal.aborted) return clientClosedResponse(route);
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
-		return route.module.formatError(classified.status, classified.type, classified.message);
-	}
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return clientClosedResponse(route);
-	if (!apiKey) {
-		return route.module.formatError(
-			401,
-			"authentication_error",
-			`No credential available for provider ${model.provider}`,
-		);
-	}
+	if (typeof apiKey !== "string") return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
+	streamOpts.fetch = bootOpts.fetch;
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
 		bootOpts.storage,
 		model,
@@ -615,32 +457,16 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	const sessionId = parsed.options.sessionId ?? deriveSessionId(parsed.modelId, parsed.context);
 	parsed.options.sessionId ??= sessionId;
 
-	let apiKey: string | undefined;
-	try {
-		apiKey = await bootOpts.storage.getApiKey(model.provider, sessionId, {
-			modelId: model.id,
-			signal: controller.signal,
-		});
-	} catch (error) {
-		if (controller.signal.aborted) return aborted();
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
-		return piNative.formatError(classified.status, classified.type, classified.message);
-	}
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return aborted();
-	if (!apiKey) {
-		return piNative.formatError(
-			401,
-			"authentication_error",
-			`No credential available for provider ${model.provider}`,
-		);
-	}
+	if (typeof apiKey !== "string") return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
 	// only inject server-controlled fields. The codex sampling strip mirrors
 	// `buildStreamOptions` — Codex rejects every one with a 400 (#3117).
 	const streamOpts: SimpleStreamOptions = { ...parsed.options, apiKey, signal: controller.signal };
+	streamOpts.fetch = bootOpts.fetch;
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
 		bootOpts.storage,
 		model,
@@ -763,20 +589,46 @@ async function handleCredentialsCheck(storage: AuthStorage, signal: AbortSignal)
 	return json(200, { generatedAt: Date.now(), credentials });
 }
 
+/**
+ * Row shape for `GET /v1/models`. Beyond the OpenAI-standard `id`/`object`/
+ * `owned_by`, rows advertise the catalog metadata OpenAI-compatible clients
+ * (omp's own proxy discovery, Zed's openai_compatible provider, ...) read to
+ * size and capability-gate discovered models: `context_length`,
+ * `max_output_tokens`, `input_modalities`, and `supports_tools` (only emitted
+ * when the catalog explicitly reports `false`; absent means usable).
+ */
+interface ModelListRow {
+	id: string;
+	object: "model";
+	owned_by: string;
+	api: Api;
+	display_name: string;
+	context_length?: number;
+	max_output_tokens?: number;
+	input_modalities: ("text" | "image" | "video")[];
+	supports_tools?: boolean;
+}
+
 function handleModelsList(opts: AuthGatewayBootOptions): Response {
 	const list = opts.listModels ? Array.from(opts.listModels()) : [];
 	const seen = new Set<string>();
-	const data = [];
+	const data: ModelListRow[] = [];
 	for (const model of list) {
 		const id = `${model.provider}/${model.id}`;
 		if (seen.has(id)) continue;
 		seen.add(id);
-		data.push({
+		const row: ModelListRow = {
 			id,
-			object: "model" as const,
+			object: "model",
 			owned_by: model.provider,
 			api: model.api,
-		});
+			display_name: model.name,
+			input_modalities: model.input,
+		};
+		if (model.contextWindow != null) row.context_length = model.contextWindow;
+		if (model.maxTokens != null) row.max_output_tokens = model.maxTokens;
+		if (model.supportsTools === false) row.supports_tools = false;
+		data.push(row);
 	}
 	return json(200, { object: "list", data });
 }

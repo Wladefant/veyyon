@@ -260,6 +260,37 @@ describe("LiteLLM provider discovery", () => {
 		expect(buildModel(spec as ModelSpec<"openai-completions">).compat.wireModelIdMode).toBe("raw");
 	});
 
+	test("preserves generic effort support when rich metadata and references omit it", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			if (url === "http://primary:4000/model_group/info") {
+				return Response.json({
+					data: [
+						{
+							model_group: "private-reasoner",
+							supports_vision: false,
+							supports_reasoning: true,
+						},
+					],
+				});
+			}
+			return new Response("{}", { status: 404 });
+		}) as FetchImpl;
+
+		const specs = await fetchLiteLLMRichModels<"openai-completions">({
+			api: "openai-completions",
+			provider: "private-litellm",
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+
+		expect(specs).toHaveLength(1);
+		const spec = specs?.[0];
+		if (!spec) throw new Error("expected exactly one discovered model");
+		expect(spec.compat).not.toHaveProperty("supportsReasoningEffort");
+		expect(buildModel(spec).compat.supportsReasoningEffort).toBe(true);
+	});
+
 	test("uses rich LiteLLM metadata before /v1/models", async () => {
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 			const url = inputUrl(input);

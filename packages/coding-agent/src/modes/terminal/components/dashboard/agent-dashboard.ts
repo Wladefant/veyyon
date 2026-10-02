@@ -809,6 +809,29 @@ export interface AgentDashboardDeps {
 	proseOnlyThinking?: () => boolean;
 }
 
+/**
+ * Roster rows the card keeps room for even when fewer agents exist.
+ *
+ * This floor stops the first spawns from resizing the card under the cursor.
+ * The card is CENTRED, so a resize moves it at both edges at once: a roster
+ * that grew a row would shift the whole card up half a row while you read it.
+ *
+ * It was eight, on the reasoning that a resize while you read is worse than
+ * some empty space. That reasoning does not survive the common case. The card
+ * already grows past the floor as agents register, so it already resizes
+ * during a run; the floor only prevented SHRINKING below eight. It bought no
+ * stability where jitter actually happens and charged for it in the session
+ * shape most people have, one agent, which drew a single row and then six
+ * rows of bordered nothing.
+ *
+ * Four is the smallest floor that still buys the stability the floor is FOR:
+ * a one-agent card and a four-agent card are the same card, so the batch of
+ * agents a run usually spawns lands without moving the panel. Below four
+ * the card twitches on the second spawn; above four it pays in empty rows for
+ * agents that are not there.
+ */
+const MIN_ROSTER_ROWS = 4;
+
 export class AgentDashboard extends Container {
 	#activeView: ViewId = "live";
 
@@ -1059,22 +1082,8 @@ export class AgentDashboard extends Container {
 		return {
 			unread: this.#irc.unreadCount(agent.id),
 			task: observed?.description ?? observed?.progress?.task,
-			model: this.#deps.showModelBadge ? this.#modelBadge(agent, observed) : undefined,
+			model: this.#deps.showModelBadge ? modelBadge(agent, observed) : undefined,
 		};
-	}
-
-	/**
-	 * Live session state when the agent is attached, else the executor-reported
-	 * selector, else the model recorded on the ref at registration. Undefined
-	 * only when none is known.
-	 */
-	#modelBadge(agent: LiveAgent, observed: ObservableSession | undefined): string | undefined {
-		const resolved = observed?.progress?.resolvedModel ?? agent.model;
-		if (!resolved) return undefined;
-		const badge = modelBadgeFromSelector(resolved, theme);
-		// A dim arrow when this is not the model the agent started on, the same
-		// mark the Agents HUD block uses, so the two surfaces read alike.
-		return observed?.progress?.fellBackFrom ? `${theme.fg("dim", "↓")}${badge}` : badge;
 	}
 
 	/**
@@ -1209,7 +1218,7 @@ export class AgentDashboard extends Container {
 		// rows off the tail, which on a feed pinned to the newest message means the
 		// newest message.
 		if (this.#activeView !== "live") return Math.max(1, budget - 2);
-		return Math.min(budget, Math.max(AgentDashboard.#MIN_ROSTER_ROWS, this.#liveAgents.length));
+		return Math.min(budget, Math.max(MIN_ROSTER_ROWS, this.#liveAgents.length));
 	}
 
 	/**
@@ -1620,29 +1629,6 @@ export class AgentDashboard extends Container {
 	}
 
 	/**
-	 * Roster rows the card keeps room for even when fewer agents exist.
-	 *
-	 * This floor stops the first spawns from resizing the card under the cursor.
-	 * The card is CENTRED, so a resize moves it at both edges at once: a roster
-	 * that grew a row would shift the whole card up half a row while you read it.
-	 *
-	 * It was eight, on the reasoning that a resize while you read is worse than
-	 * some empty space. That reasoning does not survive the common case. The card
-	 * already grows past the floor as agents register, so it already resizes
-	 * during a run; the floor only prevented SHRINKING below eight. It bought no
-	 * stability where jitter actually happens and charged for it in the session
-	 * shape most people have, one agent, which drew a single row and then six
-	 * rows of bordered nothing.
-	 *
-	 * Four is the smallest floor that still buys the stability the floor is FOR:
-	 * a one-agent card and a four-agent card are the same card, so the batch of
-	 * agents a run usually spawns lands without moving the panel. Below four
-	 * the card twitches on the second spawn; above four it pays in empty rows for
-	 * agents that are not there.
-	 */
-	static readonly #MIN_ROSTER_ROWS = 4;
-
-	/**
 	 * Body rows to ask the card for, which is the content it has plus the roster
 	 * floor when the Live view has less than the floor to show.
 	 *
@@ -1654,7 +1640,7 @@ export class AgentDashboard extends Container {
 	 */
 	#preferredBodyRows(bodyRows: number): number {
 		if (this.#activeView !== "live") return bodyRows;
-		return Math.max(bodyRows, this.#paneRowOffset() + AgentDashboard.#MIN_ROSTER_ROWS);
+		return Math.max(bodyRows, this.#paneRowOffset() + MIN_ROSTER_ROWS);
 	}
 
 	/** Body rows the tab strip and any notice occupy before the pane starts. */
@@ -1839,4 +1825,18 @@ export class AgentDashboard extends Container {
 			this.#cycleCommsFilter();
 		}
 	}
+}
+
+/**
+ * Live session state when the agent is attached, else the executor-reported
+ * selector, else the model recorded on the ref at registration. Undefined
+ * only when none is known.
+ */
+function modelBadge(agent: LiveAgent, observed: ObservableSession | undefined): string | undefined {
+	const resolved = observed?.progress?.resolvedModel ?? agent.model;
+	if (!resolved) return undefined;
+	const badge = modelBadgeFromSelector(resolved, theme);
+	// A dim arrow when this is not the model the agent started on, the same
+	// mark the Agents HUD block uses, so the two surfaces read alike.
+	return observed?.progress?.fellBackFrom ? `${theme.fg("dim", "↓")}${badge}` : badge;
 }

@@ -13,6 +13,12 @@
  * Every retired layout, including the SHA-256 frame each installed copy wrote
  * under the current fingerprint, rebuilds instead of being served.
  *
+ * The stage stores each distinct compat record once and each model an index
+ * into that table; a copy per model was 64% of the file. A payload whose
+ * index names no table entry, or one in the per-model layout written under the
+ * previous version, rebuilds instead of restoring models with a wrong or
+ * missing compat.
+ *
  * What it does not catch: a new fingerprint input that remains stable across
  * these launches while changing in production (none known).
  */
@@ -39,7 +45,9 @@ interface SnapshotHeader {
 
 interface SnapshotStage {
 	createdAt: number;
-	cachedStandard: { models: unknown[]; authoritativeFreshProviders: string[] };
+	compats: Record<string, unknown>[];
+	cachedStandard: { models: Array<Record<string, unknown>>; authoritativeFreshProviders: string[] };
+	cachedDiscoveries: Array<Record<string, unknown>>;
 }
 
 describe("static model stage snapshot", () => {
@@ -60,6 +68,24 @@ describe("static model stage snapshot", () => {
 	};
 	const launch = (): void => {
 		new ModelRegistry(authStorage!, modelsPath, { snapshotIo: true });
+	};
+	/**
+	 * A cold launch over a model cache holding two Anthropic models with one compat record and one
+	 * OpenAI model with another, so the stage has models to table and a record two of them share.
+	 */
+	const seededColdLaunch = async (): Promise<ModelRegistry> => {
+		tempDir = path.join(os.tmpdir(), `pi-reg-snap-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+		modelsPath = path.join(tempDir, "models.yml");
+		snapshotPath = path.join(tempDir, "resolved-models.json");
+		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		const dbPath = path.join(tempDir, "models.db");
+		const claude = getBundledModels("anthropic")[0]!;
+		const gpt = getBundledModels("openai")[0]!;
+		const claudes = ["claude-shared-a", "claude-shared-b"].map(id => ({ ...claude, id }));
+		writeModelCache("anthropic", Date.now(), claudes, true, "", dbPath);
+		writeModelCache("openai", Date.now(), [{ ...gpt, id: "gpt-shared-c" }], true, "", dbPath);
+		return new ModelRegistry(authStorage, modelsPath, { snapshotIo: true });
 	};
 	const mtime = (): number => fs.statSync(snapshotPath).mtimeMs;
 	/**
@@ -124,6 +150,7 @@ describe("static model stage snapshot", () => {
 		expect(Object.keys(readSnapshot().stage).sort()).toEqual([
 			"cachedDiscoveries",
 			"cachedStandard",
+			"compats",
 			"createdAt",
 			"discoveryStates",
 		]);
@@ -161,6 +188,61 @@ describe("static model stage snapshot", () => {
 		const [a, b] = cached.map(model => warm.find("anthropic", model.id)!.compat);
 		expect(a).toBe(b!);
 		expect(Object.isFrozen(a)).toBe(true);
+	});
+
+	it("stores each compat record once and every model by its index", async () => {
+		const cold = await seededColdLaunch();
+		const { stage } = readSnapshot();
+		const staged = [...stage.cachedStandard.models, ...stage.cachedDiscoveries];
+		const indexOf = (id: string) => staged.find(model => model.id === id)?.compat;
+
+		expect(staged.map(model => model.id).sort()).toEqual(["claude-shared-a", "claude-shared-b", "gpt-shared-c"]);
+		expect(indexOf("claude-shared-a")).toBe(indexOf("claude-shared-b"));
+		expect(indexOf("gpt-shared-c")).not.toBe(indexOf("claude-shared-a"));
+		const texts = stage.compats.map(record => JSON.stringify(record));
+		expect(new Set(texts).size).toBe(texts.length);
+		for (const model of staged) {
+			const live = cold.find(model.provider as string, model.id as string);
+			expect(stage.compats[model.compat as number]).toEqual(JSON.parse(JSON.stringify(live!.compat)));
+		}
+	});
+
+	const unresolvableIndexes: Array<[string, (stage: SnapshotStage) => unknown]> = [
+		["an index past the table", stage => stage.compats.length],
+		["a negative index", () => -1],
+		["a fractional index", () => 0.5],
+		["an index written as a string", () => "0"],
+		["an inline compat record from the per-model layout", stage => stage.compats[0]],
+	];
+	it.each(unresolvableIndexes)("a stage holding %s rebuilds rather than restoring", async (_label, compatOf) => {
+		await seededColdLaunch();
+		const { header, stage } = readSnapshot();
+		const victim = stage.cachedStandard.models[0]!;
+		const expected = victim.compat;
+		victim.compat = compatOf(stage);
+		writeJsonSnapshotSync(snapshotPath, header.fingerprint, stage);
+		const before = mtime();
+
+		launch();
+
+		expect(mtime()).not.toBe(before);
+		expect(readSnapshot().stage.cachedStandard.models[0]!.compat).toBe(expected);
+	});
+
+	const damagedTables: Array<[string, (stage: SnapshotStage) => unknown]> = [
+		["no compat table", stage => ({ ...stage, compats: undefined })],
+		["a table entry that is not a record", stage => ({ ...stage, compats: [...stage.compats, 7] })],
+	];
+	it.each(damagedTables)("a stage with %s rebuilds rather than restoring", async (_label, damage) => {
+		await seededColdLaunch();
+		const { header, stage } = readSnapshot();
+		writeJsonSnapshotSync(snapshotPath, header.fingerprint, damage(stage));
+		const before = mtime();
+
+		launch();
+
+		expect(mtime()).not.toBe(before);
+		expect(readSnapshot().stage.compats).toEqual(stage.compats);
 	});
 
 	it("sqlite sidecar mtime churn does not invalidate the snapshot", async () => {
@@ -311,7 +393,8 @@ describe("static model stage snapshot", () => {
 			const payload = JSON.stringify(stage);
 			const digest = createHash("sha256").update(payload).digest("hex");
 			if (variant === "obsolete fingerprint version") {
-				writeJsonSnapshotSync(snapshotPath, header.fingerprint.replace(/^[^:]+/, "8"), stage);
+				const retired = header.fingerprint.replace(/^\d+/, version => String(Number(version) - 1));
+				writeJsonSnapshotSync(snapshotPath, retired, stage);
 			} else {
 				const retiredHeader =
 					variant === "retired SHA-256 frame"

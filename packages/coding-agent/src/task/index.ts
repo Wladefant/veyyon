@@ -1131,14 +1131,19 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}): string {
 		const { manager, toolCallId, spawnParams, agentId, progress, ircEnabled, buildDetails, onUpdate, onSettled } =
 			options;
-		const buildFollowUpHint = (aborted: boolean): string => {
+		// `isolated` is whether the run actually used an isolation workspace: the
+		// result's fact where there is one, the request only when no result exists.
+		const buildFollowUpHint = (aborted: boolean, isolated: boolean): string => {
 			if (aborted) {
 				const status = AgentRegistry.global().get(agentId)?.status;
-				if (status === "idle" || status === "parked") {
+				if (!isolated && (status === "idle" || status === "parked")) {
 					const followUp = ircEnabled ? "message it via `irc` to resume; " : "";
 					return `\n\n${agentId} was stopped but is still resumable — ${followUp}transcript at history://${agentId}`;
 				}
 				return `\n\n${agentId} was aborted — transcript at history://${agentId}`;
+			}
+			if (isolated) {
+				return `\n\n${agentId} ran isolated and cannot be resumed or messaged — transcript at history://${agentId}`;
 			}
 			const followUp = ircEnabled ? "message it via `irc` to follow up; " : "";
 			return `\n\n${agentId} is now idle — ${followUp}transcript at history://${agentId}`;
@@ -1219,7 +1224,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
 					await reportProgress(statusText);
-					const deliveryText = `${finalText}${buildFollowUpHint(singleResult?.aborted === true)}`;
+					const deliveryText = `${finalText}${buildFollowUpHint(singleResult?.aborted === true, singleResult?.isolated === true)}`;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.
 						throw new TaskJobError(deliveryText);
@@ -1235,7 +1240,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const statusText = `Background task ${agentId} failed.`;
 					await reportProgress(statusText);
 					const message = errorMessage(error);
-					const hint = AgentRegistry.global().get(agentId) ? buildFollowUpHint(false) : "";
+					const hint = AgentRegistry.global().get(agentId)
+						? buildFollowUpHint(false, spawnParams.isolated === true)
+						: "";
 					throw new TaskJobError(`${message}${hint}`);
 				} finally {
 					releasePermit();
@@ -1894,7 +1901,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			this.session.recordAgentSpawn?.(spawnRecord);
 			await this.session.onSubagentComplete?.(spawnRecord);
 
-			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
+			return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 		} catch (err) {
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
@@ -1902,72 +1909,73 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			};
 		}
 	}
-
-	/** Build the tool result (summary text + details) for a settled run. */
-	#buildResultPayload(
-		result: SingleResult,
-		projectAgentsDir: string | null,
-		totalDurationMs: number,
-		mergeSummary: string,
-	): AgentToolResult<TaskToolDetails> {
-		const outcome = classifyAgentOutcome(result);
-		const status = outcome.label;
-		const output = formatResultOutputFallback(result);
-		// `meta` counts the block the reader sees. When that block is the child's
-		// output, the artifact's numbers apply (the preview may be a slice of the
-		// `agent://` file); when the output was empty and stderr or a placeholder
-		// stands in for it, the artifact's `size="0B"` would describe text that is
-		// not shown.
-		const emittedMeta =
-			result.outputMeta && result.output.trim().length > 0
-				? result.outputMeta
-				: { lineCount: output.split("\n").length, charCount: output.length };
-		const outputCharCount = emittedMeta.charCount;
-		const fullOutputThreshold = 5000;
-		let preview = output;
-		let truncated = false;
-		if (outputCharCount > fullOutputThreshold) {
-			const slice = output.slice(0, fullOutputThreshold);
-			const lastNewline = slice.lastIndexOf("\n");
-			preview = lastNewline >= 0 ? slice.slice(0, lastNewline) : slice;
-			truncated = true;
-		}
-		// A stopped-but-adopted agent (soft-budget stop) stays messageable; tell
-		// the parent so it can resume via irc instead of redoing the work.
-		const refStatus = AgentRegistry.global().get(result.id)?.status;
-		const resumable = result.aborted && (refStatus === "idle" || refStatus === "parked");
-		const summary = prompt.render(toolsPrompts["tools/task-summary"].text, {
-			agentName: result.agent,
-			id: result.id,
-			status,
-			duration: formatDuration(totalDurationMs),
-			abortReason: result.aborted ? result.abortReason : undefined,
-			resumable,
-			preview,
-			truncated,
-			meta: result.outputMeta
-				? {
-						lineCount: emittedMeta.lineCount,
-						charSize: formatBytes(emittedMeta.charCount),
-					}
-				: undefined,
-			mergeSummary,
-		});
-
-		return {
-			content: [{ type: "text", text: summary }],
-			// Without this the parent model receives a structurally successful
-			// tool result whose text merely says "failed", and `agent-loop` has
-			// nothing to surface as an error on the wire.
-			isError: outcome.isError,
-			details: {
-				projectAgentsDir,
-				results: [result],
-				totalDurationMs,
-				usage: result.usage,
-				outputPaths: result.outputPath ? [result.outputPath] : undefined,
-			},
-		};
-	}
 }
+
+/** Build the tool result (summary text + details) for a settled run. */
+function buildResultPayload(
+	result: SingleResult,
+	projectAgentsDir: string | null,
+	totalDurationMs: number,
+	mergeSummary: string,
+): AgentToolResult<TaskToolDetails> {
+	const outcome = classifyAgentOutcome(result);
+	const status = outcome.label;
+	const output = formatResultOutputFallback(result);
+	// `meta` counts the block the reader sees. When that block is the child's
+	// output, the artifact's numbers apply (the preview may be a slice of the
+	// `agent://` file); when the output was empty and stderr or a placeholder
+	// stands in for it, the artifact's `size="0B"` would describe text that is
+	// not shown.
+	const emittedMeta =
+		result.outputMeta && result.output.trim().length > 0
+			? result.outputMeta
+			: { lineCount: output.split("\n").length, charCount: output.length };
+	const outputCharCount = emittedMeta.charCount;
+	const fullOutputThreshold = 5000;
+	let preview = output;
+	let truncated = false;
+	if (outputCharCount > fullOutputThreshold) {
+		const slice = output.slice(0, fullOutputThreshold);
+		const lastNewline = slice.lastIndexOf("\n");
+		preview = lastNewline >= 0 ? slice.slice(0, lastNewline) : slice;
+		truncated = true;
+	}
+	// A stopped-but-adopted agent stays messageable; tell parent to resume via irc.
+	// Isolated runs are parked without reviver, so they must not read as resumable.
+	const refStatus = AgentRegistry.global().get(result.id)?.status;
+	const resumable = result.aborted && !result.isolated && (refStatus === "idle" || refStatus === "parked");
+	const summary = prompt.render(toolsPrompts["tools/task-summary"].text, {
+		agentName: result.agent,
+		id: result.id,
+		status,
+		duration: formatDuration(totalDurationMs),
+		abortReason: result.aborted ? result.abortReason : undefined,
+		resumable,
+		preview,
+		truncated,
+		meta: result.outputMeta
+			? {
+					lineCount: emittedMeta.lineCount,
+					charSize: formatBytes(emittedMeta.charCount),
+				}
+			: undefined,
+		mergeSummary,
+	});
+
+	return {
+		content: [{ type: "text", text: summary }],
+		// Without this the parent model receives a structurally successful
+		// tool result whose text merely says "failed", and `agent-loop` has
+		// nothing to surface as an error on the wire.
+		isError: outcome.isError,
+		details: {
+			projectAgentsDir,
+			results: [result],
+			totalDurationMs,
+			usage: result.usage,
+			outputPaths: result.outputPath ? [result.outputPath] : undefined,
+		},
+	};
+}
+
 export * from "./topic-replenishment";

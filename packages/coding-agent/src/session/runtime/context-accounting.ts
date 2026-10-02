@@ -9,18 +9,15 @@
  *   the latest compaction and in-place rewrite, estimates only the tail after it, and floors the
  *   total by the local estimate of the stored conversation, so the gauge and every compaction
  *   decision read one number.
+ * - **The resting usage** ({@link restingUsage}) reads the same total with the non-message size the
+ *   newest anchor recorded standing in for a measurement, so a reader at rest builds no tool schema.
  * - **The prompt snapshot** ({@link beginPrompt}, {@link endPrompt}) accounts for a submitted prompt
  *   until a response of the same run reports usage.
  * - **A history rewrite** ({@link markHistoryRewritten}, {@link rebaseAfterHistoryRewrite}) retires
  *   every usage anchor that measured the old history and re-measures the prompt snapshot.
  */
 import type { AgentMessage } from "@veyyon/agent-core";
-import {
-	calculatePromptTokens,
-	compactionContextTokens,
-	estimateTokens,
-	type SessionMessageEntry,
-} from "@veyyon/agent-core/compaction";
+import { calculatePromptTokens, compactionContextTokens, estimateTokens } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { type InstrumentationLevel, sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
@@ -75,6 +72,10 @@ function usableAnchor(message: AgentMessage): message is AssistantMessage {
 	);
 }
 
+function toUsage(tokens: number, contextWindow: number): ContextUsage {
+	return { tokens, contextWindow, percent: contextWindow > 0 ? (tokens / contextWindow) * 100 : 0 };
+}
+
 export class ContextAccounting {
 	readonly #host: ContextAccountingHost;
 	#pending: PendingContextSnapshot | undefined;
@@ -110,49 +111,99 @@ export class ContextAccounting {
 	 */
 	breakdown(options?: { contextWindow?: number; pendingMessages?: AgentMessage[] }): ContextUsageBreakdown {
 		const host = this.#host;
-		const rawContextWindow = options?.contextWindow ?? host.model()?.contextWindow ?? 0;
-		const contextWindow = Number.isFinite(rawContextWindow) && rawContextWindow > 0 ? rawContextWindow : 0;
-
 		const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = host.nonMessageBreakdown();
 		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;
-		const currentNonMessageTokens = host.nonMessageTokens();
-
 		const branchEntries = host.sessionStore.getBranch();
-		const latestCompaction = getLatestCompactionEntry(branchEntries);
-		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
-
-		let usedTokens = 0;
-		let anchored = false;
-
 		const pendingMessages = options?.pendingMessages ?? [];
 		const pendingMessagesTokens = sumTokens(pendingMessages);
-		const pending = this.#pending;
+		const { anchored, usedTokens } = this.#usedTokens(
+			host.nonMessageTokens(),
+			branchEntries,
+			this.#anchor(branchEntries),
+			pendingMessages,
+			pendingMessagesTokens,
+		);
+		return {
+			contextWindow: this.#contextWindow(options?.contextWindow),
+			anchored,
+			usedTokens,
+			systemPromptTokens,
+			systemToolsTokens: toolsTokens,
+			systemContextTokens,
+			skillsTokens,
+			messagesTokens: Math.max(0, usedTokens - categoryNonMessageTokens),
+			pendingMessagesTokens,
+		};
+	}
 
-		// The latest real assistant-usage anchor after the last compaction is ground truth for
-		// everything up to it; only the tail after it is estimated.
-		//
-		// A pass that rewrote history in place (a prune, the dedup, a shake, an image drop) moves that
-		// floor forward too. The provider computed its prompt tokens over bytes the rewrite has since
-		// removed, so an anchor at or before the rewrite reads high by exactly what was freed. Only a
-		// response received after the rewrite describes the current shape.
+	usage(options?: { contextWindow?: number }): ContextUsage {
+		const breakdown = this.breakdown(options);
+		return toUsage(breakdown.usedTokens, breakdown.contextWindow);
+	}
+
+	/**
+	 * Context usage read without measuring the prompt's non-message half: the size the newest usage
+	 * anchor recorded in its context snapshot stands in for the current one, so no tool schema is
+	 * built. The figure equals {@link usage} while the tools, skills and system prompt match the ones
+	 * that anchor was sent with. Undefined while a prompt is in flight and when no anchor recorded
+	 * its non-message size.
+	 */
+	restingUsage(): ContextUsage | undefined {
+		if (this.#pending) return undefined;
+		const branchEntries = this.#host.sessionStore.getBranch();
+		const anchor = this.#anchor(branchEntries);
+		const recorded = anchor?.contextSnapshot?.nonMessageTokens;
+		if (recorded === undefined) return undefined;
+		const { usedTokens } = this.#usedTokens(recorded, branchEntries, anchor, [], 0);
+		return toUsage(usedTokens, this.#contextWindow(undefined));
+	}
+
+	#contextWindow(requested: number | undefined): number {
+		const raw = requested ?? this.#host.model()?.contextWindow ?? 0;
+		return Number.isFinite(raw) && raw > 0 ? raw : 0;
+	}
+
+	/**
+	 * The newest assistant response whose provider usage still describes the prompt: after the latest
+	 * compaction and after the last in-place rewrite. A pass that rewrote history in place (a prune,
+	 * the dedup, a shake, an image drop) moves that floor forward too. The provider computed its
+	 * prompt tokens over bytes the rewrite has since removed, so an anchor at or before the rewrite
+	 * reads high by exactly what was freed. Only a response received after the rewrite describes the
+	 * current shape.
+	 */
+	#anchor(branchEntries: SessionEntry[]): AssistantMessage | undefined {
+		const latestCompaction = getLatestCompactionEntry(branchEntries);
+		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
 		const rewriteBoundaryId = this.#rewriteBoundaryEntryId;
 		const rewriteIndex = rewriteBoundaryId ? branchEntries.findIndex(entry => entry.id === rewriteBoundaryId) : -1;
 		const anchorFloorIndex = Math.max(compactionIndex, rewriteIndex);
-		let anchorEntry: SessionMessageEntry | undefined;
 		for (let i = branchEntries.length - 1; i > anchorFloorIndex; i--) {
 			const entry = branchEntries[i];
-			if (entry.type === "message" && usableAnchor(entry.message)) {
-				anchorEntry = entry;
-				break;
-			}
+			if (entry.type === "message" && usableAnchor(entry.message)) return entry.message;
 		}
+		return undefined;
+	}
+
+	/**
+	 * Tokens the next request carries when the prompt spends `currentNonMessageTokens` outside the
+	 * message list, and whether a provider figure or the prompt snapshot contributed. The anchor is
+	 * ground truth for everything up to it; only the tail after it is estimated.
+	 */
+	#usedTokens(
+		currentNonMessageTokens: number,
+		branchEntries: readonly SessionEntry[],
+		anchor: AssistantMessage | undefined,
+		pendingMessages: readonly AgentMessage[],
+		pendingMessagesTokens: number,
+	): { anchored: boolean; usedTokens: number } {
+		const host = this.#host;
+		let usedTokens = 0;
+		let anchored = false;
+		const pending = this.#pending;
 
 		const messages = host.messages();
 		let anchorIndex = -1;
-		let anchorAssistant: AssistantMessage | undefined;
-		if (anchorEntry) {
-			const anchor = anchorEntry.message as AssistantMessage;
-			anchorAssistant = anchor;
+		if (anchor) {
 			anchorIndex = messages.indexOf(anchor);
 			if (anchorIndex === -1) {
 				anchorIndex = messages.findIndex(msg => msg.role === "assistant" && msg.timestamp === anchor.timestamp);
@@ -164,13 +215,11 @@ export class ContextAccounting {
 		// first response is still pending, or the newest real anchor predates this turn, the pending
 		// snapshot is the only thing accounting for the submitted prompt, so it wins. This keeps a long
 		// tool turn from stacking an estimate of the entire tail on top of a stale turn-start prompt.
-		const useAnchor =
-			anchorAssistant !== undefined && anchorIndex !== -1 && (!pending || anchorIndex >= pending.cutoffCount);
+		const useAnchor = anchor !== undefined && anchorIndex !== -1 && (!pending || anchorIndex >= pending.cutoffCount);
 
-		if (useAnchor && anchorAssistant) {
-			const promptTokens =
-				anchorAssistant.contextSnapshot?.promptTokens ?? calculatePromptTokens(anchorAssistant.usage);
-			const nonMessageTokens = anchorAssistant.contextSnapshot?.nonMessageTokens ?? currentNonMessageTokens;
+		if (useAnchor && anchor) {
+			const promptTokens = anchor.contextSnapshot?.promptTokens ?? calculatePromptTokens(anchor.usage);
+			const nonMessageTokens = anchor.contextSnapshot?.nonMessageTokens ?? currentNonMessageTokens;
 			anchored = true;
 			usedTokens =
 				promptTokens +
@@ -219,27 +268,9 @@ export class ContextAccounting {
 		// the session holds, because a provider reporting a prompt smaller than the stored conversation
 		// must not suppress compaction. The gauge applies the same floor, so display and decision read
 		// one total.
-		usedTokens = compactionContextTokens(usedTokens, this.estimateStoredTokens(pendingMessages));
-
 		return {
-			contextWindow,
 			anchored,
-			usedTokens,
-			systemPromptTokens,
-			systemToolsTokens: toolsTokens,
-			systemContextTokens,
-			skillsTokens,
-			messagesTokens: Math.max(0, usedTokens - categoryNonMessageTokens),
-			pendingMessagesTokens,
-		};
-	}
-
-	usage(options?: { contextWindow?: number }): ContextUsage {
-		const breakdown = this.breakdown(options);
-		return {
-			tokens: breakdown.usedTokens,
-			contextWindow: breakdown.contextWindow,
-			percent: breakdown.contextWindow > 0 ? (breakdown.usedTokens / breakdown.contextWindow) * 100 : 0,
+			usedTokens: compactionContextTokens(usedTokens, this.#storedTokens(currentNonMessageTokens, pendingMessages)),
 		};
 	}
 
@@ -252,9 +283,13 @@ export class ContextAccounting {
 	 * provider bills, and the provider usage already accounts for it.
 	 */
 	estimateStoredTokens(pendingMessages: readonly AgentMessage[] = []): number {
+		return this.#storedTokens(this.#host.nonMessageTokens(), pendingMessages);
+	}
+
+	#storedTokens(nonMessageTokens: number, pendingMessages: readonly AgentMessage[]): number {
 		let pendingTokens = 0;
 		for (const message of pendingMessages) pendingTokens += estimateTokens(message, STORED_ESTIMATE);
-		return this.#host.nonMessageTokens() + this.#host.storedMessagesTokens() + pendingTokens;
+		return nonMessageTokens + this.#host.storedMessagesTokens() + pendingTokens;
 	}
 
 	/** Account for a submitted prompt until a response of this run reports usage. */

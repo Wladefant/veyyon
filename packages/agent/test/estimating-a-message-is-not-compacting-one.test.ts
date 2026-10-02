@@ -113,9 +113,17 @@ const PRUNING_CEILING = 195;
  * `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`. `catalog/build.ts`, already on
  * both reaches, returns each model's resolved compat record through it, so the growth is that one file
  * and no subtree.
+ *
+ * RE-MEASURED 2026-09-30: engine 322, remote summarizer 224. The two new modules are
+ * `utils/prompt-precompiled.ts` and `utils/prompt-handlebars.ts`. `utils/prompt.ts`, already on both
+ * reaches, reads the binary's build-time precompiled templates from the first and loads the Handlebars
+ * compiler through the second only for a template with no precompiled form. The first imports one type
+ * from `./prompt-variables` and the second only `handlebars/runtime`, so the growth is those two files
+ * and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 326;
-const REMOTE_SUMMARIZER_CEILING = 224;
+// RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
+const COMPACTION_ENGINE_CEILING = 327;
+const REMOTE_SUMMARIZER_CEILING = 225;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {

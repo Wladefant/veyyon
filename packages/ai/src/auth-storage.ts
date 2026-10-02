@@ -123,6 +123,7 @@ import type {
 } from "./auth-storage/usage-ranking";
 import {
 	computeWindowRequiredDrain,
+	isAllowanceSpent,
 	leadWithChosenAccount,
 	normalizeUsageFraction,
 	orderUsageRankedCandidates,
@@ -172,7 +173,6 @@ import type { Provider } from "./types";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
-	UsageCostHistoryEntry,
 	UsageCredential,
 	UsageFetchContext,
 	UsageFetchParams,
@@ -258,6 +258,8 @@ function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStr
 	return resolveRegisteredRankingStrategy(provider);
 }
 
+const defaultBackoffMs = 60_000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthStorage Class
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,7 +270,7 @@ function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStr
  * usage limit tracking, and OAuth token refresh.
  */
 export class AuthStorage {
-	static readonly #defaultBackoffMs = 60_000; // Default backoff when no reset time available
+	// Default backoff when no reset time available
 
 	/** Provider -> credentials cache, populated from store on reload(). */
 	#data: Map<string, StoredCredential[]> = new Map();
@@ -2207,7 +2209,6 @@ export class AuthStorage {
 			const report = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
 				logger: this.#usageLogger,
-				listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 			});
 			// Attribute the report to the credential's organization. The orgId and
 			// orgName fallbacks apply independently: Claude's usage endpoint stamps
@@ -2229,6 +2230,13 @@ export class AuthStorage {
 			}
 			return report;
 		} catch (error) {
+			if (error instanceof AIError.ProviderHttpError && (error.status === 401 || error.status === 403)) {
+				// Definitive auth failure (revoked key, lapsed subscription): purge the
+				// last-good report so #fetchUsageCached's failure branch cannot keep
+				// rendering and ranking from stale quota the way it does for transient
+				// failures.
+				this.#usageCache.set(buildUsageReportCacheKey(request), { value: null, expiresAt: 0 });
+			}
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
 				error: String(error),
@@ -2327,64 +2335,6 @@ export class AuthStorage {
 		return this.#store.listUsageHistory?.(query) ?? [];
 	}
 
-	/** Record one observed provider request cost for later local usage aggregation. */
-	recordUsageCost(
-		provider: Provider,
-		costUsd: number,
-		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
-	): boolean {
-		if (!Number.isFinite(costUsd) || costUsd <= 0) return false;
-		const record = this.#store.recordUsageCosts;
-		if (!record) return false;
-		const credential = this.#resolveObservedUsageCredential(provider, options?.sessionId);
-		if (!credential) return false;
-		const entry: UsageCostHistoryEntry = {
-			recordedAt: options?.recordedAt ?? Date.now(),
-			provider,
-			accountKey: buildUsageCacheIdentity(credential),
-			costUsd,
-		};
-		try {
-			record.call(this.#store, [entry]);
-			const cacheKey = buildUsageReportCacheKey({
-				provider,
-				credential,
-				baseUrl: options?.baseUrl,
-			});
-			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
-			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: Date.now() - 1 });
-			return true;
-		} catch (error) {
-			this.#usageLogger?.debug("usage cost record failed", {
-				provider,
-				error: String(error),
-			});
-			return false;
-		}
-	}
-
-	#resolveObservedUsageCredential(provider: Provider, sessionId?: string): UsageCredential | undefined {
-		const entries = this.#getStoredCredentials(provider);
-		const sessionCredential = this.#routing.getSessionCredential(provider, sessionId);
-		if (sessionCredential) {
-			const credential = entries[sessionCredential.index]?.credential;
-			if (credential) {
-				return credential.type === "api_key"
-					? { type: "api_key", apiKey: credential.key }
-					: buildUsageCredential(credential);
-			}
-		}
-		if (entries.length === 1) {
-			const credential = entries[0]!.credential;
-			return credential.type === "api_key"
-				? { type: "api_key", apiKey: credential.key }
-				: buildUsageCredential(credential);
-		}
-		const envKey = getEnvApiKey(provider);
-		if (envKey) return { type: "api_key", apiKey: envKey };
-		return undefined;
-	}
-
 	ingestUsageHeaders(
 		provider: Provider,
 		headers: Record<string, string>,
@@ -2476,7 +2426,8 @@ export class AuthStorage {
 			const provider = providerId as Provider;
 			const providerImpl = resolver(provider);
 			if (!providerImpl) continue;
-			const baseUrl = options?.baseUrlResolver?.(provider);
+			// The base URL resolver builds the provider's model list, so it is read only once a request is
+			// built, never for a registered usage provider that holds no credential.
 			let entries = this.#getStoredCredentials(providerId);
 			if (entries.length > 0) {
 				const dedupedEntries = this.#pruneDuplicateStoredCredentials(providerId, entries);
@@ -2491,12 +2442,17 @@ export class AuthStorage {
 				const envKey = getEnvApiKey(providerId);
 				const apiKey = runtimeKey ?? envKey;
 				if (!apiKey) continue;
-				const request = buildUsageRequest(provider, { type: "api_key", apiKey }, baseUrl);
+				const request = buildUsageRequest(
+					provider,
+					{ type: "api_key", apiKey },
+					options?.baseUrlResolver?.(provider),
+				);
 				if (providerImpl.supports && !providerImpl.supports(request)) continue;
 				requests.push(request);
 				continue;
 			}
 
+			const baseUrl = options?.baseUrlResolver?.(provider);
 			for (const entry of entries) {
 				const credential = entry.credential;
 				const request =
@@ -2726,7 +2682,6 @@ export class AuthStorage {
 		const ctx: UsageFetchContext = {
 			fetch: this.#usageFetch,
 			logger: this.#usageLogger,
-			listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 		};
 
 		const results: CredentialHealthResult[] = [];
@@ -2967,7 +2922,7 @@ export class AuthStorage {
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
 		const now = Date.now();
-		let blockedUntil = now + (options?.retryAfterMs ?? AuthStorage.#defaultBackoffMs);
+		let blockedUntil = now + (options?.retryAfterMs ?? defaultBackoffMs);
 
 		if (credentialType === "oauth" && target.credential.type === "oauth" && strategy) {
 			const report = await this.#getUsageReport(provider, target.credential, options);
@@ -3070,9 +3025,10 @@ export class AuthStorage {
 			let { blockedUntil } = result;
 			let blocked = blockedUntil !== undefined;
 			const scopedLimits = usage ? getScopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
-			if (!blocked && scopedLimits && isUsageLimitReached(scopedLimits)) {
+			const isCodexAllowedOverage = args.provider === "openai-codex" && usage?.metadata?.allowed === true;
+			if (!blocked && scopedLimits && !isCodexAllowedOverage && isUsageLimitReached(scopedLimits)) {
 				const resetAtMs = getUsageResetAtMs(scopedLimits, nowMs);
-				blockedUntil = resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs;
+				blockedUntil = resetAtMs ?? Date.now() + defaultBackoffMs;
 				this.#blocks.markCredentialBlocked(
 					args.provider,
 					args.providerKey,
@@ -3086,13 +3042,18 @@ export class AuthStorage {
 			const primary = windows?.primary;
 			const secondary = windows?.secondary;
 			const secondaryTarget = secondary ?? primary;
+			const allowanceSpent = isAllowanceSpent(strategy, usage, args.rankingContext, nowMs);
+			const usageMeasured = primary !== undefined || secondary !== undefined;
+			const primaryUncapped = primary === undefined && secondary !== undefined;
 			ranked.push({
 				selection,
 				usage,
 				usageChecked,
 				blocked,
 				blockedUntil,
-				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
+				allowanceSpent,
+				usageMeasured,
+				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped) ?? false,
 				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
 				secondaryUsed: normalizeUsageFraction(secondaryTarget),
 				secondaryRequiredDrain: computeWindowRequiredDrain(
@@ -3118,6 +3079,7 @@ export class AuthStorage {
 		strategy: CredentialRankingStrategy;
 		rankingContext: CredentialRankingContext;
 		blockScope?: string;
+		sessionPreferredUsage?: { index: number; usage: UsageReport };
 	}): Promise<OAuthCandidate[]> {
 		const nowMs = Date.now();
 		// Pre-fetch usage reports in parallel for non-blocked credentials.
@@ -3151,6 +3113,10 @@ export class AuthStorage {
 					);
 				}
 				if (blockedUntil !== undefined) return { selection, usage, usageChecked, blockedUntil };
+				if (!usageChecked && args.sessionPreferredUsage && selection.index === args.sessionPreferredUsage.index) {
+					usage = args.sessionPreferredUsage.usage;
+					usageChecked = true;
+				}
 				if (!usageChecked) {
 					usage = await this.#getUsageReport(args.provider, selection.credential, {
 						...args.options,
@@ -3243,13 +3209,22 @@ export class AuthStorage {
 		// a record of what served last rather than anything anybody asked for.
 		const chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
 		const movementAllowed = this.#loadBalancingEnabled();
-		// Ranking is a headroom contest among accounts, i.e. a move. With movement off it runs only
-		// for a plan requirement, where the usage report is what says whether an account can serve
-		// the model at all; a session that already has a working account never re-ranks either way.
-		const shouldRank =
-			checkUsage && (movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement);
+		const sessionPinIsExplicit = chosenIndex !== undefined;
+		const rankDespitePin = movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement;
+		const sessionPreferredUsage =
+			checkUsage && movementAllowed && !rankDespitePin && !sessionPinIsExplicit && sessionPreferredCredential
+				? await this.#getUsageReport(provider, sessionPreferredCredential, {
+						...options,
+						timeoutMs: this.#usageRequestTimeoutMs,
+					})
+				: undefined;
+		const sessionPreferredAllowanceSpent =
+			sessionPreferredUsage !== undefined &&
+			sessionPreferredUsage !== null &&
+			isAllowanceSpent(strategy, sessionPreferredUsage, rankingContext, Date.now());
+		const shouldRank = checkUsage && (rankDespitePin || (movementAllowed && sessionPreferredAllowanceSpent));
 		const rankingOrder = shouldRank && sessionId ? credentials.map((_credential, index) => index) : order;
-		const candidates = shouldRank
+		const candidates: OAuthCandidate[] = shouldRank
 			? await this.#rankOAuthSelections({
 					providerKey,
 					provider,
@@ -3260,6 +3235,10 @@ export class AuthStorage {
 					strategy: strategy!,
 					rankingContext,
 					blockScope,
+					sessionPreferredUsage:
+						sessionPreferredIndex !== undefined && sessionPreferredUsage
+							? { index: sessionPreferredIndex, usage: sessionPreferredUsage }
+							: undefined,
 				})
 			: // The unranked path (no ranking strategy, or a session that already
 				// has a working preferred account) still has to answer "which
@@ -3297,7 +3276,21 @@ export class AuthStorage {
 					const id = this.#getStoredCredentials(provider)[entry.index]?.id;
 					return id === undefined || !this.#authDeadCredentials.has(id);
 				})?.index);
-		if (leadIndex !== undefined) {
+		const preferredCandidate = candidates.find(candidate => candidate.selection.index === sessionPreferredIndex);
+		const pinWouldBeEvicted =
+			movementAllowed &&
+			!sessionPinIsExplicit &&
+			preferredCandidate !== undefined &&
+			preferredCandidate.allowanceSpent === true &&
+			candidates.some(
+				candidate =>
+					candidate.selection.index !== sessionPreferredIndex &&
+					candidate.usage !== null &&
+					candidate.allowanceSpent === false &&
+					!this.#blocks.isCredentialBlocked(provider, providerKey, candidate.selection.index, blockScope) &&
+					(!enforcePlanRequirement || getOpenAICodexPlanEligibility(candidate.usage, planRequirement) === true),
+			);
+		if (leadIndex !== undefined && (!pinWouldBeEvicted || leadIndex !== sessionPreferredIndex)) {
 			const leadCandidate = candidates.findIndex(
 				candidate =>
 					candidate.selection.index === leadIndex &&
@@ -3548,13 +3541,14 @@ export class AuthStorage {
 			if (applyPlanFilter && getOpenAICodexPlanEligibility(usage, planRequirement) !== true) return true;
 			if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {
 				const scopedLimits = getScopedUsageLimits(strategy, usage, rankingContext);
-				if (isUsageLimitReached(scopedLimits)) {
+				const isCodexAllowedOverage = provider === "openai-codex" && usage?.metadata?.allowed === true;
+				if (!isCodexAllowedOverage && isUsageLimitReached(scopedLimits)) {
 					const resetAtMs = getUsageResetAtMs(scopedLimits, Date.now());
 					this.#blocks.markCredentialBlocked(
 						provider,
 						providerKey,
 						selection.index,
-						resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs,
+						resetAtMs ?? Date.now() + defaultBackoffMs,
 						blockScope,
 					);
 					return true;
@@ -4368,7 +4362,7 @@ export class AuthStorage {
 			provider,
 			getProviderTypeKey(provider, matched.type),
 			matched.index,
-			Date.now() + AuthStorage.#defaultBackoffMs,
+			Date.now() + defaultBackoffMs,
 		);
 		const failed = matched;
 		const siblingRemains = stored.some(
@@ -4466,12 +4460,7 @@ export class AuthStorage {
 		// account failed authentication, and an explicit choice must stop pinning traffic to it —
 		// otherwise a revoked grant would be retried until the turn died instead of failing over.
 		if (target) this.#authDeadCredentials.add(target.id);
-		this.#blocks.markCredentialBlocked(
-			provider,
-			providerKey,
-			sessionCredential.index,
-			Date.now() + AuthStorage.#defaultBackoffMs,
-		);
+		this.#blocks.markCredentialBlocked(provider, providerKey, sessionCredential.index, Date.now() + defaultBackoffMs);
 
 		if (hasSibling && target) {
 			// Parked, not emitted: the label of the account that DIED must be read now, before

@@ -4,7 +4,13 @@
  * applier.
  */
 import { HL_PAYLOAD_REPLACE, HL_RANGE_SEP } from "./format";
-import { BARE_BODY_AUTO_PIPED_WARNING, MINUS_ROW_REJECTED, MOVE_TAKES_NO_BODY, REM_TAKES_NO_BODY } from "./messages";
+import {
+	BARE_BODY_AUTO_PIPED_WARNING,
+	MINUS_BULLET_AUTO_PIPED_WARNING,
+	MINUS_ROW_REJECTED,
+	MOVE_TAKES_NO_BODY,
+	REM_TAKES_NO_BODY,
+} from "./messages";
 import { PATCH_OPERATIONS } from "./operations";
 import { stripOneLeadingHashlinePrefix } from "./prefixes";
 import { type BlockTarget, cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
@@ -33,6 +39,13 @@ function isSkippableCommentLine(line: string): boolean {
  * identical body.
  */
 export const BARE_LITERAL_VALUE_RE = /^\s*(?:"[^"]*"|'[^']*'|[-+]?\d+(?:\.\d+)?|true|false|null)\s*,?\s*$/;
+
+/**
+ * Markdown-bullet shape: optional indent, `-`, exactly one space, then
+ * content. Unified-diff `-` rows almost never match — code lines get the `-`
+ * glued on (`-old()`) and indented deletions carry multiple spaces (`-    x`).
+ */
+const MD_BULLET_ROW_RE = /^\s*- \S/;
 
 function detectApplyPatchContamination(text: string, _hasPending: boolean): string | null {
 	const trimmed = text.trimStart();
@@ -84,7 +97,7 @@ interface PendingComment {
 	text: string;
 }
 
-type PayloadRow = { kind: "literal"; text: string; lineNum: number; bare?: boolean };
+type PayloadRow = { kind: "literal"; text: string; lineNum: number; bare?: boolean; minus?: boolean };
 
 interface Pending {
 	target: BlockTarget;
@@ -272,8 +285,12 @@ export class Executor {
 			}
 			const spec = PATCH_OPERATIONS[this.#pending.target.kind];
 			if (!spec.takesBody && spec.forbiddenBodyError) throw new Error(`line ${lineNum}: ${spec.forbiddenBodyError}`);
-			if (text.trimStart().charCodeAt(0) === 45 /* - */) throw new Error(`line ${lineNum}: ${MINUS_ROW_REJECTED}`);
-			if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING)) this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
+			const row: PayloadRow = { kind: "literal", text, lineNum, bare: true };
+			// `-` rows are held and judged at flush time by #resolveMinusRows,
+			// once the whole body is visible.
+			if (text.trimStart().charCodeAt(0) === 45 /* - */) row.minus = true;
+			else if (!this.#warnings.includes(BARE_BODY_AUTO_PIPED_WARNING))
+				this.#warnings.push(BARE_BODY_AUTO_PIPED_WARNING);
 			this.#commitDeferredBlanks(this.#pending);
 			// Defer read-output line-number stripping to #flushPending: a bare
 			// "N:text" row is only a copy-paste artifact from snapshot output
@@ -282,7 +299,7 @@ export class Executor {
 			// with "digits:" (YAML ports "42:hello", timestamps "12:30") when it
 			// sits next to an unprefixed sibling. Rows with an explicit "+" go
 			// through #handleLiteralPayload and are never bare, never stripped.
-			this.#pending.payloads.push({ kind: "literal", text, lineNum, bare: true });
+			this.#pending.payloads.push(row);
 			return;
 		}
 		if (text.trim().length === 0) return;
@@ -314,34 +331,6 @@ export class Executor {
 		pending.deferredBlanks = [];
 	}
 
-	/**
-	 * Strip a single read-output line-number prefix (`N:`) from every bare body
-	 * row, but only when *all* bare rows carry one. A uniform set of prefixes is
-	 * the signature of content pasted straight from `read`/`search` output; a
-	 * mixed set means the `N:` is genuine payload content and must stay. Rows
-	 * authored with an explicit `+` are not bare and are never touched.
-	 */
-	#stripBarePrefixesIfUniform(payloads: PayloadRow[]): void {
-		let sawBare = false;
-		let allLiteralValues = true;
-		for (const row of payloads) {
-			if (!row.bare || row.text.trim().length === 0) continue;
-			sawBare = true;
-			const stripped = stripOneLeadingHashlinePrefix(row.text);
-			if (stripped === row.text) return;
-			allLiteralValues &&= BARE_LITERAL_VALUE_RE.test(stripped);
-		}
-		if (!sawBare) return;
-		// A body where every stripped remainder is a lone quoted/numeric literal
-		// (optionally comma-terminated) is the shape of a numeric-keyed dict or
-		// YAML mapping (`1: "one",`), not read-output paste; stripping the "N:"
-		// keys would mangle every line. Leave such bodies untouched.
-		if (allLiteralValues) return;
-		for (const row of payloads) {
-			if (row.bare && row.text.trim().length > 0) row.text = stripOneLeadingHashlinePrefix(row.text);
-		}
-	}
-
 	pushInsert(cursor: Cursor, text: string, lineNum: number, mode?: "replacement"): void {
 		this.#edits.push({
 			kind: "insert",
@@ -368,11 +357,44 @@ export class Executor {
 		});
 	}
 
+	/**
+	 * Judge bare `-` body rows once the whole hunk body is known. They are
+	 * usually unified-diff contamination (`-old` next to `+new`) and inserting
+	 * them would corrupt the file, so they are rejected — EXCEPT when the body
+	 * is unambiguously a Markdown bullet list: every `-` row is bullet-shaped
+	 * (`- item`) and the body is either fully bare or already contains an
+	 * explicit `+- item` sibling. Those rows are kept as literal content with a
+	 * warning instead of failing the patch.
+	 */
+	#resolveMinusRows(payloads: readonly PayloadRow[]): void {
+		let firstMinus: PayloadRow | undefined;
+		let allBulletShaped = true;
+		let hasExplicit = false;
+		let hasExplicitBullet = false;
+		for (const row of payloads) {
+			if (row.minus) {
+				firstMinus ??= row;
+				allBulletShaped &&= MD_BULLET_ROW_RE.test(row.text);
+			} else if (!row.bare) {
+				hasExplicit = true;
+				hasExplicitBullet ||= MD_BULLET_ROW_RE.test(row.text);
+			}
+		}
+		if (firstMinus === undefined) return;
+		if (allBulletShaped && (!hasExplicit || hasExplicitBullet)) {
+			if (!this.#warnings.includes(MINUS_BULLET_AUTO_PIPED_WARNING))
+				this.#warnings.push(MINUS_BULLET_AUTO_PIPED_WARNING);
+			return;
+		}
+		throw new Error(`line ${firstMinus.lineNum}: ${MINUS_ROW_REJECTED}`);
+	}
+
 	#flushPending(): void {
 		const pending = this.#pending;
 		if (!pending) return;
 		const { target, lineNum, payloads } = pending;
-		this.#stripBarePrefixesIfUniform(payloads);
+		stripBarePrefixesIfUniform(payloads);
+		this.#resolveMinusRows(payloads);
 		this.#pending = undefined;
 		const spec = PATCH_OPERATIONS[target.kind];
 		if (spec.takesBody && payloads.length === 0) {
@@ -406,6 +428,34 @@ export class Executor {
 			const cursor: Cursor = { kind: "eof" };
 			for (const text of texts) this.pushInsert(cursor, text, lineNum);
 		}
+	}
+}
+
+/**
+ * Strip a single read-output line-number prefix (`N:`) from every bare body
+ * row, but only when *all* bare rows carry one. A uniform set of prefixes is
+ * the signature of content pasted straight from `read`/`search` output; a
+ * mixed set means the `N:` is genuine payload content and must stay. Rows
+ * authored with an explicit `+` are not bare and are never touched.
+ */
+function stripBarePrefixesIfUniform(payloads: PayloadRow[]): void {
+	let sawBare = false;
+	let allLiteralValues = true;
+	for (const row of payloads) {
+		if (!row.bare || row.text.trim().length === 0) continue;
+		sawBare = true;
+		const stripped = stripOneLeadingHashlinePrefix(row.text);
+		if (stripped === row.text) return;
+		allLiteralValues &&= BARE_LITERAL_VALUE_RE.test(stripped);
+	}
+	if (!sawBare) return;
+	// A body where every stripped remainder is a lone quoted/numeric literal
+	// (optionally comma-terminated) is the shape of a numeric-keyed dict or
+	// YAML mapping (`1: "one",`), not read-output paste; stripping the "N:"
+	// keys would mangle every line. Leave such bodies untouched.
+	if (allLiteralValues) return;
+	for (const row of payloads) {
+		if (row.bare && row.text.trim().length > 0) row.text = stripOneLeadingHashlinePrefix(row.text);
 	}
 }
 

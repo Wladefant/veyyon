@@ -246,7 +246,14 @@ export interface ProviderContextBucket {
 
 export interface AssistantMessage {
 	role: "assistant";
-	content: (TextContent | ThinkingContent | RedactedThinkingContent | AnthropicFallbackContent | ToolCall)[];
+	content: (
+		| TextContent
+		| ThinkingContent
+		| RedactedThinkingContent
+		| AnthropicFallbackContent
+		| ToolCall
+		| ImageContent
+	)[];
 	api: Api;
 	provider: Provider;
 	model: string;
@@ -400,6 +407,7 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
+	| { type: "image_end"; contentIndex: number; content: ImageContent; partial: AssistantMessage }
 	| {
 			type: "done";
 			contentIndex?: undefined;

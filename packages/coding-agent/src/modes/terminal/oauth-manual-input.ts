@@ -16,7 +16,7 @@ export class OAuthManualInputManager {
 			this.clear("Manual OAuth input superseded by a new login");
 		}
 
-		const pending = this.#createPending(providerId);
+		const pending = createPending(providerId);
 		this.#pending = pending;
 		return pending.promise;
 	}
@@ -28,7 +28,7 @@ export class OAuthManualInputManager {
 
 	tryClaimInput(providerId: string): ClaimedInput | undefined {
 		if (this.#pending) return undefined;
-		const pending = this.#createPending(providerId);
+		const pending = createPending(providerId);
 		this.#pending = pending;
 		return {
 			promise: pending.promise,
@@ -61,9 +61,9 @@ export class OAuthManualInputManager {
 	get pendingProviderId(): string | undefined {
 		return this.#pending?.providerId;
 	}
+}
 
-	#createPending(providerId: string): PendingInput & { promise: Promise<string> } {
-		const { promise, resolve, reject } = Promise.withResolvers<string>();
-		return { providerId, resolve, reject, promise };
-	}
+function createPending(providerId: string): PendingInput & { promise: Promise<string> } {
+	const { promise, resolve, reject } = Promise.withResolvers<string>();
+	return { providerId, resolve, reject, promise };
 }
