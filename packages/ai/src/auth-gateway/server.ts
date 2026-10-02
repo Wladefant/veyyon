@@ -373,6 +373,7 @@ async function handleFormatEndpoint(
 	if (typeof apiKey !== "string") return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
+	streamOpts.fetch = bootOpts.fetch;
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
 		bootOpts.storage,
 		model,
@@ -520,6 +521,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	// only inject server-controlled fields. The codex sampling strip mirrors
 	// `buildStreamOptions` — Codex rejects every one with a 400 (#3117).
 	const streamOpts: SimpleStreamOptions = { ...parsed.options, apiKey, signal: controller.signal };
+	streamOpts.fetch = bootOpts.fetch;
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
 		bootOpts.storage,
 		model,
