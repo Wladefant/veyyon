@@ -176,6 +176,8 @@ function redactShareMessage(o: SecretObfuscator, message: AgentMessage): AgentMe
 												: undefined,
 									},
 								];
+							case "image":
+								return [{ ...block }];
 							default:
 								return block satisfies never;
 						}

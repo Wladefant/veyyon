@@ -77,3 +77,11 @@ export function createBridgeEditTool(session: ToolSession, extensionRunner?: Ext
 		? (new ExtensionToolWrapper(editTool, extensionRunner) as unknown as AgentTool)
 		: (editTool as unknown as AgentTool);
 }
+
+export function createBridgeEditToolProvider(
+	tools: ReadonlyMap<string, AgentTool>,
+	session: ToolSession,
+	extensionRunner?: ExtensionRunner,
+): () => AgentTool | undefined {
+	return () => (tools.has("edit") ? createBridgeEditTool(session, extensionRunner) : undefined);
+}
