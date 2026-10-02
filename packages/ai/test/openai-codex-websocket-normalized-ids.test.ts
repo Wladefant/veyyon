@@ -346,7 +346,11 @@ describe("Codex WebSocket append state replay sanitization", () => {
 			},
 			options,
 		);
-		await secondStream.result();
+		const secondResponse = await secondStream.result();
+		expect(secondResponse.stopReason).toBe("stop");
+		expect(secondResponse.content).toEqual([
+			expect.objectContaining({ type: "text", text: "Result is 2" }),
+		]);
 
 		expect(sentRequests).toHaveLength(2);
 		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
