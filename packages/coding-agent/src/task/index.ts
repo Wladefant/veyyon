@@ -1937,10 +1937,8 @@ function buildResultPayload(
 		preview = lastNewline >= 0 ? slice.slice(0, lastNewline) : slice;
 		truncated = true;
 	}
-	// A stopped-but-adopted agent (soft-budget stop) stays messageable; tell
-	// the parent so it can resume via irc instead of redoing the work. Isolated
-	// runs are parked without a reviver (their worktree is gone), so their
-	// "parked" status must not read as resumable.
+	// A stopped-but-adopted agent stays messageable; tell parent to resume via irc.
+	// Isolated runs are parked without reviver, so they must not read as resumable.
 	const refStatus = AgentRegistry.global().get(result.id)?.status;
 	const resumable = result.aborted && !result.isolated && (refStatus === "idle" || refStatus === "parked");
 	const summary = prompt.render(toolsPrompts["tools/task-summary"].text, {
