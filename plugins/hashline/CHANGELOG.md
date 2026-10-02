@@ -6,6 +6,7 @@
 
 ### Changed
 
+- The edit prompt states the same line, block, and Markdown-section boundaries in fewer words and removes redundant examples.
 - Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 
 ## [1.5.0] - 2026-09-18
