@@ -1507,4 +1507,127 @@ exec ${JSON.stringify(realGit)} "$@"
 		const firstCall = jsonSpy.mock.calls[0]?.[1] as string[];
 		expect(firstCall.some(arg => arg === `/repos/${userRepo}/actions/runs`)).toBe(true);
 	});
+
+	it("reads repository text through GitHub's JSON contents API", async () => {
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValue({
+			type: "file",
+			encoding: "base64",
+			size: 20,
+			content: Buffer.from('{"version":"16.3.11"}\n').toString("base64"),
+			html_url: "https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/package.json",
+		});
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "can1357/oh-my-pi",
+			branch: "main",
+			path: "packages/coding-agent/package.json",
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toBe('{"version":"16.3.11"}\n');
+		expect(jsonSpy).toHaveBeenCalledWith(
+			"/tmp/test",
+			[
+				"api",
+				"/repos/can1357/oh-my-pi/contents/packages/coding-agent/package.json",
+				"--method",
+				"GET",
+				"-H",
+				"Accept: application/vnd.github+json",
+				"-H",
+				"Accept-Encoding: identity",
+				"-f",
+				"ref=main",
+			],
+			undefined,
+			{ repoProvided: true, trimOutput: false },
+		);
+	});
+
+	it("returns GitHub images as model image content", async () => {
+		const tinyPngBase64 =
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+		vi.spyOn(git.github, "json").mockResolvedValue({
+			type: "file",
+			encoding: "base64",
+			size: Buffer.byteLength(tinyPngBase64, "base64"),
+			content: tinyPngBase64,
+			html_url: "https://github.com/anomalyco/opencode/blob/main/packages/web/src/assets/lander/screenshot.png",
+		});
+		const tool = new GithubTool(
+			createSession("/tmp/test", Settings.isolated({ "github.enabled": true, "images.autoResize": false })),
+		);
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "anomalyco/opencode",
+			branch: "main",
+			path: "packages/web/src/assets/lander/screenshot.png",
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("Image file: packages/web/src/assets/lander/screenshot.png");
+		expect(result.content).toContainEqual({
+			type: "image",
+			data: expect.any(String),
+			mimeType: "image/png",
+		});
+	});
+
+	it("identifies files GitHub returns without inline bytes", async () => {
+		const sourceUrl = "https://github.com/anomalyco/opencode/blob/main/packages/web/src/assets/lander/screenshot.png";
+		vi.spyOn(git.github, "json").mockResolvedValue({
+			type: "file",
+			encoding: "none",
+			size: 2 * 1024 * 1024,
+			html_url: sourceUrl,
+		});
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "anomalyco/opencode",
+			branch: "main",
+			path: "packages/web/src/assets/lander/screenshot.png",
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("GitHub did not return file bytes");
+		expect(text).toContain("packages/web/src/assets/lander/screenshot.png");
+		expect(text).toContain(sourceUrl);
+	});
+
+	it("rejects binary files with clear notice and source link", async () => {
+		const binaryBuffer = Buffer.from([0x00, 0xff, 0xfe, 0x01, 0x02]);
+		vi.spyOn(git.github, "json").mockResolvedValue({
+			type: "file",
+			encoding: "base64",
+			size: binaryBuffer.byteLength,
+			content: binaryBuffer.toString("base64"),
+			html_url: "https://github.com/owner/repo/blob/main/data.bin",
+		});
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "owner/repo",
+			branch: "main",
+			path: "data.bin",
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Cannot read binary file 'data.bin'");
+		expect(text).toContain("https://github.com/owner/repo/blob/main/data.bin");
+	});
+
+	it("rejects non-file paths from GitHub contents API", async () => {
+		vi.spyOn(git.github, "json").mockResolvedValue([
+			{ type: "file", name: "a.ts" },
+			{ type: "file", name: "b.ts" },
+		]);
+		const tool = new GithubTool(createSession());
+		await expect(
+			tool.execute("file-read", {
+				op: "file_read",
+				repo: "owner/repo",
+				branch: "main",
+				path: "packages/coding-agent",
+			}),
+		).rejects.toThrow("GitHub path 'packages/coding-agent' is not a file.");
+	});
 });

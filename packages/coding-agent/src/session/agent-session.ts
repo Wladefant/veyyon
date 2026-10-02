@@ -551,11 +551,15 @@ function sessionStopContinuationContext(result: SessionStopEventResult | undefin
 			? result.additionalContext
 			: undefined;
 	const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
+	if (result.decision === "block") {
+		return (
+			reason ??
+			additionalContext ??
+			"A session_stop handler blocked completion without a reason. Resolve the outstanding work before finishing."
+		);
+	}
 	if (result.continue === true) {
 		return additionalContext ?? reason;
-	}
-	if (result.decision === "block") {
-		return reason ?? additionalContext;
 	}
 	return undefined;
 }
@@ -661,6 +665,8 @@ export class AgentSession {
 	#goalRuntime: GoalRuntime;
 	/** The advisors watching this session's turns; see {@link AdvisorRoster}. */
 	readonly #advisorRoster: AdvisorRoster;
+	/** Async lifecycle handlers for visible advisor cards emitted outside the primary loop. */
+	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#goalTurnCounter = 0;
 	/** Spend over the summarized prefix, tallied once per compaction boundary. */
 	readonly #spendLedger = new SessionSpendLedger();
@@ -916,6 +922,7 @@ export class AgentSession {
 	/** Stale-result and overflow prunes, image drops, shake and dedup of the recorded history. */
 	readonly #rewrites: HistoryRewrites;
 	#promptGeneration = 0;
+	#activeAgentPromptGeneration = this.#promptGeneration;
 	/**
 	 * Prompts refused as busy and waiting for the agent to go idle. Each is a
 	 * turn already committed to, held by nothing the queues can see: the hidden
@@ -2471,7 +2478,16 @@ export class AgentSession {
 	 */
 	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type !== "agent_end") {
-			return this.#processAgentEvent(event);
+			const processing = this.#processAgentEvent(event);
+			if ((event.type === "message_start" || event.type === "message_end") && isAdvisorCard(event.message)) {
+				this.#pendingAdvisorCardEvents.add(processing);
+				void processing
+					.finally(() => this.#pendingAdvisorCardEvents.delete(processing))
+					.catch(error => {
+						logger.debug("Advisor card event processing failed", { error });
+					});
+			}
+			return processing;
 		}
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#postPrompt.track(promise);
@@ -2536,6 +2552,7 @@ export class AgentSession {
 	 * before its `message_end` handler resumes.
 	 */
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type === "agent_start") this.#activeAgentPromptGeneration = this.#promptGeneration;
 		// Paired with the mark in `#recordToolExecutionStart`, and cleared before the
 		// awaited subscribers below: a listener that throws would otherwise leave this
 		// process looking like it died inside a call that had already returned.
@@ -3281,7 +3298,7 @@ export class AgentSession {
 		messages: AgentMessage[],
 		lastAssistantMessage = this.getLastAssistantMessage(),
 	): Promise<void> {
-		if (this.#abortInProgress || this.#isDisposed) {
+		if (this.#abortInProgress || this.#isDisposed || this.#activeAgentPromptGeneration !== this.#promptGeneration) {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
@@ -3304,7 +3321,7 @@ export class AgentSession {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
-		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
+		if (result?.decision !== "block" && this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
 			logger.warn("session_stop continuation cap reached", {
 				sessionId: this.sessionId,
 				cap: SESSION_STOP_CONTINUATION_CAP,
@@ -3312,7 +3329,7 @@ export class AgentSession {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
-		this.#sessionStopContinuationCount++;
+		if (result?.decision !== "block") this.#sessionStopContinuationCount++;
 		this.#sessionStopHookActive = true;
 		this.#queueHiddenNextTurnMessage(
 			{
@@ -4110,6 +4127,51 @@ export class AgentSession {
 			unsubscribe();
 			signal?.removeEventListener("abort", wake);
 		}
+	}
+
+	/**
+	 * Prevent advisor notes from starting hidden primary turns while a headless
+	 * caller prints and drains the final primary response.
+	 */
+	prepareForHeadlessAdvisorDrain(): void {
+		this.#advisorRoster.prepareForHeadlessDrain();
+	}
+
+	async #waitForPendingAdvisorCardEvents(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + Math.max(0, timeoutMs);
+		while (this.#pendingAdvisorCardEvents.size > 0) {
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) return false;
+			const settled = Promise.allSettled([...this.#pendingAdvisorCardEvents]).then(() => true as const);
+			const { promise: timedOut, resolve } = Promise.withResolvers<false>();
+			const timer = setTimeout(() => resolve(false), remainingMs);
+			try {
+				if (!(await Promise.race([settled, timedOut]))) return false;
+			} finally {
+				clearTimeout(timer);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Wait for active advisor reviews and their emitted card events before a
+	 * headless caller disposes the session. Returns `false` and logs work disposal
+	 * will abandon when the shared deadline expires or an advisor fails.
+	 */
+	async waitForAdvisorCatchup(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		const { abandoned } = await this.#advisorRoster.waitForCatchup(timeoutMs);
+		const cardEventsCaughtUp = await this.#waitForPendingAdvisorCardEvents(Math.max(0, deadline - Date.now()));
+		if (abandoned.length > 0 || !cardEventsCaughtUp) {
+			logger.warn("advisor shutdown drain incomplete; disposal will abandon reviews or cards", {
+				timeoutMs,
+				advisors: abandoned,
+				pendingAdvisorCards: this.#pendingAdvisorCardEvents.size,
+			});
+			return false;
+		}
+		return true;
 	}
 
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {

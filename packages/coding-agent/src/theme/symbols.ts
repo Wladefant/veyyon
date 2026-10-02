@@ -107,8 +107,8 @@ export const NERD_SYMBOLS: SymbolMap = {
 	"icon.pr": "\uea64",
 	// pick:  | alt: ⊛ ◍ 
 	"icon.tokens": "\ue26b",
-	// pick:  | alt: ◫ ▦
-	"icon.context": "\ue70f",
+	// pick:  (nf-cod-window) | alt:  (nf-cod-empty_window) ◫ ▦
+	"icon.context": "\ueb7f",
 	// pick:  | alt: $ ¢
 	"icon.cost": "\uf155",
 	// pick:  | alt: ◷ ◴
@@ -210,7 +210,7 @@ export const NERD_SYMBOLS: SymbolMap = {
 	"lang.java": "\u{E738}",
 	"lang.c": "\u{E61E}",
 	"lang.cpp": "\u{E61D}",
-	"lang.csharp": "\u{E7BC}",
+	"lang.csharp": "\u{E7B2}",
 	"lang.ruby": "\u{E791}",
 	"lang.julia": "\u{E624}",
 	"lang.php": "\u{E608}",
