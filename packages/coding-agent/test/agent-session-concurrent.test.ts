@@ -483,7 +483,8 @@ describe("AgentSession concurrent prompt guard", () => {
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
 			emitSessionStop: vi.fn(() => {
 				stopCount++;
-				if (stopCount <= SESSION_STOP_CONTINUATION_CAP) return Promise.resolve({ continue: true, reason: "Advisory work." });
+				if (stopCount <= SESSION_STOP_CONTINUATION_CAP)
+					return Promise.resolve({ continue: true, reason: "Advisory work." });
 				if (stopCount <= SESSION_STOP_CONTINUATION_CAP + 3) return Promise.resolve({ decision: "block" });
 				return Promise.resolve(undefined);
 			}),

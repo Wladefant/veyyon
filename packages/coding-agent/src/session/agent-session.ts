@@ -552,7 +552,11 @@ function sessionStopContinuationContext(result: SessionStopEventResult | undefin
 			: undefined;
 	const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
 	if (result.decision === "block") {
-		return reason ?? additionalContext ?? "A session_stop handler blocked completion without a reason. Resolve the outstanding work before finishing.";
+		return (
+			reason ??
+			additionalContext ??
+			"A session_stop handler blocked completion without a reason. Resolve the outstanding work before finishing."
+		);
 	}
 	if (result.continue === true) {
 		return additionalContext ?? reason;
