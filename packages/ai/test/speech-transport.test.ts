@@ -16,7 +16,11 @@ describe("speech transport postSpeechRequest", () => {
 		const capturedRequests: Array<{ url: string; headers: Headers; body: unknown }> = [];
 		const fakeAudio = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 		const fetchImpl: FetchImpl = async (input, init) => {
-			capturedRequests.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+			capturedRequests.push({
+				url: String(input),
+				headers: new Headers(init?.headers),
+				body: JSON.parse(String(init?.body)),
+			});
 			return new Response(fakeAudio, { status: 200, headers: { "content-type": "audio/mpeg" } });
 		};
 		const result = await postSpeechRequest(
@@ -44,7 +48,10 @@ describe("speech transport postSpeechRequest", () => {
 			capturedHeaders = new Headers(init?.headers);
 			return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
 		};
-		await postSpeechRequest(modelWithOldAuth, "/audio/speech", { input: "Sanitize test" }, "wav", { apiKey: "real-bearer-key", fetch: fetchImpl });
+		await postSpeechRequest(modelWithOldAuth, "/audio/speech", { input: "Sanitize test" }, "wav", {
+			apiKey: "real-bearer-key",
+			fetch: fetchImpl,
+		});
 		expect(capturedHeaders?.get("authorization")).toBe("Bearer real-bearer-key");
 		for (const [key, value] of capturedHeaders?.entries() ?? []) {
 			if (key.toLowerCase() !== "authorization") expect(value.includes("real-bearer-key")).toBe(false);
@@ -62,7 +69,10 @@ describe("speech transport postSpeechRequest", () => {
 			captured = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
 			return new Response(new Uint8Array([1]), { status: 200 });
 		};
-		await postSpeechRequest(modelWithLowerCt, "/audio/speech", { input: "ct test" }, "mp3", { apiKey: "key", fetch: fetchImpl });
+		await postSpeechRequest(modelWithLowerCt, "/audio/speech", { input: "ct test" }, "mp3", {
+			apiKey: "key",
+			fetch: fetchImpl,
+		});
 		expect(captured?.get("content-type")).toBe("application/json");
 		const ctEntries = Array.from(captured?.entries() ?? []).filter(([k]) => k.toLowerCase() === "content-type");
 		expect(ctEntries).toEqual([["content-type", "application/json"]]);
@@ -87,8 +97,12 @@ describe("speech transport postSpeechRequest", () => {
 	});
 
 	it("throws SpeechApiError on non-2xx responses preserving status and headers", async () => {
-		const fetchImpl: FetchImpl = async () => new Response("Bad Request: invalid voice", { status: 400, headers: { "x-request-id": "req-123" } });
-		const err = (await postSpeechRequest(testModel, "/audio/speech", { input: "err" }, "mp3", { apiKey: "test-key", fetch: fetchImpl }).catch(e => e)) as SpeechApiError;
+		const fetchImpl: FetchImpl = async () =>
+			new Response("Bad Request: invalid voice", { status: 400, headers: { "x-request-id": "req-123" } });
+		const err = (await postSpeechRequest(testModel, "/audio/speech", { input: "err" }, "mp3", {
+			apiKey: "test-key",
+			fetch: fetchImpl,
+		}).catch(e => e)) as SpeechApiError;
 		expect(err).toBeInstanceOf(SpeechApiError);
 		expect(err.status).toBe(400);
 		expect(err.message).toContain("openai/tts-test speech API failed (400): Bad Request: invalid voice");
