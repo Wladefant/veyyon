@@ -5570,6 +5570,17 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 			}
 			global.WebSocket = TimeoutWebSocket as unknown as typeof WebSocket;
 			try {
+				if (phase === "during handshake") {
+					const error = await prewarmOpenAICodexResponses(createCodexTestModel(), {
+						apiKey: createCodexTestToken(),
+						signal: controller.signal,
+						sessionId: "compaction-handshake",
+						providerSessionState,
+					}).catch((caught: unknown) => caught);
+					expect(AIError.is(AIError.classify(error, "openai-codex-responses"), AIError.Flag.Timeout)).toBe(true);
+					expect(error instanceof Error && error.cause).toBe(abortReason);
+					return;
+				}
 				const stream = streamOpenAICodexResponses(createCodexTestModel(), createCodexTestContext(), {
 					apiKey: createCodexTestToken(),
 					signal: controller.signal,
@@ -5642,25 +5653,33 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 		const token = createCodexTestToken();
 		vi.useFakeTimers();
 		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
-		const { promise: requestStarted, resolve: markRequestStarted } = Promise.withResolvers<void>();
+		const { promise: bodyStarted, resolve: markBodyStarted } = Promise.withResolvers<void>();
 		let requestCount = 0;
 		const fetchMock: FetchImpl = async (input, init) => {
 			requestCount += 1;
 			const requestSignal = getRequestSignal(input, init);
-			markRequestStarted();
-			return createStalledErrorResponse(status, requestSignal);
+			const response = createStalledErrorResponse(status, requestSignal);
+			const clone = response.clone.bind(response);
+			response.clone = () => {
+				const copy = clone(),
+					text = copy.text.bind(copy);
+				copy.text = () => {
+					markBodyStarted();
+					return text();
+				};
+				return copy;
+			};
+			return response;
 		};
 		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
-
 		const resultPromise = streamOpenAICodexResponses(model, createCodexTestContext(), {
 			apiKey: token,
 			fetch: fetchMock,
 			streamFirstEventTimeoutMs: 10,
 		}).result();
-		await requestStarted;
+		await bodyStarted;
 		vi.advanceTimersByTime(10);
 		const result = await resultPromise;
-
 		expect(requestCount).toBe(1);
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("timed out");
