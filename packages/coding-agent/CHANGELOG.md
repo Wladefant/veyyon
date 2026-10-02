@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Fixed file search silently clamping `limit` above 200 and then advising a `Use limit=` retry it would clamp straight back: a clamped request now says so, the suggestion is capped at 200, and at the cap the notice reports the count alone ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4997d101c2674e484595bf2b3d0dfa9e3d71c2db).
