@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- `/btw` branch promotion is refused while the main turn is running or once the session or its leaf moved since the question was asked; the panel hides the branch hint while it is unavailable, a refused `b` reports why instead of typing into the composer, and a `b` typed before the answer completes still reaches the composer ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a1183da91225eec2dd4e46dfa037e66567d8980, 98f484bd2f9a11571f807b8b0b1441cc7a7a6671, a54a2f79cbfd9b3a3e7b136cea83533064ca9d0a).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).

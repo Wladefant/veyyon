@@ -187,7 +187,6 @@ export type InputControllerContext = TuiSlashCommandHostContext &
 	SkillCommandHost &
 	Pick<
 		InteractiveModeContext,
-		| "canBranchBtw"
 		| "cancelPendingSubmission"
 		| "canCopyBtw"
 		| "clearEditor"
@@ -202,6 +201,7 @@ export type InputControllerContext = TuiSlashCommandHostContext &
 		| "handleOmfgEscape"
 		| "handlePythonCommand"
 		| "handleSTTToggle"
+		| "handlesBtwBranchKey"
 		| "hasActiveBtw"
 		| "hasActiveOmfg"
 		| "hasDisplayableThinkingContent"
@@ -357,7 +357,9 @@ export class InputController {
 			this.#btwBranchListenerInstalled = true;
 			this.#addEmptyComposerKeyListener(
 				"b",
-				() => this.ctx.canBranchBtw(),
+				// Reserved for a completed (or in-flight) branch even while the promotion is refused,
+				// so a refused `b` reports why instead of leaking a stray `b` into the composer.
+				() => this.ctx.handlesBtwBranchKey(),
 				() => this.ctx.handleBtwBranchKey(),
 			);
 		}
