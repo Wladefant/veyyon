@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Fixed superseded deferred plan-role model switches lingering across role resets and restored plan mode transitions deterministically ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1713364b2555e7f2cccf05c734e9cc88c75e44e1, oh-my-pi 85b9c01f1c6e306f0e3510d2a26cbe3d2e256af9).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
