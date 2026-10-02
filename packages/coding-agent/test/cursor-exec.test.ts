@@ -7,14 +7,14 @@ import type { AgentEvent, AnyAgentTool } from "@veyyon/agent-core";
 import { GrepArgsSchema, ReadArgsSchema, ShellArgsSchema } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CursorExecHandlers } from "@veyyon/coding-agent/cursor";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import {
 	createBridgeEditTool,
 	cursorMcpPrefersReplaceEdit,
 	normalizeCursorReplaceArgs,
 } from "@veyyon/coding-agent/cursor-bridge-tools";
 import { EditTool } from "@veyyon/coding-agent/edit";
+import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -152,10 +152,18 @@ describe("Cursor MCP StrReplace fallback", () => {
 	});
 
 	it("projects CLI and replacement fields onto replace kwargs", () => {
-		expect(normalizeCursorReplaceArgs({ path: "/tmp/n.txt", old_text: "a", new_text: "b", replaceAll: true })).toEqual({
-			path: "/tmp/n.txt", old_string: "a", new_string: "b", replace_all: true,
+		expect(
+			normalizeCursorReplaceArgs({ path: "/tmp/n.txt", old_text: "a", new_text: "b", replaceAll: true }),
+		).toEqual({
+			path: "/tmp/n.txt",
+			old_string: "a",
+			new_string: "b",
+			replace_all: true,
 		});
-		expect(normalizeCursorReplaceArgs({ path: "/tmp/n.txt", input: "[n]" })).toEqual({ path: "/tmp/n.txt", input: "[n]" });
+		expect(normalizeCursorReplaceArgs({ path: "/tmp/n.txt", input: "[n]" })).toEqual({
+			path: "/tmp/n.txt",
+			input: "[n]",
+		});
 	});
 
 	it("routes injected CLI names and replace-shaped edit onto the bridge", () => {
