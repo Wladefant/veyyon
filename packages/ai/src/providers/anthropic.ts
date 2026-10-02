@@ -3210,8 +3210,8 @@ export function stableSystemSuffixStart(systemBlocks: readonly AnthropicSystemBl
  *
  * veyyon normally appends its project footer (cwd, date, workspace tree) after the
  * stable system prefix. When cwd is outside a single direct child repository,
- * an active-repo context block follows that footer. Caching up to the last three
- * eligible blocks therefore covers both layouts:
+ * an active-repo context block follows that footer. Preserve the first eligible
+ * block (the shared harness), then cache the newest eligible blocks to cover:
  *
  * - stable prefix, project footer
  * - stable prefix, project footer, active-repo context
@@ -3236,6 +3236,15 @@ function cacheSystemPrefixBreakpoints(
 	const suffixStart = stableSystemSuffixStart(blocks);
 	const startIndex =
 		suffixStart < blocks.length && suffixStart > firstCacheableIndex ? suffixStart - 1 : blocks.length - 1;
+	// Runtime sections can outnumber the marker budget. Never evict the shared
+	// harness anchor to make room for a project-specific suffix.
+	if (firstCacheableIndex <= startIndex && blocks[firstCacheableIndex].cache_control == null) {
+		blocks[firstCacheableIndex] = {
+			...blocks[firstCacheableIndex],
+			cache_control: cloneAnthropicCacheControl(cacheControl),
+		};
+		placed++;
+	}
 	for (let index = startIndex; index >= firstCacheableIndex && placed < maxBreakpoints; index--) {
 		if (blocks[index].cache_control != null) continue;
 		blocks[index] = { ...blocks[index], cache_control: cloneAnthropicCacheControl(cacheControl) };

@@ -19,7 +19,7 @@
 
 ### Fixed
 
-- Fixed Anthropic prompt caching writing a fresh entry for the entire system prefix whenever the project footer (cwd, date, workspace tree) changed and preserved the stable prefix across memory recall refreshes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1488be016d5d7925e0a7071561af23b98c13ca3b, 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
+- Preserved Anthropic's shared harness cache breakpoint across PROJECT, SHORTHAND, HANDLES and memory recall suffixes while reserving a marker for the newest message ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1488be016d5d7925e0a7071561af23b98c13ca3b, 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
 - Synthesized required reasoning items for DeepSeek-family Responses targets when replaying turns lacking thinking content ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 76f83958b1150e9b429782d8e7b5692a13d7b12f).
 
 - Scoped Responses tool batch message hoisting to interrupted batches ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a2198912e3eac86f043a3a90db6a598bb0e2341a).

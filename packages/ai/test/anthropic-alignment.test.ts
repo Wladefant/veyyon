@@ -345,6 +345,49 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 	});
 
+	// The runtime splits the shared harness from PROJECT, SHORTHAND and HANDLES.
+	// Exercise wire placement, not the builder's optional cacheControl path.
+	it("preserves the shared harness cache across runtime sections and recall", async () => {
+		for (const suffix of [[], ["<memories>\nNeutral recall\n</memories>"]]) {
+			const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+				systemPrompt: ["Shared harness", "PROJECT\ncwd '/repo'", "SHORTHAND", "SHORTHAND HANDLES", ...suffix],
+				messages: [{ role: "user", content: "Hi", timestamp: 0 }],
+			})) as {
+				system: Array<{ text: string; cache_control?: unknown }>;
+				messages: Array<{ content: Array<{ cache_control?: unknown }> }>;
+			};
+			expect(payload.system.map(block => block.cache_control != null)).toEqual([
+				false, false, true, false, true, true, ...suffix.map(() => false),
+			]);
+			expect(payload.system[2].text).toBe("Shared harness");
+			expect(payload.messages[0].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+		}
+	});
+
+	it("spends the remaining API-key cache marker on the newest message", async () => {
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Shared harness", "PROJECT", "SHORTHAND", "SHORTHAND HANDLES"],
+				messages: [
+					{ role: "user", content: "Earlier", timestamp: 0 },
+					{
+						role: "assistant", content: [{ type: "text", text: "Reply" }],
+						api: "anthropic-messages", provider: "anthropic", model: ANTHROPIC_MODEL.id,
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+						stopReason: "stop", timestamp: 0,
+					},
+					{ role: "user", content: "Newest", timestamp: 0 },
+				],
+			},
+			{ isOAuth: false },
+		)) as { messages: Array<{ content: Array<{ cache_control?: unknown }> | string }> };
+		expect(payload.messages.map(message => Array.isArray(message.content) && message.content.some(block => block.cache_control != null))).toEqual([
+			false, false, true,
+		]);
+	});
+
 	it("caches tool-result-only user messages in OAuth request payloads", async () => {
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
 			systemPrompt: ["Stay concise."],
