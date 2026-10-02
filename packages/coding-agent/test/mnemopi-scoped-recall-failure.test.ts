@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { MnemopiSessionState } from "@veyyon/coding-agent/memory/mnemopi/state";
+import { MnemopiSessionState } from "../src/memory/mnemopi/state";
 import { useIsolatedAgentDir } from "./helpers/isolated-agent-dir";
 
 // The code under test opens `AgentStorage`, which resolves `agent.db` under the
@@ -25,6 +25,13 @@ useIsolatedAgentDir();
  * that make it safe: partial loss is visible, and total loss is an error rather
  * than an empty result.
  */
+interface RecallTarget {
+	bank: string;
+	memory: {
+		recallEnhanced: (query: string) => Promise<Array<{ id: string; content: string; score: number }>>;
+	};
+}
+
 describe("scoped memory recall when a bank cannot be read", () => {
 	/**
 	 * A recall target whose `recallEnhanced` either throws or returns one result
@@ -51,7 +58,7 @@ describe("scoped memory recall when a bank cannot be read", () => {
 	 * it has no private fields and reading one throws. The class takes the bank
 	 * bundle as a constructor option now, so the test drives the real thing.
 	 */
-	function stateWith(...targets: ReturnType<typeof target>[]): MnemopiSessionState {
+	function stateWith(...targets: RecallTarget[]): MnemopiSessionState {
 		return new MnemopiSessionState({
 			sessionId: "test-session",
 			config: { recallLimit: 10, debug: false, bank: "retain" } as never,
@@ -108,9 +115,35 @@ describe("scoped memory recall when a bank cannot be read", () => {
 		const empty = {
 			bank: "project",
 			memory: { recallEnhanced: async () => [] },
-		} as unknown as ReturnType<typeof target>;
+		} satisfies RecallTarget;
 		const state = stateWith(empty);
 
 		await expect(state.collectScopedRecallResults("q")).resolves.toEqual([]);
 	});
+	// A successful primary query counts even when the same bank's broadened
+	// fallback fails. This covers both populated and genuinely empty primary results.
+	for (const hasResults of [false, true]) {
+		it(`retains a successful ${hasResults ? "populated" : "empty"} primary when shared fallback fails`, async () => {
+			const queries: string[] = [];
+			const results = hasResults ? [{ id: "global-1", content: "memory from global", score: 1 }] : [];
+			const shared: RecallTarget = {
+				bank: "global",
+				memory: {
+					recallEnhanced: async query => {
+						queries.push(query);
+						if (query === "architecture") throw new Error("fallback database unavailable");
+						return results;
+					},
+				},
+			};
+			const state = new MnemopiSessionState({
+				sessionId: "test-session",
+				config: { recallLimit: 10, debug: false, bank: "project" } as never,
+				session: {} as never,
+				scoped: { recall: [shared], retain: { bank: "project" }, global: shared } as never,
+			});
+			await expect(state.collectScopedRecallResults("project architecture")).resolves.toEqual(results);
+			expect(queries).toEqual(["project architecture", "architecture"]);
+		});
+	}
 });

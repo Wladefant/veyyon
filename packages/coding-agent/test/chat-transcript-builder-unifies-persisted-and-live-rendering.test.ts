@@ -12,10 +12,11 @@ import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import { TranscriptComposer } from "@veyyon/coding-agent/modes/terminal/controllers/transcript-composer";
 import { UiHelpers, type UiHelpersContext } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
+import { toAssistantMessageView } from "@veyyon/coding-agent/presentation/transcript-builder";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import { stripAnsi } from "@veyyon/utils";
-import { SUPPORTED_VIDEO_MIME_TYPES } from "@veyyon/utils/mime";
+import { SUPPORTED_IMAGE_MIME_TYPES, SUPPORTED_VIDEO_MIME_TYPES } from "@veyyon/utils/mime";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 import { createToolExecution } from "./helpers/tool-execution";
 
@@ -121,6 +122,22 @@ describe("shared transcript replay preserves live state", () => {
 			expect(ctx.chatContainer.render(120).join("\n")).toBe(live);
 		}
 	});
+	// Native image results must remain visible in the host-neutral view; provider transport is covered elsewhere.
+	it.each([...SUPPORTED_IMAGE_MIME_TYPES])(
+		"projects generated %s assistant images without exposing payload bytes",
+		mimeType => {
+			const image = { type: "image" as const, mimeType, data: "SU1H" };
+			const message = assistant([{ type: "text", text: "Result" }, image, { type: "text", text: "Caption" }]);
+			const view = toAssistantMessageView(message);
+			expect(view.segments).toEqual([
+				{ kind: "text", text: "Result" },
+				{ kind: "image", mimeType, altText: "Generated image" },
+				{ kind: "text", text: "Caption" },
+			]);
+			expect(JSON.stringify(view)).not.toContain(image.data);
+			expect(message.content).toEqual([{ type: "text", text: "Result" }, image, { type: "text", text: "Caption" }]);
+		},
+	);
 
 	// Video labels must survive the shared projection in both live and replayed prompts.
 	// This covers every admitted MIME type and base64 padding width, not provider transport.
