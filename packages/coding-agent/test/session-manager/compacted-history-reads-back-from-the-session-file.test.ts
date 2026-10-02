@@ -39,24 +39,41 @@
  * table is typed against the union, so a new role fails the type check until it has a row), reads
  * every small field the fresh load holds, runs those scans, and pins the reads at zero.
  *
+ * A branch summary walks every message it sends the provider by property descriptor, and that walk
+ * rejects accessors, which is what a cold message's large fields are. The size estimate the summary
+ * runs first reads most of them back, so the walk met a cold message only when the history cooled
+ * again in between: a publish landing while the credential resolved. The summary sweep cools the
+ * history at that await and navigates back across every message role and every entry kind, and
+ * pins the request to the one the same file sends when nothing is moved out of memory.
+ *
  * NOT CAUGHT: the heap bound has a 4x margin, so a regression that keeps a quarter of the cold
  * payloads resident passes. Windows holds no pinned reader, so there every entry stays in memory
  * and the fd assertions are skipped. A branch scan this suite does not run that reads a large field
- * of every compacted message still reads the history back.
+ * of every compacted message still reads the history back. A descriptor walk other than the branch
+ * summary's that is handed a whole session entry or message fails on a cold one.
  */
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import type { AgentMessage } from "@veyyon/agent-core";
+import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as ai from "@veyyon/ai/stream";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { isSuccessfulCheckpointEntry } from "@veyyon/coding-agent/session/rewind-checkpoint";
 import { getLatestTodoPhasesSnapshotFromEntries } from "@veyyon/coding-agent/tools/agent/todo";
+import { shellDomain } from "@veyyon/coding-agent/tools/shell/manifest";
 import { BlobStore, blobsDirForSessionDir } from "@veyyon/kernel/session/blob-store";
 import { collectPendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
+import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
 import { MIN_COLD_STRING_LENGTH, RECORD_ONLY_ENTRY_TYPES } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionEntryBase } from "@veyyon/kernel/session/session-entries";
 import { loadSessionFile, resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
@@ -78,6 +95,10 @@ const COLD_HEAP_FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "cold
 const SUBPROCESS_TIMEOUT_MS = 30_000;
 
 const PROBE_TOOL = "cold_readback_probe";
+
+// A branch summary converts the shell roles through the kinds the shell manifest declares,
+// registered here the way the tool registry registers them.
+registerAgentMessageKinds(shellDomain.messageKinds);
 
 /** Drops `details.echo` when it repeats the result's first text block, and rebuilds it on load. */
 registerToolResultCodecs([
@@ -124,6 +145,13 @@ class ObservedStorage extends FileSessionStorage {
 
 	openIdentities(): string[] {
 		return [...this.open].map(reader => reader.identity);
+	}
+}
+
+/** A store that pins no reader, so a manager over it holds every entry in memory. */
+class UnpinnedStorage extends FileSessionStorage {
+	openPinnedReaderSync(): PinnedSessionReader | undefined {
+		return undefined;
 	}
 }
 
@@ -530,6 +558,76 @@ function everyKindHistory(): SessionEntry[] {
 	const oversized = next(parent);
 	entries.push({ ...oversized, type: "message", message: { role: "user", content: OVERSIZED_TEXT, timestamp: 4 } });
 	return entries;
+}
+
+/** {@link everyRoleHistory} after a root prompt, so navigating back to that prompt leaves every role. */
+function everyRoleHistoryAfterAnchor(): SessionEntry[] {
+	const roles = everyRoleHistory();
+	const anchor: SessionEntry = {
+		type: "message",
+		id: "m00000",
+		parentId: null,
+		timestamp: new Date(Date.UTC(2023, 11, 31)).toISOString(),
+		message: { role: "user", content: "anchor", timestamp: 0 },
+	};
+	roles[0] = { ...roles[0]!, parentId: anchor.id };
+	return [anchor, ...roles];
+}
+
+let authFiles = 0;
+
+/**
+ * Navigate from the leaf of `manager`'s session back to `targetId` with a branch summary, through
+ * the session `/tree` drives, and return the prompt the summary request sent. Only the provider
+ * stream is replaced. `onCredential` runs each time the credential store is asked for the key, the
+ * await a summary attempt starts from. Disposing the session closes `manager`.
+ */
+async function summarizeBranch(
+	manager: SessionManager,
+	root: string,
+	targetId: string,
+	onCredential: () => void,
+): Promise<string> {
+	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	const resolveKey = authStorage.getApiKey.bind(authStorage);
+	vi.spyOn(authStorage, "getApiKey").mockImplementation(async (provider, sessionId, options) => {
+		onCredential();
+		return resolveKey(provider, sessionId, options);
+	});
+	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
+	const session = new AgentSession({
+		agent: new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+		}),
+		sessionManager: manager,
+		settings: Settings.isolated(),
+		modelRegistry: new ModelRegistry(authStorage),
+	});
+	let prompt: string | undefined;
+	vi.spyOn(ai, "streamSimple").mockImplementation((_model, context) => {
+		prompt = JSON.stringify(context.messages.map(message => message.content));
+		const stream = new AssistantMessageEventStream();
+		queueMicrotask(() => {
+			stream.push({ type: "done", reason: "stop", message: assistantTurn("branch summary", 20) });
+			stream.end();
+		});
+		return stream;
+	});
+	try {
+		const result = await session.navigateTree(targetId, { summarize: true });
+		expect(result.cancelled).toBe(false);
+		expect(result.summaryEntry?.type).toBe("branch_summary");
+	} finally {
+		vi.restoreAllMocks();
+		await session.dispose();
+		authStorage.close();
+	}
+	if (prompt === undefined) throw new Error("The branch summary sent no request");
+	return prompt;
 }
 
 describe.skipIf(!pins)("compacted history reads back from the session file", () => {
@@ -946,4 +1044,39 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		expect(storage.reads).toBe(0);
 		await manager.close();
 	});
+
+	it.each([
+		{ history: "every message role", make: everyRoleHistoryAfterAnchor, target: "m00000", oldest: "role-user-0" },
+		{ history: "every entry kind", make: everyKindHistory, target: "h00001", oldest: "probe-result-0" },
+	])(
+		"summarizes a branch across compacted history of $history as across the same history in memory",
+		async ({ make, target, oldest }) => {
+			const fixture = await writeSession(make());
+			const root = path.dirname(fixture.dir);
+			const warmRoot = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-summary-"));
+			tempDirs.push(warmRoot);
+			fs.cpSync(root, warmRoot, { recursive: true });
+			const warmDir = path.join(warmRoot, "sessions");
+			const warm = await SessionManager.open(path.join(warmDir, "session.jsonl"), warmDir, new UnpinnedStorage(), {
+				suppressBreadcrumb: true,
+			});
+			const expected = await summarizeBranch(warm, warmRoot, target, () => warm.coolCompactedHistory());
+			// The walk reached the oldest entry the navigation leaves, so every cold entry is in the request.
+			expect(expected).toContain(oldest);
+
+			// The size estimate a summary runs first reads most of the history back. A publish that lands
+			// while the credential resolves cools it again, so the attempt walks cold entries.
+			const storage = new ObservedStorage();
+			const cold = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			expect(storage.openIdentities()).toEqual([storage.statSync(fixture.file).identity!]);
+			let readsWhenCooled: number | undefined;
+			const prompt = await summarizeBranch(cold, root, target, () => {
+				cold.coolCompactedHistory();
+				readsWhenCooled = storage.reads;
+			});
+			expect(prompt).toBe(expected);
+			expect(readsWhenCooled).toBeGreaterThan(0);
+			expect(storage.reads).toBeGreaterThan(readsWhenCooled!);
+		},
+	);
 });
