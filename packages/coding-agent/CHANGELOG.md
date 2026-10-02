@@ -27,6 +27,7 @@
 
 ### Changed
 
+- Support simple single-replacement parameters in replace edit mode while preserving internal batch parameters for multi-edit bridges ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi cc2265f681ee26e0e7e3a57d84626059d4eba2ff).
 - Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
