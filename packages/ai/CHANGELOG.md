@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Allowed OpenAI Codex OAuth login without an account ID when an email identity is present ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 676bdd7bbc2b1657aa69b5156fe939b8e635bba7).
 - Escaped reserved Harmony control tokens in client text and native replay for Harmony-dialect models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses Lite requests to force tool_choice to auto, support PI_CODEX_RESPONSES_LITE overrides, and force reasoning.context to all_turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
