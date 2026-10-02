@@ -14,6 +14,7 @@
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
 
 ### Fixed
+- Config source stamps use WebCrypto SHA-256 without loading `node:crypto` on the launch-card path; digest bytes are unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `SettingsStore.forkWithRuntimeOverrides` dropping `#configPath` on forked in-memory instances, so subagents and runtime forks can compute `configSourceStamp()` and detect on-disk config changes.
 
 - Fixed blob reference resolution passing unvalidated `blob:sha256:` and `blobtext:sha256:` suffixes into `path.join`, allowing a crafted ref (e.g. `blob:sha256:../../../etc/passwd`) in a persisted or shared session to escape the blob directory and read arbitrary files into image history; `parseBlobRef` and `parseTextBlobRef` now reject any suffix that is not a canonical 64-char lowercase hex hash ([#107](https://github.com/Wladefant/veyyon/issues/107)).

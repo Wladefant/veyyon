@@ -360,6 +360,141 @@ describe("imageGenTool", () => {
 		expect(result.details?.imageCount).toBe(1);
 	});
 
+	it("falls back to antigravity when an openai-codex API key lacks a subscription account claim", async () => {
+		const antigravityCredentials = JSON.stringify({ token: "test-antigravity-token", projectId: "test-project" });
+		let requestUrl: string | undefined;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request) => {
+			requestUrl = input.toString();
+			return new Response(
+				`data: ${JSON.stringify({
+					response: {
+						candidates: [
+							{
+								content: {
+									parts: [
+										{
+											inlineData: {
+												data: Buffer.from("fallback-image").toString("base64"),
+												mimeType: "image/png",
+											},
+										},
+									],
+								},
+							},
+						],
+					},
+				})}\n\n`,
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex",
+			name: "GPT Codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "plain-openai-key-no-claims",
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "openai-codex") return "plain-openai-key-no-claims";
+					if (provider === "google-antigravity") return antigravityCredentials;
+					return undefined;
+				},
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: (provider: string) => async () =>
+					provider === "google-antigravity" ? antigravityCredentials : "plain-openai-key-no-claims",
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-key-fallback", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
+	it("does not fall back to antigravity when an openai-codex API key has valid subscription account claims", async () => {
+		const tokenPayload = Buffer.from(
+			JSON.stringify({
+				"https://api.openai.com/auth": { chatgpt_account_id: "acc_valid" },
+			}),
+		).toString("base64");
+		const validCodexJwt = `header.${tokenPayload}.signature`;
+		const antigravityCredentials = JSON.stringify({ token: "test-antigravity-token", projectId: "test-project" });
+		let requestUrl: string | undefined;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request) => {
+			requestUrl = input.toString();
+			return new Response(
+				[
+					"event: response.output_item.done",
+					`data: ${JSON.stringify({
+						type: "response.output_item.done",
+						item: {
+							type: "image_generation_call",
+							result: Buffer.from("fake-codex-jwt-webp").toString("base64"),
+							status: "completed",
+						},
+					})}`,
+					"",
+					"event: response.completed",
+					`data: ${JSON.stringify({
+						type: "response.completed",
+						response: { output: [], status: "completed", error: null },
+					})}`,
+					"",
+				].join("\n"),
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex",
+			name: "GPT Codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => validCodexJwt,
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "openai-codex") return validCodexJwt;
+					if (provider === "google-antigravity") return antigravityCredentials;
+					return undefined;
+				},
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => validCodexJwt,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-valid-key", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+		expect(result.details?.provider).toBe("openai-codex");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
 	it("routes xAI image generation with xAI-only aspect ratios", async () => {
 		setPreferredImageProvider("xai");
 		let requestUrl: string | undefined;

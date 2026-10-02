@@ -29,16 +29,8 @@ export interface OpenAICodexModelManagerConfig {
 	cacheProviderId?: string;
 	accountFingerprint?: string;
 	/**
-	 * discovery is account-scoped — a model can be available to one account and
-	 * absent from another — so each account's `/models` endpoint is fetched
-	 * independently and the results unioned by id. Without this, discovery would
-	 * surface only the account it happened to resolve and, being authoritative,
-	 * prune every model the other accounts expose (#6265).
-	 *
-	 * Returns `null` to abort discovery entirely (e.g. an account's credential
-	 * failed to refresh): a partial account set would be cached as the complete
-	 * authoritative catalog and hide the missing account's models, so the caller
-	 * keeps the previous/bundled catalog instead.
+	 * Resolves configured Codex OAuth accounts. Fetches each account and
+	 * unions results by id. Returns null on failure to keep previous models.
 	 */
 	resolveAccounts?: () => Promise<readonly OpenAICodexAccount[] | null>;
 }
@@ -77,12 +69,7 @@ export function openaiCodexModelManagerOptions(
 	};
 }
 
-/**
- * Merge complete per-account Codex catalogs into one authoritative list,
- * deduped by model id (first account to expose an id wins). Returns `null` when
- * any account's fetch failed, so a partial list cannot replace the previous or
- * bundled authoritative catalog.
- */
+/** Unions per-account Codex catalogs by model id; returns null if any account failed. */
 function unionCodexModels(
 	results: readonly (CodexModelDiscoveryResult | null)[],
 ): ModelSpec<"openai-codex-responses">[] | null {

@@ -7,7 +7,7 @@ import {
 	MAX_DUMP_COUNT,
 	MIN_DUMP_COUNT,
 	statusLocalDumps,
-} from "../supervisor/dumps";
+} from "../cli/supervisor/dumps";
 
 export default class Supervisor extends Command {
 	static description = "Manage process supervisor and Windows crash dump diagnostics";

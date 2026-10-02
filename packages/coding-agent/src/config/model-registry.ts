@@ -535,16 +535,9 @@ function getOAuthCredentialsForProvider(authStorage: AuthStorage, provider: stri
 }
 
 /**
- * Resolve every configured Codex OAuth account for catalog discovery, refreshing
- * each credential exactly once. Codex `/models` is account-scoped, so discovery
- * must fetch per account and union the results; resolving a single access token
- * (as before) hid models available only through a sibling account (#6265).
- *
- * Returns `null` when any stored account fails to resolve (e.g. a transient
- * refresh failure): the Codex manager is authoritative, so unioning only the
- * accounts that resolved would cache a partial catalog and hide the failed
- * account's models for the cache TTL. Aborting keeps the previous/bundled
- * catalog instead.
+ * Resolves all Codex OAuth accounts, refreshing each once. Codex discovery
+ * fetches per account and unions results. Returns null on refresh failure
+ * to preserve previous/bundled models.
  */
 async function resolveCodexDiscoveryAccounts(
 	authStorage: AuthStorage,
