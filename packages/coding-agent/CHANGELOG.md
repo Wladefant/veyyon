@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch-facts` moved from `modes/` to `config/`, so the session reads its record of the project at rest without an allow-list entry in the session-does-not-import-the-UI gate ([#107](https://github.com/Wladefant/veyyon/issues/107)).
