@@ -7,6 +7,7 @@
 ### Added
 
 - `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
+- Exported SessionManagerStateSnapshot in SessionManager for atomic session migration and state restoration ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 
