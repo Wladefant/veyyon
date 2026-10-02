@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { buildModel } from "@veyyon/catalog/build";
+import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
@@ -35,17 +37,67 @@ describe("ModelRegistry extended context", () => {
 		if (tempDir && fs.existsSync(tempDir)) removeSyncWithRetries(tempDir);
 	});
 
-	function astraWindow(): number | null | undefined {
-		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.json"), { fetch: offlineFetch });
-		return registry.getAll().find(m => m.provider === "openai-codex" && m.id === "gpt-6-astra")?.contextWindow;
+	function windowOf(id: string, options?: { snapshotIo: boolean }): number | null | undefined {
+		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.json"), {
+			fetch: offlineFetch,
+			...options,
+		});
+		return registry.getAll().find(m => m.provider === "openai-codex" && m.id === id)?.contextWindow;
 	}
 
-	test("caps at the standard-pricing window by default", () => {
-		expect(astraWindow()).toBe(272_000);
+	// gpt-5.6-sol is bundled at 1,000,000, so only the clamp can bring it to 272,000. gpt-6-astra is already
+	// bundled at 272,000 and passes without the clamp.
+	test("caps a 1M-window row at the standard-pricing window by default", () => {
+		expect(windowOf("gpt-5.6-sol")).toBe(272_000);
 	});
 
 	test("allows the advertised maximum with extendedContext on", () => {
 		settings.set("extendedContext", true);
-		expect(astraWindow()).toBe(922_000);
+		expect(windowOf("gpt-5.6-sol")).toBe(872_000);
+		expect(windowOf("gpt-6-astra")).toBe(922_000);
+	});
+
+	// The static stage stores the discovery-derived rows AFTER the window policy ran, so a snapshot written in one
+	// mode would serve the other mode's windows unless the extendedContext flag is part of its fingerprint. Bundled
+	// rows never pass through the stage, so this drives a cached discovery row instead.
+	test("a cached snapshot written in one mode is not served in the other", () => {
+		writeModelCache(
+			"cerebras",
+			Date.now(),
+			[
+				buildModel({
+					id: "cached-1m",
+					name: "Cached 1M",
+					provider: "cerebras",
+					api: "openai-completions",
+					baseUrl: "https://cached.example.test/v1",
+					contextWindow: 1_000_000,
+					maxContextWindow: 872_000,
+					longContextCost: { inputThreshold: 272_000, input: 2, output: 3, cacheRead: 1, cacheWrite: 2 },
+					maxTokens: 4_000,
+					input: ["text"],
+					reasoning: false,
+					cost: { input: 1, output: 1.5, cacheRead: 0.5, cacheWrite: 1 },
+				}),
+			],
+			false,
+			"extended-context-contract",
+			path.join(tempDir, "models.db"),
+		);
+		fs.writeFileSync(
+			path.join(tempDir, "models.json"),
+			JSON.stringify({ providers: { cerebras: { auth: "none" } } }),
+		);
+		const cachedWindow = () =>
+			new ModelRegistry(authStorage, path.join(tempDir, "models.json"), {
+				fetch: offlineFetch,
+				snapshotIo: true,
+			}).find("cerebras", "cached-1m")?.contextWindow;
+
+		expect(cachedWindow()).toBe(272_000);
+		settings.set("extendedContext", true);
+		expect(cachedWindow()).toBe(872_000);
+		settings.set("extendedContext", false);
+		expect(cachedWindow()).toBe(272_000);
 	});
 });
