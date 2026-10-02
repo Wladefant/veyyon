@@ -8,6 +8,7 @@ import { fetchCodexModels } from "@veyyon/catalog/discovery/codex";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
+import { openaiCodexModelManagerOptions } from "@veyyon/catalog/provider-models/special";
 import type { ModelSpec } from "@veyyon/catalog/types";
 
 describe("Codex model discovery", () => {
@@ -94,6 +95,41 @@ describe("Codex model discovery", () => {
 		expect(terra).toMatchObject({ preferWebsockets: true, useResponsesLite: true });
 		const legacy = result?.models.find(model => model.id === "gpt-5.5");
 		expect(legacy?.useResponsesLite).toBeUndefined();
+	});
+	it("uses the discovered account catalog as authoritative", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-codex-authoritative-"));
+		const staticOnlyModel: ModelSpec<"openai-codex-responses"> = {
+			id: "unsupported-static",
+			name: "Unsupported static model",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 272_000,
+			maxTokens: 128_000,
+		};
+		const discoveredModel: ModelSpec<"openai-codex-responses"> = {
+			...staticOnlyModel,
+			id: "account-supported",
+			name: "Account-supported model",
+		};
+		try {
+			const result = await resolveProviderModels(
+				{
+					...openaiCodexModelManagerOptions(),
+					staticModels: [staticOnlyModel],
+					cacheDbPath: path.join(tempDir, "models.db"),
+					fetchDynamicModels: async () => [discoveredModel],
+				},
+				"online",
+			);
+
+			expect(result.models.map(model => model.id)).toEqual(["account-supported"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	// WHY: GPT-6 Astra and GPT-Reserve reached the picker with no effort control
@@ -331,5 +367,89 @@ describe("Codex model discovery", () => {
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
+	});
+	it("keeps account-listed API-unsupported models while pruning hidden models", async () => {
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-5.3-codex-spark",
+								display_name: "GPT-5.3 Codex Spark",
+								visibility: "list",
+								supported_in_api: false,
+								context_window: 128_000,
+								default_reasoning_level: "high",
+								input_modalities: ["text"],
+							},
+							{
+								slug: "hidden-model",
+								display_name: "Hidden model",
+								visibility: "hidden",
+								supported_in_api: true,
+							},
+							{
+								slug: "hide-model",
+								display_name: "Hide model",
+								visibility: "hide",
+								supported_in_api: true,
+							},
+						],
+					}),
+				),
+			{ preconnect() {} },
+		);
+
+		const result = await fetchCodexModels({
+			accessToken: "test-token",
+			fetchFn,
+		});
+
+		expect(result?.models.map(model => model.id)).toEqual(["gpt-5.3-codex-spark"]);
+		expect(result?.models[0]).toMatchObject({
+			contextWindow: 128_000,
+			maxTokens: 128_000,
+		});
+	});
+	it("normalizes Codex Daybreak aliases to the GPT-5.6 window and effort ladder", async () => {
+		const level = (effort: string) => ({ effort, description: `${effort} reasoning` });
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-daybreak-blue-latest",
+								display_name: "GPT-Daybreak Blue Latest",
+								context_window: 272_000,
+								default_reasoning_level: "medium",
+								supported_reasoning_levels: [level("low"), level("medium"), level("high"), level("xhigh")],
+								input_modalities: ["text", "image"],
+								visibility: "show",
+							},
+							{
+								slug: "gpt-daybreak-red-latest",
+								display_name: "GPT-Daybreak Red Latest",
+								context_window: 272_000,
+								default_reasoning_level: "high",
+								supported_reasoning_levels: [level("low"), level("medium"), level("high"), level("xhigh")],
+								input_modalities: ["text", "image"],
+								visibility: "show",
+							},
+						],
+					}),
+				),
+			{ preconnect() {} },
+		);
+
+		const result = await fetchCodexModels({
+			accessToken: "test-token",
+			fetchFn,
+		});
+
+		expect(result?.models).toHaveLength(2);
+		expect(result?.models[0]?.contextWindow).toBe(372_000);
+		expect(result?.models[1]?.contextWindow).toBe(372_000);
 	});
 });
