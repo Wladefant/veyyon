@@ -434,6 +434,16 @@ export async function executeFileSearch(
 					},
 					makeOnMatch(target.searchPath),
 				);
+				throwIfAborted(signal);
+				const out: Array<{ path: string; mtime: number }> = [];
+				for (const match of result.matches) {
+					if (!match.path) continue;
+					out.push({
+						path: formatMatchPath(match.path, target.searchPath, match.fileType),
+						mtime: match.mtime ?? 0,
+					});
+				}
+				return out;
 			} catch (error) {
 				// A deadline yields the partial matches gathered so far; a real
 				// cancellation propagates with its reason.
