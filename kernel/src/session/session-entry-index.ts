@@ -3,7 +3,7 @@ import { isRecord } from "@veyyon/utils/type-guards";
 import { walkBranchPath } from "./session-context";
 import type { SessionEntry, SessionTreeNode, UsageStatistics } from "./session-entries";
 
-function emptyUsageStatistics(): UsageStatistics {
+export function emptyUsageStatistics(): UsageStatistics {
 	return {
 		input: 0,
 		output: 0,
@@ -49,6 +49,11 @@ function addUsage(target: UsageStatistics, usage: Usage | undefined): void {
 	target.cost += usage.cost.total;
 }
 
+/** Add what `entry` spent to `target`, as {@link SessionEntryIndex} counts it. */
+export function addEntryUsage(target: UsageStatistics, entry: SessionEntry): void {
+	addUsage(target, entryUsage(entry));
+}
+
 function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {
 	return new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime();
 }
@@ -81,12 +86,24 @@ export class SessionEntryIndex {
 		this.#usage = emptyUsageStatistics();
 	}
 
-	rebuild(entries: readonly SessionEntry[]): void {
+	/**
+	 * Index `entries` from scratch. `usage` is their totals when the caller already folded them in
+	 * this order with {@link addEntryUsage}: a load that moves entries to disk as it reads them
+	 * folds each one first, and the fold here would read each moved one back.
+	 */
+	rebuild(entries: readonly SessionEntry[], usage?: UsageStatistics): void {
 		this.clear();
-		for (const entry of entries) this.insert(entry);
+		for (const entry of entries) this.#link(entry);
+		if (usage !== undefined) this.#usage = { ...usage };
+		else for (const entry of entries) addEntryUsage(this.#usage, entry);
 	}
 
 	insert(entry: SessionEntry): void {
+		this.#link(entry);
+		addEntryUsage(this.#usage, entry);
+	}
+
+	#link(entry: SessionEntry): void {
 		// The new leaf's path is the old leaf's path plus this entry exactly when
 		// it hangs off the old leaf and does not shadow an id already on the map.
 		const leafPath =
@@ -102,8 +119,6 @@ export class SessionEntryIndex {
 			if (entry.label) this.#labels.set(entry.targetId, entry.label);
 			else this.#labels.delete(entry.targetId);
 		}
-
-		addUsage(this.#usage, entryUsage(entry));
 	}
 
 	has(id: string): boolean {

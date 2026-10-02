@@ -18,6 +18,7 @@ import {
 	resolveTextBlobRefSync,
 } from "./blob-store";
 import type { OperatorNotices } from "./operator-notices";
+import { coldFieldsOf } from "./session-cold-payloads";
 import { buildSessionContext } from "./session-context";
 import {
 	type FileEntry,
@@ -27,9 +28,16 @@ import {
 	type SessionTitleSlotEntry,
 } from "./session-entries";
 import { checkSessionEntryShape } from "./session-entry-shape";
+import { LoadCooling, type LoadedColdHistory } from "./session-load-cooling";
 import { migrateToCurrentVersion } from "./session-migrations";
 import { isImageBlock, isImageDataPayload } from "./session-persistence";
-import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
+import {
+	FileSessionStorage,
+	fileObjectIdentity,
+	type PinnedSessionReader,
+	type SessionStorage,
+	type SessionStorageStat,
+} from "./session-storage";
 import {
 	parseTitleSlotFromContent,
 	parseTitleSlotLine,
@@ -38,11 +46,18 @@ import {
 } from "./session-title-slot";
 import { restoreToolResultEntries } from "./tool-result-codecs";
 
-const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
+/** Size at which a load reads the file in a stream of reads instead of as one string. */
+export const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
 export interface SessionLoadOptions {
 	source?: string;
 	operatorNotices?: OperatorNotices;
+	/**
+	 * Move compacted history to disk while a streamed file loads (see {@link LoadCooling}). The
+	 * result's `cold` holds the store the moved entries read back through and the usage totals.
+	 * A file read as one string loads whole.
+	 */
+	coolCompactedHistory?: boolean;
 }
 
 interface SessionRecordIssue {
@@ -188,6 +203,7 @@ class SessionRecordLoop {
 	readonly #streaming: boolean;
 	readonly #logSource: string | undefined;
 	readonly #notices: SessionLoadOptions;
+	readonly #cooling: LoadCooling | undefined;
 	#line = 1;
 	#byteOffset = 1;
 	/** Bytes of the title slot line, newline included, when the file starts with one. */
@@ -199,10 +215,16 @@ class SessionRecordLoop {
 	#end = 0;
 	#stitched = 0;
 
-	constructor(options: { streaming: boolean; logSource: string | undefined; notices: SessionLoadOptions }) {
+	constructor(options: {
+		streaming: boolean;
+		logSource: string | undefined;
+		notices: SessionLoadOptions;
+		cooling?: LoadCooling;
+	}) {
 		this.#streaming = options.streaming;
 		this.#logSource = options.logSource;
 		this.#notices = options.notices;
+		this.#cooling = options.cooling;
 	}
 
 	/** Advance past a line the caller consumed itself. */
@@ -243,6 +265,7 @@ class SessionRecordLoop {
 			if (this.entries.length === 0) this.#headerLine = text;
 			else this.#offsets.push(this.#byteOffset - 1);
 			this.entries.push(value as FileEntry);
+			this.#cooling?.add(value as FileEntry, this.#byteOffset - 1, byteLength);
 			this.#end = this.#byteOffset + byteLength;
 		} else {
 			this.#issues.push({ line: this.#line, byteOffset: this.#byteOffset, problem: shape.problem });
@@ -295,6 +318,8 @@ export interface ParsedSessionContent {
 	entries: FileEntry[];
 	titleSlot: SessionTitleUpdate | undefined;
 	layout: SessionRecordLayout | undefined;
+	/** What a load asked to {@link SessionLoadOptions.coolCompactedHistory} moved to disk. */
+	cold?: LoadedColdHistory;
 }
 
 /** Parse session JSONL while stripping and folding the optional fixed title slot. */
@@ -325,7 +350,7 @@ function decodeLine(bytes: Buffer, start: number, end: number): string {
 }
 
 /**
- * Hand each line of the file at `filePath` to `onLine`, with its byte length, reading
+ * Hand each line of the file open at `handle` to `onLine`, with its byte length, reading
  * {@link STREAM_READ_BYTES} at a time. A line is the bytes before a line feed, or the bytes after
  * the last one when the file does not end with one; an empty line is a line. A line longer than
  * the stream frame bound fails with `StreamFrameLimitError`, as every line reader does.
@@ -333,55 +358,90 @@ function decodeLine(bytes: Buffer, start: number, end: number): string {
  * Each read is split synchronously: an async iterator over lines cost one promise per line, and
  * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
  */
-async function forEachFileLine(filePath: string, onLine: (text: string, byteLength: number) => void): Promise<void> {
+async function forEachFileLine(
+	handle: fs.promises.FileHandle,
+	onLine: (text: string, byteLength: number) => void,
+): Promise<void> {
 	const limit = streamFrameCeiling();
-	const handle = await fs.promises.open(filePath, "r");
-	try {
-		let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
-		// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
-		let carried = 0;
-		for (;;) {
-			if (carried === buffer.length) {
-				const grown = Buffer.allocUnsafe(buffer.length * 2);
-				buffer.copy(grown, 0, 0, carried);
-				buffer = grown;
-			}
-			const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, null);
-			const filled = buffer.subarray(0, carried + bytesRead);
-			let start = 0;
-			for (let end = filled.indexOf(LINE_FEED, carried); end !== -1; end = filled.indexOf(LINE_FEED, start)) {
-				if (end - start > limit) throw new StreamFrameLimitError("line", end - start, limit);
-				onLine(decodeLine(filled, start, end), end - start);
-				start = end + 1;
-			}
-			carried = filled.length - start;
-			if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
-			if (bytesRead === 0) {
-				if (carried > 0) onLine(decodeLine(filled, start, filled.length), carried);
-				return;
-			}
-			filled.copyWithin(0, start);
+	let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
+	// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
+	let carried = 0;
+	for (;;) {
+		if (carried === buffer.length) {
+			const grown = Buffer.allocUnsafe(buffer.length * 2);
+			buffer.copy(grown, 0, 0, carried);
+			buffer = grown;
 		}
-	} finally {
-		await handle.close();
+		const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, null);
+		const filled = buffer.subarray(0, carried + bytesRead);
+		let start = 0;
+		for (let end = filled.indexOf(LINE_FEED, carried); end !== -1; end = filled.indexOf(LINE_FEED, start)) {
+			if (end - start > limit) throw new StreamFrameLimitError("line", end - start, limit);
+			onLine(decodeLine(filled, start, end), end - start);
+			start = end + 1;
+		}
+		carried = filled.length - start;
+		if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
+		if (bytesRead === 0) {
+			if (carried > 0) onLine(decodeLine(filled, start, filled.length), carried);
+			return;
+		}
+		filled.copyWithin(0, start);
 	}
+}
+
+/**
+ * The cooling a load of the file open at `handle` runs, or `undefined` when `storage` cannot keep
+ * a handle on that object: the path names another object by now, or the backend pins nothing.
+ */
+async function loadCoolingFor(
+	handle: fs.promises.FileHandle,
+	filePath: string,
+	storage: SessionStorage,
+): Promise<LoadCooling | undefined> {
+	if (storage.openPinnedReaderSync === undefined) return undefined;
+	const identity = fileObjectIdentity(await handle.stat());
+	let reader: PinnedSessionReader | undefined;
+	try {
+		reader = storage.openPinnedReaderSync(filePath);
+	} catch {
+		return undefined;
+	}
+	if (reader === undefined) return undefined;
+	if (reader.identity !== identity) {
+		reader.close();
+		return undefined;
+	}
+	// Resolved now: a cold entry reads back after the process may have changed its directory.
+	const blobs = new BlobStore(blobsDirForSessionDir(path.dirname(path.resolve(filePath))));
+	return new LoadCooling(reader, line => restoreColdLine(line, blobs));
 }
 
 /** Exported for testing — the ≥8MiB streaming path (works on any file size). */
 export async function loadEntriesFromFileStream(
 	filePath: string,
 	options: SessionLoadOptions = {},
+	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<ParsedSessionContent> {
-	let titleSlot: SessionTitleUpdate | undefined;
-	const loop = new SessionRecordLoop({
-		streaming: true,
-		logSource: filePath,
-		notices: { ...options, source: options.source ?? filePath },
-	});
-	let first = true;
-
+	let handle: fs.promises.FileHandle;
 	try {
-		await forEachFileLine(filePath, (text, byteLength) => {
+		handle = await fs.promises.open(filePath, "r");
+	} catch (err) {
+		if (isEnoent(err)) return { entries: [], titleSlot: undefined, layout: undefined };
+		throw err;
+	}
+	let cooling: LoadCooling | undefined;
+	try {
+		cooling = options.coolCompactedHistory ? await loadCoolingFor(handle, filePath, storage) : undefined;
+		let titleSlot: SessionTitleUpdate | undefined;
+		const loop = new SessionRecordLoop({
+			streaming: true,
+			logSource: filePath,
+			notices: { ...options, source: options.source ?? filePath },
+			cooling,
+		});
+		let first = true;
+		await forEachFileLine(handle, (text, byteLength) => {
 			if (first) {
 				first = false;
 				// The slot is a fixed-size first line, not a record, so it never reaches the
@@ -395,12 +455,14 @@ export async function loadEntriesFromFileStream(
 			}
 			loop.push(text, byteLength);
 		});
-	} catch (err) {
-		if (isEnoent(err)) return { entries: [], titleSlot: undefined, layout: undefined };
-		throw err;
+		const entries = foldTitleSlot(loop.finish(), titleSlot);
+		const cold = cooling?.finish();
+		cooling = undefined;
+		return { entries, titleSlot, layout: loop.layout(), cold };
+	} finally {
+		cooling?.finish();
+		await handle.close();
 	}
-
-	return { entries: foldTitleSlot(loop.finish(), titleSlot), titleSlot, layout: loop.layout() };
 }
 
 /** Read only the fixed-size head window to detect a physical title slot. */
@@ -443,6 +505,8 @@ export interface SessionFileLayout {
 export interface LoadedSessionFile {
 	entries: FileEntry[];
 	layout: SessionFileLayout | undefined;
+	/** What a load asked to {@link SessionLoadOptions.coolCompactedHistory} moved to disk. */
+	cold?: LoadedColdHistory;
 }
 
 /** Exported for testing */
@@ -466,7 +530,7 @@ export async function loadSessionFile(
 		before = storage.statSync(filePath);
 		loaded =
 			storage instanceof FileSessionStorage && before.size >= STREAM_LOAD_THRESHOLD_BYTES
-				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath })
+				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath }, storage)
 				: parseSessionContent(await storage.readText(filePath), { ...options, source: options.source ?? filePath });
 	} catch (err) {
 		if (isEnoent(err)) return { entries: [], layout: undefined };
@@ -483,7 +547,7 @@ export async function loadSessionFile(
 		throw new CorruptSessionFileError(filePath, "the first readable record is not a session header");
 	}
 
-	return { entries, layout: verifiedLayout(storage, filePath, before, loaded.layout) };
+	return { entries, layout: verifiedLayout(storage, filePath, before, loaded.layout), cold: loaded.cold };
 }
 
 /**
@@ -686,6 +750,26 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 }
 
 /**
+ * {@link scanEntryValue} over a cold entry or a cold message stand-in: every resident string is
+ * pooled, and the fields in `cold` stay on disk. A cold field is restored when its entry reads the
+ * line back, through {@link restoreColdLine}.
+ */
+function scanResidentValues(target: Record<string, unknown>, cold: readonly string[], scan: EntryScan): void {
+	for (const key of Object.keys(target)) {
+		if (cold.includes(key)) continue;
+		const item = target[key];
+		if (typeof item === "string") {
+			target[key] = scan.strings.intern(item, key);
+			continue;
+		}
+		if (typeof item !== "object" || item === null) continue;
+		const nested = coldFieldsOf(item);
+		if (nested === undefined) scanEntryValue(item, scan, key);
+		else scanResidentValues(item as Record<string, unknown>, nested, scan);
+	}
+}
+
+/**
  * How many blob reads may be in flight at once.
  *
  * A session-wide `Promise.all` over every reference issued all of them at once: a
@@ -822,6 +906,9 @@ export interface BlobResolutionOptions {
  * more under a key holding at most 256 distinct ones. Reports the payloads the blob store does not
  * hold and returns how many references stayed references.
  *
+ * A field of a cold entry (see {@link coldFieldsOf}) is left on disk: its payloads are restored
+ * when the entry reads its line back, and a missing one is logged then.
+ *
  * Two phases for the blobs: collect every reference in the session synchronously, then read them
  * through one bounded pool. The cap is session-wide rather than per-entry, so a transcript of a
  * thousand entries each holding one payload reads eight files at a time and not a thousand.
@@ -833,9 +920,17 @@ export async function resolveBlobRefsInEntries(
 ): Promise<number> {
 	const lost: LostPayloads = { count: 0 };
 	const scan: EntryScan = { sites: [], strings: new StringPool(true) };
+	let hasCold = false;
 	try {
 		for (const entry of entries) {
-			if (entry.type !== "session") scanEntryValue(entry, scan);
+			if (entry.type === "session") continue;
+			const cold = coldFieldsOf(entry);
+			if (cold === undefined) {
+				scanEntryValue(entry, scan);
+			} else {
+				hasCold = true;
+				scanResidentValues(entry as unknown as Record<string, unknown>, cold, scan);
+			}
 		}
 		await resolveBlobSites(scan, blobStore, lost);
 	} finally {
@@ -844,7 +939,7 @@ export async function resolveBlobRefsInEntries(
 		scan.sites.length = 0;
 		scan.strings.clear();
 	}
-	restoreToolResultEntries(entries);
+	restoreToolResultEntries(hasCold ? entries.filter(entry => coldFieldsOf(entry) === undefined) : entries);
 	if (lost.count > 0) {
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
 		if (options) emitLostPayloadNotice(options, lost.count);
@@ -855,7 +950,7 @@ export async function resolveBlobRefsInEntries(
 /**
  * Restore one entry read back from its session line without awaiting: the externalized payloads
  * and codec-dropped fields {@link resolveBlobRefsInEntries} restores on load. Returns how many
- * references the blob store could not answer; the load already reported each of them.
+ * references the blob store could not answer; the blob store logs each of them.
  */
 export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore): number {
 	const lost: LostPayloads = { count: 0 };
@@ -864,6 +959,17 @@ export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore)
 	for (const site of scan.sites) resolveBlobSiteSync(site, blobStore, lost, scan.strings);
 	restoreToolResultEntries([entry]);
 	return lost.count;
+}
+
+/**
+ * Parse a session line and restore what persistence moved out of it, as a load does. The range a
+ * cold entry reads may run to the next entry's line, so it may hold a blank line after its own.
+ */
+export function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
+	const end = line.indexOf("\n");
+	const entry = JSON.parse(end === -1 ? line : line.slice(0, end)) as SessionEntry;
+	restoreEntryPayloadsSync(entry, blobs);
+	return entry;
 }
 
 /**

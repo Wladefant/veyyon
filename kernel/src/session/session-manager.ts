@@ -67,11 +67,12 @@ import {
 	type SessionInfo,
 } from "./session-listing";
 import {
+	type LoadedSessionFile,
 	loadEntriesFromFile,
 	loadSessionFile,
 	readTitleSlotFromFile,
 	resolveBlobRefsInEntries,
-	restoreEntryPayloadsSync,
+	restoreColdLine,
 	type SessionFileLayout,
 } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
@@ -182,17 +183,6 @@ function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
 
 function isAssistantEntry(entry: SessionEntry): boolean {
 	return entry.type === "message" && entry.message.role === "assistant";
-}
-
-/**
- * Parse a session line and restore what persistence moved out of it, as a load does. The range a
- * cold entry reads runs to the next entry's line, so it may hold a blank line after its own.
- */
-function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
-	const end = line.indexOf("\n");
-	const entry = JSON.parse(end === -1 ? line : line.slice(0, end)) as SessionEntry;
-	restoreEntryPayloadsSync(entry, blobs);
-	return entry;
 }
 
 function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
@@ -365,8 +355,11 @@ export class SessionManager {
 	#hasTitleSlot = true;
 	#entries: SessionEntry[] = [];
 	#index = new SessionEntryIndex();
-	/** Payloads of entries the live context cannot reach, read back from the session file on use. */
-	readonly #cold = new ColdEntryPayloads();
+	/**
+	 * Payloads of entries the live context cannot reach, read back from the session file on use. A
+	 * resume adopts the store its load moved history into.
+	 */
+	#cold = new ColdEntryPayloads();
 	#instrumentation: InstrumentationLevel | undefined;
 	#nextSequence = 1;
 	#lifecycleStarted = false;
@@ -1467,14 +1460,15 @@ export class SessionManager {
 		return this.#sessionFile;
 	}
 
-	#applyEntries(header: SessionHeader, entries: SessionEntry[]): void {
+	/** `usage` is the totals of `entries` when the load that read them already added them up. */
+	#applyEntries(header: SessionHeader, entries: SessionEntry[], usage?: UsageStatistics): void {
 		this.#header = header;
 		this.#entries = entries;
 		this.#setSessionId(header.id);
 		this.#sessionName = header.title;
 		this.#titleSource = header.titleSource;
 		this.#titleUpdatedAt = header.timestamp;
-		this.#index.rebuild(entries);
+		this.#index.rebuild(entries, usage);
 		this.#nextSequence = nextSessionSequence(entries);
 		this.#lifecycleStarted = false;
 		this.#lifecycleEnded = false;
@@ -1698,8 +1692,9 @@ export class SessionManager {
 		const resolvedSessionFile = path.resolve(sessionFile);
 		const loaded = await loadSessionFile(resolvedSessionFile, this.#storage, {
 			operatorNotices: this.#operatorNotices,
+			coolCompactedHistory: true,
 		});
-		await this.#switchToLoadedFile(resolvedSessionFile, loaded.entries, loaded.layout);
+		await this.#switchToLoadedFile(resolvedSessionFile, loaded);
 	}
 
 	/**
@@ -1707,11 +1702,8 @@ export class SessionManager {
 	 * read the header's cwd before the manager exists, and hands the same entries here rather than
 	 * parsing a second time.
 	 */
-	async #switchToLoadedFile(
-		resolvedSessionFile: string,
-		fileEntries: FileEntry[],
-		layout: SessionFileLayout | undefined,
-	): Promise<void> {
+	async #switchToLoadedFile(resolvedSessionFile: string, loaded: LoadedSessionFile): Promise<void> {
+		const { entries: fileEntries, layout, cold } = loaded;
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		let migrated = false;
 		let header: SessionHeader | undefined;
@@ -1763,7 +1755,8 @@ export class SessionManager {
 			this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
 		}
 
-		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[]);
+		if (cold !== undefined) this.#cold = cold.payloads;
+		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[], cold?.usage);
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
@@ -3103,7 +3096,10 @@ export class SessionManager {
 			instrumentation?: InstrumentationLevel;
 		},
 	): Promise<SessionManager> {
-		const loaded = await loadSessionFile(filePath, storage, { operatorNotices: options?.operatorNotices });
+		const loaded = await loadSessionFile(filePath, storage, {
+			operatorNotices: options?.operatorNotices,
+			coolCompactedHistory: true,
+		});
 		const header = loaded.entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when that directory still
 		// exists. A deleted project dir would make the constructor's #cwd — and the
@@ -3128,7 +3124,7 @@ export class SessionManager {
 			options?.instrumentation,
 		);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		await manager.#switchToLoadedFile(path.resolve(filePath), loaded.entries, loaded.layout);
+		await manager.#switchToLoadedFile(path.resolve(filePath), loaded);
 		return manager;
 	}
 

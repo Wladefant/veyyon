@@ -25,6 +25,7 @@
  * signature persistence drops does not come back.
  */
 import { errorMessage, isRecord } from "@veyyon/utils";
+import { isBlobRef, isTextBlobRef } from "./blob-store";
 import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
 
@@ -86,7 +87,11 @@ interface ColdStub {
 /** Parse one session line and restore what persistence moved out of it. */
 export type ColdLineRestore = (line: string) => SessionEntry;
 
-/** The fields of `record` outside `resident` whose values are objects or long strings. */
+/**
+ * The fields of `record` outside `resident` whose values are objects, long strings or blob
+ * references. A reference is short, but the load restores it to the payload it names, so an entry
+ * cooled before that restore keeps none in memory.
+ */
 function largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>): string[] {
 	const keys: string[] = [];
 	for (const key of Object.keys(record)) {
@@ -94,7 +99,7 @@ function largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string
 		const value = record[key];
 		if (
 			typeof value === "string"
-				? value.length >= MIN_COLD_STRING_LENGTH
+				? value.length >= MIN_COLD_STRING_LENGTH || isTextBlobRef(value) || isBlobRef(value)
 				: typeof value === "object" && value !== null
 		) {
 			keys.push(key);
@@ -133,6 +138,18 @@ class ColdSlot extends ReturnsTarget {
 		if (#stub in target) (target as ColdSlot).#stub = stub;
 		else if (stub !== undefined) new ColdSlot(target).#stub = stub;
 	}
+}
+
+/**
+ * The fields of `target` held behind accessors when it is a cold entry or a cold entry's message
+ * stand-in, or `undefined` when it is neither. A walk that skips them reads the resident values
+ * without reading the entry's line back; a cold entry's `message` is resident in this sense, since
+ * its getter returns the stand-in.
+ */
+export function coldFieldsOf(target: object): readonly string[] | undefined {
+	const stub = ColdSlot.get(target);
+	if (stub === undefined) return undefined;
+	return stub.entry === target ? stub.keys : stub.messageKeys;
 }
 
 export class ColdEntryPayloads {

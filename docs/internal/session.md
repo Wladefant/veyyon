@@ -777,6 +777,8 @@ Applied when header `version < 3`:
 
 - `[]` from the loader is limited to an empty or nonexistent session and is replaced with a new initialized session file at that path. Corrupt non-empty transcripts fail closed before the active session identity changes.
 - Valid files are loaded, migrated if needed, blob refs resolved, then indexed.
+- A file of 8 MiB or more is read in 1 MiB reads. When the file is at the current version, the load moves the history each compaction summarized to disk as it reads that compaction (`LoadCooling` in [`kernel/src/session/session-load-cooling.ts`](../../kernel/src/session/session-load-cooling.ts)): a moved entry keeps its small fields in memory and reads its line back through a handle on the loaded file object on first use (`ColdEntryPayloads`). The load adds each entry's usage to the session totals before the entry moves, and blob resolution skips moved fields. A file an older version wrote loads whole and migrates in memory.
+- Once the entries are indexed, every payload the live context cannot reach moves to disk the same way, whichever path read the file. Windows opens no pinned handle, so there every entry stays in memory.
 
 ## Tree and Leaf Semantics
 
