@@ -1010,4 +1010,48 @@ describe("service tier request attribute", () => {
 		span?.end();
 		expect(onlySpan().attributes[OpenAIAttr.RequestServiceTier]).toBe("priority");
 	});
+
+	it("emits the service tier for a custom OpenAI model relay reaching the wire", () => {
+		const relayModel = buildModel({
+			id: "gpt-4o",
+			name: "Custom Relay GPT-4o",
+			api: "openai-responses",
+			provider: "custom-relay",
+			baseUrl: "https://relay.example.com/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 32_768,
+		});
+		const telemetry = telemetryFor({});
+		const span = startChatSpan(telemetry, relayModel, {
+			stepNumber: 0,
+			request: { serviceTier: "priority" },
+		});
+		span?.end();
+		expect(onlySpan().attributes[OpenAIAttr.RequestServiceTier]).toBe("priority");
+	});
+
+	it("omits the service tier when the model does not support it", () => {
+		const unsupportedModel = buildModel({
+			id: "mock-model",
+			name: "Unsupported Model",
+			api: "anthropic-messages",
+			provider: "custom-unsupported",
+			baseUrl: "https://custom.example.com",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 32_768,
+		});
+		const telemetry = telemetryFor({});
+		const span = startChatSpan(telemetry, unsupportedModel, {
+			stepNumber: 0,
+			request: { serviceTier: "priority" },
+		});
+		span?.end();
+		expect(onlySpan().attributes[OpenAIAttr.RequestServiceTier]).toBeUndefined();
+	});
 });
