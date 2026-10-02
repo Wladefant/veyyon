@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch-facts` moved from `modes/` to `config/`, so the session reads its record of the project at rest without an allow-list entry in the session-does-not-import-the-UI gate ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The bundled `/review` command fetches a pull request diff through the GitHub fetch module directly, so a launch no longer loads the `github` tool and its push guards ([#178](https://github.com/Wladefant/veyyon/pull/178)).
@@ -27,6 +28,7 @@
 
 ### Fixed
 - Fixed image generation auto-detection to fall through when an official OpenAI Codex API key lacks ChatGPT subscription account claims (oh-my-pi d124cf286e08829c8db41a9a11a560468ff9f113, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Codex web search now accepts valid email-only OAuth credentials without requiring or fabricating a ChatGPT-Account-Id header (oh-my-pi e3198485aa15c6178675f543d7f9e0b7f7c2c623, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex web search collapsing nested backend error envelopes to generic unknown errors and falling back to required tool choice when named tool choice is not supported (oh-my-pi d4cb024b5764d856b3e648be1be22b516b0cfa0b, cddad306a7b3a0a19bff20cf508462672909b0b2, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - `/provider`, `/account`, `/usage` and `veyyon usage` show each Antigravity account's own limits instead of the first account's for every login, list a second account that shares the project id instead of hiding it as covered, and word and draw Antigravity windows by what is left, in every usage renderer including the non-TUI `/usage` text ([#102](https://github.com/Wladefant/veyyon/issues/102)).
 - Fixed PowerShell completions throwing duplicate key parser errors when commands define case-sensitive flags (e.g. grep -c vs -C): flag tables and runtime completer state now use ordinal hashtables so distinct flag casing and tooltips are preserved ([#195](https://github.com/Wladefant/veyyon/issues/195)).
