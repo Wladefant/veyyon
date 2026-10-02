@@ -46,6 +46,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Turn recovery now classifies a failed turn that already streamed visible (non-whitespace) assistant text as replay-unsafe, so credential rotation and model fallback do not duplicate partial output to the user (oh-my-pi b5602ddfc1db15c16c499c20559176a69615ed4f, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Kept the mnemopi embedding subprocess referenced while requests are in flight so headless print mode cannot exit prematurely ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recomputed model scope after a cross-project resume switch so the destination project's `enabledModels` settings take effect ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed loop mode continuing when Esc is pressed mid-iteration by pausing the loop and cancelling pending submissions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

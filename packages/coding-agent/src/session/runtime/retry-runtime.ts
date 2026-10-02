@@ -30,7 +30,12 @@ import type {
 	PendingRecoveredRetryError,
 	ScheduledAgentContinueOptions,
 } from "../agent-session-types";
-import { hasReplayUnsafeToolOutput, isClassifierRefusal, toolBatchCanContinue } from "../failed-turn";
+import {
+	hasReplayUnsafeOutput,
+	hasReplayUnsafeToolOutput,
+	isClassifierRefusal,
+	toolBatchCanContinue,
+} from "../failed-turn";
 import { THINKING_LOOP_REDIRECT_TYPE } from "../nudges";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../turn-persistence";
 import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
@@ -235,7 +240,7 @@ export class RetryRuntime {
 
 		if (isClassifierRefusal(message)) return true;
 		return AIError.retriable(id, {
-			replayUnsafe: hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages),
+			replayUnsafe: hasReplayUnsafeOutput(message, this.#session.agent.state.messages),
 		});
 	}
 
