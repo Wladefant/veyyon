@@ -113,7 +113,7 @@ const STREAM_CORRUPTION_EXTRA_PATTERN = /bad record mac|stream error.*received f
  * message that merely mentions a finish reason after some unrelated close from reading as this.
  */
 export const STREAM_NO_TERMINAL_REASON_PATTERN =
-	/\b(?:closed|ended|stopped|terminated|finished)\b[^.]{0,48}?\b(?:before|without)\b[^.]{0,32}?(?:terminal\s+)?(?:finish[_\s]reason|terminal\s+event)|\breturned an empty response\b/i;
+	/\b(?:closed|ended|stopped|terminated|finished)\b[^.]{0,48}?\b(?:before|without)\b[^.]{0,32}?(?:terminal\s+)?(?:finish[_\s]reason|(?:terminal\s+)?(?:response\s+|completion\s+)?event)|\breturned an empty response\b/i;
 
 /** Whether a message describes a stream whose bytes did not survive the transport. */
 export function isStreamCorruptionText(text: string): boolean {
