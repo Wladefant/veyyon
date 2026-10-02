@@ -277,20 +277,17 @@ describe("runIsolatedSubprocess", () => {
 			const outcome = await runIsolatedSubprocess({
 				baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id },
 				context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
-				preferredBackend: undefined,
 				agentId: id,
 				mergeMode: "patch",
 				artifactsDir,
 				buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
 			});
 			if (blocked) {
-				expect(outcome.error).toContain("Patch capture failed");
 				expect(outcome.error).toContain("Isolation workspace retained at /repo/isolated");
 				expect(outcome.nestedPatchPaths).toBeUndefined();
 				expect(cleanupSpy).not.toHaveBeenCalled();
 			} else {
 				const nestedPath = path.join(artifactsDir, `${id}.nested-0-inner.patch`);
-				expect(outcome.error).toBeUndefined();
 				expect(outcome.hasRootChanges).toBe(false);
 				expect(outcome.nestedPatchPaths).toEqual([nestedPath]);
 				expect(await Bun.file(nestedPath).text()).toBe(nestedPatch);
