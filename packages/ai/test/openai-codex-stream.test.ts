@@ -4760,6 +4760,61 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	// WHY: aborting a CONNECTING prewarm socket must also cancel the 10 s
+	// handshake timer. A timer that outlives the abort closes the already-closed
+	// socket a second time (and, on a pooled socket, could tear down a later
+	// handshake). Gap: only the abort exit path is driven here; the open, error
+	// and close exits are covered by the shared clearPending call.
+	it("cancels the handshake timer when a prewarm is aborted mid-handshake", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+
+		const sockets: SilentCloseWebSocket[] = [];
+		let closeCalls = 0;
+		// close() does not emit a close event, so only the abort path can settle the handshake.
+		class SilentCloseWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+			}
+
+			close(): void {
+				closeCalls += 1;
+				super.close();
+			}
+		}
+		global.WebSocket = SilentCloseWebSocket as unknown as typeof WebSocket;
+
+		vi.useFakeTimers();
+		try {
+			const model = createCodexTestModel("https://chatgpt.com/backend-api");
+			const controller = new AbortController();
+			const prewarm = prewarmOpenAICodexResponses(model, {
+				apiKey: token,
+				sessionId: "ws-abort-timer-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				signal: controller.signal,
+			});
+			const settled = prewarm.then(
+				() => "resolved",
+				error => error,
+			);
+			for (let i = 0; i < 20; i++) await Promise.resolve();
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0].readyState).toBe(MockWebSocket.CONNECTING);
+
+			controller.abort();
+			expect(await settled).toBeInstanceOf(Error);
+			expect(closeCalls).toBe(1);
+
+			vi.advanceTimersByTime(10_000);
+			expect(closeCalls).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("surfaces a whitespace flood arriving after a delivered tool call instead of replaying", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

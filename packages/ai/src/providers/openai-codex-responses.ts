@@ -3583,6 +3583,7 @@ class CodexWebSocketConnection {
 		const onAbort = () => {
 			if (!settled) {
 				settled = true;
+				clearPending();
 				reject(new CodexWebSocketTransportError(`request was aborted`, { cause: signal?.reason }));
 			}
 			this.close("aborted");
