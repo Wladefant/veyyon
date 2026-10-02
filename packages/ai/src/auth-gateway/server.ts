@@ -53,7 +53,6 @@ import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 
 // ParsedFormatRequest / ParsedFormatOptions / FormatModule come from ./types.
 
-
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
 
@@ -349,7 +348,6 @@ function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
 }
 
-
 /** The SSE encoder's cancel hook: a client that closes the response aborts the upstream call once. */
 function abortOnClientClose(controller: AbortController): (reason?: unknown) => void {
 	return reason => {
@@ -434,8 +432,7 @@ async function handleFormatEndpoint(
 	// broker override on AuthStorage when needed).
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return clientClosedResponse(route);
-	if (typeof apiKey !== "string")
-		return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
+	if (typeof apiKey !== "string") return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
@@ -578,8 +575,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return aborted();
-	if (typeof apiKey !== "string")
-		return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+	if (typeof apiKey !== "string") return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
