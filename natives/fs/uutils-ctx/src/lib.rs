@@ -192,6 +192,10 @@ pub fn cwd() -> PathBuf {
 /// path argument through this before touching the filesystem.
 pub fn resolve(p: impl AsRef<Path>) -> PathBuf {
 	let p = p.as_ref();
+	#[cfg(windows)]
+	let normalized = brush_core::sys::fs::normalize_shell_path(p);
+	#[cfg(windows)]
+	let p = normalized.as_ref();
 	if p.is_absolute() {
 		p.to_path_buf()
 	} else {
