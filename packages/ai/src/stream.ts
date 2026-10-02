@@ -1445,7 +1445,7 @@ export function mapOptionsForApi<TApi extends Api>(
 ): OptionsForApi<TApi> {
 	const selection = resolveReasoningSelection(model, {
 		effort: rawOptions?.reasoning,
-		disabled: rawOptions?.disableReasoning,
+		disabled: rawOptions?.disableReasoning || rawOptions?.forceReasoningOff,
 	});
 	const options = applyReasoningSelection(rawOptions, selection) ?? NO_OPTIONS;
 	return optionsForApi({
@@ -1586,7 +1586,7 @@ function anthropicThinkingOff({ model, options, base }: OptionsMapping): Options
 function anthropicMessagesOptions(mapping: OptionsMapping): OptionsForApi<"anthropic-messages"> {
 	const { model, options, selection, base } = mapping;
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning) return anthropicThinkingOff(mapping);
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff) return anthropicThinkingOff(mapping);
 	let thinkingBudget = resolveThinkingBudget(reasoning, ANTHROPIC_THINKING_BUDGETS, options.thinkingBudgets);
 	if (thinkingBudget <= 0) return anthropicThinkingOff(mapping);
 
@@ -1759,7 +1759,7 @@ function googleGenerativeOptions({
 }: OptionsMapping): OptionsForApi<"google-generative-ai"> {
 	const toolChoice = mapGoogleToolChoice(options.toolChoice);
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning) {
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff) {
 		return { ...base, serviceTier: options.serviceTier, thinking: { enabled: false }, toolChoice };
 	}
 	const googleModel = model as Model<"google-generative-ai">;
@@ -1785,7 +1785,7 @@ function googleGenerativeOptions({
 function googleVertexOptions({ model, options, selection, base }: OptionsMapping): OptionsForApi<"google-vertex"> {
 	const toolChoice = mapGoogleToolChoice(options.toolChoice);
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning) {
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff) {
 		return { ...base, serviceTier: options.serviceTier, thinking: { enabled: false }, toolChoice };
 	}
 	const vertexModel = model as Model<"google-vertex">;
@@ -1819,7 +1819,7 @@ function googleGeminiCliOptions(mapping: OptionsMapping): OptionsForApi<"google-
 	const { model, options, selection, base } = mapping;
 	const toolChoice = mapGoogleToolChoice(options.toolChoice);
 	const reasoning = selection.effort;
-	if (selection.enabled && reasoning) {
+	if (selection.enabled && reasoning && !options.disableReasoning && !options.forceReasoningOff) {
 		const thinkingOn = geminiCliThinkingOn(mapping, requireSupportedEffort(model, reasoning), toolChoice);
 		if (thinkingOn) return thinkingOn;
 	}

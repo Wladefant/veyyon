@@ -1431,15 +1431,29 @@ export function repairOrphanResponsesToolCalls(input: ResponseInput): ResponseIn
 	return repaired;
 }
 
-type ResponsesBatchItemKind = "call" | "output" | "message" | "other";
+type ResponsesBatchItemKind = "call" | "output" | "assistant-message" | "other";
 
 /** Classify a Responses input item for tool-call/output batch normalization. */
 function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
-	const type = "type" in item ? item.type : undefined;
+	const type = "type" in item && typeof item.type === "string" ? item.type : undefined;
 	if (type === "function_call" || type === "custom_tool_call") return "call";
 	if (type === "function_call_output" || type === "custom_tool_call_output") return "output";
-	const role = "role" in item ? item.role : undefined;
-	if (type === "message" && (role === "assistant" || role === "user")) return "message";
+	const role = "role" in item && typeof item.role === "string" ? item.role : undefined;
+	if (type === "message") {
+		if (role === "assistant") return "assistant-message";
+		if (
+			role === "user" &&
+			"content" in item &&
+			typeof item.content === "string" &&
+			(item.content.startsWith("<stale-tool-result") ||
+				item.content.startsWith("[Orphan ") ||
+				item.content.startsWith("[Previous ") ||
+				item.content.startsWith("[stale tool result") ||
+				item.content.includes("tool result; call_id="))
+		) {
+			return "assistant-message";
+		}
+	}
 	return "other";
 }
 
@@ -1460,44 +1474,90 @@ function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
  * strict validator. See #8789.
  */
 export function hoistInterleavedResponsesToolBatchMessages<T extends object>(items: readonly T[]): T[] {
-	const moved = new Set<number>();
+	const callIdOf = (item: T): string | undefined =>
+		"call_id" in item && typeof item.call_id === "string" ? item.call_id : undefined;
+	// Does a call with `callId` precede `index` within the same contiguous batch body?
+	const hasEarlierBatchCall = (index: number, callId: string): boolean => {
+		for (let probe = index - 1; probe >= 0; probe--) {
+			const kind = classifyResponsesBatchItem(items[probe]!);
+			if (kind === "other") return false;
+			if (kind === "call" && callIdOf(items[probe]!) === callId) return true;
+		}
+		return false;
+	};
+	const bucketOf = new Map<number, number>();
 	const insertBefore = new Map<number, number[]>();
 	for (let index = 0; index < items.length; index++) {
-		if (classifyResponsesBatchItem(items[index]) !== "output") continue;
+		if (classifyResponsesBatchItem(items[index]!) !== "output") continue;
 		// Only anchor on the first output of a run.
-		if (index > 0 && classifyResponsesBatchItem(items[index - 1]) === "output") continue;
-		// Walk back over the batch body (calls interleaved with assistant messages).
+		if (index > 0 && classifyResponsesBatchItem(items[index - 1]!) === "output") continue;
+		// Calls the batch still owns further back: the anchor run's outputs, plus
+		// any earlier output crossed on the way.
+		const pending = new Set<string>();
+		for (let probe = index; probe < items.length; probe++) {
+			if (classifyResponsesBatchItem(items[probe]!) !== "output") break;
+			const callId = callIdOf(items[probe]!);
+			if (callId) pending.add(callId);
+		}
+		// Walk back over the batch body (calls and outputs interleaved with assistant messages).
+		// An earlier output is crossed only when it and a call the batch still owns
+		// both pair with calls further back — i.e. the output belongs to this same
+		// interrupted batch (#13083). Otherwise it closes a completed prior round,
+		// whose trailing messages stay put.
 		let start = index;
 		let sawCall = false;
 		const messageIndexes: number[] = [];
 		while (start > 0) {
-			const kind = classifyResponsesBatchItem(items[start - 1]);
+			const item = items[start - 1]!;
+			const kind = classifyResponsesBatchItem(item);
 			if (kind === "call") {
 				sawCall = true;
-			} else if (kind === "message") {
+				const callId = callIdOf(item);
+				if (callId) pending.delete(callId);
+			} else if (kind === "output") {
+				const callId = callIdOf(item);
+				if (!callId || !hasEarlierBatchCall(start - 1, callId)) break;
+				let ownsEarlierCall = false;
+				for (const owned of pending) {
+					if (hasEarlierBatchCall(start - 1, owned)) {
+						ownsEarlierCall = true;
+						break;
+					}
+				}
+				if (!ownsEarlierCall) break;
+				pending.add(callId);
+			} else if (kind === "assistant-message") {
 				messageIndexes.push(start - 1);
 			} else {
 				break;
 			}
-			start -= 1;
+			start--;
 		}
-		// Nothing to hoist unless a message actually sits among the calls.
+		// Nothing to hoist unless we actually crossed at least one call.
 		if (!sawCall || messageIndexes.length === 0) continue;
 		messageIndexes.reverse();
 		const target = insertBefore.get(start) ?? [];
 		for (const messageIndex of messageIndexes) {
-			moved.add(messageIndex);
+			// A wider batch can re-collect a message an earlier anchor already
+			// scheduled; move it rather than emitting it twice.
+			const previousStart = bucketOf.get(messageIndex);
+			if (previousStart !== undefined) {
+				const previous = insertBefore.get(previousStart);
+				const slot = previous?.indexOf(messageIndex) ?? -1;
+				if (previous && slot >= 0) previous.splice(slot, 1);
+			}
+			bucketOf.set(messageIndex, start);
 			target.push(messageIndex);
 		}
 		insertBefore.set(start, target);
 	}
-	if (moved.size === 0) return items.slice();
+	if (bucketOf.size === 0) return items.slice();
 	const result: T[] = [];
 	for (let index = 0; index < items.length; index++) {
 		const pending = insertBefore.get(index);
-		if (pending) for (const messageIndex of pending) result.push(items[messageIndex]);
-		if (moved.has(index)) continue;
-		result.push(items[index]);
+		if (pending) for (const messageIndex of pending) result.push(items[messageIndex]!);
+		if (bucketOf.has(index)) continue;
+		result.push(items[index]!);
 	}
 	return result;
 }
@@ -1641,6 +1701,14 @@ export interface BuildResponsesInputOptions<TApi extends Api> {
 	repairOrphanOutputs?: boolean;
 	/** Preserve assistant message item IDs from text signatures during fallback replay. */
 	preserveAssistantMessageIds?: boolean;
+	/**
+	 * Synthesize a reasoning item for every replayed assistant turn that carries
+	 * content but no reasoning item. Set for DeepSeek-family Responses targets
+	 * that reject a thinking-mode continuation lacking `reasoning_text`.
+	 */
+	requiresReasoningReplayForAllTurns?: boolean;
+	/** As {@link requiresReasoningReplayForAllTurns}, but only for turns that contain a tool call. */
+	requiresReasoningReplayForToolCalls?: boolean;
 }
 
 /**
@@ -1804,10 +1872,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					{ supportsImageDetailOriginal },
 				);
 				const sanitizedHistoryItems = rawSanitizedHistoryItems
-					? adaptResponsesReplayItemsForModel(
-							rawSanitizedHistoryItems,
-							supportsCustomToolCalls,
-							customToolWireNameMap,
+					? ensureRequiredResponsesReasoningReplay(
+							adaptResponsesReplayItemsForModel(
+								rawSanitizedHistoryItems,
+								supportsCustomToolCalls,
+								customToolWireNameMap,
+							),
+							assistantMsg.stopReason,
+							options.requiresReasoningReplayForAllTurns ?? false,
+							options.requiresReasoningReplayForToolCalls ?? false,
 						)
 					: undefined;
 				if (nativeReplayEnabled && sanitizedHistoryItems) {
@@ -1834,6 +1907,8 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				options.preserveAssistantMessageIds,
 				supportsCustomToolCalls,
 				customToolWireNameMap,
+				options.requiresReasoningReplayForAllTurns ?? false,
+				options.requiresReasoningReplayForToolCalls ?? false,
 			);
 			const outputItems = suppressHiddenEmptyFallback
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
@@ -1883,6 +1958,74 @@ function parseResponseReasoningReplayItem(signature: string | undefined): Respon
 	}
 }
 
+export const SYNTHETIC_REASONING_REPLAY_PLACEHOLDER = "reasoning unavailable";
+
+function createSyntheticResponsesReasoningItem(
+	text = SYNTHETIC_REASONING_REPLAY_PLACEHOLDER,
+	id?: string,
+): ResponseReasoningItem {
+	const item = {
+		type: "reasoning",
+		...(id ? { id } : {}),
+		summary: [],
+		content: [{ type: "reasoning_text", text }],
+	} satisfies Omit<ResponseReasoningItem, "id"> & Partial<Pick<ResponseReasoningItem, "id">>;
+	// The vendored SDK type marks `id` required; the wire accepts its absence.
+	return item as ResponseReasoningItem;
+}
+
+function isResponsesAssistantTurnBoundary(item: ResponseInput[number]): boolean {
+	const type = "type" in item && typeof item.type === "string" ? item.type : undefined;
+	if (type === "function_call_output" || type === "custom_tool_call_output") return true;
+	if (type === "compaction") return true;
+	return "role" in item && item.role !== "assistant";
+}
+
+function ensureRequiredResponsesReasoningReplay(
+	items: ResponseInput,
+	stopReason: AssistantMessage["stopReason"],
+	requiresAllTurns: boolean,
+	requiresToolCalls: boolean,
+): ResponseInput {
+	if (stopReason === "error" || (!requiresAllTurns && !requiresToolCalls)) return items;
+
+	const insertBefore: number[] = [];
+	let turnStart = 0;
+	for (let index = 0; index <= items.length; index++) {
+		if (index < items.length && !isResponsesAssistantTurnBoundary(items[index]!)) continue;
+
+		let hasContent = false;
+		let hasReasoning = false;
+		let hasToolCall = false;
+		for (let turnIndex = turnStart; turnIndex < index; turnIndex++) {
+			const item = items[turnIndex]!;
+			const itemType = "type" in item && typeof item.type === "string" ? item.type : undefined;
+			if (itemType === "reasoning") {
+				hasReasoning = true;
+				continue;
+			}
+			hasContent = true;
+			if (classifyResponsesBatchItem(item) === "call") hasToolCall = true;
+		}
+		if (hasContent && !hasReasoning && (requiresAllTurns || (requiresToolCalls && hasToolCall))) {
+			insertBefore.push(turnStart);
+		}
+		turnStart = index + 1;
+	}
+	if (insertBefore.length === 0) return items;
+
+	const repaired: ResponseInput = [];
+	let insertionIndex = 0;
+	for (let index = 0; index < items.length; index++) {
+		if (insertBefore[insertionIndex] === index) {
+			repaired.push(createSyntheticResponsesReasoningItem());
+			insertionIndex++;
+		}
+		repaired.push(items[index]!);
+	}
+	return repaired;
+}
+
 export function convertResponsesAssistantMessage<TApi extends Api>(
 	assistantMsg: AssistantMessage,
 	model: Model<TApi>,
@@ -1893,6 +2036,8 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	preserveMessageIds = false,
 	supportsCustomToolCalls = true,
 	customToolWireNameMap?: ReadonlyMap<string, string>,
+	requiresReasoningReplayForAllTurns = false,
+	requiresReasoningReplayForToolCalls = false,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	let unsignedTextBlocks = 0;
@@ -1905,13 +2050,28 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	const isDifferentModel =
 		assistantMsg.model !== model.id && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
 
+	const requiresReasoningItem =
+		assistantMsg.stopReason !== "error" &&
+		(requiresReasoningReplayForAllTurns ||
+			(requiresReasoningReplayForToolCalls && assistantMsg.content.some(block => block.type === "toolCall")));
+	let reasoningItemEmitted = false;
+	const carriedReasoningTexts: string[] = [];
+	let synthesizedReasoningItemId: string | undefined;
+
 	for (const block of assistantMsg.content) {
 		if (block.type === "thinking" && assistantMsg.stopReason !== "error") {
+			if (requiresReasoningItem) {
+				if (block.itemId) synthesizedReasoningItemId ??= block.itemId;
+				if (block.thinking.trim().length > 0) carriedReasoningTexts.push(block.thinking);
+			}
 			if (!includeThinkingSignatures) {
 				continue;
 			}
 			const reasoningItem = parseResponseReasoningReplayItem(block.thinkingSignature);
-			if (reasoningItem) outputItems.push(reasoningItem);
+			if (reasoningItem) {
+				outputItems.push(reasoningItem);
+				reasoningItemEmitted = true;
+			}
 			continue;
 		}
 
@@ -1987,6 +2147,13 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			name: functionName,
 			arguments: stringifyJson(block.arguments) ?? "null",
 		});
+	}
+
+	if (requiresReasoningItem && !reasoningItemEmitted && outputItems.length > 0) {
+		const carriedReasoningText = carriedReasoningTexts.join("\n");
+		const reasoningText =
+			carriedReasoningText.length > 0 ? carriedReasoningText : SYNTHETIC_REASONING_REPLAY_PLACEHOLDER;
+		outputItems.unshift(createSyntheticResponsesReasoningItem(reasoningText, synthesizedReasoningItemId));
 	}
 
 	return outputItems;
