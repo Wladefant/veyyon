@@ -19,7 +19,10 @@ import { buildModelReferenceIndex, resolveModelReference } from "../src/identity
 import { resolveModelThinking } from "../src/model-thinking";
 import { applyCommandCodeContract } from "../src/provider-models/command-code";
 import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
-import { resolveWaferServerlessThinkingFormat } from "../src/provider-models/openai-compat";
+import {
+	applyXaiResponsesThinkingPolicy,
+	resolveWaferServerlessThinkingFormat,
+} from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
 import { normalizeModelCost } from "../src/utils";
 import { isVariantCollapsedSpec } from "../src/variant-collapse";
@@ -231,6 +234,10 @@ export function applyCanonicalLimitFallback(models: ModelSpec<Api>[]): void {
 }
 
 function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
+	if (model.provider === "xai" && model.api === "openai-responses") {
+		const updated = applyXaiResponsesThinkingPolicy(model as ModelSpec<"openai-responses">);
+		model.compat = updated.compat;
+	}
 	const copilotLimits = model.provider === "github-copilot" ? COPILOT_GENERATED_LIMITS[model.id] : undefined;
 	if (copilotLimits) {
 		model.contextWindow = copilotLimits.contextWindow;

@@ -84,6 +84,7 @@ import {
 	openStallLadderBudget,
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
@@ -119,6 +120,7 @@ import type {
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
+	ResponseOutputItem,
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 	ResponseStatus,
@@ -131,6 +133,7 @@ import {
 	appendReasoningSummaryPart,
 	appendReasoningSummaryPartDone,
 	appendReasoningSummaryTextDelta,
+	appendResponsesImageResult,
 	appendResponsesToolResultMessages,
 	applyOpenAIServiceTier,
 	applyReasoningSummaryDone,
@@ -140,11 +143,13 @@ import {
 	createSequentialCutoffSummaryState,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
+	escapeReplayedClientText,
 	finalizeCustomToolCallInputDone,
 	finalizeMessageText,
 	finalizePendingResponsesToolCalls,
 	finalizeReasoningThinking,
 	finalizeToolCallArgumentsDone,
+	getOpenAIPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
 	normalizeOpenAIPromptCacheKey,
@@ -339,7 +344,12 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 }
 
 type CodexTransport = "sse" | "websocket";
-type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
+type CodexEventItem =
+	| ResponseReasoningItem
+	| ResponseOutputMessage
+	| ResponseFunctionToolCall
+	| ResponseCustomToolCall
+	| ResponseOutputItem.ImageGenerationCall;
 type CodexOutputBlock =
 	| ThinkingContent
 	| TextContent
@@ -1378,7 +1388,7 @@ async function buildCodexRequestContext(
 	const accountId = getCodexAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
-	const promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+	const promptCacheKey = getOpenAIPromptCacheKey(options);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
 	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
@@ -1497,7 +1507,7 @@ export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
-	promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+	promptCacheKey = getOpenAIPromptCacheKey(options),
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
@@ -2180,6 +2190,7 @@ class CodexStreamProcessor {
 		const rawItem = rawEvent.item;
 		if (!rawItem || typeof rawItem !== "object") return;
 		const item = structuredCloneJSON(rawItem) as CodexEventItem;
+		if (item.type === "image_generation_call" && item.result) item.status = "completed";
 		runtime.nativeOutputItems.push(item as unknown as Record<string, unknown>);
 
 		// Match the finalization to the OPEN ITEM that started this block, not the
@@ -2191,6 +2202,12 @@ class CodexStreamProcessor {
 		const entry = (itemId ? runtime.openItems.get(itemId) : null) ?? runtime.openItemForEvent(rawEvent);
 		const block = entry?.block ?? null;
 		const contentIndex = entry?.contentIndex ?? output.content.length - 1;
+
+		if (item.type === "image_generation_call" && item.result) {
+			appendResponsesImageResult(output, stream, item.result);
+			runtime.closeOpenItem(entry);
+			return;
+		}
 
 		if (item.type === "reasoning" && block?.type === "thinking") {
 			this.#flushSummaryDeltas(entry);
@@ -4263,7 +4280,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						customCallIds.add(maybe.call_id);
 					}
 				}
-				for (let hi = 0; hi < historyItems.length; hi++) messages.push(historyItems[hi]!);
+				const replayItems = isHarmonyDialectModel(model) ? escapeReplayedClientText(historyItems) : historyItems;
+				for (let hi = 0; hi < replayItems.length; hi++) messages.push(replayItems[hi]!);
 				msgIndex += 1;
 				continue;
 			}
@@ -4365,14 +4383,23 @@ function normalizeInputMessageContent(
 	model: Model<"openai-codex-responses">,
 	content: string | Array<TextContent | ImageContent | VideoContent>,
 ): ResponseInputContent[] {
+	// gpt-5.x codex rejects reserved Harmony control-token spellings in input
+	// data; escape the transport copy of untrusted user text so ordinary docs or
+	// grep results cannot poison the session (#6913). History is left untouched.
+	const escapeControlTokens = isHarmonyDialectModel(model);
 	if (typeof content === "string") {
 		if (!content || content.trim() === "") return [];
-		return [{ type: "input_text", text: content.toWellFormed() }];
+		const text = content.toWellFormed();
+		return [{ type: "input_text", text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text }];
 	}
 
 	return (
-		convertResponsesInputContent(content, model.input.includes("image"), model.compat.supportsImageDetailOriginal) ??
-		[]
+		convertResponsesInputContent(
+			content,
+			model.input.includes("image"),
+			model.compat.supportsImageDetailOriginal,
+			escapeControlTokens,
+		) ?? []
 	);
 }
 
