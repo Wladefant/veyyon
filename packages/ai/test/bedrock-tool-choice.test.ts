@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel, getBundledModels } from "@veyyon/catalog/models";
-import { streamBedrock } from "../src/providers/amazon-bedrock";
-import type { Context, Model, SimpleStreamOptions } from "../src/types";
+import { type BedrockOptions, streamBedrock } from "../src/providers/amazon-bedrock";
+import type { Context, Model } from "../src/types";
 
 const context: Context = {
 	systemPrompt: ["be terse"],
@@ -21,10 +21,7 @@ interface ToolChoicePayload {
 	additionalModelRequestFields?: { thinking?: unknown };
 }
 
-async function capture(
-	model: Model<"bedrock-converse-stream">,
-	options: SimpleStreamOptions,
-): Promise<ToolChoicePayload> {
+async function capture(model: Model<"bedrock-converse-stream">, options: BedrockOptions): Promise<ToolChoicePayload> {
 	const { promise, resolve, reject } = Promise.withResolvers<ToolChoicePayload>();
 	const stream = streamBedrock(model, context, {
 		region: "us-east-1",
@@ -68,7 +65,7 @@ describe("Bedrock forced tool choice", () => {
 		for (const model of models) {
 			expect(model.api).toBe("bedrock-converse-stream");
 			const generation = model.id.match(/claude-(\d+)/)?.[1] ?? model.id.match(/sonnet-(\d+)/)?.[1];
-			expect(["3", "4", "5"]).toContain(generation);
+			expect(["3", "4", "5"]).toContain(generation ?? "");
 			const rejectsForcedChoice = model.id.includes("sonnet-5-5");
 			if (rejectsForcedChoice) unsupported++;
 			for (const toolChoice of ["any", { type: "tool", name: "echo" }] as const) {
