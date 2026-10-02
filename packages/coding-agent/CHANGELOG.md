@@ -5,10 +5,13 @@
 ### Added
 
 - Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 
 - Preferred concretely authenticated providers over ambient credential sources for automatic startup defaults while preserving explicit selections ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed HTML session exports overflowing the browser call stack when rendering a valid, deeply nested conversation tree ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -42,6 +45,8 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Fixed `veyyon usage` capacity stats to report Codex chat and Spark meters separately when they share a window duration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Nerd Font symbols drawing the D3.js icon for C# files and the Microsoft logo for the context meter; they now use the C# and generic window icons ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hard `session_stop` blocks survive the advisory continuation limit, reasonless blocks retain a fallback instruction, and aborted turns cannot schedule stale stop feedback ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved bearer token fallback when discovering OpenAI Codex models without stored OAuth accounts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed timed-out or interrupted glob searches keeping native filesystem workers alive and blocking subsequent agent turns (oh-my-pi 510f9e05c7397c69f373f01d4d4f098e917aa2e3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
