@@ -63,6 +63,6 @@ describe("SqliteAuthCredentialStore opener", () => {
 		}
 
 		expect(rawError).toBeDefined();
-		expect(rawError?.message).not.toContain("Database \"/nonexistent/test.db\":");
+		expect(rawError?.message).not.toContain('Database "/nonexistent/test.db":');
 	});
 });
