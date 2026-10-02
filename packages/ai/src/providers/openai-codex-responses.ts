@@ -84,6 +84,7 @@ import {
 	openStallLadderBudget,
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
@@ -140,6 +141,7 @@ import {
 	createSequentialCutoffSummaryState,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
+	escapeReplayedClientText,
 	finalizeCustomToolCallInputDone,
 	finalizeMessageText,
 	finalizePendingResponsesToolCalls,
@@ -4263,7 +4265,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						customCallIds.add(maybe.call_id);
 					}
 				}
-				for (let hi = 0; hi < historyItems.length; hi++) messages.push(historyItems[hi]!);
+				const replayItems = isHarmonyDialectModel(model) ? escapeReplayedClientText(historyItems) : historyItems;
+				for (let hi = 0; hi < replayItems.length; hi++) messages.push(replayItems[hi]!);
 				msgIndex += 1;
 				continue;
 			}
@@ -4365,14 +4368,23 @@ function normalizeInputMessageContent(
 	model: Model<"openai-codex-responses">,
 	content: string | Array<TextContent | ImageContent | VideoContent>,
 ): ResponseInputContent[] {
+	// gpt-5.x codex rejects reserved Harmony control-token spellings in input
+	// data; escape the transport copy of untrusted user text so ordinary docs or
+	// grep results cannot poison the session (#6913). History is left untouched.
+	const escapeControlTokens = isHarmonyDialectModel(model);
 	if (typeof content === "string") {
 		if (!content || content.trim() === "") return [];
-		return [{ type: "input_text", text: content.toWellFormed() }];
+		const text = content.toWellFormed();
+		return [{ type: "input_text", text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text }];
 	}
 
 	return (
-		convertResponsesInputContent(content, model.input.includes("image"), model.compat.supportsImageDetailOriginal) ??
-		[]
+		convertResponsesInputContent(
+			content,
+			model.input.includes("image"),
+			model.compat.supportsImageDetailOriginal,
+			escapeControlTokens,
+		) ?? []
 	);
 }
 
