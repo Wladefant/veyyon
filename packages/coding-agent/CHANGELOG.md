@@ -10,6 +10,7 @@
 ### Fixed
 
 - Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed HTML session exports overflowing the browser call stack when rendering a valid, deeply nested conversation tree ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
