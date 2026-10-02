@@ -1727,16 +1727,24 @@ export function escapeReplayedClientText(items: ResponseInput): ResponseInput {
 		if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
 			return typeof item.output === "string" ? { ...item, output: escapeHarmonyControlTokens(item.output) } : item;
 		}
-		if (item.type === "message" && (item.role === "user" || item.role === "developer" || item.role === "system")) {
-			if (typeof item.content === "string") {
-				return { ...item, content: escapeHarmonyControlTokens(item.content) };
+		// EasyInputMessage may omit `type` (`{ role, content }`); the responses
+		// server persists it verbatim, so treat missing type as a message too.
+		const isTypedMessage = item.type === "message" || item.type === undefined;
+		if (isTypedMessage && "role" in item && "content" in item) {
+			const role = item.role;
+			if (role !== "user" && role !== "developer" && role !== "system") return item;
+			const content = item.content;
+			if (typeof content === "string") {
+				return { ...item, content: escapeHarmonyControlTokens(content) };
 			}
-			return {
-				...item,
-				content: item.content.map(part =>
-					part.type === "input_text" ? { ...part, text: escapeHarmonyControlTokens(part.text) } : part,
-				),
-			};
+			if (Array.isArray(content)) {
+				return {
+					...item,
+					content: content.map(part =>
+						part.type === "input_text" ? { ...part, text: escapeHarmonyControlTokens(part.text) } : part,
+					),
+				};
+			}
 		}
 		return item;
 	});
