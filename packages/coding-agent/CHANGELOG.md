@@ -5,6 +5,7 @@
 ### Fixed
 
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
+- Fixed file search silently clamping `limit` above 200 and then advising a `Use limit=` retry it would clamp straight back: a clamped request now says so, the suggestion is capped at 200, and at the cap the notice reports the count alone ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4997d101c2674e484595bf2b3d0dfa9e3d71c2db).
 - Fixed Windows stdio MCP servers launched through `.cmd`/`.bat` shims failing with `Transport closed`; the launch now builds a `cmd.exe /d /e:ON /v:OFF /c` command line escaped for `cmd.exe`'s parser and spawned with `windowsVerbatimArguments`, so the command runs and arguments (including `%VAR%`, quotes, and shell metacharacters) reach the server intact and cannot inject commands (BatBadBut / CVE-2024-24576) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 07889331103b8b0f3da532d7dc3ceb0a5c2c6de5).
 - Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
