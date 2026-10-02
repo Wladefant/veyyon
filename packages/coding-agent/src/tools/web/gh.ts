@@ -45,13 +45,18 @@ import {
 	appendRepoFlag,
 	formatAuthor,
 	formatLabels,
+	formatRepoRef,
 	formatShortSha,
 	type GhLabel,
 	type GhUser,
+	ghApiHostArgs,
+	githubRepoSlugEquals,
 	normalizeBlock,
 	normalizeOptionalString,
 	normalizeText,
+	parseRepoRef,
 	pushLine,
+	repoFromUrl,
 	requireNonEmpty,
 } from "./gh-format";
 
@@ -78,7 +83,7 @@ export {
 	parsePrUnifiedDiff,
 	resolveDefaultRepoMemoized,
 } from "./gh-fetch";
-export { parsePositiveDecimalInt } from "./gh-format";
+export { formatRepoRef, parsePositiveDecimalInt } from "./gh-format";
 
 import { saveOutputArtifact } from "../core/output-artifact";
 import type { OutputMeta } from "../core/output-meta";
@@ -204,7 +209,7 @@ const RUN_WATCH_GRACE_DEFAULT = 5;
 const RUN_WATCH_TAIL_DEFAULT = 15;
 const RUN_WATCH_TAIL_MAX = 200;
 const RUN_JOBS_PAGE_SIZE = 100;
-const RUN_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/.*)?$/;
+const RUN_URL_PATTERN = /^https:\/\/([^/]+)\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/.*)?$/;
 const RUN_SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const RUN_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
 const JOB_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required"]);
@@ -606,30 +611,31 @@ function buildGhApiSearchArgs(
 	endpoint: "issues" | "code" | "commits" | "repositories",
 	query: string,
 	limit: number,
-	extraHeaders?: ReadonlyArray<string>,
+	options?: { host?: string; extraHeaders?: ReadonlyArray<string> },
 ): string[] {
-	const args = ["api", "-X", "GET", `/search/${endpoint}`, "-f", `q=${query}`, "-F", `per_page=${limit}`];
-	for (const header of extraHeaders ?? []) {
+	const args = ["api"];
+	if (options?.host) args.push("--hostname", options.host);
+	args.push("-X", "GET", `/search/${endpoint}`, "-f", `q=${query}`, "-F", `per_page=${limit}`);
+	for (const header of options?.extraHeaders ?? []) {
 		args.push("-H", header);
 	}
 	return args;
 }
 
+/**
+ * Split a resolved scope into the `repo:` qualifier and the host to search.
+ * GitHub's search qualifiers take a bare `owner/repo`, so an enterprise host
+ * has to travel as a separate `--hostname` instead of inside the query.
+ */
+function searchScope(repo: string | undefined): { qualifier?: string; host?: string } {
+	if (!repo) return {};
+	const ref = parseRepoRef(repo);
+	return { qualifier: `repo:${ref.slug}`, host: ref.host };
+}
+
 function repoFromRepositoryUrl(value: string | undefined): string | undefined {
 	if (!value?.startsWith(REPO_API_URL_PREFIX)) return undefined;
 	return value.slice(REPO_API_URL_PREFIX.length);
-}
-
-function githubRepoSlugEquals(left: string | undefined, right: string): boolean {
-	if (left === undefined || left.length !== right.length) return false;
-	for (let idx = 0; idx < left.length; idx += 1) {
-		let leftCode = left.charCodeAt(idx);
-		let rightCode = right.charCodeAt(idx);
-		if (leftCode >= 65 && leftCode <= 90) leftCode += 32;
-		if (rightCode >= 65 && rightCode <= 90) rightCode += 32;
-		if (leftCode !== rightCode) return false;
-	}
-	return true;
 }
 
 function apiUserToGhUser(user: GhApiUser | null | undefined): GhUser | undefined {
@@ -822,9 +828,12 @@ async function ensurePrRemote(
 	}
 
 	const headRepository = requireNonEmpty(data.headRepository?.nameWithOwner, "head repository");
+	// `headRepository.nameWithOwner` is host-less, so on an enterprise host the
+	// lookup has to be pinned to the PR's own host or it resolves on the default one.
+	const pullHost = parseRepoRef(parsePrUrl(data.url).repo ?? "").host;
 	const repoSummary = await git.github.json<GhRepoViewData>(
 		repoRoot,
-		["repo", "view", headRepository, "--json", GH_REPO_CLONE_FIELDS.join(",")],
+		["repo", "view", formatRepoRef(pullHost, headRepository), "--json", GH_REPO_CLONE_FIELDS.join(",")],
 		signal,
 		{ repoProvided: true },
 	);
@@ -933,8 +942,8 @@ function parseRunReference(value: string | undefined): GhRunReference {
 	}
 
 	return {
-		repo: match[1],
-		runId: Number(match[2]),
+		repo: formatRepoRef(match[1], match[2]),
+		runId: Number(match[3]),
 	};
 }
 
@@ -1422,12 +1431,26 @@ function buildCommitRunWatchDetails(
 	};
 }
 
+async function resolveRepoFromCwd(cwd: string, signal?: AbortSignal): Promise<string> {
+	const url = requireNonEmpty(
+		await git.github.text(cwd, ["repo", "view", "--json", "url", "-q", ".url"], signal),
+		"repo",
+	);
+	const repo = repoFromUrl(url);
+	if (!repo) {
+		throw new ToolError(`GitHub CLI returned an unrecognized repository URL: ${url}`);
+	}
+	return repo;
+}
+
 async function resolveGitHubRepo(
 	cwd: string,
 	repo: string | undefined,
 	runRepo: string | undefined,
 	signal?: AbortSignal,
 ): Promise<string> {
+	if (repo) parseRepoRef(repo);
+	if (runRepo) parseRepoRef(runRepo);
 	if (repo && runRepo && !githubRepoSlugEquals(repo, runRepo)) {
 		throw new ToolError("run URL repository does not match the provided repo");
 	}
@@ -1440,12 +1463,7 @@ async function resolveGitHubRepo(
 		return runRepo;
 	}
 
-	const resolved = await git.github.text(
-		cwd,
-		["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-		signal,
-	);
-	return requireNonEmpty(resolved, "repo");
+	return resolveRepoFromCwd(cwd, signal);
 }
 
 /**
@@ -1513,9 +1531,10 @@ async function resolveGitHubBranchHead(
 	branch: string,
 	signal?: AbortSignal,
 ): Promise<string> {
+	const ref = parseRepoRef(repo);
 	const response = await git.github.json<GhBranchApiResponse>(
 		cwd,
-		["api", "--method", "GET", `/repos/${repo}/branches/${encodeURIComponent(branch)}`],
+		["api", ...ghApiHostArgs(ref), "--method", "GET", `/repos/${ref.slug}/branches/${encodeURIComponent(branch)}`],
 		signal,
 		{ repoProvided: true },
 	);
@@ -1534,13 +1553,15 @@ async function fetchRunsForCommit(
 	// whose `head_branch` is not the local checkout — e.g. tag-push triggered
 	// release workflows (`head_branch=v1.2.3`) or PR-triggered runs
 	// (`head_branch=<pr head>`). See coding-agent issue tracker for details.
+	const ref = parseRepoRef(repo);
 	const response = await git.github.json<GhActionsRunListResponse>(
 		cwd,
 		[
 			"api",
+			...ghApiHostArgs(ref),
 			"--method",
 			"GET",
-			`/repos/${repo}/actions/runs`,
+			`/repos/${ref.slug}/actions/runs`,
 			"-F",
 			`head_sha=${headSha}`,
 			"-F",
@@ -1582,13 +1603,15 @@ async function fetchRunJobs(
 	let page = 1;
 
 	while (true) {
+		const ref = parseRepoRef(repo);
 		const response = await git.github.json<GhActionsJobsResponse>(
 			cwd,
 			[
 				"api",
+				...ghApiHostArgs(ref),
 				"--method",
 				"GET",
-				`/repos/${repo}/actions/runs/${runId}/jobs`,
+				`/repos/${ref.slug}/actions/runs/${runId}/jobs`,
 				"-F",
 				`per_page=${RUN_JOBS_PAGE_SIZE}`,
 				"-F",
@@ -1623,10 +1646,11 @@ async function fetchRunSnapshot(
 	runId: number,
 	signal?: AbortSignal,
 ): Promise<GhRunSnapshot> {
+	const ref = parseRepoRef(repo);
 	const [run, jobs] = await Promise.all([
 		git.github.json<GhActionsRunApi>(
 			cwd,
-			["api", "--method", "GET", `/repos/${repo}/actions/runs/${runId}`],
+			["api", ...ghApiHostArgs(ref), "--method", "GET", `/repos/${ref.slug}/actions/runs/${runId}`],
 			signal,
 			{
 				repoProvided: true,
@@ -1655,9 +1679,14 @@ async function fetchFailedJobLogs(
 	tail: number,
 	signal?: AbortSignal,
 ): Promise<GhFailedJobLog[]> {
+	const ref = parseRepoRef(repo);
 	return Promise.all(
 		failedJobs.map(async entry => {
-			const result = await git.github.run(cwd, ["api", `/repos/${repo}/actions/jobs/${entry.job.id}/logs`], signal);
+			const result = await git.github.run(
+				cwd,
+				["api", ...ghApiHostArgs(ref), `/repos/${ref.slug}/actions/jobs/${entry.job.id}/logs`],
+				signal,
+			);
 			const fullLog = result.exitCode === 0 ? normalizeBlock(result.stdout) : undefined;
 			const logTail = fullLog ? tailLogLines(fullLog, tail) : undefined;
 			return {
@@ -2003,7 +2032,8 @@ async function executeRepoView(
 	const branch = normalizeOptionalString(params.branch);
 	const args = ["repo", "view"];
 	if (repo) {
-		args.push(repo);
+		const ref = parseRepoRef(repo);
+		args.push(formatRepoRef(ref.host, ref.slug));
 	}
 	if (branch) {
 		args.push("--branch", branch);
@@ -2498,12 +2528,13 @@ async function executePrCreate(
 			output
 				.split("\n")
 				.map(line => line.trim())
-				.find(line => line.startsWith("https://github.com/")) ?? output.trim();
+				.find(line => line.startsWith("https://")) ?? output.trim();
 		const parsed = parsePrUrl(url);
 		const resolvedRepo = repo ?? parsed.repo;
 
 		let prView: GhPrViewData | undefined;
-		if (resolvedRepo && parsed.prNumber !== undefined) {
+		const resolvedRef = resolvedRepo ? parseRepoRef(resolvedRepo) : undefined;
+		if (resolvedRef && parsed.prNumber !== undefined) {
 			try {
 				prView = await git.github.json<GhPrViewData>(
 					session.cwd,
@@ -2512,7 +2543,7 @@ async function executePrCreate(
 						"view",
 						String(parsed.prNumber),
 						"--repo",
-						resolvedRepo,
+						formatRepoRef(resolvedRef.host, resolvedRef.slug),
 						"--json",
 						GH_PR_FIELDS_NO_COMMENTS.join(","),
 					],
@@ -2650,8 +2681,12 @@ async function executeGithubSearch<TItem, TResult>(
 	const repo = spec.supportsScope
 		? await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal)
 		: undefined;
-	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, spec.fixedQualifier]);
-	const args = buildGhApiSearchArgs(spec.endpoint, apiQuery, limit, spec.headers);
+	const scope = searchScope(repo);
+	const apiQuery = composeSearchQuery([displayQuery, scope.qualifier, spec.fixedQualifier]);
+	const args = buildGhApiSearchArgs(spec.endpoint, apiQuery, limit, {
+		host: scope.host,
+		extraHeaders: spec.headers,
+	});
 
 	const response = await git.github.json<GhApiSearchResponse<TItem>>(session.cwd, args, signal);
 	const items = (response.items ?? []).map(spec.mapItem);

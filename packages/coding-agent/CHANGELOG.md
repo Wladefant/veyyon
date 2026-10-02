@@ -8,9 +8,12 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Rejected `.` and `..` as owner or repo in GitHub repository refs so they cannot traverse the `/repos/` API path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Rejected GitHub hosts outside `github.com`, `GH_HOST` and the checkout host on every repo, PR, issue and run input, kept enterprise hosts out of API paths and cache keys, and pinned fork lookup to the PR host (Refs #107)
 - Fixed an eval cell whose idle timeout fired during kernel startup killing the whole host with an unhandled `TimeoutError` rejection, and the Python runner stderr drain splitting multi-byte characters across chunks ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation, while preserving configured endpoint failovers ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- `/btw` branch promotion is refused while the main turn is running or once the session or its leaf moved since the question was asked; the panel hides the branch hint while it is unavailable, a refused `b` reports why instead of typing into the composer, and a `b` typed before the answer completes still reaches the composer ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a1183da91225eec2dd4e46dfa037e66567d8980, 98f484bd2f9a11571f807b8b0b1441cc7a7a6671, a54a2f79cbfd9b3a3e7b136cea83533064ca9d0a).
 - Fixed the embedded shell's `command -v`/`-V` honoring only the first operand: it now iterates every name like bash/zsh, printing one line per resolved name and skipping misses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4397d12100f63bc3085b573b983c120524ea58ed).
 - Wait for pending advisor reviews to drain in headless print mode before disposing the session ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -24,6 +27,7 @@
 - Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
 - Hard-refusal fail-closed guard preventing any agent from merging a PR or pushing to `main` on `Bavariance/polysimulator` across `git push`, `gh pr merge`, `gh api` and the `github` tool ([#174](https://github.com/Wladefant/veyyon/pull/174)).
+- The polysimulator main guard fires only when the target repo (`-R`/`--repo`, a URL or the working directory's git remote) is `Bavariance/polysimulator`; merges and pushes to `main` in other repositories and in an unidentifiable repository are no longer refused ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Terminate the mnemopi embedding worker subprocess after a configurable idle period (`mnemopi.embedIdleUnloadMs`, default 5 minutes, clamped to the 2147483647 ms a `setTimeout` delay can hold) and lazily relaunch it on the next embed request, releasing the loaded ONNX model's ~1.25 GB commit charge during idle periods ([#54](https://github.com/Wladefant/veyyon/issues/54)).
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
