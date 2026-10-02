@@ -30,13 +30,13 @@ function createCodexTestToken(accountId = "acc_test"): string {
 	return `aaa.${payload}.bbb`;
 }
 
-function createCodexTestModel(): Model<"openai-codex-responses"> {
+function createCodexTestModel(baseUrl = "https://chatgpt.com/backend-api"): Model<"openai-codex-responses"> {
 	return buildModel({
 		id: "gpt-5.3-codex-spark",
 		name: "GPT-5.3 Codex Spark",
 		api: "openai-codex-responses",
 		provider: "openai-codex",
-		baseUrl: "https://chatgpt.com/backend-api",
+		baseUrl,
 		reasoning: true,
 		preferWebsockets: false,
 		input: ["text"],
@@ -76,11 +76,10 @@ interface CapturedRequest {
 	headers: Headers;
 }
 
-async function runAndCaptureRequest(): Promise<CapturedRequest> {
+async function runAndCaptureRequest(model = createCodexTestModel()): Promise<CapturedRequest> {
 	const tempDir = TempDir.createSync("@veyyon-codex-zstd-");
 	setAgentDir(tempDir.path());
 	const token = createCodexTestToken();
-	const model = createCodexTestModel();
 
 	let captured: CapturedRequest | undefined;
 	const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
@@ -133,5 +132,58 @@ describe("codex SSE request body zstd compression", () => {
 			expect(typeof body).toBe("string");
 			expect(body).toBe(JSON.stringify(PINNED_PAYLOAD));
 		});
+	});
+
+	it.each([400, 415])("retries uncompressed when server rejects compressed request with %i", async status => {
+		const tempDir = TempDir.createSync("@temp-zstd-fallback-");
+		setAgentDir(tempDir.path());
+		const cancelSpy = vi.spyOn(ReadableStream.prototype, "cancel");
+		const attempts: Array<{ headers: Headers; body: RequestInit["body"] }> = [];
+
+		const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			attempts.push({ headers, body: init?.body });
+			if (attempts.length === 1) {
+				return new Response(JSON.stringify({ error: { message: "Rejected" } }), {
+					status,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			return new Response(createCompletedCodexSse("Success after retry"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+
+		const result = await streamOpenAICodexResponses(createCodexTestModel(), createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock as FetchImpl,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(attempts).toHaveLength(2);
+		expect(attempts[0].headers.get("content-encoding")).toBe("zstd");
+		expect(attempts[0].body instanceof Uint8Array).toBe(true);
+		expect(new TextDecoder().decode(Bun.zstdDecompressSync(attempts[0].body as Uint8Array))).toContain("Say hello");
+		expect(cancelSpy).toHaveBeenCalled();
+		expect(attempts[1].headers.has("content-encoding")).toBe(false);
+		expect(typeof attempts[1].body).toBe("string");
+	});
+
+	it("does not compress with zstd when using a non-official baseUrl", async () => {
+		const { body, headers } = await runAndCaptureRequest(
+			createCodexTestModel("https://custom-proxy.internal.example.com/backend-api"),
+		);
+		expect(headers.has("content-encoding")).toBe(false);
+		expect(typeof body).toBe("string");
+	});
+
+	it("falls back to uncompressed plain JSON when Bun.zstdCompressSync throws", async () => {
+		vi.spyOn(Bun, "zstdCompressSync").mockImplementation(() => {
+			throw new Error("Simulated zstd compression failure");
+		});
+		const { body, headers } = await runAndCaptureRequest();
+		expect(headers.has("content-encoding")).toBe(false);
+		expect(typeof body).toBe("string");
 	});
 });
