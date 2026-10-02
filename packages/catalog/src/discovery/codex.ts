@@ -41,7 +41,7 @@ interface CodexModelEntry {
 	default_reasoning_level?: unknown;
 	supported_reasoning_levels?: unknown;
 	input_modalities?: unknown;
-	supported_in_api?: unknown;
+	visibility?: unknown;
 	priority?: unknown;
 	prefer_websockets?: unknown;
 	use_responses_lite?: unknown;
@@ -226,8 +226,8 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 		return null;
 	}
 
-	const supportedInApi = toBoolean(payload.supported_in_api);
-	if (supportedInApi === false) {
+	const visibility = toNonEmptyString(payload.visibility)?.toLowerCase();
+	if (visibility === "hide" || visibility === "hidden") {
 		return null;
 	}
 
