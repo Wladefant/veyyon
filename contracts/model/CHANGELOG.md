@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `image_end` to `AssistantMessageEvent` for streamed image completion events (Refs #107).
+
 ## [1.5.0] - 2026-09-18
 
 ### Added

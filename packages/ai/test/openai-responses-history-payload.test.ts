@@ -723,6 +723,63 @@ describe("OpenAI responses history payload", () => {
 		]);
 	});
 
+	it("normalizes result-bearing native images for full Codex replay", () => {
+		const model = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-5.5");
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "first user", timestamp: Date.now() },
+				makeAssistantMessage(
+					[
+						{
+							id: "ig_failed",
+							type: "image_generation_call",
+							status: "failed",
+						},
+						{
+							id: "ig_generating",
+							type: "image_generation_call",
+							status: "generating",
+						},
+						{
+							id: "ig_stale_result",
+							type: "image_generation_call",
+							status: "generating",
+							result: "stale-result-image",
+						},
+						{
+							id: "ig_completed",
+							type: "image_generation_call",
+							status: "completed",
+							result: "completed-image",
+						},
+					],
+					false,
+					"openai-codex",
+					model.id,
+				),
+				{ role: "user", content: "follow-up user", timestamp: Date.now() },
+			],
+		};
+		const imageGenerationItems = convertCodexResponsesMessages(model, context).filter(
+			item => item.type === "image_generation_call",
+		);
+
+		expect(imageGenerationItems).toEqual([
+			{
+				id: "ig_stale_result",
+				type: "image_generation_call",
+				status: "completed",
+				result: "stale-result-image",
+			},
+			{
+				id: "ig_completed",
+				type: "image_generation_call",
+				status: "completed",
+				result: "completed-image",
+			},
+		]);
+	});
+
 	it("falls back to rebuilt history on resumed same-provider sessions with fresh session state", async () => {
 		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const providerSessionState = new Map<string, ProviderSessionState>();
