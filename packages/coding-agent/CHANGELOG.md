@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch-facts` moved from `modes/` to `config/`, so the session reads its record of the project at rest without an allow-list entry in the session-does-not-import-the-UI gate ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -31,6 +32,8 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Fixed Cursor MCP calls named `StrReplace`/`Edit` (or `edit` with `old_string`/`new_string`) 404ing after the server injected CLI tool instructions by routing them as replace-mode edit calls (oh-my-pi 143aded8452dde605ed785e0eee9af3f99e59fe0, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed `veyyon --smoke-test` deleting sibling directories in temporary storage by scoping dead daemon runtime directory cleanup to the `daemons` container and 16-hex scope keys, and isolating distribution smoke test runtimes under a private parent ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed MCP reconnects erasing peer server outcomes, keeping connected and failed peer statuses intact when one server reconnects and tracking a dedicated reconnecting lifecycle event ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 735551bd8518ebad2877d127a07cd2296557f813).
 - Fixed authoritative providers (e.g. `openai-codex`) refreshing expired OAuth credentials when a fresh cache exists, preventing unsupported bundled models from remaining selectable ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed image generation auto-detection to fall through when an official OpenAI Codex API key lacks ChatGPT subscription account claims (oh-my-pi d124cf286e08829c8db41a9a11a560468ff9f113, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
