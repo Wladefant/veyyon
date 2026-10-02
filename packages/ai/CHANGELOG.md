@@ -20,6 +20,7 @@
 ### Fixed
 - Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 
+- Demoted credit-funded OpenAI Codex accounts behind siblings with renewable allowance and evicted automatic session pins whose allowance is spent when an unblocked sibling has quota ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Synthesized required reasoning items for DeepSeek-family Responses targets when replaying turns lacking thinking content ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 76f83958b1150e9b429782d8e7b5692a13d7b12f).
 
 - Scoped Responses tool batch message hoisting to interrupted batches ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a2198912e3eac86f043a3a90db6a598bb0e2341a).
