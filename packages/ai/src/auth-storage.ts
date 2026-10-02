@@ -123,6 +123,7 @@ import type {
 } from "./auth-storage/usage-ranking";
 import {
 	computeWindowRequiredDrain,
+	isAllowanceSpent,
 	leadWithChosenAccount,
 	normalizeUsageFraction,
 	orderUsageRankedCandidates,
@@ -3078,7 +3079,8 @@ export class AuthStorage {
 			let { blockedUntil } = result;
 			let blocked = blockedUntil !== undefined;
 			const scopedLimits = usage ? getScopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
-			if (!blocked && scopedLimits && isUsageLimitReached(scopedLimits)) {
+			const isCodexAllowedOverage = args.provider === "openai-codex" && usage?.metadata?.allowed === true;
+			if (!blocked && scopedLimits && !isCodexAllowedOverage && isUsageLimitReached(scopedLimits)) {
 				const resetAtMs = getUsageResetAtMs(scopedLimits, nowMs);
 				blockedUntil = resetAtMs ?? Date.now() + defaultBackoffMs;
 				this.#blocks.markCredentialBlocked(
@@ -3094,12 +3096,14 @@ export class AuthStorage {
 			const primary = windows?.primary;
 			const secondary = windows?.secondary;
 			const secondaryTarget = secondary ?? primary;
+			const allowanceSpent = isAllowanceSpent(strategy, usage, args.rankingContext, nowMs);
 			ranked.push({
 				selection,
 				usage,
 				usageChecked,
 				blocked,
 				blockedUntil,
+				allowanceSpent,
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
 				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
 				secondaryUsed: normalizeUsageFraction(secondaryTarget),
@@ -3126,6 +3130,7 @@ export class AuthStorage {
 		strategy: CredentialRankingStrategy;
 		rankingContext: CredentialRankingContext;
 		blockScope?: string;
+		sessionPreferredUsage?: { index: number; usage: UsageReport };
 	}): Promise<OAuthCandidate[]> {
 		const nowMs = Date.now();
 		// Pre-fetch usage reports in parallel for non-blocked credentials.
@@ -3159,6 +3164,10 @@ export class AuthStorage {
 					);
 				}
 				if (blockedUntil !== undefined) return { selection, usage, usageChecked, blockedUntil };
+				if (!usageChecked && args.sessionPreferredUsage && selection.index === args.sessionPreferredUsage.index) {
+					usage = args.sessionPreferredUsage.usage;
+					usageChecked = true;
+				}
 				if (!usageChecked) {
 					usage = await this.#getUsageReport(args.provider, selection.credential, {
 						...args.options,
@@ -3251,13 +3260,22 @@ export class AuthStorage {
 		// a record of what served last rather than anything anybody asked for.
 		const chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
 		const movementAllowed = this.#loadBalancingEnabled();
-		// Ranking is a headroom contest among accounts, i.e. a move. With movement off it runs only
-		// for a plan requirement, where the usage report is what says whether an account can serve
-		// the model at all; a session that already has a working account never re-ranks either way.
-		const shouldRank =
-			checkUsage && (movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement);
+		const sessionPinIsExplicit = chosenIndex !== undefined;
+		const rankDespitePin = movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement;
+		const sessionPreferredUsage =
+			checkUsage && movementAllowed && !rankDespitePin && !sessionPinIsExplicit && sessionPreferredCredential
+				? await this.#getUsageReport(provider, sessionPreferredCredential, {
+						...options,
+						timeoutMs: this.#usageRequestTimeoutMs,
+					})
+				: undefined;
+		const sessionPreferredAllowanceSpent =
+			sessionPreferredUsage !== undefined &&
+			sessionPreferredUsage !== null &&
+			isAllowanceSpent(strategy, sessionPreferredUsage, rankingContext, Date.now());
+		const shouldRank = checkUsage && (rankDespitePin || (movementAllowed && sessionPreferredAllowanceSpent));
 		const rankingOrder = shouldRank && sessionId ? credentials.map((_credential, index) => index) : order;
-		const candidates = shouldRank
+		const candidates: OAuthCandidate[] = shouldRank
 			? await this.#rankOAuthSelections({
 					providerKey,
 					provider,
@@ -3268,6 +3286,10 @@ export class AuthStorage {
 					strategy: strategy!,
 					rankingContext,
 					blockScope,
+					sessionPreferredUsage:
+						sessionPreferredIndex !== undefined && sessionPreferredUsage
+							? { index: sessionPreferredIndex, usage: sessionPreferredUsage }
+							: undefined,
 				})
 			: // The unranked path (no ranking strategy, or a session that already
 				// has a working preferred account) still has to answer "which
@@ -3305,7 +3327,21 @@ export class AuthStorage {
 					const id = this.#getStoredCredentials(provider)[entry.index]?.id;
 					return id === undefined || !this.#authDeadCredentials.has(id);
 				})?.index);
-		if (leadIndex !== undefined) {
+		const preferredCandidate = candidates.find(candidate => candidate.selection.index === sessionPreferredIndex);
+		const pinWouldBeEvicted =
+			movementAllowed &&
+			!sessionPinIsExplicit &&
+			preferredCandidate !== undefined &&
+			preferredCandidate.allowanceSpent === true &&
+			candidates.some(
+				candidate =>
+					candidate.selection.index !== sessionPreferredIndex &&
+					candidate.usage !== null &&
+					candidate.allowanceSpent === false &&
+					!this.#blocks.isCredentialBlocked(provider, providerKey, candidate.selection.index, blockScope) &&
+					(!enforcePlanRequirement || getOpenAICodexPlanEligibility(candidate.usage, planRequirement) === true),
+			);
+		if (leadIndex !== undefined && (!pinWouldBeEvicted || leadIndex !== sessionPreferredIndex)) {
 			const leadCandidate = candidates.findIndex(
 				candidate =>
 					candidate.selection.index === leadIndex &&
@@ -3556,7 +3592,8 @@ export class AuthStorage {
 			if (applyPlanFilter && getOpenAICodexPlanEligibility(usage, planRequirement) !== true) return true;
 			if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {
 				const scopedLimits = getScopedUsageLimits(strategy, usage, rankingContext);
-				if (isUsageLimitReached(scopedLimits)) {
+				const isCodexAllowedOverage = provider === "openai-codex" && usage?.metadata?.allowed === true;
+				if (!isCodexAllowedOverage && isUsageLimitReached(scopedLimits)) {
 					const resetAtMs = getUsageResetAtMs(scopedLimits, Date.now());
 					this.#blocks.markCredentialBlocked(
 						provider,

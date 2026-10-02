@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Demoted credit-funded OpenAI Codex accounts behind siblings with renewable allowance and evicted automatic session pins whose allowance is spent when an unblocked sibling has quota ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Tracked projected thinking blocks by source index in the leaked-thinking stream wrapper so out-of-order thinking_end events update the correct signature after intervening blocks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
