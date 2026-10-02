@@ -34,7 +34,29 @@ function createCodexTestContext(): Context {
 }
 
 function createCodexSse(events: Array<Record<string, unknown>>): string {
-	return `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
+	return `${events.map(e => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
+}
+function sseText(text: string, extraEvents: Array<Record<string, unknown>> = []): string {
+	return createCodexSse([
+		...extraEvents,
+		{
+			type: "response.output_item.added",
+			item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+		},
+		{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+		{ type: "response.output_text.delta", delta: text },
+		{
+			type: "response.output_item.done",
+			item: {
+				type: "message",
+				id: "msg_1",
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text }],
+			},
+		},
+		{ type: "response.completed", response: { status: "completed", usage: { total_tokens: 5 } } },
+	]);
 }
 
 describe("Codex parentTurnId and turn-state refreshes", () => {
@@ -90,51 +112,16 @@ describe("Codex parentTurnId and turn-state refreshes", () => {
 			let sentBody: Record<string, unknown> | undefined;
 
 			const mockFetch: FetchImpl = async (_url, init) => {
-				if (init?.body && typeof init.body === "string") {
-					sentBody = JSON.parse(init.body);
-				}
-				const ssePayload = createCodexSse([
-					{
-						type: "response.output_item.added",
-						item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
-					},
-					{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
-					{ type: "response.output_text.delta", delta: "Hello" },
-					{
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: "msg_1",
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text: "Hello" }],
-						},
-					},
-					{
-						type: "response.completed",
-						response: {
-							status: "completed",
-							usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-						},
-					},
-				]);
-				return new Response(ssePayload, {
-					status: 200,
-					headers: { "content-type": "text/event-stream" },
-				});
+				if (init?.body && typeof init.body === "string") sentBody = JSON.parse(init.body);
+				return new Response(sseText("Hello"), { status: 200, headers: { "content-type": "text/event-stream" } });
 			};
-
-			const model = createCodexModel("gpt-5.5");
-			const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			const stream = streamOpenAICodexResponses(createCodexModel("gpt-5.5"), createCodexTestContext(), {
 				apiKey: createCodexTestToken(),
 				parentTurnId: "turn_parent_abc",
 				fetch: mockFetch,
 			});
-
-			for await (const _event of stream) {
-				// drain
+			for await (const _ of stream) {
 			}
-
 			expect(sentBody).toBeDefined();
 			const clientMetadata = sentBody?.client_metadata as Record<string, string>;
 			expect(clientMetadata.parent_turn_id).toBe("turn_parent_abc");
@@ -148,59 +135,21 @@ describe("Codex parentTurnId and turn-state refreshes", () => {
 			const providerSessionState = new Map<string, ProviderSessionState>();
 			const capturedRequests: Array<{ url: string; headers: Headers }> = [];
 			const mockFetch: FetchImpl = async (url, init) => {
-				const headers = new Headers(init?.headers);
-				capturedRequests.push({ url: String(url), headers });
-				const isSecondCall = capturedRequests.length > 1;
-				const events = [
-					{
-						type: "response.metadata",
-						headers: {
-							"x-codex-turn-state": "turn_state_from_event_999",
-						},
-					},
-					{
-						type: "response.output_item.added",
-						item: {
-							type: "message",
-							id: isSecondCall ? "item_2" : "item_1",
-							role: "assistant",
-							status: "in_progress",
-							content: [],
-						},
-					},
-					{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
-					{ type: "response.output_text.delta", delta: isSecondCall ? "Turn 2" : "Turn 1" },
-					{
-						type: "response.output_item.done",
-						item: {
-							type: "message",
-							id: isSecondCall ? "item_2" : "item_1",
-							role: "assistant",
-							status: "completed",
-							content: [{ type: "output_text", text: isSecondCall ? "Turn 2" : "Turn 1" }],
-						},
-					},
-					{
-						type: "response.completed",
-						response: {
-							status: "completed",
-							usage: { total_tokens: 15 },
-						},
-					},
+				capturedRequests.push({ url: String(url), headers: new Headers(init?.headers) });
+				const extra = [
+					{ type: "response.metadata", headers: { "x-codex-turn-state": "turn_state_from_event_999" } },
 				];
-				return new Response(createCodexSse(events), {
+				return new Response(sseText("ok", extra), {
 					status: 200,
 					headers: { "content-type": "text/event-stream" },
 				});
 			};
-
 			const model = createCodexModel("gpt-5.5");
 			const context: Context = {
 				sessionId: "shared-test-session",
 				systemPrompt: ["You are a helpful assistant."],
 				messages: [{ role: "user", content: "First turn", timestamp: Date.now() }],
 			};
-			// Turn 1
 			const stream1 = streamOpenAICodexResponses(model, context, {
 				apiKey: createCodexTestToken(),
 				sessionId: "shared-test-session",
@@ -208,9 +157,7 @@ describe("Codex parentTurnId and turn-state refreshes", () => {
 				fetch: mockFetch,
 			});
 			for await (const _ of stream1) {
-				// drain
 			}
-
 			// Tool loop continuation within the same turn
 			context.messages.push({
 				role: "assistant",
@@ -239,9 +186,7 @@ describe("Codex parentTurnId and turn-state refreshes", () => {
 				fetch: mockFetch,
 			});
 			for await (const _ of stream2) {
-				// drain
 			}
-
 			expect(capturedRequests.length).toBe(2);
 			expect(capturedRequests[0].headers.get("x-codex-turn-state")).toBeNull();
 			expect(capturedRequests[1].headers.get("x-codex-turn-state")).toBe("turn_state_from_event_999");
