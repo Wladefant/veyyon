@@ -187,7 +187,7 @@ describe("RetryFallback replay safety filtering", () => {
 			thinkingLevel: undefined,
 			setThinkingLevel: () => {},
 			configuredThinkingLevel: () => undefined,
-			thinkingLevelCeiling: () => undefined,
+			sessionId: "test-session",
 		};
 		const host: RetryFallbackHost = {
 			emitSessionEvent: async () => {},
