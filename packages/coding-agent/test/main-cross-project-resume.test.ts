@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { type Args, parseArgs } from "@veyyon/coding-agent/cli/args";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import * as modelResolverModule from "@veyyon/coding-agent/config/model-resolver";
 import { createSessionManager, runRootCommand } from "@veyyon/coding-agent/main";
 import type { CustomMessageEntry, SessionHeader } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
@@ -267,7 +268,7 @@ describe("runRootCommand — a resumed session continues in its recorded directo
 	});
 
 	/** Run the launch up to session construction and return the session manager it would build on. */
-	async function launchUntilSession(argv: string[]): Promise<SessionManager> {
+	async function launchUntilSession(argv: string[], settings?: Settings): Promise<SessionManager> {
 		const parsed = parseArgs(argv);
 		parsed.noExtensions = true;
 		parsed.noSkills = true;
@@ -282,7 +283,7 @@ describe("runRootCommand — a resumed session continues in its recorded directo
 				discoverAuthStorage: async () => authStorage,
 				// An inherited stdin pipe nobody writes to never reaches EOF.
 				readPipedInput: async () => undefined,
-				settings: Settings.isolated({}),
+				settings: settings ?? Settings.isolated({}),
 				createAgentSession: async options => {
 					opened = options?.sessionManager;
 					throw new StopAfterSessionOptions();
@@ -334,5 +335,24 @@ describe("runRootCommand — a resumed session continues in its recorded directo
 		expect(moves.map(entry => entry.details)).toEqual([
 			{ previous: path.resolve(otherProject), cwd: opened.getCwd() },
 		]);
+	}, 15_000);
+
+	it("re-resolves the model scope from the resumed project's enabledModels after the switch", async () => {
+		const info = await persistSession(otherProject, sessionDir);
+		setProjectDir(launchDir);
+		// enabledModels scoped only to the resumed project: the launch scope
+		// yields no patterns, so any resolveModelScope call proves the recompute
+		// ran against the destination settings rather than the launch directory.
+		const settings = Settings.isolated({
+			"marketplace.autoUpdate": "off",
+			enabledModels: [{ paths: [otherProject], models: ["model-resumed"] }],
+		});
+		const resolveModelScope = vi.spyOn(modelResolverModule, "resolveModelScope").mockResolvedValue([]);
+		await launchUntilSession(["--resume", info.id, "--session-dir", sessionDir, "--print"], settings);
+
+		// Launch scope had no patterns, so the only resolution is the post-switch
+		// one; the pre-fix code never recomputed and would not call it at all.
+		expect(resolveModelScope).toHaveBeenCalledTimes(1);
+		expect(resolveModelScope.mock.calls[0]?.[0]).toEqual(["model-resumed"]);
 	}, 15_000);
 });
