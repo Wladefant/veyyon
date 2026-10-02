@@ -4152,11 +4152,6 @@ async function openCodexSseEventStream(
 		responsesLite,
 		requestMetadata,
 	);
-	const bodyJson = await serializeBody();
-	const compressedBody = compressCodexRequestBody(bodyJson, url);
-	if (compressedBody !== undefined) {
-		headers.set("content-encoding", "zstd");
-	}
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex request", {
 			url,
@@ -4184,16 +4179,24 @@ async function openCodexSseEventStream(
 			clearPreResponseTimeout = undefined;
 		}
 	};
-	let response: Response;
-	const send = (requestBody: string | Uint8Array): Promise<Response> =>
+	let lastSentBody: string | Uint8Array | undefined;
+	const send = (allowCompression: boolean): Promise<Response> =>
 		fetchProviderWithRetry(url, {
 			method: "POST",
 			headers,
 			signal,
-			prepareInit: () => {
+			prepareInit: async () => {
+				const bodyJson = await serializeBody();
+				const compressedBody = allowCompression ? compressCodexRequestBody(bodyJson, url) : undefined;
+				if (compressedBody !== undefined) {
+					headers.set("content-encoding", "zstd");
+				} else {
+					headers.delete("content-encoding");
+				}
+				lastSentBody = compressedBody ?? bodyJson;
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
-				return { body: requestBody, signal: watchdog.signal };
+				return { body: lastSentBody, signal: watchdog.signal };
 			},
 			maxAttempts: CODEX_MAX_RETRIES + 1,
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
@@ -4202,9 +4205,10 @@ async function openCodexSseEventStream(
 			fetch: fetchAttempt,
 			timeout: false,
 		});
+	let response: Response;
 	try {
-		response = await send(compressedBody ?? bodyJson);
-		if (compressedBody !== undefined && (response.status === 400 || response.status === 415)) {
+		response = await send(true);
+		if (lastSentBody instanceof Uint8Array && (response.status === 400 || response.status === 415)) {
 			const rejectedStatus = response.status;
 			await response.body?.cancel();
 			headers.delete("content-encoding");
@@ -4213,7 +4217,7 @@ async function openCodexSseEventStream(
 					url,
 					status: rejectedStatus,
 				});
-			response = await send(bodyJson);
+			response = await send(false);
 		}
 	} finally {
 		clearPreResponseTimeout?.();
