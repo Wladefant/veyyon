@@ -858,7 +858,7 @@ export class ExtensionRunner {
 					const hasContinuationContext =
 						(typeof result.additionalContext === "string" && result.additionalContext.length > 0) ||
 						(typeof result.reason === "string" && result.reason.length > 0);
-					if ((result.continue === true || result.decision === "block") && hasContinuationContext) {
+					if (result.decision === "block" || (result.continue === true && hasContinuationContext)) {
 						return result as RunnerEmitResult<TEvent>;
 					}
 				}

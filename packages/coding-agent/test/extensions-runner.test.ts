@@ -763,6 +763,31 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("session_stop", () => {
+		it("preserves a reasonless hard block instead of replacing it with a later advisory result", async () => {
+			await Bun.write(
+				path.join(extensionsDir, "hard-stop.ts"),
+				`export default function(pi) {
+					pi.on("session_stop", () => ({ decision: "block" }));
+					pi.on("session_stop", () => ({ continue: true, reason: "Later advisory." }));
+				}`,
+			);
+			const loaded = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				loaded.extensions,
+				loaded.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const result = await runner.emitSessionStop({
+				messages: [],
+				turn_id: 0,
+				session_id: "test-session",
+				stop_hook_active: false,
+			});
+			expect(result).toEqual({ decision: "block" });
+		});
+
 		it("invokes handlers with completed main-session messages and returns continuation feedback", async () => {
 			const eventsPath = path.join(tempDir.path(), "session-stop-events.jsonl");
 			const extCode = `

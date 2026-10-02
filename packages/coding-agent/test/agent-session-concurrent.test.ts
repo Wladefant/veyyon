@@ -21,6 +21,7 @@ import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
+import { SESSION_STOP_CONTINUATION_CAP } from "@veyyon/coding-agent/session/nudges";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
@@ -466,6 +467,49 @@ describe("AgentSession concurrent prompt guard", () => {
 		).toBe(true);
 	});
 
+	it("honors hard session-stop blocks after advisory continuations exhaust their cap", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		let stopCount = 0;
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn(() => {
+				stopCount++;
+				if (stopCount <= SESSION_STOP_CONTINUATION_CAP) return Promise.resolve({ continue: true, reason: "Advisory work." });
+				if (stopCount <= SESSION_STOP_CONTINUATION_CAP + 3) return Promise.resolve({ decision: "block" });
+				return Promise.resolve(undefined);
+			}),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+		await session.prompt("First message");
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(SESSION_STOP_CONTINUATION_CAP + 4);
+		expect(stopCount).toBe(SESSION_STOP_CONTINUATION_CAP + 4);
+		expect(
+			mock.calls[SESSION_STOP_CONTINUATION_CAP + 1]?.context.messages.some(message =>
+				typeof message.content === "string"
+					? message.content.includes("blocked completion without a reason")
+					: message.content.some(
+							content => content.type === "text" && content.text.includes("blocked completion without a reason"),
+						),
+			),
+		).toBe(true);
+	});
+
 	it("does not emit session_stop when abort starts before the settle pass", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
@@ -566,7 +610,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		).toBe(false);
 	});
 
-	it("caps consecutive session_stop continuations at eight", async () => {
+	it("caps consecutive advisory session_stop continuations at eight", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			handler: () => ({ content: ["Pass"] }),
@@ -581,7 +625,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
-			emitSessionStop: vi.fn(() => Promise.resolve({ decision: "block" as const, reason: "Run another pass." })),
+			emitSessionStop: vi.fn(() => Promise.resolve({ continue: true, reason: "Run another pass." })),
 		} as unknown as ExtensionRunner;
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated();
