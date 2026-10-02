@@ -88,7 +88,8 @@ export interface TruncationTextOptions {
  */
 export type LimitsInput = {
 	matchLimit?: number;
-	resultLimit?: number;
+	/** A bare number suggests double; `suggestion: null` drops the advice because the tool is at its hard cap. */
+	resultLimit?: number | { reached: number; suggestion: number | null };
 	headLimit?: number;
 } & ({ columnMax?: undefined } | { columnMax: number | undefined; columnUnit: ColumnUnit });
 
@@ -318,7 +319,7 @@ export class OutputMetaBuilder {
 	}
 
 	/** Record the `reached`/`suggestion` limit under `kind`. No-op if reached <= 0. */
-	#reachedLimit(kind: "matchLimit" | "resultLimit" | "headLimit", reached: number, suggestion: number): this {
+	#reachedLimit(kind: "matchLimit" | "headLimit", reached: number, suggestion: number): this {
 		if (reached <= 0) return this;
 		this.#meta.limits = { ...this.#meta.limits, [kind]: { reached, suggestion } };
 		return this;
@@ -329,8 +330,10 @@ export class OutputMetaBuilder {
 		if (limits.matchLimit !== undefined) {
 			this.matchLimit(limits.matchLimit);
 		}
-		if (limits.resultLimit !== undefined) {
+		if (typeof limits.resultLimit === "number") {
 			this.resultLimit(limits.resultLimit);
+		} else if (limits.resultLimit !== undefined) {
+			this.resultLimit(limits.resultLimit.reached, limits.resultLimit.suggestion);
 		}
 		if (limits.headLimit !== undefined) {
 			this.headLimit(limits.headLimit);
@@ -341,9 +344,17 @@ export class OutputMetaBuilder {
 		return this;
 	}
 
-	/** Add result limit notice. No-op if reached <= 0. */
-	resultLimit(reached: number, suggestion = reached * 2): this {
-		return this.#reachedLimit("resultLimit", reached, suggestion);
+	/**
+	 * Add result limit notice. No-op if reached <= 0. `suggestion: null` omits the "Use limit=" advice
+	 * for a tool already at its hard cap.
+	 */
+	resultLimit(reached: number, suggestion: number | null = reached * 2): this {
+		if (reached <= 0) return this;
+		this.#meta.limits = {
+			...this.#meta.limits,
+			resultLimit: suggestion === null ? { reached } : { reached, suggestion },
+		};
+		return this;
 	}
 
 	/** Add limit notice for head truncation. No-op if reached <= 0. */

@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed file search silently clamping `limit` above 200 and then advising a `Use limit=` retry it would clamp straight back: a clamped request now says so, the suggestion is capped at 200, and at the cap the notice reports the count alone ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4997d101c2674e484595bf2b3d0dfa9e3d71c2db).
 - Fixed Windows stdio MCP servers launched through `.cmd`/`.bat` shims failing with `Transport closed`; the launch now builds a `cmd.exe /d /e:ON /v:OFF /c` command line escaped for `cmd.exe`'s parser and spawned with `windowsVerbatimArguments`, so the command runs and arguments (including `%VAR%`, quotes, and shell metacharacters) reach the server intact and cannot inject commands (BatBadBut / CVE-2024-24576) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 07889331103b8b0f3da532d7dc3ceb0a5c2c6de5).
 - Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
@@ -18,6 +19,7 @@
 
 ### Changed
 
+- Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch-facts` moved from `modes/` to `config/`, so the session reads its record of the project at rest without an allow-list entry in the session-does-not-import-the-UI gate ([#107](https://github.com/Wladefant/veyyon/issues/107)).
