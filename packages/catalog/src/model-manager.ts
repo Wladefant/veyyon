@@ -4,7 +4,13 @@ import type { DiscoveryFailure, DiscoveryHooks } from "./discovery/failure";
 import { readModelCache, writeModelCache } from "./model-cache";
 import { type GeneratedProvider, getBundledModels } from "./models";
 import { defaultModelsDevFallback } from "./modelsdev-overlay";
-import type { Api, Model, ModelSpec, Provider } from "./types";
+import { type Api, type Model, modelKind, type ModelSpec, type Provider } from "./types";
+
+/** Materialized discovery rows plus kind provenance captured before policy can supply a kind. */
+interface DiscoveredModelSet<TApi extends Api> {
+	models: Model<TApi>[];
+	explicitKindModels: ReadonlySet<Model<TApi>>;
+}
 import { isRecord } from "./utils";
 import { collapseBuiltModelVariants } from "./variant-collapse";
 
@@ -193,15 +199,15 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const cacheModels = dynamicFetchSucceeded
 		? []
 		: prepareCacheModelsForStaticMismatch(
-				normalizeModelList<TApi>(cache?.models ?? []),
+				normalizeModelList<TApi>(cache?.models ?? []).models,
 				staticModels,
 				cacheFingerprintMatches,
 				options.dropCachedModelIdsOnStaticMismatch,
 			);
-	const dynamicModels = fetchedDynamicModels ?? [];
+	const dynamicModels = fetchedDynamicModels?.models ?? [];
 	// `fetchModelsDev` already built these rows. A second `buildModel` would read
 	// each row's resolved compat as its sparse override record.
-	const modelsDevModelsAll = fetchedModelsDevModels ?? [];
+	const modelsDevModelsAll = fetchedModelsDevModels?.models ?? [];
 	// An enrich-only overlay (OAuth twin surfaces) fills declared surfaces on ids
 	// some real source serves and never adds an id of its own: the endpoint's
 	// listing is subscription-gated, so overlay-only ids would fail at request time.
@@ -214,15 +220,28 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				);
 			})
 		: modelsDevModelsAll;
-	const mergedWithCache = mergeDynamicModels(mergeDynamicModels(staticModels, modelsDevModels), cacheModels);
-	const mergedModels = mergeDynamicModels(mergedWithCache, dynamicModels);
+	const mergedWithModelsDev = mergeDynamicModels(
+		staticModels,
+		modelsDevModels,
+		fetchedModelsDevModels?.explicitKindModels,
+	);
+	const mergedWithCache = mergeDynamicModels(mergedWithModelsDev, cacheModels);
+	const mergedModels = mergeDynamicModels(
+		mergedWithCache,
+		dynamicModels,
+		fetchedDynamicModels?.explicitKindModels,
+	);
 	const models = collapseBuiltModelVariants(
 		dynamicModelsAuthoritative && dynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
 	);
 	const dynamicAuthoritative = !hasDynamicFetcher || dynamicFetchSucceeded || shouldUseFreshCacheAsAuthoritative;
 	if (shouldFetchFromNetwork) {
 		if (dynamicFetchSucceeded) {
-			const mergedSnapshot = mergeDynamicModels(mergeDynamicModels(staticModels, modelsDevModels), dynamicModels);
+			const mergedSnapshot = mergeDynamicModels(
+				mergeDynamicModels(staticModels, modelsDevModels, fetchedModelsDevModels?.explicitKindModels),
+				dynamicModels,
+				fetchedDynamicModels?.explicitKindModels,
+			);
 			const snapshotModels = dynamicModelsAuthoritative
 				? retainModelIds(mergedSnapshot, dynamicModels)
 				: mergedSnapshot;
@@ -243,9 +262,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				now(),
 				collapseBuiltModelVariants(
 					mergeDynamicModels(
-						mergeDynamicModels(staticModels, modelsDevModels),
+						mergeDynamicModels(staticModels, modelsDevModels, fetchedModelsDevModels?.explicitKindModels),
 						prepareCacheModelsForStaticMismatch(
-							normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+							normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []).models,
 							staticModels,
 							cacheFingerprintMatches,
 							options.dropCachedModelIdsOnStaticMismatch,
@@ -267,7 +286,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 async function fetchModelsDev<TApi extends Api, TModelsDevPayload>(
 	options: ModelManagerOptions<TApi, TModelsDevPayload>,
 	modelsDev: ModelsDevFallback<TApi, TModelsDevPayload> | undefined,
-): Promise<Model<TApi>[] | null> {
+): Promise<DiscoveredModelSet<TApi> | null> {
 	// A provider without its own hook gets the shared models.dev overlay: one
 	// cached catalog fetch, mapped through the provider's descriptor, so its
 	// declared surfaces track upstream between releases (OpenCode's ModelsDev
@@ -283,9 +302,12 @@ async function fetchModelsDev<TApi extends Api, TModelsDevPayload>(
 	try {
 		const payload = await modelsDev.fetch({ onFailure });
 		const rejected: string[] = [];
-		const models = normalizeModelList<TApi>(modelsDev.map(payload, options.providerId), rejection => {
-			rejected.push(`${rejection.id} (${rejection.field})`);
-		});
+		const { models, explicitKindModels } = normalizeModelList<TApi>(
+			modelsDev.map(payload, options.providerId),
+			rejection => {
+				rejected.push(`${rejection.id} (${rejection.field})`);
+			},
+		);
 		if (rejected.length > 0) {
 			// Same reason as the dynamic path: one drifted field usually disqualifies the whole payload, so this
 			// is reported once per fetch instead of once per model.
@@ -295,7 +317,7 @@ async function fetchModelsDev<TApi extends Api, TModelsDevPayload>(
 				detail: `${rejected.length} models.dev models rejected: ${rejected.slice(0, 5).join(", ")}${rejected.length > 5 ? ", ..." : ""}`,
 			});
 		}
-		return models;
+		return { models, explicitKindModels };
 	} catch (error) {
 		// Null means this source produced no list, and the manager then falls through to the next source (cache,
 		// then static models) rather than reporting an empty catalog. A fetch that THREW never reached its own
@@ -309,14 +331,14 @@ async function fetchModelsDev<TApi extends Api, TModelsDevPayload>(
 async function fetchDynamicModels<TApi extends Api>(
 	fetcher: (hooks?: DiscoveryHooks) => Promise<readonly ModelSpec<TApi>[] | null>,
 	onFailure: ((failure: DiscoveryFailure) => void) | undefined,
-): Promise<Model<TApi>[] | null> {
+): Promise<DiscoveredModelSet<TApi> | null> {
 	try {
 		const models = await fetcher({ onFailure });
 		if (models === null) {
 			return null;
 		}
 		const rejected: string[] = [];
-		const normalized = normalizeModelList<TApi>(models, rejection => {
+		const { models: normalized, explicitKindModels } = normalizeModelList<TApi>(models, rejection => {
 			rejected.push(`${rejection.id} (${rejection.field})`);
 		});
 		if (rejected.length > 0) {
@@ -335,7 +357,7 @@ async function fetchDynamicModels<TApi extends Api>(
 			// so the next run retries instead of trusting the empty snapshot.
 			return null;
 		}
-		return normalized;
+		return { models: normalized, explicitKindModels };
 	} catch (error) {
 		// Null means this source produced no list, and the manager then falls through to the next source
 		// (cache, then static models) rather than reporting an empty catalog. A fetcher that THREW never got
@@ -398,6 +420,7 @@ function prepareCacheModelsForStaticMismatch<TApi extends Api>(
 function mergeDynamicModels<TApi extends Api>(
 	baseModels: readonly Model<TApi>[],
 	dynamicModels: readonly Model<TApi>[],
+	explicitKindModels?: ReadonlySet<Model<TApi>>,
 ): Model<TApi>[] {
 	// Empty-side fast paths: `mergeDynamicModels(base, [])` is the common shape
 	// after we've already merged the first pair, and `(...)` with no base
@@ -414,6 +437,11 @@ function mergeDynamicModels<TApi extends Api>(
 			merged.set(dynamicModel.id, dynamicModel);
 			continue;
 		}
+		// A policy-derived kind on a chat row is not permission to replace an
+		// authored runner. Only a kind present before materialization can do so.
+		if (modelKind(existingModel) !== "chat" && !explicitKindModels?.has(dynamicModel)) {
+			continue;
+		}
 		merged.set(dynamicModel.id, mergeDynamicModel(existingModel, dynamicModel));
 	}
 	return Array.from(merged.values());
@@ -423,9 +451,9 @@ function retainModelIds<TApi extends Api>(
 	models: readonly Model<TApi>[],
 	retainedModels: readonly Model<TApi>[],
 ): Model<TApi>[] {
-	if (retainedModels.length === 0 || models.length === 0) return [];
+	if (models.length === 0) return [];
 	const retainedIds = new Set(retainedModels.map(model => model.id));
-	return models.filter(model => retainedIds.has(model.id));
+	return models.filter(model => modelKind(model) !== "chat" || retainedIds.has(model.id));
 }
 
 /**
@@ -434,7 +462,7 @@ function retainModelIds<TApi extends Api>(
  * arms calling `resolveProviderModels` with the same `staticModels` array)
  * skip the JSON+hash work after the first call.
  */
-const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v3";
+const MODEL_CACHE_FINGERPRINT_VERSION = "merge-v4";
 const kStaticFingerprint = Symbol("model-manager.staticFingerprint");
 type ModelArrayWithFingerprint = readonly Model<Api>[] & { [kStaticFingerprint]?: string };
 function fingerprintStatic<TApi extends Api>(
@@ -546,21 +574,27 @@ function preferDiscoveryLimit(discoveryLimit: number | null, fallbackLimit: numb
 function normalizeModelList<TApi extends Api>(
 	value: unknown,
 	onRejected?: (rejection: { id: string; field: string }) => void,
-): Model<TApi>[] {
+): DiscoveredModelSet<TApi> {
 	if (!Array.isArray(value)) {
-		return [];
+		return { models: [], explicitKindModels: new Set() };
 	}
 	const models: Model<TApi>[] = [];
+	const explicitKindModels = new Set<Model<TApi>>();
 	for (const item of value) {
 		const field = modelSpecRejection(item);
 		if (field === null) {
-			models.push(buildModel(item as ModelSpec<TApi>));
+			const spec = item as ModelSpec<TApi>;
+			const model = buildModel(spec);
+			models.push(model);
+			if (spec.kind !== undefined) {
+				explicitKindModels.add(model);
+			}
 			continue;
 		}
 		const id = isRecord(item) && typeof item.id === "string" && item.id.length > 0 ? item.id : "<no id>";
 		onRejected?.({ id, field });
 	}
-	return models;
+	return { models, explicitKindModels };
 }
 
 /** Spec fields that must be non-empty strings, in the order a rejection reports them. */

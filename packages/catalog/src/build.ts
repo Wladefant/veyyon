@@ -16,18 +16,62 @@ import { buildDevinCompat } from "./compat/devin";
 import { buildOpenAICompat, buildOpenAIResponsesCompat, buildOpenRouterCompat } from "./compat/openai";
 import { shareCompat } from "./compat/share";
 import { resolveModelThinking } from "./model-thinking";
-import type { Api, CompatOf, Model, ModelSpec } from "./types";
+import {
+	type Api,
+	type CompatOf,
+	type Model,
+	MODEL_KINDS,
+	type ModelSpec,
+	type WebSearchGrounding,
+} from "./types";
 import { cleanModelName, normalizeModelCost } from "./utils";
+
+function resolveProviderWebSearch(provider: string): WebSearchGrounding | undefined {
+	switch (provider) {
+		case "google":
+		case "google-antigravity":
+			return "gemini";
+		case "anthropic":
+			return "anthropic";
+		case "openai-codex":
+			return "codex";
+		case "xai":
+		case "xai-oauth":
+			return "xai";
+		case "openrouter":
+			return "openrouter";
+		default:
+			return undefined;
+	}
+}
 
 export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi> {
 	const compat = shareCompat(buildCompat(spec)) as CompatOf<TApi>;
+	const rawKind =
+		spec.kind ??
+		(spec.provider === "typesafe" ? "judge" : spec.provider === "web" ? "search" : undefined);
+	const resolvedKind = MODEL_KINDS.find(k => k === rawKind);
+	const kind = resolvedKind !== "chat" ? resolvedKind : undefined;
+
+	const rawWebSearch = spec.webSearch ?? resolveProviderWebSearch(spec.provider);
+	const webSearch =
+		rawWebSearch === "gemini" ||
+		rawWebSearch === "anthropic" ||
+		rawWebSearch === "codex" ||
+		rawWebSearch === "xai" ||
+		rawWebSearch === "openrouter"
+			? rawWebSearch
+			: undefined;
+	const { kind: _omittedKind, webSearch: _omittedWebSearch, ...restSpec } = spec;
 	return {
-		...spec,
+		...restSpec,
 		name: cleanModelName(spec.name),
 		cost: normalizeModelCost(spec.cost),
 		thinking: resolveModelThinking(spec, compat),
 		compat,
 		compatConfig: spec.compat,
+		...(kind !== undefined ? { kind } : {}),
+		...(webSearch !== undefined ? { webSearch } : {}),
 	} as Model<TApi>;
 }
 
