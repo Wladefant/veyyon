@@ -10,6 +10,8 @@
 ### Fixed
 
 - Persist nested-repo patches before task isolation teardown, retain workspace on write failure, and stop advertising isolated agents as resumable ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi bdf400b69fc448dbead1c1d6bcfa216cb7697ae6, 207b925541814d4d6132a2525921fd33056fc19c, 1a65c7a99757f19f87498751816b232cfc3de962).
+- Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed HTML session exports overflowing the browser call stack when rendering a valid, deeply nested conversation tree ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -43,6 +45,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Fixed Nerd Font symbols drawing the D3.js icon for C# files and the Microsoft logo for the context meter; they now use the C# and generic window icons ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hard `session_stop` blocks survive the advisory continuation limit, reasonless blocks retain a fallback instruction, and aborted turns cannot schedule stale stop feedback ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved bearer token fallback when discovering OpenAI Codex models without stored OAuth accounts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed timed-out or interrupted glob searches keeping native filesystem workers alive and blocking subsequent agent turns (oh-my-pi 510f9e05c7397c69f373f01d4d4f098e917aa2e3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
