@@ -128,7 +128,11 @@ export class BtwPanelComponent extends Container {
 
 	#contentComponent(): Component {
 		if (this.#state === "error") {
-			return new Text(theme.fg("error", sanitizeErrorLine(this.#errorMessage ?? "Unknown error")), COMPOSER_INSET_COLS, 0);
+			return new Text(
+				theme.fg("error", sanitizeErrorLine(this.#errorMessage ?? "Unknown error")),
+				COMPOSER_INSET_COLS,
+				0,
+			);
 		}
 		const text = this.#visibleAnswer;
 		if (!text) {

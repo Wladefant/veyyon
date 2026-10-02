@@ -396,7 +396,11 @@ export class BtwController {
 				return false;
 			}
 			await this.ctx.sessionManager.ensureOnDisk();
-			if (signal?.aborted || generation !== this.#generation || sessionId !== this.ctx.sessionManager.getSessionId()) {
+			if (
+				signal?.aborted ||
+				generation !== this.#generation ||
+				sessionId !== this.ctx.sessionManager.getSessionId()
+			) {
 				return false;
 			}
 			if (!previous) this.#closeHistory();
