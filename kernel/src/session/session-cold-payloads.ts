@@ -107,12 +107,35 @@ function defineValue(target: Record<string, unknown>, key: string, value: unknow
 	Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
 }
 
+/** A base whose constructor returns its argument, so a subclass installs its fields on that object. */
+class ReturnsTarget {
+	constructor(target: object) {
+		// biome-ignore lint/correctness/noConstructorReturn: `new ColdSlot(entry)` installs `#stub` on the entry itself.
+		return target;
+	}
+}
+
+/**
+ * The stub of a cold entry or message stand-in, held in a private field installed on that object.
+ * A private field is invisible to `Object.keys`, `Reflect.ownKeys`, `JSON.stringify`,
+ * `structuredClone` and every descriptor walk, and costs one property slot, where a `WeakMap`
+ * keyed by every cold object costs a table entry per key: 4 MiB for the 69,498 cold objects of a
+ * resumed session.
+ */
+class ColdSlot extends ReturnsTarget {
+	#stub: ColdStub | undefined;
+
+	static get(target: object): ColdStub | undefined {
+		return #stub in target ? (target as ColdSlot).#stub : undefined;
+	}
+
+	static set(target: object, stub: ColdStub | undefined): void {
+		if (#stub in target) (target as ColdSlot).#stub = stub;
+		else if (stub !== undefined) new ColdSlot(target).#stub = stub;
+	}
+}
+
 export class ColdEntryPayloads {
-	/**
-	 * Keyed by the cold entry and by its message stand-in. Weak, so an entry the session no longer
-	 * holds takes its stub, and in time its handle, with it.
-	 */
-	readonly #stubs = new WeakMap<object, ColdStub>();
 	/** One accessor pair per field name, shared by every entry cooled on that field. */
 	readonly #accessors = new Map<string, PropertyDescriptor>();
 	/** Key lists shared by every entry with the same cooled fields. */
@@ -162,7 +185,7 @@ export class ColdEntryPayloads {
 		}
 		const next: ColdFile = { reader, restore: previous.restore, cold: 0 };
 		for (const entry of entries) {
-			const stub = this.#stubs.get(entry);
+			const stub = ColdSlot.get(entry);
 			if (stub?.file !== previous) continue;
 			stub.file = next;
 			previous.cold -= 1;
@@ -180,7 +203,7 @@ export class ColdEntryPayloads {
 	 */
 	cool(entry: SessionEntry, offset: number, length: number): boolean {
 		const file = this.#current;
-		if (file === undefined || length < MIN_COLD_LINE_BYTES || this.#stubs.has(entry)) return false;
+		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdSlot.get(entry) !== undefined) return false;
 		const record = entry as unknown as Record<string, unknown>;
 		const original = entry.type === "message" ? record.message : undefined;
 		const nested = isRecord(original) ? original : undefined;
@@ -200,10 +223,10 @@ export class ColdEntryPayloads {
 		const messageKeys = message === undefined ? NO_FIELDS : this.#sharedKeys(movedFromMessage);
 		for (const key of shared) Object.defineProperty(record, key, this.#accessor(key));
 		const stub: ColdStub = { file, offset, length, entry, keys: shared, message, messageKeys };
-		this.#stubs.set(entry, stub);
+		ColdSlot.set(entry, stub);
 		if (message !== undefined) {
 			Object.defineProperty(record, "message", this.#messageAccessor());
-			this.#stubs.set(message, stub);
+			ColdSlot.set(message, stub);
 		}
 		file.cold += 1;
 		return true;
@@ -217,7 +240,7 @@ export class ColdEntryPayloads {
 	 */
 	coolWritten(entry: SessionEntry, line: string, offset: number, length: number): boolean {
 		const file = this.#current;
-		if (file === undefined || length < MIN_COLD_LINE_BYTES || this.#stubs.has(entry)) return false;
+		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdSlot.get(entry) !== undefined) return false;
 		let written: string | undefined;
 		try {
 			written = file.reader.read(offset, length);
@@ -237,7 +260,7 @@ export class ColdEntryPayloads {
 	 * into memory. A warm entry is left as it is.
 	 */
 	warm(receiver: object): void {
-		const stub = this.#stubs.get(receiver);
+		const stub = ColdSlot.get(receiver);
 		if (stub === undefined) return;
 		const { entry, message } = stub;
 		const line = stub.file.reader.read(stub.offset, stub.length);
@@ -259,12 +282,12 @@ export class ColdEntryPayloads {
 				`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${stub.offset}-${stub.offset + stub.length} of session object ${stub.file.reader.identity}`,
 			);
 		}
-		// Deleted first, so a throw above leaves the entry cold and readable again.
-		this.#stubs.delete(entry);
+		// Cleared first, so a throw above leaves the entry cold and readable again.
+		ColdSlot.set(entry, undefined);
 		const record = entry as unknown as Record<string, unknown>;
 		for (const key of stub.keys) defineValue(record, key, restored[key]);
 		if (message !== undefined) {
-			this.#stubs.delete(message);
+			ColdSlot.set(message, undefined);
 			const from = restoredMessage as Record<string, unknown>;
 			for (const key of stub.messageKeys) defineValue(message, key, from[key]);
 			defineValue(record, "message", message);
@@ -324,13 +347,12 @@ export class ColdEntryPayloads {
 	 */
 	#messageAccessor(): PropertyDescriptor {
 		if (this.#messageDescriptor !== undefined) return this.#messageDescriptor;
-		const stubs = this.#stubs;
 		const payloads = this;
 		this.#messageDescriptor = {
 			configurable: true,
 			enumerable: true,
 			get(this: SessionEntry): unknown {
-				const message = stubs.get(this)?.message;
+				const message = ColdSlot.get(this)?.message;
 				if (message === undefined) throw new Error(`Cold session entry ${this.id} lost its message stand-in`);
 				return message;
 			},
