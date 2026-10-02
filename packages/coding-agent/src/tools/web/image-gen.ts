@@ -574,6 +574,12 @@ async function findGeminiImageCredentials(
 	return null;
 }
 
+function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
+	if (!baseUrl) return true;
+	const lower = trimTrailingSlashes(baseUrl.toLowerCase());
+	return lower === CODEX_BASE_URL || lower.startsWith(`${CODEX_BASE_URL}/`);
+}
+
 async function findOpenAIHostedImageCredentials(
 	modelRegistry: ModelRegistry | undefined,
 	activeModel: Model | undefined,
@@ -582,6 +588,13 @@ async function findOpenAIHostedImageCredentials(
 	if (!modelRegistry || !isOpenAIHostedImageModel(activeModel)) return null;
 	const apiKey = await modelRegistry.getApiKey(activeModel, sessionId);
 	if (!isAuthenticated(apiKey)) return null;
+	if (
+		(activeModel.api === "openai-codex-responses" || activeModel.provider === "openai-codex") &&
+		isOfficialCodexApiUrl(getOpenAIBaseUrl(activeModel)) &&
+		!getCodexAccountId(apiKey)
+	) {
+		return null;
+	}
 	return {
 		provider: getOpenAIHostedImageProvider(activeModel),
 		apiKey,
@@ -1127,11 +1140,19 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
 		return untilAborted(signal, async () => {
 			const sessionId = ctx.sessionManager.getSessionId();
-			const apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
+			let apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
 			if (!apiKey) {
 				throw new Error(
 					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity or xAI Grok OAuth, or set XAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
 				);
+			}
+
+			if (
+				params.aspect_ratio &&
+				apiKey.provider !== "xai" &&
+				!COMMON_IMAGE_ASPECT_RATIO_SET.has(params.aspect_ratio)
+			) {
+				apiKey = (await findXAIImageCredentials(ctx.modelRegistry)) ?? apiKey;
 			}
 
 			const provider = apiKey.provider;

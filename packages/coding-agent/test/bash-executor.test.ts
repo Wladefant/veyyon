@@ -8,7 +8,7 @@ import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output
 import * as shellSnapshot from "@veyyon/coding-agent/utils/shell-snapshot";
 import type { Shell, ShellRunResult } from "@veyyon/natives";
 import * as piNatives from "@veyyon/natives";
-import { removeSyncWithRetries } from "@veyyon/utils";
+import { $which, removeSyncWithRetries } from "@veyyon/utils";
 
 // Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
 // OutputSink when bash-executor pulls settings via resolveOutputSinkHeadBytes.
@@ -1054,7 +1054,8 @@ describe("executeBash :async: background retention", () => {
 		"keeps a per-job :async: shell's plain-`&` background process alive across turns",
 		async () => {
 			const pidFile = path.join(tmp, "pid");
-			const sleepBin = fs.existsSync("/bin/sleep") ? "/bin/sleep" : "sleep";
+			const sleepBin = $which("sleep");
+			if (!sleepBin) throw new Error("sleep executable not found");
 			let pid: number | undefined;
 			try {
 				// A per-job `:async:` key: its shell is removed from the reuse map at
@@ -1095,7 +1096,8 @@ describe("executeBash :async: background retention", () => {
 		"keeps a nohup-detached background process alive across turns (reparenting)",
 		async () => {
 			const pidFile = path.join(tmp, "nohup-pid");
-			const sleepBin = fs.existsSync("/bin/sleep") ? "/bin/sleep" : "sleep";
+			const sleepBin = $which("sleep");
+			if (!sleepBin) throw new Error("sleep executable not found");
 			let pid: number | undefined;
 			try {
 				// `nohup cmd &` is a transparent background wrapper: brush unwraps it and

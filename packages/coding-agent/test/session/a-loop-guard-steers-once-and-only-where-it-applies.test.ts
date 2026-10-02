@@ -218,6 +218,12 @@ const EVENTS: Record<AssistantMessageEvent["type"], (message: AssistantMessage) 
 		toolCall: { type: "toolCall", id: "t", name: "bash", arguments: {} },
 		partial,
 	}),
+	image_end: partial => ({
+		type: "image_end",
+		contentIndex: 1,
+		content: { type: "image", data: "SU1H", mimeType: "image/png" },
+		partial,
+	}),
 	done: message => ({ type: "done", reason: "stop", message }),
 	error: error => ({ type: "error", reason: "aborted", error }),
 };
@@ -236,6 +242,7 @@ const ENDS_THE_RUN: Record<AssistantMessageEvent["type"], boolean> = {
 	toolcall_end: false,
 	done: false,
 	error: false,
+	image_end: false,
 };
 
 function thinking(h: Harness, message: AssistantMessage, headers: number): void {
