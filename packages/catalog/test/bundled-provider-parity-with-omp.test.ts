@@ -88,7 +88,6 @@ const OMP_BUNDLED_PROVIDERS: readonly string[] = [
 
 /** Providers omp bundles that Veyyon does not, each with the reason it is not ported yet. */
 const OMP_PROVIDER_OPT_OUTS: Readonly<Record<string, string>> = {
-	abliteration: "port pending (Refs #107)",
 	aiand: "port pending (Refs #107)",
 	"alibaba-token-plan": "port pending (Refs #107)",
 	"bedrock-mantle": "port pending (Refs #107)",
@@ -97,8 +96,6 @@ const OMP_PROVIDER_OPT_OUTS: Readonly<Record<string, string>> = {
 	deepinfra: "open port, PR 354",
 	helmcode: "port pending (Refs #107)",
 	local: "open port, PR 351 (synthetic role provider)",
-	meta: "port pending (Refs #107)",
-	"muse-code": "port pending (Refs #107)",
 	stepfun: "port pending (Refs #107)",
 	typesafe: "open port, PR 345",
 	web: "open port, PR 351 (synthetic role provider)",
