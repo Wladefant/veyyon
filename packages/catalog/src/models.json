@@ -82276,6 +82276,10 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-4": {
@@ -82295,7 +82299,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 8192,
-			"maxTokens": 8192
+			"maxTokens": 8192,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4-turbo": {
 			"id": "gpt-4-turbo",
@@ -82315,7 +82323,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 4096
+			"maxTokens": 4096,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4.1": {
 			"id": "gpt-4.1",
@@ -82335,7 +82347,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
-			"maxTokens": 32768
+			"maxTokens": 32768,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4.1-mini": {
 			"id": "gpt-4.1-mini",
@@ -82355,7 +82371,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
-			"maxTokens": 32768
+			"maxTokens": 32768,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4.1-nano": {
 			"id": "gpt-4.1-nano",
@@ -82375,7 +82395,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1047576,
-			"maxTokens": 32768
+			"maxTokens": 32768,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4o": {
 			"id": "gpt-4o",
@@ -82395,7 +82419,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 16384
+			"maxTokens": 16384,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4o-2024-05-13": {
 			"id": "gpt-4o-2024-05-13",
@@ -82415,7 +82443,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 4096
+			"maxTokens": 4096,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4o-2024-08-06": {
 			"id": "gpt-4o-2024-08-06",
@@ -82435,7 +82467,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 16384
+			"maxTokens": 16384,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4o-2024-11-20": {
 			"id": "gpt-4o-2024-11-20",
@@ -82455,7 +82491,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 16384
+			"maxTokens": 16384,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-4o-mini": {
 			"id": "gpt-4o-mini",
@@ -82475,7 +82515,11 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 16384
+			"maxTokens": 16384,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5": {
 			"id": "gpt-5",
@@ -82513,6 +82557,10 @@
 					"medium",
 					"high"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5-codex": {
@@ -82536,7 +82584,11 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 15,
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5-codex-mini": {
 			"id": "gpt-5-codex-mini",
@@ -82559,7 +82611,11 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 20,
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5-mini": {
 			"id": "gpt-5-mini",
@@ -82597,6 +82653,10 @@
 					"medium",
 					"high"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5-nano": {
@@ -82635,6 +82695,10 @@
 					"medium",
 					"high"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5-pro": {
@@ -82667,6 +82731,10 @@
 				"efforts": [
 					"high"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.1": {
@@ -82703,6 +82771,10 @@
 					"medium",
 					"high"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.1-codex": {
@@ -82726,7 +82798,11 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 11,
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5.1-codex-max": {
 			"id": "gpt-5.1-codex-max",
@@ -82749,7 +82825,11 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 10,
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5.1-codex-mini": {
 			"id": "gpt-5.1-codex-mini",
@@ -82772,7 +82852,11 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 19,
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5.2": {
 			"id": "gpt-5.2",
@@ -82810,6 +82894,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.2-chat-latest": {
@@ -82842,6 +82930,10 @@
 				"efforts": [
 					"medium"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.2-codex": {
@@ -82865,7 +82957,11 @@
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"priority": 8,
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5.2-pro": {
 			"id": "gpt-5.2-pro",
@@ -82901,6 +82997,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.3-chat-latest": {
@@ -82922,7 +83022,11 @@
 			},
 			"contextWindow": 128000,
 			"maxTokens": 16384,
-			"applyPatchToolType": "freeform"
+			"applyPatchToolType": "freeform",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5.3-codex": {
 			"id": "gpt-5.3-codex",
@@ -82960,6 +83064,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.3-codex-spark": {
@@ -82998,7 +83106,11 @@
 					"xhigh"
 				]
 			},
-			"contextPromotionTarget": "openai-codex/gpt-5.5"
+			"contextPromotionTarget": "openai-codex/gpt-5.5",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5.4": {
 			"id": "gpt-5.4",
@@ -83039,6 +83151,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.4-mini": {
@@ -83080,6 +83196,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.4-nano": {
@@ -83119,6 +83239,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.4-pro": {
@@ -83156,6 +83280,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-5.5": {
@@ -83198,7 +83326,11 @@
 					"xhigh"
 				]
 			},
-			"contextPromotionTarget": "openai-codex/gpt-5.4"
+			"contextPromotionTarget": "openai-codex/gpt-5.4",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2.5
+			}
 		},
 		"gpt-5.5-pro": {
 			"id": "gpt-5.5-pro",
@@ -83235,7 +83367,11 @@
 					"xhigh"
 				]
 			},
-			"contextPromotionTarget": "openai-codex/gpt-5.4"
+			"contextPromotionTarget": "openai-codex/gpt-5.4",
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			}
 		},
 		"gpt-5.6": {
 			"id": "gpt-5.6",
@@ -83275,6 +83411,17 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			},
+			"longContextCost": {
+				"inputThreshold": 272000,
+				"input": 10,
+				"output": 45,
+				"cacheRead": 1,
+				"cacheWrite": 12.5
 			}
 		},
 		"gpt-5.6-luna": {
@@ -83295,7 +83442,7 @@
 				"cacheWrite": 0.25
 			},
 			"pricing": "unknown",
-			"contextWindow": 372000,
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"useResponsesLite": true,
@@ -83319,6 +83466,18 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 872000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			},
+			"longContextCost": {
+				"inputThreshold": 272000,
+				"input": 0.4,
+				"output": 1.8,
+				"cacheRead": 0.04,
+				"cacheWrite": 0.5
 			}
 		},
 		"gpt-5.6-sol": {
@@ -83339,7 +83498,7 @@
 				"cacheWrite": 5
 			},
 			"pricing": "unknown",
-			"contextWindow": 372000,
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"useResponsesLite": true,
@@ -83363,6 +83522,18 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 872000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			},
+			"longContextCost": {
+				"inputThreshold": 272000,
+				"input": 10,
+				"output": 45,
+				"cacheRead": 1,
+				"cacheWrite": 12.5
 			}
 		},
 		"gpt-5.6-terra": {
@@ -83383,7 +83554,7 @@
 				"cacheWrite": 2.5
 			},
 			"pricing": "unknown",
-			"contextWindow": 372000,
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"preferWebsockets": true,
 			"useResponsesLite": true,
@@ -83407,6 +83578,18 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 872000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
+			},
+			"longContextCost": {
+				"inputThreshold": 272000,
+				"input": 4,
+				"output": 18,
+				"cacheRead": 0.4,
+				"cacheWrite": 5
 			}
 		},
 		"gpt-6-astra": {
@@ -83424,7 +83607,7 @@
 				"input": 10,
 				"output": 50,
 				"cacheRead": 1,
-				"cacheWrite": 12.5
+				"cacheWrite": 0
 			},
 			"pricing": "unknown",
 			"contextWindow": 272000,
@@ -83451,6 +83634,11 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 922000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2.5
 			}
 		},
 		"gpt-6-luna": {
@@ -83468,7 +83656,7 @@
 				"input": 0.1,
 				"output": 0.5,
 				"cacheRead": 0.01,
-				"cacheWrite": 0.125
+				"cacheWrite": 0
 			},
 			"pricing": "unknown",
 			"contextWindow": 272000,
@@ -83495,6 +83683,11 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 872000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-6-sol": {
@@ -83512,7 +83705,7 @@
 				"input": 2,
 				"output": 10,
 				"cacheRead": 0.2,
-				"cacheWrite": 2.5
+				"cacheWrite": 0
 			},
 			"pricing": "unknown",
 			"contextWindow": 272000,
@@ -83539,6 +83732,11 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 872000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-6.1-sol": {
@@ -83556,7 +83754,7 @@
 				"input": 2,
 				"output": 10,
 				"cacheRead": 0.1,
-				"cacheWrite": 2.5
+				"cacheWrite": 0
 			},
 			"pricing": "unknown",
 			"contextWindow": 272000,
@@ -83583,6 +83781,11 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 922000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-daybreak-blue-latest": {
@@ -83597,10 +83800,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 4,
-				"output": 20,
-				"cacheRead": 0.4,
-				"cacheWrite": 5
+				"input": 5,
+				"output": 30,
+				"cacheRead": 0.5,
+				"cacheWrite": 6.25
 			},
 			"pricing": "unknown",
 			"contextWindow": 272000,
@@ -83627,7 +83830,34 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"maxContextWindow": 872000,
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
+		},
+		"gpt-image-2": {
+			"id": "gpt-image-2",
+			"name": "GPT Image 2",
+			"api": "openai-codex-responses",
+			"provider": "openai-codex",
+			"baseUrl": "https://chatgpt.com/backend-api",
+			"kind": "image",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 10000,
+			"maxTokens": null,
+			"supportsTools": false
 		},
 		"gpt-realtime-2.1": {
 			"id": "gpt-realtime-2.1",
@@ -83666,6 +83896,10 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"gpt-reserve": {
@@ -83710,6 +83944,10 @@
 					"xhigh",
 					"max"
 				]
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"o1": {
@@ -83746,6 +83984,10 @@
 					"high"
 				],
 				"requiresEffort": true
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"o1-pro": {
@@ -83782,6 +84024,10 @@
 					"high"
 				],
 				"requiresEffort": true
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"o3": {
@@ -83818,6 +84064,10 @@
 					"high"
 				],
 				"requiresEffort": true
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"o3-mini": {
@@ -83853,6 +84103,10 @@
 					"high"
 				],
 				"requiresEffort": true
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"o3-pro": {
@@ -83889,6 +84143,10 @@
 					"high"
 				],
 				"requiresEffort": true
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		},
 		"o4-mini": {
@@ -83925,6 +84183,10 @@
 					"high"
 				],
 				"requiresEffort": true
+			},
+			"serviceTierCost": {
+				"flex": 0.5,
+				"priority": 2
 			}
 		}
 	},
