@@ -372,7 +372,7 @@ describe("searchCodex model selection", () => {
 		expect(capturedRequest?.body).toEqual(
 			expect.objectContaining({
 				model: "gpt-5.6-sol",
-				tool_choice: { type: "web_search" },
+				tool_choice: "auto",
 				reasoning: { context: "all_turns" },
 				parallel_tool_calls: false,
 				input: [
@@ -685,7 +685,9 @@ describe("searchCodex model selection", () => {
 		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
 		const bundled = catalogModels.getBundledModels("openai-codex");
 		const modified = bundled.map(m =>
-			m.id === "gpt-5.6-luna" ? { ...m, compat: { ...m.compat, supportsNamedToolChoice: false } } : m,
+			m.id === "gpt-5.6-luna"
+				? { ...m, useResponsesLite: false, compat: { ...m.compat, supportsNamedToolChoice: false } }
+				: m,
 		);
 		vi.spyOn(catalogModels, "getBundledModels").mockReturnValue(modified as Model<Api>[]);
 
@@ -699,7 +701,9 @@ describe("searchCodex model selection", () => {
 		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
 		const bundled = catalogModels.getBundledModels("openai-codex");
 		const modified = bundled.map(m =>
-			m.id === "gpt-5.6-luna" ? { ...m, compat: { ...m.compat, supportsNamedToolChoice: true } } : m,
+			m.id === "gpt-5.6-luna"
+				? { ...m, useResponsesLite: false, compat: { ...m.compat, supportsNamedToolChoice: true } }
+				: m,
 		);
 		vi.spyOn(catalogModels, "getBundledModels").mockReturnValue(modified as Model<Api>[]);
 
