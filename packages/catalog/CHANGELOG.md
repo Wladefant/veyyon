@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `openai-codex` subscription fields: 1M context for `gpt-5.6-*`, a `maxContextWindow` ceiling (872K, 922K for Astra and GPT-6.1 Sol), `longContext` pricing above 272K, `serviceTierCost` for flex and priority, zero cache-write cost for GPT-6 subscription models, the `gpt-daybreak-blue-latest` price, and the hidden `gpt-image-2` image runner ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Removed
 
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.

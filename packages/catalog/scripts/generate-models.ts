@@ -24,6 +24,14 @@ import { createModelManager } from "../src/model-manager";
 import { hasBillableCost } from "../src/models";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import { toModelSpec } from "../src/provider-models/bundled-references";
+import {
+	CODEX_IMAGE_MODEL,
+	codexContextWindowFloor,
+	codexCostPatch,
+	codexLongContextCost,
+	codexServiceTierCost,
+	resolveCodexMaxContextWindow,
+} from "../src/provider-models/codex-subscription";
 import { COMMAND_CODE_STATIC_MODELS } from "../src/provider-models/command-code";
 import {
 	allowsUnauthenticatedCatalogDiscovery,
@@ -51,14 +59,6 @@ import {
 import type { Api, ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
-import {
-	CODEX_IMAGE_MODEL,
-	codexContextWindowFloor,
-	codexCostPatch,
-	codexLongContextCost,
-	codexServiceTierCost,
-	resolveCodexMaxContextWindow,
-} from "../src/provider-models/codex-subscription";
 import { getCodexAccountId } from "../src/wire/codex";
 import {
 	applyCanonicalLimitFallback,
