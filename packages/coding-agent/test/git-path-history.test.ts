@@ -12,7 +12,8 @@ const makeDir = useTrackedTempDirs("veyyon-git-path-history-");
 
 test("path history is bounded, newest first, and constrained to its revision", async () => {
 	const cwd = makeDir();
-	const git = (...args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
+	const git = (...args: string[]): string =>
+		execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
 	git("init", "-q", "-b", "main");
 	git("config", "user.name", "test");
 	git("config", "user.email", "test@example.invalid");
