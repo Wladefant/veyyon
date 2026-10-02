@@ -11,10 +11,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import type { Subprocess } from "bun";
-import {
-	MnemopiEmbedClient,
-	type MnemopiEmbedWorkerHandle,
-} from "../src/memory/mnemopi/embed-client";
+import { MnemopiEmbedClient, type MnemopiEmbedWorkerHandle } from "../src/memory/mnemopi/embed-client";
 import type { MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound } from "../src/memory/mnemopi/embed-protocol";
 import { hermeticSpawnEnv } from "./helpers/hermetic-spawn-env";
 
