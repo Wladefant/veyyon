@@ -57,6 +57,9 @@ export type WorkerInitPayload =
 			browserWSEndpoint: string;
 			targetId: string;
 			dialogs?: "accept" | "dismiss";
+			url?: string;
+			waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
+			timeoutMs: number;
 			/**
 			 * Post-timeout recycle: before adopting the page, dismiss any open JS dialog and
 			 * stop a pending navigation so a blocked target cannot stall worker init (which

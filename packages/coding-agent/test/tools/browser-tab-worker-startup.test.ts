@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { ensureChromiumExecutable } from "@veyyon/coding-agent/tools/web/browser/launch";
 import { acquireBrowser, type BrowserHandle, releaseBrowser } from "@veyyon/coding-agent/tools/web/browser/registry";
 import type {
 	ReadyInfo,
@@ -7,19 +6,9 @@ import type {
 	TabWorkerOutbound,
 } from "@veyyon/coding-agent/tools/web/browser/tab-protocol";
 import { acquireTab, initializeTabWorkerForTest } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
+import { chromiumAvailable } from "./chromium-probe";
 
-async function chromiumCanLaunch(): Promise<boolean> {
-	try {
-		const executable = await ensureChromiumExecutable();
-		if (!executable) return false;
-		const probe = Bun.spawnSync([executable, "--version"], { stdout: "ignore", stderr: "ignore" });
-		return probe.exitCode === 0;
-	} catch {
-		return false;
-	}
-}
-
-const CHROMIUM_AVAILABLE = await chromiumCanLaunch();
+const CHROMIUM_AVAILABLE = await chromiumAvailable();
 
 class FakeStartupWorker {
 	#errorHandlers = new Set<(error: Error) => void>();
@@ -204,4 +193,104 @@ describe("browser init deadline carry-over", () => {
 		},
 		30_000,
 	);
+});
+
+/**
+ * Defends `acquireTabImpl`'s init budget without a browser: the tab worker is the real isolated
+ * worker, pointed at a loopback "browser" whose websocket upgrade never completes, so it never
+ * reports `setup`. Only the external boundary (the browser endpoint) is faked.
+ *
+ * Closes: `startedAt` ignoring `deadlineStartMs` (budget restarts after browser acquisition) and the
+ * `initBudgetExhausted` fail-fast (an exhausted budget still spending a second, inline attempt), and
+ * an abort during init being reported as a startup failure.
+ * Gap: the recycle path's own fail-fast and the headless page-close are not exercised here.
+ */
+describe("acquireTab init budget without a browser", () => {
+	function makeStalledBrowser(endpoint: string): BrowserHandle {
+		// A headless handle never reaches puppeteer in the supervisor itself: it only reads
+		// `wsEndpoint()` to build the payload, and `refCount: 1` keeps release out of the path.
+		return {
+			key: "headless:1",
+			kind: { kind: "headless", headless: true },
+			refCount: 1,
+			browser: { wsEndpoint: () => endpoint, targets: () => [], connected: true },
+			stealth: { browserSession: null, override: null },
+		} as unknown as BrowserHandle;
+	}
+
+	async function withStalledEndpoint<T>(onConnect: () => void, run: (endpoint: string) => Promise<T>): Promise<T> {
+		const server = Bun.serve({
+			port: 0,
+			fetch: () => {
+				onConnect();
+				return Promise.withResolvers<Response>().promise;
+			},
+		});
+		try {
+			return await run(`ws://127.0.0.1:${server.port}/devtools/browser/stalled`);
+		} finally {
+			await server.stop(true);
+		}
+	}
+
+	async function failureOf(promise: Promise<unknown>): Promise<Error> {
+		try {
+			await promise;
+		} catch (error) {
+			if (error instanceof Error) return error;
+		}
+		throw new Error("Expected acquireTab to reject with an Error");
+	}
+
+	const uniqueName = () => `budget-${process.pid}-${Math.random().toString(36).slice(2)}`;
+
+	it("counts time spent before acquisition: an exhausted budget fails with the first attempt's error, no inline retry", async () => {
+		await withStalledEndpoint(
+			() => {},
+			async endpoint => {
+				const started = performance.now();
+				const failure = await failureOf(
+					acquireTab(uniqueName(), makeStalledBrowser(endpoint), {
+						timeoutMs: 5_000,
+						deadlineStartMs: performance.now() - 60_000,
+					}),
+				);
+				expect(failure.message).toBe("Timed out waiting for tab worker setup");
+				// One setup floor (2 s), not two: the inline retry would add another.
+				expect(performance.now() - started).toBeLessThan(4_000);
+			},
+		);
+	}, 30_000);
+
+	it("retries inline when budget remains and wraps the final failure with its cause", async () => {
+		await withStalledEndpoint(
+			() => {},
+			async endpoint => {
+				const failure = await failureOf(
+					acquireTab(uniqueName(), makeStalledBrowser(endpoint), { timeoutMs: 3_000 }),
+				);
+				expect(failure.message).toContain("inline fallback also failed");
+				expect(failure.cause).toBeInstanceOf(Error);
+				expect(Object.keys(failure)).toContain("cause");
+			},
+		);
+	}, 30_000);
+
+	it("surfaces an abort that fired during init as an abort, not as a startup failure", async () => {
+		const controller = new AbortController();
+		await withStalledEndpoint(
+			// The worker reaching the endpoint is the moment init is in flight.
+			() => controller.abort(),
+			async endpoint => {
+				const failure = await failureOf(
+					acquireTab(uniqueName(), makeStalledBrowser(endpoint), {
+						timeoutMs: 3_000,
+						signal: controller.signal,
+					}),
+				);
+				expect(failure.name).toBe("ToolAbortError");
+				expect(failure.message).toBe("Browser tab open aborted");
+			},
+		);
+	}, 30_000);
 });

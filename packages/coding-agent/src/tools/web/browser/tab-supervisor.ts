@@ -192,8 +192,6 @@ const killedTabs = new Map<string, string>();
 
 const REPORTED_INIT_FAILURE = Symbol("reported-init-failure");
 
-type ReportedInitFailure = Error & { [REPORTED_INIT_FAILURE]?: true };
-
 function markReportedInitFailure(error: Error): Error {
 	Object.defineProperty(error, REPORTED_INIT_FAILURE, { value: true, configurable: true });
 	return error;
@@ -367,8 +365,8 @@ async function acquireTabImpl(
 			const finalError = new ToolError(
 				`Failed to start browser tab worker (inline fallback also failed): ${errorMessage(inlineError)}`,
 			);
-			Object.defineProperty(finalError, "cause", { value: error, configurable: true });
-			if (opts.signal?.aborted) finalError.isAbort = true;
+			finalError.cause = error;
+			if (opts.signal?.aborted) throw new ToolAbortError("Browser tab open aborted");
 			throw finalError;
 		}
 	}
@@ -758,6 +756,9 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 		browserWSEndpoint,
 		targetId,
 		dialogs: opts.dialogs,
+		url: opts.url,
+		waitUntil: opts.waitUntil,
+		timeoutMs: opts.timeoutMs,
 	};
 }
 
@@ -865,6 +866,7 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 		browserWSEndpoint,
 		targetId: tab.targetId,
 		dialogs: tab.dialogPolicy,
+		timeoutMs,
 		// Unblock a wedged page (open JS dialog, hung navigation) before adopting it —
 		// otherwise init stalls, times out, and the tab gets force-killed.
 		recover: true,
@@ -896,7 +898,7 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 			const finalError = new ToolError(
 				`Failed to recycle timed-out browser tab worker (inline fallback also failed): ${errorMessage(inlineError)}`,
 			);
-			Object.defineProperty(finalError, "cause", { value: error, configurable: true });
+			finalError.cause = error;
 			throw finalError;
 		}
 	}
