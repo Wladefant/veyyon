@@ -35,6 +35,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Preserved plan mode state, model state, and active tool set when exiting plan mode encounters a restoration failure, preventing corrupted session state on failed plan exits (oh-my-pi 8a8ff498b3dd2f9cfb751dc44d73718e3cfd033c, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved live macOS update backups held by active sessions and tolerated EPERM/EACCES during project directory canonicalization ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Cursor MCP calls named `StrReplace`/`Edit` (or `edit` with `old_string`/`new_string`) 404ing after the server injected CLI tool instructions by routing them as replace-mode edit calls (oh-my-pi 143aded8452dde605ed785e0eee9af3f99e59fe0, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `veyyon --smoke-test` deleting sibling directories in temporary storage by scoping dead daemon runtime directory cleanup to the `daemons` container and 16-hex scope keys, and isolating distribution smoke test runtimes under a private parent ([#107](https://github.com/Wladefant/veyyon/issues/107)).
