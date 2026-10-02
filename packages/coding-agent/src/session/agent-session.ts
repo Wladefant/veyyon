@@ -665,6 +665,8 @@ export class AgentSession {
 	#goalRuntime: GoalRuntime;
 	/** The advisors watching this session's turns; see {@link AdvisorRoster}. */
 	readonly #advisorRoster: AdvisorRoster;
+	/** Async lifecycle handlers for visible advisor cards emitted outside the primary loop. */
+	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#goalTurnCounter = 0;
 	/** Spend over the summarized prefix, tallied once per compaction boundary. */
 	readonly #spendLedger = new SessionSpendLedger();
@@ -2476,7 +2478,16 @@ export class AgentSession {
 	 */
 	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type !== "agent_end") {
-			return this.#processAgentEvent(event);
+			const processing = this.#processAgentEvent(event);
+			if ((event.type === "message_start" || event.type === "message_end") && isAdvisorCard(event.message)) {
+				this.#pendingAdvisorCardEvents.add(processing);
+				void processing
+					.finally(() => this.#pendingAdvisorCardEvents.delete(processing))
+					.catch(error => {
+						logger.debug("Advisor card event processing failed", { error });
+					});
+			}
+			return processing;
 		}
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#postPrompt.track(promise);
@@ -4116,6 +4127,51 @@ export class AgentSession {
 			unsubscribe();
 			signal?.removeEventListener("abort", wake);
 		}
+	}
+
+	/**
+	 * Prevent advisor notes from starting hidden primary turns while a headless
+	 * caller prints and drains the final primary response.
+	 */
+	prepareForHeadlessAdvisorDrain(): void {
+		this.#advisorRoster.prepareForHeadlessDrain();
+	}
+
+	async #waitForPendingAdvisorCardEvents(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + Math.max(0, timeoutMs);
+		while (this.#pendingAdvisorCardEvents.size > 0) {
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) return false;
+			const settled = Promise.allSettled([...this.#pendingAdvisorCardEvents]).then(() => true as const);
+			const { promise: timedOut, resolve } = Promise.withResolvers<false>();
+			const timer = setTimeout(() => resolve(false), remainingMs);
+			try {
+				if (!(await Promise.race([settled, timedOut]))) return false;
+			} finally {
+				clearTimeout(timer);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Wait for active advisor reviews and their emitted card events before a
+	 * headless caller disposes the session. Returns `false` and logs work disposal
+	 * will abandon when the shared deadline expires or an advisor fails.
+	 */
+	async waitForAdvisorCatchup(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		const { abandoned } = await this.#advisorRoster.waitForCatchup(timeoutMs);
+		const cardEventsCaughtUp = await this.#waitForPendingAdvisorCardEvents(Math.max(0, deadline - Date.now()));
+		if (abandoned.length > 0 || !cardEventsCaughtUp) {
+			logger.warn("advisor shutdown drain incomplete; disposal will abandon reviews or cards", {
+				timeoutMs,
+				advisors: abandoned,
+				pendingAdvisorCards: this.#pendingAdvisorCardEvents.size,
+			});
+			return false;
+		}
+		return true;
 	}
 
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
