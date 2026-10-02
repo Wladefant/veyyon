@@ -186,6 +186,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 
 		const result = await handlers.mcp({
 			name: "StrReplace",
+			providerIdentifier: "pi-agent",
 			toolName: "StrReplace",
 			toolCallId: "sr1",
 			args: { path: target, old_string: "beta", new_string: "gamma" },
@@ -212,6 +213,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 
 		const result = await handlers.mcp({
 			name: "edit",
+			providerIdentifier: "pi-agent",
 			toolName: "edit",
 			toolCallId: "e-mix",
 			args: { path: target, old_text: "beta", new_text: "gamma" },
@@ -238,6 +240,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 
 		await handlers.mcp({
 			name: "edit",
+			providerIdentifier: "pi-agent",
 			toolName: "edit",
 			toolCallId: "e-hl",
 			args: { input: "[missing.txt]\nPUT 1.=1:\n+x\n" },
@@ -258,6 +261,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 
 		const result = await handlers.mcp({
 			name: "StrReplace",
+			providerIdentifier: "pi-agent",
 			toolName: "StrReplace",
 			toolCallId: "sr-deny",
 			args: { path: target, old_string: "beta", new_string: "gamma" },
