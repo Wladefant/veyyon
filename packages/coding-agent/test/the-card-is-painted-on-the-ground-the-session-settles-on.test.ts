@@ -175,7 +175,9 @@ async function recordGround(hex: string): Promise<void> {
 
 /** The card, painted for real, with the bytes it wrote. */
 async function paintCard(): Promise<string> {
-	return await bytesFrom(() => paintFirstFrame("9.9.9"));
+	const card = await bytesFrom(() => paintFirstFrame("9.9.9"));
+	process.stdin.emit("data", "\x1b[?0u");
+	return card;
 }
 
 /** What the terminal answers, through its own parser. */

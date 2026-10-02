@@ -8,6 +8,7 @@
  */
 
 import type { Effort } from "@veyyon/catalog/effort";
+import { isAnthropicOpus55Model } from "@veyyon/catalog/identity/family";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@veyyon/catalog/model-thinking";
 import { calculateCost } from "@veyyon/catalog/models";
 import { $env, $flag } from "@veyyon/utils/env";
@@ -301,6 +302,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 		);
 
 		const blocks = output.content as Block[];
+		const contentIndexByBlockIndex = new Map<number, number>();
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
 		let wireBodyJson: string | undefined;
@@ -368,15 +370,26 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				const cacheRetention = resolveCacheRetention(options.cacheRetention);
 				const convertedMessages = convertMessages(context, model, cacheRetention);
 				const toolPlan = planToolConfig(context.tools, options.toolChoice, convertedMessages);
-				const toolConfig = toolPlan.toolConfig;
+				let toolConfig = toolPlan.toolConfig;
 				sentinelInjected = toolPlan.sentinelInjected;
 				let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 
-				// Bedrock rejects thinking + forced tool_choice ("any" or specific tool).
-				// When tool_choice forces tool use, disable thinking to avoid API errors.
-				if (toolConfig?.toolChoice && additionalModelRequestFields) {
-					const tc = toolConfig.toolChoice;
-					if (tc.any || tc.tool) additionalModelRequestFields = undefined;
+				// Some models (Opus/Sonnet 5.5) reject forced tool use outright; keep the
+				// tools offered under `auto` and leave thinking intact.
+				const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
+				const id = model.id.toLowerCase();
+				const isOpusOrSonnet55 =
+					isAnthropicOpus55Model(model.id) ||
+					id.includes("claude-sonnet-5-5") ||
+					id.includes("claude-3-7-sonnet-5-5");
+				const supportsForcedToolChoice =
+					(model.compat as { supportsForcedToolChoice?: boolean } | undefined)?.supportsForcedToolChoice ??
+					!isOpusOrSonnet55;
+				if (toolConfig && forcedChoice && !supportsForcedToolChoice) {
+					toolConfig = { ...toolConfig, toolChoice: { auto: {} } };
+				} else if (toolConfig && forcedChoice && additionalModelRequestFields) {
+					// Bedrock rejects thinking + forced tool_choice.
+					additionalModelRequestFields = undefined;
 				}
 
 				let commandInput: ConverseStreamRequest = {
@@ -470,13 +483,13 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				if (messageType === "exception") {
 					const exceptionType = message.headers[":exception-type"] || "Exception";
 					const payload = safeParsePayload(message.payload) as { message?: string } | undefined;
-					const errorMessage = payload?.message || new TextDecoder().decode(message.payload);
+					const errorMessage = payload?.message || PAYLOAD_DECODER.decode(message.payload);
 					const text = `${exceptionType}: ${errorMessage}`;
 					throw new AIError.BedrockApiError(text, 400, { code: exceptionType });
 				}
 				if (messageType === "error") {
 					const code = message.headers[":error-code"] || "UnknownError";
-					const errorMessage = message.headers[":error-message"] || new TextDecoder().decode(message.payload);
+					const errorMessage = message.headers[":error-message"] || PAYLOAD_DECODER.decode(message.payload);
 					throw new AIError.BedrockApiError(`${code}: ${errorMessage}`, 400, { code });
 				}
 				if (messageType !== "event") continue;
@@ -499,16 +512,35 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 					}
 					case "contentBlockStart": {
 						if (!firstTokenTime) firstTokenTime = performance.now();
-						handleContentBlockStart(payload as ContentBlockStartEvent, blocks, output, stream, sentinelInjected);
+						handleContentBlockStart(
+							payload as ContentBlockStartEvent,
+							blocks,
+							contentIndexByBlockIndex,
+							output,
+							stream,
+							sentinelInjected,
+						);
 						break;
 					}
 					case "contentBlockDelta": {
 						if (!firstTokenTime) firstTokenTime = performance.now();
-						handleContentBlockDelta(payload as ContentBlockDeltaEvent, blocks, output, stream);
+						handleContentBlockDelta(
+							payload as ContentBlockDeltaEvent,
+							blocks,
+							contentIndexByBlockIndex,
+							output,
+							stream,
+						);
 						break;
 					}
 					case "contentBlockStop": {
-						handleContentBlockStop(payload as ContentBlockStopEvent, blocks, output, stream);
+						handleContentBlockStop(
+							payload as ContentBlockStopEvent,
+							blocks,
+							contentIndexByBlockIndex,
+							output,
+							stream,
+						);
 						break;
 					}
 					case "messageStop": {
@@ -605,10 +637,13 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 	return stream;
 };
 
+/** Shared across events: every payload decode is a complete, non-streaming call. */
+const PAYLOAD_DECODER = new TextDecoder();
+
 function safeParsePayload(payload: Uint8Array): unknown {
 	if (payload.length === 0) return {};
 	try {
-		return JSON.parse(new TextDecoder().decode(payload));
+		return JSON.parse(PAYLOAD_DECODER.decode(payload));
 	} catch {
 		// Undefined is DISTINCT from the `{}` an empty payload returns, and the caller relies on that: an
 		// unparseable event frame is skipped rather than treated as an empty event, so a malformed frame
@@ -617,9 +652,28 @@ function safeParsePayload(payload: Uint8Array): unknown {
 	}
 }
 
+/**
+ * Append a streamed block and index it by Bedrock's `contentBlockIndex`, so
+ * per-delta routing is an O(1) lookup instead of a scan over every block
+ * (quadratic over a long turn). The first block registered for an index wins,
+ * as the first-match scan did. Returns the block's content index.
+ */
+function pushStreamBlock(
+	blocks: Block[],
+	contentIndexByBlockIndex: Map<number, number>,
+	block: Block,
+	contentBlockIndex: number,
+): number {
+	const contentIndex = blocks.length;
+	blocks.push(block);
+	if (!contentIndexByBlockIndex.has(contentBlockIndex)) contentIndexByBlockIndex.set(contentBlockIndex, contentIndex);
+	return contentIndex;
+}
+
 function handleContentBlockStart(
 	event: ContentBlockStartEvent,
 	blocks: Block[],
+	contentIndexByBlockIndex: Map<number, number>,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 	sentinelInjected: boolean,
@@ -641,29 +695,29 @@ function handleContentBlockStart(
 			[kStreamingPartialJson]: "",
 			[kStreamingBlockIndex]: index,
 		};
-		output.content.push(block);
-		stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1, partial: output });
+		const contentIndex = pushStreamBlock(blocks, contentIndexByBlockIndex, block, index);
+		stream.push({ type: "toolcall_start", contentIndex, partial: output });
 	}
 }
 
 function handleContentBlockDelta(
 	event: ContentBlockDeltaEvent,
 	blocks: Block[],
+	contentIndexByBlockIndex: Map<number, number>,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 ): void {
 	const contentBlockIndex = event.contentBlockIndex;
 	const delta = event.delta;
-	let index = blocks.findIndex(b => b[kStreamingBlockIndex] === contentBlockIndex);
+	let index = contentIndexByBlockIndex.get(contentBlockIndex) ?? -1;
 	let block = blocks[index];
 
 	if (delta?.text !== undefined) {
 		// If no text block exists yet, create one — `handleContentBlockStart` is not sent for text blocks
 		if (!block) {
 			const newBlock: Block = { type: "text", text: "", [kStreamingBlockIndex]: contentBlockIndex };
-			output.content.push(newBlock);
-			index = blocks.length - 1;
-			block = blocks[index];
+			index = pushStreamBlock(blocks, contentIndexByBlockIndex, newBlock, contentBlockIndex);
+			block = newBlock;
 			stream.push({ type: "text_start", contentIndex: index, partial: output });
 		}
 		if (block.type === "text") {
@@ -689,9 +743,8 @@ function handleContentBlockDelta(
 				thinkingSignature: "",
 				[kStreamingBlockIndex]: contentBlockIndex,
 			};
-			output.content.push(newBlock);
-			thinkingIndex = blocks.length - 1;
-			thinkingBlock = blocks[thinkingIndex];
+			thinkingIndex = pushStreamBlock(blocks, contentIndexByBlockIndex, newBlock, contentBlockIndex);
+			thinkingBlock = newBlock;
 			stream.push({ type: "thinking_start", contentIndex: thinkingIndex, partial: output });
 		}
 
@@ -727,10 +780,11 @@ function handleMetadata(event: MetadataEvent, model: Model<"bedrock-converse-str
 function handleContentBlockStop(
 	event: ContentBlockStopEvent,
 	blocks: Block[],
+	contentIndexByBlockIndex: Map<number, number>,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 ): void {
-	const index = blocks.findIndex(b => b[kStreamingBlockIndex] === event.contentBlockIndex);
+	const index = contentIndexByBlockIndex.get(event.contentBlockIndex) ?? -1;
 	const block = blocks[index];
 	if (!block) return;
 

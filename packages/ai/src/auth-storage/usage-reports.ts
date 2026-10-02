@@ -41,7 +41,7 @@ export function getUsageReportIdentifiers(report: UsageReport): string[] {
 	const identifiers: string[] = [];
 	const email = getUsageReportMetadataValue(report, "email");
 	if (email) identifiers.push(`email:${email.toLowerCase()}`);
-	if (report.provider === "anthropic") {
+	if (report.provider === "anthropic" || report.provider === "openai-codex") {
 		// Anthropic: one account email can hold several organizations
 		// (Team seat + personal Max). Reports from different orgs must not
 		// merge — scope every identifier by org when the report carries one.
@@ -56,12 +56,11 @@ export function getUsageReportIdentifiers(report: UsageReport): string[] {
 		}
 		const orgId = getUsageReportMetadataValue(report, "orgId");
 		if (orgId) {
-			if (identifiers.length === 0) return [`anthropic:org:${orgId.toLowerCase()}`];
-			return identifiers.map(identifier => `anthropic:org:${orgId.toLowerCase()}|${identifier.toLowerCase()}`);
+			if (identifiers.length === 0) return [`${report.provider}:org:${orgId.toLowerCase()}`];
+			return identifiers.map(
+				identifier => `${report.provider}:org:${orgId.toLowerCase()}|${identifier.toLowerCase()}`,
+			);
 		}
-		return identifiers.map(identifier => `anthropic:${identifier.toLowerCase()}`);
-	}
-	if (report.provider === "openai-codex") {
 		return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 	}
 	// Only add project as a fallback when no email is available — two users with different emails on the

@@ -27,6 +27,21 @@ function genaiChunk(text: string): Record<string, unknown> {
 function ccaChunk(text: string): Record<string, unknown> {
 	return { response: genaiChunk(text) };
 }
+function ccaThinkingOnlyChunk(thinking: string): Record<string, unknown> {
+	return {
+		response: {
+			candidates: [
+				{
+					content: {
+						parts: [{ thought: true, text: thinking }],
+					},
+					finishReason: "STOP",
+				},
+			],
+			usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+		},
+	};
+}
 
 async function drain(stream: AsyncIterable<AssistantMessageEvent>) {
 	const events: AssistantMessageEvent[] = [];
@@ -458,6 +473,35 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("Provider finish_reason: SAFETY");
 		expect(calls).toBe(1);
+	});
+	it("surfaces thought-only STOP immediately for session-level final-output recovery", async () => {
+		let calls = 0;
+		const fetchMock: FetchImpl = async () => {
+			calls += 1;
+			const response = sse(ccaThinkingOnlyChunk("The task is complete, but I omitted the final answer."));
+			Object.defineProperty(response, "url", { value: "https://example.com/v1internal:streamGenerateContent" });
+			return response;
+		};
+
+		const stream = streamGoogleGeminiCli(antigravityModel, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			antigravityEndpointMode: "auto",
+			fetch: fetchMock,
+		});
+		const { events } = await drain(stream);
+		const result = await stream.result();
+
+		expect(calls).toBe(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("thought-only response without final output");
+		expect(result.content).toEqual([
+			{
+				type: "thinking",
+				thinking: "The task is complete, but I omitted the final answer.",
+			},
+		]);
+		expect(events.some(e => e.type === "thinking_start")).toBe(true);
+		expect(events.some(e => e.type === "thinking_end")).toBe(true);
 	});
 
 	it("fails over to the sandbox endpoint after daily returns only empty successful streams", async () => {

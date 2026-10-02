@@ -708,26 +708,29 @@ function parseOpenAICompletionsErrorStatus(value: unknown): number | undefined {
 function createOpenAICompletionsStreamError(chunk: unknown, provider: string): Error | undefined {
 	if (!chunk || typeof chunk !== "object") return undefined;
 	const error = Reflect.get(chunk, "error");
-	if (!error || typeof error !== "object") return undefined;
+	const flatMessage = Reflect.get(chunk, "message");
+	const structuredError = error !== null && typeof error === "object";
+	if (!structuredError && typeof error !== "string" && typeof flatMessage !== "string") return undefined;
 
-	const messageValue = Reflect.get(error, "message");
+	const parsed = AIError.OpenAIHttpError.parseEnvelope(chunk, undefined);
+	const detail = parsed.detail ?? "Provider returned an in-band OpenAI completions stream error";
+	if (!structuredError) {
+		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
+	}
+
 	const typeValue = Reflect.get(error, "type");
 	const codeValue = Reflect.get(error, "code");
 	const type = typeof typeValue === "string" ? typeValue.trim() : undefined;
 	const status =
 		parseOpenAICompletionsErrorStatus(codeValue) ??
 		(type ? OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE[type.toUpperCase()] : undefined);
-	const detail =
-		typeof messageValue === "string" && messageValue.length > 0
-			? messageValue
-			: "Provider returned an in-band OpenAI completions stream error";
 	if (status === undefined) {
 		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
 	}
 	// A nonnumeric string `code` is the machine code (insufficient_quota, usage_limit_reached) that
 	// quota classification reads; `type` is the generic class and only the fallback.
 	const machineCode = typeof codeValue === "string" && !/^\d+$/.test(codeValue.trim()) ? codeValue.trim() : undefined;
-	const code = machineCode || type;
+	const code = machineCode || type || parsed.code;
 	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code });
 }
 
@@ -1109,13 +1112,7 @@ function finalizeOpenAICompletionsStream(
 ): void {
 	if (streamFinishedAt === undefined) {
 		const stopReason = stopReasonForTerminallessEof(output.content, hasCompleteToolCalls);
-		if (stopReason === undefined) {
-			throw new AIError.ProviderResponseError(
-				"OpenAI completions stream closed before a terminal finish reason was received",
-				{ provider: model.provider, kind: "incomplete-stream" },
-			);
-		}
-		output.stopReason = stopReason;
+		output.stopReason = stopReason ?? "stop";
 	}
 
 	if (streamMarkupHealing) {
@@ -1247,12 +1244,17 @@ const streamOpenAICompletionsOnce = (
 		const { requestAbortController, requestSignal } = abortTracker;
 		const onSseEvent = options?.onSseEvent;
 		const modelSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
-		const rawSseObserver = modelSseObserver
-			? (event: RawSseEvent) => {
-					resolveOpenAiSseEventName(event);
-					notifyRawSseEvent(modelSseObserver, event);
-				}
-			: undefined;
+		// Track the OpenAI `[DONE]` sentinel independently of `onSseEvent`: it is
+		// the streaming protocol's terminal signal, so a stream that ends with it
+		// completed by server agreement even when no `finish_reason` chunk arrived.
+		let sawDoneSentinel = false;
+		const rawSseObserver = (event: RawSseEvent) => {
+			if (event.data === "[DONE]") sawDoneSentinel = true;
+			if (modelSseObserver) {
+				resolveOpenAiSseEventName(event);
+				notifyRawSseEvent(modelSseObserver, event);
+			}
+		};
 		// Assigned once the block helpers exist (they are scoped to the `try`);
 		// the catch handler uses it to close open blocks before emitting the
 		// terminal error so both exit paths obey the same block lifecycle.
@@ -1712,6 +1714,24 @@ const streamOpenAICompletionsOnce = (
 			}
 			if (abortTracker.wasCallerAbort()) {
 				throw new AIError.RequestAbortError();
+			}
+
+			// Detect premature stream closure before the normal block-finalization
+			// sweep. Throwing after that sweep would make the error handler emit a
+			// second text_end/thinking_end for the same partial block.
+			//
+			// Only a genuine truncation — transport EOF with neither a
+			// `finish_reason` chunk nor the `[DONE]` sentinel — is incomplete. A
+			// stream terminated by `[DONE]` completed by server agreement; some
+			// OpenAI-compatible hosts omit or `null` the `finish_reason` and rely on
+			// `[DONE]` alone, so finalize those as the default `stop`
+			// (mapStopReason(null)) instead of surfacing a false incomplete-stream
+			// error and retrying every turn.
+			if (streamFinishedAt === undefined && !sawDoneSentinel && output.content.length > 0) {
+				throw new AIError.ProviderResponseError(
+					"OpenAI completions stream closed before a finish_reason was received",
+					{ provider: model.provider, kind: "incomplete-stream" },
+				);
 			}
 
 			finalizeOpenAICompletionsStream(

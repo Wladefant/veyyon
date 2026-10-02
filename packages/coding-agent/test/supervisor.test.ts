@@ -10,8 +10,8 @@ import {
 	LOCAL_DUMPS_BASE_KEY,
 	SUPERVISOR_TARGET_APPS,
 	statusLocalDumps,
-} from "../src/supervisor/dumps";
-import { resolveSupervisorArgv, shouldSuperviseLaunch, superviseProcess } from "../src/supervisor/process";
+} from "../src/cli/supervisor/dumps";
+import { resolveSupervisorArgv, shouldSuperviseLaunch, superviseProcess } from "../src/cli/supervisor/process";
 
 function createTestContext() {
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "supervisor-test-"));
