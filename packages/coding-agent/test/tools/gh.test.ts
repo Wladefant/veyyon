@@ -16,6 +16,7 @@ import {
 	resolveDefaultRepoMemoized,
 	resolveTailLimit,
 } from "@veyyon/coding-agent/tools/web/gh";
+import { resetCheckoutHosts } from "@veyyon/coding-agent/tools/web/gh-format";
 import * as git from "@veyyon/coding-agent/utils/git";
 import { hashPath, removeWithRetries, setAgentDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
@@ -1513,9 +1514,13 @@ exec ${JSON.stringify(realGit)} "$@"
 describe("github tool on a GitHub Enterprise host", () => {
 	const ENTERPRISE_URL = "https://ghe.example.com/acme/widgets";
 	const ENTERPRISE_REPO = "ghe.example.com/acme/widgets";
+	const savedGhHost = process.env.GH_HOST;
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		resetCheckoutHosts();
+		if (savedGhHost === undefined) delete process.env.GH_HOST;
+		else process.env.GH_HOST = savedGhHost;
 	});
 
 	it("resolves the current checkout to a host-qualified repo", async () => {
@@ -1542,6 +1547,7 @@ describe("github tool on a GitHub Enterprise host", () => {
 	});
 
 	it("run_watch keeps the host out of the run URL's repo path", async () => {
+		process.env.GH_HOST = "ghe.example.com";
 		const abort = new AbortController();
 		const jsonSpy = vi.spyOn(git.github, "json").mockImplementation((async () => {
 			abort.abort();
@@ -1560,5 +1566,146 @@ describe("github tool on a GitHub Enterprise host", () => {
 		const args = (jsonSpy.mock.calls[0]?.[1] ?? []) as string[];
 		expect(args).toContain("/repos/acme/widgets/actions/runs/12");
 		expect(args[args.indexOf("--hostname") + 1]).toBe("ghe.example.com");
+	});
+
+	/** A completed run with one failed job, then the job-log fetch. Returns the log request's argv. */
+	async function failedJobLogArgs(runUrl: string): Promise<string[]> {
+		vi.spyOn(git.github, "json")
+			.mockResolvedValueOnce({
+				id: 12,
+				name: "CI",
+				status: "completed",
+				conclusion: "failure",
+				head_branch: "main",
+				html_url: runUrl,
+			})
+			.mockResolvedValueOnce({
+				total_count: 1,
+				jobs: [{ id: 99, name: "test", status: "completed", conclusion: "failure" }],
+			});
+		const runSpy = vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 0, stdout: "boom\n", stderr: "" });
+		const tool = new GithubTool(createSession("/tmp/gh-failed-job-logs"));
+
+		const result = await tool.execute("run-watch", { op: "run_watch", run: runUrl });
+
+		expect(result.details?.watch?.failedLogs?.[0]?.available).toBe(true);
+		return (runSpy.mock.calls[0]?.[1] ?? []) as string[];
+	}
+
+	it("fetches failed-job logs for a github.com run URL from a host-less API path", async () => {
+		// Regression: the run URL yields `github.com/o/r`, and the log request used
+		// `/repos/github.com/o/r/...`, a 404 that was swallowed as "no logs".
+		const args = await failedJobLogArgs("https://github.com/o/r/actions/runs/12");
+
+		expect(args).toContain("/repos/o/r/actions/jobs/99/logs");
+		expect(args[args.indexOf("--hostname") + 1]).toBe("github.com");
+		expect(args.some(arg => arg.includes("github.com/o/r"))).toBe(false);
+	});
+
+	it("fetches failed-job logs for an enterprise run URL from the enterprise host", async () => {
+		process.env.GH_HOST = "ghe.example.com";
+		const args = await failedJobLogArgs("https://ghe.example.com/acme/widgets/actions/runs/12");
+
+		expect(args).toContain("/repos/acme/widgets/actions/jobs/99/logs");
+		expect(args[args.indexOf("--hostname") + 1]).toBe("ghe.example.com");
+	});
+
+	it("looks up a PR's fork on the PR's own host", async () => {
+		process.env.GH_HOST = "ghe.example.com";
+		const remote = "https://ghe.example.com/forker/widgets.git";
+		const calls: string[][] = [];
+		vi.spyOn(git.github, "json").mockImplementation((async (_cwd: string, args: string[]) => {
+			calls.push(args);
+			if (args[0] === "pr") {
+				return {
+					number: 5,
+					headRefName: "feat",
+					headRefOid: "0123456789abcdef0123456789abcdef01234567",
+					isCrossRepository: true,
+					headRepository: { nameWithOwner: "forker/widgets" },
+					headRepositoryOwner: { login: "forker" },
+					url: `${ENTERPRISE_URL}/pull/5`,
+				};
+			}
+			return { nameWithOwner: "forker/widgets", url: "https://ghe.example.com/forker/widgets", sshUrl: remote };
+		}) as unknown as typeof git.github.json);
+		vi.spyOn(git.repo, "root").mockResolvedValue("/tmp/gh-enterprise-fork");
+		vi.spyOn(git.repo, "primaryRoot").mockResolvedValue("/tmp/gh-enterprise-fork");
+		vi.spyOn(git.worktree, "list").mockResolvedValue([]);
+		vi.spyOn(git.remote, "url").mockResolvedValue("https://ghe.example.com/acme/widgets.git");
+		vi.spyOn(git.remote, "add").mockRejectedValue(new Error("stop after the fork lookup"));
+		const tool = new GithubTool(createSession("/tmp/gh-enterprise-fork"));
+
+		await tool.execute("pr-checkout", { op: "pr_checkout", pr: `${ENTERPRISE_URL}/pull/5` }).catch(() => {});
+
+		const forkLookup = calls.find(args => args[0] === "repo" && args[1] === "view");
+		expect(forkLookup?.[2]).toBe("ghe.example.com/forker/widgets");
+	});
+
+	it("pr_create reads the PR URL from enterprise output", async () => {
+		process.env.GH_HOST = "ghe.example.com";
+		vi.spyOn(git.github, "text").mockResolvedValue(`Warning: 1 uncommitted change\n${ENTERPRISE_URL}/pull/8\n`);
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValue({ number: 8, url: `${ENTERPRISE_URL}/pull/8` });
+		const tool = new GithubTool(createSession("/tmp/gh-enterprise-pr-create"));
+
+		await tool.execute("pr-create", { op: "pr_create", title: "t", body: "b", repo: ENTERPRISE_REPO });
+
+		const viewArgs = (jsonSpy.mock.calls[0]?.[1] ?? []) as string[];
+		expect(viewArgs.slice(0, 3)).toEqual(["pr", "view", "8"]);
+		expect(viewArgs[viewArgs.indexOf("--repo") + 1]).toBe(ENTERPRISE_REPO);
+	});
+});
+
+describe("github tool host allowlist", () => {
+	const savedGhHost = process.env.GH_HOST;
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		resetCheckoutHosts();
+		if (savedGhHost === undefined) delete process.env.GH_HOST;
+		else process.env.GH_HOST = savedGhHost;
+	});
+
+	/** Every route a host reaches the tool by; each must be refused before `gh` is spawned. */
+	const attackerInputs: Array<[string, Record<string, unknown>]> = [
+		["repo_view repo", { op: "repo_view", repo: "attacker.invalid/o/r" }],
+		["search_prs repo", { op: "search_prs", query: "is:open", repo: "attacker.invalid/o/r" }],
+		["run_watch repo", { op: "run_watch", repo: "attacker.invalid/o/r" }],
+		["run_watch run URL", { op: "run_watch", run: "https://attacker.invalid/o/r/actions/runs/1" }],
+		["pr_checkout PR URL", { op: "pr_checkout", pr: "https://attacker.invalid/o/r/pull/1" }],
+		["pr_checkout repo", { op: "pr_checkout", pr: "1", repo: "attacker.invalid/o/r" }],
+		["pr_create repo", { op: "pr_create", title: "t", body: "b", repo: "attacker.invalid/o/r" }],
+	];
+
+	for (const [route, input] of attackerInputs) {
+		it(`refuses attacker.invalid via ${route} before gh runs`, async () => {
+			// A token for the configured enterprise host is exactly what must not leave.
+			process.env.GH_HOST = "ghe.corp";
+			const text = vi.spyOn(git.github, "text").mockResolvedValue("https://ghe.corp/o/r\n");
+			const json = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+			const run = vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+			const tool = new GithubTool(createSession(`/tmp/gh-allowlist-${route.replace(/\W/g, "-")}`));
+
+			await expect(tool.execute("attacker", input as never)).rejects.toThrow(/attacker\.invalid.*not allowed/);
+
+			// `repo view --json url` resolves the checkout's own host; nothing may name the attacker.
+			const seen = [...text.mock.calls, ...json.mock.calls, ...run.mock.calls].map(call => JSON.stringify(call[1]));
+			expect(seen.filter(args => args.includes("attacker.invalid"))).toEqual([]);
+		});
+	}
+
+	it("lets github.com and the GH_HOST host through", async () => {
+		process.env.GH_HOST = "ghe.corp";
+		const json = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+		const tool = new GithubTool(createSession("/tmp/gh-allowlist-ok"));
+
+		await tool.execute("ok", { op: "search_prs", query: "is:open", repo: "ghe.corp/o/r" });
+		await tool.execute("ok", { op: "search_prs", query: "is:open", repo: "github.com/o/r" });
+
+		const hostnames = json.mock.calls.map(call => {
+			const args = call[1] as string[];
+			return args[args.indexOf("--hostname") + 1];
+		});
+		expect(hostnames).toEqual(["ghe.corp", "github.com"]);
 	});
 });

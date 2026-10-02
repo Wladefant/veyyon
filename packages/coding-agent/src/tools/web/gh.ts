@@ -822,9 +822,12 @@ async function ensurePrRemote(
 	}
 
 	const headRepository = requireNonEmpty(data.headRepository?.nameWithOwner, "head repository");
+	// `headRepository.nameWithOwner` is host-less, so on an enterprise host the
+	// lookup has to be pinned to the PR's own host or it resolves on the default one.
+	const pullHost = parseRepoRef(parsePrUrl(data.url).repo ?? "").host;
 	const repoSummary = await git.github.json<GhRepoViewData>(
 		repoRoot,
-		["repo", "view", headRepository, "--json", GH_REPO_CLONE_FIELDS.join(",")],
+		["repo", "view", formatRepoRef(pullHost, headRepository), "--json", GH_REPO_CLONE_FIELDS.join(",")],
 		signal,
 		{ repoProvided: true },
 	);
@@ -1440,6 +1443,8 @@ async function resolveGitHubRepo(
 	runRepo: string | undefined,
 	signal?: AbortSignal,
 ): Promise<string> {
+	if (repo) parseRepoRef(repo);
+	if (runRepo) parseRepoRef(runRepo);
 	if (repo && runRepo && !githubRepoSlugEquals(repo, runRepo)) {
 		throw new ToolError("run URL repository does not match the provided repo");
 	}
@@ -1668,9 +1673,14 @@ async function fetchFailedJobLogs(
 	tail: number,
 	signal?: AbortSignal,
 ): Promise<GhFailedJobLog[]> {
+	const ref = parseRepoRef(repo);
 	return Promise.all(
 		failedJobs.map(async entry => {
-			const result = await git.github.run(cwd, ["api", `/repos/${repo}/actions/jobs/${entry.job.id}/logs`], signal);
+			const result = await git.github.run(
+				cwd,
+				["api", ...ghApiHostArgs(ref), `/repos/${ref.slug}/actions/jobs/${entry.job.id}/logs`],
+				signal,
+			);
 			const fullLog = result.exitCode === 0 ? normalizeBlock(result.stdout) : undefined;
 			const logTail = fullLog ? tailLogLines(fullLog, tail) : undefined;
 			return {
@@ -2014,6 +2024,7 @@ async function executeRepoView(
 	const branch = normalizeOptionalString(params.branch);
 	const args = ["repo", "view"];
 	if (repo) {
+		parseRepoRef(repo);
 		args.push(repo);
 	}
 	if (branch) {
@@ -2402,7 +2413,7 @@ async function executePrCreate(
 			output
 				.split("\n")
 				.map(line => line.trim())
-				.find(line => line.startsWith("https://github.com/")) ?? output.trim();
+				.find(line => line.startsWith("https://")) ?? output.trim();
 		const parsed = parsePrUrl(url);
 		const resolvedRepo = repo ?? parsed.repo;
 

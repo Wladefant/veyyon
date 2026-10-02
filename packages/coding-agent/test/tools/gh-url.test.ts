@@ -5,7 +5,7 @@
  * mixed-case host parsed one way in the fetch path and another in the
  * cache-invalidation path. Both now import the same parsers from `gh-url.ts`.
  */
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,6 +13,19 @@ import { invalidateGithubCacheForBashCommand } from "@veyyon/coding-agent/tools/
 import { parseIssueUrl, parsePrUrl } from "@veyyon/coding-agent/tools/web/gh-url";
 import { getCached, putCached, resetForTests } from "@veyyon/coding-agent/tools/web/github-cache";
 import { removeWithRetries } from "@veyyon/utils";
+
+// The enterprise cases name `ghe.corp.internal`; a host outside GH_HOST, github.com and the
+// checkout is refused (see gh-host-allowlist.test.ts), so those cases set GH_HOST themselves.
+// The github.com cases run with it unset, where `github.com/` folds into the bare slug.
+let savedGhHost: string | undefined;
+beforeEach(() => {
+	savedGhHost = process.env.GH_HOST;
+	delete process.env.GH_HOST;
+});
+afterEach(() => {
+	if (savedGhHost === undefined) delete process.env.GH_HOST;
+	else process.env.GH_HOST = savedGhHost;
+});
 
 describe("parseIssueUrl / parsePrUrl (F5)", () => {
 	it("parses a query-string-suffixed issue URL", () => {
@@ -58,6 +71,7 @@ describe("parseIssueUrl / parsePrUrl (F5)", () => {
 	});
 
 	it("parses enterprise host issue and PR URLs while preserving host", () => {
+		process.env.GH_HOST = "ghe.corp.internal";
 		expect(parseIssueUrl("https://ghe.corp.internal/o/r/issues/7")).toEqual({
 			repo: "ghe.corp.internal/o/r",
 			issueNumber: 7,
@@ -129,6 +143,7 @@ describe("gh.ts and gh-cache-invalidation.ts key the same URL identically (F5)",
 	});
 
 	it("invalidates via an enterprise host PR URL with matching cache key", async () => {
+		process.env.GH_HOST = "ghe.corp.internal";
 		await withCache(() => {
 			const repo = "ghe.corp.internal/enterprise/repo";
 			putCached({
@@ -148,6 +163,7 @@ describe("gh.ts and gh-cache-invalidation.ts key the same URL identically (F5)",
 	});
 
 	it("invalidates via an enterprise host issue URL with matching cache key", async () => {
+		process.env.GH_HOST = "ghe.corp.internal";
 		await withCache(() => {
 			const repo = "ghe.corp.internal/enterprise/repo";
 			putCached({

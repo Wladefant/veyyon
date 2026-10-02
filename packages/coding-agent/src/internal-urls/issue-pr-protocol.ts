@@ -34,7 +34,7 @@ import {
 	type PrDiffFile,
 	resolveDefaultRepoMemoized,
 } from "../tools/web/gh-fetch";
-import { formatRepoRef, parsePositiveDecimalInt } from "../tools/web/gh-format";
+import { assertAllowedGhHost, formatRepoRef, parsePositiveDecimalInt } from "../tools/web/gh-format";
 import { type CacheStatus, formatFreshnessNote } from "../tools/web/github-cache";
 import * as git from "../utils/git";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
@@ -148,6 +148,7 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 		? parts.length >= 2
 		: parts.length >= 3 && parsePositiveDecimalInt(parts[2]) !== undefined;
 	if (hostPrefixed) {
+		assertAllowedGhHost(host);
 		repoHost = host;
 		host = parts[0] ?? "";
 		parts = parts.slice(1);

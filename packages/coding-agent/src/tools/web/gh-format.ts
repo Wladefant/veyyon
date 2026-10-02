@@ -62,16 +62,66 @@ export function requireNonEmpty(value: string | null | undefined, label: string)
 
 export function appendRepoFlag(args: string[], repo: string | undefined, identifier?: string): void {
 	// A full URL identifier already names host, repo, and number; `gh` derives
-	// all three from it and rejects a competing `--repo`.
+	// all three from it and rejects a competing `--repo`. That host is the one
+	// `gh` will talk to, so it is checked here, before the call.
+	if (identifier && URL_SCHEME_PATTERN.test(identifier)) {
+		assertAllowedGhHost(hostOfUrl(identifier));
+	}
 	if (!repo || identifier?.startsWith("https://")) {
 		return;
 	}
 
+	parseRepoRef(repo);
 	args.push("--repo", repo);
 }
 
 /** The host `gh` assumes when a ref names none and `GH_HOST` is unset. */
 export const GITHUB_HOST = "github.com";
+
+const URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function hostOfUrl(value: string): string {
+	try {
+		return new URL(value).host;
+	} catch {
+		throw new ToolError(`invalid GitHub URL: ${JSON.stringify(value)}`);
+	}
+}
+
+/**
+ * Hosts the checkout itself lives on, recorded as the session resolves them
+ * (`repoFromUrl`). They are the third source the host allowlist trusts.
+ */
+const checkoutHosts = new Set<string>();
+
+/** Drop every recorded checkout host. Tests only. */
+export function resetCheckoutHosts(): void {
+	checkoutHosts.clear();
+}
+
+/**
+ * The ONE allowlist for a host that arrives in user or model input (a URL, a
+ * `host/owner/repo` ref, a `pr://` / `issue://` URL): `github.com`, the
+ * `GH_HOST` host, and the host of the current checkout. `gh` attaches a host's
+ * token to whatever `--hostname` / `--repo` / URL host it is handed, so any
+ * other host would receive a credential it was never meant to see.
+ */
+export function allowedGhHosts(): string[] {
+	const hosts = new Set<string>([GITHUB_HOST]);
+	const envHost = process.env.GH_HOST?.trim().toLowerCase();
+	if (envHost) hosts.add(envHost);
+	for (const host of checkoutHosts) hosts.add(host);
+	return [...hosts];
+}
+
+/** Throw before `gh` runs when `host` is not one of {@link allowedGhHosts}. */
+export function assertAllowedGhHost(host: string): void {
+	if (allowedGhHosts().includes(host.toLowerCase())) return;
+	throw new ToolError(
+		`GitHub host ${JSON.stringify(host)} is not allowed. Accepted hosts: ${allowedGhHosts().join(", ")}. ` +
+			"Set GH_HOST to use another GitHub Enterprise host.",
+	);
+}
 
 /**
  * A repository in the GitHub CLI's `[HOST/]OWNER/REPO` form. A ref that names
@@ -86,13 +136,22 @@ export interface GhRepoRef {
 	slug: string;
 }
 
-/** Split `[HOST/]OWNER/REPO`; anything with another shape is taken as a slug. */
-export function parseRepoRef(repo: string): GhRepoRef {
+function splitRepoRef(repo: string): GhRepoRef {
 	const firstSlash = repo.indexOf("/");
 	if (firstSlash < 0) return { slug: repo };
 	const secondSlash = repo.indexOf("/", firstSlash + 1);
 	if (secondSlash < 0 || repo.includes("/", secondSlash + 1)) return { slug: repo };
 	return { host: repo.slice(0, firstSlash), slug: repo.slice(firstSlash + 1) };
+}
+
+/**
+ * Split `[HOST/]OWNER/REPO`; anything with another shape is taken as a slug.
+ * A named host must pass {@link assertAllowedGhHost}.
+ */
+export function parseRepoRef(repo: string): GhRepoRef {
+	const ref = splitRepoRef(repo);
+	if (ref.host) assertAllowedGhHost(ref.host);
+	return ref;
 }
 
 /** Join a known host and `OWNER/REPO` into the form `--repo` accepts. */
@@ -108,17 +167,23 @@ export function ghApiHostArgs(ref: GhRepoRef): string[] {
 	return ref.host ? ["--hostname", ref.host] : [];
 }
 
+function registerCheckoutHost(host: string): void {
+	checkoutHosts.add(host.toLowerCase());
+}
+
 const REPO_URL_PATTERN = /^https?:\/\/([^/]+)\/([^/]+)\/([^/?#]+)/;
 
 /**
  * `https://HOST/OWNER/REPO` → the repository's identity: `OWNER/REPO` on
  * github.com, `HOST/OWNER/REPO` anywhere else. Used for the session
- * checkout, whose identity should read the way users write it.
+ * checkout, whose identity should read the way users write it, and it records
+ * the host as the checkout's for the allowlist.
  */
 export function repoFromUrl(value: string | undefined): string | undefined {
 	const match = REPO_URL_PATTERN.exec(value?.trim() ?? "");
 	if (!match) return undefined;
 	const host = match[1].toLowerCase();
+	registerCheckoutHost(host);
 	const slug = `${match[2]}/${match[3]}`;
 	return host === GITHUB_HOST ? slug : formatRepoRef(host, slug);
 }
@@ -130,8 +195,8 @@ export function repoFromUrl(value: string | undefined): string | undefined {
  */
 export function githubRepoSlugEquals(left: string | undefined, right: string): boolean {
 	if (left === undefined) return false;
-	const leftRef = parseRepoRef(left);
-	const rightRef = parseRepoRef(right);
+	const leftRef = splitRepoRef(left);
+	const rightRef = splitRepoRef(right);
 	if (leftRef.host && rightRef.host && leftRef.host.toLowerCase() !== rightRef.host.toLowerCase()) {
 		return false;
 	}

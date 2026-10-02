@@ -1,4 +1,4 @@
-import { formatRepoRef } from "./gh-format";
+import { assertAllowedGhHost, formatRepoRef } from "./gh-format";
 
 /**
  * Shared GitHub issue/PR URL parsing. Single source for the stricter,
@@ -14,15 +14,23 @@ const ISSUE_URL_PATTERN = /^https:\/\/([^/\s]+)\/([^/\s]+\/[^/\s]+)\/issues\/(\d
 
 const NON_GITHUB_HOST_PATTERN = /(?:^|\.)(?:gitlab\.com|bitbucket\.org)$/i;
 
-function isNonGitHubHost(host: string): boolean {
-	return NON_GITHUB_HOST_PATTERN.test(host);
+/**
+ * False for a known non-GitHub forge, so the URL is simply not ours to parse.
+ * Any other host must be on the allowlist: this throws before the host can
+ * reach `gh`.
+ */
+function acceptedHost(host: string): boolean {
+	if (NON_GITHUB_HOST_PATTERN.test(host)) return false;
+	assertAllowedGhHost(host);
+	return true;
 }
+
 /** Parse a GitHub PR URL, tolerating trailing query strings/fragments and mixed-case hosts. */
 export function parsePrUrl(value: string | undefined): { repo?: string; prNumber?: number } {
 	const normalized = value?.trim();
 	if (!normalized) return {};
 	const match = normalized.match(PR_URL_PATTERN);
-	if (!match || isNonGitHubHost(match[1])) return {};
+	if (!match || !acceptedHost(match[1])) return {};
 	return { repo: formatRepoRef(match[1], match[2]), prNumber: Number(match[3]) };
 }
 
@@ -31,6 +39,6 @@ export function parseIssueUrl(value: string | undefined): { repo?: string; issue
 	const normalized = value?.trim();
 	if (!normalized) return {};
 	const match = normalized.match(ISSUE_URL_PATTERN);
-	if (!match || isNonGitHubHost(match[1])) return {};
+	if (!match || !acceptedHost(match[1])) return {};
 	return { repo: formatRepoRef(match[1], match[2]), issueNumber: Number(match[3]) };
 }

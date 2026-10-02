@@ -7,6 +7,7 @@
 - Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Rejected GitHub hosts outside `github.com`, `GH_HOST` and the checkout host on every repo, PR, issue and run input, kept enterprise hosts out of API paths and cache keys, and pinned fork lookup to the PR host (Refs #107)
 
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.

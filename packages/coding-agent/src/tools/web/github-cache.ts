@@ -246,12 +246,16 @@ export function resolveGithubCacheAuthKey(host: string = process.env.GH_HOST || 
 }
 
 /**
- * Row identity for a repo. An explicit `github.com/` prefix is dropped so the
- * host-qualified and bare spellings of the same repository share one row.
+ * Row identity for a repo. An explicit host prefix is dropped only when it is
+ * the auth host, the one a bare slug resolves to (`GH_HOST`, else github.com),
+ * so both spellings of that repository share a row. Any other host stays in the
+ * key: with `GH_HOST=ghe.corp`, `github.com/acme/widgets` and `acme/widgets`
+ * are different repositories and must not serve each other's payload.
  */
 function normalizeRepo(repo: string): string {
 	const lower = repo.toLowerCase();
-	return lower.startsWith("github.com/") ? lower.slice("github.com/".length) : lower;
+	const authPrefix = `${(process.env.GH_HOST?.trim() || GITHUB_HOST).toLowerCase()}/`;
+	return lower.startsWith(authPrefix) ? lower.slice(authPrefix.length) : lower;
 }
 
 export function getCached<T = unknown>(
