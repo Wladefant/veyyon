@@ -34,6 +34,7 @@ import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
+import { type AuthGatewayBootOptions, mirrorRequestAbort, resolveGatewayApiKey } from "./dispatch";
 import {
 	captureRequestHeaders,
 	corsHeaders,
@@ -45,28 +46,12 @@ import {
 } from "./http";
 import type {
 	AuthGatewayServerHandle,
-	AuthGatewayServerOptions,
 	AuthGatewayFormatModule as FormatModule,
 	AuthGatewayParsedRequest as ParsedFormatRequest,
 } from "./types";
 import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 
 // ParsedFormatRequest / ParsedFormatOptions / FormatModule come from ./types.
-
-export type ModelResolver = (modelId: string) => Model<Api> | undefined;
-
-export interface AuthGatewayBootOptions extends AuthGatewayServerOptions {
-	/** Source of credentials. Caller wires this to a broker-backed AuthStorage. */
-	storage: AuthStorage;
-	/**
-	 * Resolve a client-requested model id to a pi-ai Model. Caller supplies
-	 * this from a ModelRegistry (lives in `coding-agent` to avoid an inverse
-	 * dependency in `pi-ai`).
-	 */
-	resolveModel: ModelResolver;
-	/** Optional supplier for `/v1/models` listing. Returns the full model array. */
-	listModels?: () => Iterable<Model<Api>>;
-}
 
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
@@ -363,16 +348,6 @@ function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
 }
 
-function mirrorRequestAbort(req: Request): AbortController {
-	const controller = new AbortController();
-	if (req.signal.aborted) {
-		controller.abort(req.signal.reason);
-	} else {
-		req.signal.addEventListener("abort", () => controller.abort(req.signal.reason), { once: true });
-	}
-	return controller;
-}
-
 /** The SSE encoder's cancel hook: a client that closes the response aborts the upstream call once. */
 function abortOnClientClose(controller: AbortController): (reason?: unknown) => void {
 	return reason => {
@@ -455,26 +430,9 @@ async function handleFormatEndpoint(
 	// expected to resolve the credential and pass it as `options.apiKey`.
 	// For OAuth providers this returns the access token (refreshed via the
 	// broker override on AuthStorage when needed).
-	let apiKey: string | undefined;
-	try {
-		apiKey = await bootOpts.storage.getApiKey(model.provider, sessionId, {
-			modelId: model.id,
-			signal: controller.signal,
-		});
-	} catch (error) {
-		if (controller.signal.aborted) return clientClosedResponse(route);
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
-		return route.module.formatError(classified.status, classified.type, classified.message);
-	}
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return clientClosedResponse(route);
-	if (!apiKey) {
-		return route.module.formatError(
-			401,
-			"authentication_error",
-			`No credential available for provider ${model.provider}`,
-		);
-	}
+	if (typeof apiKey !== "string") return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
@@ -615,26 +573,9 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	const sessionId = parsed.options.sessionId ?? deriveSessionId(parsed.modelId, parsed.context);
 	parsed.options.sessionId ??= sessionId;
 
-	let apiKey: string | undefined;
-	try {
-		apiKey = await bootOpts.storage.getApiKey(model.provider, sessionId, {
-			modelId: model.id,
-			signal: controller.signal,
-		});
-	} catch (error) {
-		if (controller.signal.aborted) return aborted();
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
-		return piNative.formatError(classified.status, classified.type, classified.message);
-	}
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return aborted();
-	if (!apiKey) {
-		return piNative.formatError(
-			401,
-			"authentication_error",
-			`No credential available for provider ${model.provider}`,
-		);
-	}
+	if (typeof apiKey !== "string") return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
