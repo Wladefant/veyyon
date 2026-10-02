@@ -30,7 +30,12 @@ import type {
 	PendingRecoveredRetryError,
 	ScheduledAgentContinueOptions,
 } from "../agent-session-types";
-import { hasReplayUnsafeOutput, hasReplayUnsafeToolOutput, isClassifierRefusal, toolBatchCanContinue } from "../failed-turn";
+import {
+	hasReplayUnsafeOutput,
+	hasReplayUnsafeToolOutput,
+	isClassifierRefusal,
+	toolBatchCanContinue,
+} from "../failed-turn";
 import { THINKING_LOOP_REDIRECT_TYPE } from "../nudges";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../turn-persistence";
 import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
