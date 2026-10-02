@@ -13,9 +13,11 @@
 
 ### Fixed
 
+- Fixed Codex remote compaction retrying transient unexpected socket closures instead of prematurely failing over to paid local compaction ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recovered tool-call turns from mid-stream envelope errors and transient stream-parse errors, not only stream-read errors.
 - Fixed tool calls that put their payload in the intent field `i` (for example a file body in `write`) silently running with leftover arguments; they now fail with a clear prompt to move the content into the tool's parameters ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed stream finalization when a provider ends without emitting a completion or error event, ensuring the final assistant message is preserved and corresponding message lifecycle events are emitted ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed chat request telemetry recording service tiers based on the target model rather than provider name alone, correctly emitting attributes for custom OpenAI relays and dropping unadvertised tiers ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 ### Breaking Changes
 
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
