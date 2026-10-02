@@ -10,14 +10,19 @@
 #   SCENE_COMMAND="bash /repo/proof/docker/glyph-seed/cmd.sh" \
 #     proof/record.sh --pair proof/scenes/theme-nerd-glyphs.sh
 set +e
-settle 12
+# Escape and Return go through kitty's remote control as pty bytes, the same
+# path `t` types through: an XTEST key did not reach the window on the
+# containerised recorder.
+pty_key() { kitty @ --to "${KITTY_SOCKET}" send-text -- "$1"; }
+expect_screen "C# sources" 120 launch
+settle 6
 shot search-card
 t "/model"
 pause 1.2
-k Escape
+pty_key $'\e'
 pause 0.6
-k Return
+pty_key $'\r'
 settle 4
 shot model-context
-k Escape
+pty_key $'\e'
 pause 1
