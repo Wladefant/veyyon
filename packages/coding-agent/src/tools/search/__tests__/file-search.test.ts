@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { Settings } from "../../../config/settings";
 import type { ToolSession } from "../..";
-import { ToolError } from "../../core/tool-errors";
+import { ToolAbortError, ToolError } from "../../core/tool-errors";
 import { executeFileSearch } from "../file-search";
 
 const ROOT_SEARCH_ERROR = "Searching from root directory '/' is not allowed";
@@ -32,5 +36,147 @@ async function expectRootSearchRejected(searchPath: string): Promise<void> {
 describe("executeFileSearch", () => {
 	test.each(["/", "//"])("rejects bare root search path %s", async searchPath => {
 		await expectRootSearchRejected(searchPath);
+	});
+
+	test.each([
+		["*.ts", ["target.ts"]],
+		["*.missing", []],
+	])("returns completed native scan results for %s", async (pattern, expected) => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "file-search-"));
+		try {
+			await fs.writeFile(path.join(cwd, "target.ts"), "export const value = 1;\n");
+			const session: ToolSession = {
+				cwd,
+				hasUI: false,
+				settings: Settings.isolated({}),
+				getSessionFile: () => null,
+				getSessionSpawns: () => null,
+			};
+			const result = await executeFileSearch(session, { path: pattern });
+			expect(result.details?.files).toEqual(expected);
+			expect(result.details?.fileCount).toBe(expected.length);
+		} finally {
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("does not finish a timeout until the native scan has stopped", async () => {
+		const started = Promise.withResolvers<void>();
+		const timeoutObserved = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let nativeSettled = false;
+		const session: ToolSession = {
+			cwd: process.cwd(),
+			hasUI: false,
+			settings: Settings.isolated({}),
+			getSessionFile: () => null,
+			getSessionSpawns: () => null,
+		};
+		const execution = executeFileSearch(session, { path: "." }, undefined, undefined, {
+			timeoutMs: 100,
+			nativeGlob: async options => {
+				const nativeSignal = options.signal as AbortSignal | undefined;
+				if (!nativeSignal) {
+					started.resolve();
+					timeoutObserved.resolve();
+					throw new Error("Missing native cancellation signal");
+				}
+				nativeSignal.addEventListener("abort", () => timeoutObserved.resolve(), { once: true });
+				started.resolve();
+				await timeoutObserved.promise;
+				await release.promise;
+				nativeSettled = true;
+				throw new Error("GenericFailure, Aborted: Timeout");
+			},
+		});
+		await started.promise;
+		await timeoutObserved.promise;
+		const stateBeforeCleanup = await Promise.race([
+			execution.then(
+				() => "settled",
+				() => "settled",
+			),
+			delay(20, "pending"),
+		]);
+		expect(stateBeforeCleanup).toBe("pending");
+
+		release.resolve();
+		const result = await execution;
+
+		expect(nativeSettled).toBe(true);
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("File search timed out after 0.1s");
+	});
+
+	test("waits for every native scan to settle before rejecting an abort", async () => {
+		const controller = new AbortController();
+		const allStarted = Promise.withResolvers<void>();
+		const allAborted = Promise.withResolvers<void>();
+		const releases = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+		let startedCount = 0;
+		let abortedCount = 0;
+		let settledCount = 0;
+		const session: ToolSession = {
+			cwd: process.cwd(),
+			hasUI: false,
+			settings: Settings.isolated({}),
+			getSessionFile: () => null,
+			getSessionSpawns: () => null,
+		};
+		const execution = executeFileSearch(
+			session,
+			{ path: `.; ${path.dirname(process.cwd())}` },
+			controller.signal,
+			undefined,
+			{
+				timeoutMs: 5000,
+				nativeGlob: async options => {
+					const nativeSignal = options.signal as AbortSignal | undefined;
+					if (!nativeSignal) throw new Error("Missing native cancellation signal");
+					const abortObserved = Promise.withResolvers<void>();
+					nativeSignal.addEventListener(
+						"abort",
+						() => {
+							abortedCount += 1;
+							if (abortedCount === 2) allAborted.resolve();
+							abortObserved.resolve();
+						},
+						{ once: true },
+					);
+					const release = releases[startedCount];
+					startedCount += 1;
+					if (startedCount === 2) allStarted.resolve();
+					await abortObserved.promise;
+					await release.promise;
+					settledCount += 1;
+					throw new Error("GenericFailure, Aborted: Signal");
+				},
+			},
+		);
+
+		await allStarted.promise;
+		controller.abort();
+		await allAborted.promise;
+		const stateBeforeCleanup = await Promise.race([
+			execution.then(
+				() => "settled",
+				() => "settled",
+			),
+			delay(20, "pending"),
+		]);
+		expect(stateBeforeCleanup).toBe("pending");
+
+		releases[0].resolve();
+		const stateAfterFirst = await Promise.race([
+			execution.then(
+				() => "settled",
+				() => "settled",
+			),
+			delay(20, "pending"),
+		]);
+		releases[1].resolve();
+		expect(stateAfterFirst).toBe("pending");
+		await expect(execution).rejects.toBeInstanceOf(ToolAbortError);
+		expect(settledCount).toBe(2);
 	});
 });
