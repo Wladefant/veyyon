@@ -1586,7 +1586,8 @@ function anthropicThinkingOff({ model, options, base }: OptionsMapping): Options
 function anthropicMessagesOptions(mapping: OptionsMapping): OptionsForApi<"anthropic-messages"> {
 	const { model, options, selection, base } = mapping;
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff) return anthropicThinkingOff(mapping);
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff)
+		return anthropicThinkingOff(mapping);
 	let thinkingBudget = resolveThinkingBudget(reasoning, ANTHROPIC_THINKING_BUDGETS, options.thinkingBudgets);
 	if (thinkingBudget <= 0) return anthropicThinkingOff(mapping);
 
