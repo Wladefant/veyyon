@@ -32,6 +32,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Fixed Cursor MCP calls named `StrReplace`/`Edit` (or `edit` with `old_string`/`new_string`) 404ing after the server injected CLI tool instructions by routing them as replace-mode edit calls (oh-my-pi 143aded8452dde605ed785e0eee9af3f99e59fe0, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `veyyon --smoke-test` deleting sibling directories in temporary storage by scoping dead daemon runtime directory cleanup to the `daemons` container and 16-hex scope keys, and isolating distribution smoke test runtimes under a private parent ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed MCP reconnects erasing peer server outcomes, keeping connected and failed peer statuses intact when one server reconnects and tracking a dedicated reconnecting lifecycle event ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 735551bd8518ebad2877d127a07cd2296557f813).
 - Fixed authoritative providers (e.g. `openai-codex`) refreshing expired OAuth credentials when a fresh cache exists, preventing unsupported bundled models from remaining selectable ([#107](https://github.com/Wladefant/veyyon/issues/107)).
