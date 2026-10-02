@@ -12,9 +12,10 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-import { clampLow, errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
+import { errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
 import { normalizePathForComparison } from "@veyyon/utils/dirs";
 import { type } from "arktype";
+import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
@@ -879,10 +880,14 @@ export class BashTool
 		const waiters: Array<
 			Promise<ManagedBashJobCompletion | { kind: "background"; reason: BackgroundReason } | { kind: "aborted" }>
 		> = [job.completion];
+		let thresholdTimer: Timer | undefined;
 		if (thresholdMs > 0) {
-			waiters.push(
-				Bun.sleep(thresholdMs).then(() => ({ kind: "background" as const, reason: "threshold" as const })),
-			);
+			const { promise: thresholdPromise, resolve: resolveThreshold } = Promise.withResolvers<{
+				kind: "background";
+				reason: BackgroundReason;
+			}>();
+			thresholdTimer = setTimeout(() => resolveThreshold({ kind: "background", reason: "threshold" }), thresholdMs);
+			waiters.push(thresholdPromise);
 		}
 		if (stallMs > 0) {
 			waiters.push(watchStall(job, stallMs, internal.signal));
@@ -908,6 +913,7 @@ export class BashTool
 		try {
 			return await Promise.race(waiters);
 		} finally {
+			clearTimeout(thresholdTimer);
 			internal.abort();
 			unregisterManual();
 			if (signal && onAbort) {
@@ -1433,10 +1439,7 @@ async function watchStall(
  * clamp lives in ONE place.
  */
 function resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
-	if (baseMs <= 0) return 0;
-	if (timeoutMs === undefined) return baseMs;
-	const timeoutBufferMs = 1_000;
-	return clampLow(timeoutMs - timeoutBufferMs, 0, baseMs);
+	return resolveAutoBackgroundWaitMs(baseMs, timeoutMs);
 }
 
 /**

@@ -29,6 +29,7 @@
 
 ### Changed
 
+- Extracted shared foreground-wait and auto-background helper primitives (`formatBackgroundNotice`, `resolveAutoBackgroundWaitMs`, `raceJobSettlement`) into `async/auto-background.ts` with cancellable threshold timers (oh-my-pi aeed1e6195abfa971b15e291c6c598bc9c1065b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
