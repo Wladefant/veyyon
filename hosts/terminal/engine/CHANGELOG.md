@@ -22,7 +22,7 @@
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
-- A full-width overlay such as the model selector replaces the rows of an inline Kitty image drawn with Unicode placeholders instead of letting the image cover it; a narrower overlay still leaves those rows untouched ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- A full-width overlay that is not fullscreen, such as the `/autoresearch status` run screen, replaces the rows of an inline Kitty image drawn with Unicode placeholders instead of letting the image cover it; a narrower overlay still leaves those rows untouched ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 

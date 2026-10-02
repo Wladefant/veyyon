@@ -270,7 +270,7 @@ export function compositeLineAt(
 	totalWidth: number,
 ): string {
 	if (TERMINAL.isImageLine(baseLine)) {
-		// A full-width overlay such as the model selector is opaque: replace the
+		// A full-width overlay such as the `/autoresearch status` screen is opaque: replace the
 		// Unicode placeholder cells so the image cannot cover the modal. A partial
 		// overlay cannot safely splice placement control sequences.
 		if (startCol !== 0 || overlayWidth < totalWidth) return baseLine;
