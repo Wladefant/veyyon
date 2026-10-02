@@ -6,6 +6,7 @@
 
 - Extracted shared auth-gateway request dispatch, credential resolution, account identity, and abort mirroring helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Shared gateway usage-limit blocking and authentication-failure credential invalidation across request adapters.
+- Honored injected gateway transports for native and translated requests, in both streaming and completed responses.
 - Added Vercel AI Gateway app attribution headers (`http-referer` and `x-title`) on Anthropic and OpenAI-compatible routes while preserving caller-supplied attribution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Exposed catalog metadata fields (`context_length`, `max_output_tokens`, `input_modalities`, and `supports_tools`) in auth gateway `GET /v1/models` responses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.

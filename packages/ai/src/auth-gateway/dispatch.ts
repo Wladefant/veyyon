@@ -13,7 +13,7 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import type { AuthStorage } from "../auth-storage";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
-import type { Api, Model } from "../types";
+import type { Api, FetchImpl, Model } from "../types";
 import type { AuthGatewayServerOptions } from "./types";
 
 export interface ClientUsageIdentity {
@@ -31,6 +31,8 @@ export interface AuthGatewayBootOptions extends AuthGatewayServerOptions {
 	resolveModel: ModelResolver;
 	/** Optional supplier for /v1/models listing. Returns the full model array. */
 	listModels?: () => Iterable<Model<Api>>;
+	/** Upstream transport for every provider call; defaults to global fetch. */
+	fetch?: FetchImpl;
 }
 
 export function normalizeClientSessionKey(clientKey: string | undefined): string | undefined {
