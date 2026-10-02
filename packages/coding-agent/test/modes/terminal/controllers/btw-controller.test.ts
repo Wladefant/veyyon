@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
 import { BtwPanelComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/btw-panel";
 import { BtwController } from "@veyyon/coding-agent/modes/terminal/controllers/btw-controller";
@@ -51,7 +51,18 @@ function makeFakeSession(
 	} as unknown as InteractiveModeContext["session"];
 }
 
-function makeCtx(session: InteractiveModeContext["session"], btwContainer = new Container()): InteractiveModeContext {
+interface TestInteractiveModeContext extends InteractiveModeContext {
+	showStatus: Mock<InteractiveModeContext["showStatus"]>;
+	showError: Mock<InteractiveModeContext["showError"]>;
+	handleBtwBranch: Mock<InteractiveModeContext["handleBtwBranch"]>;
+	setTestLeafId(nextLeafId: string | null): void;
+	setTestSessionId(nextSessionId: string): void;
+}
+
+function makeCtx(
+	session: InteractiveModeContext["session"],
+	btwContainer = new Container(),
+): TestInteractiveModeContext {
 	let leafId: string | null = "leaf-1";
 	let sessionId = "session-1";
 	return {
@@ -71,10 +82,7 @@ function makeCtx(session: InteractiveModeContext["session"], btwContainer = new 
 		setTestSessionId(nextSessionId: string) {
 			sessionId = nextSessionId;
 		},
-	} as unknown as InteractiveModeContext & {
-		setTestLeafId(nextLeafId: string | null): void;
-		setTestSessionId(nextSessionId: string): void;
-	};
+	} as unknown as TestInteractiveModeContext;
 }
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -285,9 +293,7 @@ describe("BtwController", () => {
 	it("refuses branch when the loaded session changed but the leaf id still matches", async () => {
 		const assistantMessage = createAssistantMessage("Answer");
 		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
-		const ctx = makeCtx(makeFakeSession(runEphemeralTurn)) as InteractiveModeContext & {
-			setTestSessionId(nextSessionId: string): void;
-		};
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
 		const controller = new BtwController(ctx);
 
 		await controller.start("Question?");
