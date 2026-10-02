@@ -148,7 +148,7 @@ export function toStoredAuthCredential(row: AuthRow, credential: AuthCredential)
 
 export function resolveProviderCredentialIdentityKey(provider: string, identifiers: string[]): string | null {
 	const emailIdentifier = identifiers.find(identifier => identifier.startsWith("email:"));
-	if (provider === "anthropic") {
+	if (provider === "anthropic" || provider === "openai-codex") {
 		// One Anthropic account email can hold several organizations (e.g. a
 		// Team seat plus a personal Max plan), each with its own org-scoped
 		// token and limit pools. Scope identity by org so both subscriptions
@@ -167,7 +167,6 @@ export function resolveProviderCredentialIdentityKey(provider: string, identifie
 		// No base identity at all: the org alone still distinguishes the row.
 		return orgIdentifier ?? null;
 	}
-	if (provider === "openai-codex" && emailIdentifier) return emailIdentifier;
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
 	if (emailIdentifier) return emailIdentifier;
@@ -254,10 +253,12 @@ export function matchesReplacementCredential(
 		existing.type === "oauth" && existingIdentityKey.endsWith(`|${orgIdentifier}`)
 			? extractOAuthCredentialIdentifiers(existing)
 			: null;
+	const orgQualifierId = orgIdentifier.slice("org:".length);
 	for (const identifier of incomingIdentifiers) {
 		const isBase =
 			identifier.startsWith("email:") || identifier.startsWith("account:") || identifier.startsWith("project:");
 		if (!isBase) continue;
+		if (identifier.slice(identifier.indexOf(":") + 1) === orgQualifierId) continue;
 		if (existingIdentityKey === identifier) return true;
 		if (existingIdentityKey === `${identifier}|${orgIdentifier}`) return true;
 		if (existingIdentifiers?.includes(identifier)) return true;
