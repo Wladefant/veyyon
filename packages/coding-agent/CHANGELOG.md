@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
-### Added
+### Fixed
+
+- Fixed Windows stdio MCP servers launched through `.cmd`/`.bat` shims failing with `Transport closed`; the launch now builds a `cmd.exe /d /e:ON /v:OFF /c` command line escaped for `cmd.exe`'s parser and spawned with `windowsVerbatimArguments`, so the command runs and arguments (including `%VAR%`, quotes, and shell metacharacters) reach the server intact and cannot inject commands (BatBadBut / CVE-2024-24576) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 07889331103b8b0f3da532d7dc3ceb0a5c2c6de5).
+- Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
 - Hard-refusal fail-closed guard preventing any agent from merging a PR or pushing to `main` on `Bavariance/polysimulator` across `git push`, `gh pr merge`, `gh api` and the `github` tool ([#174](https://github.com/Wladefant/veyyon/pull/174)).
 - Terminate the mnemopi embedding worker subprocess after a configurable idle period (`mnemopi.embedIdleUnloadMs`, default 5 minutes, clamped to the 2147483647 ms a `setTimeout` delay can hold) and lazily relaunch it on the next embed request, releasing the loaded ONNX model's ~1.25 GB commit charge during idle periods ([#54](https://github.com/Wladefant/veyyon/issues/54)).
