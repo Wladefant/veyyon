@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Parameterized MCP tool name sanitization and unified current and legacy name minting under one shared pipeline (oh-my-pi 24aa8aa6279e815e338623e9d9be3f7792f6c193, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch-facts` moved from `modes/` to `config/`, so the session reads its record of the project at rest without an allow-list entry in the session-does-not-import-the-UI gate ([#107](https://github.com/Wladefant/veyyon/issues/107)).
