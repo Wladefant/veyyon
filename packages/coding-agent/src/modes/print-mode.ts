@@ -23,6 +23,11 @@ import { initializeExtensions } from "./runtime-init";
 /**
  * Options for print mode.
  */
+/** Matches the longest built-in provider request deadline while bounding tool-loop stalls. */
+export const PRINT_MODE_ADVISOR_DRAIN_TIMEOUT_MS = 10 * 60_000;
+/** Error exits cannot hold automation for the full normal drain budget. */
+export const PRINT_MODE_ERROR_ADVISOR_DRAIN_TIMEOUT_MS = 30_000;
+
 export interface PrintModeOptions {
 	/** Output mode: "text" for final response only, "json" for all events */
 	mode: "text" | "json";
@@ -111,7 +116,16 @@ export function printableEvent(event: AgentSessionEvent): unknown {
  */
 export type PrintModeSession =
 	| AgentSession
-	| (Pick<AgentSession, "subscribe" | "prompt" | "dispose" | "displayAssistantContent" | "obfuscateProviderText"> & {
+	| (Pick<
+			AgentSession,
+			| "subscribe"
+			| "prompt"
+			| "dispose"
+			| "displayAssistantContent"
+			| "obfuscateProviderText"
+			| "prepareForHeadlessAdvisorDrain"
+			| "waitForAdvisorCatchup"
+	  > & {
 			// Only the two members print mode reads, not the whole state object and
 			// the whole SessionManager class. A caller that has just these can drive
 			// print mode, and that is worth being able to say.
@@ -241,6 +255,10 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 		await logger.time("print:prompt:next", () => dispatchPromptOrCommand(message));
 	}
 
+	// From this point onward a late blocker must be recorded without starting a
+	// primary turn whose response print mode would never emit.
+	session.prepareForHeadlessAdvisorDrain();
+
 	// An errored or aborted turn is a failed command in either output mode:
 	// `--mode json` streams the error event and still exits non-zero, so a
 	// script cannot read a failure as success (exit-codes.md).
@@ -261,6 +279,7 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 			// Flush before this hard exit — it bypasses the awaited postmortem.quit()
 			// in main(), and the postmortem `exit` handler can't await, so the error
 			// spans would otherwise stay buffered in the batch processor and drop.
+			await session.waitForAdvisorCatchup(PRINT_MODE_ERROR_ADVISOR_DRAIN_TIMEOUT_MS);
 			await flushTelemetryExport();
 			// This branch hard-exits, bypassing the `await session.dispose()` at
 			// the end of runPrintMode. Flush telemetry and dispose the session
@@ -302,6 +321,8 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 			}
 		}
 	}
+
+	await session.waitForAdvisorCatchup(PRINT_MODE_ADVISOR_DRAIN_TIMEOUT_MS);
 
 	// Ensure stdout is fully flushed before returning
 	// This prevents race conditions where the process exits before all output is written
