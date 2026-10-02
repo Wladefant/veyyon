@@ -8,9 +8,9 @@
  */
 
 import type { Effort } from "@veyyon/catalog/effort";
+import { isAnthropicOpus55Model } from "@veyyon/catalog/identity/family";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@veyyon/catalog/model-thinking";
 import { calculateCost } from "@veyyon/catalog/models";
-import { isAnthropicOpus55Model } from "@veyyon/catalog/identity/family";
 import { $env, $flag } from "@veyyon/utils/env";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import { renderDemotedThinking } from "../dialect/demotion";
@@ -378,7 +378,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				// tools offered under `auto` and leave thinking intact.
 				const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
 				const id = model.id.toLowerCase();
-				const isOpusOrSonnet55 = isAnthropicOpus55Model(model.id) || id.includes("claude-sonnet-5-5") || id.includes("claude-3-7-sonnet-5-5");
+				const isOpusOrSonnet55 =
+					isAnthropicOpus55Model(model.id) ||
+					id.includes("claude-sonnet-5-5") ||
+					id.includes("claude-3-7-sonnet-5-5");
 				const supportsForcedToolChoice =
 					(model.compat as { supportsForcedToolChoice?: boolean } | undefined)?.supportsForcedToolChoice ??
 					!isOpusOrSonnet55;
