@@ -2563,15 +2563,10 @@ class CodexStreamProcessor {
 			!this.runtime.sawTerminalEvent &&
 			!this.options?.signal?.aborted;
 		if (!canReplay) return false;
+		if (this.#hasCommittedOutput()) return false;
 
 		const state = websocketState;
 		const streamError = error instanceof Error ? error : new Error(String(error));
-		const streamedContent = this.output.content.some(
-			block =>
-				(block.type === "text" && block.text.length > 0) ||
-				(block.type === "thinking" && block.thinking.length > 0),
-		);
-		const replayingBufferedOutputOverSse = hasVisibleAssistantContent(this.output) || streamedContent;
 		const fatalWebSocketMessage = streamError.message.toLowerCase();
 		const isFatal = CODEX_WEBSOCKET_FATAL_PATTERNS.some(pattern =>
 			fatalWebSocketMessage.includes(pattern.toLowerCase()),
@@ -2588,18 +2583,13 @@ class CodexStreamProcessor {
 		const isStall = isCodexWebSocketStallError(streamError);
 		const stallLadderExhausted = isStall && this.runtime.websocketStallRetries >= PRE_RESPONSE_STALL_ATTEMPTS - 1;
 		const activateFallback =
-			replayingBufferedOutputOverSse ||
-			isFatal ||
-			stallLadderExhausted ||
-			this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
+			isFatal || stallLadderExhausted || this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
 		recordCodexWebSocketFailure(state, activateFallback, {
-			cause: replayingBufferedOutputOverSse
-				? "stream-failed-while-replaying-over-sse"
-				: isFatal
-					? "fatal-stream-error"
-					: stallLadderExhausted
-						? "stall-ladder-exhausted"
-						: "stream-retry-budget-exhausted",
+			cause: isFatal
+				? "fatal-stream-error"
+				: stallLadderExhausted
+					? "stall-ladder-exhausted"
+					: "stream-retry-budget-exhausted",
 			error: streamError.message,
 		});
 		CODEX_DEBUG &&
@@ -2609,7 +2599,6 @@ class CodexStreamProcessor {
 				retryBudget: CODEX_WEBSOCKET_RETRY_BUDGET,
 				activated: activateFallback,
 				fatal: isFatal,
-				replayedBufferedOutput: replayingBufferedOutputOverSse,
 			});
 
 		if (!activateFallback) {
@@ -2627,6 +2616,7 @@ class CodexStreamProcessor {
 			return true;
 		}
 
+		this.#closeOpenBlocksForReplay();
 		this.runtime.resetAccumulators();
 		resetOutputState(this.model, this.output);
 		this.firstTokenTime = undefined;
@@ -2663,28 +2653,25 @@ class CodexStreamProcessor {
 		}
 	}
 
+	#hasCommittedOutput(): boolean {
+		return (
+			hasVisibleAssistantContent(this.output) ||
+			this.output.content.some(
+				block =>
+					(block.type === "text" && block.text.length > 0) ||
+					(block.type === "thinking" && block.thinking.length > 0),
+			)
+		);
+	}
+
 	async #tryRetryProviderError(error: unknown): Promise<boolean> {
 		// A stall that has already used the turn's declared first-event budget is
 		// not retried: nothing streamed, the endpoint said nothing, and another
 		// attempt can only push the caller further past the number it declared.
 		const stallOutlivedBudget = isPreResponseStall(error) && this.requestSetup.firstEventBudget.spent();
-		// A leading `response.output_item.added` opens an empty block and emits only
-		// a `*_start` before any delta; that is replay-safe. But once any text or
-		// thinking delta has streamed — including a whitespace-only
-		// `output_text.delta`, which still reaches consumers as `text_delta` — or a
-		// visible tool/image block exists, replaying would duplicate/reorder those
-		// already-delivered events, so treat the attempt as committed. Emptiness is
-		// measured by the streamed block length (whitespace counts), not by visible
-		// final content.
-		const streamedContent = this.output.content.some(
-			block =>
-				(block.type === "text" && block.text.length > 0) ||
-				(block.type === "thinking" && block.thinking.length > 0),
-		);
 		if (
 			!(error instanceof CodexProviderStreamError && error.retryable) ||
-			hasVisibleAssistantContent(this.output) ||
-			streamedContent ||
+			this.#hasCommittedOutput() ||
 			!this.runtime.canSafelyReplayWebsocketOverSse ||
 			this.runtime.providerRetryAttempt >= CODEX_MAX_RETRIES ||
 			stallOutlivedBudget ||
