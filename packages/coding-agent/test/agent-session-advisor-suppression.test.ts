@@ -388,6 +388,27 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
 		expect(mock.calls.length).toBe(1);
 	});
+	it("preserves late advisor concerns as cards during headless drain instead of waking a new turn", async () => {
+		const { session, mock } = await createCompletedAdvisorSession("concern");
+
+		await session.prompt("answer with exactly one line");
+		await session.waitForIdle();
+		const answer = session.agent.state.messages.at(-1);
+		if (answer?.role !== "assistant") throw new Error("Expected terminal assistant answer");
+		answer.stopReason = "error";
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		session.prepareForHeadlessAdvisorDrain();
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(mock.calls.length).toBe(1);
+	});
 
 	it("preserves an advisor concern steered before the user interrupt, without auto-resuming", async () => {
 		const { session, sessionManager, mock, streamStarted } = await createParkedSession();

@@ -36,6 +36,7 @@ export async function awaitStdoutDrain(): Promise<void> {
 	const sink = stdoutSink();
 	if (sink) {
 		await sink.flush();
+		return;
 	}
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	process.stdout.write("", error => {

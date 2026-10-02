@@ -3,9 +3,10 @@ import type { AssistantMessage } from "@veyyon/ai";
 import {
 	PRINT_MODE_ADVISOR_DRAIN_TIMEOUT_MS,
 	PRINT_MODE_ERROR_ADVISOR_DRAIN_TIMEOUT_MS,
+	type PrintModeSession,
 	runPrintMode,
 } from "@veyyon/coding-agent/modes/print-mode";
-import type { AgentSession, AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 
 function makeAssistantMessage(text: string): AssistantMessage {
 	const timestamp = Date.now();
@@ -30,7 +31,7 @@ function makeAssistantMessage(text: string): AssistantMessage {
 }
 
 interface DelayedSession {
-	session: AgentSession;
+	session: PrintModeSession;
 	promptStarted: Promise<void>;
 	resolvePrompt: () => void;
 }
@@ -71,7 +72,7 @@ function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
 		// `--mode json` re-redacts every line through this; identity for the same
 		// literal-content reason as the display seam above.
 		obfuscateProviderText: (text: string) => text,
-	} as unknown as AgentSession;
+	} as PrintModeSession;
 
 	return { session, promptStarted, resolvePrompt };
 }
@@ -102,6 +103,17 @@ describe("print mode working indicator", () => {
 			}
 			return true;
 		});
+		const stream: object = process.stdout;
+		const key = Object.getOwnPropertySymbols(stream).find(symbol => symbol.description === "kWriteStreamFastPath");
+		if (key) {
+			const sink = Reflect.get(stream, key) as { flush?: () => unknown } | undefined;
+			if (sink && typeof sink.flush === "function") {
+				vi.spyOn(sink, "flush").mockImplementation(async () => {
+					stdoutEvents.push("flush");
+					return 0;
+				});
+			}
+		}
 	});
 
 	afterEach(() => {
@@ -160,7 +172,7 @@ describe("print mode working indicator", () => {
 		let disposed = false;
 		let catchupTimeoutMs: number | undefined;
 		let subscriber: ((event: AgentSessionEvent) => void) | undefined;
-		const session = {
+		const session: PrintModeSession = {
 			state: { messages },
 			sessionManager: { getHeader: () => undefined },
 			extensionRunner: undefined,
@@ -195,7 +207,7 @@ describe("print mode working indicator", () => {
 			},
 			displayAssistantContent: (content: AssistantMessage["content"]) => content,
 			obfuscateProviderText: (text: string) => text,
-		} as unknown as AgentSession;
+		};
 
 		const run = runPrintMode(session, { mode: "json", initialMessage: "hello" });
 		await catchupStarted;
@@ -223,7 +235,7 @@ describe("print mode working indicator", () => {
 			exitCode = code as number;
 			throw new Error("process exit");
 		});
-		const session = {
+		const session: PrintModeSession = {
 			state: { messages },
 			sessionManager: { getHeader: () => undefined },
 			extensionRunner: undefined,
@@ -244,7 +256,7 @@ describe("print mode working indicator", () => {
 			},
 			displayAssistantContent: (content: AssistantMessage["content"]) => content,
 			obfuscateProviderText: (text: string) => text,
-		} as unknown as AgentSession;
+		};
 
 		const run = runPrintMode(session, { mode: "text", initialMessage: "hello" });
 		await catchupStarted;

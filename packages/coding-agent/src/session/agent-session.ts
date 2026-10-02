@@ -2481,7 +2481,11 @@ export class AgentSession {
 			const processing = this.#processAgentEvent(event);
 			if ((event.type === "message_start" || event.type === "message_end") && isAdvisorCard(event.message)) {
 				this.#pendingAdvisorCardEvents.add(processing);
-				void processing.finally(() => this.#pendingAdvisorCardEvents.delete(processing)).catch(() => {});
+				void processing
+					.finally(() => this.#pendingAdvisorCardEvents.delete(processing))
+					.catch(error => {
+						logger.debug("Advisor card event processing failed", { error });
+					});
 			}
 			return processing;
 		}
