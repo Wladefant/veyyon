@@ -779,7 +779,7 @@ interface ModelListRow {
 	display_name: string;
 	context_length?: number;
 	max_output_tokens?: number;
-	input_modalities: ("text" | "image")[];
+	input_modalities: ("text" | "image" | "video")[];
 	supports_tools?: boolean;
 }
 

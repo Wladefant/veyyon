@@ -371,9 +371,9 @@ function extractCodexSseError(rawEvent: Record<string, unknown>): { code: string
 	return { code, message };
 }
 
-function acceptsNamedToolChoice(model: Model<Api> | undefined): boolean {
+function acceptsNamedToolChoice(model?: { id?: string; compat?: unknown }): boolean {
 	const compat = model?.compat;
-	return !(compat && "supportsNamedToolChoice" in compat && compat.supportsNamedToolChoice === false);
+	return !(compat && typeof compat === "object" && "supportsNamedToolChoice" in compat && compat.supportsNamedToolChoice === false);
 }
 
 /**

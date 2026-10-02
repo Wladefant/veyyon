@@ -246,7 +246,7 @@ export interface ProviderContextBucket {
 
 export interface AssistantMessage {
 	role: "assistant";
-	content: (TextContent | ThinkingContent | RedactedThinkingContent | AnthropicFallbackContent | ToolCall)[];
+	content: (TextContent | ThinkingContent | RedactedThinkingContent | AnthropicFallbackContent | ToolCall | ImageContent)[];
 	api: Api;
 	provider: Provider;
 	model: string;

@@ -146,7 +146,6 @@ describe("Codex parentTurnId and turn-state refreshes", () => {
 			};
 			const model = createCodexModel("gpt-5.5");
 			const context: Context = {
-				sessionId: "shared-test-session",
 				systemPrompt: ["You are a helpful assistant."],
 				messages: [{ role: "user", content: "First turn", timestamp: Date.now() }],
 			};
@@ -169,11 +168,17 @@ describe("Codex parentTurnId and turn-state refreshes", () => {
 						arguments: {},
 					},
 				],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+				stopReason: "tool-call",
 				timestamp: Date.now(),
 			});
 			context.messages.push({
 				role: "toolResult",
 				toolCallId: "call_1",
+				toolName: "test_tool",
 				content: [{ type: "text", text: "tool result output" }],
 				isError: false,
 				timestamp: Date.now(),

@@ -264,6 +264,8 @@ function snapshotAssistantContentBlock(block: AssistantContentBlock, mode: Snaps
 			return { ...block, from: { ...block.from }, to: { ...block.to } };
 		case "toolCall":
 			return mode === "delta" ? { ...block } : { ...block, arguments: structuredCloneJSON(block.arguments) };
+		case "image":
+			return { ...block };
 	}
 }
 
@@ -309,6 +311,12 @@ function snapshotAssistantMessageEvent(
 			return {
 				...event,
 				toolCall: snapshotAssistantContentBlock(event.toolCall, "full") as AssistantToolCallBlock,
+				partial: partialSnapshot ?? snapshotAssistantMessage(event.partial, "delta"),
+			};
+		case "image_end":
+			return {
+				...event,
+				content: { ...event.content },
 				partial: partialSnapshot ?? snapshotAssistantMessage(event.partial, "delta"),
 			};
 		case "done":
