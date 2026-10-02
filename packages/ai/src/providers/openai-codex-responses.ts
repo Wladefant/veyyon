@@ -43,7 +43,7 @@ import {
 	CodexWebSocketTransportError,
 	CodexWhitespaceToolCallLoopError,
 } from "../error/classes";
-import { getEnvApiKey } from "../stream";
+import { getEnvApiKey, isOfficialCodexApiUrl } from "../stream";
 import type {
 	Api,
 	AssistantMessage,
@@ -76,7 +76,7 @@ import {
 	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 } from "../utils";
 import { clearStreamingPartialJson, kStreamingLastParseLen, kStreamingPartialJson } from "../utils/block-symbols";
-import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
+import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import {
 	type FirstEventBudget,
@@ -1991,6 +1991,19 @@ class CodexStreamProcessor {
 					this.#handleStreamEvent(rawEvent);
 					if (this.runtime.sawTerminalEvent) break;
 				}
+				if (!this.runtime.sawTerminalEvent) {
+					CODEX_DEBUG &&
+						logger.debug("[codex] codex stream ended unexpectedly", {
+							transport: this.runtime.transport,
+							terminalEventSeen: false,
+							unexpectedStreamEnd: true,
+							sentTurnStateHeader: Boolean(this.requestContext.websocketState?.turnState),
+							sentModelsEtagHeader: Boolean(this.requestContext.websocketState?.modelsEtag),
+						});
+					throw new CodexProviderStreamError("Codex stream ended before terminal completion event", {
+						retryable: true,
+					});
+				}
 				return { firstTokenTime: this.#attemptFirstTokenTime };
 			} catch (error) {
 				const recovered = await this.#recoverStreamError(error);
@@ -2343,12 +2356,15 @@ class CodexStreamProcessor {
 				// took for this attempt and nothing mutates it; a retry replaces it
 				// with a fresh one. Adopting it saves a second full clone per turn.
 				state.lastRequest = runtime.requestBodyForState;
-				if (responseId) {
+				const replayableResponseItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+					structuredCloneJSON(runtime.nativeOutputItems),
+				);
+				if (responseId && replayableResponseItems) {
 					state.lastResponseId = responseId;
-					state.lastResponseItems = stripInputItemIds(structuredCloneJSON(runtime.nativeOutputItems));
+					state.lastResponseItems = replayableResponseItems;
 					state.canAppend = rawEvent.type === "response.done" || rawEvent.type === "response.completed";
 				} else {
-					// Without a response id the append baseline cannot be trusted.
+					// Without both a response id and replayable output, the append baseline cannot be trusted.
 					state.canAppend = false;
 				}
 			}
@@ -2547,10 +2563,10 @@ class CodexStreamProcessor {
 			!this.runtime.sawTerminalEvent &&
 			!this.options?.signal?.aborted;
 		if (!canReplay) return false;
+		if (this.#hasCommittedOutput()) return false;
 
 		const state = websocketState;
 		const streamError = error instanceof Error ? error : new Error(String(error));
-		const replayingBufferedOutputOverSse = this.output.content.length > 0;
 		const fatalWebSocketMessage = streamError.message.toLowerCase();
 		const isFatal = CODEX_WEBSOCKET_FATAL_PATTERNS.some(pattern =>
 			fatalWebSocketMessage.includes(pattern.toLowerCase()),
@@ -2567,18 +2583,13 @@ class CodexStreamProcessor {
 		const isStall = isCodexWebSocketStallError(streamError);
 		const stallLadderExhausted = isStall && this.runtime.websocketStallRetries >= PRE_RESPONSE_STALL_ATTEMPTS - 1;
 		const activateFallback =
-			replayingBufferedOutputOverSse ||
-			isFatal ||
-			stallLadderExhausted ||
-			this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
+			isFatal || stallLadderExhausted || this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
 		recordCodexWebSocketFailure(state, activateFallback, {
-			cause: replayingBufferedOutputOverSse
-				? "stream-failed-while-replaying-over-sse"
-				: isFatal
-					? "fatal-stream-error"
-					: stallLadderExhausted
-						? "stall-ladder-exhausted"
-						: "stream-retry-budget-exhausted",
+			cause: isFatal
+				? "fatal-stream-error"
+				: stallLadderExhausted
+					? "stall-ladder-exhausted"
+					: "stream-retry-budget-exhausted",
 			error: streamError.message,
 		});
 		CODEX_DEBUG &&
@@ -2588,16 +2599,15 @@ class CodexStreamProcessor {
 				retryBudget: CODEX_WEBSOCKET_RETRY_BUDGET,
 				activated: activateFallback,
 				fatal: isFatal,
-				replayedBufferedOutput: replayingBufferedOutputOverSse,
 			});
 
 		if (!activateFallback) {
+			this.#closeOpenBlocksForReplay();
 			this.runtime.websocketStreamRetries += 1;
 			if (isStall) this.runtime.websocketStallRetries += 1;
-			// Full re-send on a fresh socket: clear accumulator state from the failed
-			// attempt. Content is empty here, but blockless native items (e.g.
-			// web_search_call) may already have accumulated.
 			this.runtime.resetAccumulators();
+			this.runtime.sawTerminalEvent = false;
+			resetOutputState(this.model, this.output);
 			this.firstTokenTime = undefined;
 			await scheduler.wait(CODEX_WEBSOCKET_RETRY_DELAY_MS * Math.max(1, this.runtime.websocketStreamRetries), {
 				signal: this.requestSetup.requestSignal,
@@ -2606,12 +2616,52 @@ class CodexStreamProcessor {
 			return true;
 		}
 
+		this.#closeOpenBlocksForReplay();
 		this.runtime.resetAccumulators();
 		resetOutputState(this.model, this.output);
 		this.firstTokenTime = undefined;
 
 		await this.#reopenSseStream(state);
 		return true;
+	}
+
+	/**
+	 * Emit balancing `*_end` events for every block that opened (pushed a
+	 * `*_start`) but never committed visible content, so a retry that resets
+	 * `output` and replays cannot leave the consumer with an orphaned
+	 * `text_start`/`thinking_start` from the abandoned attempt. Only reachable
+	 * blocks are empty text/reasoning ones — a committed tool/text block blocks
+	 * the retry upstream.
+	 */
+	#closeOpenBlocksForReplay(): void {
+		const { runtime, output, stream } = this;
+		const open = new Set<CodexOpenItem>(runtime.openItems.values());
+		for (const entry of runtime.openItemsByOutputIndex.values()) open.add(entry);
+		if (runtime.currentEntry) open.add(runtime.currentEntry);
+		for (const entry of open) {
+			const block = entry.block;
+			if (block?.type === "thinking") {
+				stream.push({
+					type: "thinking_end",
+					contentIndex: entry.contentIndex,
+					content: block.thinking,
+					partial: output,
+				});
+			} else if (block?.type === "text") {
+				stream.push({ type: "text_end", contentIndex: entry.contentIndex, content: block.text, partial: output });
+			}
+		}
+	}
+
+	#hasCommittedOutput(): boolean {
+		return (
+			hasVisibleAssistantContent(this.output) ||
+			this.output.content.some(
+				block =>
+					(block.type === "text" && block.text.length > 0) ||
+					(block.type === "thinking" && block.thinking.length > 0),
+			)
+		);
 	}
 
 	async #tryRetryProviderError(error: unknown): Promise<boolean> {
@@ -2621,13 +2671,19 @@ class CodexStreamProcessor {
 		const stallOutlivedBudget = isPreResponseStall(error) && this.requestSetup.firstEventBudget.spent();
 		if (
 			!(error instanceof CodexProviderStreamError && error.retryable) ||
-			this.output.content.length > 0 ||
+			this.#hasCommittedOutput() ||
+			!this.runtime.canSafelyReplayWebsocketOverSse ||
 			this.runtime.providerRetryAttempt >= CODEX_MAX_RETRIES ||
 			stallOutlivedBudget ||
 			this.options?.signal?.aborted
 		) {
 			return false;
 		}
+
+		// A leading `output_item.added` already pushed a `*_start` for the (empty)
+		// open block; balance it with the matching end before the reset+replay so
+		// consumers never see an orphaned start from the abandoned attempt.
+		this.#closeOpenBlocksForReplay();
 
 		this.runtime.providerRetryAttempt += 1;
 		const websocketState = this.requestContext.websocketState;
@@ -3159,14 +3215,6 @@ export function getOpenAICodexTransportDetails(
 		hasTurnState: state?.turnState !== undefined,
 		lastFallbackAt: state?.lastFallbackAt,
 	};
-}
-
-function stripInputItemIds(items: Array<Record<string, unknown>>): InputItem[] {
-	return items.map(item => {
-		if (item.id == null) return item as InputItem;
-		const { id: _id, ...rest } = item;
-		return rest as InputItem;
-	});
 }
 
 /**
@@ -4049,6 +4097,24 @@ async function getOrCreateCodexWebSocketConnection(
 	return state.connection;
 }
 
+/**
+ * Compress an SSE request body with zstd. Returns `undefined` when
+ * compression is disabled or fails, in which case the caller sends the
+ * plain JSON string without a `content-encoding` header.
+ */
+function compressCodexRequestBody(bodyJson: string, baseUrl: string): Uint8Array | undefined {
+	if (!isOfficialCodexApiUrl(baseUrl) || !$flag("PI_CODEX_ZSTD", true)) return undefined;
+	try {
+		return Bun.zstdCompressSync(bodyJson, { level: 3 });
+	} catch (error) {
+		CODEX_DEBUG &&
+			logger.debug("[codex] codex request body compression failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		return undefined;
+	}
+}
+
 async function openCodexSseEventStream(
 	url: string,
 	requestHeaders: Record<string, string> | undefined,
@@ -4081,6 +4147,11 @@ async function openCodexSseEventStream(
 		responsesLite,
 		requestMetadata,
 	);
+	const bodyJson = await serializeBody();
+	const compressedBody = compressCodexRequestBody(bodyJson, url);
+	if (compressedBody !== undefined) {
+		headers.set("content-encoding", "zstd");
+	}
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex request", {
 			url,
@@ -4109,30 +4180,36 @@ async function openCodexSseEventStream(
 		}
 	};
 	let response: Response;
-	try {
-		response = await fetchProviderWithRetry(url, {
+	const send = (requestBody: string | Uint8Array): Promise<Response> =>
+		fetchProviderWithRetry(url, {
 			method: "POST",
 			headers,
 			signal,
-			prepareInit: async () => {
-				const bodyJson = await serializeBody();
+			prepareInit: () => {
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
-				return { body: bodyJson, signal: watchdog.signal };
+				return { body: requestBody, signal: watchdog.signal };
 			},
 			maxAttempts: CODEX_MAX_RETRIES + 1,
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
-			// The caller's declared cap wins. Codex's own five-minute budget is
-			// what a ChatGPT-plan rate limit needs when nobody said otherwise,
-			// but a caller that declares `maxRetryDelayMs` has named the longest
-			// wait it will tolerate, and a hardcoded ceiling above it turned a
-			// `retry-after: 120` into two minutes of silence the caller had
-			// forbidden.
 			maxDelayMs: maxRetryDelayMs ?? CODEX_RATE_LIMIT_BUDGET_MS,
 			shouldRetryError: error => !(isPreResponseStall(error) && firstEventBudget.spent()),
 			fetch: fetchAttempt,
 			timeout: false,
 		});
+	try {
+		response = await send(compressedBody ?? bodyJson);
+		if (compressedBody !== undefined && (response.status === 400 || response.status === 415)) {
+			const rejectedStatus = response.status;
+			await response.body?.cancel();
+			headers.delete("content-encoding");
+			CODEX_DEBUG &&
+				logger.debug("[codex] retrying request without zstd after encoding rejection", {
+					url,
+					status: rejectedStatus,
+				});
+			response = await send(bodyJson);
+		}
 	} finally {
 		clearPreResponseTimeout?.();
 	}
