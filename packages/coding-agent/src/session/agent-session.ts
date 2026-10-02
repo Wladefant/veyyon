@@ -585,6 +585,8 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 }
 
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
+/** Bound on draining post-prompt work before a /btw branch; a hung task must not hold the promotion forever. */
+const BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
 
 /**
  * Emit a warn-level log for a turn that ended in a provider error so recurring
@@ -9679,21 +9681,30 @@ export class AgentSession {
 		return { selectedText, cancelled: false };
 	}
 
+	/** Promotes a completed /btw answer from the explicitly authorized session and leaf. */
 	async branchFromBtw(
 		question: string,
 		assistantMessage: AssistantMessage,
+		leafId: string,
+		sessionId: string,
 	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
 		const previousSessionFile = this.sessionFile;
 		if (!this.sessionManager.getSessionFile()) {
 			throw new Error("Cannot branch /btw: session is not persisted");
 		}
 
-		const leafId = this.sessionManager.getLeafId();
-		if (!leafId) {
-			throw new Error("Cannot branch /btw: current session has no leaf");
+		// The user authorized THIS answer at THIS leaf of THIS session. A resumed or branched session
+		// keeps entry ids, so the leaf alone matches a session the answer never saw.
+		const authorized = () =>
+			this.sessionManager.getSessionId() === sessionId && this.sessionManager.getLeafId() === leafId;
+		if (!leafId || !authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 
+		// A promotion never parks behind or aborts a running turn: that turn's reply would land on
+		// the old leaf, or be thrown away, after the user chose to keep it.
 		if (
+			this.isStreaming ||
 			this.isBashRunning ||
 			this.isEvalRunning ||
 			this.isCompacting ||
@@ -9714,8 +9725,19 @@ export class AgentSession {
 			}
 		}
 
-		await this.#cancelPostPromptTasks();
+		// Leaf and session are re-checked after every await: an extension hook or the post-prompt
+		// drain can append to the transcript while this is suspended.
+		if (!authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
+		}
+
+		await withTimeout(
+			this.#cancelPostPromptTasks(),
+			BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS,
+			"Timed out draining post-prompt tasks before /btw branch",
+		);
 		if (
+			this.isStreaming ||
 			this.isBashRunning ||
 			this.isEvalRunning ||
 			this.isCompacting ||
@@ -9728,13 +9750,12 @@ export class AgentSession {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 		this.agent.replaceQueues([], []);
-		if (this.isStreaming) {
-			await this.abort({ goalReason: "internal", reason: "branching /btw" });
-			this.agent.replaceQueues([], []);
-		}
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
 
+		if (!authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
+		}
 		this.sessionManager.createBranchedSession(leafId);
 
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
