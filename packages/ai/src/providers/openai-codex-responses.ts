@@ -84,6 +84,7 @@ import {
 	openStallLadderBudget,
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
@@ -119,6 +120,7 @@ import type {
 	ResponseFunctionToolCall,
 	ResponseInput,
 	ResponseInputContent,
+	ResponseOutputItem,
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 	ResponseStatus,
@@ -131,6 +133,7 @@ import {
 	appendReasoningSummaryPart,
 	appendReasoningSummaryPartDone,
 	appendReasoningSummaryTextDelta,
+	appendResponsesImageResult,
 	appendResponsesToolResultMessages,
 	applyOpenAIServiceTier,
 	applyReasoningSummaryDone,
@@ -140,11 +143,13 @@ import {
 	createSequentialCutoffSummaryState,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
+	escapeReplayedClientText,
 	finalizeCustomToolCallInputDone,
 	finalizeMessageText,
 	finalizePendingResponsesToolCalls,
 	finalizeReasoningThinking,
 	finalizeToolCallArgumentsDone,
+	getOpenAIPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
 	normalizeOpenAIPromptCacheKey,
@@ -184,6 +189,14 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	 */
 	clientMetadata?: Record<string, string>;
 	/**
+	 * Turn id of the initiating (parent) Codex turn for nested requests such as
+	 * subagent spawns (codex-rs `parent_turn_id`, #35835). Emitted both as the
+	 * flat `client_metadata.parent_turn_id` key and inside the
+	 * `x-codex-turn-metadata` JSON blob; blank values are ignored. The key is
+	 * reserved: `clientMetadata` extras cannot supply it.
+	 */
+	parentTurnId?: string;
+	/**
 	 * Invoked when the server streams a `response.metadata` event carrying
 	 * ChatGPT moderation metadata (`metadata.openai_chatgpt_moderation_metadata`)
 	 * for first-party presentation parity. Diagnostic observer: failures are
@@ -201,6 +214,8 @@ export interface OpenAICodexCompatibilityMetadataOptions {
 	startNewTurn?: boolean;
 	turnStartedAtUnixMs?: number;
 	clientMetadata?: Readonly<Record<string, string>>;
+	/** Parent Codex turn id for nested requests; see {@link OpenAICodexResponsesOptions.parentTurnId}. */
+	parentTurnId?: string;
 	/** Add the direct installation header a non-turn codex call requires. */
 	includeInstallationHeader?: boolean;
 }
@@ -272,7 +287,7 @@ const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_IDLE_
  * SSE. Generous default so legitimately slow first-token providers still get
  * a chance on the WS transport before falling through.
  */
-const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 60_000);
+const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 300_000);
 const CODEX_WEBSOCKET_RETRY_BUDGET = Number($env.VEYYON_CODEX_WEBSOCKET_RETRY_BUDGET || CODEX_MAX_RETRIES);
 const CODEX_WEBSOCKET_RETRY_DELAY_MS = Number($env.VEYYON_CODEX_WEBSOCKET_RETRY_DELAY_MS || CODEX_RETRY_DELAY_MS);
 // The codes Codex sends for a failure a replay can survive. A code is this provider's own vocabulary;
@@ -339,7 +354,12 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 }
 
 type CodexTransport = "sse" | "websocket";
-type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
+type CodexEventItem =
+	| ResponseReasoningItem
+	| ResponseOutputMessage
+	| ResponseFunctionToolCall
+	| ResponseCustomToolCall
+	| ResponseOutputItem.ImageGenerationCall;
 type CodexOutputBlock =
 	| ThinkingContent
 	| TextContent
@@ -495,6 +515,7 @@ const CODEX_RESERVED_METADATA_KEYS: Record<string, true> = {
 	turn_started_at_unix_ms: true,
 	forked_from_thread_id: true,
 	parent_thread_id: true,
+	parent_turn_id: true,
 	// Codex protocol metadata key; spelled as codex-rs spells it.
 	subagent_kind: true,
 	thread_source: true,
@@ -567,6 +588,7 @@ function createCodexRequestMetadata(
 		startNewTurn: boolean;
 		turnStartedAtUnixMs?: number;
 		clientMetadata?: Readonly<Record<string, string>>;
+		parentTurnId?: string;
 		compaction?: CodexCompactionRequestContext;
 	},
 ): CodexRequestMetadata {
@@ -575,6 +597,9 @@ function createCodexRequestMetadata(
 		session.turnStartedAtUnixMs = options.turnStartedAtUnixMs;
 	}
 	const identity = createCodexCompatibilityIdentity(session);
+	// codex-rs `set_parent_turn_id` ignores blank values; keep the original
+	// spelling when non-blank.
+	const parentTurnId = options.parentTurnId?.trim() ? options.parentTurnId : undefined;
 	const extra: Record<string, string> = {};
 	const callerMetadata = options.clientMetadata;
 	if (callerMetadata) {
@@ -596,6 +621,7 @@ function createCodexRequestMetadata(
 		window_id: identity.windowId,
 		request_kind: requestKind,
 	};
+	if (parentTurnId) turnMetadata.parent_turn_id = parentTurnId;
 	if (options.compaction) {
 		turnMetadata.compaction = {
 			trigger: options.compaction.trigger,
@@ -614,14 +640,20 @@ function createCodexRequestMetadata(
 		...identity,
 		turnId: session.turnId,
 		turnMetadataJson,
-		clientMetadata: {
-			[OPENAI_HEADERS.INSTALLATION_ID]: identity.installationId,
-			session_id: identity.sessionId,
-			thread_id: identity.threadId,
-			[OPENAI_HEADERS.WINDOW_ID]: identity.windowId,
-			turn_id: session.turnId,
-			[OPENAI_HEADERS.TURN_METADATA]: turnMetadataJson,
-		},
+		clientMetadata: (() => {
+			const clientMetadata: Record<string, string> = {
+				[OPENAI_HEADERS.INSTALLATION_ID]: identity.installationId,
+				session_id: identity.sessionId,
+				thread_id: identity.threadId,
+				[OPENAI_HEADERS.WINDOW_ID]: identity.windowId,
+				turn_id: session.turnId,
+			};
+			// Both projections, mirroring codex-rs `CodexResponsesMetadata::to_client_metadata`:
+			// the flat key above/below AND the field inside the turn-metadata JSON.
+			if (parentTurnId) clientMetadata.parent_turn_id = parentTurnId;
+			clientMetadata[OPENAI_HEADERS.TURN_METADATA] = turnMetadataJson;
+			return clientMetadata;
+		})(),
 	};
 }
 
@@ -666,6 +698,7 @@ export function createOpenAICodexCompatibilityMetadata(
 		startNewTurn,
 		turnStartedAtUnixMs: options.turnStartedAtUnixMs ?? (startNewTurn || !session.turnId ? Date.now() : undefined),
 		clientMetadata: options.clientMetadata,
+		parentTurnId: options.parentTurnId,
 		compaction: options.compaction,
 	});
 	const headers = new Headers();
@@ -1378,7 +1411,7 @@ async function buildCodexRequestContext(
 	const accountId = getCodexAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
-	const promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+	const promptCacheKey = getOpenAIPromptCacheKey(options);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
 	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
@@ -1440,6 +1473,7 @@ async function buildCodexRequestContext(
 				: undefined
 			: getCodexTurnStartedAtUnixMs(context),
 		clientMetadata: transformedBody.client_metadata,
+		parentTurnId: options?.parentTurnId,
 		compaction,
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
@@ -1497,7 +1531,7 @@ export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
-	promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+	promptCacheKey = getOpenAIPromptCacheKey(options),
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
@@ -2039,6 +2073,12 @@ class CodexStreamProcessor {
 				this.#handleResponseCompleted(rawEvent);
 				return;
 			case "response.metadata":
+				// The WebSocket transport has no per-response HTTP headers; codex-rs
+				// mirrors them into this event's `headers` and reads
+				// `x-codex-turn-state` from there (ResponsesStreamEvent::turn_state).
+				// Pick up the refresh so same-turn follow-ups echo the latest turn
+				// state on either transport.
+				updateCodexSessionMetadataFromHeaders(this.requestContext.websocketState, toCodexHeaders(rawEvent.headers));
 				this.#reportModerationMetadata(rawEvent);
 				return;
 			case "error":
@@ -2180,6 +2220,7 @@ class CodexStreamProcessor {
 		const rawItem = rawEvent.item;
 		if (!rawItem || typeof rawItem !== "object") return;
 		const item = structuredCloneJSON(rawItem) as CodexEventItem;
+		if (item.type === "image_generation_call" && item.result) item.status = "completed";
 		runtime.nativeOutputItems.push(item as unknown as Record<string, unknown>);
 
 		// Match the finalization to the OPEN ITEM that started this block, not the
@@ -2191,6 +2232,12 @@ class CodexStreamProcessor {
 		const entry = (itemId ? runtime.openItems.get(itemId) : null) ?? runtime.openItemForEvent(rawEvent);
 		const block = entry?.block ?? null;
 		const contentIndex = entry?.contentIndex ?? output.content.length - 1;
+
+		if (item.type === "image_generation_call" && item.result) {
+			appendResponsesImageResult(output, stream, item.result);
+			runtime.closeOpenItem(entry);
+			return;
+		}
 
 		if (item.type === "reasoning" && block?.type === "thinking") {
 			this.#flushSummaryDeltas(entry);
@@ -2296,12 +2343,15 @@ class CodexStreamProcessor {
 				// took for this attempt and nothing mutates it; a retry replaces it
 				// with a fresh one. Adopting it saves a second full clone per turn.
 				state.lastRequest = runtime.requestBodyForState;
-				if (responseId) {
+				const replayableResponseItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+					structuredCloneJSON(runtime.nativeOutputItems),
+				);
+				if (responseId && replayableResponseItems) {
 					state.lastResponseId = responseId;
-					state.lastResponseItems = stripInputItemIds(structuredCloneJSON(runtime.nativeOutputItems));
+					state.lastResponseItems = replayableResponseItems;
 					state.canAppend = rawEvent.type === "response.done" || rawEvent.type === "response.completed";
 				} else {
-					// Without a response id the append baseline cannot be trusted.
+					// Without both a response id and replayable output, the append baseline cannot be trusted.
 					state.canAppend = false;
 				}
 			}
@@ -3112,14 +3162,6 @@ export function getOpenAICodexTransportDetails(
 		hasTurnState: state?.turnState !== undefined,
 		lastFallbackAt: state?.lastFallbackAt,
 	};
-}
-
-function stripInputItemIds(items: Array<Record<string, unknown>>): InputItem[] {
-	return items.map(item => {
-		if (item.id == null) return item as InputItem;
-		const { id: _id, ...rest } = item;
-		return rest as InputItem;
-	});
 }
 
 /**
@@ -4292,7 +4334,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						customCallIds.add(maybe.call_id);
 					}
 				}
-				for (let hi = 0; hi < historyItems.length; hi++) messages.push(historyItems[hi]!);
+				const replayItems = isHarmonyDialectModel(model) ? escapeReplayedClientText(historyItems) : historyItems;
+				for (let hi = 0; hi < replayItems.length; hi++) messages.push(replayItems[hi]!);
 				msgIndex += 1;
 				continue;
 			}
@@ -4394,14 +4437,23 @@ function normalizeInputMessageContent(
 	model: Model<"openai-codex-responses">,
 	content: string | Array<TextContent | ImageContent | VideoContent>,
 ): ResponseInputContent[] {
+	// gpt-5.x codex rejects reserved Harmony control-token spellings in input
+	// data; escape the transport copy of untrusted user text so ordinary docs or
+	// grep results cannot poison the session (#6913). History is left untouched.
+	const escapeControlTokens = isHarmonyDialectModel(model);
 	if (typeof content === "string") {
 		if (!content || content.trim() === "") return [];
-		return [{ type: "input_text", text: content.toWellFormed() }];
+		const text = content.toWellFormed();
+		return [{ type: "input_text", text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text }];
 	}
 
 	return (
-		convertResponsesInputContent(content, model.input.includes("image"), model.compat.supportsImageDetailOriginal) ??
-		[]
+		convertResponsesInputContent(
+			content,
+			model.input.includes("image"),
+			model.compat.supportsImageDetailOriginal,
+			escapeControlTokens,
+		) ?? []
 	);
 }
 

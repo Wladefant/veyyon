@@ -574,6 +574,12 @@ async function findGeminiImageCredentials(
 	return null;
 }
 
+function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
+	if (!baseUrl) return true;
+	const lower = trimTrailingSlashes(baseUrl.toLowerCase());
+	return lower === CODEX_BASE_URL || lower.startsWith(`${CODEX_BASE_URL}/`);
+}
+
 async function findOpenAIHostedImageCredentials(
 	modelRegistry: ModelRegistry | undefined,
 	activeModel: Model | undefined,
@@ -582,6 +588,13 @@ async function findOpenAIHostedImageCredentials(
 	if (!modelRegistry || !isOpenAIHostedImageModel(activeModel)) return null;
 	const apiKey = await modelRegistry.getApiKey(activeModel, sessionId);
 	if (!isAuthenticated(apiKey)) return null;
+	if (
+		(activeModel.api === "openai-codex-responses" || activeModel.provider === "openai-codex") &&
+		isOfficialCodexApiUrl(getOpenAIBaseUrl(activeModel)) &&
+		!getCodexAccountId(apiKey)
+	) {
+		return null;
+	}
 	return {
 		provider: getOpenAIHostedImageProvider(activeModel),
 		apiKey,

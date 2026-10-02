@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
+	applyCodexResponsesLiteShape,
+	type CodexLiteShapedBody,
 	type InputItem,
 	type RequestBody,
+	resolveCodexResponsesLite,
 	transformRequestBody,
 } from "@veyyon/ai/providers/openai-codex/request-transformer";
 import {
@@ -1217,5 +1220,58 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		expect(JSON.parse(replayOnly?.thinkingSignature ?? "{}").id).toBe("rs_3");
 		const text = result.content.find(block => block.type === "text");
 		expect(text?.text).toBe("Hello");
+	});
+});
+
+describe("openai-codex responses lite overrides and shape", () => {
+	it("forces tool_choice to auto in applyCodexResponsesLiteShape", () => {
+		const body: CodexLiteShapedBody = {
+			instructions: "test instructions",
+			tools: [{ type: "function", name: "my_tool" }],
+			tool_choice: { type: "function", name: "my_tool" },
+			input: [],
+		};
+		applyCodexResponsesLiteShape(body);
+		expect(body.tool_choice).toBe("auto");
+		expect(body.instructions).toBeUndefined();
+		expect(body.tools).toBeUndefined();
+	});
+
+	it("honors PI_CODEX_RESPONSES_LITE environment variable", () => {
+		const model = createCodexModel("gpt-5.4");
+		const originalEnv = process.env.PI_CODEX_RESPONSES_LITE;
+		try {
+			process.env.PI_CODEX_RESPONSES_LITE = "1";
+			expect(resolveCodexResponsesLite(model)).toBe(true);
+
+			process.env.PI_CODEX_RESPONSES_LITE = "true";
+			expect(resolveCodexResponsesLite(model)).toBe(true);
+
+			process.env.PI_CODEX_RESPONSES_LITE = "0";
+			expect(resolveCodexResponsesLite(model)).toBe(false);
+
+			delete process.env.PI_CODEX_RESPONSES_LITE;
+			expect(resolveCodexResponsesLite(model)).toBe(false);
+
+			// Explicit requested parameter always wins
+			expect(resolveCodexResponsesLite(model, true)).toBe(true);
+			expect(resolveCodexResponsesLite(model, false)).toBe(false);
+		} finally {
+			if (originalEnv !== undefined) {
+				process.env.PI_CODEX_RESPONSES_LITE = originalEnv;
+			} else {
+				delete process.env.PI_CODEX_RESPONSES_LITE;
+			}
+		}
+	});
+
+	it("forces reasoning.context to all_turns when responsesLite is enabled", async () => {
+		const model = createCodexModel("gpt-5.4");
+		const body: RequestBody = { model: model.id, input: [] };
+		const transformed = await transformRequestBody(body, model, {
+			responsesLite: true,
+			reasoningEffort: "medium",
+		});
+		expect(transformed.reasoning?.context).toBe("all_turns");
 	});
 });
