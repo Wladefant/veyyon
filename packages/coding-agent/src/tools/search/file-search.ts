@@ -233,6 +233,11 @@ export async function executeFileSearch(
 			throw new ToolError("Limit must be a positive number");
 		}
 		const effectiveLimit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(requestedLimit)));
+		// A request above the hard cap is reduced; say so, so `limit=1000` does not read as "200 is all there is".
+		const clampNotice =
+			requestedLimit > MAX_LIMIT
+				? `Requested limit ${requestedLimit} clamped to the max of ${MAX_LIMIT}`
+				: undefined;
 		const includeHidden = hidden ?? true;
 		const useGitignore = gitignore ?? true;
 		const timeoutMs = options?.timeoutMs ?? DEFAULT_GLOB_TIMEOUT_MS;
@@ -284,6 +289,7 @@ export async function executeFileSearch(
 			const baseOutput = formatGroupedPaths(limited);
 			const trailingNotes: string[] = [];
 			if (notice) trailingNotes.push(notice);
+			if (clampNotice) trailingNotes.push(clampNotice);
 			if (missingPathsNote) trailingNotes.push(missingPathsNote);
 			const rawOutput = trailingNotes.length > 0 ? `${baseOutput}\n\n${trailingNotes.join("\n")}` : baseOutput;
 			// Head-truncate at the file-search byte budget and save the full output
@@ -317,7 +323,14 @@ export async function executeFileSearch(
 				missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 			};
 
-			const resultBuilder = toolResult(details).text(output).limits({ resultLimit: limitMeta.resultLimit?.reached });
+			// Double the reached count up to the cap; at the cap no larger limit exists, so drop the advice
+			// rather than name a value that clamps straight back.
+			const reached = limitMeta.resultLimit?.reached;
+			const resultLimit =
+				reached === undefined
+					? undefined
+					: { reached, suggestion: reached < MAX_LIMIT ? Math.min(reached * 2, MAX_LIMIT) : null };
+			const resultBuilder = toolResult(details).text(output).limits({ resultLimit });
 			if (truncation.truncated) {
 				resultBuilder.truncation(truncation, { direction: "head" });
 			}
