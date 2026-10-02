@@ -559,14 +559,14 @@ async function resolveCodexDiscoveryAccounts(
 }
 function resolveCodexAccountFingerprint(authStorage: AuthStorage, fallbackKey?: string): string {
 	const accounts = authStorage.listOAuthAccounts("openai-codex");
-	if (accounts.length > 0) {
-		const identifiers = accounts.map(a => a.accountId ?? a.email ?? a.credentialId ?? String(a.position)).sort();
-		return Bun.hash(identifiers.join("\u0000")).toString(36);
+	const identifiers = accounts.map(a => a.accountId ?? a.email ?? a.credentialId ?? String(a.position)).sort();
+	if (
+		fallbackKey &&
+		!getOAuthCredentialsForProvider(authStorage, "openai-codex").some(c => c.access === fallbackKey)
+	) {
+		identifiers.push(`bearer:${Bun.hash(fallbackKey).toString(36)}`);
 	}
-	if (fallbackKey) {
-		return "bearer";
-	}
-	return "empty";
+	return identifiers.length > 0 ? Bun.hash(identifiers.join("\u0000")).toString(36) : "empty";
 }
 
 function mergeCompat<TBase extends object, TOverride extends object>(

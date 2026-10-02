@@ -56,9 +56,7 @@ describe("openaiCodexModelManagerOptions", () => {
 		globalThis.fetch = (async (_u: unknown, init?: RequestInit) => {
 			const id = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
 			requested.push(id);
-			const data =
-				id === "acc-1" ? [{ slug: "m-common" }, { slug: "m-1" }] : [{ slug: "m-common" }, { slug: "m-2" }];
-			return new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } });
+			return Response.json({ data: [{ slug: id === "acc-1" ? "m-1" : "m-2" }, { slug: "m-common" }] });
 		}) as unknown as typeof fetch;
 		const models = await options.fetchDynamicModels?.();
 		expect(requested).toEqual(["acc-1", "acc-2"]);
@@ -66,13 +64,14 @@ describe("openaiCodexModelManagerOptions", () => {
 	});
 
 	it("aborts discovery (returns null) when resolveAccounts returns null", async () => {
-		const options = openaiCodexModelManagerOptions({ resolveAccounts: async () => null });
 		let called = false;
 		globalThis.fetch = (async () => {
 			called = true;
 			return new Response("{}", { status: 200 });
 		}) as unknown as typeof fetch;
-		expect(await options.fetchDynamicModels?.()).toBeNull();
+		expect(
+			await openaiCodexModelManagerOptions({ resolveAccounts: async () => null }).fetchDynamicModels?.(),
+		).toBeNull();
 		expect(called).toBe(false);
 	});
 
@@ -83,19 +82,15 @@ describe("openaiCodexModelManagerOptions", () => {
 				{ accessToken: "tok-fail", accountId: "acc-fail" },
 			],
 		});
-		globalThis.fetch = (async (_u: unknown, init?: RequestInit) => {
-			if (new Headers(init?.headers).get("chatgpt-account-id") === "acc-ok") {
-				return new Response(JSON.stringify({ data: [{ slug: "ok" }] }), {
-					headers: { "content-type": "application/json" },
-				});
-			}
-			return new Response("Unauthorized", { status: 401 });
-		}) as unknown as typeof fetch;
+		globalThis.fetch = (async (_u: unknown, init?: RequestInit) =>
+			new Headers(init?.headers).get("chatgpt-account-id") === "acc-ok"
+				? Response.json({ data: [{ slug: "ok" }] })
+				: new Response("Unauthorized", { status: 401 })) as unknown as typeof fetch;
 		expect(await options.fetchDynamicModels?.()).toBeNull();
 	});
+
 	it("namespaces cache under union-v1 and isolates distinct account fingerprints", () => {
-		const def = openaiCodexModelManagerOptions();
-		expect(def.cacheProviderId).toBe("openai-codex:union-v1");
+		expect(openaiCodexModelManagerOptions().cacheProviderId).toBe("openai-codex:union-v1");
 		const a = openaiCodexModelManagerOptions({ accountFingerprint: "a" });
 		const b = openaiCodexModelManagerOptions({ accountFingerprint: "a\u0000b" });
 		expect(a.cacheProviderId).toBe("openai-codex:union-v1:a");

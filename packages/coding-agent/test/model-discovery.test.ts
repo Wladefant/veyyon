@@ -364,20 +364,6 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(configuredModel?.contextWindow).toBe(65_536);
 	});
 
-	test("Codex discovery falls back to a resolved non-OAuth token when no OAuth accounts exist", async () => {
-		authStorage.setRuntimeApiKey("openai-codex", "runtime-token");
-		let calls = 0;
-		const fetchMock: FetchImpl = async (_i, init) => {
-			calls++;
-			expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer runtime-token");
-			return Response.json({ models: [{ slug: "m-rt" }] });
-		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
-		await registry.refreshProvider("openai-codex", "online");
-		expect(calls).toBe(1);
-		expect(registry.find("openai-codex", "m-rt")).toBeDefined();
-	});
-
 	test("Codex discovery aborts (keeps bundled models) when any account credential fails to refresh", async () => {
 		authStorage.close();
 		authStorage = await AuthStorage.create(":memory:", {
@@ -427,6 +413,24 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(calls).toBe(3);
 		expect(registry.find("openai-codex", "m-a")).toBeDefined();
 		expect(registry.find("openai-codex", "m-b")).toBeDefined();
+	});
+
+	test("Codex discovery falls back to non-OAuth bearer token and invalidates cache when token switches", async () => {
+		authStorage.setRuntimeApiKey("openai-codex", "key-a");
+		let calls = 0;
+		const fetchMock: FetchImpl = async (_i, init) => {
+			calls++;
+			const key = new Headers(init?.headers).get("Authorization")?.replace("Bearer ", "");
+			return Response.json({ models: [{ slug: key === "key-a" ? "model-a" : "gpt-6-astra" }] });
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refreshProvider("openai-codex", "online");
+		expect(calls).toBe(1);
+		expect(registry.find("openai-codex", "model-a")).toBeDefined();
+		authStorage.setRuntimeApiKey("openai-codex", "key-b");
+		await registry.refreshProvider("openai-codex", "online-if-uncached");
+		expect(calls).toBe(2);
+		expect(registry.find("openai-codex", "gpt-6-astra")).toBeDefined();
 	});
 
 	test("auto-discovers ollama models without provider config", async () => {
