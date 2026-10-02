@@ -70,6 +70,7 @@ import type { AssistantMessageEventStream } from "../utils/event-stream";
 import type { CapturedHttpErrorResponse } from "../utils/http-inspector";
 import { getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
 import { getOpenRouterHeaders } from "../utils/openrouter-headers";
+import { VERCEL_AI_GATEWAY_REFERER, VERCEL_AI_GATEWAY_TITLE } from "../utils/vercel-headers";
 import { isForcedToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -237,6 +238,11 @@ export function resolveOpenAIRequestSetup(
 		}
 	}
 	Object.assign(headers, options.extraHeaders);
+	if (model.provider === "vercel-ai-gateway") {
+		// Vercel AI Gateway app attribution; caller/config headers take precedence.
+		setHeaderIfAbsent(headers, "http-referer", VERCEL_AI_GATEWAY_REFERER);
+		setHeaderIfAbsent(headers, "x-title", VERCEL_AI_GATEWAY_TITLE);
+	}
 	if (model.provider === "coreweave") {
 		applyCoreWeaveProjectHeader(headers);
 	}
