@@ -19,7 +19,10 @@ import { buildModelReferenceIndex, resolveModelReference } from "../src/identity
 import { resolveModelThinking } from "../src/model-thinking";
 import { applyCommandCodeContract } from "../src/provider-models/command-code";
 import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
-import { resolveWaferServerlessThinkingFormat } from "../src/provider-models/openai-compat";
+import {
+	applyXaiResponsesThinkingPolicy,
+	resolveWaferServerlessThinkingFormat,
+} from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
 import { normalizeModelCost } from "../src/utils";
 import { isVariantCollapsedSpec } from "../src/variant-collapse";
@@ -57,6 +60,12 @@ const CODEX_GPT_5_4_PRIORITY_BY_VARIANT: Partial<Record<OpenAIVariant, number>> 
 	base: 0,
 	mini: 1,
 	nano: 2,
+};
+
+const CODEX_GPT_5_6_372K_MODEL_IDS: Record<string, true> = {
+	"gpt-5.6-luna": true,
+	"gpt-5.6-sol": true,
+	"gpt-5.6-terra": true,
 };
 
 const COPILOT_GENERATED_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
@@ -225,6 +234,10 @@ export function applyCanonicalLimitFallback(models: ModelSpec<Api>[]): void {
 }
 
 function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
+	if (model.provider === "xai" && model.api === "openai-responses") {
+		const updated = applyXaiResponsesThinkingPolicy(model as ModelSpec<"openai-responses">);
+		model.compat = updated.compat;
+	}
 	const copilotLimits = model.provider === "github-copilot" ? COPILOT_GENERATED_LIMITS[model.id] : undefined;
 	if (copilotLimits) {
 		model.contextWindow = copilotLimits.contextWindow;
@@ -409,7 +422,7 @@ function applyOpenAICatalogPolicy(model: ModelSpec<Api>, parsedModel: OpenAIMode
 	// discovery under-reports it — omitting the field for some accounts and
 	// actively returning 272000 for others (#5705, #6259). Pin the true 372K
 	// input window on the bundled catalog; discovery enforces the same floor.
-	if (model.api === "openai-codex-responses" && semverEqual(parsedModel.version, "5.6")) {
+	if (model.api === "openai-codex-responses" && CODEX_GPT_5_6_372K_MODEL_IDS[model.id]) {
 		model.contextWindow = 372000;
 	}
 }

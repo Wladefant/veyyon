@@ -81,11 +81,13 @@ import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { conversationIdForOpenCode, getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
+import { getVercelAiGatewayHeaders } from "../utils/vercel-headers";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
+import { isForcedToolChoice } from "../utils/tool-choice";
 import {
 	AnthropicApiError,
 	AnthropicConnectionTimeoutError,
@@ -148,6 +150,22 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 		}
 	}
 	return result.join(",");
+}
+
+/**
+ * Merge an extra Anthropic beta into a caller-provided `anthropic-beta` header,
+ * preserving the caller's key casing and deduping the tokens. Returns a
+ * single-entry header record for a per-request `headers` override — used to
+ * attach a required beta to injected SDK clients that bypass the client-level
+ * beta construction.
+ */
+function mergeAnthropicBetaHeader(callerHeaders: Record<string, string>, beta: string): Record<string, string> {
+	for (const key in callerHeaders) {
+		if (key.toLowerCase() === "anthropic-beta") {
+			return { [key]: buildBetaHeader(normalizeExtraBetas(callerHeaders[key]), [beta]) };
+		}
+	}
+	return { "anthropic-beta": beta };
 }
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
@@ -2644,11 +2662,19 @@ function buildAnthropicStreamBetas(
 	if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
 		extraBetas.push(taskBudgetBeta);
 	}
+	// `output_config.effort` ships on thinking-on requests, explicit
+	// thinking-off adaptive pins, and forced-tool adaptive pins. The beta
+	// must accompany the field even when direct streamAnthropic callers omit
+	// thinkingEnabled (#6589). MiniMax uses `thinking.type:"adaptive"` itself
+	// as the control surface, so the sentinel "adaptive" value intentionally
+	// sends no output_config. Skip Vertex rawPredict: that adapter needs betas
+	// in the body (`anthropic_beta`), not as an `anthropic-beta` HTTP header,
+	// so the effort field is dropped from the body there too (see buildParams)
+	// and advertising the beta would only earn a 400 (#5614).
 	const sendsAdaptiveEffortPin =
-		options?.thinkingEnabled === false &&
-		model.thinking?.mode === "anthropic-adaptive" &&
-		!model.compat.disableAdaptiveThinking &&
-		!usesAdaptiveThinkingTagOnly(model);
+		isAdaptiveOnlyThinking(model) &&
+		(options?.thinkingEnabled === false ||
+			(model.compat.supportsForcedToolChoice && isForcedToolChoice(options?.toolChoice)));
 	if (
 		model.reasoning &&
 		((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
@@ -2796,12 +2822,12 @@ function createAnthropicStreamRequest(
 	isOAuthToken: boolean,
 	requestSignal: AbortSignal,
 	requestTimeoutMs: number | undefined,
-	umansGatewayWebSearchHeader: Record<string, string> | undefined,
+	perRequestHeaders: Record<string, string> | undefined,
 ): unknown {
 	const requestOptions = {
 		...createSdkStreamRequestOptions(requestSignal, requestTimeoutMs),
 		maxRetries: 0,
-		...(umansGatewayWebSearchHeader ? { headers: umansGatewayWebSearchHeader } : {}),
+		...(perRequestHeaders ? { headers: perRequestHeaders } : {}),
 		// An injected SDK client serializes `params` itself; only this package's client takes the bytes.
 		...(client instanceof AnthropicMessagesClient ? { serializedBody } : {}),
 	};
@@ -2971,6 +2997,23 @@ const streamAnthropicOnce = (
 				// to zero even when no watchdog timeout is configured (the helper only
 				// pins it alongside a timeout; a client retry budget of 5 would otherwise
 				// multiply with PROVIDER_MAX_RETRIES into up to 66 wire attempts).
+				// Injected SDK clients (`options.client`) bypass the client-level
+				// `anthropic-beta` construction below, so any `output_config.effort` the
+				// body carries — the adaptive-only thinking-off / forced-tool pins and
+				// enabled-effort turns alike — would reach Anthropic without the required
+				// `effort-2025-11-24` beta and 400. `create()` accepts per-request headers
+				// (already used for the gateway web-search header), so merge the beta with
+				// any caller-provided `anthropic-beta` (deduped) and attach it there. Vertex
+				// never carries the effort field (dropped in buildParams), so it is unaffected.
+				const injectedClientEffortHeaders =
+					options?.client !== undefined &&
+					(params.output_config as AnthropicOutputConfig | undefined)?.effort !== undefined
+						? mergeAnthropicBetaHeader(mergedCallerHeaders, effortBeta)
+						: undefined;
+				const perRequestHeaders =
+					umansGatewayWebSearchHeader || injectedClientEffortHeaders
+						? { ...umansGatewayWebSearchHeader, ...injectedClientEffortHeaders }
+						: undefined;
 				const anthropicRequest = createAnthropicStreamRequest(
 					client,
 					params,
@@ -2978,7 +3021,7 @@ const streamAnthropicOnce = (
 					isOAuthToken,
 					requestSignal,
 					requestTimeoutMs,
-					umansGatewayWebSearchHeader,
+					perRequestHeaders,
 				);
 				// Created before the request so the catch below reads what this attempt
 				// already streamed: the event loop can throw mid-stream, and a retry
@@ -3307,6 +3350,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	}
 
 	// First in the merge below, so a caller-supplied header still wins.
+	const vercelHeaders = model.provider === "vercel-ai-gateway" ? getVercelAiGatewayHeaders() : undefined;
 	const openCodeHeaders = isOpenCodeProvider(model.provider) ? getOpenCodeHeaders(conversationId) : undefined;
 	const defaultHeaders = buildAnthropicHeaders({
 		apiKey,
@@ -3315,6 +3359,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		extraBetas: betaFeatures,
 		stream,
 		modelHeaders: mergeHeaders(
+			vercelHeaders,
 			openCodeHeaders,
 			model.headers,
 			foundryCustomHeaders,
@@ -3423,8 +3468,10 @@ function disableThinkingIfToolChoiceForced(
 	// omission defaults to adaptive thinking ON, so a forced-tool turn would still
 	// reason instead of calling the tool (#6589). Pin the lowest adaptive effort
 	// instead of dropping it, mirroring the disable branch in buildParams. Vertex
-	// rawPredict can't carry the effort beta as an HTTP header, so it keeps the
-	// delete behavior (the field is stripped there anyway; see buildParams).
+	// rawPredict is the sole exception: it can only carry the effort beta in the
+	// body (dropped there too, see buildParams), so it keeps the delete behavior.
+	// The effort beta itself is attached at the request site — including per-request
+	// for injected SDK clients that bypass client-level beta construction.
 	if (isAdaptiveOnlyThinking(model) && model.provider !== "google-vertex") {
 		const outputConfig = (params.output_config as AnthropicOutputConfig | undefined) ?? {};
 		outputConfig.effort = "low";

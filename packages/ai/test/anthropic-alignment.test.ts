@@ -22,6 +22,7 @@ import {
 } from "@veyyon/ai/providers/anthropic";
 import { getEnvApiKey, streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
+import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { removeSyncWithRetries } from "@veyyon/utils";
@@ -453,6 +454,106 @@ describe("Anthropic request fingerprint alignment", () => {
 		// both fields need their betas on API-key requests too.
 		expect(capturedBeta).toContain("effort-2025-11-24");
 		expect(capturedBeta).toContain("mid-conversation-system-2026-04-07");
+	});
+
+	it("adds the effort beta when a direct forced tool choice creates an adaptive effort pin", async () => {
+		let capturedBeta: string | undefined;
+		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedBeta = (init?.headers as Record<string, string> | undefined)?.["anthropic-beta"];
+			return new Response(
+				JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
+				{ status: 400, headers: { "Content-Type": "application/json" } },
+			);
+		}) as typeof fetch;
+
+		const adaptiveModel: Model<"anthropic-messages"> = buildModel({
+			...ANTHROPIC_MODEL_SPEC,
+			id: "claude-4-7-opus-20260408",
+			name: "Claude Opus 4.7",
+			reasoning: true,
+			compat: { ...ANTHROPIC_MODEL_SPEC.compat, supportsForcedToolChoice: true },
+			thinking: {
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+		});
+
+		await streamAnthropic(
+			adaptiveModel,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools: [
+					{
+						name: "run_check",
+						description: "run check",
+						parameters: { type: "object", properties: {} },
+					},
+				],
+			},
+			{ apiKey: "sk-ant-api-test", toolChoice: "any", fetch: fetchMock },
+		).result();
+
+		expect(capturedBeta).toContain("effort-2025-11-24");
+	});
+
+	it("attaches the effort beta per-request for injected clients on forced tool choice", async () => {
+		let capturedBetaHeader: string | undefined;
+		let capturedEffort: string | undefined;
+
+		const fakeClient = {
+			messages: {
+				create: (params: { output_config?: { effort?: string } }, options?: { headers?: Record<string, string> }) => {
+					capturedEffort = params?.output_config?.effort;
+					capturedBetaHeader = options?.headers?.["anthropic-beta"];
+					const response = new Response(null, { status: 200, headers: { "request-id": "req_mock" } });
+					const stream = (async function* () {
+						yield { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 1 } } };
+						yield { type: "content_block_start", index: 0, content_block: { type: "text", text: "done" } };
+						yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } };
+						yield { type: "content_block_stop", index: 0 };
+						yield { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } };
+						yield { type: "message_stop" };
+					})();
+					return {
+						async withResponse() {
+							return { data: stream, response, request_id: "req_mock" };
+						},
+					};
+				},
+			},
+		} as unknown as AnthropicMessagesClientLike;
+
+		const adaptiveModel: Model<"anthropic-messages"> = buildModel({
+			...ANTHROPIC_MODEL_SPEC,
+			id: "claude-4-7-opus-20260408",
+			name: "Claude Opus 4.7",
+			reasoning: true,
+			compat: { ...ANTHROPIC_MODEL_SPEC.compat, supportsForcedToolChoice: true },
+			thinking: {
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+		});
+
+		await streamAnthropic(
+			adaptiveModel,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				tools: [
+					{
+						name: "run_check",
+						description: "run check",
+						parameters: { type: "object", properties: {} },
+					},
+				],
+			},
+			{ apiKey: "sk-ant-api-test", client: fakeClient, toolChoice: "any" },
+		).result();
+
+		expect(capturedEffort).toBe("low");
+		expect(capturedBetaHeader).toContain("effort-2025-11-24");
 	});
 
 	it("adds the context-management beta to API-key thinking requests", async () => {

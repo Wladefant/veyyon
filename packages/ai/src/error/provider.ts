@@ -9,6 +9,8 @@ export type ProviderResponseErrorKind =
 	| "output"
 	/** Response body was empty/missing when content was required. */
 	| "empty-body"
+	/** Response completed without actionable output (for example, thoughts only). */
+	| "empty-output"
 	/** Malformed wire envelope (unexpected message ordering / shape). */
 	| "envelope"
 	/** Content was blocked by a provider safety filter. */
@@ -43,6 +45,7 @@ export interface ProviderResponseErrorOptions {
 export const PROVIDER_RESPONSE_RETRYABLE: Record<ProviderResponseErrorKind, boolean> = {
 	"incomplete-stream": true,
 	"empty-body": true,
+	"empty-output": true,
 	envelope: false,
 	output: false,
 	"content-blocked": false,
@@ -92,6 +95,8 @@ export class ProviderResponseError extends Error {
 		this.kind = options.kind ?? "output";
 		// A safety filter block is terminal and intentionally non-retryable.
 		if (this.kind === "content-blocked") attach(this, create(Flag.ContentBlocked));
+		else if (this.kind === "empty-body" || this.kind === "empty-output")
+			attach(this, create(Flag.Transient, Flag.EmptyResponse));
 		else if (PROVIDER_RESPONSE_RETRYABLE[this.kind]) attach(this, create(Flag.Transient));
 	}
 }

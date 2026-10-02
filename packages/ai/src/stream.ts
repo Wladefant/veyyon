@@ -1618,24 +1618,37 @@ function anthropicMessagesOptions(mapping: OptionsMapping): OptionsForApi<"anthr
 		};
 	}
 	if (ANTHROPIC_USE_INTERLEAVED_THINKING) {
-		return {
-			...base,
-			maxTokens: maxTokensWithThinking,
-			requestModelId: selection.wireModelId,
-			thinkingEnabled: true,
-			thinkingBudgetTokens: thinkingBudget,
-			effort,
-			toolChoice,
-			thinkingDisplay,
-			serviceTier: options.serviceTier,
-		};
+		if (
+			model.maxTokens !== null &&
+			model.maxTokens !== undefined &&
+			model.maxTokens < thinkingBudget + OUTPUT_FALLBACK_BUFFER
+		) {
+			thinkingBudget = model.maxTokens - OUTPUT_FALLBACK_BUFFER;
+		}
+		if (thinkingBudget >= ANTHROPIC_THINKING_BUDGETS.minimal) {
+			return {
+				...base,
+				maxTokens: maxTokensWithThinking,
+				requestModelId: selection.wireModelId,
+				thinkingEnabled: true,
+				thinkingBudgetTokens: thinkingBudget,
+				effort,
+				toolChoice,
+				thinkingDisplay,
+				serviceTier: options.serviceTier,
+			};
+		}
 	}
 
 	// Caller's maxTokens is desired output, so add thinking budget on top. With no caller/model cap, use a finite total fallback.
 	const maxTokens = maxTokensWithThinkingBudget(base.maxTokens, model.maxTokens, thinkingBudget);
-	// If not enough room for thinking + output, reduce thinking budget; too little left disables thinking.
-	if (maxTokens <= thinkingBudget) thinkingBudget = maxTokens - MIN_OUTPUT_TOKENS;
-	if (thinkingBudget <= 0) return anthropicThinkingOff(mapping);
+	// Keep the provider's output buffer after thinking, reducing the
+	// budget before its wire-level clamp could fall below the API minimum.
+	if (maxTokens < thinkingBudget + OUTPUT_FALLBACK_BUFFER) {
+		thinkingBudget = maxTokens - OUTPUT_FALLBACK_BUFFER;
+	}
+	// If thinking budget is too low, disable thinking
+	if (thinkingBudget < ANTHROPIC_THINKING_BUDGETS.minimal) return anthropicThinkingOff(mapping);
 	return {
 		...base,
 		maxTokens,
