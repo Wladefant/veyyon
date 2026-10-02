@@ -22,11 +22,11 @@ import {
 } from "@veyyon/ai/providers/anthropic";
 import { getEnvApiKey, streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
-import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type as arkType } from "arktype";
+import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
 import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
@@ -357,7 +357,13 @@ describe("Anthropic request fingerprint alignment", () => {
 				messages: Array<{ content: Array<{ cache_control?: unknown }> }>;
 			};
 			expect(payload.system.map(block => block.cache_control != null)).toEqual([
-				false, false, true, false, true, true, ...suffix.map(() => false),
+				false,
+				false,
+				true,
+				false,
+				true,
+				true,
+				...suffix.map(() => false),
 			]);
 			expect(payload.system[2].text).toBe("Shared harness");
 			expect(payload.messages[0].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
@@ -372,20 +378,32 @@ describe("Anthropic request fingerprint alignment", () => {
 				messages: [
 					{ role: "user", content: "Earlier", timestamp: 0 },
 					{
-						role: "assistant", content: [{ type: "text", text: "Reply" }],
-						api: "anthropic-messages", provider: "anthropic", model: ANTHROPIC_MODEL.id,
-						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-						stopReason: "stop", timestamp: 0,
+						role: "assistant",
+						content: [{ type: "text", text: "Reply" }],
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: ANTHROPIC_MODEL.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: 0,
 					},
 					{ role: "user", content: "Newest", timestamp: 0 },
 				],
 			},
 			{ isOAuth: false },
 		)) as { messages: Array<{ content: Array<{ cache_control?: unknown }> | string }> };
-		expect(payload.messages.map(message => Array.isArray(message.content) && message.content.some(block => block.cache_control != null))).toEqual([
-			false, false, true,
-		]);
+		expect(
+			payload.messages.map(
+				message => Array.isArray(message.content) && message.content.some(block => block.cache_control != null),
+			),
+		).toEqual([false, false, true]);
 	});
 
 	it("caches tool-result-only user messages in OAuth request payloads", async () => {
@@ -586,12 +604,18 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		const fakeClient = {
 			messages: {
-				create: (params: { output_config?: { effort?: string } }, options?: { headers?: Record<string, string> }) => {
+				create: (
+					params: { output_config?: { effort?: string } },
+					options?: { headers?: Record<string, string> },
+				) => {
 					capturedEffort = params?.output_config?.effort;
 					capturedBetaHeader = options?.headers?.["anthropic-beta"];
 					const response = new Response(null, { status: 200, headers: { "request-id": "req_mock" } });
 					const stream = (async function* () {
-						yield { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 1 } } };
+						yield {
+							type: "message_start",
+							message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 1 } },
+						};
 						yield { type: "content_block_start", index: 0, content_block: { type: "text", text: "done" } };
 						yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } };
 						yield { type: "content_block_stop", index: 0 };
