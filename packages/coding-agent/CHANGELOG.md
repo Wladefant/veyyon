@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- In-memory file read results now constrain context expansion to content lines so the empty trailing newline anchor line is not exposed as context ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e49f8f4fb27c9fb73dc5e1e2d019388513672101).
 - Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed HTML session exports overflowing the browser call stack when rendering a valid, deeply nested conversation tree ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
