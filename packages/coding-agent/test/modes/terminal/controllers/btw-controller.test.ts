@@ -301,10 +301,10 @@ describe("BtwController", () => {
 		expect(controller.canBranch()).toBe(false);
 		expect(controller.handlesBranchKey()).toBe(true);
 		expect(await controller.handleBranch()).toBe(false);
-		expect(ctx.handleBtwBranch).not.toHaveBeenCalled();
-		expect(ctx.showStatus).toHaveBeenCalledWith("/btw branch unavailable: the session changed since /btw started", {
-			dim: true,
-		});
+		expect(ctx.handleBtwBranch.mock.calls).toEqual([]);
+		expect(ctx.showStatus.mock.calls).toEqual([
+			["/btw branch unavailable: the session changed since /btw started", { dim: true }],
+		]);
 	});
 
 	it("refuses a completed branch while the main turn is streaming", async () => {
@@ -324,9 +324,7 @@ describe("BtwController", () => {
 		const panel = btwContainer.children[0];
 		expect(Bun.stripANSI(panel?.render(120).join("\n") ?? "")).not.toContain("b branch to chat");
 		expect(await controller.handleBranch()).toBe(false);
-		expect(ctx.showStatus).toHaveBeenCalledWith("/btw branch unavailable: a turn is still running", {
-			dim: true,
-		});
+		expect(ctx.showStatus.mock.calls).toEqual([["/btw branch unavailable: a turn is still running", { dim: true }]]);
 	});
 
 	it("does not allow branch after a complete empty reply", async () => {
@@ -406,7 +404,7 @@ describe("BtwController", () => {
 		expect(Bun.stripANSI(panel?.render(120).join("\n") ?? "")).toContain("Branching to chat");
 		expect(controller.handleEscape()).toBe(true);
 		expect(btwContainer.children).toHaveLength(1);
-		expect(ctx.showStatus).toHaveBeenCalledWith("/btw branch is in progress", { dim: true });
+		expect(ctx.showStatus.mock.calls).toEqual([["/btw branch is in progress", { dim: true }]]);
 
 		branch.resolve();
 		await branchPromise;

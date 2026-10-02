@@ -409,7 +409,7 @@ describe("InputController keybinding setup", () => {
 		const result = listener?.("b");
 
 		expect(result).toEqual({ consume: true });
-		expect(spies.handleBtwBranchKey).toHaveBeenCalledTimes(1);
+		expect(spies.handleBtwBranchKey.mock.calls).toHaveLength(1);
 	});
 
 	it("lets b reach the composer before an active /btw answer is branchable", async () => {
@@ -471,7 +471,7 @@ describe("InputController keybinding setup", () => {
 			expect(controller.hasActiveRequest()).toBe(true);
 
 			expect(press("b")).toBeUndefined();
-			expect(handleBtwBranch).not.toHaveBeenCalled();
+			expect(handleBtwBranch.mock.calls).toEqual([]);
 		});
 
 		it("consumes b and promotes the answer once the /btw answer is complete", async () => {
@@ -489,7 +489,7 @@ describe("InputController keybinding setup", () => {
 
 			expect(press("b")).toEqual({ consume: true });
 			await Promise.resolve();
-			expect(handleBtwBranch).toHaveBeenCalledTimes(1);
+			expect(handleBtwBranch.mock.calls).toHaveLength(1);
 		});
 	});
 
