@@ -20,23 +20,39 @@ const migratedSessionRoots = new Set<string>();
  * Best effort: callers decide whether migration failures should surface.
  */
 function migrateSessionDirPath(oldPath: string, newPath: string): void {
-	const existing = fs.statSync(newPath, { throwIfNoEntry: false });
-	if (existing?.isDirectory()) {
-		for (const file of fs.readdirSync(oldPath)) {
-			const src = path.join(oldPath, file);
-			const dst = path.join(newPath, file);
-			if (!fs.existsSync(dst)) {
-				fs.renameSync(src, dst);
+	try {
+		fs.mkdirSync(newPath);
+	} catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+	}
+	if (!fs.lstatSync(newPath).isDirectory()) {
+		throw new Error(`Session migration target is not a directory: ${newPath}`);
+	}
+	for (const file of fs.readdirSync(oldPath)) {
+		const src = path.join(oldPath, file);
+		const dst = path.join(newPath, file);
+		if (fs.lstatSync(src).isDirectory()) {
+			migrateSessionDirPath(src, dst);
+			continue;
+		}
+		try {
+			fs.linkSync(src, dst);
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "EEXIST") continue;
+			if (!(error instanceof Error && "code" in error && (error.code === "EXDEV" || error.code === "EPERM"))) {
+				throw error;
+			}
+			try {
+				fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
+			} catch (copyError) {
+				if (copyError instanceof Error && "code" in copyError && copyError.code === "EEXIST") continue;
+				throw copyError;
 			}
 		}
-		// Keep colliding stale copies rather than silently deleting a different transcript.
-		if (fs.readdirSync(oldPath).length === 0) fs.rmdirSync(oldPath);
-		return;
+		// Both publication paths fail atomically if another writer owns the destination.
+		fs.unlinkSync(src);
 	}
-	if (existing) {
-		fs.rmSync(newPath, { recursive: true, force: true });
-	}
-	fs.renameSync(oldPath, newPath);
+	if (fs.readdirSync(oldPath).length === 0) fs.rmdirSync(oldPath);
 }
 
 function encodeLegacyAbsoluteSessionDirName(cwd: string): string {
@@ -164,6 +180,8 @@ export function computeDefaultSessionDir(
 	const { encodedDirName, hashedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
 	migrateHomeSessionDirs(sessionsRoot);
 	const sessionDir = path.join(sessionsRoot, encodedDirName);
+	const target = fs.lstatSync(sessionDir, { throwIfNoEntry: false });
+	if (target && !target.isDirectory()) throw new Error(`Session directory is not a directory: ${sessionDir}`);
 	migrateLegacyAbsoluteSessionDir(resolvedCwd, sessionDir, sessionsRoot);
 	const hashedDir = path.join(sessionsRoot, hashedDirName);
 	if (hashedDir !== sessionDir && fs.existsSync(hashedDir)) {
