@@ -22,6 +22,7 @@
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
+- Leaving a fullscreen overlay such as `/settings` no longer flashes the alternate screen on terminals that re-report their size when the alternate buffer toggles: a height-only resize repaints the normal screen in place, and only a width change borrows the alternate screen ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 

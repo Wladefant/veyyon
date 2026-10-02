@@ -486,6 +486,40 @@ describe("non-multiplexer resize viewport fast path", () => {
 			}
 		});
 	});
+
+	it("repaints a height-only resize on the normal screen without borrowing the alternate screen", async () => {
+		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+
+				// A height-only SIGWINCH reflows nothing in the normal buffer, so the
+				// fast path repaints it in place. Leaving a fullscreen overlay fires
+				// exactly this echo on terminals that re-report their size when the
+				// alt buffer toggles; borrowing the alt screen for it flashes one
+				// frame of a different buffer (the settings-exit flicker).
+				term.resize(40, 8);
+
+				expect(tui.resizeViewportActive).toBe(true);
+				expect(tui.resizeViewportPaints).toBeGreaterThan(0);
+				const drag = writes.join("");
+				expect(drag).not.toContain(ALT_SCREEN_ENTER);
+				expect(drag).not.toContain("\x1b[2J");
+				expect(drag).not.toContain("\x1b[3J");
+				expect(visible(term).at(-1)).toBe("b14-y");
+
+				await scheduler.flushAll(term);
+				expect(tui.resizeViewportActive).toBe(false);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_EXIT);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 });
 
 /**
