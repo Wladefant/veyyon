@@ -6,7 +6,7 @@ import { getLogsDir } from "@veyyon/utils/dirs";
 import { isCompiledBinary } from "@veyyon/utils/env";
 import * as logger from "@veyyon/utils/logger";
 import type { SessionHeartbeat, SessionPhase } from "@veyyon/utils/session-heartbeat";
-import { resolveCliArgv } from "../cli-commands";
+import { resolveCliArgv } from "../../cli-commands";
 
 export const RECURSION_MARKER_ENV = "VEYYON_SUPERVISED";
 

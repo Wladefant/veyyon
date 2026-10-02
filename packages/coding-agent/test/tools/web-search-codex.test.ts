@@ -207,6 +207,17 @@ describe("searchCodex model selection", () => {
 			return true;
 		},
 	} as unknown as AuthStorage;
+	const emailOnlyAuthStorage = {
+		async getOAuthAccess() {
+			return {
+				accessToken: "email-only-access-token",
+				email: "user@example.com",
+			};
+		},
+		hasOAuth() {
+			return true;
+		},
+	} as unknown as AuthStorage;
 	let capturedRequest: CapturedRequest | null = null;
 
 	function makeSearchParams(query: string, fetch?: FetchImpl): SearchParams {
@@ -254,6 +265,48 @@ describe("searchCodex model selection", () => {
 		expect(capturedRequest?.body?.model).toBe("gpt-5.6-luna");
 		expect(result.model).toBe("gpt-5.6-luna");
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
+	});
+
+	it("uses email-only OAuth credentials without an account header", async () => {
+		const result = await searchCodex({
+			...makeSearchParams("email-only Codex search", mockCodexFetch("gpt-5.6-luna")),
+			authStorage: emailOnlyAuthStorage,
+		});
+
+		const headers = new Headers(capturedRequest?.headers);
+		expect(headers.get("authorization")).toBe("Bearer email-only-access-token");
+		expect(headers.has("chatgpt-account-id")).toBe(false);
+		expect(result.answer).toBe("Codex answer");
+	});
+
+	it("includes chatgpt-account-id header when accountId is present", async () => {
+		const result = await searchCodex({
+			...makeSearchParams("codex search with account id", mockCodexFetch("gpt-5.6-luna")),
+			authStorage: fakeAuthStorage,
+		});
+
+		const headers = new Headers(capturedRequest?.headers);
+		expect(headers.get("authorization")).toBe("Bearer test-access-token");
+		expect(headers.get("chatgpt-account-id")).toBe("acct-test");
+		expect(result.answer).toBe("Codex answer");
+	});
+
+	it("throws when no Codex OAuth credentials are found", async () => {
+		const emptyAuthStorage = {
+			async getOAuthAccess() {
+				return null;
+			},
+			hasOAuth() {
+				return false;
+			},
+		} as unknown as AuthStorage;
+
+		await expect(
+			searchCodex({
+				...makeSearchParams("unauthenticated search", mockCodexFetch("gpt-5.6-luna")),
+				authStorage: emptyAuthStorage,
+			}),
+		).rejects.toThrow("No Codex OAuth credentials found");
 	});
 
 	it("falls back to the default model when VEYYON_CODEX_WEB_SEARCH_MODEL is blank", async () => {

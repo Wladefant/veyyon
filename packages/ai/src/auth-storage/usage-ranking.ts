@@ -39,6 +39,7 @@ export type UsageRankingResult<T extends AuthCredential> = UsageCandidate<T> & {
 export type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> & {
 	blocked: boolean;
 	blockedUntil?: number;
+	usageMeasured: boolean;
 	hasPriorityBoost: boolean;
 	allowanceSpent?: boolean;
 	planPriority: number;
@@ -124,8 +125,8 @@ function compareUsageRankedCandidatePriority(
 	// scores are only comparable between measured windows, and the
 	// clockless headroom fallback (0..1) must not let an account whose
 	// usage fetch failed shadow a measured sibling.
-	const leftMeasured = left.usage !== null;
-	const rightMeasured = right.usage !== null;
+	const leftMeasured = left.usageMeasured;
+	const rightMeasured = right.usageMeasured;
 	if (leftMeasured !== rightMeasured) return leftMeasured ? -1 : 1;
 	// Required drain, descending: the account whose remaining quota must
 	// burn fastest to avoid expiring unused at its reset comes first, so

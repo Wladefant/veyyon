@@ -3097,6 +3097,8 @@ export class AuthStorage {
 			const secondary = windows?.secondary;
 			const secondaryTarget = secondary ?? primary;
 			const allowanceSpent = isAllowanceSpent(strategy, usage, args.rankingContext, nowMs);
+			const usageMeasured = primary !== undefined || secondary !== undefined;
+			const primaryUncapped = primary === undefined && secondary !== undefined;
 			ranked.push({
 				selection,
 				usage,
@@ -3104,7 +3106,8 @@ export class AuthStorage {
 				blocked,
 				blockedUntil,
 				allowanceSpent,
-				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
+				usageMeasured,
+				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped) ?? false,
 				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
 				secondaryUsed: normalizeUsageFraction(secondaryTarget),
 				secondaryRequiredDrain: computeWindowRequiredDrain(

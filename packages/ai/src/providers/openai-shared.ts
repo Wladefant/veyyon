@@ -25,6 +25,7 @@ import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { stringifyJson, structuredCloneJSON } from "@veyyon/utils/json";
 import { classifyJsonPrefix, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
+import { parseImageMetadata } from "@veyyon/utils/mime";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
 import {
@@ -67,10 +68,12 @@ import {
 	kStreamingPartialJson,
 } from "../utils/block-symbols";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import type { CapturedHttpErrorResponse } from "../utils/http-inspector";
 import { getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
 import { getOpenRouterHeaders } from "../utils/openrouter-headers";
 import { isForcedToolChoice } from "../utils/tool-choice";
+import { VERCEL_AI_GATEWAY_REFERER, VERCEL_AI_GATEWAY_TITLE } from "../utils/vercel-headers";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -237,6 +240,11 @@ export function resolveOpenAIRequestSetup(
 		}
 	}
 	Object.assign(headers, options.extraHeaders);
+	if (model.provider === "vercel-ai-gateway") {
+		// Vercel AI Gateway app attribution; caller/config headers take precedence.
+		setHeaderIfAbsent(headers, "http-referer", VERCEL_AI_GATEWAY_REFERER);
+		setHeaderIfAbsent(headers, "x-title", VERCEL_AI_GATEWAY_TITLE);
+	}
 	if (model.provider === "coreweave") {
 		applyCoreWeaveProjectHeader(headers);
 	}
@@ -1512,10 +1520,17 @@ export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent | VideoContent>,
 	supportsImages: boolean,
 	supportsImageDetailOriginal: boolean,
+	escapeControlTokens = false,
 ): ResponseInputContent[] | undefined {
 	if (typeof content === "string") {
 		if (content.trim().length === 0) return undefined;
-		return [{ type: "input_text", text: content.toWellFormed() } satisfies ResponseInputText];
+		const text = content.toWellFormed();
+		return [
+			{
+				type: "input_text",
+				text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text,
+			} satisfies ResponseInputText,
+		];
 	}
 
 	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
@@ -1526,7 +1541,7 @@ export function convertResponsesInputContent(
 		if (text.trim().length === 0) continue;
 		normalizedContent.push({
 			type: "input_text",
-			text,
+			text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text,
 		} satisfies ResponseInputText);
 	}
 	for (const item of imageBlocks) {
@@ -1628,6 +1643,37 @@ export interface BuildResponsesInputOptions<TApi extends Api> {
 	preserveAssistantMessageIds?: boolean;
 }
 
+/**
+ * Escape reserved Harmony control tokens in the client-boundary text of
+ * replayed Responses input items — user/developer/system message text and
+ * tool-result output. Model-owned items (assistant output, reasoning, tool-call
+ * arguments) carry no client data and are returned untouched.
+ *
+ * Native history replay pushes stored `providerPayload` items straight onto the
+ * wire, bypassing {@link convertResponsesInputContent}; without this a stored
+ * `input_text` carrying `<|channel|>analysis` still reaches gpt-5.x raw (#6913).
+ * Callers gate on {@link isHarmonyDialectModel}. Items are copied, not mutated.
+ */
+export function escapeReplayedClientText(items: ResponseInput): ResponseInput {
+	return items.map(item => {
+		if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+			return typeof item.output === "string" ? { ...item, output: escapeHarmonyControlTokens(item.output) } : item;
+		}
+		if (item.type === "message" && (item.role === "user" || item.role === "developer" || item.role === "system")) {
+			if (typeof item.content === "string") {
+				return { ...item, content: escapeHarmonyControlTokens(item.content) };
+			}
+			return {
+				...item,
+				content: item.content.map(part =>
+					part.type === "input_text" ? { ...part, text: escapeHarmonyControlTokens(part.text) } : part,
+				),
+			};
+		}
+		return item;
+	});
+}
+
 export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInputOptions<TApi>): ResponseInput {
 	const messages: ResponseInput = [];
 	const systemPrompts = options.systemRole ? normalizeSystemPrompts(options.context.systemPrompt) : [];
@@ -1646,6 +1692,11 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		: buildCustomToolWireNameMap(options.context.tools);
 	let knownCallIds = new Set<string>();
 	const customCallIds = new Set<string>();
+	// Harmony-server models (gpt-5.x) reject requests whose input data reproduces
+	// reserved control-token spellings; escape the transport copy of untrusted
+	// user/tool text so ordinary docs, code, or grep results cannot poison the
+	// session (#6913). The persisted transcript is never touched.
+	const escapeControlTokens = isHarmonyDialectModel(options.model);
 	const transformedMessages = transformMessages(
 		options.context.messages,
 		options.model,
@@ -1674,9 +1725,12 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				const sanitizedItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems), {
 					supportsImageDetailOriginal,
 				});
-				messages.push(
-					...adaptResponsesReplayItemsForModel(sanitizedItems, supportsCustomToolCalls, customToolWireNameMap),
+				const replayItems = adaptResponsesReplayItemsForModel(
+					sanitizedItems,
+					supportsCustomToolCalls,
+					customToolWireNameMap,
 				);
+				messages.push(...(escapeControlTokens ? escapeReplayedClientText(replayItems) : replayItems));
 				knownCallIds = collectKnownCallIds(messages);
 				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
@@ -1692,28 +1746,40 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					msg.content.filter((item): item is TextContent => item.type === "text"),
 					false,
 					supportsImageDetailOriginal,
+					escapeControlTokens,
 				);
 				const imageContent = convertResponsesInputContent(
 					msg.content.filter((item): item is ImageContent => item.type === "image"),
 					options.model.input.includes("image"),
 					supportsImageDetailOriginal,
+					escapeControlTokens,
 				);
 				if (textContent) messages.push({ role: "developer", content: textContent });
 				if (imageContent) messages.push({ role: "user", content: imageContent });
+				continue;
+			}
+			const developerText =
+				options.developerStringContent && msg.role === "developer" && typeof msg.content === "string"
+					? msg.content.toWellFormed()
+					: undefined;
+			if (developerText) {
+				messages.push({
+					role: "developer",
+					content: escapeControlTokens ? escapeHarmonyControlTokens(developerText) : developerText,
+				});
+				msgIndex++;
 				continue;
 			}
 			const content = convertResponsesInputContent(
 				msg.content,
 				options.model.input.includes("image"),
 				supportsImageDetailOriginal,
+				escapeControlTokens,
 			);
 			if (!content) continue;
 			messages.push({
 				role: msg.role === "developer" && options.supportsDeveloperRole ? "developer" : "user",
-				content:
-					options.developerStringContent && msg.role === "developer" && typeof msg.content === "string"
-						? msg.content.toWellFormed()
-						: content,
+				content,
 			});
 		} else if (msg.role === "assistant") {
 			const assistantMsg = msg as AssistantMessage;
@@ -1949,7 +2015,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	// genuinely empty text result (empty file read, silent tool) must stay
 	// empty — the placeholder sent models chasing an attachment that never
 	// existed.
-	const output = (
+	const rawOutput = (
 		omittedImages
 			? joinTextWithImagePlaceholder(textResult, true)
 			: textResult.length > 0
@@ -1958,6 +2024,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 					? "(see attached image)"
 					: ""
 	).toWellFormed();
+	const output = isHarmonyDialectModel(model) ? escapeHarmonyControlTokens(rawOutput) : rawOutput;
 	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
 		// Strict backends (Azure, Copilot) reject unpaired outputs outright, but
 		// silently dropping the result loses information the model needs. Fold it
@@ -2970,6 +3037,11 @@ class ResponsesStreamDecoder<TApi extends Api> {
 			case "custom_tool_call":
 				this.#finishCustomToolCall(item, event.output_index);
 				return;
+			case "image_generation_call":
+				if (item.status === "completed" && item.result) {
+					appendResponsesImageResult(this.#output, this.#stream, item.result);
+				}
+				return;
 		}
 	}
 
@@ -3119,6 +3191,26 @@ class ResponsesStreamDecoder<TApi extends Api> {
 		promoteResponsesToolUseStopReason(output, (response as { end_turn?: boolean } | undefined)?.end_turn);
 		this.#options?.onCompleted?.();
 	}
+}
+
+/** Append a native Responses image result and emit its completion event. */
+export function appendResponsesImageResult(
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	result: string,
+): void {
+	const image: ImageContent = {
+		type: "image",
+		data: result,
+		mimeType: parseImageMetadata(Buffer.from(result, "base64"))?.mimeType ?? "image/png",
+	};
+	output.content.push(image);
+	stream.push({
+		type: "image_end",
+		contentIndex: output.content.length - 1,
+		content: image,
+		partial: output,
+	});
 }
 
 export async function processResponsesStream<TApi extends Api>(
