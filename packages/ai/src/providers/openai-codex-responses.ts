@@ -43,7 +43,7 @@ import {
 	CodexWebSocketTransportError,
 	CodexWhitespaceToolCallLoopError,
 } from "../error/classes";
-import { getEnvApiKey } from "../stream";
+import { getEnvApiKey, isOfficialCodexApiUrl } from "../stream";
 import type {
 	Api,
 	AssistantMessage,
@@ -4044,6 +4044,24 @@ async function getOrCreateCodexWebSocketConnection(
 	return state.connection;
 }
 
+/**
+ * Compress an SSE request body with zstd. Returns `undefined` when
+ * compression is disabled or fails, in which case the caller sends the
+ * plain JSON string without a `content-encoding` header.
+ */
+function compressCodexRequestBody(bodyJson: string, baseUrl: string): Uint8Array | undefined {
+	if (!isOfficialCodexApiUrl(baseUrl) || !$flag("PI_CODEX_ZSTD", true)) return undefined;
+	try {
+		return Bun.zstdCompressSync(bodyJson, { level: 3 });
+	} catch (error) {
+		CODEX_DEBUG &&
+			logger.debug("[codex] codex request body compression failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		return undefined;
+	}
+}
+
 async function openCodexSseEventStream(
 	url: string,
 	requestHeaders: Record<string, string> | undefined,
@@ -4076,6 +4094,11 @@ async function openCodexSseEventStream(
 		responsesLite,
 		requestMetadata,
 	);
+	const bodyJson = await serializeBody();
+	const compressedBody = compressCodexRequestBody(bodyJson, url);
+	if (compressedBody !== undefined) {
+		headers.set("content-encoding", "zstd");
+	}
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex request", {
 			url,
@@ -4104,30 +4127,36 @@ async function openCodexSseEventStream(
 		}
 	};
 	let response: Response;
-	try {
-		response = await fetchProviderWithRetry(url, {
+	const send = (requestBody: string | Uint8Array): Promise<Response> =>
+		fetchProviderWithRetry(url, {
 			method: "POST",
 			headers,
 			signal,
-			prepareInit: async () => {
-				const bodyJson = await serializeBody();
+			prepareInit: () => {
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
-				return { body: bodyJson, signal: watchdog.signal };
+				return { body: requestBody, signal: watchdog.signal };
 			},
 			maxAttempts: CODEX_MAX_RETRIES + 1,
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
-			// The caller's declared cap wins. Codex's own five-minute budget is
-			// what a ChatGPT-plan rate limit needs when nobody said otherwise,
-			// but a caller that declares `maxRetryDelayMs` has named the longest
-			// wait it will tolerate, and a hardcoded ceiling above it turned a
-			// `retry-after: 120` into two minutes of silence the caller had
-			// forbidden.
 			maxDelayMs: maxRetryDelayMs ?? CODEX_RATE_LIMIT_BUDGET_MS,
 			shouldRetryError: error => !(isPreResponseStall(error) && firstEventBudget.spent()),
 			fetch: fetchAttempt,
 			timeout: false,
 		});
+	try {
+		response = await send(compressedBody ?? bodyJson);
+		if (compressedBody !== undefined && (response.status === 400 || response.status === 415)) {
+			const rejectedStatus = response.status;
+			await response.body?.cancel();
+			headers.delete("content-encoding");
+			CODEX_DEBUG &&
+				logger.debug("[codex] retrying request without zstd after encoding rejection", {
+					url,
+					status: rejectedStatus,
+				});
+			response = await send(bodyJson);
+		}
 	} finally {
 		clearPreResponseTimeout?.();
 	}
