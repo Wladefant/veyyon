@@ -158,6 +158,7 @@ import { SqliteAuthCredentialStore } from "./auth-storage-sqlite";
 // streaming engine for them, which is most of why importing auth storage reached 276 modules.
 import { getEnvApiKey, getEnvApiKeyName } from "./env-api-key";
 import * as AIError from "./error";
+import { AUTHENTICATED_API_KEY_SENTINEL } from "./provider-env-keys";
 import { getProviderDefinition, PASTE_CODE_LOGIN_PROVIDERS } from "./registry";
 import { getOAuthApiKey, getOAuthProvider } from "./registry/oauth";
 import type {
@@ -1799,6 +1800,18 @@ export class AuthStorage {
 		if (this.#chatgptWebOAuthFallback(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
 		return false;
+	}
+
+	/** Ambient credential sources remain selectable, but do not outrank concrete startup credentials. */
+	hasConcreteAuth(provider: string): boolean {
+		if (this.#runtimeOverrides.has(provider)) return true;
+		if (this.#configOverrides.has(provider)) return true;
+		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#chatgptWebOAuthFallback(provider)) return true;
+		const envKey = getEnvApiKey(provider);
+		if (envKey && envKey !== AUTHENTICATED_API_KEY_SENTINEL) return true;
+		const fallback = this.#fallbackResolver?.(provider);
+		return Boolean(fallback && fallback !== AUTHENTICATED_API_KEY_SENTINEL);
 	}
 
 	/**

@@ -2347,6 +2347,15 @@ export class ModelRegistry {
 		);
 	}
 
+	/** Prefer explicit credentials and local endpoints over ambient AWS/Vertex auth at startup. */
+	hasConcreteAuth(provider: string): boolean {
+		return (
+			isConfigValueCommand(this.#customProviderApiKeys.get(provider)) ||
+			this.#keylessProviders.has(provider) ||
+			this.authStorage.hasConcreteAuth(provider)
+		);
+	}
+
 	/** True when the provider is usable without stored credentials (ollama, lm-studio, …). */
 	isKeylessProvider(provider: string): boolean {
 		return this.#keylessProviders.has(provider);

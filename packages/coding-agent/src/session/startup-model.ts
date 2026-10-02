@@ -464,7 +464,10 @@ export class StartupModelSelection {
 
 		if (!this.#model) {
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
-			let pick = pickDefaultAvailableModel(fallbackCandidates.filter(candidate => this.#hasAuth(candidate)));
+			let pick = pickDefaultAvailableModel(
+				fallbackCandidates.filter(candidate => this.#hasAuth(candidate)),
+				provider => modelRegistry.hasConcreteAuth(provider),
+			);
 
 			// Cold-cache discovery race (issues #6114, #6162): a discovery provider (models.yml
 			// `openai-models-list`, LM Studio/Ollama/llama.cpp, or an openai-compat proxy) ships no
@@ -485,7 +488,10 @@ export class StartupModelSelection {
 				await logger.time("resolveModelDiscoveryFallback", () => modelRegistry.refresh("online-if-uncached"));
 				if (!(await this.#tryResolveDefaultRole()) && !this.#model) {
 					const refreshedCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
-					pick = pickDefaultAvailableModel(refreshedCandidates.filter(candidate => this.#hasAuth(candidate)));
+					pick = pickDefaultAvailableModel(
+						refreshedCandidates.filter(candidate => this.#hasAuth(candidate)),
+						provider => modelRegistry.hasConcreteAuth(provider),
+					);
 				}
 			}
 

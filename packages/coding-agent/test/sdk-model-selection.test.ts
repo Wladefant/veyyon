@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { AUTHENTICATED_API_KEY_SENTINEL } from "@veyyon/ai/provider-env-keys";
 import { buildModel } from "@veyyon/catalog/build";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { getBundledModel } from "@veyyon/catalog/models";
@@ -575,6 +576,46 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			await session.dispose();
 		}
 	});
+
+	// An ambient credential source must not displace an explicit login, but remains usable alone or explicitly selected.
+	for (const scenario of ["concrete", "ambient-only", "explicit"] as const) {
+		test(`startup preserves ${scenario} credential selection`, async () => {
+			const ambient = getBundledModel("amazon-bedrock", DEFAULT_MODEL_PER_PROVIDER["amazon-bedrock"]);
+			const concrete = getBundledModel("anthropic", DEFAULT_MODEL_PER_PROVIDER.anthropic);
+			if (!ambient || !concrete) throw new Error("Expected bundled provider defaults");
+			const authStorage = await AuthStorage.create(path.join(tempDir, "ambient-auth.db"));
+			authStoragesToClose.push(authStorage);
+			const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			authStorage.setFallbackResolver(provider =>
+				provider === "amazon-bedrock" ? AUTHENTICATED_API_KEY_SENTINEL : undefined,
+			);
+			if (scenario !== "ambient-only") authStorage.setRuntimeApiKey("anthropic", "test-token");
+			vi.spyOn(registry, "getAvailable").mockReturnValue(
+				scenario === "ambient-only" ? [ambient] : [ambient, concrete],
+			);
+			const { session } = await createAgentSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				authStorage,
+				modelRegistry: registry,
+				settings: Settings.isolated({ enabledModels: ["amazon-bedrock/*", "anthropic/*"] }),
+				sessionManager: SessionManager.inMemory(),
+				...(scenario === "explicit" ? { model: ambient } : {}),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+			});
+			sessionsToDispose.push(session);
+			expect(authStorage.hasAuth("amazon-bedrock")).toBe(true);
+			expect(authStorage.hasConcreteAuth("amazon-bedrock")).toBe(false);
+			expect(session.model?.provider).toBe(scenario === "concrete" ? "anthropic" : "amazon-bedrock");
+		});
+	}
 
 	test("prefers Codex OAuth over plain OpenAI for the shared startup default", async () => {
 		const openaiDefault = getBundledModel("openai", "gpt-5.5");
