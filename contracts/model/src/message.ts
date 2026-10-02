@@ -400,6 +400,7 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
+	| { type: "image_end"; contentIndex: number; content: ImageContent; partial: AssistantMessage }
 	| {
 			type: "done";
 			contentIndex?: undefined;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@veyyon/ai";
 import {
+	buildTransformedCodexRequestBody,
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
 	prewarmOpenAICodexResponses,
@@ -21,6 +22,8 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import * as piUtils from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils";
+
+import { withEnv } from "./helpers";
 
 const { getAgentDir, setAgentDir, TempDir } = piUtils;
 
@@ -495,6 +498,7 @@ describe("openai-codex streaming", () => {
 		const fetchMock: FetchImpl = async () =>
 			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		const textEndContents: string[] = [];
+		const eventTypes: string[] = [];
 
 		const stream = streamOpenAICodexResponses(model, context, {
 			apiKey: token,
@@ -502,14 +506,35 @@ describe("openai-codex streaming", () => {
 		});
 		const readPromise = (async () => {
 			for await (const event of stream) {
+				eventTypes.push(event.type);
 				if (event.type === "text_end") textEndContents.push(event.content);
 			}
 		})();
 		const result = await stream.result();
 		await readPromise;
 
-		return { result, textEndContents };
+		return { result, textEndContents, eventTypes };
 	}
+
+	it("surfaces result-bearing native images with stale generating status", async () => {
+		const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+		const { result, eventTypes } = await runCodexSseEvents([
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "image_generation_call", id: "ig_1", status: "generating", result: null },
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "image_generation_call", id: "ig_1", status: "generating", result: data },
+			},
+			{ type: "response.completed", response: { id: "resp_image", status: "completed" } },
+		]);
+
+		expect(result.content).toEqual([{ type: "image", data, mimeType: "image/png" }]);
+		expect(eventTypes).toContain("image_end");
+	});
 
 	for (const testCase of [
 		{
@@ -2256,6 +2281,61 @@ describe("openai-codex streaming", () => {
 		expect(capturedHeaders?.get("session_id")).toBe(sessionId);
 		expect(capturedHeaders?.get("x-client-request-id")).toBe(sessionId);
 		expect(capturedBody?.prompt_cache_key).toBe(promptCacheKey);
+
+		await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId,
+			promptCacheKey,
+			cacheRetention: "none",
+		}).result();
+
+		expect(capturedHeaders?.get("conversation_id")).toBe(sessionId);
+		expect(capturedHeaders?.get("session_id")).toBe(sessionId);
+		expect(capturedHeaders?.get("x-client-request-id")).toBe(sessionId);
+		expect(capturedBody?.prompt_cache_key).toBeUndefined();
+	});
+
+	it("applies cache retention resolution to direct Codex request body construction", async () => {
+		const model = createCodexTestModel();
+		const context = createCodexTestContext();
+		const disabledPromptKey = await buildTransformedCodexRequestBody(model, context, {
+			promptCacheKey: "disabled-cache",
+			cacheRetention: "none",
+		});
+		const disabledSession = await buildTransformedCodexRequestBody(model, context, {
+			sessionId: "disabled-session",
+			cacheRetention: "none",
+		});
+
+		expect(disabledPromptKey.prompt_cache_key).toBeUndefined();
+		expect(disabledSession.prompt_cache_key).toBeUndefined();
+
+		await withEnv({ VEYYON_CACHE_RETENTION: "none" }, async () => {
+			const disabledEnvironment = await buildTransformedCodexRequestBody(model, context, {
+				sessionId: "environment-session",
+			});
+			const explicitShort = await buildTransformedCodexRequestBody(model, context, {
+				promptCacheKey: "explicit-cache",
+				cacheRetention: "short",
+			});
+
+			expect(disabledEnvironment.prompt_cache_key).toBeUndefined();
+			expect(explicitShort.prompt_cache_key).toBe("explicit-cache");
+		});
+
+		await withEnv({ PI_CACHE_RETENTION: "none" }, async () => {
+			const disabledEnvironment = await buildTransformedCodexRequestBody(model, context, {
+				sessionId: "environment-session",
+			});
+			const explicitShort = await buildTransformedCodexRequestBody(model, context, {
+				promptCacheKey: "explicit-cache",
+				cacheRetention: "short",
+			});
+
+			expect(disabledEnvironment.prompt_cache_key).toBeUndefined();
+			expect(explicitShort.prompt_cache_key).toBe("explicit-cache");
+		});
 	});
 
 	it("omits unsupported sampling keys (temperature/top_p/top_k/min_p/penalties) from the Codex Responses body", async () => {
