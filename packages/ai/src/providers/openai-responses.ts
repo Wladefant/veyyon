@@ -182,22 +182,14 @@ function isOpenAIResponsesReplayUnsafeEvent(event: ResponseStreamEvent): boolean
 	const t = event.type;
 	if (t === "response.reasoning_summary_part.done" || t === "response.output_item.done") return true;
 	return (
-		(t === "response.output_text.delta" ||
-			t === "response.refusal.delta" ||
-			t === "response.reasoning_summary_text.delta" ||
-			t === "response.reasoning_text.delta" ||
-			t === "response.function_call_arguments.delta" ||
-			t === "response.custom_tool_call_input.delta") &&
-		typeof event.delta === "string" &&
-		event.delta.length > 0
+		(t === "response.output_text.delta" || t === "response.refusal.delta" || t === "response.reasoning_summary_text.delta" ||
+			t === "response.reasoning_text.delta" || t === "response.function_call_arguments.delta" || t === "response.custom_tool_call_input.delta") &&
+		typeof event.delta === "string" && event.delta.length > 0
 	);
 }
 
 function isRetryableOpenAIResponsesStreamFailure(error: unknown): boolean {
-	return (
-		AIError.isTransientStreamParseError(error) ||
-		(error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream")
-	);
+	return AIError.isTransientStreamParseError(error) || (error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream");
 }
 
 interface OpenAIResponsesProviderSessionState
@@ -524,7 +516,6 @@ class OpenAIResponsesStreamRun {
 	#sentPreviousResponseId: string | undefined;
 	/** Set once a rejection dropped strict tools; every later rebuild of this call keeps them off. */
 	#strictToolsDisabled = false;
-	readonly #preparedRequests = new WeakMap<OpenAIResponsesSamplingParams, RequestInit>();
 
 	constructor(
 		readonly model: Model<"openai-responses">,
@@ -802,8 +793,6 @@ class OpenAIResponsesStreamRun {
 		plan: OpenAIResponsesRequestPlan,
 		requestParams: OpenAIResponsesSamplingParams,
 	): Promise<RequestInit> {
-		const cached = this.#preparedRequests.get(requestParams);
-		if (cached) return cached;
 		const bodyJson = JSON.stringify(requestParams);
 		let wireParams = requestParams;
 		const onPayload = this.options?.onPayload;
@@ -818,25 +807,15 @@ class OpenAIResponsesStreamRun {
 		const fallbackApplied = plan.effortFallbacks.apply(wireParams);
 		const wireBodyJson = fallbackApplied || wireParams !== requestParams ? JSON.stringify(wireParams) : bodyJson;
 		plan.effortFallbacks.sent(wireParams);
-		const init = { body: wireBodyJson };
-		this.#preparedRequests.set(requestParams, init);
-		return init;
+		this.#wireBodyJson = wireBodyJson;
+		return { body: wireBodyJson };
 	}
 
 	#resetOutputForRetry(plan: OpenAIResponsesRequestPlan): void {
 		const o = this.#output;
 		const initial = createInitialResponsesAssistantMessage(this.model.api, this.model.provider, this.model.id);
 		o.content.length = 0;
-		o.responseId =
-			o.upstreamProvider =
-			o.errorMessage =
-			o.errorStatus =
-			o.errorId =
-			o.stopDetails =
-			o.providerPayload =
-			o.duration =
-			o.ttft =
-				undefined;
+		o.responseId = o.upstreamProvider = o.errorMessage = o.errorStatus = o.errorId = o.stopDetails = o.providerPayload = o.duration = o.ttft = undefined;
 		o.usage = initial.usage;
 		if (plan.premiumRequests !== undefined) o.usage.premiumRequests = plan.premiumRequests;
 		o.stopReason = "stop";
