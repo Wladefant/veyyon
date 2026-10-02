@@ -4,6 +4,7 @@ import { clamp } from "@veyyon/utils/math";
 import { HOUR_MS, MINUTE_MS, WEEK_MS } from "@veyyon/utils/time";
 import { normalizeStoredEmail } from "../auth-credential-rows";
 import type {
+	CredentialRankingContext,
 	CredentialRankingStrategy,
 	UsageAmount,
 	UsageFetchContext,
@@ -498,23 +499,44 @@ export const openaiCodexUsageProvider: UsageProvider = {
 
 const FIVE_HOUR_MS = 5 * HOUR_MS;
 
+function isCodexSparkRequest(context?: CredentialRankingContext): boolean {
+	return (context?.modelId ?? "").toLowerCase().includes("-spark");
+}
+
+function scopeCodexLimitsForRequest(report: UsageReport, context?: CredentialRankingContext): UsageLimit[] {
+	const isSparkRequest = isCodexSparkRequest(context);
+	return report.limits.filter(limit => {
+		if (limit.id === "openai-codex:primary" || limit.id === "openai-codex:secondary") {
+			return !isSparkRequest;
+		}
+		const slug = limit.id.split(":")[1];
+		return slug === "spark" ? isSparkRequest : false;
+	});
+}
+
 export const codexRankingStrategy: CredentialRankingStrategy = {
+	scopeLimits: scopeCodexLimitsForRequest,
 	blockScope() {
 		return "shared";
 	},
-	findWindowLimits(report) {
+	findWindowLimits(report, context) {
+		const limits = scopeCodexLimitsForRequest(report, context);
 		const findLimit = (key: "primary" | "secondary"): UsageLimit | undefined => {
-			const direct = report.limits.find(l => l.id === `openai-codex:${key}`);
+			const direct = limits.find(l => l.id === `openai-codex:${key}`);
 			if (direct) return direct;
-			const byId = report.limits.find(l => l.id.toLowerCase().includes(key));
+			const byId = limits.find(l => l.id.toLowerCase().includes(key));
 			if (byId) return byId;
 			const windowId = key === "secondary" ? "7d" : "1h";
-			return report.limits.find(l => l.scope.windowId?.toLowerCase() === windowId);
+			return limits.find(l => l.scope.windowId?.toLowerCase() === windowId);
 		};
 		return { primary: findLimit("primary"), secondary: findLimit("secondary") };
 	},
 	windowDefaults: { primaryMs: HOUR_MS, secondaryMs: WEEK_MS },
-	hasPriorityBoost(primary) {
+	hasPriorityBoost(primary, primaryUncapped = false) {
+		// A missing primary window is only an uncapped signal when the same
+		// request scope still reports its secondary window. Empty or
+		// differently-scoped reports remain unmeasured.
+		if (primaryUncapped) return true;
 		if (!primary) return false;
 		const windowId = primary.scope.windowId?.toLowerCase();
 		const durationMs = primary.window?.durationMs;
