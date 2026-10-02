@@ -7,7 +7,12 @@ import type { SessionHeader } from "@veyyon/kernel/session/session-entries";
 import { findMostRecentSession } from "@veyyon/kernel/session/session-listing";
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { readTerminalBreadcrumbEntry } from "@veyyon/kernel/session/session-paths";
+import {
+	hasPositiveMovedProjectEvidence,
+	readCwdIdentity,
+	readTerminalBreadcrumbEntry,
+	writeTerminalBreadcrumb,
+} from "@veyyon/kernel/session/session-paths";
 import { getTerminalSessionsDir, setAgentDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
@@ -21,14 +26,17 @@ function getHeader(entries: unknown[]): SessionHeader | undefined {
 	);
 }
 
-function writeBreadcrumb(cwd: string, sessionFile: string): string {
+function writeBreadcrumb(cwd: string, sessionFile: string, fresh = false): string {
 	const terminalId = getTerminalId();
 	if (!terminalId) throw new Error("Expected a terminal id for breadcrumb test");
-	const dir = getTerminalSessionsDir();
-	fs.mkdirSync(dir, { recursive: true });
-	const file = path.join(dir, terminalId);
-	fs.writeFileSync(file, `${cwd}\n${sessionFile}\n`);
-	return file;
+	writeTerminalBreadcrumb(cwd, sessionFile, fresh);
+	return path.join(getTerminalSessionsDir(), terminalId);
+}
+
+/** Simulate `mv` / `git worktree move`: same directory inode at a new path. */
+async function renameProjectDir(from: string, to: string): Promise<void> {
+	await fsp.rm(to, { recursive: true, force: true });
+	await fsp.rename(from, to);
 }
 
 function stripHeaderCwd(file: string): void {
@@ -81,8 +89,8 @@ describe("SessionManager.continueRecent relocation", () => {
 
 		// Breadcrumb points at the old session, recorded under the old cwd.
 		writeBreadcrumb(cwdA, oldFile);
-		// Simulate `git worktree move`: the old directory no longer exists.
-		await fsp.rm(cwdA, { recursive: true, force: true });
+		// Real move/rename: the continue cwd is the same directory inode.
+		await renameProjectDir(cwdA, cwdB);
 
 		const resumed = await SessionManager.continueRecent(cwdB);
 		try {
@@ -167,7 +175,7 @@ describe("SessionManager.continueRecent relocation", () => {
 
 		const explicitSessionDir = path.join(testAgentDir, "custom-sessions");
 		writeBreadcrumb(cwdA, oldFile);
-		await fsp.rm(cwdA, { recursive: true, force: true });
+		await renameProjectDir(cwdA, cwdB);
 
 		const resumed = await SessionManager.continueRecent(cwdB, explicitSessionDir);
 		try {
@@ -193,11 +201,11 @@ describe("SessionManager.continueRecent relocation", () => {
 		await session.close();
 
 		writeBreadcrumb(cwdA, oldFile);
-		await fsp.rm(cwdA, { recursive: true, force: true });
+		await renameProjectDir(cwdA, cwdB);
 
 		// The re-root below is taken only when all three hold. Each is asserted on its own so a
 		// failure names the fact that gave way instead of only reporting the path it produced.
-		expect(await readTerminalBreadcrumbEntry()).toEqual({
+		expect(await readTerminalBreadcrumbEntry()).toMatchObject({
 			cwd: cwdA,
 			sessionFile: oldFile,
 			exists: true,
@@ -273,7 +281,7 @@ describe("SessionManager.continueRecent relocation", () => {
 		await moved.close();
 
 		writeBreadcrumb(cwdA, movedFile);
-		await fsp.rm(cwdA, { recursive: true, force: true });
+		await renameProjectDir(cwdA, cwdB);
 
 		const resumed = await SessionManager.continueRecent(cwdB, explicitSessionDir);
 		try {
@@ -284,6 +292,130 @@ describe("SessionManager.continueRecent relocation", () => {
 			expect(getHeader(await loadEntriesFromFile(movedFile))?.cwd).toBe(path.resolve(cwdB));
 		} finally {
 			await resumed.close();
+		}
+	});
+	it("ignores foreign fresh breadcrumbs with an explicit sessionDir", async () => {
+		const explicitSessionDir = path.join(testAgentDir, "intended-sessions");
+		const intended = SessionManager.create(cwdB, explicitSessionDir);
+		intended.appendMessage({ role: "user", content: "intended session", timestamp: 1 });
+		intended.appendMessage(makeAssistantMessage());
+		await intended.flush();
+		const intendedFile = intended.getSessionFile();
+		if (!intendedFile) throw new Error("Expected persisted intended session file");
+		await intended.close();
+
+		const foreignMissingFile = path.join(testAgentDir, "foreign-sessions", "missing.jsonl");
+		fs.mkdirSync(path.dirname(foreignMissingFile), { recursive: true });
+		writeBreadcrumb(cwdB, foreignMissingFile, true);
+
+		const resumed = await SessionManager.continueRecent(cwdB, explicitSessionDir);
+		try {
+			expect(resumed.getSessionFile()).toBe(intendedFile);
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("honors in-directory fresh breadcrumbs with an explicit sessionDir", async () => {
+		const explicitSessionDir = path.join(testAgentDir, "intended-sessions");
+		const prior = SessionManager.create(cwdB, explicitSessionDir);
+		prior.appendMessage({ role: "user", content: "prior session", timestamp: 1 });
+		prior.appendMessage(makeAssistantMessage());
+		await prior.flush();
+		const priorFile = prior.getSessionFile();
+		if (!priorFile) throw new Error("Expected persisted prior session file");
+		await prior.close();
+
+		const freshMissingFile = path.join(explicitSessionDir, "missing.jsonl");
+		fs.mkdirSync(path.dirname(freshMissingFile), { recursive: true });
+		writeBreadcrumb(cwdB, freshMissingFile, true);
+
+		const resumed = await SessionManager.continueRecent(cwdB, explicitSessionDir);
+		try {
+			expect(resumed.getSessionFile()).not.toBe(priorFile);
+			expect(resumed.getEntries()).toHaveLength(0);
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("does not re-root into an unrelated cwd when the breadcrumb directory is merely missing", async () => {
+		const oldProject = path.join(testAgentDir, "projects", "old-project");
+		const unrelated = path.join(testAgentDir, "elsewhere", "unrelated-project");
+		fs.mkdirSync(oldProject, { recursive: true });
+		fs.mkdirSync(unrelated, { recursive: true });
+
+		const session = SessionManager.create(oldProject);
+		session.appendMessage({ role: "user", content: "original project", timestamp: 1 });
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+		const oldFile = session.getSessionFile();
+		if (!oldFile) throw new Error("Expected persisted session file");
+		await session.close();
+
+		writeBreadcrumb(oldProject, oldFile);
+		// Deleted / offline / never-mounted: absence is not evidence of a move.
+		await fsp.rm(oldProject, { recursive: true, force: true });
+
+		const resumed = await SessionManager.continueRecent(unrelated);
+		try {
+			expect(fs.existsSync(oldFile)).toBe(true);
+			expect(resumed.getSessionFile()).not.toBe(oldFile);
+			const oldHeader = getHeader(await loadEntriesFromFile(oldFile));
+			expect(oldHeader?.cwd).toBe(path.resolve(oldProject));
+			expect(oldHeader?.cwd).not.toBe(path.resolve(unrelated));
+			expect(resumed.getCwd()).toBe(path.resolve(unrelated));
+			expect(resumed.getEntries()).toHaveLength(0);
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("does not re-root from a two-line breadcrumb that recorded no directory identity", async () => {
+		const session = SessionManager.create(cwdA);
+		session.appendMessage({ role: "user", content: "legacy crumb", timestamp: 1 });
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+		const oldFile = session.getSessionFile();
+		if (!oldFile) throw new Error("Expected persisted session file");
+		await session.close();
+
+		const terminalId = getTerminalId();
+		if (!terminalId) throw new Error("Expected a terminal id for breadcrumb test");
+		fs.writeFileSync(path.join(getTerminalSessionsDir(), terminalId), `${cwdA}\n${oldFile}\n`);
+		await renameProjectDir(cwdA, cwdB);
+
+		const resumed = await SessionManager.continueRecent(cwdB);
+		try {
+			expect(fs.existsSync(oldFile)).toBe(true);
+			expect(getHeader(await loadEntriesFromFile(oldFile))?.cwd).toBe(path.resolve(cwdA));
+			expect(resumed.getEntries()).toHaveLength(0);
+		} finally {
+			await resumed.close();
+		}
+	});
+});
+
+describe("hasPositiveMovedProjectEvidence", () => {
+	it("is true only when the continue cwd is the same directory inode", () => {
+		const from = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cwd-from-"));
+		const sibling = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cwd-unrelated-"));
+		try {
+			const identity = readCwdIdentity(from);
+			expect(identity).toBeDefined();
+			expect(hasPositiveMovedProjectEvidence(identity, sibling)).toBe(false);
+
+			const to = path.join(path.dirname(from), `${path.basename(from)}-renamed`);
+			try {
+				fs.renameSync(from, to);
+				expect(hasPositiveMovedProjectEvidence(identity, to)).toBe(true);
+				expect(hasPositiveMovedProjectEvidence(undefined, to)).toBe(false);
+			} finally {
+				fs.rmSync(to, { recursive: true, force: true });
+			}
+		} finally {
+			fs.rmSync(from, { recursive: true, force: true });
+			fs.rmSync(sibling, { recursive: true, force: true });
 		}
 	});
 });
