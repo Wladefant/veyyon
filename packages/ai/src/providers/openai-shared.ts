@@ -25,6 +25,7 @@ import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { stringifyJson, structuredCloneJSON } from "@veyyon/utils/json";
 import { classifyJsonPrefix, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
+import { parseImageMetadata } from "@veyyon/utils/mime";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
 import {
@@ -3036,6 +3037,11 @@ class ResponsesStreamDecoder<TApi extends Api> {
 			case "custom_tool_call":
 				this.#finishCustomToolCall(item, event.output_index);
 				return;
+			case "image_generation_call":
+				if (item.status === "completed" && item.result) {
+					appendResponsesImageResult(this.#output, this.#stream, item.result);
+				}
+				return;
 		}
 	}
 
@@ -3185,6 +3191,26 @@ class ResponsesStreamDecoder<TApi extends Api> {
 		promoteResponsesToolUseStopReason(output, (response as { end_turn?: boolean } | undefined)?.end_turn);
 		this.#options?.onCompleted?.();
 	}
+}
+
+/** Append a native Responses image result and emit its completion event. */
+export function appendResponsesImageResult(
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	result: string,
+): void {
+	const image: ImageContent = {
+		type: "image",
+		data: result,
+		mimeType: parseImageMetadata(Buffer.from(result, "base64"))?.mimeType ?? "image/png",
+	};
+	output.content.push(image);
+	stream.push({
+		type: "image_end",
+		contentIndex: output.content.length - 1,
+		content: image,
+		partial: output,
+	});
 }
 
 export async function processResponsesStream<TApi extends Api>(
