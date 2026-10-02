@@ -95,6 +95,26 @@ it("keeps the request prefix pinned while replaying successive effort updates", 
 	expect(requests[3].input.filter(item => item.type === "configuration_update")).toEqual([]);
 });
 
+it("drops a transition-free baseline when the provider session closes", async () => {
+	const requests: WireRequest[] = [];
+	const states = new Map<string, ProviderSessionState>();
+	const context: Context = { messages: [{ role: "user", content: "first", timestamp: 0 }] };
+	const options: OpenAIResponsesOptions = {
+		apiKey: "fake-key",
+		sessionId: "reset-session",
+		providerSessionState: states,
+		statefulResponses: false,
+		fetch: endpoint(requests),
+	};
+	await turn(model, context, { ...options, reasoning: "low" });
+	for (const state of states.values()) state.close();
+	context.messages.push({ role: "user", content: "after close", timestamp: 1 });
+	await turn(model, context, { ...options, reasoning: "high" });
+	expect(requests.map(request => request.reasoning?.effort)).toEqual(["low", "high"]);
+	expect(requests.flatMap(request => request.input.filter(item => item.type === "configuration_update"))).toEqual([]);
+	for (const state of states.values()) state.close();
+});
+
 it("does not emit updates without the capability, a routing session or provider state", async () => {
 	for (const mode of ["unsupported", "no-session", "no-state"] as const) {
 		const requests: WireRequest[] = [];
