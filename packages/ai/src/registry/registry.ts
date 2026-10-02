@@ -11,6 +11,7 @@ import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
 import { commandCodeProvider } from "./command-code";
 import { coreWeaveProvider } from "./coreweave";
 import { cursorProvider } from "./cursor";
+import { deepinfraProvider } from "./deepinfra";
 import { deepseekProvider } from "./deepseek";
 import { devinProvider } from "./devin";
 import { firepassProvider } from "./firepass";
@@ -117,6 +118,7 @@ const ALL = [
 	togetherProvider,
 	nvidiaProvider,
 	novitaProvider,
+	deepinfraProvider,
 	huggingfaceProvider,
 	perplexityProvider,
 	qianfanProvider,

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added DeepInfra provider descriptor and keyless authoritative model discovery from tagged public catalog metadata ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Removed
 
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.

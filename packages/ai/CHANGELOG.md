@@ -4,6 +4,7 @@
 
 ### Added
 
+- Registered DeepInfra as a built-in provider with chat-completion API key validation ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared auth-gateway request dispatch, credential resolution, account identity, and abort mirroring helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).

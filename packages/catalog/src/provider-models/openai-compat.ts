@@ -1308,6 +1308,124 @@ export function novitaModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 5.6 DeepInfra
+// ---------------------------------------------------------------------------
+
+export const DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai";
+const DEEPINFRA_EFFORTS = [Effort.Low, Effort.Medium, Effort.High] as const;
+const DEEPINFRA_DISCOVERY_TIMEOUT_MS = 10_000;
+
+/** DeepInfra OpenAI-compatible discovery configuration. */
+export interface DeepinfraModelManagerConfig { apiKey?: string; baseUrl?: string; fetch?: FetchImpl; }
+interface DeepinfraModelEntry { id?: unknown; metadata?: unknown; }
+
+// Map DeepInfra catalog entry to chat model spec, dropping non-chat entries.
+function mapDeepinfraModel(
+	entry: DeepinfraModelEntry,
+	baseUrl: string,
+	reference: ModelSpec<"openai-completions"> | undefined,
+): ModelSpec<"openai-completions"> | null {
+	const id = typeof entry.id === "string" ? entry.id.trim() : "";
+	if (!id) {
+		return null;
+	}
+	const metadata = isRecord(entry.metadata) ? entry.metadata : {};
+	const tags = Array.isArray(metadata.tags)
+		? metadata.tags.filter((tag): tag is string => typeof tag === "string")
+		: [];
+	if (!tags.includes("chat")) {
+		return null;
+	}
+	const pricing = isRecord(metadata.pricing) ? metadata.pricing : {};
+	// `reasoning_effort` tags advertise the effort dial; ignored if unsupported.
+	const thinking: ThinkingConfig | undefined = tags.includes("reasoning_effort")
+		? { mode: "effort", efforts: [...DEEPINFRA_EFFORTS] }
+		: undefined;
+	const contextWindow = toPositiveNumber(metadata.context_length, reference?.contextWindow ?? null);
+	const liveMaxTokens = toPositiveNumber(metadata.max_tokens, 0);
+	const refMax = reference?.maxTokens ?? null;
+	const maxTokens = contextWindow !== null && liveMaxTokens > 0 && liveMaxTokens < contextWindow
+		? liveMaxTokens
+		: refMax !== null && contextWindow !== null ? Math.min(refMax, contextWindow) : refMax;
+	return {
+		...reference,
+		id,
+		name: reference?.name ?? id,
+		api: "openai-completions",
+		provider: "deepinfra",
+		baseUrl,
+		reasoning: tags.includes("reasoning") || tags.includes("reasoning_effort"),
+		...(thinking ? { thinking } : {}),
+		input: tags.includes("vision") || tags.includes("vlm") ? ["text", "image"] : ["text"],
+		cost: {
+			input: toPositiveNumber(pricing.input_tokens, 0),
+			output: toPositiveNumber(pricing.output_tokens, 0),
+			cacheRead: toPositiveNumber(pricing.cache_read_tokens, 0),
+			cacheWrite: 0,
+		},
+		contextWindow,
+		maxTokens,
+	};
+}
+
+// Dedicated fetch preserves sort_by=omp priority order and passes filter query params.
+async function fetchDeepinfraModels(options: {
+	baseUrl: string;
+	apiKey?: string;
+	fetch?: FetchImpl;
+	references: Map<string, ModelSpec<"openai-completions">>;
+}): Promise<ModelSpec<"openai-completions">[] | null> {
+	const headers: Record<string, string> = { Accept: "application/json" };
+	if (options.apiKey) {
+		headers.Authorization = `Bearer ${options.apiKey}`;
+	}
+	const fetchImpl = discoveryFetch(options.fetch);
+	let payload: unknown;
+	try {
+		const response = await withCatalogDiscoveryTimeout(DEEPINFRA_DISCOVERY_TIMEOUT_MS, signal =>
+			fetchImpl(`${options.baseUrl}/models?filter=with_meta&sort_by=omp`, { method: "GET", headers, signal }),
+		);
+		if (!response.ok) {
+			return null;
+		}
+		payload = await response.json();
+	} catch {
+		return null;
+	}
+	if (!isRecord(payload) || !Array.isArray(payload.data)) {
+		return null;
+	}
+	const models: ModelSpec<"openai-completions">[] = [];
+	const seen = new Set<string>();
+	for (const entry of payload.data) {
+		if (!isRecord(entry)) {
+			continue;
+		}
+		const reference = typeof entry.id === "string" ? options.references.get(entry.id) : undefined;
+		const mapped = mapDeepinfraModel(entry as DeepinfraModelEntry, options.baseUrl, reference);
+		if (mapped && !seen.has(mapped.id)) {
+			seen.add(mapped.id);
+			models.push(mapped);
+		}
+	}
+	return models;
+}
+
+// Builds DeepInfra model-discovery manager; discovery is public and keyless.
+export function deepinfraModelManagerOptions(
+	config?: DeepinfraModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = (config?.baseUrl ?? DEEPINFRA_BASE_URL).replace(/\/$/, "");
+	const references = createBundledReferenceMap<"openai-completions">("deepinfra");
+	return {
+		providerId: "deepinfra",
+		dynamicModelsAuthoritative: true,
+		fetchDynamicModels: () => fetchDeepinfraModels({ baseUrl, apiKey, fetch: config?.fetch, references }),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 6. xAI
 // ---------------------------------------------------------------------------
 

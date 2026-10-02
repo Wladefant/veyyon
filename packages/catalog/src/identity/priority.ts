@@ -21,6 +21,7 @@ const DEFAULT_MODEL_PROVIDER_ORDER = [
 	"fireworks",
 	"cerebras",
 	"baseten",
+	"deepinfra",
 	"openrouter",
 	"aimlapi",
 	"together",
