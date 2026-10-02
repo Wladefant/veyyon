@@ -1,7 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { Api, FetchImpl, Model } from "@veyyon/catalog/types";
 import { ConfigurationError, ValidationError } from "../src/error";
-import { isSpeechApi, synthesizeOpenAiSpeech, synthesizeSpeech, synthesizeXaiSpeech } from "../src/speech";
+import {
+	DEFAULT_XAI_SAMPLE_RATE,
+	isSpeechApi,
+	synthesizeOpenAiSpeech,
+	synthesizeSpeech,
+	synthesizeXaiSpeech,
+} from "../src/speech";
 
 const openaiModel = {
 	id: "tts-1",
@@ -119,7 +125,7 @@ describe("speech adapters and router", () => {
 		expect(capturedRequests[1]?.body).toEqual({
 			text: "Route test 2",
 			voice_id: "eve",
-			output_format: { codec: "wav" },
+			output_format: { codec: "wav", sample_rate: DEFAULT_XAI_SAMPLE_RATE },
 		});
 
 		// Assert xAI endpoint and schema are distinct from OpenAI
