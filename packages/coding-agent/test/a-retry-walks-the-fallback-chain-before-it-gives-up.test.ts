@@ -2455,7 +2455,7 @@ describe("AgentSession retry fallback", () => {
 
 		const errorMessage = "Provider returned error finish_reason";
 		const mock = createMockModel({
-			responses: [{ content: ["partial output before error"], stopReason: "error", errorMessage }],
+			responses: [{ content: ["   "], stopReason: "error", errorMessage }],
 		});
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,
