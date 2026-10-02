@@ -171,8 +171,15 @@ describe("Codex parentTurnId and turn-state refreshes", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
-				stopReason: "tool-call",
+				usage: {
+					input: 1,
+					output: 1,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
 				timestamp: Date.now(),
 			});
 			context.messages.push({

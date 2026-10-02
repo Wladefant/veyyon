@@ -3468,6 +3468,37 @@ describe("agentLoop streaming snapshots", () => {
 		// partial, never the mutable partial object itself.
 		expect(update.message).not.toBe(livePartial);
 	});
+	it("preserves generated image completion snapshots after the provider changes its image", async () => {
+		// WHY: native image results must survive the loop and cannot retain mutable provider blocks.
+		const image = { type: "image" as const, data: "SU1H", mimeType: "image/png" };
+		const livePartial = createAssistantMessage([image], "stop");
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			stream.push({ type: "start", partial: livePartial });
+			stream.push({ type: "image_end", contentIndex: 0, content: image, partial: livePartial });
+			stream.push({ type: "done", reason: "stop", message: livePartial });
+			return stream;
+		};
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop(
+			[createUserMessage("generate an image")],
+			{ systemPrompt: [], messages: [], tools: [] },
+			{ model: createMockModel().model, convertToLlm: identityConverter },
+			undefined,
+			streamFn,
+		))
+			events.push(event);
+		image.data = "changed";
+		const update = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_update" }> =>
+				e.type === "message_update" && e.assistantMessageEvent.type === "image_end",
+		);
+		expect(update).toBeDefined();
+		if (update?.assistantMessageEvent.type !== "image_end") throw new Error("missing image completion");
+		expect(update.assistantMessageEvent.content).toEqual({ type: "image", data: "SU1H", mimeType: "image/png" });
+		expect(update.message.content).toEqual([{ type: "image", data: "SU1H", mimeType: "image/png" }]);
+		expect(update.assistantMessageEvent.partial).toBe(update.message);
+	});
 });
 
 describe("agentLoop kCursorExecResolved (issue #4348)", () => {

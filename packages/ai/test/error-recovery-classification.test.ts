@@ -38,6 +38,7 @@ const RETRY_DECISION: Record<string, boolean> = {
 	ThinkingLoop: true,
 	StaleResponsesItem: true,
 	ProviderFinishError: true,
+	EmptyResponse: true,
 	// Owned by the credential-rotation layer, which retries against a DIFFERENT
 	// account. Retriable at the session level for that reason, and deliberately
 	// not retriable at the provider level (asserted in the corpus block below).
@@ -331,6 +332,7 @@ describe("a stack trace is not evidence about the failure", () => {
 			"AuthFailed",
 			"ContentBlocked",
 			"ContextOverflow",
+			"EmptyResponse",
 			"MalformedFunctionCall",
 			"ProviderFinishError",
 			"Timeout",

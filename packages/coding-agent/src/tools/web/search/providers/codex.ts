@@ -7,7 +7,7 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import type { Api, AuthStorage, FetchImpl, Model } from "@veyyon/ai";
+import type { AuthStorage, FetchImpl, Model } from "@veyyon/ai";
 import { withOAuthAccess } from "@veyyon/ai/auth-retry";
 import {
 	applyCodexResponsesLiteShape,
@@ -371,9 +371,9 @@ function extractCodexSseError(rawEvent: Record<string, unknown>): { code: string
 	return { code, message };
 }
 
-function acceptsNamedToolChoice(model?: { id?: string; compat?: unknown }): boolean {
-	const compat = model?.compat;
-	return !(compat && typeof compat === "object" && "supportsNamedToolChoice" in compat && compat.supportsNamedToolChoice === false);
+function acceptsNamedToolChoice(model: Pick<CodexSearchModel, "compat">): boolean {
+	const compat = model.compat;
+	return !(compat && "supportsNamedToolChoice" in compat && compat.supportsNamedToolChoice === false);
 }
 
 /**
