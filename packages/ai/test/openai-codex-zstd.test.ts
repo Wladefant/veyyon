@@ -137,7 +137,6 @@ describe("codex SSE request body zstd compression", () => {
 		let rejectedBodyCanceled = false;
 		let canceledBeforeRetry = false;
 		const attempts: Array<{ headers: Headers; body: RequestInit["body"] }> = [];
-
 		const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
 			const headers = new Headers(init?.headers);
 			attempts.push({ headers, body: init?.body });
@@ -162,12 +161,10 @@ describe("codex SSE request body zstd compression", () => {
 				headers: { "content-type": "text/event-stream" },
 			});
 		});
-
 		const result = await streamOpenAICodexResponses(createCodexTestModel(), createCodexTestContext(), {
 			apiKey: createCodexTestToken(),
 			fetch: fetchMock as FetchImpl,
 		}).result();
-
 		expect(result.stopReason).toBe("stop");
 		expect(canceledBeforeRetry).toBe(true);
 		expect(attempts).toHaveLength(2);
