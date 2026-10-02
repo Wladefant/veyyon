@@ -62,6 +62,19 @@ describe("pi.typebox compatibility shim", () => {
 		).toThrow('Validation failed for tool "unsafe-schema"');
 	});
 
+	it("validates Type.Unsafe draft-07 documents like the wire path", () => {
+		const schema = Type.Unsafe({
+			type: "object",
+			properties: { xs: { type: "array", items: [{ type: "string" }] } },
+			required: ["xs"],
+		});
+		// Draft-07 positional items array: tuple with 1 string item. A 2-element array
+		// is valid in draft-07 unless additionalItems is false, but in draft-2020-12
+		// items must be a schema object, so the upgraded schema turns this into prefixItems.
+		expect(safeParse(schema, { xs: ["a"] }).success).toBe(true);
+		expect(safeParse(schema, { xs: [1] }).success).toBe(false);
+	});
+
 	it("preserves numeric enum values from TypeScript enum objects", () => {
 		const schema = Type.Enum({ 0: "Fast", 1: "Slow", Fast: 0, Slow: 1 });
 
