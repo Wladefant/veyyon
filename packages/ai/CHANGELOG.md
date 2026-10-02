@@ -7,6 +7,7 @@
 - Added Vercel AI Gateway app attribution headers (`http-referer` and `x-title`) on Anthropic and OpenAI-compatible routes while preserving caller-supplied attribution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Exposed catalog metadata fields (`context_length`, `max_output_tokens`, `input_modalities`, and `supports_tools`) in auth gateway `GET /v1/models` responses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
+- Added first-class `parentTurnId` support for nested Codex requests and captured `x-codex-turn-state` refreshes from `response.metadata` event headers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 
@@ -18,6 +19,9 @@
 
 ### Fixed
 
+- Fixed `forceReasoningOff` being ignored by Anthropic and Google transports, which allowed native thinking alongside a caller-supplied external scratchpad ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 19c0afcc0d2e8a738f7a67499bb7a8b5a7ae2e3b).
+
+- Fixed Codex OAuth selection to keep chat and Spark quotas independent, preserve legacy shared blocks from older brokers, and avoid treating incomplete usage reports as uncapped ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Codex Responses ignoring disabled cache retention when deriving prompt_cache_key, while preserving transport session identity ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi eb5bfbfb11c598826b0d2da3255347a244004e0e).
 - Fixed Codex Responses dropping native image-generation results from assistant content and replay when terminal output items retained a stale `generating` status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a3d1f35099fa).
 - Preserved workspace-scoped credential identity and usage report partitioning for OpenAI Codex ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0eeb6c38149905a7c1d9a8ae4bd98cff882721b8).
