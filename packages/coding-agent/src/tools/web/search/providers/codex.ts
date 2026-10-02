@@ -7,7 +7,7 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import type { AuthStorage, FetchImpl, Model, OAuthAccess } from "@veyyon/ai";
+import type { Api, AuthStorage, FetchImpl, Model } from "@veyyon/ai";
 import { withOAuthAccess } from "@veyyon/ai/auth-retry";
 import {
 	applyCodexResponsesLiteShape,
@@ -329,30 +329,11 @@ function getAccountIdFromJwt(accessToken: string): string | null {
 }
 
 /**
- * Resolve a Codex bearer + accountId through {@link AuthStorage} — the single
- * refresh authority. Returns `null` when no OAuth credential is configured,
- * when the credential cannot be refreshed (broker error, revoked token, etc.),
- * or when the access token carries no `chatgpt_account_id` claim.
- */
-async function findCodexAuth(
-	authStorage: AuthStorage,
-	sessionId: string | undefined,
-	signal: AbortSignal | undefined,
-): Promise<{ access: OAuthAccess; accountId: string } | null> {
-	const access = await authStorage.getOAuthAccess("openai-codex", sessionId, { signal });
-	if (!access) return null;
-	const accountId = access.accountId ?? getAccountIdFromJwt(access.accessToken);
-	if (!accountId) return null;
-	return { access, accountId };
-}
-
-/**
  * Builds HTTP headers for Codex API requests.
  */
-function buildCodexHeaders(accessToken: string, accountId: string): Record<string, string> {
-	return {
+function buildCodexHeaders(accessToken: string, accountId?: string): Record<string, string> {
+	const headers: Record<string, string> = {
 		Authorization: `Bearer ${accessToken}`,
-		[OPENAI_HEADERS.ACCOUNT_ID]: accountId,
 		[OPENAI_HEADERS.BETA]: OPENAI_HEADER_VALUES.BETA_RESPONSES,
 		[OPENAI_HEADERS.ORIGINATOR]: OPENAI_HEADER_VALUES.ORIGINATOR_CODEX,
 		[OPENAI_HEADERS.VERSION]: CODEX_CLIENT_VERSION,
@@ -360,6 +341,39 @@ function buildCodexHeaders(accessToken: string, accountId: string): Record<strin
 		Accept: "text/event-stream",
 		"Content-Type": "application/json",
 	};
+	if (accountId) {
+		headers[OPENAI_HEADERS.ACCOUNT_ID] = accountId;
+	}
+	return headers;
+}
+
+/**
+ * Extracts a backend error `{code, message}` from a Codex SSE event, tolerating
+ * the envelope shapes the ChatGPT Codex backend emits: top-level `{code,message}`,
+ * a nested `error` object, and a `response.error` object (as in `response.failed`).
+ * Without this the nested shapes collapse to `Codex error (): Unknown error`,
+ * discarding the backend diagnostic — e.g. a regional/model-snapshot rejection (#7200).
+ */
+function extractCodexSseError(rawEvent: Record<string, unknown>): { code: string; message: string } {
+	const candidates: unknown[] = [
+		rawEvent,
+		rawEvent.error,
+		(rawEvent.response as { error?: unknown } | undefined)?.error,
+	];
+	let code = "";
+	let message = "";
+	for (const candidate of candidates) {
+		if (!candidate || typeof candidate !== "object") continue;
+		const record = candidate as Record<string, unknown>;
+		if (!code && typeof record.code === "string" && record.code) code = record.code;
+		if (!message && typeof record.message === "string" && record.message) message = record.message;
+	}
+	return { code, message };
+}
+
+function acceptsNamedToolChoice(model: Model<Api> | undefined): boolean {
+	const compat = model?.compat;
+	return !(compat && "supportsNamedToolChoice" in compat && compat.supportsNamedToolChoice === false);
 }
 
 /**
@@ -369,7 +383,7 @@ function buildCodexHeaders(accessToken: string, accountId: string): Record<strin
  * overrides from the default ChatGPT-account model-selection path.
  */
 async function callCodexSearch(
-	auth: { accessToken: string; accountId: string },
+	auth: { accessToken: string; accountId?: string },
 	query: string,
 	options: {
 		signal?: AbortSignal;
@@ -415,7 +429,7 @@ async function callCodexSearch(
 				search_context_size: options.searchContextSize ?? "high",
 			},
 		],
-		tool_choice: { type: "web_search" },
+		tool_choice: acceptsNamedToolChoice(candidateModel) ? { type: "web_search" } : "required",
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
 	if (usesResponsesLite) {
@@ -522,13 +536,14 @@ async function callCodexSearch(
 					}
 				}
 			} else if (eventType === "error") {
-				const code = (rawEvent as { code?: string }).code ?? "";
-				const message = (rawEvent as { message?: string }).message ?? "Unknown error";
-				throw new SearchProviderError("codex", `Codex error (${code}): ${message}`, 500);
+				const { code, message } = extractCodexSseError(rawEvent);
+				throw new SearchProviderError("codex", `Codex error (${code}): ${message || "Unknown error"}`, 500);
 			} else if (eventType === "response.failed") {
-				const resp = (rawEvent as { response?: { error?: { message?: string } } }).response;
-				const errorMessage = resp?.error?.message ?? "Request failed";
-				throw new SearchProviderError("codex", `Codex request failed: ${errorMessage}`, 500);
+				const { code, message } = extractCodexSseError(rawEvent);
+				const detail = code
+					? `Codex request failed (${code}): ${message || "Request failed"}`
+					: `Codex request failed: ${message || "Request failed"}`;
+				throw new SearchProviderError("codex", detail, 500);
 			}
 		}
 
@@ -578,7 +593,9 @@ async function callCodexSearch(
  *   rejects.
  */
 export async function searchCodex(params: SearchParams): Promise<SearchResponse> {
-	const seed = await findCodexAuth(params.authStorage, params.sessionId, params.signal);
+	const seed = await params.authStorage.getOAuthAccess("openai-codex", params.sessionId, {
+		signal: params.signal,
+	});
 	if (!seed) {
 		throw new Error(
 			"No Codex OAuth credentials found. Login with 'veyyon /login openai-codex' to enable Codex web search.",
@@ -595,10 +612,7 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 			// Derive ALL auth material from the access this attempt received —
 			// a refreshed/rotated credential carries a different bearer and
 			// ChatGPT account id than the seed.
-			const accountId = access.accountId ?? getAccountIdFromJwt(access.accessToken);
-			if (!accountId) {
-				throw new Error("Codex OAuth credential is missing a ChatGPT account id");
-			}
+			const accountId = access.accountId ?? getAccountIdFromJwt(access.accessToken) ?? undefined;
 			const auth = { accessToken: access.accessToken, accountId };
 
 			let lastError: unknown;
@@ -626,7 +640,7 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 			}
 			throw lastError ?? new Error("Codex search failed without returning a result");
 		},
-		{ sessionId: params.sessionId, signal: params.signal, seed: seed.access },
+		{ sessionId: params.sessionId, signal: params.signal, seed },
 	);
 
 	const sources = applyResultLimit(result.sources, params.numSearchResults ?? params.limit);

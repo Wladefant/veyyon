@@ -845,6 +845,11 @@ class GeminiCliStreamRun {
 			}
 		}
 	}
+	#hasThinkingOutput(): boolean {
+		return this.#output.content.some(
+			block => block.type === "thinking" && (block.thinking.trim().length > 0 || Boolean(block.thinkingSignature)),
+		);
+	}
 
 	/** True when this endpoint produced the response, false to move on to the next one. */
 	async #streamFromEndpoint(plan: CloudCodeAssistPlan, endpoint: string, isLastEndpoint: boolean): Promise<boolean> {
@@ -860,10 +865,16 @@ class GeminiCliStreamRun {
 		const decoder = await this.#streamWithEmptyRetries(plan, requestUrl, response);
 		googleDoneReason(this.#output, this.model.provider);
 		if (!decoder?.receivedContent) {
-			throw new AIError.ProviderResponseError("Cloud Code Assist API returned an empty response", {
-				provider: this.model.provider,
-				kind: "empty-body",
-			});
+			const thoughtOnly = this.#hasThinkingOutput();
+			throw new AIError.ProviderResponseError(
+				thoughtOnly
+					? "Cloud Code Assist API returned a thought-only response without final output"
+					: "Cloud Code Assist API returned an empty response",
+				{
+					provider: this.model.provider,
+					kind: thoughtOnly ? "empty-output" : "empty-body",
+				},
+			);
 		}
 		if (this.options?.signal?.aborted) {
 			throw new AIError.RequestAbortError("Request was aborted");
@@ -921,6 +932,11 @@ class GeminiCliStreamRun {
 			if (emptyAttempt > 0) current = await this.#resend(plan, requestUrl, emptyAttempt);
 			const decoder = await this.#decode(current, plan.toolNames);
 			if (this.#output.stopReason !== "stop" || decoder.receivedContent) return decoder;
+			// A thought-only STOP is a complete provider response, not a
+			// transiently empty transport. Replaying the identical request
+			// burns another full reasoning pass; let session recovery add
+			// an explicit final-output reminder instead.
+			if (this.#hasThinkingOutput()) break;
 			if (emptyAttempt < MAX_EMPTY_STREAM_RETRIES) resetGoogleStreamOutputForRetry(this.model, this.#output);
 		}
 		return undefined;

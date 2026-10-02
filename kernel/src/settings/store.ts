@@ -15,7 +15,6 @@
  * tables the product registered before the first read.
  */
 
-import { createHash } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
@@ -985,7 +984,7 @@ export class SettingsStore {
 			...MAIN_CONFIG_FILENAMES.map(filename => path.join(this.#agentDir, filename)),
 			...this.#configFiles,
 		];
-		const hash = createHash("sha256");
+		const chunks: Uint8Array[] = [];
 		const contents = await Promise.all(
 			files.map(async file => {
 				try {
@@ -998,9 +997,16 @@ export class SettingsStore {
 		);
 		for (let index = 0; index < files.length; index++) {
 			const content = contents[index]!;
-			hash.update(files[index]!).update("\0").update(String(content.length)).update("\0").update(content);
+			chunks.push(
+				Buffer.from(files[index]!),
+				Buffer.from("\0"),
+				Buffer.from(String(content.length)),
+				Buffer.from("\0"),
+				typeof content === "string" ? Buffer.from(content) : content,
+			);
 		}
-		return hash.digest("hex");
+		const digest = await crypto.subtle.digest("SHA-256", Buffer.concat(chunks));
+		return Buffer.from(digest).toString("hex");
 	}
 
 	/**

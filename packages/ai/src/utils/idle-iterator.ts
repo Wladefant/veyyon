@@ -1,8 +1,8 @@
 import { $env } from "@veyyon/utils/env";
 import * as AIError from "../error";
 
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
-const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 100_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
+const DEFAULT_STREAM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 
 function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): number | undefined {
 	if (value === undefined) return fallback;
