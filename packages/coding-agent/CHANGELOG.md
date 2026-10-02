@@ -10,6 +10,7 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- The native ledger bridge locates its Python interpreter instead of assuming a bare `python` exists. `PYTHON_EXECUTABLE`/`PYTHON` still win, and the fallback now walks PATH (`python3` first on Linux and macOS, `python` first on Windows), so a host that ships only `python3` no longer fails every claim with `Executable not found in $PATH: "python"`. The topic-replenishment suite consequently stops planting `PYTHON`/`PYTHON_EXECUTABLE` in the process environment for every suite that follows it ([#25](https://github.com/Wladefant/veyyon/issues/25)).
 - Rejected `.` and `..` as owner or repo in GitHub repository refs so they cannot traverse the `/repos/` API path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Rejected GitHub hosts outside `github.com`, `GH_HOST` and the checkout host on every repo, PR, issue and run input, kept enterprise hosts out of API paths and cache keys, and pinned fork lookup to the PR host (Refs #107)
 - Fixed an eval cell whose idle timeout fired during kernel startup killing the whole host with an unhandled `TimeoutError` rejection, and the Python runner stderr drain splitting multi-byte characters across chunks ([#73](https://github.com/Wladefant/veyyon/issues/73)).
