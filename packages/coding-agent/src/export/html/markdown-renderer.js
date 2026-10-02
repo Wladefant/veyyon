@@ -59,12 +59,21 @@
 		marked.use({
 			breaks: true,
 			gfm: true,
+			// The lexer marks text inside an inline `<pre>`, `<code>` or `<kbd>` as `escaped`, expecting
+			// the raw HTML around it to be emitted verbatim. The `html` override escapes that HTML, so the
+			// flag would let `a <pre> b <img src=x onerror=...` reach the DOM unescaped. Clear it on every
+			// lexed token; the only `escaped` text the `text` override then sees is what the parser itself
+			// builds from already-rendered output (a loose list item's paragraph, a task checkbox).
+			walkTokens(token) {
+				if (token.type === "text") token.escaped = false;
+			},
 			renderer: {
 				code(token) {
 					return `<pre><code class="hljs">${highlight(token.text, token.lang)}</code></pre>`;
 				},
 				text(token) {
-					return token.tokens ? this.parser.parseInline(token.tokens) : escapeHtmlTags(escapeHtml(token.text));
+					if (token.tokens) return this.parser.parseInline(token.tokens);
+					return token.escaped ? token.text : escapeHtmlTags(escapeHtml(token.text));
 				},
 				codespan(token) {
 					return `<code>${escapeHtml(token.text)}</code>`;

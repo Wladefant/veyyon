@@ -121,4 +121,23 @@ describe("the exported viewer's markdown renderer", () => {
 		expect(html).toContain("<pre><code");
 		expect(html).not.toContain("<script");
 	});
+
+	it("renders bold inline code in loose ordered-list items followed by fenced code", () => {
+		const html = parse(
+			'1. **`Crew Ship`** — description\n   ```json\n   { "crew": "..." }\n   ```\n\n' +
+				'2. **`Hover Ship`** — description\n   ```json\n   { "crew": "..." }\n   ```',
+		);
+		expect(html).toContain("<strong><code>Crew Ship</code></strong>");
+		expect(html).toContain("<strong><code>Hover Ship</code></strong>");
+		expect(html).not.toContain("&lt;strong&gt;");
+	});
+
+	it.each([
+		["pre", "a <pre> b <img src=x onerror=alert(1)"],
+		["code", "<code>x <img src=x onerror=alert(1)"],
+		["kbd", "<kbd>x <img src=x onerror=alert(1)"],
+	])("keeps text after an inline %s opener escaped", (_label, payload) => {
+		const html = parse(payload);
+		expect(livesInTheDom(html)).toBe(false);
+	});
 });
