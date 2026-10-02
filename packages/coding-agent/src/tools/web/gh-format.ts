@@ -71,8 +71,9 @@ export function appendRepoFlag(args: string[], repo: string | undefined, identif
 		return;
 	}
 
-	parseRepoRef(repo);
-	args.push("--repo", repo);
+	// Only the parsed value reaches `gh`, never the raw string.
+	const ref = parseRepoRef(repo);
+	args.push("--repo", formatRepoRef(ref.host, ref.slug));
 }
 
 /** The host `gh` assumes when a ref names none and `GH_HOST` is unset. */
@@ -144,14 +145,24 @@ function splitRepoRef(repo: string): GhRepoRef {
 	return { host: repo.slice(0, firstSlash), slug: repo.slice(firstSlash + 1) };
 }
 
+const REPO_PART = "[A-Za-z0-9._-]+";
+const REPO_SLUG_PATTERN = new RegExp(`^(${REPO_PART})/(${REPO_PART})$`);
+const HOST_REPO_PATTERN = new RegExp(`^([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)/(${REPO_PART}/${REPO_PART})$`);
+
 /**
- * Split `[HOST/]OWNER/REPO`; anything with another shape is taken as a slug.
- * A named host must pass {@link assertAllowedGhHost}.
+ * Parse exactly `OWNER/REPO` or `HOST/OWNER/REPO` (strict charset: no scheme, no `:`, no `@`, no
+ * extra segments). Anything else, such as `https://host/o/r` or `git@host:o/r.git`, fails here
+ * before `gh` runs: `gh --repo` would honour the host inside those and send that host's token
+ * there. A named host must pass {@link assertAllowedGhHost}. Callers pass only the parsed value on.
  */
 export function parseRepoRef(repo: string): GhRepoRef {
-	const ref = splitRepoRef(repo);
-	if (ref.host) assertAllowedGhHost(ref.host);
-	return ref;
+	if (REPO_SLUG_PATTERN.test(repo)) return { slug: repo };
+	const match = HOST_REPO_PATTERN.exec(repo);
+	if (!match) {
+		throw new ToolError(`invalid repository ${JSON.stringify(repo)}: expected OWNER/REPO or HOST/OWNER/REPO`);
+	}
+	assertAllowedGhHost(match[1]);
+	return { host: match[1], slug: match[2] };
 }
 
 /** Join a known host and `OWNER/REPO` into the form `--repo` accepts. */

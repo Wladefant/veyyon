@@ -2024,8 +2024,8 @@ async function executeRepoView(
 	const branch = normalizeOptionalString(params.branch);
 	const args = ["repo", "view"];
 	if (repo) {
-		parseRepoRef(repo);
-		args.push(repo);
+		const ref = parseRepoRef(repo);
+		args.push(formatRepoRef(ref.host, ref.slug));
 	}
 	if (branch) {
 		args.push("--branch", branch);
@@ -2418,7 +2418,8 @@ async function executePrCreate(
 		const resolvedRepo = repo ?? parsed.repo;
 
 		let prView: GhPrViewData | undefined;
-		if (resolvedRepo && parsed.prNumber !== undefined) {
+		const resolvedRef = resolvedRepo ? parseRepoRef(resolvedRepo) : undefined;
+		if (resolvedRef && parsed.prNumber !== undefined) {
 			try {
 				prView = await git.github.json<GhPrViewData>(
 					session.cwd,
@@ -2427,7 +2428,7 @@ async function executePrCreate(
 						"view",
 						String(parsed.prNumber),
 						"--repo",
-						resolvedRepo,
+						formatRepoRef(resolvedRef.host, resolvedRef.slug),
 						"--json",
 						GH_PR_FIELDS_NO_COMMENTS.join(","),
 					],

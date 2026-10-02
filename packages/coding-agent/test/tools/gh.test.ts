@@ -1694,6 +1694,41 @@ describe("github tool host allowlist", () => {
 		});
 	}
 
+	/** Shapes `gh --repo` would honour as a host-bearing remote; none may reach it raw. */
+	const malformedRepos = [
+		"https://attacker.invalid/o/r",
+		"http://attacker.invalid/o/r.git",
+		"git@attacker.invalid:o/r.git",
+		"ssh://git@attacker.invalid/o/r",
+		"attacker.invalid:o/r",
+		"user@attacker.invalid/o/r",
+		"o/r/extra/segments",
+		"justone",
+	];
+	const repoRoutes: Array<[string, (repo: string) => Record<string, unknown>]> = [
+		["repo_view", repo => ({ op: "repo_view", repo })],
+		["search_prs", repo => ({ op: "search_prs", query: "is:open", repo })],
+		["pr_checkout", repo => ({ op: "pr_checkout", pr: "1", repo })],
+		["pr_create", repo => ({ op: "pr_create", title: "t", body: "b", repo })],
+		["run_watch", repo => ({ op: "run_watch", repo })],
+	];
+	for (const [route, build] of repoRoutes) {
+		it(`refuses URL, SSH and malformed repo values via ${route} before gh runs`, async () => {
+			process.env.GH_HOST = "ghe.corp";
+			const text = vi.spyOn(git.github, "text").mockResolvedValue("https://ghe.corp/o/r\n");
+			const json = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+			const run = vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+			const tool = new GithubTool(createSession(`/tmp/gh-malformed-${route}`));
+
+			for (const repo of malformedRepos) {
+				await expect(tool.execute("bad", build(repo) as never)).rejects.toThrow();
+			}
+
+			const seen = [...text.mock.calls, ...json.mock.calls, ...run.mock.calls].map(call => JSON.stringify(call[1]));
+			expect(seen.filter(args => args.includes("attacker.invalid"))).toEqual([]);
+		});
+	}
+
 	it("lets github.com and the GH_HOST host through", async () => {
 		process.env.GH_HOST = "ghe.corp";
 		const json = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });

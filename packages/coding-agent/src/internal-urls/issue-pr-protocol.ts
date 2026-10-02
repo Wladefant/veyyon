@@ -34,7 +34,7 @@ import {
 	type PrDiffFile,
 	resolveDefaultRepoMemoized,
 } from "../tools/web/gh-fetch";
-import { assertAllowedGhHost, formatRepoRef, parsePositiveDecimalInt } from "../tools/web/gh-format";
+import { assertAllowedGhHost, formatRepoRef, parsePositiveDecimalInt, parseRepoRef } from "../tools/web/gh-format";
 import { type CacheStatus, formatFreshnessNote } from "../tools/web/github-cache";
 import * as git from "../utils/git";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
@@ -328,7 +328,9 @@ async function fetchAndRenderList(
 	url: InternalUrl,
 	context: ResolveContext | undefined,
 ): Promise<InternalResource> {
-	const repo = await resolveListRepo(scheme, options.repo, context);
+	const resolvedRepo = await resolveListRepo(scheme, options.repo, context);
+	const listRef = parseRepoRef(resolvedRepo);
+	const repo = formatRepoRef(listRef.host, listRef.slug);
 	const cwd = resolveCwd(context);
 	const fields =
 		scheme === "issue"

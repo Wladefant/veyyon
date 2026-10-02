@@ -149,3 +149,27 @@ describe("github cache keys with GH_HOST set", () => {
 		expect(getCached("acme/widgets", "pr", 7, true)?.rendered).toBe("one row");
 	});
 });
+
+describe("parseRepoRef accepts only OWNER/REPO or HOST/OWNER/REPO", () => {
+	it("rejects scheme, SSH, userinfo and extra-segment forms that gh would read as a host", () => {
+		for (const repo of [
+			"https://attacker.invalid/o/r",
+			"git@attacker.invalid:o/r.git",
+			"ssh://git@attacker.invalid/o/r",
+			"user@attacker.invalid/o/r",
+			"host:8080/o/r",
+			"o/r/x/y",
+			"solo",
+		]) {
+			expect(() => parseRepoRef(repo)).toThrow(/invalid repository|not allowed/);
+			expect(() => appendRepoFlag([], repo)).toThrow(/invalid repository|not allowed/);
+		}
+	});
+
+	it("passes only the parsed value to --repo", () => {
+		const args: string[] = [];
+		appendRepoFlag(args, "github.com/o/r");
+		expect(parseRepoRef("o/r")).toEqual({ slug: "o/r" });
+		expect(args).toEqual(["--repo", "github.com/o/r"]);
+	});
+});
