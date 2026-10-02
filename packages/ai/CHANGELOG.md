@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Fixed OpenAI Responses prepared request caching to rebuild wire body on reasoning-effort fallback and retain sent payload in diagnostics ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 21cb04bd3e6b72fcd05bb4e2f02fe441cf2d2a60).
 - Retried one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex stream close retries gating on committed visible content and emitted deltas rather than open empty blocks, emitting balancing end events before replay and classifying premature closes as stream corruption ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Corrected auth gateway video modality types and merged Codex continuation fixtures; provider behavior is unchanged.
