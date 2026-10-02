@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@veyyon/ai";
+import { STREAM_NO_TERMINAL_REASON_PATTERN } from "@veyyon/ai/error/domains/network";
 import {
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
@@ -5148,5 +5149,155 @@ describe("openai-codex SSE statelessness", () => {
 			providerSessionState,
 		});
 		expect(stats).toMatchObject({ fullContextRequests: 2, deltaRequests: 0 });
+	});
+});
+
+describe("openai-codex stream retry guards and balancing end events", () => {
+	it("classifies premature Codex stream close as stream corruption without a terminal event", () => {
+		expect(STREAM_NO_TERMINAL_REASON_PATTERN.test("Codex stream ended before terminal completion event")).toBe(true);
+		expect(
+			STREAM_NO_TERMINAL_REASON_PATTERN.test(
+				"OpenAI responses stream closed before a terminal response event was received",
+			),
+		).toBe(true);
+	});
+
+	it("retries socket close when leading output_item.added opened an empty block and balances end events", async () => {
+		const tempDir = TempDir.createSync("@veyyon-codex-stream-");
+		setAgentDir(tempDir.path());
+		let wsAttempt = 0;
+		const eventsSeen: string[] = [];
+
+		class RetryEmptyBlockWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				wsAttempt += 1;
+				this.scheduleOpen();
+			}
+			override send(): void {
+				if (wsAttempt === 1) {
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { id: "msg_empty", type: "message", role: "assistant", content: [] },
+						output_index: 0,
+					});
+					queueMicrotask(() => this.emit("close", { code: 1006 } as unknown as Event));
+				} else {
+					this.emitCodexResponse({ messageId: "msg_ok", responseId: "resp_ok", text: "Retried and succeeded" });
+				}
+			}
+		}
+
+		global.WebSocket = RetryEmptyBlockWebSocket as unknown as typeof WebSocket;
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const stream = streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: createCodexTestToken(),
+				sessionId: "empty-block-retry-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				fetch: (async () => {
+					throw new Error("SSE fallback should not be called");
+				}) as FetchImpl,
+			},
+		);
+		const consumerPromise = (async () => {
+			for await (const event of stream) {
+				if (event.type === "text_start" || event.type === "text_end") eventsSeen.push(event.type);
+			}
+		})();
+		const result = await stream.result();
+		await consumerPromise;
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "Retried and succeeded" })]);
+		expect(wsAttempt).toBe(2);
+		expect(eventsSeen).toEqual(["text_start", "text_end", "text_start", "text_end"]);
+	});
+
+	it("does not retry socket close if a whitespace text delta was already streamed", async () => {
+		const tempDir = TempDir.createSync("@veyyon-codex-stream-");
+		setAgentDir(tempDir.path());
+		let wsAttempt = 0;
+		class WhitespaceCommittedWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				wsAttempt += 1;
+				this.scheduleOpen();
+			}
+			override send(): void {
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { id: "msg_ws", type: "message", role: "assistant", content: [] },
+					output_index: 0,
+				});
+				this.sendJson({ type: "response.output_text.delta", item_id: "msg_ws", delta: "   ", output_index: 0 });
+				queueMicrotask(() => {
+					this.emit("error", new Event("error"));
+					this.emit("close", { code: 1006 } as unknown as Event);
+				});
+			}
+		}
+		global.WebSocket = WhitespaceCommittedWebSocket as unknown as typeof WebSocket;
+		const result = await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: createCodexTestToken(),
+				sessionId: "ws-whitespace-committed-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				fetch: (async () => {
+					throw new Error("SSE fallback error");
+				}) as FetchImpl,
+			},
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(wsAttempt).toBe(1);
+	});
+
+	it("does not retry socket close if a thinking delta was already streamed", async () => {
+		const tempDir = TempDir.createSync("@veyyon-codex-stream-");
+		setAgentDir(tempDir.path());
+		let wsAttempt = 0;
+		class ThinkingCommittedWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				wsAttempt += 1;
+				this.scheduleOpen();
+			}
+			override send(): void {
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { id: "msg_rs", type: "reasoning", summary: [] },
+					output_index: 0,
+				});
+				this.sendJson({
+					type: "response.reasoning_summary_text.delta",
+					item_id: "msg_rs",
+					delta: "thinking step",
+					output_index: 0,
+				});
+				queueMicrotask(() => {
+					this.emit("error", new Event("error"));
+					this.emit("close", { code: 1006 } as unknown as Event);
+				});
+			}
+		}
+		global.WebSocket = ThinkingCommittedWebSocket as unknown as typeof WebSocket;
+		const result = await streamOpenAICodexResponses(
+			createCodexTestModel("https://chatgpt.com/backend-api"),
+			createCodexTestContext(),
+			{
+				apiKey: createCodexTestToken(),
+				sessionId: "ws-thinking-committed-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				fetch: (async () => {
+					throw new Error("SSE fallback error");
+				}) as FetchImpl,
+			},
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(wsAttempt).toBe(1);
 	});
 });

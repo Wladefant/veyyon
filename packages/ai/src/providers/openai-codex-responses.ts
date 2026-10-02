@@ -76,7 +76,7 @@ import {
 	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 } from "../utils";
 import { clearStreamingPartialJson, kStreamingLastParseLen, kStreamingPartialJson } from "../utils/block-symbols";
-import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
+import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import {
 	type FirstEventBudget,
@@ -1957,6 +1957,19 @@ class CodexStreamProcessor {
 					this.#handleStreamEvent(rawEvent);
 					if (this.runtime.sawTerminalEvent) break;
 				}
+				if (!this.runtime.sawTerminalEvent) {
+					CODEX_DEBUG &&
+						logger.debug("[codex] codex stream ended unexpectedly", {
+							transport: this.runtime.transport,
+							terminalEventSeen: false,
+							unexpectedStreamEnd: true,
+							sentTurnStateHeader: Boolean(this.requestContext.websocketState?.turnState),
+							sentModelsEtagHeader: Boolean(this.requestContext.websocketState?.modelsEtag),
+						});
+					throw new CodexProviderStreamError("Codex stream ended before terminal completion event", {
+						retryable: true,
+					});
+				}
 				return { firstTokenTime: this.#attemptFirstTokenTime };
 			} catch (error) {
 				const recovered = await this.#recoverStreamError(error);
@@ -2503,7 +2516,12 @@ class CodexStreamProcessor {
 
 		const state = websocketState;
 		const streamError = error instanceof Error ? error : new Error(String(error));
-		const replayingBufferedOutputOverSse = this.output.content.length > 0;
+		const streamedContent = this.output.content.some(
+			block =>
+				(block.type === "text" && block.text.length > 0) ||
+				(block.type === "thinking" && block.thinking.length > 0),
+		);
+		const replayingBufferedOutputOverSse = hasVisibleAssistantContent(this.output) || streamedContent;
 		const fatalWebSocketMessage = streamError.message.toLowerCase();
 		const isFatal = CODEX_WEBSOCKET_FATAL_PATTERNS.some(pattern =>
 			fatalWebSocketMessage.includes(pattern.toLowerCase()),
@@ -2545,12 +2563,12 @@ class CodexStreamProcessor {
 			});
 
 		if (!activateFallback) {
+			this.#closeOpenBlocksForReplay();
 			this.runtime.websocketStreamRetries += 1;
 			if (isStall) this.runtime.websocketStallRetries += 1;
-			// Full re-send on a fresh socket: clear accumulator state from the failed
-			// attempt. Content is empty here, but blockless native items (e.g.
-			// web_search_call) may already have accumulated.
 			this.runtime.resetAccumulators();
+			this.runtime.sawTerminalEvent = false;
+			resetOutputState(this.model, this.output);
 			this.firstTokenTime = undefined;
 			await scheduler.wait(CODEX_WEBSOCKET_RETRY_DELAY_MS * Math.max(1, this.runtime.websocketStreamRetries), {
 				signal: this.requestSetup.requestSignal,
@@ -2567,20 +2585,68 @@ class CodexStreamProcessor {
 		return true;
 	}
 
+	/**
+	 * Emit balancing `*_end` events for every block that opened (pushed a
+	 * `*_start`) but never committed visible content, so a retry that resets
+	 * `output` and replays cannot leave the consumer with an orphaned
+	 * `text_start`/`thinking_start` from the abandoned attempt. Only reachable
+	 * blocks are empty text/reasoning ones — a committed tool/text block blocks
+	 * the retry upstream.
+	 */
+	#closeOpenBlocksForReplay(): void {
+		const { runtime, output, stream } = this;
+		const open = new Set<CodexOpenItem>(runtime.openItems.values());
+		for (const entry of runtime.openItemsByOutputIndex.values()) open.add(entry);
+		if (runtime.currentEntry) open.add(runtime.currentEntry);
+		for (const entry of open) {
+			const block = entry.block;
+			if (block?.type === "thinking") {
+				stream.push({
+					type: "thinking_end",
+					contentIndex: entry.contentIndex,
+					content: block.thinking,
+					partial: output,
+				});
+			} else if (block?.type === "text") {
+				stream.push({ type: "text_end", contentIndex: entry.contentIndex, content: block.text, partial: output });
+			}
+		}
+	}
+
 	async #tryRetryProviderError(error: unknown): Promise<boolean> {
 		// A stall that has already used the turn's declared first-event budget is
 		// not retried: nothing streamed, the endpoint said nothing, and another
 		// attempt can only push the caller further past the number it declared.
 		const stallOutlivedBudget = isPreResponseStall(error) && this.requestSetup.firstEventBudget.spent();
+		// A leading `response.output_item.added` opens an empty block and emits only
+		// a `*_start` before any delta; that is replay-safe. But once any text or
+		// thinking delta has streamed — including a whitespace-only
+		// `output_text.delta`, which still reaches consumers as `text_delta` — or a
+		// visible tool/image block exists, replaying would duplicate/reorder those
+		// already-delivered events, so treat the attempt as committed. Emptiness is
+		// measured by the streamed block length (whitespace counts), not by visible
+		// final content.
+		const streamedContent = this.output.content.some(
+			block =>
+				(block.type === "text" && block.text.length > 0) ||
+				(block.type === "thinking" && block.thinking.length > 0),
+		);
 		if (
 			!(error instanceof CodexProviderStreamError && error.retryable) ||
-			this.output.content.length > 0 ||
+			hasVisibleAssistantContent(this.output) ||
+			streamedContent ||
+			!this.runtime.canSafelyReplayWebsocketOverSse ||
 			this.runtime.providerRetryAttempt >= CODEX_MAX_RETRIES ||
 			stallOutlivedBudget ||
 			this.options?.signal?.aborted
 		) {
 			return false;
 		}
+
+		// A leading `output_item.added` already pushed a `*_start` for the (empty)
+		// open block; balance it with the matching end before the reset+replay so
+		// consumers never see an orphaned start from the abandoned attempt.
+		this.#closeOpenBlocksForReplay();
 
 		this.runtime.providerRetryAttempt += 1;
 		const websocketState = this.requestContext.websocketState;
