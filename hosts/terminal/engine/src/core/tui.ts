@@ -17,6 +17,7 @@
  */
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import { type ActivitySignal, processActivity } from "@veyyon/utils/activity-signal";
 import { getDebugLogPath } from "@veyyon/utils/dirs";
 import { $flag, isBunTestRuntime } from "@veyyon/utils/env";
 import { isKeyRelease, matchesKey } from "@veyyon/utils/keys";
@@ -136,6 +137,11 @@ export interface RenderScheduler {
 
 export interface TUIOptions {
 	renderScheduler?: RenderScheduler;
+	/**
+	 * Where the engine reports its keystrokes and frames between start() and stop(), and where its
+	 * loop watchdog parks at rest. Default `processActivity`.
+	 */
+	activity?: ActivitySignal;
 }
 
 export interface TUIStartOptions {
@@ -523,8 +529,12 @@ export class TUI extends Container {
 	#stopped = false;
 	// Always-on event-loop lag probe. The high default threshold keeps it quiet;
 	// it only logs `ui.loop-blocked` (with the current loop phase) when a frame
-	// budget is genuinely starved. Armed in start(), disarmed in stop().
+	// budget is genuinely starved. Armed in start(), disarmed in stop(). It
+	// parks while the session rests and wakes on the keystrokes and frames this
+	// engine reports to `#activity` between start() and stop().
 	#watchdog: LoopWatchdog;
+	#activity: ActivitySignal;
+	#detachActivity: (() => void) | undefined;
 
 	// Live tail of the last resident alt paint: the composed rows that had not
 	// moved onto the scroll tape yet. Together with the tape this is the whole
@@ -603,10 +613,14 @@ export class TUI extends Container {
 		this.terminal = terminal;
 		this.#overlays = new OverlayStack(terminal);
 		this.#renderScheduler = options?.renderScheduler ?? DEFAULT_RENDER_SCHEDULER;
+		this.#activity = options?.activity ?? processActivity;
 		if (showHardwareCursor !== undefined) this.#cursor.setShow(showHardwareCursor);
 		// A block's stacks come from the process's sampling profiler. A test process runs many
 		// TUIs and its own profiling, so it keeps the watchdog's timing and phase report only.
-		this.#watchdog = new LoopWatchdog({ stacks: isBunTestRuntime() ? undefined : stallSampler });
+		this.#watchdog = new LoopWatchdog({
+			stacks: isBunTestRuntime() ? undefined : stallSampler,
+			activity: this.#activity,
+		});
 	}
 
 	override render(width: number): readonly string[] {
@@ -1433,6 +1447,7 @@ export class TUI extends Container {
 
 	start(options?: TUIStartOptions): void {
 		this.#stopped = false;
+		this.#detachActivity ??= this.#activity.attachHost();
 		this.#watchdog.start();
 		this.#ghosttyInitialImageDelayDone = false;
 		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + GHOSTTY_INITIAL_IMAGE_DELAY_MS;
@@ -1564,6 +1579,8 @@ export class TUI extends Container {
 		// full-screen program a wheel that types arrow keys.
 		this.#syncAltScroll();
 		this.#watchdog.stop();
+		this.#detachActivity?.();
+		this.#detachActivity = undefined;
 		this.#renderTimer?.cancel();
 		this.#renderTimer = undefined;
 		// The request itself, not just its timer: a stopped engine owes no frame,
@@ -2218,6 +2235,7 @@ export class TUI extends Container {
 	 * one.
 	 */
 	#handleInput(data: string): void {
+		this.#activity.report();
 		pushLoopPhase("ui.input");
 		try {
 			this.#dispatchInput(data);
@@ -2422,6 +2440,7 @@ export class TUI extends Container {
 	 */
 	#doRender(): void {
 		if (this.#stopped) return;
+		this.#activity.report();
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 

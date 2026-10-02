@@ -9,6 +9,7 @@
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
 - `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.
 - `once` is removed; `lazy(build)` returns a `Lazy<T>` whose `value` getter calls `build` on the first read and returns that result afterwards, and `typeof held.value` states the built type without building it.
+- `StallStackSource` requires `park()`, which `LoopWatchdog` calls when it parks.
 
 ### Added
 
@@ -55,6 +56,11 @@
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
+- `TUIOptions.activity` sets the `ActivitySignal` the TUI attaches to between `start()` and `stop()`; the default is `processActivity`.
+- `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.
+- `@veyyon/utils/rearming-timeout` exports `rearmingTimeout`, a schedule for a callback that arms its own next run, which re-arms one `setTimeout` with `refresh()` instead of creating a timeout per call.
+- `@veyyon/utils/activity-signal` exports `ActivitySignal` and the process-wide `processActivity`: a host attaches with `attachHost()` and calls `report()` on its work, and a sampler that found the process quiet calls `park(wake)` to arm no timer until the next report.
+- `LoopWatchdog` accepts `parkAfterMs` (default 10,000) and `activity`, and `IdleTrim` accepts `activity`.
 - `IdleTrim` accepts `release`, which runs on the first quiet sampling window after a busy one and again after each trim; a `release` that throws is not called again and the trim continues.
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
@@ -63,7 +69,7 @@
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
 - `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
-- `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
+- `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running, at a 10 ms interval while the loop watchdog reports busy ticks and at 100 ms after 10 seconds without one, and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
@@ -74,6 +80,7 @@
 
 ### Changed
 
+- An interactive session at rest arms no working-clock heartbeat, stops its loop watchdog after 10 quiet seconds and its idle trim after the trim, and samples its stack once a second, each until the next keystroke or frame, so the runtime's idle collector drops to its slow rate: the linux-x64 binary idle 90 seconds after launch records 131 thread wakeups in 60 seconds instead of 4,062 and spends 20 ms of CPU instead of 160 ms (median of three).
 - Capability discovery finds the repository root by checking each ancestor of the working directory for `.git` instead of listing and keeping every ancestor directory, and concurrent loads share one lookup; twenty concurrent lookups from a directory under a 1,700-entry directory take 0.31 ms instead of 2.50 ms and leave 32 KiB on the heap instead of 259 KiB, and from a home directory outside any repository take 0.30 ms instead of 1.85 ms and leave 33 KiB instead of 185 KiB (median of 15).
 - A session compares a SHA-256 digest of its tool names, descriptions and MCP server instructions to decide whether a tool change rebuilds the system prompt, instead of keeping the joined text, so each main session and live subagent holds 87,568 fewer bytes of heap once its tool set has been applied twice with the default tools.
 - On Linux the binary's embedded module pages are released on the first 5-second window under 5% CPU after work instead of after 30 quiet seconds, so an idle session 15 seconds after launch holds 190 MiB RSS instead of 270-286 MiB, and a session with turns 12 seconds apart holds 209-216 MiB after its second and third turns instead of 290-295 MiB, at unchanged turn latency.
@@ -295,6 +302,8 @@
 - A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
 - `getEffectiveSnapshot` resolves every declared setting without memoizing it, so a store keeps cached values only for paths its session reads, which cut the heap a live spawned session retains from 315.4 KiB to 277.0 KiB (median of 3 runs over 20 sessions).
 - `SessionManager.getCwd` returns the absolute cwd the session holds instead of resolving a new copy on every read, so the transcript rows of a resumed 600-turn session share one path string instead of holding 1,599 copies, which cut its heap and extra memory from 123,876 KiB to 123,672 KiB and its live strings from 135,858 to 134,281 (median of five); every returned value is unchanged.
+- The resume warning for tool calls left without a result scans the branch from the keep boundary of its newest compaction, so it no longer lists a call before that boundary or reads a compacted entry back from the session file to check it.
+- A cold message entry keeps a message object holding the message's `role`, `toolName`, `toolCallId`, `isError`, `stopReason`, `provider` and `model` and reads only its large fields back on access, so the checkpoint and todo scans of a resume read no entry back; with the bounded resume warning this cut the entries a resumed 390 MiB, 44,454-cold-entry session reads back from 43,027 to 0, its heap from 529.7 MiB plus 418.8 MiB external to 109.9 MiB plus 40.8 MiB, its peak RSS from 2,231 MiB to 1,204 MiB and its time to the startup banner from 2.27 s to 1.46 s (median of 3 alternating runs).
 - 12 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The extraction client waits between fallback models through `scheduler.wait` from `node:timers/promises`, the wait its rate-limit retries use; the delay is unchanged.
@@ -305,6 +314,7 @@
 - The addon runs its async exports on a Tokio runtime of at most four scheduler workers on every platform instead of napi-rs's default of one per CPU, which cuts an idle `vey` on a 32-thread host from 54 threads to 26 and the anonymous memory the addon's load and first async call add from 3.6 MiB to 3.1 MiB.
 - The first launch of a version inflates the embedded addon archive into one buffer sized from the addon metadata instead of 16 KiB chunks joined by a copy, which cuts that launch on linux-x64 from 575 ms to 485 ms to a ready status line and its peak resident memory from 449 MiB to 305 MiB (median of seven).
 - The edit card reads its target paths through `editInputPaths` from `@veyyon/utils/fs-tool-args`; rendered output is unchanged.
+- The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
 - 23 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
 - The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.
@@ -420,6 +430,9 @@
 - `stallSampler` checks inspector profile payloads with the shared `isRecord`; no user-visible change.
 - `@veyyon/utils/prompt` loads the Handlebars parser and compiler through `@veyyon/utils/prompt-handlebars` on the first template no build precompiled, so a process that renders only precompiled templates evaluates the Handlebars runtime alone.
 - `prompt.format` returns text it rewrites no line of as a cut of its input, without the blank lines at its end, instead of a joined copy; creating an idle main session copies 188,952 fewer characters (347,436 bytes over 65 calls), and a prompt with no mustache holds one buffer for its template and its render.
+- `LoopWatchdog` and `IdleTrim` re-arm one timeout per `start()` through `rearmingTimeout` instead of creating a timeout, a handle object and two closures on every tick.
+- While a host is attached to its activity signal, `LoopWatchdog` arms no tick after 10 seconds of ticks without a block or busy CPU, `IdleTrim` arms no window after the window that follows a trim, and `stallSampler` samples once a second, until the host reports work.
+- The `rearmingTimeout` documentation records its measured effect on an idle interactive session of the linux-x64 binary; no user-visible change.
 
 ### Removed
 

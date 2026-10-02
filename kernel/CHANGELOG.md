@@ -57,6 +57,8 @@
 - A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
 - `getEffectiveSnapshot` resolves every declared setting without memoizing it, so a store keeps cached values only for paths its session reads, which cut the heap a live spawned session retains from 315.4 KiB to 277.0 KiB (median of 3 runs over 20 sessions).
 - `SessionManager.getCwd` returns the absolute cwd the session holds instead of resolving a new copy on every read, so the transcript rows of a resumed 600-turn session share one path string instead of holding 1,599 copies, which cut its heap and extra memory from 123,876 KiB to 123,672 KiB and its live strings from 135,858 to 134,281 (median of five); every returned value is unchanged.
+- The resume warning for tool calls left without a result scans the branch from the keep boundary of its newest compaction, so it no longer lists a call before that boundary or reads a compacted entry back from the session file to check it.
+- A cold message entry keeps a message object holding the message's `role`, `toolName`, `toolCallId`, `isError`, `stopReason`, `provider` and `model` and reads only its large fields back on access, so the checkpoint and todo scans of a resume read no entry back; with the bounded resume warning this cut the entries a resumed 390 MiB, 44,454-cold-entry session reads back from 43,027 to 0, its heap from 529.7 MiB plus 418.8 MiB external to 109.9 MiB plus 40.8 MiB, its peak RSS from 2,231 MiB to 1,204 MiB and its time to the startup banner from 2.27 s to 1.46 s (median of 3 alternating runs).
 
 ### Fixed
 
