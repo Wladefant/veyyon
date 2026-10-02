@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,7 +29,8 @@ function migrateSessionDirPath(oldPath: string, newPath: string): void {
 				fs.renameSync(src, dst);
 			}
 		}
-		fs.rmSync(oldPath, { recursive: true, force: true });
+		// Keep colliding stale copies rather than silently deleting a different transcript.
+		if (fs.readdirSync(oldPath).length === 0) fs.rmdirSync(oldPath);
 		return;
 	}
 	if (existing) {
@@ -47,7 +49,7 @@ function encodeRelativeSessionDirName(prefix: string, relative: string): string 
 	return encoded ? (prefix.endsWith("-") ? `${prefix}${encoded}` : `${prefix}-${encoded}`) : prefix;
 }
 
-function getDefaultSessionDirName(cwd: string): { encodedDirName: string; resolvedCwd: string } {
+function getDefaultSessionDirName(cwd: string): { encodedDirName: string; hashedDirName: string; resolvedCwd: string } {
 	const resolvedCwd = path.resolve(cwd);
 	const canonicalCwd = resolveEquivalentPath(resolvedCwd);
 	const home = os.homedir();
@@ -56,13 +58,22 @@ function getDefaultSessionDirName(cwd: string): { encodedDirName: string; resolv
 	const canonicalTempRoot = resolveEquivalentPath(tempRoot);
 	const homeRelative = path.relative(canonicalHome, canonicalCwd);
 	const tempRelative = path.relative(canonicalTempRoot, canonicalCwd);
-	const encodedDirName =
-		homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative))
-			? encodeRelativeSessionDirName("-", homeRelative)
-			: tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative))
-				? encodeRelativeSessionDirName("-tmp", tempRelative)
-				: encodeLegacyAbsoluteSessionDirName(canonicalCwd);
-	return { encodedDirName, resolvedCwd };
+	const inHome = homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative));
+	const inTemp = tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative));
+	const encodedDirName = inHome
+		? encodeRelativeSessionDirName("-", homeRelative)
+		: inTemp
+			? encodeRelativeSessionDirName("-tmp", tempRelative)
+			: encodeLegacyAbsoluteSessionDirName(canonicalCwd);
+	// Recover the short-lived hashed layout without making it the active layout again.
+	const scope = inHome ? "home" : inTemp ? "tmp" : "abs";
+	const readable = path
+		.basename(canonicalCwd)
+		.replace(/[^a-zA-Z0-9._-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(-80);
+	const digest = createHash("sha256").update(canonicalCwd.replaceAll("\\", "/")).digest("hex");
+	return { encodedDirName, hashedDirName: `${scope}-${readable || "project"}-${digest}`, resolvedCwd };
 }
 
 /**
@@ -150,10 +161,22 @@ export function computeDefaultSessionDir(
 	storage: SessionStorage,
 	sessionsRoot: string = getSessionsDir(),
 ): string {
-	const { encodedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
+	const { encodedDirName, hashedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
 	migrateHomeSessionDirs(sessionsRoot);
 	const sessionDir = path.join(sessionsRoot, encodedDirName);
 	migrateLegacyAbsoluteSessionDir(resolvedCwd, sessionDir, sessionsRoot);
+	const hashedDir = path.join(sessionsRoot, hashedDirName);
+	if (hashedDir !== sessionDir && fs.existsSync(hashedDir)) {
+		try {
+			migrateSessionDirPath(hashedDir, sessionDir);
+		} catch (error) {
+			logger.warn("Hashed session directory could not be migrated; its transcripts will not be listed", {
+				from: hashedDir,
+				to: sessionDir,
+				error: errorMessage(error),
+			});
+		}
+	}
 	storage.ensureDirSync(sessionDir);
 	return sessionDir;
 }

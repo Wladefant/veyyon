@@ -14,6 +14,7 @@
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
 
 ### Fixed
+- Session discovery recovers hashed-layout transcripts without changing active directory names or deleting conflicting stale copies ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Validate `Type.Unsafe` against the draft-2020-12 upgraded schema so raw JSON Schema draft-07 documents validate consistently with wire validation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Config source stamps use WebCrypto SHA-256 without loading `node:crypto` on the launch-card path; digest bytes are unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `SettingsStore.forkWithRuntimeOverrides` dropping `#configPath` on forked in-memory instances, so subagents and runtime forks can compute `configSourceStamp()` and detect on-disk config changes.
