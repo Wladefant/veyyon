@@ -151,7 +151,7 @@ function isLeakedThinkingHealExempt(model: Model<Api>): boolean {
 }
 
 /** Strict official-Codex endpoint check; exact origin or a path boundary after {@link CODEX_BASE_URL}. */
-function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
+export function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return true;
 	const lower = trimTrailingSlashes(baseUrl.toLowerCase());
 	return lower === CODEX_BASE_URL || lower.startsWith(`${CODEX_BASE_URL}/`);
@@ -1586,7 +1586,8 @@ function anthropicThinkingOff({ model, options, base }: OptionsMapping): Options
 function anthropicMessagesOptions(mapping: OptionsMapping): OptionsForApi<"anthropic-messages"> {
 	const { model, options, selection, base } = mapping;
 	const reasoning = selection.effort;
-	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff) return anthropicThinkingOff(mapping);
+	if (!selection.enabled || !reasoning || options.disableReasoning || options.forceReasoningOff)
+		return anthropicThinkingOff(mapping);
 	let thinkingBudget = resolveThinkingBudget(reasoning, ANTHROPIC_THINKING_BUDGETS, options.thinkingBudgets);
 	if (thinkingBudget <= 0) return anthropicThinkingOff(mapping);
 

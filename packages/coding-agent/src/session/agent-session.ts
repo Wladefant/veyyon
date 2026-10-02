@@ -551,11 +551,15 @@ function sessionStopContinuationContext(result: SessionStopEventResult | undefin
 			? result.additionalContext
 			: undefined;
 	const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
+	if (result.decision === "block") {
+		return (
+			reason ??
+			additionalContext ??
+			"A session_stop handler blocked completion without a reason. Resolve the outstanding work before finishing."
+		);
+	}
 	if (result.continue === true) {
 		return additionalContext ?? reason;
-	}
-	if (result.decision === "block") {
-		return reason ?? additionalContext;
 	}
 	return undefined;
 }
@@ -916,6 +920,7 @@ export class AgentSession {
 	/** Stale-result and overflow prunes, image drops, shake and dedup of the recorded history. */
 	readonly #rewrites: HistoryRewrites;
 	#promptGeneration = 0;
+	#activeAgentPromptGeneration = this.#promptGeneration;
 	/**
 	 * Prompts refused as busy and waiting for the agent to go idle. Each is a
 	 * turn already committed to, held by nothing the queues can see: the hidden
@@ -2536,6 +2541,7 @@ export class AgentSession {
 	 * before its `message_end` handler resumes.
 	 */
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
+		if (event.type === "agent_start") this.#activeAgentPromptGeneration = this.#promptGeneration;
 		// Paired with the mark in `#recordToolExecutionStart`, and cleared before the
 		// awaited subscribers below: a listener that throws would otherwise leave this
 		// process looking like it died inside a call that had already returned.
@@ -3281,7 +3287,7 @@ export class AgentSession {
 		messages: AgentMessage[],
 		lastAssistantMessage = this.getLastAssistantMessage(),
 	): Promise<void> {
-		if (this.#abortInProgress || this.#isDisposed) {
+		if (this.#abortInProgress || this.#isDisposed || this.#activeAgentPromptGeneration !== this.#promptGeneration) {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
@@ -3304,7 +3310,7 @@ export class AgentSession {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
-		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
+		if (result?.decision !== "block" && this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
 			logger.warn("session_stop continuation cap reached", {
 				sessionId: this.sessionId,
 				cap: SESSION_STOP_CONTINUATION_CAP,
@@ -3312,7 +3318,7 @@ export class AgentSession {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
-		this.#sessionStopContinuationCount++;
+		if (result?.decision !== "block") this.#sessionStopContinuationCount++;
 		this.#sessionStopHookActive = true;
 		this.#queueHiddenNextTurnMessage(
 			{

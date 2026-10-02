@@ -14,6 +14,9 @@ import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import type { OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import { removeWithRetries } from "../../utils/src/temp";
+import { isAllowanceSpent } from "../src/auth-storage/usage-ranking";
+import type { CredentialRankingStrategy } from "../src/usage";
+import { codexRankingStrategy } from "../src/usage/openai-codex";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -199,7 +202,7 @@ function addSparkUsage(
 
 describe("AuthStorage codex oauth ranking", () => {
 	let tempDir = "";
-	let store: AuthCredentialStore | null = null;
+	let store: SqliteAuthCredentialStore | null = null;
 	let dbPath = "";
 	let authStorage: AuthStorage | null = null;
 	const usageByAccount = new Map<string, UsageReport>();
@@ -430,6 +433,153 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		const counts = await countApiKeySelections(authStorage, "openai-codex", "weighted-codex-zero");
 		expectExclusivePreference(counts, "api-acct-zero", "api-acct-progress");
+	});
+	const setCreditRep = (
+		id: string,
+		primaryUsed: number,
+		secondaryUsed: number,
+		extra?: { limitReached?: boolean; resetInMs?: number },
+	) => {
+		usageByAccount.set(
+			id,
+			createCodexUsageReport({
+				accountId: id,
+				primary: { usedFraction: primaryUsed, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: secondaryUsed, resetInMs: extra?.resetInMs ?? 5 * 24 * HOUR_MS },
+				metadata: extra?.limitReached ? { allowed: true, limitReached: true } : undefined,
+			}),
+		);
+	};
+
+	test("prefers renewable allowance over credit-funded account even with fresh 5h window", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-credit-funded", "credit@example.com") },
+			{ type: "oauth", ...createCredential("acct-renewable-plan", "plan@example.com") },
+		]);
+		usageByAccount.set(
+			"acct-credit-funded",
+			createCodexUsageReport({
+				accountId: "acct-credit-funded",
+				primary: { usedFraction: 0, resetInMs: FIVE_HOUR_MS },
+				secondary: { usedFraction: 1.0, resetInMs: HOUR_MS },
+				primaryWindow: { windowId: "5h", windowLabel: "5 Hours", durationMs: FIVE_HOUR_MS },
+				metadata: { allowed: true, limitReached: true },
+			}),
+		);
+		setCreditRep("acct-renewable-plan", 0.2, 0.5);
+		const counts = await countApiKeySelections(authStorage, "openai-codex", "session-credit-new");
+		expectExclusivePreference(counts, "api-acct-renewable-plan", "api-acct-credit-funded");
+	});
+
+	test("evicts warm automatic session pin when renewable allowance is spent and unblocked sibling has quota", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-warm-pin", "warm@example.com") },
+			{ type: "oauth", ...createCredential("acct-sibling-quota", "sibling@example.com") },
+		]);
+		setCreditRep("acct-warm-pin", 0.1, 0.2);
+		setCreditRep("acct-sibling-quota", 0.1, 0.4);
+		const sessionId = "mid-session-credit-eviction";
+		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-warm-pin");
+
+		setCreditRep("acct-warm-pin", 0.1, 1.0, { limitReached: true });
+		await authStorage.invalidateUsageCache("openai-codex");
+		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-sibling-quota");
+		const warmPinId = store.listAuthCredentials("openai-codex")[0]?.id;
+		expect(warmPinId).toBeDefined();
+		expect(store.getCredentialBlock(warmPinId!, "openai-codex:oauth", "shared")).toBeUndefined();
+	});
+
+	test("retains warm automatic pin when loadBalancing is disabled even if allowance is spent", async () => {
+		if (!store) throw new Error("test setup failed");
+		const staticStorage = new AuthStorage(store, {
+			loadBalancing: false,
+			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
+		});
+		await staticStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-lb-first", "first@example.com") },
+			{ type: "oauth", ...createCredential("acct-lb-second", "second@example.com") },
+		]);
+		setCreditRep("acct-lb-first", 0.1, 0.2);
+		setCreditRep("acct-lb-second", 0.1, 0.4);
+		const sessionId = "lb-false-session";
+		expect(await staticStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-lb-first");
+
+		setCreditRep("acct-lb-first", 0.1, 1.0, { limitReached: true });
+		await staticStorage.invalidateUsageCache("openai-codex");
+		expect(await staticStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-lb-first");
+	});
+
+	test("retains explicit user pin even when allowance is spent", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-explicit-pin", "explicit@example.com") },
+			{ type: "oauth", ...createCredential("acct-alt-sibling", "alt@example.com") },
+		]);
+		const rows = store.listAuthCredentials("openai-codex");
+		const credId = rows.find(
+			r => r.credential.type === "oauth" && r.credential.accountId === "acct-explicit-pin",
+		)?.id;
+		if (credId === undefined) throw new Error("expected credential id");
+
+		const sessionId = "explicit-pin-session";
+		authStorage.pinSessionCredential("openai-codex", sessionId, credId);
+		setCreditRep("acct-explicit-pin", 0.1, 1.0, { limitReached: true });
+		setCreditRep("acct-alt-sibling", 0.1, 0.2);
+		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-explicit-pin");
+	});
+
+	test("serves all credit-funded accounts at 100% allowance without creating false hard blocks", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-all-1", "all1@example.com") },
+			{ type: "oauth", ...createCredential("acct-all-2", "all2@example.com") },
+		]);
+		setCreditRep("acct-all-1", 0.1, 1.0, { limitReached: true });
+		setCreditRep("acct-all-2", 0.1, 1.0, { limitReached: true });
+		expect(await authStorage.getApiKey("openai-codex", "session-all-credit")).toBeDefined();
+		for (const entry of store.listAuthCredentials("openai-codex")) {
+			expect(store.getCredentialBlock(entry.id, "openai-codex:oauth", "shared")).toBeUndefined();
+		}
+	});
+
+	test("isAllowanceSpent respects request scope and does not treat healthy scoped meters as spent", () => {
+		const scopedStrategy: CredentialRankingStrategy = {
+			...codexRankingStrategy,
+			scopeLimits: (report, ctx) =>
+				report.limits.filter(l =>
+					(ctx?.modelId ?? "").includes("spark") ? l.id.includes("spark") : !l.id.includes("spark"),
+				),
+		};
+		const report: UsageReport = {
+			provider: "openai-codex",
+			fetchedAt: Date.now(),
+			limits: [
+				createLimit({
+					key: "secondary",
+					windowId: "7d",
+					windowLabel: "Chat",
+					durationMs: WEEK_MS,
+					usedFraction: 1.0,
+					resetInMs: WEEK_MS,
+				}),
+				{
+					...createLimit({
+						key: "secondary",
+						windowId: "7d",
+						windowLabel: "Spark",
+						durationMs: WEEK_MS,
+						usedFraction: 0.2,
+						resetInMs: WEEK_MS,
+					}),
+					id: "openai-codex:spark:secondary",
+				},
+			],
+			metadata: { allowed: true, limitReached: true },
+		};
+		expect(isAllowanceSpent(scopedStrategy, report, { modelId: "gpt-5.3-codex-spark" }, Date.now())).toBe(false);
+		expect(isAllowanceSpent(scopedStrategy, report, {}, Date.now())).toBe(true);
 	});
 	test("skips exhausted weekly account even when reset is near", async () => {
 		if (!authStorage) throw new Error("test setup failed");

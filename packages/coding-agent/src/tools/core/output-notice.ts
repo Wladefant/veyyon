@@ -98,7 +98,8 @@ export type ColumnUnit = "bytes" | "chars";
  */
 export interface LimitsMeta {
 	matchLimit?: { reached: number; suggestion: number };
-	resultLimit?: { reached: number; suggestion: number };
+	/** `suggestion` is absent when the tool is already at its hard cap, so no larger usable limit exists. */
+	resultLimit?: { reached: number; suggestion?: number };
 	headLimit?: { reached: number; suggestion: number };
 	/**
 	 * `unit` is absent in results persisted before it was recorded; those notices read "chars".
@@ -233,7 +234,7 @@ function isGeneratedOutputNoticeLine(line: string): boolean {
 	return (
 		body.startsWith("Showing ") ||
 		/^\d+ matches limit reached\. Use limit=\d+ for more/u.test(body) ||
-		/^\d+ results limit reached\. Use limit=\d+ for more/u.test(body) ||
+		/^\d+ results limit reached(?:\.|$)/u.test(body) ||
 		body.startsWith("Some lines truncated to ")
 	);
 }
@@ -346,7 +347,12 @@ export function formatOutputNotice(meta: OutputMeta | undefined): string {
 	}
 	if (meta.limits?.resultLimit) {
 		const l = meta.limits.resultLimit;
-		parts.push(`${l.reached} results limit reached. Use limit=${l.suggestion} for more`);
+		// At the hard cap a "Use limit=" retry would clamp straight back, so report the count alone.
+		parts.push(
+			l.suggestion === undefined
+				? `${l.reached} results limit reached`
+				: `${l.reached} results limit reached. Use limit=${l.suggestion} for more`,
+		);
 	}
 	if (meta.limits?.headLimit) {
 		const l = meta.limits.headLimit;

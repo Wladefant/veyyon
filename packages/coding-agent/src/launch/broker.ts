@@ -31,7 +31,7 @@ import {
 	managedDaemonProcessLeasePath,
 	managedDaemonsRoot,
 } from "./paths";
-import { hasLiveDaemonProjectPresence } from "./presence";
+import { hasLiveDaemonProjectPresence, pruneDeadDaemonRuntimeDirs } from "./presence";
 import {
 	DAEMON_CLEANUP_WAIT_ENV,
 	DAEMON_IDLE_GRACE_ENV,
@@ -1425,6 +1425,13 @@ export async function startDaemonBrokerFromEnvironment(): Promise<void> {
 	if (!token) throw new Error("Daemon broker token is empty");
 	const broker = new DaemonBroker(projectDir, runtimeDir, token, idleGraceMs, cleanupWaitMs);
 	const cancelCleanup = postmortem.register("daemon-broker", () => broker.shutdown());
+	// Reclaim sibling daemon scopes left behind by dead brokers (issue #8674).
+	// Detached and non-throwing so it never delays clients connecting to us.
+	void pruneDeadDaemonRuntimeDirs(runtimeDir).catch(error => {
+		logger.warn("Daemon runtime prune failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	});
 	try {
 		await broker.run();
 	} finally {
