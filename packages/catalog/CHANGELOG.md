@@ -9,6 +9,7 @@
 ### Changed
 
 - OpenCode gateway model discovery now sends the `x-opencode-session` header derived from the install id alongside the Veyyon user agent ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
+- Regenerated the bundled catalog for 19 providers: it gains `claude-sonnet-5-5`, `gemini-3.8-flash` and about 340 OpenRouter, Kilo, Vercel, ZenMux, Venice, OpenCode Zen and Copilot rows, and drops retired Bedrock and Novita rows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Removed
 

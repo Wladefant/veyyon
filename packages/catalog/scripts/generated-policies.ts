@@ -79,6 +79,10 @@ const COPILOT_GENERATED_LIMITS: Record<string, { contextWindow: number; maxToken
 export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
 	for (const model of models) {
 		applyGeneratedModelPolicy(model);
+		// A row the host reports as not reasoning carries no effort surface: a reference
+		// fill can attach one from a reasoning sibling (`qwen/qwen3.8-max` on OpenRouter),
+		// and the rebake below then has no thinking to derive from it.
+		if (model.reasoning !== true && model.reasoningOptions !== undefined) delete model.reasoningOptions;
 		rebakeModelThinking(model);
 	}
 }
