@@ -18,6 +18,7 @@ import { bundledCatalogDigest, getBundledModels, getBundledProviders } from "@ve
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
+	type OpenAICodexAccount,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 } from "@veyyon/catalog/provider-models";
@@ -26,6 +27,7 @@ import {
 	getVariantAliasSources,
 	resolveVariantAlias,
 } from "@veyyon/catalog/variant-collapse";
+import { CODEX_CLIENT_VERSION } from "@veyyon/catalog/wire/codex";
 import {
 	DAY_MS,
 	errorMessage,
@@ -532,20 +534,39 @@ function getOAuthCredentialsForProvider(authStorage: AuthStorage, provider: stri
 	return entries.filter((entry): entry is OAuthCredential => entry.type === "oauth");
 }
 
-function resolveOAuthAccountIdForAccessToken(
+/**
+ * Resolves all Codex OAuth accounts, refreshing each once. Codex discovery
+ * fetches per account and unions results. Returns null on refresh failure
+ * to preserve previous/bundled models.
+ */
+async function resolveCodexDiscoveryAccounts(
 	authStorage: AuthStorage,
-	provider: string,
-	accessToken: string,
-): string | undefined {
-	const oauthCredentials = getOAuthCredentialsForProvider(authStorage, provider);
-	const matchingCredential = oauthCredentials.find(credential => credential.access === accessToken);
-	if (matchingCredential) {
-		return matchingCredential.accountId;
+	resolvedAccessToken: string,
+): Promise<OpenAICodexAccount[] | null> {
+	const accesses = await authStorage.getOAuthAccesses("openai-codex");
+	const accounts: OpenAICodexAccount[] = [];
+	for (const access of accesses) {
+		if (!access.ok) return null;
+		accounts.push({ accessToken: access.accessToken, accountId: access.accountId });
 	}
-	if (oauthCredentials.length === 1) {
-		return oauthCredentials[0].accountId;
+	if (!accounts.some(account => account.accessToken === resolvedAccessToken)) {
+		const matchingCredential = getOAuthCredentialsForProvider(authStorage, "openai-codex").find(
+			credential => credential.access === resolvedAccessToken,
+		);
+		accounts.push({ accessToken: resolvedAccessToken, accountId: matchingCredential?.accountId });
 	}
-	return undefined;
+	return accounts;
+}
+function resolveCodexAccountFingerprint(authStorage: AuthStorage, fallbackKey?: string): string {
+	const accounts = authStorage.listOAuthAccounts("openai-codex");
+	const identifiers = accounts.map(a => a.accountId ?? a.email ?? a.credentialId ?? String(a.position)).sort();
+	if (
+		fallbackKey &&
+		!getOAuthCredentialsForProvider(authStorage, "openai-codex").some(c => c.access === fallbackKey)
+	) {
+		identifiers.push(`bearer:${Bun.hash(fallbackKey).toString(36)}`);
+	}
+	return identifiers.length > 0 ? Bun.hash(identifiers.join("\u0000")).toString(36) : "empty";
 }
 
 function mergeCompat<TBase extends object, TOverride extends object>(
@@ -1910,6 +1931,7 @@ export class ModelRegistry {
 		providerId: string,
 		strategy: ModelRefreshStrategy,
 		cacheProviderId: () => string,
+		authoritative = false,
 	): Promise<string | undefined> {
 		const peekedKey = await this.#peekApiKeyForProvider(providerId);
 		if (isAuthenticated(peekedKey) || strategy === "offline") {
@@ -1919,7 +1941,13 @@ export class ModelRegistry {
 		if (oauthCredentials.length === 0) {
 			return peekedKey;
 		}
-		if (strategy === "online-if-uncached") {
+		// Authoritative providers prune bundled models only when their manager is
+		// actually constructed, which needs an authenticated key. A fresh cache does
+		// not let us skip the refresh here: with an expired OAuth token peekedKey is
+		// undefined, the manager is never added, and stale bundled models survive the
+		// full cache TTL. So only take the no-refresh shortcut for non-authoritative
+		// providers, whose bundled models stay visible regardless.
+		if (strategy === "online-if-uncached" && !authoritative) {
 			// Mirror shouldFetchRemoteSources: built-in managers use the catalog's
 			// default TTL, so only refresh when the manager will actually fetch.
 			const cache = readModelCache<Api>(
@@ -1960,11 +1988,13 @@ export class ModelRegistry {
 	): Promise<ModelManagerOptions<Api>[]> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
+			authoritative: boolean;
 			resolveKey: (value: string | undefined) => string | undefined;
 			createOptions: (key: string) => ModelManagerOptions<Api>;
 		}> = [
 			{
 				providerId: "google-antigravity",
+				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: oauthToken =>
 					googleAntigravityModelManagerOptions({
@@ -1975,6 +2005,7 @@ export class ModelRegistry {
 			},
 			{
 				providerId: "google-gemini-cli",
+				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: oauthToken =>
 					googleGeminiCliModelManagerOptions({
@@ -1985,12 +2016,15 @@ export class ModelRegistry {
 			},
 			{
 				providerId: "openai-codex",
+				authoritative: true,
 				resolveKey: value => value,
 				createOptions: accessToken => {
-					const accountId = resolveOAuthAccountIdForAccessToken(this.authStorage, "openai-codex", accessToken);
+					const accountFingerprint = resolveCodexAccountFingerprint(this.authStorage, accessToken);
 					return openaiCodexModelManagerOptions({
-						accessToken,
-						accountId,
+						resolveAccounts: () => resolveCodexDiscoveryAccounts(this.authStorage, accessToken),
+						clientVersion: CODEX_CLIENT_VERSION,
+						fetch: this.#fetch,
+						accountFingerprint,
 					});
 				},
 			},
@@ -2012,12 +2046,18 @@ export class ModelRegistry {
 							baseUrl: this.#builtInDiscoveryBaseUrl(descriptor.providerId),
 							fetch: this.#fetch,
 						}).cacheProviderId ?? descriptor.providerId,
+					descriptor.dynamicModelsAuthoritative ?? false,
 				),
 			),
 		);
 		const specialKeys = await Promise.all(
 			enabledSpecialProviderDescriptors.map(descriptor =>
-				this.#resolveBuiltInDiscoveryApiKey(descriptor.providerId, strategy, () => descriptor.providerId),
+				this.#resolveBuiltInDiscoveryApiKey(
+					descriptor.providerId,
+					strategy,
+					() => descriptor.createOptions("").cacheProviderId ?? descriptor.providerId,
+					descriptor.authoritative,
+				),
 			),
 		);
 		const options: ModelManagerOptions<Api>[] = [];

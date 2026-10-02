@@ -5,9 +5,15 @@
 ### Removed
 
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
+- Removed redundant `grok-composer-2.5-fast` OAuth contract test from `xai-oauth-bundle.test.ts` as curated seed parity loops already verify its properties ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Defaulted paid xAI and SuperGrok model selection to Grok 4.6.
+- Versioned the GitHub Copilot model cache per credential and endpoint so stale routing rows are refetched.
+- Aligned runtime model discovery with generation-time exclusion policies for Amazon Bedrock, Z.AI, Fireworks, and Xiaomi, and relaxed literal ZenMux default model assertions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Aborted OpenAI Codex catalog discovery when any account credential fails to refresh to keep bundled models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog and forward the configured transport fetch ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Invalidated stale paid-xAI model-cache rows written under Chat Completions so the Responses migration takes effect immediately instead of waiting for TTL expiry ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Stripped unsupported reasoning effort dials from off-allowlist paid xAI Responses models during catalog resolution ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Daybreak aliases (e.g. `gpt-daybreak-blue-latest`) to classify under GPT-5.6 for wire capabilities without overwriting their reported context window in static catalog generation ([#107](https://github.com/Wladefant/veyyon/issues/107)).

@@ -1,40 +1,86 @@
 import { lazy } from "@veyyon/utils/abortable";
-import { fetchCodexModels } from "../discovery/codex";
+import { type CodexModelDiscoveryResult, fetchCodexModels } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
 import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
 import type { ModelManagerOptions } from "../model-manager";
-import type { FetchImpl } from "../types";
+import type { FetchImpl, ModelSpec } from "../types";
 
 // ---------------------------------------------------------------------------
 // OpenAI Codex
 // ---------------------------------------------------------------------------
 
+/** One Codex OAuth account to fetch a catalog for. */
+export interface OpenAICodexAccount {
+	/** OAuth access token used for `Authorization: Bearer ...`. */
+	accessToken: string;
+	/** ChatGPT account id sent as the `chatgpt-account-id` header. */
+	accountId?: string;
+}
+
+export function openAICodexModelCacheProviderId(accountFingerprint?: string): string {
+	return accountFingerprint ? `openai-codex:union-v1:${accountFingerprint}` : "openai-codex:union-v1";
+}
+
 export interface OpenAICodexModelManagerConfig {
 	accessToken?: string;
 	accountId?: string;
 	clientVersion?: string;
+	fetch?: FetchImpl;
+	cacheProviderId?: string;
+	accountFingerprint?: string;
+	/**
+	 * Resolves configured Codex OAuth accounts. Fetches each account and
+	 * unions results by id. Returns null on failure to keep previous models.
+	 */
+	resolveAccounts?: () => Promise<readonly OpenAICodexAccount[] | null>;
 }
 
 export function openaiCodexModelManagerOptions(
 	config: OpenAICodexModelManagerConfig = {},
 ): ModelManagerOptions<"openai-codex-responses"> {
-	const { accessToken, accountId, clientVersion } = config;
+	const { resolveAccounts, accessToken, accountId, clientVersion, fetch, cacheProviderId, accountFingerprint } =
+		config;
 	return {
 		providerId: "openai-codex",
-		...(accessToken
+		cacheProviderId: cacheProviderId ?? openAICodexModelCacheProviderId(accountFingerprint),
+		dynamicModelsAuthoritative: true,
+		...(resolveAccounts || accessToken
 			? {
 					fetchDynamicModels: async hooks => {
-						const result = await fetchCodexModels({
-							accessToken,
-							accountId,
-							clientVersion,
-							onFailure: hooks?.onFailure,
-						});
-						return result?.models ?? null;
+						const accounts = resolveAccounts
+							? await resolveAccounts()
+							: [{ accessToken: accessToken!, accountId }];
+						if (!accounts || accounts.length === 0) return null;
+						const results = await Promise.all(
+							accounts.map(account =>
+								fetchCodexModels({
+									accessToken: account.accessToken,
+									accountId: account.accountId,
+									clientVersion,
+									fetchFn: fetch,
+									onFailure: hooks?.onFailure,
+								}),
+							),
+						);
+						return unionCodexModels(results);
 					},
 				}
 			: undefined),
 	};
+}
+
+/** Unions per-account Codex catalogs by model id; returns null if any account failed. */
+function unionCodexModels(
+	results: readonly (CodexModelDiscoveryResult | null)[],
+): ModelSpec<"openai-codex-responses">[] | null {
+	const byId = new Map<string, ModelSpec<"openai-codex-responses">>();
+	for (const result of results) {
+		if (!result) return null;
+		for (const model of result.models) {
+			if (!byId.has(model.id)) byId.set(model.id, model);
+		}
+	}
+	return [...byId.values()];
 }
 
 // ---------------------------------------------------------------------------

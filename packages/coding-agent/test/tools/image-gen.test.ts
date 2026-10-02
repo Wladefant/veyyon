@@ -3,15 +3,15 @@ import type { Model } from "@veyyon/ai";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
+import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
+import { removeWithRetries } from "@veyyon/utils";
 import {
 	getImageGenTools,
 	getImageGenToolsWithRegistry,
 	imageGenTool,
 	isImageProviderPreference,
 	setPreferredImageProvider,
-} from "@veyyon/coding-agent/tools/web/image-gen";
-import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
-import { removeWithRetries } from "@veyyon/utils";
+} from "../../src/tools/web/image-gen";
 
 /**
  * isImageProviderPreference guards the persisted image-provider setting so an unknown or
@@ -357,6 +357,192 @@ describe("imageGenTool", () => {
 
 		expect(requestHeaders?.get("authorization")).toBe(`Bearer ${codexJwt}`);
 		expect(requestHeaders?.get("chatgpt-account-id")).toBe("acc_test");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
+	it("falls back to antigravity when an openai-codex API key lacks a subscription account claim", async () => {
+		const antigravityCredentials = JSON.stringify({ token: "test-antigravity-token", projectId: "test-project" });
+		let requestUrl: string | undefined;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request) => {
+			requestUrl = input.toString();
+			return new Response(
+				`data: ${JSON.stringify({
+					response: {
+						candidates: [
+							{
+								content: {
+									parts: [
+										{
+											inlineData: {
+												data: Buffer.from("fallback-image").toString("base64"),
+												mimeType: "image/png",
+											},
+										},
+									],
+								},
+							},
+						],
+					},
+				})}\n\n`,
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex",
+			name: "GPT Codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "plain-openai-key-no-claims",
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "openai-codex") return "plain-openai-key-no-claims";
+					if (provider === "google-antigravity") return antigravityCredentials;
+					return undefined;
+				},
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: (provider: string) => async () =>
+					provider === "google-antigravity" ? antigravityCredentials : "plain-openai-key-no-claims",
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-key-fallback", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+		expect(result.details?.provider).toBe("antigravity");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
+	it("does not fall back to antigravity when an openai-codex API key has valid subscription account claims", async () => {
+		const tokenPayload = Buffer.from(
+			JSON.stringify({
+				"https://api.openai.com/auth": { chatgpt_account_id: "acc_valid" },
+			}),
+		).toString("base64");
+		const validCodexJwt = `header.${tokenPayload}.signature`;
+		const antigravityCredentials = JSON.stringify({ token: "test-antigravity-token", projectId: "test-project" });
+		let requestUrl: string | undefined;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request) => {
+			requestUrl = input.toString();
+			return new Response(
+				[
+					"event: response.output_item.done",
+					`data: ${JSON.stringify({
+						type: "response.output_item.done",
+						item: {
+							type: "image_generation_call",
+							result: Buffer.from("fake-codex-jwt-webp").toString("base64"),
+							status: "completed",
+						},
+					})}`,
+					"",
+					"event: response.completed",
+					`data: ${JSON.stringify({
+						type: "response.completed",
+						response: { output: [], status: "completed", error: null },
+					})}`,
+					"",
+				].join("\n"),
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex",
+			name: "GPT Codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => validCodexJwt,
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "openai-codex") return validCodexJwt;
+					if (provider === "google-antigravity") return antigravityCredentials;
+					return undefined;
+				},
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => validCodexJwt,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-valid-key", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+		expect(result.details?.provider).toBe("openai-codex");
+		expect(result.details?.imageCount).toBe(1);
+	});
+
+	// A provider preference must not block a credentialed provider that supports
+	// the requested ratio; this does not cover HTTP-error fallback.
+	it("skips a credentialed preferred provider with an incompatible aspect ratio", async () => {
+		setPreferredImageProvider("gemini");
+		const requestUrls: string[] = [];
+		const ctx: CustomToolContext = {
+			fetch: async input => {
+				requestUrls.push(input.toString());
+				return new Response(
+					JSON.stringify({ data: [{ b64_json: Buffer.from("ratio-fallback-image").toString("base64") }] }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			},
+			sessionManager: {
+				getCwd: () => "/repo",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "google") return "test-gemini-token";
+					if (provider === "xai-oauth") return "test-xai-token";
+					return undefined;
+				},
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => async () =>
+					provider === "google" ? "test-gemini-token" : "test-xai-token",
+			} as unknown as ModelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-ratio-fallback",
+			{ subject: "a cat", aspect_ratio: "3:2" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+		expect(requestUrls).toEqual(["https://api.x.ai/v1/images/generations"]);
+		expect(result.details?.provider).toBe("xai");
 		expect(result.details?.imageCount).toBe(1);
 	});
 

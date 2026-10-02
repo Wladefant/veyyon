@@ -1094,6 +1094,14 @@ export function buildParams(
 			filterReasoning: policy.reasoning.filterReasoningHistory,
 		},
 		includeThinkingSignatures: shouldReplayNativeHistory && !policy.reasoning.filterReasoningHistory,
+		requiresReasoningReplayForAllTurns:
+			policy.reasoning.enabled &&
+			policy.reasoning.requiresReasoningContentForAllAssistantTurns &&
+			(!policy.reasoning.filterReasoningHistory || policy.reasoning.allowsSyntheticReasoningContentForToolCalls),
+		requiresReasoningReplayForToolCalls:
+			policy.reasoning.enabled &&
+			policy.reasoning.requiresReasoningContentForToolCalls &&
+			(!policy.reasoning.filterReasoningHistory || policy.reasoning.allowsSyntheticReasoningContentForToolCalls),
 		repairOrphanOutputs: true,
 	});
 
