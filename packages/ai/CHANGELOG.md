@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added speech synthesis types and transport with bearer confinement and authentication retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c, cfa658186db0af5f91055d953431b64e5e25eff1).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared auth-gateway request dispatch, credential resolution, account identity, and abort mirroring helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Shared gateway usage-limit blocking and authentication-failure credential invalidation across request adapters.
