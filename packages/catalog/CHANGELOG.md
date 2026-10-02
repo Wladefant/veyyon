@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Declared GPT-6 Astra reasoning configuration-update support and generated first-party GPT-6 freeform `apply_patch` metadata ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Removed
 
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.

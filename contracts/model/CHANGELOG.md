@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the Responses `supportsConfigurationUpdate` compatibility capability ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added `image_end` to `AssistantMessageEvent` for streamed image completion events (Refs #107).
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
