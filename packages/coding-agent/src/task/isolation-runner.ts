@@ -18,8 +18,9 @@
  * Step 1 happens once per top-level call (the baseline is cloned per spawn
  * before mutation); steps 2 and 3 are per-spawn.
  */
-import * as path from "node:path";
+
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type * as natives from "@veyyon/natives";
 import { errorMessage, logger } from "@veyyon/utils";
 import type { ToolSession } from "../tools";
@@ -29,11 +30,11 @@ import { runSubprocess } from "./executor";
 import type { SingleResult } from "./types";
 import {
 	applyNestedPatches,
+	type CommitToBranchResult,
 	captureBaseline,
 	captureDeltaPatch,
 	cleanupIsolation,
 	cleanupTaskBranches,
-	type CommitToBranchResult,
 	commitToBranch,
 	ensureIsolation,
 	getRepoRoot,
@@ -414,18 +415,21 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 	};
 }
 
+function patchArtifactsList(result: SingleResult): string {
+	const files = [
+		result.patchPath ? `- ${result.patchPath}` : null,
+		...(result.nestedPatchPaths ?? []).map(p => `- ${p}`),
+	].filter(Boolean);
+	return files.length > 0 ? `\n\nPatch artifacts:\n${files.join("\n")}` : "";
+}
+
 async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationMergeOutcome> {
 	const { result, repoRoot, mergeMode } = opts;
 	try {
 		if (mergeMode === "branch") {
 			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
-				const patchArtifacts = [
-					result.patchPath ? `- ${result.patchPath}` : null,
-					...(result.nestedPatchPaths ?? []).map(p => `- ${p}`),
-				].filter(Boolean);
-				const patchList = patchArtifacts.length > 0 ? `\n\nPatch artifacts:\n${patchArtifacts.join("\n")}` : "";
 				return {
-					summary: `\n\n<system-notification>Branch merge failed while capturing the task branch: ${result.error}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
+					summary: `\n\n<system-notification>Branch merge failed while capturing the task branch: ${result.error}\nTask outputs are preserved but changes were not applied.${patchArtifactsList(result)}</system-notification>`,
 					changesApplied: false,
 					failure: `Merge failed: ${result.error}`,
 					hadAnyChanges: false,
@@ -533,12 +537,7 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		} else {
 			const notification =
 				"<system-notification>Patches were not applied and must be handled manually.</system-notification>";
-			const patchArtifacts = [
-				result.patchPath ? `- ${result.patchPath}` : null,
-				...(result.nestedPatchPaths ?? []).map(p => `- ${p}`),
-			].filter(Boolean);
-			const patchList = patchArtifacts.length > 0 ? `\n\nPatch artifacts:\n${patchArtifacts.join("\n")}` : "";
-			summary = `\n\n${notification}${patchList}`;
+			summary = `\n\n${notification}${patchArtifactsList(result)}`;
 			failure = result.patchPath
 				? `Merge failed: the patch did not apply to the parent tree; it is preserved at ${result.patchPath}`
 				: "Merge failed: the run produced no patch artifact to apply";
@@ -546,13 +545,8 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		return { summary, changesApplied, failure, hadAnyChanges, mergedBranchForNestedPatches: false };
 	} catch (mergeErr) {
 		const msg = errorMessage(mergeErr);
-		const patchArtifacts = [
-			result.patchPath ? `- ${result.patchPath}` : null,
-			...(result.nestedPatchPaths ?? []).map(p => `- ${p}`),
-		].filter(Boolean);
-		const patchList = patchArtifacts.length > 0 ? `\n\nPatch artifacts:\n${patchArtifacts.join("\n")}` : "";
 		return {
-			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
+			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${patchArtifactsList(result)}</system-notification>`,
 			changesApplied: false,
 			failure: `Merge failed: ${msg}`,
 			hadAnyChanges: false,

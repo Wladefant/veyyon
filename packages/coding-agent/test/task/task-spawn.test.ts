@@ -291,13 +291,28 @@ describe("task spawn routing", () => {
 	it("tells the parent an isolated agent cannot be messaged or resumed", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
 		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
-			repoRoot: "/repo", baseline: { root: { repoRoot: "/repo", headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" }, nested: [] },
+			repoRoot: "/repo",
+			baseline: { root: { headCommit: "HEAD" } } as never,
 		});
-		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({ ...makeResult("Sandboxed"), isolated: true, patchPath: "/artifacts/Sandboxed.patch" });
-		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({ summary: "", changesApplied: true, hadAnyChanges: false, mergedBranchForNestedPatches: false });
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({
+			...makeResult("Sandboxed"),
+			isolated: true,
+			patchPath: "/artifacts/Sandboxed.patch",
+		});
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "",
+			changesApplied: true,
+			hadAnyChanges: false,
+			mergedBranchForNestedPatches: false,
+		});
 		const manager = createManager();
 		const tool = await TaskTool.create(createSession({ manager, settings: { "task.isolation.mode": "auto" } }));
-		const result = await tool.execute("tc-isolated", { agent: "task", name: "Sandboxed", task: "Do thing.", isolated: true } as TaskParams);
+		const result = await tool.execute("tc-isolated", {
+			agent: "task",
+			name: "Sandboxed",
+			task: "Do thing.",
+			isolated: true,
+		} as TaskParams);
 		const job = manager.getJob(result.details?.async?.jobId ?? "");
 		await job!.promise;
 		const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
