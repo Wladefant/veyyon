@@ -27,6 +27,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Codex web search now accepts valid email-only OAuth credentials without requiring or fabricating a ChatGPT-Account-Id header (oh-my-pi e3198485aa15c6178675f543d7f9e0b7f7c2c623, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex web search collapsing nested backend error envelopes to generic unknown errors and falling back to required tool choice when named tool choice is not supported (oh-my-pi d4cb024b5764d856b3e648be1be22b516b0cfa0b, cddad306a7b3a0a19bff20cf508462672909b0b2, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - `/provider`, `/account`, `/usage` and `veyyon usage` show each Antigravity account's own limits instead of the first account's for every login, list a second account that shares the project id instead of hiding it as covered, and word and draw Antigravity windows by what is left, in every usage renderer including the non-TUI `/usage` text ([#102](https://github.com/Wladefant/veyyon/issues/102)).
 - Fixed PowerShell completions throwing duplicate key parser errors when commands define case-sensitive flags (e.g. grep -c vs -C): flag tables and runtime completer state now use ordinal hashtables so distinct flag casing and tooltips are preserved ([#195](https://github.com/Wladefant/veyyon/issues/195)).
