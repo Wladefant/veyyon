@@ -1317,15 +1317,20 @@ export function normalizeCodexToolChoice(
 	return undefined;
 }
 
-function getCodexServiceTierCostMultiplier(
-	model: Pick<Model<"openai-codex-responses">, "id">,
+/**
+ * Bill multiplier for a service tier. The model's own `serviceTierCost` wins;
+ * a model without one keeps the historical rates (flex halves, priority doubles,
+ * gpt-5.5 priority is 2.5x).
+ */
+export function getCodexServiceTierCostMultiplier(
+	model: Pick<Model<"openai-codex-responses">, "id" | "serviceTierCost">,
 	serviceTier: ServiceTier | "default" | undefined,
 ): number {
 	switch (serviceTier) {
 		case "flex":
-			return 0.5;
+			return model.serviceTierCost?.flex ?? 0.5;
 		case "priority":
-			return model.id === "gpt-5.5" ? 2.5 : 2;
+			return model.serviceTierCost?.priority ?? (model.id === "gpt-5.5" ? 2.5 : 2);
 		default:
 			return 1;
 	}
@@ -1346,7 +1351,7 @@ function resolveCodexCostServiceTier(res: unknown, req?: unknown): ServiceTier |
 }
 
 function applyCodexServiceTierPricing(
-	model: Pick<Model<"openai-codex-responses">, "id">,
+	model: Pick<Model<"openai-codex-responses">, "id" | "serviceTierCost">,
 	usage: AssistantMessage["usage"],
 	resTier: unknown,
 	reqTier: unknown,

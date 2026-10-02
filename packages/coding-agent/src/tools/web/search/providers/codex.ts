@@ -14,7 +14,7 @@ import {
 	resolveCodexResponsesLite,
 } from "@veyyon/ai/providers/openai-codex/request-transformer";
 import { createOpenAICodexCompatibilityMetadata } from "@veyyon/ai/providers/openai-codex-responses";
-import { getBundledModels } from "@veyyon/catalog/models";
+import { getBundledChatModels } from "@veyyon/catalog/models";
 import {
 	// The host is imported, never respelled. `@veyyon/catalog/wire/codex` owns it and
 	// six other modules already read it from there; this file had its own copy of the
@@ -68,7 +68,7 @@ interface CodexModelCandidate {
 
 function getBundledCodexModels(): CodexSearchModel[] {
 	const models: CodexSearchModel[] = [];
-	for (const model of getBundledModels("openai-codex")) {
+	for (const model of getBundledChatModels("openai-codex")) {
 		if (model.api === "openai-codex-responses") {
 			models.push(model as CodexSearchModel);
 		}
