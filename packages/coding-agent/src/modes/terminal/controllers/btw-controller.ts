@@ -1,7 +1,21 @@
-import type { AssistantMessage } from "@veyyon/ai";
-import { errorMessage, prompt } from "@veyyon/utils";
+import type { AssistantMessage, Message } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
+import type { OverlayHandle } from "@veyyon/tui";
+import { logger, prompt, Snowflake, toError, withTimeout } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { sideChannelPrompts } from "../../../prompts/side-channel/rows";
+import {
+	type BtwHistoryRecord,
+	BtwHistoryStore,
+	type BtwHistoryTurn,
+	getBtwCopyText,
+	getBtwLatestTurn,
+	getBtwTurns,
+} from "../../../session/btw-history";
+import { TRUNCATE_LENGTHS } from "../../../tools/core/render-limits";
+import { sanitizeErrorLine } from "../../../tools/core/render-utils";
 import { copyToClipboard } from "../../../utils/clipboard";
+import { BtwHistoryPanel } from "../components/dialogs/btw-history-panel";
 import { BtwPanelComponent } from "../components/dialogs/btw-panel";
 import type { InteractiveModeContext } from "../types";
 
@@ -23,6 +37,14 @@ interface BtwRequest {
 	question: string;
 	leafId: string | null;
 	sessionId: string;
+	session: BtwControllerContext["session"];
+	store: BtwHistoryStore;
+	record: BtwHistoryRecord;
+	/** Earlier turns of a follow-up, replayed as context for the next question. */
+	history?: readonly BtwHistoryTurn[];
+	/** At least one checkpoint belongs to this request; later failures must block lifecycle changes. */
+	persisted: boolean;
+	conversationKey: string;
 }
 
 function assistantMessageWithReplyText(assistantMessage: AssistantMessage, replyText: string): AssistantMessage {
@@ -56,11 +78,25 @@ export class BtwController {
 	#branchInFlight = false;
 	#lastCopyText: string | undefined;
 	#copyInFlight = false;
+	/** Whether the inline panel is mounted; a request may keep running behind the history overlay. */
+	#visible = false;
+	#starting = false;
+	#transitionCount = 0;
+	#generation = 0;
+	#store: BtwHistoryStore | undefined;
+	#storePromise: Promise<BtwHistoryStore> | undefined;
+	#storeSessionId: string | undefined;
+	#storeArtifactsDir: string | undefined;
+	#historyPanel: BtwHistoryPanel | undefined;
+	#historyOverlay: OverlayHandle | undefined;
+	readonly #writes = new Set<Promise<boolean>>();
+	readonly #failedWrites = new Map<BtwRequest, Error>();
 
 	constructor(private readonly ctx: BtwControllerContext) {}
 
+	/** Whether the inline panel owns Escape. */
 	hasActiveRequest(): boolean {
-		return this.#activeRequest !== undefined;
+		return this.#visible;
 	}
 
 	canBranch(): boolean {
@@ -70,7 +106,7 @@ export class BtwController {
 	/** Whether plain `b` is currently reserved for a completed or pending branch action. */
 	handlesBranchKey(): boolean {
 		if (this.#branchInFlight) return true;
-		if (this.#activeRequest?.component.isBranchable() !== true) return false;
+		if (!this.#visible || this.#activeRequest?.component.isBranchable() !== true) return false;
 		return (
 			this.#lastQuestion !== undefined &&
 			this.#lastReplyText !== undefined &&
@@ -82,7 +118,10 @@ export class BtwController {
 
 	#branchUnavailableReason(): string | undefined {
 		if (this.#branchInFlight) return "a branch is already in progress";
-		if (this.#activeRequest?.component.isBranchable() !== true) return "the answer is not ready";
+		if (this.#transitionCount > 0) return "a session operation is in progress";
+		if (!this.#visible || this.#activeRequest?.component.isBranchable() !== true) return "the answer is not ready";
+		// Inline branch promotion carries one pair; do not drop earlier side turns.
+		if (this.#activeRequest.history?.length) return "multi-turn side conversations remain in BTW history";
 		if (!this.#lastQuestion || !this.#lastReplyText || !this.#lastAssistantMessage) {
 			return "the answer is unavailable";
 		}
@@ -99,23 +138,31 @@ export class BtwController {
 
 	canCopy(): boolean {
 		return (
-			!this.#copyInFlight && this.#activeRequest?.component.isCopyable() === true && this.#lastCopyText !== undefined
+			this.#visible &&
+			!this.#copyInFlight &&
+			this.#activeRequest?.component.isCopyable() === true &&
+			this.#lastCopyText !== undefined
 		);
 	}
 
-	async handleCopy(): Promise<boolean> {
-		if (!this.canCopy() || this.#lastCopyText === undefined) return false;
+	async #copyAnswer(answer: string): Promise<boolean> {
+		if (this.#copyInFlight || !answer.trim()) return false;
 		this.#copyInFlight = true;
 		try {
-			await copyToClipboard(this.#lastCopyText);
+			await copyToClipboard(replaceTabs(answer).trim());
 			this.ctx.showStatus("Copied /btw answer to clipboard");
 			return true;
 		} catch (error) {
-			this.ctx.showError(errorMessage(error));
+			this.ctx.showError(sanitizeErrorLine(error));
 			return true;
 		} finally {
 			this.#copyInFlight = false;
 		}
+	}
+
+	async handleCopy(): Promise<boolean> {
+		if (!this.canCopy() || this.#lastCopyText === undefined) return false;
+		return this.#copyAnswer(this.#lastCopyText);
 	}
 
 	async handleBranch(): Promise<boolean> {
@@ -134,8 +181,12 @@ export class BtwController {
 		this.#branchInFlight = true;
 		request.component.markBranching();
 		try {
+			await this.flush();
 			await this.ctx.handleBtwBranch(question, assistantMessage, leafId, sessionId);
 			return true;
+		} catch (error) {
+			this.ctx.showError(sanitizeErrorLine(`Cannot branch /btw: ${toError(error).message}`));
+			return false;
 		} finally {
 			this.#branchInFlight = false;
 			if (this.#activeRequest === request) request.component.markComplete();
@@ -147,100 +198,474 @@ export class BtwController {
 			this.ctx.showStatus("/btw branch is in progress", { dim: true });
 			return true;
 		}
-		if (!this.#activeRequest) return false;
-		this.#closeActiveRequest({ abort: this.#activeRequest.abortController.signal.aborted === false });
+		if (!this.#visible) return false;
+		if (this.handleCancel()) return true;
+		this.#hideInline();
 		return true;
 	}
 
-	dispose(): void {
-		this.#closeActiveRequest({ abort: true });
+	canFollowUp(): boolean {
+		const request = this.#activeRequest;
+		return (
+			this.#visible &&
+			!this.#starting &&
+			!this.#branchInFlight &&
+			this.#transitionCount === 0 &&
+			request !== undefined &&
+			this.#isActiveRequest(request) &&
+			getBtwLatestTurn(request.record).status === "complete"
+		);
 	}
 
+	/** Opens BTW history on the inline answer's topic with the follow-up composer focused. */
+	handleFollowUp(): boolean {
+		const request = this.#activeRequest;
+		if (!request || !this.canFollowUp()) return false;
+		return this.#showHistory(request.store).openFollowUp(request.record.id);
+	}
+
+	handleCancel(): boolean {
+		const request = this.#activeRequest;
+		if (!request || getBtwLatestTurn(request.record).status !== "running") return false;
+		this.#updateRequest(request, { status: "cancelled", updatedAt: Date.now() });
+		request.abortController.abort();
+		request.component.markAborted();
+		void this.#persist(request);
+		this.#refreshHistory();
+		return true;
+	}
+
+	async dispose(): Promise<void> {
+		this.#generation++;
+		this.#transitionCount++;
+		try {
+			this.handleCancel();
+			// A timeout must stop the caller before it moves or deletes the old path.
+			// Keep the current view and store available until outstanding writes settle.
+			await this.flush();
+			this.#closeHistory();
+			this.#hideInline();
+			this.#activeRequest?.component.close();
+			this.#activeRequest = undefined;
+			this.#clearCompletedState();
+			this.#store = undefined;
+			this.#storePromise = undefined;
+			this.#storeSessionId = undefined;
+			this.#storeArtifactsDir = undefined;
+		} finally {
+			this.#transitionCount--;
+		}
+	}
+
+	async flush(timeoutMs = 10_000): Promise<void> {
+		await withTimeout(
+			this.#drainWrites(),
+			timeoutMs,
+			"BTW history is still being saved. The session operation was stopped; retry when storage responds.",
+		);
+	}
+
+	async #drainWrites(): Promise<void> {
+		// Retrying a session operation retries already-failed snapshots without
+		// rebasing their disk revisions. Newly failing writes still reject below.
+		for (const request of [...this.#failedWrites.keys()]) await this.#persist(request, true);
+		while (this.#writes.size > 0) await Promise.all(this.#writes);
+		const failure = this.#failedWrites.values().next().value;
+		if (failure) {
+			throw new Error(
+				sanitizeErrorLine(
+					`BTW history could not be saved: ${sanitizeErrorLine(failure)}. The session operation was stopped; retry after fixing storage. Unsaved answers remain in /btw.`,
+					TRUNCATE_LENGTHS.RECAP,
+				),
+				{ cause: failure },
+			);
+		}
+	}
+
+	/**
+	 * Runs a session move (relocate, cwd change) only once BTW history is saved,
+	 * then retires this session's BTW state. Refuses while a side answer is running.
+	 */
+	async withSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
+		if (
+			this.#starting ||
+			this.#branchInFlight ||
+			this.#transitionCount > 0 ||
+			(this.#activeRequest && getBtwLatestTurn(this.#activeRequest.record).status === "running")
+		) {
+			this.ctx.showStatus("Wait for the current /btw answer to finish or cancel it before moving.", { dim: true });
+			return false;
+		}
+		this.#transitionCount++;
+		try {
+			await this.flush();
+			const moved = await operation();
+			if (moved) await this.dispose();
+			return moved;
+		} catch (error) {
+			this.ctx.showError(sanitizeErrorLine(error));
+			return false;
+		} finally {
+			this.#transitionCount--;
+		}
+	}
+
+	async #loadHistory(): Promise<BtwHistoryStore> {
+		const sessionId = this.ctx.sessionManager.getSessionId();
+		const artifactsDir = this.ctx.sessionManager.getArtifactsDir() ?? undefined;
+		if (this.#storeSessionId !== sessionId || this.#storeArtifactsDir !== artifactsDir) {
+			await this.dispose();
+			if (
+				this.ctx.sessionManager.getSessionId() !== sessionId ||
+				(this.ctx.sessionManager.getArtifactsDir() ?? undefined) !== artifactsDir
+			) {
+				throw new Error("The session changed while opening BTW history.");
+			}
+			this.#storeSessionId = sessionId;
+			this.#storeArtifactsDir = artifactsDir;
+		}
+		this.#storePromise ??= BtwHistoryStore.open(artifactsDir);
+		const pending = this.#storePromise;
+		try {
+			const store = await pending;
+			if (this.#storePromise === pending) this.#store = store;
+			return store;
+		} catch (error) {
+			if (this.#storePromise === pending) this.#storePromise = undefined;
+			throw error;
+		}
+	}
+
+	/** `/btw QUESTION` asks a new side question; bare `/btw` opens the session's BTW history. */
 	async start(question: string): Promise<void> {
+		await this.#start(question);
+	}
+
+	async startFollowUp(recordId: string, question: string, signal?: AbortSignal): Promise<boolean> {
+		if (!question.trim()) return false;
+		return this.#start(question, recordId, signal);
+	}
+
+	async #start(question: string, recordId?: string, signal?: AbortSignal): Promise<boolean> {
+		if (signal?.aborted) return false;
 		const trimmedQuestion = question.trim();
-		if (!trimmedQuestion) {
-			this.ctx.showStatus("Usage: /btw <question>");
-			return;
+		if (this.#starting || this.#branchInFlight || this.#transitionCount > 0) {
+			this.ctx.showStatus("A /btw action is in progress. Please wait.", { dim: true });
+			return false;
 		}
-
-		const model = this.ctx.session.model;
-		if (!model) {
-			this.ctx.showError("No active model available for /btw.");
-			return;
+		if (
+			trimmedQuestion &&
+			this.#activeRequest &&
+			getBtwLatestTurn(this.#activeRequest.record).status === "running" &&
+			this.#activeRequest.sessionId === this.ctx.sessionManager.getSessionId()
+		) {
+			this.ctx.showStatus("A /btw question is still running. Open /btw to view it or cancel it first.", {
+				dim: true,
+			});
+			return false;
 		}
-
-		this.#closeActiveRequest({ abort: true });
-
-		const request: BtwRequest = {
-			component: new BtwPanelComponent({
+		const originalSessionId = this.ctx.sessionManager.getSessionId();
+		this.#starting = true;
+		try {
+			const store = await this.#loadHistory();
+			const generation = this.#generation;
+			const sessionId = this.ctx.sessionManager.getSessionId();
+			if (signal?.aborted || store !== this.#store || sessionId !== originalSessionId) return false;
+			if (!trimmedQuestion) {
+				this.#showHistory(store);
+				return true;
+			}
+			// A just-cancelled or completed turn may still be publishing its checkpoint.
+			await this.flush();
+			if (
+				signal?.aborted ||
+				generation !== this.#generation ||
+				store !== this.#store ||
+				sessionId !== this.ctx.sessionManager.getSessionId()
+			) {
+				return false;
+			}
+			const previous = recordId ? store.getRecords().find(record => record.id === recordId) : undefined;
+			if (recordId && (!previous || getBtwLatestTurn(previous).status === "running")) {
+				this.ctx.showStatus("This side conversation is unavailable or still running.", { dim: true });
+				return false;
+			}
+			const session = this.ctx.session;
+			if (!session.model) {
+				this.ctx.showError("No active model available for /btw.");
+				return false;
+			}
+			await this.ctx.sessionManager.ensureOnDisk();
+			if (signal?.aborted || generation !== this.#generation || sessionId !== this.ctx.sessionManager.getSessionId()) {
+				return false;
+			}
+			if (!previous) this.#closeHistory();
+			this.#activeRequest?.component.close();
+			this.#clearCompletedState();
+			const now = Date.now();
+			const leafId = this.ctx.sessionManager.getLeafId();
+			const turn: BtwHistoryTurn = {
 				question: trimmedQuestion,
-				tui: this.ctx.ui,
-				canBranch: () => this.canBranch(),
-			}),
-			abortController: new AbortController(),
-			question: trimmedQuestion,
-			leafId: this.ctx.sessionManager.getLeafId(),
-			sessionId: this.ctx.sessionManager.getSessionId(),
-		};
-		this.ctx.btwContainer.clear();
-		this.ctx.btwContainer.addChild(request.component);
+				answer: "",
+				status: "running",
+				createdAt: now,
+				updatedAt: now,
+			};
+			const record: BtwHistoryRecord = previous
+				? { ...previous, followUps: [...(previous.followUps ?? []), turn] }
+				: { ...turn, id: Snowflake.next(), leafId };
+			const history = previous ? getBtwTurns(previous) : undefined;
+			// A cancelled or failed transport may still be unwinding. Start a fresh
+			// lineage after that boundary, while successful follow-ups share one.
+			const transportEpoch = (history?.findLastIndex(item => item.status !== "complete") ?? -1) + 1;
+			const request: BtwRequest = {
+				component: new BtwPanelComponent({
+					question: trimmedQuestion,
+					tui: this.ctx.ui,
+					canBranch: () => this.canBranch(),
+					canFollowUp: () => this.canFollowUp(),
+				}),
+				abortController: new AbortController(),
+				question: trimmedQuestion,
+				leafId,
+				sessionId,
+				session,
+				store,
+				record,
+				history,
+				conversationKey: `btw:${record.id}:${transportEpoch}`,
+				persisted: false,
+			};
+			this.#activeRequest = request;
+			this.#visible = !previous || !this.#historyOverlay;
+			this.ctx.btwContainer.clear();
+			if (this.#visible) this.ctx.btwContainer.addChild(request.component);
+			this.ctx.ui.requestRender();
+			if (!(await this.#persist(request))) {
+				if (this.#activeRequest === request) {
+					this.#activeRequest = undefined;
+					request.component.close();
+					this.#hideInline();
+					this.#store = undefined;
+					this.#storePromise = undefined;
+					this.#historyPanel?.update(store.getRecords());
+				}
+				return false;
+			}
+			if (
+				generation !== this.#generation ||
+				!this.#isActiveRequest(request) ||
+				getBtwLatestTurn(request.record).status !== "running"
+			) {
+				return false;
+			}
+			if (signal?.aborted) {
+				// The initial checkpoint may already own a topic lease. Finish it as
+				// cancelled before accepting another turn, without dispatching a model.
+				this.handleCancel();
+				await this.flush();
+				return false;
+			}
+			this.#refreshHistory();
+			void this.#runRequest(request);
+			return true;
+		} catch (error) {
+			this.ctx.showError(sanitizeErrorLine(`Cannot open /btw history: ${toError(error).message}`));
+			return false;
+		} finally {
+			this.#starting = false;
+		}
+	}
+
+	#showHistory(store: BtwHistoryStore): BtwHistoryPanel {
+		if (this.#historyOverlay && this.#historyPanel) {
+			this.#refreshHistory();
+			return this.#historyPanel;
+		}
+		this.#hideInline();
+		const historySessionId = this.ctx.sessionManager.getSessionId();
+		const panel = new BtwHistoryPanel({
+			records: this.#historyRecords(store),
+			onClose: () => this.#closeHistory(),
+			onCopy: record => {
+				const answer = getBtwCopyText(record);
+				if (answer !== undefined) void this.#copyAnswer(answer);
+			},
+			onCancel: record => {
+				if (this.#activeRequest?.record.id === record.id) this.handleCancel();
+			},
+			canFollowUp: record =>
+				!this.#starting &&
+				!this.#branchInFlight &&
+				this.#transitionCount === 0 &&
+				getBtwLatestTurn(record).status !== "running" &&
+				(!this.#activeRequest || getBtwLatestTurn(this.#activeRequest.record).status !== "running"),
+			onFollowUp: (record, question, signal) => {
+				if (historySessionId !== this.ctx.sessionManager.getSessionId()) return Promise.resolve(false);
+				return this.startFollowUp(record.id, question, signal);
+			},
+			requestRender: () => this.ctx.ui.requestRender(),
+			getHeight: () => this.ctx.ui.terminal.rows,
+		});
+		this.#historyPanel = panel;
+		this.#historyOverlay = this.ctx.ui.showOverlay(panel, {
+			anchor: "bottom-center",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
+		});
+		this.ctx.ui.setFocus(panel);
 		this.ctx.ui.requestRender();
-		this.#activeRequest = request;
-		void this.#runRequest(request);
+		return panel;
+	}
+
+	/** Stored records with the active request's in-memory record (streamed answer) in its place. */
+	#historyRecords(store: BtwHistoryStore): readonly BtwHistoryRecord[] {
+		const records = store.getRecords();
+		const request = this.#activeRequest;
+		if (!request || request.store !== store) return records;
+		return records.map(record => (record.id === request.record.id ? request.record : record));
+	}
+
+	#refreshHistory(): void {
+		if (this.#historyPanel && this.#store) this.#historyPanel.update(this.#historyRecords(this.#store));
+	}
+
+	#closeHistory(): void {
+		const overlay = this.#historyOverlay;
+		this.#historyOverlay = undefined;
+		this.#historyPanel = undefined;
+		if (!overlay) return;
+		overlay.hide();
+		// Closing history while a side answer still runs returns to its inline
+		// panel instead of leaving the request running with nothing on screen.
+		const request = this.#activeRequest;
+		if (request && this.#isActiveRequest(request) && getBtwLatestTurn(request.record).status === "running") {
+			request.component.setAnswer(getBtwLatestTurn(request.record).answer);
+			this.#visible = true;
+			this.ctx.btwContainer.clear();
+			this.ctx.btwContainer.addChild(request.component);
+		}
+		this.ctx.ui.requestRender();
+	}
+
+	#persist(request: BtwRequest, retry = false): Promise<boolean> {
+		const pending = retry ? request.store.retry(request.record) : request.store.upsert(request.record);
+		const write = pending.then(
+			() => {
+				request.persisted = true;
+				this.#failedWrites.delete(request);
+				return true;
+			},
+			error => {
+				// An initial rejection never dispatched a model or owned a disk
+				// checkpoint; terminal failures must survive removal from #writes.
+				if (request.persisted) this.#failedWrites.set(request, toError(error));
+				logger.error("BTW history save failed", { error });
+				if (request.sessionId === this.ctx.sessionManager.getSessionId()) {
+					this.ctx.showError(sanitizeErrorLine(`Could not save /btw history: ${toError(error).message}`));
+				}
+				return false;
+			},
+		);
+		this.#writes.add(write);
+		void write.finally(() => this.#writes.delete(write));
+		return write;
+	}
+
+	#updateRequest(request: BtwRequest, patch: Partial<BtwHistoryTurn>): void {
+		const followUps = request.record.followUps;
+		if (followUps?.length) {
+			request.record = {
+				...request.record,
+				followUps: [...followUps.slice(0, -1), { ...followUps[followUps.length - 1]!, ...patch }],
+			};
+		} else {
+			request.record = { ...request.record, ...patch };
+		}
 	}
 
 	async #runRequest(request: BtwRequest): Promise<void> {
+		const btwUserPrompt = sideChannelPrompts["side-channel/btw-user"].text;
 		try {
-			const promptText = prompt.render(sideChannelPrompts["side-channel/btw-user"].text, {
-				question: request.question,
-			});
-			const { replyText, assistantMessage } = await this.ctx.session.runEphemeralTurn({
+			const promptText = prompt.render(btwUserPrompt, { question: request.question });
+			const model = request.session.model;
+			if (!model) throw new Error("No active model available for /btw.");
+			const history: Message[] = [];
+			for (const turn of request.history ?? []) {
+				history.push({
+					role: "user",
+					content: [{ type: "text", text: prompt.render(btwUserPrompt, { question: turn.question }) }],
+					attribution: "agent",
+					timestamp: turn.createdAt,
+				});
+				if (!turn.answer) continue;
+				// Saved BTW history holds visible text, not provider-native reasoning
+				// or replay signatures. These are context messages, not new billed turns.
+				history.push({
+					role: "assistant",
+					content: [{ type: "text", text: turn.answer }],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: emptyUsage(),
+					stopReason: "stop",
+					timestamp: turn.updatedAt,
+				});
+			}
+			const { replyText, assistantMessage } = await request.session.runEphemeralTurn({
 				promptText,
+				history,
+				conversationKey: request.conversationKey,
 				onTextDelta: delta => {
+					const latest = getBtwLatestTurn(request.record);
+					if (latest.status !== "running") return;
+					this.#updateRequest(request, { answer: latest.answer + delta, updatedAt: Date.now() });
 					if (this.#isActiveRequest(request)) {
-						request.component.appendText(delta);
+						if (this.#visible) request.component.appendText(delta);
+						this.#refreshHistory();
 					}
 				},
 				signal: request.abortController.signal,
 			});
-
-			if (!this.#isActiveRequest(request)) {
-				return;
-			}
-			request.component.setAnswer(replyText);
-			request.component.markComplete();
-			const copyText = request.component.getCopyText();
-			if (copyText !== undefined) {
-				this.#lastQuestion = request.question;
-				this.#lastReplyText = replyText;
-				this.#lastCopyText = copyText;
-				this.#lastAssistantMessage = assistantMessageWithReplyText(assistantMessage, replyText);
-				this.#lastLeafId = request.leafId;
-				this.#lastSessionId = request.sessionId;
-			} else {
-				this.#clearCompletedState();
+			if (getBtwLatestTurn(request.record).status !== "running") return;
+			this.#updateRequest(request, { answer: replyText, status: "complete", updatedAt: Date.now() });
+			if (this.#isActiveRequest(request)) {
+				request.component.setAnswer(replyText);
+				request.component.markComplete();
+				const copyText = request.component.getCopyText();
+				if (copyText !== undefined) {
+					this.#lastQuestion = request.question;
+					this.#lastReplyText = replyText;
+					this.#lastCopyText = copyText;
+					this.#lastAssistantMessage = assistantMessageWithReplyText(assistantMessage, replyText);
+					this.#lastLeafId = request.leafId;
+					this.#lastSessionId = request.sessionId;
+				} else {
+					this.#clearCompletedState();
+				}
 			}
 		} catch (error) {
-			if (!this.#isActiveRequest(request)) {
-				return;
+			if (getBtwLatestTurn(request.record).status !== "running") return;
+			const cancelled = request.abortController.signal.aborted;
+			const message = toError(error).message;
+			this.#updateRequest(request, {
+				status: cancelled ? "cancelled" : "error",
+				updatedAt: Date.now(),
+				...(cancelled ? {} : { error: message }),
+			});
+			if (this.#isActiveRequest(request)) {
+				if (cancelled) request.component.markAborted();
+				else request.component.markError(message);
 			}
-			if (request.abortController.signal.aborted) {
-				request.component.markAborted();
-				return;
-			}
-			request.component.markError(errorMessage(error));
 		}
+		void this.#persist(request);
+		if (this.#isActiveRequest(request)) this.#refreshHistory();
 	}
 
-	#closeActiveRequest(options: { abort: boolean }): void {
-		const request = this.#activeRequest;
-		if (!request) return;
-		this.#activeRequest = undefined;
-		this.#clearCompletedState();
-		if (options.abort) {
-			request.abortController.abort();
-		}
-		request.component.close();
+	#hideInline(): void {
+		this.#visible = false;
 		this.ctx.btwContainer.clear();
 		this.ctx.ui.requestRender();
 	}
@@ -255,6 +680,6 @@ export class BtwController {
 	}
 
 	#isActiveRequest(request: BtwRequest): boolean {
-		return this.#activeRequest === request;
+		return this.#activeRequest === request && request.sessionId === this.ctx.sessionManager.getSessionId();
 	}
 }

@@ -486,6 +486,9 @@ export interface InteractiveModeContext {
 	handlesBtwBranchKey(): boolean;
 	canCopyBtw(): boolean;
 	handleBtwCopyKey(): Promise<boolean>;
+	/** Whether plain `f` opens a follow-up on the completed inline /btw answer. */
+	canFollowUpBtw(): boolean;
+	handleBtwFollowUpKey(): boolean;
 	handleBtwBranch(
 		question: string,
 		assistantMessage: AssistantMessage,

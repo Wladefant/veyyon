@@ -189,6 +189,7 @@ export type InputControllerContext = TuiSlashCommandHostContext &
 		InteractiveModeContext,
 		| "cancelPendingSubmission"
 		| "canCopyBtw"
+		| "canFollowUpBtw"
 		| "clearEditor"
 		| "dismissWelcome"
 		| "flushPendingBashComponents"
@@ -197,6 +198,7 @@ export type InputControllerContext = TuiSlashCommandHostContext &
 		| "handleBashCommand"
 		| "handleBtwBranchKey"
 		| "handleBtwCopyKey"
+		| "handleBtwFollowUpKey"
 		| "handleBtwEscape"
 		| "handleOmfgEscape"
 		| "handlePythonCommand"
@@ -249,6 +251,7 @@ export class InputController {
 	#focusedLeftTapListenerInstalled = false;
 	#btwBranchListenerInstalled = false;
 	#btwCopyListenerInstalled = false;
+	#btwFollowUpListenerInstalled = false;
 	#goalDetailListenerInstalled = false;
 	// Tap counter for the double-← gesture; reset whenever a quiet gap
 	// (>= AGENT_VIEW_LEFT_TAP_WINDOW_MS) starts a fresh sequence. See
@@ -324,7 +327,7 @@ export class InputController {
 	 * Consume `key` while the focused editor is empty and `allowed()` holds, running `act`; any other
 	 * state leaves the key to the editor.
 	 */
-	#addEmptyComposerKeyListener(key: KeyId, allowed: () => boolean, act: () => Promise<unknown>): void {
+	#addEmptyComposerKeyListener(key: KeyId, allowed: () => boolean, act: () => unknown): void {
 		this.ctx.ui.addInputListener(data => {
 			if (!matchesKey(data, key)) return undefined;
 			if (!allowed()) return undefined;
@@ -369,6 +372,14 @@ export class InputController {
 				"c",
 				() => this.ctx.canCopyBtw(),
 				() => this.ctx.handleBtwCopyKey(),
+			);
+		}
+		if (!this.#btwFollowUpListenerInstalled) {
+			this.#btwFollowUpListenerInstalled = true;
+			this.#addEmptyComposerKeyListener(
+				"f",
+				() => this.ctx.canFollowUpBtw(),
+				() => this.ctx.handleBtwFollowUpKey(),
 			);
 		}
 		if (!this.#goalDetailListenerInstalled) {

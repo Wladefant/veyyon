@@ -14,6 +14,7 @@ import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { formatCount, pluralize } from "@veyyon/utils/format";
 import { getKeybindings } from "@veyyon/utils/keybindings";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { TextBlockView, ViewHiddenCount, ViewLine, ViewSection, ViewSpan, ViewTone } from "@veyyon/view";
@@ -784,6 +785,17 @@ export function shortenEmbeddedPaths(text: string, homeDir?: string): string {
 		const normalizedSuffix = pathSuffix.replaceAll(path.win32.sep, path.posix.sep);
 		return `${prefix}~${normalizedSuffix}${trailingPunct}`;
 	});
+}
+
+/**
+ * One bounded, plain row of error text for a TUI surface: control sequences
+ * stripped, home paths shortened, newlines and whitespace runs collapsed.
+ * Apply theme styles after this call; keep the original error for logs.
+ */
+export function sanitizeErrorLine(error: unknown, maxWidth: number = TRUNCATE_LENGTHS.LINE): string {
+	const message = error instanceof Error ? error.message : String(error);
+	const text = collapseWhitespace(replaceTabs(shortenEmbeddedPaths(sanitizeText(message))));
+	return truncateToWidth(text || "Unknown error", Math.max(0, maxWidth));
 }
 
 export function formatToolWorkingDirectory(workdir: string | undefined, projectDir: string): string | undefined {

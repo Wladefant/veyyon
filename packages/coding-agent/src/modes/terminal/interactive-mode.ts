@@ -4446,6 +4446,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleCopy();
 	}
 
+	canFollowUpBtw(): boolean {
+		return this.#btwController.canFollowUp();
+	}
+
+	handleBtwFollowUpKey(): boolean {
+		return this.#btwController.handleFollowUp();
+	}
+
 	async handleBtwBranch(
 		question: string,
 		assistantMessage: AssistantMessage,

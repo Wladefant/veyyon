@@ -1,7 +1,7 @@
 import { type Component, Container, Markdown, Text, type TUI } from "@veyyon/tui";
 import { getMarkdownTheme } from "../../../../theme/markdown-theme";
 import { theme } from "../../../../theme/theme";
-import { replaceTabs } from "../../../../tools/core/render-utils";
+import { replaceTabs, sanitizeErrorLine } from "../../../../tools/core/render-utils";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 import { mountTranscriptBlock } from "../transcript/transcript-block-chrome";
 
@@ -13,12 +13,15 @@ interface BtwPanelComponentOptions {
 	tui: TUI;
 	/** Whether the controller would accept `b` now. Read at paint time, so the hint tracks the main turn. */
 	canBranch?: () => boolean;
+	/** Whether the controller would accept `f` now; read at paint time like {@link canBranch}. */
+	canFollowUp?: () => boolean;
 }
 
 export class BtwPanelComponent extends Container {
 	#question: string;
 	#tui: TUI;
 	#canBranch: (() => boolean) | undefined;
+	#canFollowUp: (() => boolean) | undefined;
 	#state: BtwPanelState = "running";
 	#answer = "";
 	#errorMessage: string | undefined;
@@ -30,6 +33,7 @@ export class BtwPanelComponent extends Container {
 		this.#question = options.question;
 		this.#tui = options.tui;
 		this.#canBranch = options.canBranch;
+		this.#canFollowUp = options.canFollowUp;
 		this.#rebuild();
 	}
 
@@ -106,9 +110,10 @@ export class BtwPanelComponent extends Container {
 			case "running":
 				return theme.fg("muted", "Esc cancel /btw");
 			case "complete": {
-				if (!this.isCopyable()) return theme.fg("muted", "Esc dismiss");
-				const actions = ["c copy"];
-				if (this.#canBranch?.() ?? this.isBranchable()) actions.push("b branch to chat");
+				const actions: string[] = [];
+				if (this.isCopyable()) actions.push("c copy");
+				if (this.#canFollowUp?.()) actions.push("f follow up");
+				if (this.isCopyable() && (this.#canBranch?.() ?? this.isBranchable())) actions.push("b branch to chat");
 				actions.push("Esc dismiss");
 				return theme.fg("muted", actions.join(" · "));
 			}
@@ -123,7 +128,7 @@ export class BtwPanelComponent extends Container {
 
 	#contentComponent(): Component {
 		if (this.#state === "error") {
-			return new Text(theme.fg("error", replaceTabs(this.#errorMessage ?? "Unknown error")), COMPOSER_INSET_COLS, 0);
+			return new Text(theme.fg("error", sanitizeErrorLine(this.#errorMessage ?? "Unknown error")), COMPOSER_INSET_COLS, 0);
 		}
 		const text = this.#visibleAnswer;
 		if (!text) {

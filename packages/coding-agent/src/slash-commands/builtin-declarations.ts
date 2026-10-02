@@ -745,8 +745,8 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 
 	{
 		name: "btw",
-		description: "Ask an ephemeral side question using the current session context",
-		inlineHint: "<question>",
+		description: "Ask an ephemeral side question using the current session context; bare /btw opens BTW history",
+		inlineHint: "[question]",
 		allowArgs: true,
 	},
 
