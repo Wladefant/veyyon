@@ -1207,15 +1207,38 @@ export function redactSensitiveInObject(val: unknown): { result: unknown; change
 	}
 	if (val !== null && typeof val === "object") {
 		let changed = false;
-		const result: Record<string, unknown> = {};
+		const result: Record<string, unknown> = Object.create(null);
 		for (const [k, v] of Object.entries(val)) {
+			const targetKey = redactSensitiveCredentials(k);
+			if (targetKey !== k) changed = true;
+			if (Object.hasOwn(result, targetKey)) {
+				throw new Error(`Redacted property key collision: "${targetKey}" conflicts with an existing key`);
+			}
 			const r = redactSensitiveInObject(v);
 			if (r.changed) changed = true;
-			result[k] = r.result;
+			Object.defineProperty(result, targetKey, {
+				value: r.result,
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
 		}
-		return { result, changed };
+		return { result: changed ? result : val, changed };
 	}
 	return { result: val, changed: false };
+}
+
+export function redactJsonFunctionCallArguments(argsText: string): { result: string; changed: boolean } {
+	try {
+		const parsed = JSON.parse(argsText);
+		if (parsed !== null && typeof parsed === "object") {
+			const { result, changed } = redactSensitiveInObject(parsed);
+			if (changed) return { result: JSON.stringify(result), changed: true };
+			return { result: argsText, changed: false };
+		}
+	} catch {}
+	const raw = redactSensitiveCredentials(argsText);
+	return { result: raw, changed: raw !== argsText };
 }
 
 function redactBlocks<T extends { type: string }>(

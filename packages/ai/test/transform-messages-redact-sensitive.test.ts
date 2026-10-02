@@ -1,40 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { convertCodexResponsesMessages } from "@veyyon/ai/providers/openai-codex-responses";
-import { transformMessages } from "@veyyon/ai/providers/transform-messages";
-import type { Api, AssistantMessage, Context, Message, Model, ToolCall, ToolResultMessage } from "@veyyon/ai/types";
+import { redactJsonFunctionCallArguments, transformMessages } from "@veyyon/ai/providers/transform-messages";
+import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage } from "@veyyon/ai/types";
 import { normalizeSystemPrompts } from "@veyyon/ai/utils";
-import { createCodexModel } from "./helpers";
 
-const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-const makeModel = (api = "openai-responses", provider = "openai", compat?: Record<string, unknown>): Model<Api> =>
-	({
-		api: api as Api,
-		provider,
-		id: "t",
-		name: "t",
-		baseUrl: "https://t",
-		contextWindow: 8192,
-		maxTokens: 2048,
-		input: ["text"],
-		reasoning: true,
-		compat,
-		cost: zeroCost,
-	}) as unknown as Model<Api>;
-
+const makeModel = (api = "openai-responses", provider = "openai", compat?: Record<string, unknown>) =>
+	({ api, provider, compat }) as unknown as Model<Api>;
 const mkAssistant = (content: AssistantMessage["content"], api = "openai-responses", provider = "openai") =>
-	({
-		role: "assistant",
-		content,
-		api: api as Api,
-		provider,
-		model: "t",
-		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { ...zeroCost, total: 0 } },
-		stopReason: "stop",
-		timestamp: 0,
-	}) as unknown as AssistantMessage;
+	({ role: "assistant", content, api, provider }) as unknown as AssistantMessage;
 
 describe("transformMessages redact sensitive credentials", () => {
-	it("redacts already-masked and real tokens from outbound messages", () => {
+	it("redacts already-masked and real tokens from outbound messages and system prompts", () => {
 		const tc: ToolCall = {
 			type: "toolCall",
 			id: "x",
@@ -58,6 +33,15 @@ describe("transformMessages redact sensitive credentials", () => {
 		expect((res[1] as AssistantMessage).content[0]).toMatchObject({ text: "Key: [openai_token_redacted]" });
 		expect(((res[1] as AssistantMessage).content[1] as ToolCall).arguments).toEqual({ c: "[github_token_redacted]" });
 		expect((res[2] as ToolResultMessage).content[0]).toMatchObject({ text: "[github_token_redacted]" });
+
+		const lookalike = "sk-abcdefghijklmnopqrstuvwxyz";
+		expect(transformMessages([{ role: "user", content: lookalike, timestamp: 0 }], makeModel())[0]).toMatchObject({
+			role: "user",
+			content: lookalike,
+		});
+		expect(normalizeSystemPrompts(["Token: gho_************************************"])).toEqual([
+			"Token: [github_token_redacted]",
+		]);
 	});
 
 	it("drops thinking and tool thought signatures when redacting signed content", () => {
@@ -69,7 +53,6 @@ describe("transformMessages redact sensitive credentials", () => {
 			"anthropic",
 		);
 		expect(transformMessages([thinkingMsg], anthropicModel)[0]).toMatchObject({ role: "assistant", content: [] });
-
 		const toolMsg = mkAssistant([
 			{ type: "toolCall", id: "c", name: "run", arguments: { token }, thoughtSignature: "sig" },
 		]);
@@ -78,34 +61,39 @@ describe("transformMessages redact sensitive credentials", () => {
 		expect(toolBlock.thoughtSignature).toBeUndefined();
 	});
 
-	it("preserves non-credential lookalike and redacts system prompt & codex history", () => {
-		const lookalike = "sk-abcdefghijklmnopqrstuvwxyz";
-		expect(transformMessages([{ role: "user", content: lookalike, timestamp: 0 }], makeModel())[0]).toMatchObject({
-			role: "user",
-			content: lookalike,
-		});
-		expect(normalizeSystemPrompts(["Token: gho_************************************"])).toEqual([
-			"Token: [github_token_redacted]",
-		]);
+	it("redacts secret object keys avoiding silent collisions, preserves own __proto__, and drops thoughtSignature", () => {
+		const k1 = "sk-proj-ABCdef1234567890ABCdef1234567890ABCdef1234567890ABCdef123456";
+		const k2 = "sk-proj-XYZdef1234567890ABCdef1234567890ABCdef1234567890ABCdef123456";
+		expect(() =>
+			transformMessages(
+				[mkAssistant([{ type: "toolCall", id: "c", name: "run", arguments: { [k1]: "v1", [k2]: "v2" } }])],
+				makeModel(),
+			),
+		).toThrow(/Redacted property key collision/);
 
-		const model = createCodexModel("gpt-5.1-codex");
-		const token = "sk-ABCdef1234567890ABCdef1234567890ABCdef1234567890ABCdef123456";
-		const ctx: Context = {
-			messages: [
-				{
-					role: "user",
-					content: "f",
-					timestamp: 0,
-					providerPayload: {
-						type: "openaiResponsesHistory",
-						provider: model.provider,
-						items: [{ type: "message", role: "user", content: [{ type: "input_text", text: token }] }],
-					},
-				} as Context["messages"][number],
-			],
-		};
-		expect(convertCodexResponsesMessages(model, ctx)).toEqual([
-			{ type: "message", role: "user", content: [{ type: "input_text", text: "[openai_token_redacted]" }] },
+		const rawWithProto = JSON.parse(
+			`{"__proto__":"harmless_proto_val","${k1}":"v1","token":"ghp_ABCdef1234567890ABCdef1234567890ABCdef"}`,
+		);
+		const toolMsg = mkAssistant([
+			{ type: "toolCall", id: "c", name: "run", arguments: rawWithProto, thoughtSignature: "sig" },
 		]);
+		const toolBlock = (transformMessages([toolMsg], makeModel())[0] as AssistantMessage).content[0] as ToolCall;
+		expect(toolBlock.thoughtSignature).toBeUndefined();
+		expect(Object.hasOwn(toolBlock.arguments, "__proto__")).toBe(true);
+		// biome-ignore lint/suspicious/noProto lint/complexity/useLiteralKeys: Testing explicit __proto__ property preservation
+		expect(toolBlock.arguments["__proto__"]).toBe("harmless_proto_val");
+		expect(toolBlock.arguments["[openai_token_redacted]"]).toBe("v1");
+		expect(toolBlock.arguments.token).toBe("[github_token_redacted]");
+		expect(JSON.stringify(toolBlock.arguments)).toContain('"__proto__":"harmless_proto_val"');
+	});
+
+	it("redacts native function_call arguments with JSON unicode escapes and handles invalid JSON", () => {
+		const unicodeArgs = '{"token":"\\u0067hp_ABCdef1234567890ABCdef1234567890ABCdef"}';
+		const { result: redactedUnicode } = redactJsonFunctionCallArguments(unicodeArgs);
+		expect(JSON.parse(redactedUnicode)).toEqual({ token: "[github_token_redacted]" });
+
+		const invalidJson = '{"token": incomplete ghp_ABCdef1234567890ABCdef1234567890ABCdef';
+		const { result: redactedInvalid } = redactJsonFunctionCallArguments(invalidJson);
+		expect(redactedInvalid).toBe('{"token": incomplete [github_token_redacted]');
 	});
 });
