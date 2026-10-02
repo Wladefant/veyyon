@@ -15,12 +15,14 @@ import type {
 } from "@veyyon/ai";
 import { errorMessage, sanitizeText } from "@veyyon/utils";
 import { resolveToCwd } from "./tools/core/path-utils";
+import { cursorMcpPrefersReplaceEdit, normalizeCursorReplaceArgs } from "./cursor-bridge-tools";
 
-interface CursorExecBridgeOptions {
+export interface CursorExecBridgeOptions {
 	cwd: string;
 	tools: Map<string, AnyAgentTool>;
 	getToolContext?: () => AgentToolContext | undefined;
 	emitEvent?: (event: AgentEvent) => void;
+	getEditReplaceTool?: () => AnyAgentTool | undefined;
 }
 
 function createToolResultMessage(
@@ -52,8 +54,9 @@ async function executeTool(
 	toolName: string,
 	toolCallId: string,
 	args: Record<string, unknown>,
+	toolOverride?: AnyAgentTool,
 ): Promise<ToolResultMessage> {
-	const tool = options.tools.get(toolName);
+	const tool = toolOverride ?? options.tools.get(toolName);
 	if (!tool) {
 		const result = buildToolErrorResult(`Tool "${toolName}" not available`);
 		return createToolResultMessage(toolCallId, toolName, result, true);
@@ -328,6 +331,16 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 	async mcp(call: CursorMcpCall) {
 		const toolName = call.toolName || call.name;
 		const toolCallId = decodeToolCallId(call.toolCallId);
+		const args = Object.keys(call.args ?? {}).length > 0 ? call.args : decodeMcpArgs(call.rawArgs ?? {});
+		if (cursorMcpPrefersReplaceEdit(toolName, args)) {
+			const replaceTool = this.options.getEditReplaceTool?.();
+			if (!replaceTool) {
+				const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
+				const message = formatMcpToolErrorMessage(toolName, availableTools);
+				return createToolResultMessage(toolCallId, toolName, buildToolErrorResult(message), true);
+			}
+			return await executeTool(this.options, "edit", toolCallId, normalizeCursorReplaceArgs(args), replaceTool);
+		}
 		const tool = this.options.tools.get(toolName);
 		if (!tool) {
 			const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
@@ -336,7 +349,6 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			return createToolResultMessage(toolCallId, toolName, result, true);
 		}
 
-		const args = Object.keys(call.args ?? {}).length > 0 ? call.args : decodeMcpArgs(call.rawArgs ?? {});
 		const toolResultMessage = await executeTool(this.options, toolName, toolCallId, args);
 		return toolResultMessage;
 	}

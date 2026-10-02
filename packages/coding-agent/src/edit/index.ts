@@ -527,14 +527,14 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 	readonly #editMode?: EditMode;
 	readonly #deferredDiagnostics: DeferredDiagnostics;
 
-	constructor(private readonly session: ToolSession) {
+	constructor(private readonly session: ToolSession, editMode?: EditMode) {
 		const {
 			VEYYON_EDIT_FUZZY: editFuzzy = "auto",
 			VEYYON_EDIT_FUZZY_THRESHOLD: editFuzzyThreshold = "auto",
 			VEYYON_EDIT_VARIANT: envEditVariant = "auto",
 		} = Bun.env;
 
-		this.#editMode = resolveConfiguredEditMode(envEditVariant);
+		this.#editMode = editMode ?? resolveConfiguredEditMode(envEditVariant);
 		this.#allowFuzzy = resolveAllowFuzzy(session, editFuzzy);
 		this.#fuzzyThreshold = resolveFuzzyThreshold(session, editFuzzyThreshold);
 		const deduplicateDiagnostics =
@@ -772,8 +772,18 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 					batchRequest: LspBatchRequest | undefined,
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
-					const { edits, path } = params as ReplaceParams;
-					const runs = (edits as ReplaceEditEntry[]).map(
+					const replaceParams = params as Record<string, unknown>;
+					const path = replaceParams.path as string;
+					const rawEdits = Array.isArray(replaceParams.edits)
+						? (replaceParams.edits as ReplaceEditEntry[])
+						: [
+								{
+									old_text: (replaceParams.old_text ?? replaceParams.old_string) as string,
+									new_text: (replaceParams.new_text ?? replaceParams.new_string) as string,
+									all: (replaceParams.all ?? replaceParams.replace_all) as boolean | undefined,
+								},
+							];
+					const runs = rawEdits.map(
 						entry => (br: LspBatchRequest | undefined) =>
 							executeReplaceSingle({
 								session: tool.session,
