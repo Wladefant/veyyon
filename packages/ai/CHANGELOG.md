@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Fixed Codex OAuth selection to keep chat and Spark quotas independent, preserve legacy shared blocks from older brokers, and avoid treating incomplete usage reports as uncapped ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Codex Responses ignoring disabled cache retention when deriving prompt_cache_key, while preserving transport session identity ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi eb5bfbfb11c598826b0d2da3255347a244004e0e).
 - Fixed Codex Responses dropping native image-generation results from assistant content and replay when terminal output items retained a stale `generating` status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a3d1f35099fa).
 - Preserved workspace-scoped credential identity and usage report partitioning for OpenAI Codex ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0eeb6c38149905a7c1d9a8ae4bd98cff882721b8).
