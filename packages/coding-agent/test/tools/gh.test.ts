@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1639,7 +1639,11 @@ exec ${JSON.stringify(realGit)} "$@"
 describe("github tool on a GitHub Enterprise host", () => {
 	const ENTERPRISE_URL = "https://ghe.example.com/acme/widgets";
 	const ENTERPRISE_REPO = "ghe.example.com/acme/widgets";
-	const savedGhHost = process.env.GH_HOST;
+	let savedGhHost: string | undefined;
+	beforeEach(() => {
+		savedGhHost = process.env.GH_HOST;
+		delete process.env.GH_HOST;
+	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -1778,6 +1782,93 @@ describe("github tool on a GitHub Enterprise host", () => {
 		const viewArgs = (jsonSpy.mock.calls[0]?.[1] ?? []) as string[];
 		expect(viewArgs.slice(0, 3)).toEqual(["pr", "view", "8"]);
 		expect(viewArgs[viewArgs.indexOf("--repo") + 1]).toBe(ENTERPRISE_REPO);
+	});
+
+	it("run_watch refuses to infer a commit for a bare repo that resolves elsewhere", async () => {
+		// The bare `repo` goes to github.com (no GH_HOST), so the enterprise
+		// checkout's HEAD says nothing about the runs being watched.
+		vi.spyOn(git.github, "text").mockResolvedValue(`${ENTERPRISE_URL}\n`);
+		const jsonSpy = vi.spyOn(git.github, "json");
+		const tool = new GithubTool(createSession(`/tmp/gh-enterprise-mismatch-${Date.now()}`));
+
+		await expect(tool.execute("run-watch", { op: "run_watch", repo: "acme/widgets" })).rejects.toThrow(
+			"current checkout is ghe.example.com/acme/widgets",
+		);
+		expect(jsonSpy).not.toHaveBeenCalled();
+	});
+
+	it("run_watch accepts a bare repo when GH_HOST names the checkout's host", async () => {
+		process.env.GH_HOST = "ghe.example.com";
+		vi.spyOn(git.github, "text").mockResolvedValue(`${ENTERPRISE_URL}\n`);
+		vi.spyOn(git.branch, "current").mockResolvedValue("main");
+		vi.spyOn(git.head, "sha").mockResolvedValue("c215f3a91217c215f3a91217c215f3a91217c215");
+		const abort = new AbortController();
+		const jsonSpy = vi.spyOn(git.github, "json").mockImplementation((async () => {
+			abort.abort();
+			return { workflow_runs: [] };
+		}) as unknown as typeof git.github.json);
+		const tool = new GithubTool(createSession(`/tmp/gh-enterprise-ghhost-${Date.now()}`));
+
+		await tool.execute("run-watch", { op: "run_watch", repo: "acme/widgets" }, abort.signal).catch(() => {});
+
+		// Guard passed: the watch reached its first poll, and the caller's bare
+		// repo is left host-less so `gh` applies the same GH_HOST.
+		const args = (jsonSpy.mock.calls[0]?.[1] ?? []) as string[];
+		expect(args).toContain("/repos/acme/widgets/actions/runs");
+		expect(args).not.toContain("--hostname");
+	});
+
+	it("keeps github.com on the checkout's identity when GH_HOST names another host", async () => {
+		process.env.GH_HOST = "ghe.example.com";
+		// Stripping the host here would hand `gh` a bare ref and send a
+		// github.com checkout's lookups to the enterprise instance.
+		vi.spyOn(git.github, "text").mockResolvedValue("https://github.com/acme/widgets\n");
+		await expect(resolveDefaultRepoMemoized(`/tmp/gh-default-host-retained-${Date.now()}`)).resolves.toBe(
+			"github.com/acme/widgets",
+		);
+	});
+
+	it("file_read links a bare repo to the host its request went to", async () => {
+		process.env.GH_HOST = "ghe.example.com";
+		vi.spyOn(git.github, "json").mockResolvedValue({
+			type: "file",
+			encoding: "none",
+			size: 2 * 1024 * 1024,
+		} as never);
+		const tool = new GithubTool(createSession("/tmp/gh-default-host-file-read"));
+
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "acme/widgets",
+			path: "docs/readme.md",
+		});
+
+		// The request carried no --hostname, so it hit GH_HOST; the fallback link
+		// must name the same instance rather than github.com.
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		expect(text).toContain("https://ghe.example.com/acme/widgets/blob/HEAD/docs/readme.md");
+	});
+
+	it("file_read passes the host as a flag and keeps it out of the API path", async () => {
+		process.env.GH_HOST = "ghe.example.com";
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValue({
+			type: "file",
+			encoding: "none",
+			size: 2 * 1024 * 1024,
+		} as never);
+		const tool = new GithubTool(createSession("/tmp/gh-host-flag-file-read"));
+
+		await tool.execute("file-read", {
+			op: "file_read",
+			repo: "ghe.example.com/acme/widgets",
+			path: "docs/readme.md",
+		});
+
+		const args = (jsonSpy.mock.calls[0]?.[1] ?? []) as string[];
+		expect(args).toContain("/repos/acme/widgets/contents/docs/readme.md");
+		expect(args).not.toContain("/repos/ghe.example.com/acme/widgets/contents/docs/readme.md");
+		expect(args).toContain("--hostname");
+		expect(args[args.indexOf("--hostname") + 1]).toBe("ghe.example.com");
 	});
 });
 

@@ -25,7 +25,7 @@ import { getGithubCacheDbPath } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
 import type { Settings } from "../../config/settings";
 import { ToolAbortError } from "../core/tool-errors";
-import { GITHUB_HOST } from "./gh-format";
+import { defaultGhHost, splitRepoRef } from "./gh-format";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Storage layer
@@ -205,7 +205,7 @@ const authKeyMemo = new Map<string, AuthKeyMemoEntry>();
  * The DB stores only a hash, never the token or hosts.yml contents. If no
  * credential source is visible, callers should pass `null` to bypass caching.
  */
-export function resolveGithubCacheAuthKey(host: string = process.env.GH_HOST || GITHUB_HOST): string | undefined {
+export function resolveGithubCacheAuthKey(host: string = defaultGhHost()): string | undefined {
 	const hostsPath = path.join(getGhConfigDir(), "hosts.yml");
 	let envSig = "";
 	for (const name of AUTH_KEY_TOKEN_ENV_VARS) {
@@ -246,16 +246,15 @@ export function resolveGithubCacheAuthKey(host: string = process.env.GH_HOST || 
 }
 
 /**
- * Row identity for a repo. An explicit host prefix is dropped only when it is
- * the auth host, the one a bare slug resolves to (`GH_HOST`, else github.com),
- * so both spellings of that repository share a row. Any other host stays in the
- * key: with `GH_HOST=ghe.corp`, `github.com/acme/widgets` and `acme/widgets`
- * are different repositories and must not serve each other's payload.
+ * Row identity for a repo, relative to the host `gh` defaults to. A prefix
+ * naming that same host is dropped so `github.com/owner/repo` and `owner/repo`
+ * share one row — but under `GH_HOST` the bare form means the configured
+ * instance, so an explicit `github.com/` prefix then stays and keeps its own
+ * rows instead of answering with another host's issue.
  */
 function normalizeRepo(repo: string): string {
-	const lower = repo.toLowerCase();
-	const authPrefix = `${(process.env.GH_HOST?.trim() || GITHUB_HOST).toLowerCase()}/`;
-	return lower.startsWith(authPrefix) ? lower.slice(authPrefix.length) : lower;
+	const ref = splitRepoRef(repo.toLowerCase());
+	return ref.host && ref.host !== defaultGhHost() ? `${ref.host}/${ref.slug}` : ref.slug;
 }
 
 export function getCached<T = unknown>(
