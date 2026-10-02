@@ -8,8 +8,16 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Rejected `.` and `..` as owner or repo in GitHub repository refs so they cannot traverse the `/repos/` API path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Rejected GitHub hosts outside `github.com`, `GH_HOST` and the checkout host on every repo, PR, issue and run input, kept enterprise hosts out of API paths and cache keys, and pinned fork lookup to the PR host (Refs #107)
+- Fixed an eval cell whose idle timeout fired during kernel startup killing the whole host with an unhandled `TimeoutError` rejection, and the Python runner stderr drain splitting multi-byte characters across chunks ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation, while preserving configured endpoint failovers ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - `/btw` branch promotion is refused while the main turn is running or once the session or its leaf moved since the question was asked; the panel hides the branch hint while it is unavailable, a refused `b` reports why instead of typing into the composer, and a `b` typed before the answer completes still reaches the composer ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a1183da91225eec2dd4e46dfa037e66567d8980, 98f484bd2f9a11571f807b8b0b1441cc7a7a6671, a54a2f79cbfd9b3a3e7b136cea83533064ca9d0a).
+- Fixed the embedded shell's `command -v`/`-V` honoring only the first operand: it now iterates every name like bash/zsh, printing one line per resolved name and skipping misses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4397d12100f63bc3085b573b983c120524ea58ed).
+- Wait for pending advisor reviews to drain in headless print mode before disposing the session ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed HTML session exports overflowing the browser call stack when rendering a valid, deeply nested conversation tree ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -19,6 +27,7 @@
 - Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
 - Hard-refusal fail-closed guard preventing any agent from merging a PR or pushing to `main` on `Bavariance/polysimulator` across `git push`, `gh pr merge`, `gh api` and the `github` tool ([#174](https://github.com/Wladefant/veyyon/pull/174)).
+- The polysimulator main guard fires only when the target repo (`-R`/`--repo`, a URL or the working directory's git remote) is `Bavariance/polysimulator`; merges and pushes to `main` in other repositories and in an unidentifiable repository are no longer refused ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Terminate the mnemopi embedding worker subprocess after a configurable idle period (`mnemopi.embedIdleUnloadMs`, default 5 minutes, clamped to the 2147483647 ms a `setTimeout` delay can hold) and lazily relaunch it on the next embed request, releasing the loaded ONNX model's ~1.25 GB commit charge during idle periods ([#54](https://github.com/Wladefant/veyyon/issues/54)).
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
@@ -28,6 +37,9 @@
 
 ### Changed
 
+- Removed unused asynchronous file loading methods from ConfigFile; no user-visible effect ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16608553c9ce132fe4ce43084c0f0caa9dcc1022).
+- Parameterized MCP tool name sanitization and unified current and legacy name minting under one shared pipeline (oh-my-pi 24aa8aa6279e815e338623e9d9be3f7792f6c193, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Extracted shared foreground-wait and auto-background helper primitives (`formatBackgroundNotice`, `resolveAutoBackgroundWaitMs`, `raceJobSettlement`) into `async/auto-background.ts` with cancellable threshold timers (oh-my-pi aeed1e6195abfa971b15e291c6c598bc9c1065b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -43,6 +55,12 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Turn recovery now classifies a failed turn that already streamed visible (non-whitespace) assistant text as replay-unsafe, so credential rotation and model fallback do not duplicate partial output to the user (oh-my-pi b5602ddfc1db15c16c499c20559176a69615ed4f, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Kept the mnemopi embedding subprocess referenced while requests are in flight so headless print mode cannot exit prematurely ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Recomputed model scope after a cross-project resume switch so the destination project's `enabledModels` settings take effect ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed loop mode continuing when Esc is pressed mid-iteration by pausing the loop and cancelling pending submissions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed `veyyon usage` capacity stats to report Codex chat and Spark meters separately when they share a window duration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Nerd Font symbols drawing the D3.js icon for C# files and the Microsoft logo for the context meter; they now use the C# and generic window icons ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hard `session_stop` blocks survive the advisory continuation limit, reasonless blocks retain a fallback instruction, and aborted turns cannot schedule stale stop feedback ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved bearer token fallback when discovering OpenAI Codex models without stored OAuth accounts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed timed-out or interrupted glob searches keeping native filesystem workers alive and blocking subsequent agent turns (oh-my-pi 510f9e05c7397c69f373f01d4d4f098e917aa2e3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
