@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added cross-platform copy-on-write file cloning and atomic clone_over primitives in veyyon-iso ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Fixed
 
 - Fixed Windows stdio MCP servers launched through `.cmd`/`.bat` shims failing with `Transport closed`; the launch now builds a `cmd.exe /d /e:ON /v:OFF /c` command line escaped for `cmd.exe`'s parser and spawned with `windowsVerbatimArguments`, so the command runs and arguments (including `%VAR%`, quotes, and shell metacharacters) reach the server intact and cannot inject commands (BatBadBut / CVE-2024-24576) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 07889331103b8b0f3da532d7dc3ceb0a5c2c6de5).
