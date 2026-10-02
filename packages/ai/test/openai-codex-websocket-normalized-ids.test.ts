@@ -211,4 +211,151 @@ describe("Codex WebSocket append state replay sanitization", () => {
 		// Without replayable assistant output, append cannot be trusted: canAppend must be false
 		expect(transportDetails.canAppend).toBe(false);
 	});
+	it("chains second-turn websocket append when assistant tool call has normalized oversized call ID", async () => {
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const oversizedCallId = `call_${"a".repeat(80)}`;
+
+		class NormalizedIdChainingWs extends TestWebSocket {
+			override send(data: string): void {
+				const parsed = JSON.parse(data) as Record<string, unknown>;
+				sentRequests.push(parsed);
+				if (parsed.type === "response.create") {
+					setTimeout(() => {
+						if (sentRequests.length === 1) {
+							this.sendJson({
+								type: "response.created",
+								response: { id: "resp_ws_tool" },
+							});
+							this.sendJson({
+								type: "response.output_item.added",
+								output_index: 0,
+								item: {
+									type: "function_call",
+									id: "fc_1",
+									call_id: oversizedCallId,
+									name: "calculator",
+									arguments: "",
+								},
+							});
+							this.sendJson({
+								type: "response.output_item.done",
+								output_index: 0,
+								item: {
+									type: "function_call",
+									id: "fc_1",
+									call_id: oversizedCallId,
+									name: "calculator",
+									arguments: '{"expr":"1+1"}',
+									status: "completed",
+								},
+							});
+							this.sendJson({
+								type: "response.completed",
+								response: {
+									id: "resp_ws_tool",
+									status: "completed",
+									usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+								},
+							});
+						} else {
+							this.sendJson({
+								type: "response.created",
+								response: { id: "resp_ws_final" },
+							});
+							this.sendJson({
+								type: "response.output_item.added",
+								output_index: 0,
+								item: {
+									type: "message",
+									id: "msg_final",
+									role: "assistant",
+									status: "in_progress",
+									content: [],
+								},
+							});
+							this.sendJson({
+								type: "response.content_part.added",
+								part: { type: "output_text", text: "" },
+							});
+							this.sendJson({ type: "response.output_text.delta", delta: "Result is 2" });
+							this.sendJson({
+								type: "response.output_item.done",
+								output_index: 0,
+								item: {
+									type: "message",
+									id: "msg_final",
+									role: "assistant",
+									status: "completed",
+									content: [{ type: "output_text", text: "Result is 2" }],
+								},
+							});
+							this.sendJson({
+								type: "response.completed",
+								response: {
+									id: "resp_ws_final",
+									status: "completed",
+									usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+								},
+							});
+						}
+					}, 0);
+				}
+			}
+		}
+
+		globalThis.WebSocket = NormalizedIdChainingWs as unknown as typeof WebSocket;
+
+		const model = createCodexModel("gpt-5.5", { preferWebsockets: true });
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const sessionId = "ws-normalized-chaining";
+
+		const firstUser = { role: "user" as const, content: "Compute 1+1", timestamp: Date.now() };
+		const options = {
+			apiKey: createCodexTestToken(),
+			sessionId,
+			preferWebsockets: true,
+			providerSessionState,
+		};
+
+		const firstStream = streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: ["You are a helpful assistant."], messages: [firstUser] },
+			options,
+		);
+		const firstResponse = await firstStream.result();
+		const toolCall = firstResponse.content.find(
+			(block): block is Extract<(typeof firstResponse.content)[number], { type: "toolCall" }> =>
+				block.type === "toolCall",
+		);
+		expect(toolCall).toBeDefined();
+
+		const toolResult = {
+			role: "toolResult" as const,
+			toolCallId: toolCall!.id,
+			toolName: toolCall!.name,
+			content: [{ type: "text" as const, text: "2" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+
+		const secondStream = streamOpenAICodexResponses(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [firstUser, firstResponse, toolResult],
+			},
+			options,
+		);
+		await secondStream.result();
+
+		expect(sentRequests).toHaveLength(2);
+		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[1]?.previous_response_id).toBe("resp_ws_tool");
+		expect(sentRequests[1]?.input).toEqual([
+			expect.objectContaining({
+				type: "function_call_output",
+				output: "2",
+			}),
+		]);
+	});
 });
