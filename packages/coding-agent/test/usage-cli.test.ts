@@ -103,12 +103,11 @@ describe("computeProviderWindowStats", () => {
 		expect(sevenDay.remainingAccounts).toBeCloseTo(1.4);
 	});
 
-	it("reports Spark-only capacity instead of dropping the meter", () => {
+	it("reports legacy Spark-only capacity when limits have no tier", () => {
 		const report = makeReport("openai-codex", "spark@example.test", [
 			makeLimit({
 				id: "openai-codex:spark:primary",
 				provider: "openai-codex",
-				tier: "spark",
 				usedFraction: 0.75,
 				durationMs: FIVE_HOURS,
 				windowId: "5h",
@@ -116,7 +115,6 @@ describe("computeProviderWindowStats", () => {
 			makeLimit({
 				id: "openai-codex:spark:secondary",
 				provider: "openai-codex",
-				tier: "spark",
 				usedFraction: 0.25,
 				durationMs: SEVEN_DAYS,
 				windowId: "7d",
