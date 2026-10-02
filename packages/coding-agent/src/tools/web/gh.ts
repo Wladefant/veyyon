@@ -632,7 +632,6 @@ function repoFromRepositoryUrl(value: string | undefined): string | undefined {
 	return value.slice(REPO_API_URL_PREFIX.length);
 }
 
-
 function apiUserToGhUser(user: GhApiUser | null | undefined): GhUser | undefined {
 	if (!user) return undefined;
 	const login = user.login ?? undefined;
