@@ -527,7 +527,10 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 	readonly #editMode?: EditMode;
 	readonly #deferredDiagnostics: DeferredDiagnostics;
 
-	constructor(private readonly session: ToolSession, editMode?: EditMode) {
+	constructor(
+		private readonly session: ToolSession,
+		editMode?: EditMode,
+	) {
 		const {
 			VEYYON_EDIT_FUZZY: editFuzzy = "auto",
 			VEYYON_EDIT_FUZZY_THRESHOLD: editFuzzyThreshold = "auto",

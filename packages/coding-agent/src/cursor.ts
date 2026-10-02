@@ -14,8 +14,8 @@ import type {
 	ToolResultMessage,
 } from "@veyyon/ai";
 import { errorMessage, sanitizeText } from "@veyyon/utils";
-import { resolveToCwd } from "./tools/core/path-utils";
 import { cursorMcpPrefersReplaceEdit, normalizeCursorReplaceArgs } from "./cursor-bridge-tools";
+import { resolveToCwd } from "./tools/core/path-utils";
 
 export interface CursorExecBridgeOptions {
 	cwd: string;
