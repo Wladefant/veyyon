@@ -1423,7 +1423,7 @@ export function repairOrphanResponsesToolCalls(input: ResponseInput): ResponseIn
 	return repaired;
 }
 
-type ResponsesBatchItemKind = "call" | "output" | "assistant-message" | "other";
+type ResponsesBatchItemKind = "call" | "output" | "message" | "other";
 
 /** Classify a Responses input item for tool-call/output batch normalization. */
 function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
@@ -1431,7 +1431,7 @@ function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
 	if (type === "function_call" || type === "custom_tool_call") return "call";
 	if (type === "function_call_output" || type === "custom_tool_call_output") return "output";
 	const role = "role" in item ? item.role : undefined;
-	if (type === "message" && role === "assistant") return "assistant-message";
+	if (type === "message" && (role === "assistant" || role === "user")) return "message";
 	return "other";
 }
 
@@ -1466,7 +1466,7 @@ export function hoistInterleavedResponsesToolBatchMessages<T extends object>(ite
 			const kind = classifyResponsesBatchItem(items[start - 1]);
 			if (kind === "call") {
 				sawCall = true;
-			} else if (kind === "assistant-message") {
+			} else if (kind === "message") {
 				messageIndexes.push(start - 1);
 			} else {
 				break;
@@ -1789,9 +1789,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		msgIndex++;
 	}
 
-	const hoisted = hoistInterleavedResponsesToolBatchMessages(messages);
-	const withRepairedOutputs = options.repairOrphanOutputs ? repairOrphanResponsesToolOutputs(hoisted) : hoisted;
-	return repairOrphanResponsesToolCalls(withRepairedOutputs);
+	// Repair orphan outputs/calls first: both can inject a message
+	// (an orphan result note, a computer call interrupted note) in place
+	// of, or beside, a tool item — wedging it between another call's
+	// function_call and function_call_output. Hoist runs last so it relocates
+	// any wedged message — model-streamed or repair-injected — out of the batch,
+	// preserving the Responses call→output pairing (#11473, extends #8789).
+	const withRepairedOutputs = options.repairOrphanOutputs ? repairOrphanResponsesToolOutputs(messages) : messages;
+	const withRepairedCalls = repairOrphanResponsesToolCalls(withRepairedOutputs);
+	return hoistInterleavedResponsesToolBatchMessages(withRepairedCalls);
 }
 
 type ResponsesReplayAssistantMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -3464,6 +3470,27 @@ const TOP_LEVEL_EXCLUDE_MAP = {
 };
 
 /**
+ * Output-only lifecycle metadata excluded from per-item prefix identity:
+ * replay sanitization strips `status` from message/function_call/custom
+ * tool items (they reject output lifecycle fields), so raw response items
+ * must not be distinguished from their sanitized replay form.
+ */
+const ITEM_LIFECYCLE_EXCLUDE_MAP = {
+	status: true,
+};
+
+/**
+ * Replay sanitization strips output item IDs from message/function/custom
+ * assistant items. A live transcript rebuilt from the corresponding agent
+ * message may still retain that ID; it is output-only identity, while call_id
+ * remains the semantic tool/result pairing key.
+ */
+const REPLAY_SANITIZED_ITEM_EXCLUDE_MAP = {
+	status: true,
+	id: true,
+};
+
+/**
  * Strict-prefix delta for stateful `previous_response_id` chaining (used by the
  * platform Responses provider and the Codex provider on both transports):
  * returns the input items the current request appends beyond the previous
@@ -3490,7 +3517,12 @@ export function buildResponsesDeltaInput<TItem extends ResponseInputItem | Input
 	for (const series of [previous.input, previousResponseItems]) {
 		if (!series) continue;
 		for (const item of series) {
-			if (deepEqualsWithout(item, current.input[index])) {
+			const type = (item as { type?: unknown }).type;
+			const omitKeys =
+				type === "message" || type === "function_call" || type === "custom_tool_call"
+					? REPLAY_SANITIZED_ITEM_EXCLUDE_MAP
+					: ITEM_LIFECYCLE_EXCLUDE_MAP;
+			if (deepEqualsWithout(item, current.input[index], omitKeys)) {
 				index++;
 			} else {
 				return null;

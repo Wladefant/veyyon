@@ -16,6 +16,7 @@ export const Flag = {
 	StaleResponsesItem: 0x0010_0000,
 	MalformedFunctionCall: 0x0020_0000,
 	ProviderFinishError: 0x0040_0000,
+	EmptyResponse: 0x0000_2000,
 	ContentBlocked: 0x0000_8000,
 	ContextOverflow: 0x0080_0000,
 	AuthFailed: 0x0100_0000,
