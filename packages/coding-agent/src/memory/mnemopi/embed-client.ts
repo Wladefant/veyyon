@@ -7,12 +7,12 @@ import {
 	createWorkerHandle,
 	createWorkerSubprocess,
 	logWorkerMessage,
+	type RefCountedWorkerHandle,
 	resolveWorkerSpawnCmd,
 	SMOKE_TEST_TIMEOUT_MS,
 	type SpawnedSubprocess,
 	smokeTestWorker,
 	spawnWorkerOrUnavailable,
-	type RefCountedWorkerHandle,
 	workerEnvFromParent,
 } from "../../subprocess/worker-client";
 import { MNEMOPI_EMBED_WORKER_ARG } from "../../worker-args";
@@ -71,7 +71,7 @@ export function createMnemopiEmbedSubprocess(): SpawnedSubprocess<MnemopiEmbedWo
 	});
 }
 
-function wrapSubprocess(spawned: SpawnedSubprocess<MnemopiEmbedWorkerOutbound>): MnemopiEmbedWorkerHandle {
+export function wrapSubprocess(spawned: SpawnedSubprocess<MnemopiEmbedWorkerOutbound>): MnemopiEmbedWorkerHandle {
 	const { proc } = spawned;
 	// `proc.send` throws synchronously when the child's IPC pipe is already
 	// closed. That throw MUST propagate: the caller registers a pending
