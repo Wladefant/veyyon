@@ -763,6 +763,32 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("session_stop", () => {
+		it.each([false, true])("preserves a reasonless hard block with advisory-first=%s", async advisoryFirst => {
+			const handlers = [{ decision: "block" }, { continue: true, reason: "Advisory." }];
+			if (advisoryFirst) handlers.reverse();
+			await fs.promises.writeFile(
+				path.join(extensionsDir, "hard-stop.ts"),
+				`export default function(api) {
+					for (const result of ${JSON.stringify(handlers)}) api.on("session_stop", () => result);
+				}`,
+			);
+			const loaded = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				loaded.extensions,
+				loaded.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const result = await runner.emitSessionStop({
+				messages: [],
+				turn_id: 0,
+				session_id: "test-session",
+				stop_hook_active: false,
+			});
+			expect(result).toEqual({ decision: "block" });
+		});
+
 		it("invokes handlers with completed main-session messages and returns continuation feedback", async () => {
 			const eventsPath = path.join(tempDir.path(), "session-stop-events.jsonl");
 			const extCode = `
