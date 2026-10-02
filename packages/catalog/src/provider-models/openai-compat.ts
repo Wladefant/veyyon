@@ -3920,10 +3920,11 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 	const compat: OpenAICompat = {
 		supportsStore: false,
 		supportsDeveloperRole: false,
-		supportsReasoningEffort:
-			supportedOpenAIParams !== undefined
-				? supportedOpenAIParams.includes("reasoning_effort")
-				: (referenceCompat?.supportsReasoningEffort ?? false),
+		...(supportedOpenAIParams !== undefined
+			? { supportsReasoningEffort: supportedOpenAIParams.includes("reasoning_effort") }
+			: referenceCompat?.supportsReasoningEffort !== undefined
+				? { supportsReasoningEffort: referenceCompat.supportsReasoningEffort }
+				: {}),
 		...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
 		...(referenceCompat?.omitReasoningEffort !== undefined
 			? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
