@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Tracked projected thinking blocks by source index in the leaked-thinking stream wrapper so out-of-order thinking_end events update the correct signature after intervening blocks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Detected premature stream closure before block finalization on OpenAI completions streams, honored the `[DONE]` sentinel as clean completion when finish reason is omitted, and surfaced flat in-band stream error envelopes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
