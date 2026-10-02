@@ -4,7 +4,13 @@
  * applier.
  */
 import { HL_PAYLOAD_REPLACE, HL_RANGE_SEP } from "./format";
-import { BARE_BODY_AUTO_PIPED_WARNING, MINUS_BULLET_AUTO_PIPED_WARNING, MINUS_ROW_REJECTED, MOVE_TAKES_NO_BODY, REM_TAKES_NO_BODY } from "./messages";
+import {
+	BARE_BODY_AUTO_PIPED_WARNING,
+	MINUS_BULLET_AUTO_PIPED_WARNING,
+	MINUS_ROW_REJECTED,
+	MOVE_TAKES_NO_BODY,
+	REM_TAKES_NO_BODY,
+} from "./messages";
 import { PATCH_OPERATIONS } from "./operations";
 import { stripOneLeadingHashlinePrefix } from "./prefixes";
 import { type BlockTarget, cloneCursor, type ParsedRange, type Token, Tokenizer } from "./tokenizer";
