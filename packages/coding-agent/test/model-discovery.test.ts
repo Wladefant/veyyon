@@ -370,17 +370,7 @@ describe("ModelRegistry runtime discovery", () => {
 		const fetchMock: FetchImpl = async (_i, init) => {
 			calls++;
 			expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer runtime-token");
-			return Response.json({
-				models: [
-					{
-						slug: "m-rt",
-						display_name: "RT",
-						context_window: 128_000,
-						supported_in_api: true,
-						input_modalities: ["text"],
-					},
-				],
-			});
+			return Response.json({ models: [{ slug: "m-rt" }] });
 		};
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refreshProvider("openai-codex", "online");
@@ -419,10 +409,7 @@ describe("ModelRegistry runtime discovery", () => {
 		const fetchMock: FetchImpl = async (_i, init) => {
 			calls++;
 			const id = new Headers(init?.headers).get("chatgpt-account-id");
-			const models =
-				id === "acc-a"
-					? [{ slug: "m-a", display_name: "A", context_window: 128_000, input_modalities: ["text"] }]
-					: [{ slug: "m-b", display_name: "B", context_window: 256_000, input_modalities: ["text"] }];
+			const models = id === "acc-a" ? [{ slug: "m-a" }] : [{ slug: "m-b" }];
 			return Response.json({ models });
 		};
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
@@ -430,10 +417,8 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(calls).toBe(1);
 		expect(registry.find("openai-codex", "m-a")).toBeDefined();
 		expect(registry.find("openai-codex", "m-b")).toBeUndefined();
-
 		await registry.refreshProvider("openai-codex", "online-if-uncached");
 		expect(calls).toBe(1);
-
 		await authStorage.set("openai-codex", [
 			{ type: "oauth", access: "tok-a", refresh: "r-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
 			{ type: "oauth", access: "tok-b", refresh: "r-b", accountId: "acc-b", expires: Date.now() + 3_600_000 },
