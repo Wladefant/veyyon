@@ -1907,6 +1907,9 @@ function obfuscateAssistantContentForProvider(
 			changed = true;
 			return { ...block, from: { model: from }, to: { model: to } };
 		}
+		if (block.type === "image") {
+			return block;
+		}
 		assertOpaqueProviderFieldSafe(obfuscator, block.thoughtSignature, "tool-thought-signature");
 		const [mapped] = mapAssistantContentStrings([block], text => obfuscator.obfuscate(text), {
 			includeToolMetadata: true,

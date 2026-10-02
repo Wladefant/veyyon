@@ -69,7 +69,8 @@ export type AssistantContent =
 	| ThinkingContent
 	| RedactedThinkingContent
 	| ToolCallContent
-	| FallbackContent;
+	| FallbackContent
+	| ImageContent;
 
 /**
  * Why a turn ended, as a guest receives it: the `StopReason` `@veyyon/model` declares, under the
