@@ -18,6 +18,7 @@ import type {
 	ProviderSessionState,
 } from "@veyyon/ai/types";
 import { getStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
+import * as requestDebug from "@veyyon/ai/utils/request-debug";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import * as piUtils from "@veyyon/utils";
@@ -5178,32 +5179,47 @@ describe("openai-codex SSE statelessness", () => {
 });
 
 describe("openai-codex abort cause preservation and close resilience", () => {
-	it.each(["during handshake", "before request", "during request"] as const)(
-		"preserves timeout classification when streaming is aborted %s",
-		async phase => {
+	it.each([
+		{ phase: "during handshake", timeout: true },
+		{ phase: "before request", timeout: true },
+		{ phase: "during request", timeout: true },
+		{ phase: "during debug await", timeout: true },
+		{ phase: "during request", timeout: false },
+	] as const)(
+		"preserves abort classification for $phase (timeout: $timeout)",
+		async ({ phase, timeout: isTimeout }) => {
 			const tempDir = TempDir.createSync("@veyyon-codex-stream-");
 			setAgentDir(tempDir.path());
 			const controller = new AbortController();
-			const timeout = new DOMException("The operation timed out.", "TimeoutError");
+			const abortReason = isTimeout ? new DOMException("The operation timed out.", "TimeoutError") : undefined;
 			const providerSessionState = new Map<string, ProviderSessionState>();
 			const fetchMock = vi.fn<FetchImpl>(() => {
 				throw new Error("Aborted stream must not fall back to SSE");
 			});
+
+			if (phase === "during debug await") {
+				vi.spyOn(requestDebug, "isRequestDebugEnabled").mockReturnValue(true);
+				vi.spyOn(requestDebug, "createRequestDebugSession").mockImplementation(async () => {
+					controller.abort(abortReason);
+					return undefined;
+				});
+			}
+
 			class TimeoutWebSocket extends MockWebSocket {
 				constructor(url: string, options?: WsOptions) {
 					super(url, options);
-					if (phase === "during handshake") queueMicrotask(() => controller.abort(timeout));
+					if (phase === "during handshake") queueMicrotask(() => controller.abort(abortReason));
 					else this.scheduleOpen();
 				}
 				override scheduleOpen(): void {
 					setTimeout(() => {
 						this.readyState = MockWebSocket.OPEN;
 						this.emit("open", new Event("open"));
-						if (phase === "before request") controller.abort(timeout);
+						if (phase === "before request") controller.abort(abortReason);
 					}, 0);
 				}
 				override send(): void {
-					if (phase === "during request") controller.abort(timeout);
+					if (phase === "during request") controller.abort(abortReason);
 				}
 				override close(): void {
 					super.close();
@@ -5216,53 +5232,18 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 					apiKey: createCodexTestToken(),
 					signal: controller.signal,
 					fetch: fetchMock,
-					sessionId: `stream-timeout-${phase}`,
+					sessionId: `stream-abort-${phase}-${isTimeout}`,
 					providerSessionState,
 				});
 				const result = await stream.result();
 				expect(result.stopReason).toBe("aborted");
-				expect(AIError.is(result.errorId!, AIError.Flag.Timeout)).toBe(true);
+				expect(AIError.is(result.errorId!, AIError.Flag.Timeout)).toBe(isTimeout);
 				expect(fetchMock).not.toHaveBeenCalled();
 			} finally {
 				for (const state of providerSessionState.values()) state.close();
 			}
 		},
 	);
-
-	it("keeps caller cancellation distinct from a stream timeout", async () => {
-		const tempDir = TempDir.createSync("@veyyon-codex-stream-");
-		setAgentDir(tempDir.path());
-		const controller = new AbortController();
-		const providerSessionState = new Map<string, ProviderSessionState>();
-		const fetchMock = vi.fn<FetchImpl>(() => {
-			throw new Error("Cancelled stream must not fall back to SSE");
-		});
-		class CancelledWs extends MockWebSocket {
-			constructor(url: string, options?: WsOptions) {
-				super(url, options);
-				this.scheduleOpen();
-			}
-			override send(): void {
-				controller.abort();
-			}
-		}
-		global.WebSocket = CancelledWs as unknown as typeof WebSocket;
-		try {
-			const stream = streamOpenAICodexResponses(createCodexTestModel(), createCodexTestContext(), {
-				apiKey: createCodexTestToken(),
-				signal: controller.signal,
-				fetch: fetchMock,
-				sessionId: "stream-caller-cancel",
-				providerSessionState,
-			});
-			const result = await stream.result();
-			expect(result.stopReason).toBe("aborted");
-			expect(AIError.is(result.errorId!, AIError.Flag.Timeout)).toBe(false);
-			expect(fetchMock).not.toHaveBeenCalled();
-		} finally {
-			for (const state of providerSessionState.values()) state.close();
-		}
-	});
 
 	it("does not throw when closing a stale socket", async () => {
 		const tempDir = TempDir.createSync("@veyyon-codex-stream-");
