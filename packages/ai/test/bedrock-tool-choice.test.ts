@@ -1,23 +1,8 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { Effort } from "@veyyon/catalog/effort";
+import { getBundledModel, getBundledModels } from "@veyyon/catalog/models";
 import { streamBedrock } from "../src/providers/amazon-bedrock";
 import type { Context, Model, SimpleStreamOptions } from "../src/types";
-import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
-
-const originalSkipAuth = process.env.AWS_BEDROCK_SKIP_AUTH;
-const originalRegion = process.env.AWS_REGION;
-
-beforeAll(() => {
-	process.env.AWS_BEDROCK_SKIP_AUTH = "1";
-	process.env.AWS_REGION = "us-east-1";
-});
-
-afterAll(() => {
-	if (originalSkipAuth === undefined) delete process.env.AWS_BEDROCK_SKIP_AUTH;
-	else process.env.AWS_BEDROCK_SKIP_AUTH = originalSkipAuth;
-	if (originalRegion === undefined) delete process.env.AWS_REGION;
-	else process.env.AWS_REGION = originalRegion;
-});
 
 const context: Context = {
 	systemPrompt: ["be terse"],
@@ -40,8 +25,10 @@ async function capture(
 	model: Model<"bedrock-converse-stream">,
 	options: SimpleStreamOptions,
 ): Promise<ToolChoicePayload> {
-	const { promise, resolve } = Promise.withResolvers<ToolChoicePayload>();
+	const { promise, resolve, reject } = Promise.withResolvers<ToolChoicePayload>();
 	const stream = streamBedrock(model, context, {
+		region: "us-east-1",
+		bearerToken: "fake-bedrock-test-token",
 		fetch: async () => new Response("", { status: 400 }),
 		...options,
 		onPayload: payload => {
@@ -49,7 +36,7 @@ async function capture(
 			return undefined;
 		},
 	});
-	void stream.result().catch(() => {});
+	void stream.result().catch(reject);
 	return promise;
 }
 
@@ -70,6 +57,30 @@ describe("Bedrock forced tool choice", () => {
 
 		const namedPayload = await capture(model, { toolChoice: { type: "tool", name: "echo" }, reasoning: Effort.Low });
 		expect(namedPayload.toolConfig?.toolChoice).toEqual({ auto: {} });
+	});
+
+	// Sweep every bundled Bedrock Sonnet identity, including regional aliases.
+	// New generations require an explicit forced-choice decision below.
+	test("honors forced-choice support across the bundled Sonnet registry", async () => {
+		const models = getBundledModels("amazon-bedrock").filter(model => model.id.includes("sonnet"));
+		expect(models.length).toBeGreaterThan(0);
+		let unsupported = 0;
+		for (const model of models) {
+			expect(model.api).toBe("bedrock-converse-stream");
+			const generation = model.id.match(/claude-(\d+)/)?.[1] ?? model.id.match(/sonnet-(\d+)/)?.[1];
+			expect(["3", "4", "5"]).toContain(generation);
+			const rejectsForcedChoice = model.id.includes("sonnet-5-5");
+			if (rejectsForcedChoice) unsupported++;
+			for (const toolChoice of ["any", { type: "tool", name: "echo" }] as const) {
+				const payload = await capture(bedrockModel(model.id), { toolChoice, reasoning: Effort.Low });
+				expect(payload.toolConfig?.toolChoice).toEqual(
+					rejectsForcedChoice ? { auto: {} } : toolChoice === "any" ? { any: {} } : { tool: { name: "echo" } },
+				);
+				if (rejectsForcedChoice) expect(payload.additionalModelRequestFields?.thinking).toBeDefined();
+				else expect(payload.additionalModelRequestFields?.thinking).toBeUndefined();
+			}
+		}
+		expect(unsupported).toBeGreaterThan(0);
 	});
 
 	test("still forces the tool on Opus 5, dropping thinking instead", async () => {
