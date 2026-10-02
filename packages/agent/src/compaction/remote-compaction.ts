@@ -37,7 +37,7 @@ import { scheduler } from "node:timers/promises";
 import type { ApiKey, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex-responses";
-import { resolveServerCompactionTransport } from "@veyyon/ai/providers/openai-compaction";
+import { resolveServerCompactionTransport, type ServerCompactionRequest } from "@veyyon/ai/providers/openai-compaction";
 import { logger } from "@veyyon/utils";
 import { isUnexpectedSocketCloseMessage } from "@veyyon/utils/fetch-retry";
 import type { CompactionPreparation, CompactionResult, SummaryOptions } from "./compaction";
@@ -144,7 +144,7 @@ export async function compactWithProvider(
 	const remote = await withAuth(
 		apiKey,
 		async key => {
-			const compactRequest = {
+			const compactRequest: ServerCompactionRequest = {
 				model,
 				messages: llmMessages,
 				previousWindow,
