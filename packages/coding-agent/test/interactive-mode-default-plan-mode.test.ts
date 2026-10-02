@@ -243,4 +243,41 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
 	});
+
+	it("restores active tools and plan state when prior-model restoration fails on plan exit", async () => {
+		const settings = Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false });
+		settings.setModelRole("plan", "anthropic/claude-haiku-4-5:high");
+		const writeTool = makeTool("write");
+		const created = createHarness(settings, {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+		});
+		const previousModel = session?.model;
+		await created.init();
+		const planModel = session?.model;
+		const planTools = session?.getActiveToolNames();
+		expect(planModel?.id).toBe("claude-haiku-4-5");
+		expect(session?.configuredThinkingLevel()).toBe(Effort.High);
+		expect(created.planModeEnabled).toBe(true);
+
+		const setModelTemporary = session!.setModelTemporary.bind(session);
+		const restoreModel = vi.spyOn(session!, "setModelTemporary").mockImplementationOnce(async (...args) => {
+			await setModelTemporary(...args);
+			throw new Error("model restore failed after switch");
+		});
+		await expect(created.handlePlanModeCommand()).rejects.toThrow("model restore failed after switch");
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(created.planModePaused).toBe(false);
+		expect(session?.getPlanModeState()?.enabled).toBe(true);
+		expect(session?.model?.id).toBe(planModel?.id);
+		expect(session?.configuredThinkingLevel()).toBe(Effort.High);
+		expect(session?.getActiveToolNames()).toEqual(planTools);
+
+		restoreModel.mockRestore();
+		await created.handlePlanModeCommand();
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+		expect(session?.model?.id).toBe(previousModel?.id);
+	});
 });
