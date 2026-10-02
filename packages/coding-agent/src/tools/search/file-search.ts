@@ -113,6 +113,10 @@ export interface FileSearchOptions {
 	operations?: FileSearchOperations;
 	/** Remap slash-only paths to the session cwd before root-search validation. */
 	rootPathAlias?: boolean;
+	/** Native glob binding. Override only in tests. */
+	nativeGlob?: typeof natives.glob;
+	/** Native and user-facing scan timeout. Override only in tests. */
+	timeoutMs?: number;
 }
 
 interface FileSearchTarget {
@@ -132,7 +136,12 @@ export async function executeFileSearch(
 	const rootPathAlias = options?.rootPathAlias === true;
 	const { path: pathInput, limit, hidden, gitignore } = params;
 
-	return untilAborted(signal, async () => {
+	throwIfAborted(signal);
+	// Native scans receive the abort signal directly and must settle before
+	// execute returns. Custom operations have no signal API, so retain their
+	// immediate-abort wrapper.
+	const immediateAbortSignal = customOps?.glob ? signal : undefined;
+	return untilAborted(immediateAbortSignal, async () => {
 		const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, session.cwd);
 		const scopedPaths = toPathList(pathInput);
 		const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
@@ -226,7 +235,10 @@ export async function executeFileSearch(
 		const effectiveLimit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(requestedLimit)));
 		const includeHidden = hidden ?? true;
 		const useGitignore = gitignore ?? true;
-		const timeoutMs = DEFAULT_GLOB_TIMEOUT_MS;
+		const timeoutMs = options?.timeoutMs ?? DEFAULT_GLOB_TIMEOUT_MS;
+		if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+			throw new TypeError("Glob timeout must be a positive number");
+		}
 		const scopedTimeout = scopedTimeoutSignal(timeoutMs, signal);
 		const combinedSignal = scopedTimeout.signal;
 		const formatMatchPath = (matchPath: string, base: string, fileType?: natives.FileType): string => {
@@ -402,37 +414,26 @@ export async function executeFileSearch(
 				return [];
 			}
 			try {
-				const result = await untilAborted(combinedSignal, () =>
-					natives.glob(
-						{
-							pattern: target.globPattern,
-							path: target.searchPath,
-							hidden: includeHidden,
-							maxResults: effectiveLimit,
-							sortByMtime: true,
-							gitignore: useGitignore,
-							// parseFindPattern explicitly prepends "**/" when the user's
-							// pattern begins with a glob (so `*.ts` becomes `**/*.ts`).
-							// Anything that arrives here without "**/" was scoped to a
-							// single directory by the user (e.g. `dir/*`); disable the
-							// native auto-recursion so `dir/*` does not silently match
-							// `dir/sub/nested.ts`.
-							recursive: false,
-							signal: combinedSignal,
-						},
-						makeOnMatch(target.searchPath),
-					),
+				const nativeGlob = options?.nativeGlob ?? natives.glob;
+				const result = await nativeGlob(
+					{
+						pattern: target.globPattern,
+						path: target.searchPath,
+						hidden: includeHidden,
+						maxResults: effectiveLimit,
+						sortByMtime: true,
+						gitignore: useGitignore,
+						// parseFindPattern explicitly prepends "**/" when the user's
+						// pattern begins with a glob (so `*.ts` becomes `**/*.ts`).
+						// Anything that arrives here without "**/" was scoped to a
+						// single directory by the user (e.g. `dir/*`); disable the
+						// native auto-recursion so `dir/*` does not silently match
+						// `dir/sub/nested.ts`.
+						recursive: false,
+						signal: combinedSignal,
+					},
+					makeOnMatch(target.searchPath),
 				);
-				throwIfAborted(signal);
-				const out: Array<{ path: string; mtime: number }> = [];
-				for (const match of result.matches) {
-					if (!match.path) continue;
-					out.push({
-						path: formatMatchPath(match.path, target.searchPath, match.fileType),
-						mtime: match.mtime ?? 0,
-					});
-				}
-				return out;
 			} catch (error) {
 				// A deadline yields the partial matches gathered so far; a real
 				// cancellation propagates with its reason.
@@ -444,21 +445,29 @@ export async function executeFileSearch(
 				// thrown. `!signal?.aborted` is still required: an operator
 				// interrupt that lands in the same window is a cancellation even
 				// though the scoped signal also shows a timeout reason.
-				if (isTimeoutError(error) && !signal?.aborted) {
-					timedOut = true;
-					return [];
+				const nativeAbort =
+					isTimeoutError(error) ||
+					isCancellation(error) ||
+					(error instanceof Error &&
+						(error.name === "AbortError" || error.name === "TimeoutError" || error.message.includes("Aborted:")));
+				if (nativeAbort) {
+					if (scopedTimeout.signal.aborted && !signal?.aborted) {
+						timedOut = true;
+						return [];
+					}
+					throw toolAbort(error, "search");
 				}
-				// `toolAbort`, not a bare mint: callers downstream test
-				// `instanceof ToolAbortError`, so the type has to be preserved,
-				// but the reason has to survive with it.
-				if (isCancellation(error)) throw toolAbort(error, "search");
 				throw error;
 			}
 		};
 
 		let perTarget: Array<Array<{ path: string; mtime: number }>>;
 		try {
-			perTarget = await Promise.all(targets.map(runTarget));
+			const settledTargets = await Promise.allSettled(targets.map(runTarget));
+			perTarget = settledTargets.map(result => {
+				if (result.status === "rejected") throw result.reason;
+				return result.value;
+			});
 		} finally {
 			scopedTimeout.cancel();
 		}
