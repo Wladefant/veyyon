@@ -4,6 +4,7 @@
 
 ### Added
 
+- Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared auth-gateway request dispatch, credential resolution, account identity, and abort mirroring helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Shared gateway usage-limit blocking and authentication-failure credential invalidation across request adapters.
@@ -15,6 +16,7 @@
 
 ### Changed
 
+- Shared the gateway retry resolver used by translated and native requests; retry behavior is unchanged.
 - Reused TextDecoder instances and indexed streaming content blocks by index in Bedrock Converse and AWS EventStream for O(1) per-delta routing ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Moved the `reasoning-budget` re-export below its import block in `stream.ts` and dropped a stray blank line before `applyCacheControlToLastTextBlock` so both files match the formatter and import-order rules; no behavior change.
 - `aws-credentials.ts` persists a refreshed SSO cache token through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the write stays atomic and the file stays mode `0600`.
@@ -23,6 +25,7 @@
 
 ### Fixed
 
+- Fixed Codex stream close retries gating on committed visible content and emitted deltas rather than open empty blocks, emitting balancing end events before replay and classifying premature closes as stream corruption ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Corrected auth gateway video modality types and merged Codex continuation fixtures; provider behavior is unchanged.
 - Preserved Anthropic's shared harness cache breakpoint across PROJECT, SHORTHAND, HANDLES and memory recall suffixes while reserving a marker for the newest message ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1488be016d5d7925e0a7071561af23b98c13ca3b, 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
 - Downgraded forced tool choice to auto for Claude Opus 5.5 and Sonnet 5.5 on Bedrock Converse to prevent 400 rejection while keeping thinking intact ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 8e4fb1a1e0e3838d7b33d9dd02bafe9365400401).
