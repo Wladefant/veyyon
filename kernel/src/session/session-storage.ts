@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -779,25 +780,25 @@ export class FileSessionStorage implements SessionStorage {
 		let artifactsMoved = false;
 		try {
 			if (sessionPathChanged && this.existsStateSync(sourcePath) !== "absent") {
-				await this.rename(sourcePath, targetPath);
+				await movePath(sourcePath, targetPath);
 				sessionMoved = true;
 			}
 			if (artifactPathChanged && this.existsStateSync(sourceArtifacts) !== "absent") {
-				await this.rename(sourceArtifacts, targetArtifacts);
+				await movePath(sourceArtifacts, targetArtifacts);
 				artifactsMoved = true;
 			}
 		} catch (error) {
 			const rollbackErrors: Error[] = [];
 			if (artifactsMoved) {
 				try {
-					await this.rename(targetArtifacts, sourceArtifacts);
+					await movePath(targetArtifacts, sourceArtifacts);
 				} catch (rollbackError) {
 					rollbackErrors.push(toError(rollbackError));
 				}
 			}
 			if (sessionMoved) {
 				try {
-					await this.rename(targetPath, sourcePath);
+					await movePath(targetPath, sourcePath);
 				} catch (rollbackError) {
 					rollbackErrors.push(toError(rollbackError));
 				}
@@ -847,6 +848,100 @@ export class FileSessionStorage implements SessionStorage {
 				},
 			);
 		}
+	}
+}
+
+/**
+ * Move a live file across devices without exposing a partial destination.
+ * The source remains authoritative while the copy is staged. Publication and
+ * source removal are synchronous so in-process writers cannot land between them.
+ */
+export async function moveFileAcrossDevices(source: string, destination: string): Promise<void> {
+	const staging = `${destination}.${process.pid}.${crypto.randomUUID()}.move`;
+	try {
+		for (;;) {
+			const before = fs.statSync(source, { bigint: true });
+			await fs.promises.copyFile(source, staging);
+			const after = fs.statSync(source, { bigint: true });
+			if (before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs) continue;
+			// Flush the completed copy before making it discoverable. Neither the
+			// temporary copy nor an existing destination is ever a live write target.
+			const fd = fs.openSync(staging, "r+");
+			try {
+				fs.fsyncSync(fd);
+			} finally {
+				fs.closeSync(fd);
+			}
+			fs.linkSync(staging, destination);
+			try {
+				fs.unlinkSync(source);
+			} catch (error) {
+				fs.unlinkSync(destination);
+				throw error;
+			}
+			return;
+		}
+	} finally {
+		await fs.promises.unlink(staging).catch(error => {
+			if (!isEnoent(error))
+				logger.warn("Failed to remove staged move copy", { staging, error: toError(error).message });
+		});
+	}
+}
+
+/**
+ * Move a directory tree across devices by recursively copying entries and removing sources.
+ */
+export async function moveDirectoryAcrossDevices(source: string, destination: string): Promise<void> {
+	await fs.promises.mkdir(destination, { recursive: true });
+	const entries = await fs.promises.readdir(source, { withFileTypes: true });
+	const movedEntries: Array<{ src: string; dst: string; isDir: boolean }> = [];
+	try {
+		for (const entry of entries) {
+			const src = path.join(source, entry.name);
+			const dst = path.join(destination, entry.name);
+			if (entry.isDirectory()) {
+				await moveDirectoryAcrossDevices(src, dst);
+				movedEntries.push({ src, dst, isDir: true });
+			} else {
+				await moveFileAcrossDevices(src, dst);
+				movedEntries.push({ src, dst, isDir: false });
+			}
+		}
+		await fs.promises.rmdir(source);
+	} catch (err) {
+		for (const moved of movedEntries.reverse()) {
+			try {
+				if (moved.isDir) {
+					await moveDirectoryAcrossDevices(moved.dst, moved.src);
+				} else {
+					await moveFileAcrossDevices(moved.dst, moved.src);
+				}
+			} catch {
+				// Best-effort rollback
+			}
+		}
+		try {
+			await fs.promises.rmdir(destination);
+		} catch {
+			// Destination may not be empty if rollback was partial
+		}
+		throw err;
+	}
+}
+
+async function movePath(source: string, destination: string): Promise<void> {
+	try {
+		await fs.promises.rename(source, destination);
+		return;
+	} catch (err) {
+		if (!hasFsCode(err, "EXDEV")) throw toError(err);
+	}
+	const stat = await fs.promises.stat(source);
+	if (stat.isDirectory()) {
+		await moveDirectoryAcrossDevices(source, destination);
+	} else {
+		await moveFileAcrossDevices(source, destination);
 	}
 }
 
