@@ -32946,8 +32946,8 @@
 				"cacheWrite": 0
 			},
 			"pricing": "unknown",
-			"contextWindow": 32000,
-			"maxTokens": 32000
+			"contextWindow": null,
+			"maxTokens": null
 		},
 		"Qwen/Qwen2.5-Coder-32B-Instruct": {
 			"id": "Qwen/Qwen2.5-Coder-32B-Instruct",
@@ -46820,8 +46820,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 117964,
+			"contextWindow": null,
+			"maxTokens": null,
 			"pricing": "unknown"
 		},
 		"thedrummer/rocinante-12b": {

@@ -17,8 +17,8 @@ import {
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
-import { applyCommandCodeContract } from "../src/provider-models/command-code";
 import { codexContextWindowFloor } from "../src/provider-models/codex-subscription";
+import { applyCommandCodeContract } from "../src/provider-models/command-code";
 import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import {
 	applyXaiResponsesThinkingPolicy,

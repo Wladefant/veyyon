@@ -12,8 +12,9 @@
  * with the discovered window, the default tier multipliers and no price patch
  * until someone adds a row here.
  */
-import { CODEX_BASE_URL } from "../wire/codex";
+
 import type { LongContextCost, Model, ModelSpec } from "../types";
+import { CODEX_BASE_URL } from "../wire/codex";
 
 type CodexTier = NonNullable<Model["serviceTierCost"]>;
 type CodexCost = Pick<Model["cost"], "input" | "output" | "cacheRead" | "cacheWrite">;
