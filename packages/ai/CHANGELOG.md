@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Shared the gateway retry resolver used by translated and native requests; retry behavior is unchanged.
 - Reused TextDecoder instances and indexed streaming content blocks by index in Bedrock Converse and AWS EventStream for O(1) per-delta routing ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Moved the `reasoning-budget` re-export below its import block in `stream.ts` and dropped a stray blank line before `applyCacheControlToLastTextBlock` so both files match the formatter and import-order rules; no behavior change.
 - `aws-credentials.ts` persists a refreshed SSO cache token through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the write stays atomic and the file stays mode `0600`.
