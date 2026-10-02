@@ -511,6 +511,46 @@ describe("AgentSession concurrent prompt guard", () => {
 		).toBe(true);
 	});
 
+	it("does not emit a stop hook after an abort completed inside message-end delivery", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const emitSessionStop = vi.fn().mockResolvedValue(undefined);
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop,
+		} as unknown as ExtensionRunner;
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			modelRegistry,
+			extensionRunner,
+		});
+		let abortCompleted = false;
+		session.subscribe(async event => {
+			if (event.type === "message_end" && event.message.role === "assistant") {
+				await session.abort();
+				abortCompleted = true;
+			}
+		});
+		await session.prompt("First message");
+		await session.waitForIdle();
+		expect(abortCompleted).toBe(true);
+		expect(emitSessionStop).not.toHaveBeenCalled();
+	});
+
 	it("does not emit session_stop when abort starts before the settle pass", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({

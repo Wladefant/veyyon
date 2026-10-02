@@ -763,12 +763,13 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("session_stop", () => {
-		it("preserves a reasonless hard block instead of replacing it with a later advisory result", async () => {
-			await Bun.write(
+		it.each([false, true])("preserves a reasonless hard block with advisory-first=%s", async advisoryFirst => {
+			const handlers = [{ decision: "block" }, { continue: true, reason: "Advisory." }];
+			if (advisoryFirst) handlers.reverse();
+			await fs.promises.writeFile(
 				path.join(extensionsDir, "hard-stop.ts"),
-				`export default function(pi) {
-					pi.on("session_stop", () => ({ decision: "block" }));
-					pi.on("session_stop", () => ({ continue: true, reason: "Later advisory." }));
+				`export default function(api) {
+					for (const result of ${JSON.stringify(handlers)}) api.on("session_stop", () => result);
 				}`,
 			);
 			const loaded = await loadTestExtensions();
