@@ -136,13 +136,22 @@ export async function collectCodexCompactionV2Stream(
 	signal: AbortSignal | undefined,
 	sanitize: (text: string) => string,
 ): Promise<CodexCompactionV2StreamResult> {
+	return collectCodexCompactionV2Events(readSseJson<CodexCompactionV2Event>(body, signal), signal, sanitize);
+}
+
+/** Collect decoded native events under the same window contract as the SSE transport. */
+export async function collectCodexCompactionV2Events(
+	events: AsyncIterable<unknown>,
+	signal: AbortSignal | undefined,
+	sanitize: (text: string) => string,
+): Promise<CodexCompactionV2StreamResult> {
 	const compactionItems: Array<Record<string, unknown>> = [];
 	let malformedCompactionItems = 0;
 	let outputItemCount = 0;
 	let sawCompleted = false;
 	let usage: CodexCompactionV2Usage | undefined;
 
-	for await (const event of readSseJson<CodexCompactionV2Event>(body, signal)) {
+	for await (const event of events) {
 		if (!isRecord(event)) continue;
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (type === "response.output_item.done") {

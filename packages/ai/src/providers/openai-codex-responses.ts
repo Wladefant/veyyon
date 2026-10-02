@@ -1397,12 +1397,16 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 	};
 }
 
-async function buildCodexRequestContext(
+function createCodexRequestContext(
 	model: Model<"openai-codex-responses">,
-	context: Context,
+	transformedBody: RequestBody,
 	options: OpenAICodexResponsesOptions | undefined,
-	output: AssistantMessage,
-): Promise<CodexRequestContext> {
+	contextOptions: {
+		isolateCompactionTransport: boolean;
+		startNewTurn?: boolean;
+		turnStartedAtUnixMs?: number;
+	},
+): CodexRequestContext {
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 	if (!apiKey) {
 		throw new AIError.MissingApiKeyError(model.provider);
@@ -1411,22 +1415,21 @@ async function buildCodexRequestContext(
 	const accountId = getCodexAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
-	const promptCacheKey = getOpenAIPromptCacheKey(options);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
-	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
 	const rawRequestDump: RawHttpRequestDump = {
 		provider: model.provider,
-		api: output.api,
+		api: model.api,
 		model: model.id,
 		method: "POST",
 		url,
 	};
 
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const isolatedTransportState = options?.codexCompaction ? createCodexProviderSessionState() : undefined;
+	const isolatedTransportState =
+		contextOptions.isolateCompactionTransport && options?.codexCompaction ? createCodexProviderSessionState() : undefined;
 	const transportProviderSessionState = isolatedTransportState ?? providerSessionState;
 	const responsesLite = resolveCodexResponsesLite(model, options?.responsesLite);
 	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, apiKey, baseUrl, responsesLite);
@@ -1449,7 +1452,6 @@ async function buildCodexRequestContext(
 		websocketState.turnState = sharedWebsocketState.turnState;
 		websocketState.modelsEtag = sharedWebsocketState.modelsEtag;
 	}
-	const withinTurnContinuation = isCodexWithinTurnContinuation(context);
 	const metadataSessionId = transportSessionId ?? crypto.randomUUID();
 	const metadataSession = getOrCreateCodexMetadataSessionState(metadataSessionId, providerSessionState);
 	const compaction = options?.codexCompaction;
@@ -1458,7 +1460,7 @@ async function buildCodexRequestContext(
 		metadataSession,
 		requestKind,
 		compaction,
-		compaction ? undefined : !withinTurnContinuation,
+		contextOptions.startNewTurn,
 	);
 	if (websocketState && startNewTurn) {
 		// Codex scopes turn-state to one turn. Mid-turn compaction and tool-loop
@@ -1471,7 +1473,7 @@ async function buildCodexRequestContext(
 			? startNewTurn || !metadataSession.turnId
 				? Date.now()
 				: undefined
-			: getCodexTurnStartedAtUnixMs(context),
+			: contextOptions.turnStartedAtUnixMs,
 		clientMetadata: transformedBody.client_metadata,
 		parentTurnId: options?.parentTurnId,
 		compaction,
@@ -1524,6 +1526,19 @@ async function buildCodexRequestContext(
 		transformedBody,
 		rawRequestDump,
 	};
+}
+
+async function buildCodexRequestContext(
+	model: Model<"openai-codex-responses">,
+	context: Context,
+	options: OpenAICodexResponsesOptions | undefined,
+): Promise<CodexRequestContext> {
+	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, getOpenAIPromptCacheKey(options));
+	return createCodexRequestContext(model, transformedBody, options, {
+		isolateCompactionTransport: true,
+		startNewTurn: options?.codexCompaction ? undefined : !isCodexWithinTurnContinuation(context),
+		turnStartedAtUnixMs: options?.codexCompaction ? undefined : getCodexTurnStartedAtUnixMs(context),
+	});
 }
 
 /** @internal Exported for tests. */
@@ -2822,7 +2837,7 @@ const streamOpenAICodexResponsesOnce = (
 		let requestContext: CodexRequestContext | undefined;
 
 		try {
-			requestContext = await buildCodexRequestContext(model, context, options, output);
+			requestContext = await buildCodexRequestContext(model, context, options);
 			// Anchors are read off the SERIALIZED body, not off the options, for the
 			// same reason the Anthropic path counts markers after placement: an intent
 			// to cache that never reached the wire is exactly the defect class this
