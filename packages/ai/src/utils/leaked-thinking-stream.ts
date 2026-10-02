@@ -78,13 +78,18 @@ export function wrapLeakedThinkingStream(inner: AssistantMessageEventStream): As
 					case "thinking_delta": {
 						projector ??= new LeakedThinkingProjector(out, event.partial);
 						const block = event.partial.content[event.contentIndex];
-						projector.thinking(event.delta, block?.type === "thinking" ? block.thinkingSignature : undefined);
+						projector.thinking(
+							event.contentIndex,
+							event.delta,
+							block?.type === "thinking" ? block.thinkingSignature : undefined,
+						);
 						break;
 					}
 					case "thinking_end": {
 						projector ??= new LeakedThinkingProjector(out, event.partial);
 						const block = event.partial.content[event.contentIndex];
 						projector.thinkingEnd(
+							event.contentIndex,
 							block?.type === "thinking" ? block.thinkingSignature : undefined,
 							event.content,
 						);
@@ -153,7 +158,8 @@ class LeakedThinkingProjector {
 	#lastTextSignature: string | undefined;
 	/** Forwarded native tool calls, keyed by the inner stream's `contentIndex`. */
 	#toolBlocks = new Map<number, { index: number; block: StreamingToolCall }>();
-
+	/** Projected native thinking blocks, keyed by the inner stream's `contentIndex`. */
+	#thinkingBlocks = new Map<number, number>();
 	constructor(out: AssistantMessageEventStream, seed: AssistantMessage) {
 		this.#out = out;
 		this.#partial = { ...seed, content: [] };
@@ -167,9 +173,13 @@ class LeakedThinkingProjector {
 		this.#apply(this.#healer.feedEvents(delta), this.#lastTextSignature);
 	}
 
-	/** Forward a native thinking delta, preserving its signature. */
-	thinking(delta: string, signature: string | undefined): void {
-		const index = this.#openThinking();
+	/** Forward a native thinking delta, preserving its source block identity and signature. */
+	thinking(srcIndex: number, delta: string, signature: string | undefined): void {
+		let index = this.#thinkingBlocks.get(srcIndex);
+		if (index === undefined) {
+			index = this.#openThinking();
+			this.#thinkingBlocks.set(srcIndex, index);
+		}
 		const block = this.#partial.content[index] as ThinkingContent;
 		block.thinking += delta;
 		if (signature !== undefined) block.thinkingSignature = signature;
@@ -177,10 +187,8 @@ class LeakedThinkingProjector {
 	}
 
 	/**
-	 * Capture a native thinking block's completed signature. Anthropic delivers
-	 * it via `signature_delta` after every `thinking_delta`, so it is absent while
-	 * deltas stream and only present on the `thinking_end` partial. Stamp it onto
-	 * the open projected block so {@link finish} persists the signed block.
+	 * Capture a native thinking block's completed signature. Source identity is
+	 * required because providers may finalize it after a later block has started.
 	 *
 	 * A block that never streamed a delta but closes with a signature is
 	 * projected here instead of dropped: Gemini thought signatures arrive via
@@ -189,7 +197,17 @@ class LeakedThinkingProjector {
 	 * every current-turn function-call replay unsigned, which Gemini 3 punishes
 	 * with empty stops and `server_error: stream closed with reason: error`.
 	 */
-	thinkingEnd(signature: string | undefined, content: string): void {
+	thinkingEnd(srcIndex: number, signature: string | undefined, content: string): void {
+		const index = this.#thinkingBlocks.get(srcIndex);
+		if (index !== undefined) {
+			if (signature !== undefined) {
+				(this.#partial.content[index] as ThinkingContent).thinkingSignature = signature;
+			}
+			if (this.#thinking?.index === index) {
+				this.#closeThinking();
+			}
+			return;
+		}
 		if (this.#thinking) {
 			if (signature !== undefined) {
 				(this.#partial.content[this.#thinking.index] as ThinkingContent).thinkingSignature = signature;
@@ -203,7 +221,6 @@ class LeakedThinkingProjector {
 			this.#projectSignedThinking(content, signature);
 		}
 	}
-
 	/**
 	 * Project a completed signature-bearing thinking block whose deltas never
 	 * reached the projector. Releases held-back text first (same boundary

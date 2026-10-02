@@ -20,6 +20,8 @@ import type { ErrorDomain, GatewayStructuralRule, GatewayVerdict, GatewayWording
 const MALFORMED_FUNCTION_CALL_PATTERN = /\bmalformed.?function.?call\b/i;
 const STALE_RESPONSE_ITEM_PATTERNS = [/\bItem with id ['"][^'"]+['"] not found\.?/i, /previous[ _]?response/i] as const;
 const STALE_RESPONSE_ITEM_DETAIL_PATTERN = /not[ _]?found|invalid|expired|stale|zero[ _-]?data[ _-]?retention/i;
+export const EMPTY_RESPONSE_PATTERN =
+	/\b(?:returned an empty response|empty response body|thought-only response without final output)\b/i;
 
 export function isStaleResponsesText(text: string): boolean {
 	return (
@@ -51,7 +53,7 @@ export const toolCallDomain: ErrorDomain = {
 export const streamDomain: ErrorDomain = {
 	id: "stream",
 	why: "The stream ended without saying what failed, or referred to server-side state that is gone.",
-	recovers: [Flag.ProviderFinishError, Flag.StaleResponsesItem],
+	recovers: [Flag.ProviderFinishError, Flag.StaleResponsesItem, Flag.EmptyResponse],
 	recovery: {
 		transport: { action: "surface" },
 		credential: { action: "surface" },
@@ -70,6 +72,12 @@ export const streamDomain: ErrorDomain = {
 			why: "Only the Responses APIs carry server-side conversation items, so only they can be told an item is gone; the same sentence from another api means something else.",
 			structural: signal => signal.api === "openai-responses" || signal.api === "openai-codex-responses",
 			text: isStaleResponsesText,
+		},
+		{
+			flags: Flag.EmptyResponse,
+			name: "empty-response",
+			why: "The provider completed without actionable output (for example, thought-only response without final output).",
+			text: text => EMPTY_RESPONSE_PATTERN.test(text),
 		},
 	],
 };
