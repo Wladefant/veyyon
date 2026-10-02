@@ -7,7 +7,7 @@
  * `"chat"` so existing models maintain chat semantics.
  */
 import { describe, expect, it } from "bun:test";
-import { MODEL_KINDS, RUNNER_APIS, modelKind } from "../src/index";
+import { MODEL_KINDS, modelKind, RUNNER_APIS } from "../src/index";
 
 describe("specialist model kind vocabulary and contracts", () => {
 	it("enumerates canonical model kinds in declaration order", () => {
