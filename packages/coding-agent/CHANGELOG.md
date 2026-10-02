@@ -27,6 +27,7 @@
 
 ### Changed
 
+- Removed unused asynchronous file loading methods from ConfigFile; no user-visible effect ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16608553c9ce132fe4ce43084c0f0caa9dcc1022).
 - Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
