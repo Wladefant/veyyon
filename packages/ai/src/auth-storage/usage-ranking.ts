@@ -4,7 +4,7 @@
  */
 
 import { clamp01 } from "@veyyon/utils/math";
-import type { UsageLimit, UsageReport } from "../usage";
+import type { CredentialRankingContext, CredentialRankingStrategy, UsageLimit, UsageReport } from "../usage";
 import type { CredentialSelection } from "./credentials";
 import type { OpenAICodexPlanRequirement } from "./openai-codex-plan";
 import type { ApiKeyCredential, AuthCredential, OAuthCredential } from "./types";
@@ -29,6 +29,7 @@ export type UsageCandidate<T extends AuthCredential> = {
 	selection: CredentialSelection<T>;
 	usage: UsageReport | null;
 	usageChecked: boolean;
+	allowanceSpent?: boolean;
 };
 
 export type OAuthCandidate = UsageCandidate<OAuthCredential>;
@@ -40,6 +41,7 @@ export type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> &
 	blockedUntil?: number;
 	usageMeasured: boolean;
 	hasPriorityBoost: boolean;
+	allowanceSpent?: boolean;
 	planPriority: number;
 	secondaryUsed: number;
 	secondaryRequiredDrain: number;
@@ -107,6 +109,11 @@ function compareUsageRankedCandidatePriority(
 	if (planRequirement !== "none" && left.planPriority !== right.planPriority) {
 		return left.planPriority - right.planPriority;
 	}
+	// Paid overage (Codex credits) never renews, so an account serving past its
+	// allowance yields to any sibling whose renewable allowance is left (#13889).
+	if (Boolean(left.allowanceSpent) !== Boolean(right.allowanceSpent)) {
+		return left.allowanceSpent ? 1 : -1;
+	}
 	if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
 	// Short-window guard: candidates whose primary (e.g. 5h) window is
 	// nearly exhausted rank behind cool ones regardless of drain urgency —
@@ -154,6 +161,7 @@ export function orderUsageRankedCandidates<T extends AuthCredential>(
 		selection: candidate.selection,
 		usage: candidate.usage,
 		usageChecked: candidate.usageChecked,
+		allowanceSpent: candidate.allowanceSpent,
 	}));
 }
 
@@ -172,4 +180,31 @@ export function leadWithChosenAccount<C extends { index: number }>(ordered: C[],
 	const [chosen] = ordered.splice(at, 1);
 	if (chosen) ordered.unshift(chosen);
 	return ordered;
+}
+
+/**
+ * Returns true when an account's renewable allowance for the request scope is
+ * fully consumed (e.g. 100% window usage or limit_reached), meaning any
+ * continuing service draws on paid credit overage.
+ */
+export function isAllowanceSpent(
+	strategy: CredentialRankingStrategy | undefined,
+	report: UsageReport | null,
+	rankingContext: CredentialRankingContext,
+	nowMs: number,
+): boolean {
+	if (!report) return false;
+	const limits = strategy?.scopeLimits?.(report, rankingContext) ?? report.limits;
+	const usedFractions = limits
+		.filter(limit => {
+			const resetsAt = limit.window?.resetsAt;
+			return resetsAt === undefined || resetsAt > nowMs || report.fetchedAt >= resetsAt;
+		})
+		.map(limit => limit.amount?.usedFraction)
+		.filter((fraction): fraction is number => typeof fraction === "number" && Number.isFinite(fraction));
+	if (usedFractions.length > 0) {
+		return Math.max(...usedFractions) >= 1;
+	}
+	const isScoped = strategy?.scopeLimits !== undefined;
+	return !isScoped && report.metadata?.limitReached === true;
 }

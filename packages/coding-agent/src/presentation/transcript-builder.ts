@@ -265,6 +265,9 @@ export function assistantSegments(
 			case "fallback":
 				segments.push({ kind: "fallback" });
 				break;
+			case "image":
+				segments.push({ kind: "image", mimeType: block.mimeType, altText: "Generated image" });
+				break;
 			default: {
 				const exhaustive: never = block;
 				throw new Error(`Unhandled assistant content type: ${(exhaustive as { type: string }).type}`);

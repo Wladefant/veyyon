@@ -163,6 +163,20 @@ export function computeDefaultSessionDir(
 // =============================================================================
 
 /**
+ * Overwrite `file` with `content` unless it already holds exactly that, so
+ * re-recording an unchanged pointer costs a read instead of a disk write.
+ */
+function writeIfChangedSync(file: string, content: string): void {
+	try {
+		if (fs.readFileSync(file, "utf8") === content) return;
+	} catch {
+		// Missing or unreadable: write it below.
+	}
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, content);
+}
+
+/**
  * Write a breadcrumb linking the current terminal to a session file.
  * The breadcrumb contains the cwd and session path so --continue can
  * find "this terminal's last session" even when running concurrent instances.
@@ -178,10 +192,10 @@ export function writeTerminalBreadcrumb(cwd: string, sessionFile: string, fresh 
 	// per-append), and writing in order matters: a lazy `/new` fresh crumb is
 	// re-stamped non-fresh the instant the session materializes, so an async
 	// fire-and-forget could land the two writes out of order and leave a
-	// materialized session marked fresh.
+	// materialized session marked fresh. Re-recording the same session (resume,
+	// cwd re-adoption) leaves an identical crumb alone instead of rewriting it.
 	try {
-		fs.mkdirSync(breadcrumbDir, { recursive: true });
-		fs.writeFileSync(breadcrumbFile, content);
+		writeIfChangedSync(breadcrumbFile, content);
 	} catch (err) {
 		if (!isEnoent(err)) logger.debug("Terminal breadcrumb write failed", { err });
 	}
