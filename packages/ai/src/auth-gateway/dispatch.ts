@@ -10,6 +10,7 @@
 import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
+import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
@@ -121,6 +122,48 @@ export async function refreshGatewayApiKeyAfterAuthError(
 		error: message,
 	});
 	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
+}
+
+/** Resolve retries against the most recently refreshed credential, not the initial bearer. */
+export function buildGatewayApiKeyResolver(
+	storage: AuthStorage,
+	model: Model<Api>,
+	sessionId: string,
+	initialKey: string,
+	requestSignal: AbortSignal,
+	format: string,
+	peer: string,
+): ApiKeyResolver {
+	let lastKey = initialKey;
+	return async ({ lastChance, error, signal }) => {
+		const sig = signal ?? requestSignal;
+		if (error === undefined) {
+			lastKey = initialKey;
+			return initialKey;
+		}
+		if (!lastChance) {
+			const refreshed = await storage.getApiKey(model.provider, sessionId, {
+				modelId: model.id,
+				signal: sig,
+				forceRefresh: true,
+			});
+			lastKey = refreshed ?? lastKey;
+			return refreshed;
+		}
+		const next = await refreshGatewayApiKeyAfterAuthError(
+			storage,
+			model,
+			sessionId,
+			model.provider,
+			lastKey,
+			error,
+			sig,
+			format,
+			peer,
+		);
+		lastKey = next ?? lastKey;
+		return next;
+	};
 }
 
 export function mirrorRequestAbort(req: Request): AbortController {

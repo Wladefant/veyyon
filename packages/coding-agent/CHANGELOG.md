@@ -42,6 +42,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Hard `session_stop` blocks survive the advisory continuation limit, reasonless blocks retain a fallback instruction, and aborted turns cannot schedule stale stop feedback ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved bearer token fallback when discovering OpenAI Codex models without stored OAuth accounts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed timed-out or interrupted glob searches keeping native filesystem workers alive and blocking subsequent agent turns (oh-my-pi 510f9e05c7397c69f373f01d4d4f098e917aa2e3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed memory recall blocks invalidating the prompt cache across refreshes by stripping volatile current time timestamps from recall preambles ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
