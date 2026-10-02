@@ -46,6 +46,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Kept the mnemopi embedding subprocess referenced while requests are in flight so headless print mode cannot exit prematurely ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recomputed model scope after a cross-project resume switch so the destination project's `enabledModels` settings take effect ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed loop mode continuing when Esc is pressed mid-iteration by pausing the loop and cancelling pending submissions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `veyyon usage` capacity stats to report Codex chat and Spark meters separately when they share a window duration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
