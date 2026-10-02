@@ -126,6 +126,10 @@ export interface EvalAgentResult {
 		branchName?: string;
 		/** Captured nested repository patches — surfaced for isolated `apply=false` manual application. */
 		nestedPatches?: NestedRepoPatch[];
+		/** On-disk copies of `nestedPatches`, written before the isolation workspace was removed. */
+		nestedPatchPaths?: string[];
+		/** False when `patchPath` is an empty root diff and the work lives in `nestedPatchPaths`. */
+		hasRootChanges?: boolean;
 		/**
 		 * Tri-state apply outcome for isolated runs:
 		 * - `true`  — apply ran (or had nothing to do) and left the repo clean.
@@ -719,6 +723,8 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			patchPath: result.patchPath,
 			branchName: result.branchName,
 			nestedPatches: result.nestedPatches?.length ? result.nestedPatches : undefined,
+			nestedPatchPaths: result.nestedPatchPaths?.length ? result.nestedPatchPaths : undefined,
+			hasRootChanges: result.hasRootChanges !== undefined ? result.hasRootChanges : undefined,
 			changesApplied: isIsolated ? changesApplied : undefined,
 			isolationSummary: mergeSummary ? mergeSummary.trim() : undefined,
 		},

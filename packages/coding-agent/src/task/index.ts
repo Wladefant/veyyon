@@ -1132,13 +1132,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const { manager, toolCallId, spawnParams, agentId, progress, ircEnabled, buildDetails, onUpdate, onSettled } =
 			options;
 		const buildFollowUpHint = (aborted: boolean): string => {
+			const isolated = spawnParams.isolated === true;
 			if (aborted) {
 				const status = AgentRegistry.global().get(agentId)?.status;
-				if (status === "idle" || status === "parked") {
+				if (!isolated && (status === "idle" || status === "parked")) {
 					const followUp = ircEnabled ? "message it via `irc` to resume; " : "";
 					return `\n\n${agentId} was stopped but is still resumable — ${followUp}transcript at history://${agentId}`;
 				}
 				return `\n\n${agentId} was aborted — transcript at history://${agentId}`;
+			}
+			if (isolated) {
+				return `\n\n${agentId} ran isolated and cannot be resumed or messaged — transcript at history://${agentId}`;
 			}
 			const followUp = ircEnabled ? "message it via `irc` to follow up; " : "";
 			return `\n\n${agentId} is now idle — ${followUp}transcript at history://${agentId}`;
@@ -1934,9 +1938,11 @@ function buildResultPayload(
 		truncated = true;
 	}
 	// A stopped-but-adopted agent (soft-budget stop) stays messageable; tell
-	// the parent so it can resume via irc instead of redoing the work.
+	// the parent so it can resume via irc instead of redoing the work. Isolated
+	// runs are parked without a reviver (their worktree is gone), so their
+	// "parked" status must not read as resumable.
 	const refStatus = AgentRegistry.global().get(result.id)?.status;
-	const resumable = result.aborted && (refStatus === "idle" || refStatus === "parked");
+	const resumable = result.aborted && !result.isolated && (refStatus === "idle" || refStatus === "parked");
 	const summary = prompt.render(toolsPrompts["tools/task-summary"].text, {
 		agentName: result.agent,
 		id: result.id,

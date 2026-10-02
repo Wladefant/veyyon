@@ -19,6 +19,7 @@
  * before mutation); steps 2 and 3 are per-spawn.
  */
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import type * as natives from "@veyyon/natives";
 import { errorMessage, logger } from "@veyyon/utils";
 import type { ToolSession } from "../tools";
@@ -32,6 +33,7 @@ import {
 	captureDeltaPatch,
 	cleanupIsolation,
 	cleanupTaskBranches,
+	type CommitToBranchResult,
 	commitToBranch,
 	ensureIsolation,
 	getRepoRoot,
@@ -160,16 +162,60 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 }
 
+/**
+ * Write each nested-repo patch to `${artifactsDir}/${agentId}.nested-<n>-<path>.patch`.
+ * Throws on write failure so the workspace is kept alive; cleans partial files on failure.
+ */
+export async function persistNestedPatches(
+	artifactsDir: string,
+	agentId: string,
+	nestedPatches: readonly NestedRepoPatch[],
+): Promise<string[]> {
+	const saved: string[] = [];
+	try {
+		for (const [index, nestedPatch] of nestedPatches.entries()) {
+			const destination = path.join(
+				artifactsDir,
+				`${agentId}.nested-${index}-${nestedPatch.relativePath.replace(/[^a-zA-Z0-9._-]/g, "_") || "root"}.patch`,
+			);
+			await Bun.write(destination, nestedPatch.patch);
+			saved.push(destination);
+		}
+	} catch (error) {
+		await Promise.all(saved.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
+		throw error;
+	}
+	return saved;
+}
+
+export interface IsolationPatchArtifacts {
+	patchPath: string;
+	hasRootChanges: boolean;
+	nestedPatches: NestedRepoPatch[];
+	nestedPatchPaths: string[];
+}
+
+/** Capture the isolation delta and write root and nested patches to disk before teardown. */
 async function writeIsolationPatch(
 	isolationDir: string,
 	baseline: WorktreeBaseline,
 	artifactsDir: string,
 	agentId: string,
-): Promise<{ patchPath: string; nestedPatches: NestedRepoPatch[] }> {
+): Promise<IsolationPatchArtifacts> {
 	const delta = await captureDeltaPatch(isolationDir, baseline);
 	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
 	await Bun.write(patchPath, delta.rootPatch);
-	return { patchPath, nestedPatches: delta.nestedPatches };
+	const nestedPatchPaths = await persistNestedPatches(artifactsDir, agentId, delta.nestedPatches);
+	return {
+		patchPath,
+		hasRootChanges: delta.rootPatch.trim().length > 0,
+		nestedPatches: delta.nestedPatches,
+		nestedPatchPaths,
+	};
+}
+
+function retainedWorkspaceNote(isolationDir: string): string {
+	return ` Isolation workspace retained at ${isolationDir} — recover the changes from it; \`veyyon worktree clear\` reclaims it once this session has exited.`;
 }
 
 /**
@@ -192,6 +238,7 @@ async function writeIsolationPatch(
  */
 export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<SingleResult> {
 	let handle: IsolationHandle | undefined;
+	let retainWorkspace = false;
 	try {
 		const taskBaseline = structuredClone(opts.context.baseline);
 		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
@@ -222,30 +269,16 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		});
 		const result: SingleResult = isolationFallback ? { ...subprocessResult, isolationFallback } : subprocessResult;
 		if (opts.mergeMode === "branch" && result.exitCode === 0) {
+			let commitResult: CommitToBranchResult | null = null;
 			try {
-				const commitResult = await commitToBranch(
+				commitResult = await commitToBranch(
 					isolationDir,
 					taskBaseline,
 					opts.agentId,
 					opts.description,
 					opts.buildCommitMessage?.(),
 				);
-				return {
-					...result,
-					branchName: commitResult?.branchName,
-					branchBaseSha: commitResult?.baseSha,
-					nestedPatches: commitResult?.nestedPatches,
-				};
 			} catch (mergeErr) {
-				// Agent succeeded but the branch commit failed. `commitToBranch`
-				// creates `veyyon/task/<id>` before it commits the leftover
-				// working-tree delta, so a throw from that trailing step leaves a
-				// branch that already holds every commit the agent made. The
-				// isolation worktree — the only other copy of those objects — is
-				// destroyed by the `finally` below, so deleting the branch
-				// unconditionally turned a recoverable merge failure into
-				// permanent loss of committed work. Delete only when nothing is
-				// at stake.
 				const baseSha = taskBaseline.root.headCommit;
 				const branchName = `${TASK_BRANCH_PREFIX}${opts.agentId}`;
 				const rescueBranch = await rescueTaskBranch(opts.context.repoRoot, branchName, baseSha);
@@ -262,14 +295,45 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					);
 					return {
 						...result,
-						patchPath: patchResult.patchPath,
-						nestedPatches: patchResult.nestedPatches,
+						...patchResult,
 						error: `Merge failed: ${msg}${rescueNote}`,
+						isolated: true,
 					};
 				} catch (patchErr) {
+					retainWorkspace = true;
 					const patchMsg = errorMessage(patchErr);
-					return { ...result, error: `Merge failed: ${msg}; patch capture failed: ${patchMsg}${rescueNote}` };
+					return {
+						...result,
+						error: `Merge failed: ${msg}; patch capture failed: ${patchMsg}${rescueNote}${retainedWorkspaceNote(isolationDir)}`,
+						isolated: true,
+					};
 				}
+			}
+			try {
+				const nestedPatchPaths = await persistNestedPatches(
+					opts.artifactsDir,
+					opts.agentId,
+					commitResult?.nestedPatches ?? [],
+				);
+				return {
+					...result,
+					branchName: commitResult?.branchName,
+					branchBaseSha: commitResult?.baseSha,
+					nestedPatches: commitResult?.nestedPatches,
+					nestedPatchPaths,
+					isolated: true,
+				};
+			} catch (persistErr) {
+				retainWorkspace = true;
+				const persistMsg = errorMessage(persistErr);
+				return {
+					...result,
+					branchName: commitResult?.branchName,
+					branchBaseSha: commitResult?.baseSha,
+					nestedPatches: commitResult?.nestedPatches,
+					error: `Nested patch capture failed: ${persistMsg}.${retainedWorkspaceNote(isolationDir)}`,
+					isolated: true,
+				};
 			}
 		}
 		if (result.exitCode === 0) {
@@ -277,19 +341,24 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const patchResult = await writeIsolationPatch(isolationDir, taskBaseline, opts.artifactsDir, opts.agentId);
 				return {
 					...result,
-					patchPath: patchResult.patchPath,
-					nestedPatches: patchResult.nestedPatches,
+					...patchResult,
+					isolated: true,
 				};
 			} catch (patchErr) {
+				retainWorkspace = true;
 				const msg = errorMessage(patchErr);
-				return { ...result, error: `Patch capture failed: ${msg}` };
+				return {
+					...result,
+					error: `Patch capture failed: ${msg}.${retainedWorkspaceNote(isolationDir)}`,
+					isolated: true,
+				};
 			}
 		}
-		return result;
+		return { ...result, isolated: true };
 	} catch (err) {
-		return opts.buildFailureResult(err);
+		return { ...opts.buildFailureResult(err), isolated: true };
 	} finally {
-		if (handle) {
+		if (handle && !retainWorkspace) {
 			await cleanupIsolation(handle);
 		}
 	}
@@ -350,7 +419,11 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 	try {
 		if (mergeMode === "branch") {
 			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
-				const patchList = result.patchPath ? `\nPatch artifact:\n- ${result.patchPath}` : "";
+				const patchArtifacts = [
+					result.patchPath ? `- ${result.patchPath}` : null,
+					...(result.nestedPatchPaths ?? []).map(p => `- ${p}`),
+				].filter(Boolean);
+				const patchList = patchArtifacts.length > 0 ? `\n\nPatch artifacts:\n${patchArtifacts.join("\n")}` : "";
 				return {
 					summary: `\n\n<system-notification>Branch merge failed while capturing the task branch: ${result.error}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
 					changesApplied: false,
@@ -362,9 +435,12 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 			const canApplyNestedOnly =
 				!result.branchName && result.exitCode === 0 && !result.aborted && (result.nestedPatches?.length ?? 0) > 0;
 			if (!result.branchName || result.exitCode !== 0 || result.aborted) {
+				const nestedList = result.nestedPatchPaths?.length
+					? `\nCaptured nested patches preserved at:\n${result.nestedPatchPaths.map(p => `- ${p}`).join("\n")}`
+					: "";
 				return {
 					summary: canApplyNestedOnly
-						? "\n\nNo root changes to apply; nested repository patches captured."
+						? `\n\nNo root changes to apply; nested repository patches captured.${nestedList}`
 						: "\n\nNo changes to apply.",
 					changesApplied: true,
 					hadAnyChanges: canApplyNestedOnly,
@@ -457,7 +533,11 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		} else {
 			const notification =
 				"<system-notification>Patches were not applied and must be handled manually.</system-notification>";
-			const patchList = result.patchPath ? `\n\nPatch artifact:\n- ${result.patchPath}` : "";
+			const patchArtifacts = [
+				result.patchPath ? `- ${result.patchPath}` : null,
+				...(result.nestedPatchPaths ?? []).map(p => `- ${p}`),
+			].filter(Boolean);
+			const patchList = patchArtifacts.length > 0 ? `\n\nPatch artifacts:\n${patchArtifacts.join("\n")}` : "";
 			summary = `\n\n${notification}${patchList}`;
 			failure = result.patchPath
 				? `Merge failed: the patch did not apply to the parent tree; it is preserved at ${result.patchPath}`
@@ -466,8 +546,13 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		return { summary, changesApplied, failure, hadAnyChanges, mergedBranchForNestedPatches: false };
 	} catch (mergeErr) {
 		const msg = errorMessage(mergeErr);
+		const patchArtifacts = [
+			result.patchPath ? `- ${result.patchPath}` : null,
+			...(result.nestedPatchPaths ?? []).map(p => `- ${p}`),
+		].filter(Boolean);
+		const patchList = patchArtifacts.length > 0 ? `\n\nPatch artifacts:\n${patchArtifacts.join("\n")}` : "";
 		return {
-			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.</system-notification>`,
+			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
 			changesApplied: false,
 			failure: `Merge failed: ${msg}`,
 			hadAnyChanges: false,
@@ -523,6 +608,10 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
 		// Nested patch failures do not undo the parent merge; the caller decides
 		// whether they fail the run.
 		opts.onApplyFailure?.(error);
-		return "\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
+		const msg = errorMessage(error);
+		const preserved = result.nestedPatchPaths?.length
+			? `\nCaptured nested patches preserved at:\n${result.nestedPatchPaths.map(p => `- ${p}`).join("\n")}`
+			: "";
+		return `\n\n<system-notification>Some nested repository patches failed to apply: ${msg}${preserved}</system-notification>`;
 	}
 }

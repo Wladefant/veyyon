@@ -20,6 +20,7 @@ import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
+import * as isolationRunner from "@veyyon/coding-agent/task/isolation-runner";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -285,6 +286,25 @@ describe("task spawn routing", () => {
 		expect(job!.resultText).toContain("message it via `irc` to follow up");
 		expect(job!.resultText).toContain("history://Spawnling");
 		expect(runSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("tells the parent an isolated agent cannot be messaged or resumed", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
+			repoRoot: "/repo", baseline: { root: { repoRoot: "/repo", headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" }, nested: [] },
+		});
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({ ...makeResult("Sandboxed"), isolated: true, patchPath: "/artifacts/Sandboxed.patch" });
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({ summary: "", changesApplied: true, hadAnyChanges: false, mergedBranchForNestedPatches: false });
+		const manager = createManager();
+		const tool = await TaskTool.create(createSession({ manager, settings: { "task.isolation.mode": "auto" } }));
+		const result = await tool.execute("tc-isolated", { agent: "task", name: "Sandboxed", task: "Do thing.", isolated: true } as TaskParams);
+		const job = manager.getJob(result.details?.async?.jobId ?? "");
+		await job!.promise;
+		const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
+		expect(delivered).toContain("Sandboxed ran isolated and cannot be resumed or messaged");
+		expect(delivered).toContain("history://Sandboxed");
+		expect(delivered).not.toContain("is now idle");
+		expect(job!.status).toBe("completed");
 	});
 
 	it("bounds concurrent job bodies with the session spawn semaphore", async () => {

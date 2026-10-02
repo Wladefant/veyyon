@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Persist nested-repo patches before task isolation teardown, retain workspace on write failure, and stop advertising isolated agents as resumable ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi bdf400b69fc448dbead1c1d6bcfa216cb7697ae6, 207b925541814d4d6132a2525921fd33056fc19c, 1a65c7a99757f19f87498751816b232cfc3de962).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
