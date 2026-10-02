@@ -102,6 +102,17 @@ describe("openaiCodexModelManagerOptions", () => {
 		}) as unknown as typeof fetch;
 		expect(await options.fetchDynamicModels?.()).toBeNull();
 	});
+	it("namespaces cache under union-v1 and isolates distinct account fingerprints", () => {
+		const defaultOptions = openaiCodexModelManagerOptions();
+		expect(defaultOptions.cacheProviderId).toBe("openai-codex:union-v1");
+		expect(defaultOptions.cacheProviderId).not.toBe("openai-codex");
+
+		const accA = openaiCodexModelManagerOptions({ accountFingerprint: "acc-a" });
+		const accB = openaiCodexModelManagerOptions({ accountFingerprint: "acc-a\u0000acc-b" });
+		expect(accA.cacheProviderId).toBe("openai-codex:union-v1:acc-a");
+		expect(accB.cacheProviderId).toBe("openai-codex:union-v1:acc-a\u0000acc-b");
+		expect(accA.cacheProviderId).not.toBe(accB.cacheProviderId);
+	});
 });
 
 describe("cursorModelManagerOptions", () => {

@@ -564,6 +564,17 @@ async function resolveCodexDiscoveryAccounts(
 	}
 	return accounts;
 }
+function resolveCodexAccountFingerprint(authStorage: AuthStorage, fallbackKey?: string): string {
+	const accounts = authStorage.listOAuthAccounts("openai-codex");
+	if (accounts.length > 0) {
+		const identifiers = accounts.map(a => a.accountId ?? a.email ?? a.credentialId ?? String(a.position)).sort();
+		return Bun.hash(identifiers.join("\u0000")).toString(36);
+	}
+	if (fallbackKey) {
+		return "bearer";
+	}
+	return "empty";
+}
 
 function mergeCompat<TBase extends object, TOverride extends object>(
 	baseCompat: TBase | null | undefined,
@@ -1927,6 +1938,7 @@ export class ModelRegistry {
 		providerId: string,
 		strategy: ModelRefreshStrategy,
 		cacheProviderId: () => string,
+		authoritative = false,
 	): Promise<string | undefined> {
 		const peekedKey = await this.#peekApiKeyForProvider(providerId);
 		if (isAuthenticated(peekedKey) || strategy === "offline") {
@@ -1936,7 +1948,13 @@ export class ModelRegistry {
 		if (oauthCredentials.length === 0) {
 			return peekedKey;
 		}
-		if (strategy === "online-if-uncached") {
+		// Authoritative providers prune bundled models only when their manager is
+		// actually constructed, which needs an authenticated key. A fresh cache does
+		// not let us skip the refresh here: with an expired OAuth token peekedKey is
+		// undefined, the manager is never added, and stale bundled models survive the
+		// full cache TTL. So only take the no-refresh shortcut for non-authoritative
+		// providers, whose bundled models stay visible regardless.
+		if (strategy === "online-if-uncached" && !authoritative) {
 			// Mirror shouldFetchRemoteSources: built-in managers use the catalog's
 			// default TTL, so only refresh when the manager will actually fetch.
 			const cache = readModelCache<Api>(
@@ -1977,11 +1995,13 @@ export class ModelRegistry {
 	): Promise<ModelManagerOptions<Api>[]> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
+			authoritative: boolean;
 			resolveKey: (value: string | undefined) => string | undefined;
 			createOptions: (key: string) => ModelManagerOptions<Api>;
 		}> = [
 			{
 				providerId: "google-antigravity",
+				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: oauthToken =>
 					googleAntigravityModelManagerOptions({
@@ -1992,6 +2012,7 @@ export class ModelRegistry {
 			},
 			{
 				providerId: "google-gemini-cli",
+				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: oauthToken =>
 					googleGeminiCliModelManagerOptions({
@@ -2002,13 +2023,17 @@ export class ModelRegistry {
 			},
 			{
 				providerId: "openai-codex",
+				authoritative: true,
 				resolveKey: value => value,
-				createOptions: accessToken =>
-					openaiCodexModelManagerOptions({
+				createOptions: accessToken => {
+					const accountFingerprint = resolveCodexAccountFingerprint(this.authStorage, accessToken);
+					return openaiCodexModelManagerOptions({
 						resolveAccounts: () => resolveCodexDiscoveryAccounts(this.authStorage, accessToken),
 						clientVersion: CODEX_CLIENT_VERSION,
 						fetch: this.#fetch,
-					}),
+						accountFingerprint,
+					});
+				},
 			},
 		];
 		const disabledProviders = getDisabledProviderIdsFromSettings();
@@ -2028,12 +2053,18 @@ export class ModelRegistry {
 							baseUrl: this.#builtInDiscoveryBaseUrl(descriptor.providerId),
 							fetch: this.#fetch,
 						}).cacheProviderId ?? descriptor.providerId,
+					descriptor.dynamicModelsAuthoritative ?? false,
 				),
 			),
 		);
 		const specialKeys = await Promise.all(
 			enabledSpecialProviderDescriptors.map(descriptor =>
-				this.#resolveBuiltInDiscoveryApiKey(descriptor.providerId, strategy, () => descriptor.providerId),
+				this.#resolveBuiltInDiscoveryApiKey(
+					descriptor.providerId,
+					strategy,
+					() => descriptor.createOptions("").cacheProviderId ?? descriptor.providerId,
+					descriptor.authoritative,
+				),
 			),
 		);
 		const options: ModelManagerOptions<Api>[] = [];

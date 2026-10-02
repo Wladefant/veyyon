@@ -17,13 +17,18 @@ export interface OpenAICodexAccount {
 	accountId?: string;
 }
 
+export function openAICodexModelCacheProviderId(accountFingerprint?: string): string {
+	return accountFingerprint ? `openai-codex:union-v1:${accountFingerprint}` : "openai-codex:union-v1";
+}
+
 export interface OpenAICodexModelManagerConfig {
 	accessToken?: string;
 	accountId?: string;
 	clientVersion?: string;
 	fetch?: FetchImpl;
+	cacheProviderId?: string;
+	accountFingerprint?: string;
 	/**
-	 * Resolves every configured Codex OAuth account at discovery time. Codex
 	 * discovery is account-scoped — a model can be available to one account and
 	 * absent from another — so each account's `/models` endpoint is fetched
 	 * independently and the results unioned by id. Without this, discovery would
@@ -41,9 +46,11 @@ export interface OpenAICodexModelManagerConfig {
 export function openaiCodexModelManagerOptions(
 	config: OpenAICodexModelManagerConfig = {},
 ): ModelManagerOptions<"openai-codex-responses"> {
-	const { resolveAccounts, accessToken, accountId, clientVersion, fetch } = config;
+	const { resolveAccounts, accessToken, accountId, clientVersion, fetch, cacheProviderId, accountFingerprint } =
+		config;
 	return {
 		providerId: "openai-codex",
+		cacheProviderId: cacheProviderId ?? openAICodexModelCacheProviderId(accountFingerprint),
 		dynamicModelsAuthoritative: true,
 		...(resolveAccounts || accessToken
 			? {
