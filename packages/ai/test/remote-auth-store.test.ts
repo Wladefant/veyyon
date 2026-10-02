@@ -793,13 +793,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 						},
 						identityKey: "email:remote-codex@example.com",
 						rotatesInMs: null,
-						blocks: [
-							{
-								providerKey: "openai-codex:oauth",
-								blockScope: "shared",
-								blockedUntilMs,
-							},
-						],
+						blocks: [{ providerKey: "openai-codex:oauth", blockScope: "shared", blockedUntilMs }],
 					},
 				],
 			},

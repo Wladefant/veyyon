@@ -163,49 +163,35 @@ function expectExclusivePreference(counts: Map<string, number>, preferred: strin
 
 function addSparkUsage(
 	report: UsageReport,
-	primaryUsedFraction: number,
-	secondaryUsedFraction: number,
-	meterState: { allowed: boolean; limitReached: boolean } = {
-		allowed: primaryUsedFraction < 1 && secondaryUsedFraction < 1,
-		limitReached: primaryUsedFraction >= 1 || secondaryUsedFraction >= 1,
-	},
+	primary: number,
+	secondary: number,
+	spark = { allowed: primary < 1 && secondary < 1, limitReached: primary >= 1 || secondary >= 1 },
 ): UsageReport {
-	const makeSparkLimit = (key: "primary" | "secondary", usedFraction: number): UsageLimit => {
-		const limit = createLimit({
-			key,
-			windowId: key === "primary" ? "5h" : "7d",
-			windowLabel: key === "primary" ? "5 Hours (Spark)" : "7 Days (Spark)",
-			durationMs: key === "primary" ? FIVE_HOUR_MS : WEEK_MS,
-			usedFraction,
-			resetInMs: key === "primary" ? FIVE_HOUR_MS : WEEK_MS,
-		});
-		return {
-			...limit,
-			id: `openai-codex:spark:${key}`,
-			scope: {
-				provider: "openai-codex",
-				windowId: limit.scope.windowId,
-				tier: "spark",
-				modelId: "gpt-5.3-codex-spark",
-			},
-		};
-	};
+	const sparkLimit = (k: "primary" | "secondary", w: "5h" | "7d", d: number, u: number): UsageLimit => ({
+		...createLimit({
+			key: k,
+			windowId: w,
+			windowLabel: `${k} Spark`,
+			durationMs: d,
+			usedFraction: u,
+			resetInMs: WEEK_MS,
+		}),
+		id: `openai-codex:spark:${k}`,
+		scope: { provider: "openai-codex", windowId: w, tier: "spark", modelId: "gpt-5.3-codex-spark" },
+	});
 	return {
 		...report,
 		limits: [
 			...report.limits,
-			makeSparkLimit("primary", primaryUsedFraction),
-			makeSparkLimit("secondary", secondaryUsedFraction),
+			sparkLimit("primary", "5h", FIVE_HOUR_MS, primary),
+			sparkLimit("secondary", "7d", WEEK_MS, secondary),
 		],
 		metadata: {
 			...report.metadata,
 			meterStates: {
 				...(report.metadata?.meterStates as Record<string, unknown> | undefined),
-				chat: {
-					allowed: report.metadata?.allowed,
-					limitReached: report.metadata?.limitReached,
-				},
-				spark: meterState,
+				chat: { allowed: report.metadata?.allowed, limitReached: report.metadata?.limitReached },
+				spark,
 			},
 		},
 	};
@@ -261,19 +247,17 @@ describe("AuthStorage codex oauth ranking", () => {
 
 	test("preserves the uncapped-Pro priority signal when only the secondary window is reported", async () => {
 		if (!authStorage) throw new Error("test setup failed");
-
 		await authStorage.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-uncapped-pro", "uncapped-pro@example.com") },
 			{ type: "oauth", ...createCredential("acct-capped", "capped@example.com") },
 		]);
-
 		const uncapped = createCodexUsageReport({
 			accountId: "acct-uncapped-pro",
 			primary: { usedFraction: 0, resetInMs: FIVE_HOUR_MS },
 			secondary: { usedFraction: 0.9, resetInMs: WEEK_MS },
 			metadata: { planType: "pro", allowed: true, limitReached: false },
 		});
-		uncapped.limits = uncapped.limits.filter(limit => limit.id !== "openai-codex:primary");
+		uncapped.limits = uncapped.limits.filter(l => l.id !== "openai-codex:primary");
 		usageByAccount.set("acct-uncapped-pro", uncapped);
 		usageByAccount.set(
 			"acct-capped",
@@ -283,21 +267,18 @@ describe("AuthStorage codex oauth ranking", () => {
 				secondary: { usedFraction: 0.5, resetInMs: WEEK_MS },
 			}),
 		);
-
 		const counts = await countApiKeySelections(authStorage, "openai-codex", "uncapped-pro");
 		expectExclusivePreference(counts, "api-acct-uncapped-pro", "api-acct-capped");
 	});
 
 	test("does not boost incomplete or differently-scoped Codex usage over measured quota", async () => {
 		if (!authStorage) throw new Error("test setup failed");
-
 		await authStorage.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-status", "status@example.com") },
 			{ type: "oauth", ...createCredential("acct-chat", "chat@example.com") },
 			{ type: "oauth", ...createCredential("acct-chat-only", "chat-only@example.com") },
 			{ type: "oauth", ...createCredential("acct-spark", "spark@example.com") },
 		]);
-
 		usageByAccount.set("acct-status", {
 			provider: "openai-codex",
 			fetchedAt: Date.now(),
@@ -312,7 +293,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				secondary: { usedFraction: 0.2, resetInMs: WEEK_MS },
 			}),
 		);
-		const sparkOnlyReport = addSparkUsage(
+		const sparkOnly = addSparkUsage(
 			createCodexUsageReport({
 				accountId: "acct-spark",
 				primary: { usedFraction: 0.1, resetInMs: HOUR_MS },
@@ -321,9 +302,9 @@ describe("AuthStorage codex oauth ranking", () => {
 			0.1,
 			0.1,
 		);
-		sparkOnlyReport.limits = sparkOnlyReport.limits.filter(limit => limit.id.includes(":spark:"));
-		usageByAccount.set("acct-spark", sparkOnlyReport);
-		const otherMeterReport = addSparkUsage(
+		sparkOnly.limits = sparkOnly.limits.filter(l => l.id.includes(":spark:"));
+		usageByAccount.set("acct-spark", sparkOnly);
+		const otherMeter = addSparkUsage(
 			createCodexUsageReport({
 				accountId: "acct-chat-only",
 				primary: { usedFraction: 0.9, resetInMs: HOUR_MS },
@@ -332,12 +313,11 @@ describe("AuthStorage codex oauth ranking", () => {
 			0.9,
 			0.9,
 		);
-		otherMeterReport.limits = otherMeterReport.limits.filter(limit => limit.id.includes(":spark:"));
-		usageByAccount.set("acct-chat-only", otherMeterReport);
+		otherMeter.limits = otherMeter.limits.filter(l => l.id.includes(":spark:"));
+		usageByAccount.set("acct-chat-only", otherMeter);
 
 		const chatCounts = await countApiKeySelections(authStorage, "openai-codex", "incomplete-chat");
 		expectExclusivePreference(chatCounts, "api-acct-chat", "api-acct-status");
-
 		const sparkCounts = await countApiKeySelections(
 			authStorage,
 			"openai-codex",
@@ -346,6 +326,44 @@ describe("AuthStorage codex oauth ranking", () => {
 			"gpt-5.3-codex-spark",
 		);
 		expectExclusivePreference(sparkCounts, "api-acct-spark", "api-acct-chat-only");
+	});
+
+	test("isolates exhausted non-requested meters so exhausted Spark does not block chat or vice versa", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const seed = (id: string, email: string, chat: number, spark: number) => {
+			usageByAccount.set(
+				id,
+				addSparkUsage(
+					createCodexUsageReport({
+						accountId: id,
+						primary: { usedFraction: chat, resetInMs: HOUR_MS },
+						secondary: { usedFraction: chat, resetInMs: WEEK_MS },
+					}),
+					spark,
+					spark,
+				),
+			);
+			return { type: "oauth" as const, ...createCredential(id, email) };
+		};
+		// Account A: Chat 10%, Spark 100%; Account B: Chat 20%, Spark 20% -> Chat prefers A
+		await authStorage.set("openai-codex", [
+			seed("acct-chat-healthy-spark-exhausted", "a@example.com", 0.1, 1.0),
+			seed("acct-both-moderate", "b@example.com", 0.2, 0.2),
+		]);
+		expect(await authStorage.getApiKey("openai-codex", "session-chat-exhausted-spark")).toBe(
+			"api-acct-chat-healthy-spark-exhausted",
+		);
+
+		// Account C: Chat 100%, Spark 10%; Account D: Chat 50%, Spark 50% -> Spark prefers C
+		await authStorage.set("openai-codex", [
+			seed("acct-chat-exhausted-spark-healthy", "c@example.com", 1.0, 0.1),
+			seed("acct-both-half", "d@example.com", 0.5, 0.5),
+		]);
+		expect(
+			await authStorage.getApiKey("openai-codex", "session-spark-exhausted-chat", {
+				modelId: "gpt-5.3-codex-spark",
+			}),
+		).toBe("api-acct-chat-exhausted-spark-healthy");
 	});
 
 	test("prefers near-reset weekly account over lower-used far-reset account", async () => {
