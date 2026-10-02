@@ -49,3 +49,15 @@ describe("postmortem.isWorkerIpcDeserializeError", () => {
 		expect(postmortem.isWorkerIpcDeserializeError(undefined)).toBe(false);
 	});
 });
+
+describe("postmortem.registerWorkerIpcFaultHandler", () => {
+	it("registers and unregisters fault handler callback", () => {
+		const handled: Error[] = [];
+		const handler = (err: Error) => {
+			handled.push(err);
+		};
+		const unregister = postmortem.registerWorkerIpcFaultHandler(handler);
+		expect(typeof unregister).toBe("function");
+		unregister();
+	});
+});

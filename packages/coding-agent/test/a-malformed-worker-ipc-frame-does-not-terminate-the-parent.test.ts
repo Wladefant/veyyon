@@ -23,9 +23,10 @@ describe("issue #9158 — malformed worker IPC frame must not terminate the pare
 	it("contains an advanced-serialization decode failure to the worker instead of exiting the session", async () => {
 		const repoRoot = path.resolve(import.meta.dir, "..");
 		// Bun advanced-IPC frame with an invalid structured-clone body, written
-		// raw to the IPC fd (3) — the same shape the issue reporter used.
+		// raw to the IPC fd (3), then the child blocks forever. Staying alive is
+		// the point: the malformed frame — not an exit — must fault the worker.
 		const childScript =
-			'require("node:fs").writeSync(3, Buffer.from([2, 4, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef])); process.exit(0);';
+			'require("node:fs").writeSync(3, Buffer.from([2, 4, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef])); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);';
 		// Runs in a spawned `bun -e` parent: importing postmortem installs the global
 		// uncaughtException handler under test.
 		const wrapperScript = `
@@ -40,10 +41,10 @@ describe("issue #9158 — malformed worker IPC frame must not terminate the pare
 			});
 			const { promise: errored, resolve } = Promise.withResolvers();
 			worker.errors.add(resolve);
-			// Deterministic: the bad frame is contained, then the clean child exit
-			// (reportCleanExit) faults the worker's own error channel.
-			await errored;
-			process.stdout.write("SURVIVED_WITH_ERROR");
+			// The bad frame is contained and faults the worker's error channel even
+			// though the child stays alive (blocked in Atomics.wait).
+			const err = await errored;
+			process.stdout.write(\`FAULTED:\${err instanceof Error ? err.message : String(err)}\`);
 		`;
 		const { env, cleanup } = hermeticSpawnEnv({ VEYYON_TEST_RUNTIME: "0" });
 		let stdout = "";
@@ -68,7 +69,8 @@ describe("issue #9158 — malformed worker IPC frame must not terminate the pare
 		// Before the fix the postmortem handler exited the parent with code 1 and
 		// no "SURVIVED" marker ever printed.
 		expect(exitCode).toBe(0);
-		expect(stdout).toBe("SURVIVED_WITH_ERROR");
+		expect(stdout).toContain("FAULTED:");
+		expect(stdout).toContain("worker sent a malformed IPC frame");
 	}, 45_000);
 	it("still faults on an unrelated TypeError with the same message but a real stack", async () => {
 		// Guards the narrowed matcher: an application-thrown `TypeError` carrying
