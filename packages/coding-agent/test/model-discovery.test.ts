@@ -281,6 +281,53 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(authStorage.getOAuthCredential("anthropic")?.access).toBe("sk-ant-oat-expired-anthropic");
 	});
 
+	test("online-if-uncached refreshes expired OAuth for authoritative providers even when the cache is fresh", async () => {
+		// Regression for #107: openai-codex is authoritative, so its bundled
+		// models are pruned only when the manager is actually constructed — which
+		// needs an authenticated key. With an expired OAuth token peekApiKey
+		// returns undefined; the fresh-cache shortcut must NOT skip the refresh, or
+		// the manager is never added and unsupported bundled ids (gpt-5.4-nano)
+		// remain selectable for the whole cache TTL.
+		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
+		await authStorage.set("openai-codex", {
+			type: "oauth",
+			access: "expired-openai-codex",
+			refresh: "refresh-openai-codex",
+			expires: Date.now() - 60_000,
+		});
+		// Fresh + authoritative, but written against no static fingerprint so the
+		// constructed manager still performs the account-scoped fetch.
+		writeModelCache("openai-codex", Date.now() - 60_000, [], true, "", cacheDbPath);
+		let modelListCalls = 0;
+		const fetchMock: FetchImpl = async (input, init) => {
+			const url = String(input);
+			if (url.startsWith("https://chatgpt.com/backend-api") && url.includes("/models")) {
+				modelListCalls++;
+				expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer fresh-openai-codex");
+				return Response.json({
+					models: [
+						{
+							slug: "gpt-5.6-terra",
+							display_name: "GPT-5.6 Terra",
+							context_window: 372_000,
+							supported_in_api: true,
+							input_modalities: ["text", "image"],
+						},
+					],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+
+		await registry.refreshProvider("openai-codex", "online-if-uncached");
+
+		expect(refreshCalls).toEqual(["openai-codex"]);
+		expect(modelListCalls).toBe(1);
+		expect(registry.find("openai-codex", "gpt-5.6-terra")).toBeDefined();
+		expect(registry.find("openai-codex", "gpt-5.4-nano")).toBeUndefined();
+	});
+
 	test("configured discovery suppresses built-in special OAuth discovery", async () => {
 		await authStorage.set("google-gemini-cli", {
 			type: "oauth",
@@ -362,6 +409,55 @@ describe("ModelRegistry runtime discovery", () => {
 		await registry.refreshProvider("openai-codex", "online");
 		expect(modelListCalls).toBe(0);
 		expect(getModelsForProvider(registry, "openai-codex").length).toBeGreaterThan(0);
+	});
+	test("Codex discovery invalidates single-account cache and unions models when sibling account is added, rejecting stale cache", async () => {
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", access: "token-a", refresh: "ref-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
+		]);
+		let fetchCalls = 0;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			fetchCalls++;
+			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+			if (accountId === "acc-a") {
+				return Response.json({
+					models: [
+						{ slug: "model-a", display_name: "Model A", context_window: 128_000, input_modalities: ["text"] },
+					],
+				});
+			}
+			if (accountId === "acc-b") {
+				return Response.json({
+					models: [
+						{
+							slug: "gpt-6-astra",
+							display_name: "GPT-6 Astra",
+							context_window: 372_000,
+							input_modalities: ["text"],
+						},
+					],
+				});
+			}
+			return Response.json({ models: [] });
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refreshProvider("openai-codex", "online");
+		expect(fetchCalls).toBe(1);
+		expect(registry.find("openai-codex", "model-a")).toBeDefined();
+		expect(registry.find("openai-codex", "gpt-6-astra")).toBeUndefined();
+
+		// Calling online-if-uncached with unchanged account set hits the cache without fetching.
+		await registry.refreshProvider("openai-codex", "online-if-uncached");
+		expect(fetchCalls).toBe(1);
+
+		// Adding sibling account B invalidates the single-account cache, forcing a fetch and unioning both models.
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", access: "token-a", refresh: "ref-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
+			{ type: "oauth", access: "token-b", refresh: "ref-b", accountId: "acc-b", expires: Date.now() + 3_600_000 },
+		]);
+		await registry.refreshProvider("openai-codex", "online-if-uncached");
+		expect(fetchCalls).toBe(3); // 1 initial + 2 for accounts A & B
+		expect(registry.find("openai-codex", "model-a")).toBeDefined();
+		expect(registry.find("openai-codex", "gpt-6-astra")).toBeDefined();
 	});
 
 	test("auto-discovers ollama models without provider config", async () => {
