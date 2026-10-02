@@ -24,10 +24,10 @@
 - Sessions preserve concurrent in-flight tool calls independently and commit abandoned-call reports to the normal dated log before removing crash evidence ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Interactive launches now run under a direct parent supervisor that records retained heartbeat context and the real child exit status immediately after a silent death; `veyyon supervisor dumps` provides reversible, opt-in Windows LocalDumps configuration for `veyyon.exe` and `bun.exe` ([#100](https://github.com/Wladefant/veyyon/issues/100)).
-- Extracted shared foreground-wait and auto-background helper primitives (`formatBackgroundNotice`, `resolveAutoBackgroundWaitMs`, `raceJobSettlement`) into `async/auto-background.ts` with cancellable threshold timers (oh-my-pi aeed1e6195abfa971b15e291c6c598bc9c1065b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 
+- Extracted shared foreground-wait and auto-background helper primitives (`formatBackgroundNotice`, `resolveAutoBackgroundWaitMs`, `raceJobSettlement`) into `async/auto-background.ts` with cancellable threshold timers (oh-my-pi aeed1e6195abfa971b15e291c6c598bc9c1065b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).

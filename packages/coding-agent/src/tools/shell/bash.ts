@@ -12,7 +12,7 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-import { clampLow, errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
+import { errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
 import { normalizePathForComparison } from "@veyyon/utils/dirs";
 import { type } from "arktype";
 import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
@@ -886,10 +886,7 @@ export class BashTool
 				kind: "background";
 				reason: BackgroundReason;
 			}>();
-			thresholdTimer = setTimeout(
-				() => resolveThreshold({ kind: "background", reason: "threshold" }),
-				thresholdMs,
-			);
+			thresholdTimer = setTimeout(() => resolveThreshold({ kind: "background", reason: "threshold" }), thresholdMs);
 			waiters.push(thresholdPromise);
 		}
 		if (stallMs > 0) {
