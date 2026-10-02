@@ -22,6 +22,7 @@ export const MCP_CONFIG_STATUS_LABEL = "mcp config";
 
 export type McpConnectionStatusEvent =
 	| { type: "connecting"; serverNames: string[] }
+	| { type: "reconnecting"; serverName: string }
 	| { type: "connected"; serverName: string }
 	// `foreign` marks servers imported from another tool's config (Claude Code,
 	// Codex, …) — the boot health zone downgrades their failures from alarm to
@@ -66,6 +67,8 @@ export function isMcpConnectionStatusEvent(data: unknown): data is McpConnection
 	switch (data.type) {
 		case "connecting":
 			return isStringArray(data.serverNames);
+		case "reconnecting":
+			return typeof data.serverName === "string";
 		case "connected":
 			return typeof data.serverName === "string";
 		case "failed":
