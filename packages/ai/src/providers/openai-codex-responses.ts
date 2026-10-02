@@ -110,11 +110,17 @@ import {
 	type CodexReasoningContext,
 	type CodexRequestOptions,
 	type InputItem,
+	type ReasoningConfig,
 	type RequestBody,
 	resolveCodexResponsesLite,
 	transformRequestBody,
 } from "./openai-codex/request-transformer";
 import { CodexApiError } from "./openai-codex/response-handler";
+import {
+	getOpenAIEffortControlState,
+	type OpenAIEffortControlState,
+	planStableOpenAIEffort,
+} from "./openai-configuration-update";
 import type {
 	ResponseCustomToolCall,
 	ResponseFunctionToolCall,
@@ -162,6 +168,7 @@ import {
 import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
+	baseUrl?: string;
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "concise" | "detailed" | null;
 	/** `reasoning.context` replay scope; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
@@ -461,6 +468,8 @@ interface CodexProviderSessionState extends ProviderSessionState {
 	webSocketSessions: Map<string, CodexWebSocketSessionState>;
 	webSocketPublicToPrivate: Map<string, string>;
 	metadataSessions: Map<string, CodexMetadataSessionState>;
+	/** `configuration_update` effort baselines, keyed by model + session. */
+	effortControls: Map<string, OpenAIEffortControlState<ReasoningConfig["effort"]>>;
 	/**
 	 * Prompt-cache observations, per cache identity.
 	 *
@@ -1107,6 +1116,7 @@ function createCodexProviderSessionState(): CodexProviderSessionState {
 		webSocketSessions: new Map(),
 		webSocketPublicToPrivate: new Map(),
 		metadataSessions: new Map(),
+		effortControls: new Map(),
 		cacheTracker: createCacheTrackerState(),
 		close: () => {
 			for (const session of state.webSocketSessions.values()) {
@@ -1115,6 +1125,7 @@ function createCodexProviderSessionState(): CodexProviderSessionState {
 			state.webSocketSessions.clear();
 			state.webSocketPublicToPrivate.clear();
 			state.metadataSessions.clear();
+			state.effortControls.clear();
 			state.cacheTracker = createCacheTrackerState();
 		},
 	};
@@ -1129,7 +1140,9 @@ function isCodexProviderSessionState(state: ProviderSessionState | undefined): s
 		"webSocketPublicToPrivate" in state &&
 		state.webSocketPublicToPrivate instanceof Map &&
 		"metadataSessions" in state &&
-		state.metadataSessions instanceof Map
+		state.metadataSessions instanceof Map &&
+		"effortControls" in state &&
+		state.effortControls instanceof Map
 	);
 }
 
@@ -1576,7 +1589,34 @@ export async function buildTransformedCodexRequestBody(
 		responsesLite: options?.responsesLite,
 	};
 
-	return transformRequestBody(params, model, codexOptions, { developerMessages });
+	const body = await transformRequestBody(params, model, codexOptions, { developerMessages });
+	applyCodexStableEffort(model, body, options);
+	return body;
+}
+
+/**
+ * Keep the request-level effort byte-stable across a conversation and carry
+ * later changes as `configuration_update` items (GPT-6 Astra). Requires a
+ * session id and provider session state to remember the baseline; without
+ * them every request stands alone and sends its own effort.
+ */
+function applyCodexStableEffort(
+	model: Model<"openai-codex-responses">,
+	body: RequestBody,
+	options: OpenAICodexResponsesOptions | undefined,
+): void {
+	if (!model.compat.supportsConfigurationUpdate || options?.codexCompaction) return;
+	const effort = body.reasoning?.effort;
+	if (effort === undefined || effort === null || effort === "none" || !body.input) return;
+	const providerState = getCodexProviderSessionState(options?.providerSessionState);
+	const sessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
+	if (!providerState || !sessionId) return;
+	const baseUrl = options?.baseUrl || model.baseUrl || CODEX_BASE_URL;
+	const state = getOpenAIEffortControlState(
+		providerState.effortControls,
+		`${baseUrl}\u0000${model.id}\u0000${sessionId}`,
+	);
+	body.reasoning = { ...body.reasoning, effort: planStableOpenAIEffort(state, body.input, effort) };
 }
 
 async function openInitialCodexEventStream(

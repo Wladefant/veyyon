@@ -4,6 +4,7 @@
 
 ### Added
 
+- Integrated stable conversation-effort planning and configuration updates into OpenAI Codex Responses for supported models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0b893cef55fdfeb0fdbc72806eeb542056eae1d9).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Responses wire types for conversation reasoning configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Vercel AI Gateway app attribution headers (`http-referer` and `x-title`) on Anthropic and OpenAI-compatible routes while preserving caller-supplied attribution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
