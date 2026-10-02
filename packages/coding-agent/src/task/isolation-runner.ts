@@ -163,10 +163,7 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 }
 
-/**
- * Write each nested-repo patch to `${artifactsDir}/${agentId}.nested-<n>-<path>.patch`.
- * Throws on write failure so the workspace is kept alive; cleans partial files on failure.
- */
+// Persist nested patches before workspace cleanup; cleans partial files on failure.
 export async function persistNestedPatches(
 	artifactsDir: string,
 	agentId: string,
@@ -422,6 +419,9 @@ function patchArtifactsList(result: SingleResult): string {
 	].filter(Boolean);
 	return files.length > 0 ? `\n\nPatch artifacts:\n${files.join("\n")}` : "";
 }
+function nestedPreservedList(paths?: readonly string[]): string {
+	return paths?.length ? `\nCaptured nested patches preserved at:\n${paths.map(p => `- ${p}`).join("\n")}` : "";
+}
 
 async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationMergeOutcome> {
 	const { result, repoRoot, mergeMode } = opts;
@@ -439,9 +439,7 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 			const canApplyNestedOnly =
 				!result.branchName && result.exitCode === 0 && !result.aborted && (result.nestedPatches?.length ?? 0) > 0;
 			if (!result.branchName || result.exitCode !== 0 || result.aborted) {
-				const nestedList = result.nestedPatchPaths?.length
-					? `\nCaptured nested patches preserved at:\n${result.nestedPatchPaths.map(p => `- ${p}`).join("\n")}`
-					: "";
+				const nestedList = nestedPreservedList(result.nestedPatchPaths);
 				return {
 					summary: canApplyNestedOnly
 						? `\n\nNo root changes to apply; nested repository patches captured.${nestedList}`
@@ -603,9 +601,7 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
 		// whether they fail the run.
 		opts.onApplyFailure?.(error);
 		const msg = errorMessage(error);
-		const preserved = result.nestedPatchPaths?.length
-			? `\nCaptured nested patches preserved at:\n${result.nestedPatchPaths.map(p => `- ${p}`).join("\n")}`
-			: "";
+		const preserved = nestedPreservedList(result.nestedPatchPaths);
 		return `\n\n<system-notification>Some nested repository patches failed to apply: ${msg}${preserved}</system-notification>`;
 	}
 }

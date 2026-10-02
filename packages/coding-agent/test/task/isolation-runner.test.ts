@@ -253,21 +253,14 @@ describe("runIsolatedSubprocess", () => {
 	});
 
 	for (const { label, blocked, id } of [
-		{
-			label: "writes nested-repo patches to disk before the workspace is torn down",
-			blocked: false,
-			id: "NestedPersist",
-		},
-		{ label: "retains the workspace when captured changes cannot be written", blocked: true, id: "RetainOnFailure" },
+		{ label: "writes nested-repo patches before teardown", blocked: false, id: "NestedPersist" },
+		{ label: "retains workspace when write fails", blocked: true, id: "RetainOnFailure" },
 	]) {
 		it(label, async () => {
 			const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-iso-"));
 			tempRoots.push(tmp);
-			let artifactsDir = tmp;
-			if (blocked) {
-				artifactsDir = path.join(tmp, "artifacts");
-				await Bun.write(artifactsDir, "not a directory");
-			}
+			const artifactsDir = blocked ? path.join(tmp, "artifacts") : tmp;
+			if (blocked) await Bun.write(artifactsDir, "not a directory");
 			const nestedPatch = "diff --git a/b.txt b/b.txt\n+hi\n";
 			vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
 				mergedDir: "/repo/isolated",

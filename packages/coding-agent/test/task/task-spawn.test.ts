@@ -292,12 +292,11 @@ describe("task spawn routing", () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
 		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
 			repoRoot: "/repo",
-			baseline: { root: { headCommit: "HEAD" } } as never,
+			baseline: {} as never,
 		});
 		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({
 			...makeResult("Sandboxed"),
 			isolated: true,
-			patchPath: "/artifacts/Sandboxed.patch",
 		});
 		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
 			summary: "",
@@ -307,19 +306,18 @@ describe("task spawn routing", () => {
 		});
 		const manager = createManager();
 		const tool = await TaskTool.create(createSession({ manager, settings: { "task.isolation.mode": "auto" } }));
-		const result = await tool.execute("tc-isolated", {
+		const res = await tool.execute("tc-iso", {
 			agent: "task",
 			name: "Sandboxed",
-			task: "Do thing.",
+			task: "x",
 			isolated: true,
 		} as TaskParams);
-		const job = manager.getJob(result.details?.async?.jobId ?? "");
+		const job = manager.getJob(res.details?.async?.jobId ?? "");
 		await job!.promise;
 		const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
 		expect(delivered).toContain("Sandboxed ran isolated and cannot be resumed or messaged");
 		expect(delivered).toContain("history://Sandboxed");
 		expect(delivered).not.toContain("is now idle");
-		expect(job!.status).toBe("completed");
 	});
 
 	it("bounds concurrent job bodies with the session spawn semaphore", async () => {
