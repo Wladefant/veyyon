@@ -1525,23 +1525,25 @@ exec ${JSON.stringify(realGit)} "$@"
 		});
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		expect(text).toBe('{"version":"16.3.11"}\n');
-		expect(jsonSpy).toHaveBeenCalledWith(
-			"/tmp/test",
+		expect(jsonSpy.mock.calls).toEqual([
 			[
-				"api",
-				"/repos/can1357/oh-my-pi/contents/packages/coding-agent/package.json",
-				"--method",
-				"GET",
-				"-H",
-				"Accept: application/vnd.github+json",
-				"-H",
-				"Accept-Encoding: identity",
-				"-f",
-				"ref=main",
+				"/tmp/test",
+				[
+					"api",
+					"/repos/can1357/oh-my-pi/contents/packages/coding-agent/package.json",
+					"--method",
+					"GET",
+					"-H",
+					"Accept: application/vnd.github+json",
+					"-H",
+					"Accept-Encoding: identity",
+					"-f",
+					"ref=main",
+				],
+				undefined,
+				{ repoProvided: true, trimOutput: false },
 			],
-			undefined,
-			{ repoProvided: true, trimOutput: false },
-		);
+		]);
 	});
 
 	it("returns GitHub images as model image content", async () => {
