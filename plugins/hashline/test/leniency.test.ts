@@ -178,6 +178,26 @@ describe("hashline body contracts", () => {
 		);
 	});
 
+	it("auto-pipes a fully bare Markdown bullet body with a warning", () => {
+		const result = parsePatch("SWAP 2.=2:\n- item\n  - nested");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\n- item\n  - nested\nc\nd\ne");
+		expect(result.warnings.some(w => /bullet row/.test(w))).toBe(true);
+	});
+
+	it("auto-pipes bare Markdown bullets alongside explicit +- bullets", () => {
+		const result = parsePatch("SWAP 2.=2:\n+- first\n- second");
+		expect(applyEdits(FILE, result.edits).text).toBe("a\n- first\n- second\nc\nd\ne");
+		expect(result.warnings.some(w => /bullet row/.test(w))).toBe(true);
+	});
+
+	it("rejects bare minus rows when mixed with non-bullet explicit rows (unified-diff contamination)", () => {
+		expect(() => parsePatch("SWAP 2.=2:\n-old line\n+new line")).toThrow(/`-` rows are not valid/);
+	});
+
+	it("rejects non-bullet bare minus rows (no space after hyphen)", () => {
+		expect(() => parsePatch("SWAP 2.=2:\n-not a bullet")).toThrow(/`-` rows are not valid/);
+	});
+
 	it("rejects empty replace (points at DEL) and rejects empty insert", () => {
 		// A bodyless SWAP is not leniently downgraded to a delete — it throws
 		// EMPTY_REPLACE; deleting is DEL. An empty insert body is rejected too.
