@@ -1131,8 +1131,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}): string {
 		const { manager, toolCallId, spawnParams, agentId, progress, ircEnabled, buildDetails, onUpdate, onSettled } =
 			options;
-		const buildFollowUpHint = (aborted: boolean): string => {
-			const isolated = spawnParams.isolated === true;
+		// `isolated` is whether the run actually used an isolation workspace: the
+		// result's fact where there is one, the request only when no result exists.
+		const buildFollowUpHint = (aborted: boolean, isolated: boolean): string => {
 			if (aborted) {
 				const status = AgentRegistry.global().get(agentId)?.status;
 				if (!isolated && (status === "idle" || status === "parked")) {
@@ -1223,7 +1224,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
 					await reportProgress(statusText);
-					const deliveryText = `${finalText}${buildFollowUpHint(singleResult?.aborted === true)}`;
+					const deliveryText = `${finalText}${buildFollowUpHint(singleResult?.aborted === true, singleResult?.isolated === true)}`;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.
 						throw new TaskJobError(deliveryText);
@@ -1239,7 +1240,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const statusText = `Background task ${agentId} failed.`;
 					await reportProgress(statusText);
 					const message = errorMessage(error);
-					const hint = AgentRegistry.global().get(agentId) ? buildFollowUpHint(false) : "";
+					const hint = AgentRegistry.global().get(agentId)
+						? buildFollowUpHint(false, spawnParams.isolated === true)
+						: "";
 					throw new TaskJobError(`${message}${hint}`);
 				} finally {
 					releasePermit();

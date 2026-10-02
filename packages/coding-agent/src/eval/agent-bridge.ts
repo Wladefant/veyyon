@@ -679,12 +679,14 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 					}
 				} else if (result.branchName) {
 					mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
-				} else if (result.patchPath) {
+				} else if (result.patchPath && result.hasRootChanges !== false) {
 					mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
 				} else {
 					const nestedPatches = result.nestedPatches ?? [];
 					if (nestedPatches.length > 0) {
-						mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"} (apply=false). Not applied.`;
+						const nestedPaths = result.nestedPatchPaths ?? [];
+						const where = nestedPaths.length > 0 ? ` at ${nestedPaths.map(p => `\`${p}\``).join(", ")}` : "";
+						mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"}${where} (apply=false). Not applied.`;
 					} else {
 						mergeSummary = "\n\nIsolation: no changes captured.";
 					}
@@ -720,7 +722,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			model: result.resolvedModel ?? modelOverride,
 			structured,
 			isolated: isIsolated || undefined,
-			patchPath: result.patchPath,
+			patchPath: result.hasRootChanges === false ? undefined : result.patchPath,
 			branchName: result.branchName,
 			nestedPatches: result.nestedPatches?.length ? result.nestedPatches : undefined,
 			nestedPatchPaths: result.nestedPatchPaths?.length ? result.nestedPatchPaths : undefined,

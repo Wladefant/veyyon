@@ -320,6 +320,24 @@ describe("task spawn routing", () => {
 		expect(delivered).not.toContain("is now idle");
 	});
 
+	it("does not claim an agent ran isolated when isolation is disabled and the spawn never started", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("Refused"));
+		const manager = createManager();
+		const tool = await TaskTool.create(createSession({ manager, settings: { "task.isolation.mode": "none" } }));
+		const res = await tool.execute("tc-iso-off", {
+			agent: "task",
+			name: "Refused",
+			task: "x",
+			isolated: true,
+		} as TaskParams);
+		const job = manager.getJob(res.details?.async?.jobId ?? "");
+		await job!.promise.catch(() => undefined);
+		const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
+		expect(delivered).toContain("Task isolation is disabled");
+		expect(delivered).not.toContain("ran isolated");
+	});
+
 	it("bounds concurrent job bodies with the session spawn semaphore", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],
