@@ -179,14 +179,7 @@ function createNoProgressCodexSse(signal: AbortSignal | undefined): Response {
 	return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-/**
- * Non-2xx response whose error body is delivered partially and then stalls
- * forever unless the request signal aborts. Mirrors a server (or proxy) that
- * flushes error headers plus an incomplete JSON body and holds the socket open —
- * the shape that used to bypass the Codex pre-response deadline (issue #12664).
- * Wiring the body stream to the fetch signal lets the armed pre-response
- * watchdog abort the read exactly as a real socket would.
- */
+/** Non-2xx response whose error body is delivered partially and stalls until aborted. */
 function createStalledErrorResponse(status: number, signal: AbortSignal | undefined): Response {
 	const encoder = new TextEncoder();
 	let abortListener: (() => void) | undefined;
@@ -5199,38 +5192,27 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 			class TimeoutWebSocket extends MockWebSocket {
 				constructor(url: string, options?: WsOptions) {
 					super(url, options);
-					if (phase === "during handshake") {
-						queueMicrotask(() => controller.abort(timeout));
-					} else {
-						this.scheduleOpen();
-					}
+					if (phase === "during handshake") queueMicrotask(() => controller.abort(timeout));
+					else this.scheduleOpen();
 				}
-
 				override scheduleOpen(): void {
 					setTimeout(() => {
 						this.readyState = MockWebSocket.OPEN;
 						this.emit("open", new Event("open"));
-						if (phase === "before request") {
-							controller.abort(timeout);
-						}
+						if (phase === "before request") controller.abort(timeout);
 					}, 0);
 				}
-
 				override send(): void {
-					if (phase === "during request") {
-						controller.abort(timeout);
-					}
+					if (phase === "during request") controller.abort(timeout);
 				}
-
 				override close(): void {
 					super.close();
 					this.emit("close", { code: 1000 } as CloseEvent);
 				}
 			}
 			global.WebSocket = TimeoutWebSocket as unknown as typeof WebSocket;
-			const model = createCodexTestModel();
 			try {
-				const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+				const stream = streamOpenAICodexResponses(createCodexTestModel(), createCodexTestContext(), {
 					apiKey: createCodexTestToken(),
 					signal: controller.signal,
 					fetch: fetchMock,
@@ -5255,20 +5237,18 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 		const fetchMock = vi.fn<FetchImpl>(() => {
 			throw new Error("Cancelled stream must not fall back to SSE");
 		});
-		class CancelledWebSocket extends MockWebSocket {
+		class CancelledWs extends MockWebSocket {
 			constructor(url: string, options?: WsOptions) {
 				super(url, options);
 				this.scheduleOpen();
 			}
-
 			override send(): void {
 				controller.abort();
 			}
 		}
-		global.WebSocket = CancelledWebSocket as unknown as typeof WebSocket;
-		const model = createCodexTestModel();
+		global.WebSocket = CancelledWs as unknown as typeof WebSocket;
 		try {
-			const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			const stream = streamOpenAICodexResponses(createCodexTestModel(), createCodexTestContext(), {
 				apiKey: createCodexTestToken(),
 				signal: controller.signal,
 				fetch: fetchMock,
@@ -5299,11 +5279,7 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 			}
 
 			override send(): void {
-				this.emitCodexResponse({
-					messageId: "msg_stale_open",
-					responseId: "resp_stale_open",
-					text: "Done",
-				});
+				this.emitCodexResponse({ messageId: "msg_stale", responseId: "resp_stale", text: "Done" });
 			}
 
 			override close(): void {
@@ -5311,7 +5287,6 @@ describe("openai-codex abort cause preservation and close resilience", () => {
 				throw Object.assign(new Error("Socket is closed"), { code: "ERR_SOCKET_CLOSED" });
 			}
 		}
-
 		global.WebSocket = StaleOpenWebSocket as unknown as typeof WebSocket;
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
