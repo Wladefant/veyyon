@@ -47,54 +47,45 @@ describe("openaiCodexModelManagerOptions", () => {
 	it("unions models across multiple accounts and preserves order/dedupes", async () => {
 		const options = openaiCodexModelManagerOptions({
 			resolveAccounts: async () => [
-				{ accessToken: "token-account-1", accountId: "acc-1" },
-				{ accessToken: "token-account-2", accountId: "acc-2" },
+				{ accessToken: "tok-1", accountId: "acc-1" },
+				{ accessToken: "tok-2", accountId: "acc-2" },
 			],
 		});
 		expect(options.dynamicModelsAuthoritative).toBe(true);
-
-		const requestedAccounts: string[] = [];
-		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-			const accountId = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
-			requestedAccounts.push(accountId);
-			const models =
-				accountId === "acc-1"
-					? [{ slug: "model-common" }, { slug: "model-acc1-only" }]
-					: [{ slug: "model-common" }, { slug: "model-acc2-only" }];
-			return new Response(JSON.stringify({ data: models }), {
-				status: 200,
-				headers: { "content-type": "application/json" },
-			});
+		const requested: string[] = [];
+		globalThis.fetch = (async (_u: unknown, init?: RequestInit) => {
+			const id = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
+			requested.push(id);
+			const data =
+				id === "acc-1" ? [{ slug: "m-common" }, { slug: "m-1" }] : [{ slug: "m-common" }, { slug: "m-2" }];
+			return new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } });
 		}) as unknown as typeof fetch;
-
 		const models = await options.fetchDynamicModels?.();
-		expect(requestedAccounts).toEqual(["acc-1", "acc-2"]);
-		expect(models?.map(model => model.id)).toEqual(["model-acc1-only", "model-common", "model-acc2-only"]);
+		expect(requested).toEqual(["acc-1", "acc-2"]);
+		expect(models?.map(m => m.id)).toEqual(["m-1", "m-common", "m-2"]);
 	});
 
 	it("aborts discovery (returns null) when resolveAccounts returns null", async () => {
 		const options = openaiCodexModelManagerOptions({ resolveAccounts: async () => null });
-		let fetchCalled = false;
+		let called = false;
 		globalThis.fetch = (async () => {
-			fetchCalled = true;
+			called = true;
 			return new Response("{}", { status: 200 });
 		}) as unknown as typeof fetch;
 		expect(await options.fetchDynamicModels?.()).toBeNull();
-		expect(fetchCalled).toBe(false);
+		expect(called).toBe(false);
 	});
 
 	it("aborts discovery (returns null) when any account fetch fails", async () => {
 		const options = openaiCodexModelManagerOptions({
 			resolveAccounts: async () => [
-				{ accessToken: "token-ok", accountId: "acc-ok" },
-				{ accessToken: "token-fail", accountId: "acc-fail" },
+				{ accessToken: "tok-ok", accountId: "acc-ok" },
+				{ accessToken: "tok-fail", accountId: "acc-fail" },
 			],
 		});
-		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
-			if (accountId === "acc-ok") {
-				return new Response(JSON.stringify({ data: [{ slug: "model-ok" }] }), {
-					status: 200,
+		globalThis.fetch = (async (_u: unknown, init?: RequestInit) => {
+			if (new Headers(init?.headers).get("chatgpt-account-id") === "acc-ok") {
+				return new Response(JSON.stringify({ data: [{ slug: "ok" }] }), {
 					headers: { "content-type": "application/json" },
 				});
 			}
@@ -103,15 +94,13 @@ describe("openaiCodexModelManagerOptions", () => {
 		expect(await options.fetchDynamicModels?.()).toBeNull();
 	});
 	it("namespaces cache under union-v1 and isolates distinct account fingerprints", () => {
-		const defaultOptions = openaiCodexModelManagerOptions();
-		expect(defaultOptions.cacheProviderId).toBe("openai-codex:union-v1");
-		expect(defaultOptions.cacheProviderId).not.toBe("openai-codex");
-
-		const accA = openaiCodexModelManagerOptions({ accountFingerprint: "acc-a" });
-		const accB = openaiCodexModelManagerOptions({ accountFingerprint: "acc-a\u0000acc-b" });
-		expect(accA.cacheProviderId).toBe("openai-codex:union-v1:acc-a");
-		expect(accB.cacheProviderId).toBe("openai-codex:union-v1:acc-a\u0000acc-b");
-		expect(accA.cacheProviderId).not.toBe(accB.cacheProviderId);
+		const def = openaiCodexModelManagerOptions();
+		expect(def.cacheProviderId).toBe("openai-codex:union-v1");
+		const a = openaiCodexModelManagerOptions({ accountFingerprint: "a" });
+		const b = openaiCodexModelManagerOptions({ accountFingerprint: "a\u0000b" });
+		expect(a.cacheProviderId).toBe("openai-codex:union-v1:a");
+		expect(b.cacheProviderId).toBe("openai-codex:union-v1:a\u0000b");
+		expect(a.cacheProviderId).not.toBe(b.cacheProviderId);
 	});
 });
 

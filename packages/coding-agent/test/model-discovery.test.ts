@@ -365,16 +365,16 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("Codex discovery falls back to a resolved non-OAuth token when no OAuth accounts exist", async () => {
-		authStorage.setRuntimeApiKey("openai-codex", "runtime-openai-codex");
-		let modelListCalls = 0;
-		const fetchMock: FetchImpl = async (_input, init) => {
-			modelListCalls++;
-			expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer runtime-openai-codex");
+		authStorage.setRuntimeApiKey("openai-codex", "runtime-token");
+		let calls = 0;
+		const fetchMock: FetchImpl = async (_i, init) => {
+			calls++;
+			expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer runtime-token");
 			return Response.json({
 				models: [
 					{
-						slug: "runtime-codex-model",
-						display_name: "Runtime Codex Model",
+						slug: "m-rt",
+						display_name: "RT",
 						context_window: 128_000,
 						supported_in_api: true,
 						input_modalities: ["text"],
@@ -384,80 +384,64 @@ describe("ModelRegistry runtime discovery", () => {
 		};
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refreshProvider("openai-codex", "online");
-		expect(modelListCalls).toBe(1);
-		expect(registry.find("openai-codex", "runtime-codex-model")).toBeDefined();
+		expect(calls).toBe(1);
+		expect(registry.find("openai-codex", "m-rt")).toBeDefined();
 	});
 
 	test("Codex discovery aborts (keeps bundled models) when any account credential fails to refresh", async () => {
 		authStorage.close();
 		authStorage = await AuthStorage.create(":memory:", {
-			refreshOAuthCredential: async (_provider, _credId, credential): Promise<OAuthCredentials> => {
-				if (credential.access.includes("expired")) throw new Error("simulated refresh failure");
-				return { ...credential, expires: Date.now() + 3_600_000 };
+			refreshOAuthCredential: async (_p, _c, cred): Promise<OAuthCredentials> => {
+				if (cred.access.includes("expired")) throw new Error("refresh failure");
+				return { ...cred, expires: Date.now() + 3_600_000 };
 			},
 		});
 		await authStorage.set("openai-codex", [
-			{ type: "oauth", access: "fresh-codex", refresh: "refresh-fresh", expires: Date.now() + 3_600_000 },
-			{ type: "oauth", access: "expired-codex", refresh: "refresh-expired", expires: Date.now() - 60_000 },
+			{ type: "oauth", access: "fresh-codex", refresh: "r-fresh", expires: Date.now() + 3_600_000 },
+			{ type: "oauth", access: "expired-codex", refresh: "r-expired", expires: Date.now() - 60_000 },
 		]);
-		let modelListCalls = 0;
-		const fetchMock: FetchImpl = async () => {
-			modelListCalls++;
-			return Response.json({ models: [] });
-		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		let calls = 0;
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: async () => {
+				calls++;
+				return Response.json({ models: [] });
+			},
+		});
 		await registry.refreshProvider("openai-codex", "online");
-		expect(modelListCalls).toBe(0);
+		expect(calls).toBe(0);
 		expect(getModelsForProvider(registry, "openai-codex").length).toBeGreaterThan(0);
 	});
 	test("Codex discovery invalidates single-account cache and unions models when sibling account is added, rejecting stale cache", async () => {
 		await authStorage.set("openai-codex", [
-			{ type: "oauth", access: "token-a", refresh: "ref-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
+			{ type: "oauth", access: "tok-a", refresh: "r-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
 		]);
-		let fetchCalls = 0;
-		const fetchMock: FetchImpl = async (_input, init) => {
-			fetchCalls++;
-			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
-			if (accountId === "acc-a") {
-				return Response.json({
-					models: [
-						{ slug: "model-a", display_name: "Model A", context_window: 128_000, input_modalities: ["text"] },
-					],
-				});
-			}
-			if (accountId === "acc-b") {
-				return Response.json({
-					models: [
-						{
-							slug: "gpt-6-astra",
-							display_name: "GPT-6 Astra",
-							context_window: 372_000,
-							input_modalities: ["text"],
-						},
-					],
-				});
-			}
-			return Response.json({ models: [] });
+		let calls = 0;
+		const fetchMock: FetchImpl = async (_i, init) => {
+			calls++;
+			const id = new Headers(init?.headers).get("chatgpt-account-id");
+			const models =
+				id === "acc-a"
+					? [{ slug: "m-a", display_name: "A", context_window: 128_000, input_modalities: ["text"] }]
+					: [{ slug: "m-b", display_name: "B", context_window: 256_000, input_modalities: ["text"] }];
+			return Response.json({ models });
 		};
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refreshProvider("openai-codex", "online");
-		expect(fetchCalls).toBe(1);
-		expect(registry.find("openai-codex", "model-a")).toBeDefined();
-		expect(registry.find("openai-codex", "gpt-6-astra")).toBeUndefined();
+		expect(calls).toBe(1);
+		expect(registry.find("openai-codex", "m-a")).toBeDefined();
+		expect(registry.find("openai-codex", "m-b")).toBeUndefined();
 
-		// Calling online-if-uncached with unchanged account set hits the cache without fetching.
 		await registry.refreshProvider("openai-codex", "online-if-uncached");
-		expect(fetchCalls).toBe(1);
+		expect(calls).toBe(1);
 
-		// Adding sibling account B invalidates the single-account cache, forcing a fetch and unioning both models.
 		await authStorage.set("openai-codex", [
-			{ type: "oauth", access: "token-a", refresh: "ref-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
-			{ type: "oauth", access: "token-b", refresh: "ref-b", accountId: "acc-b", expires: Date.now() + 3_600_000 },
+			{ type: "oauth", access: "tok-a", refresh: "r-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
+			{ type: "oauth", access: "tok-b", refresh: "r-b", accountId: "acc-b", expires: Date.now() + 3_600_000 },
 		]);
 		await registry.refreshProvider("openai-codex", "online-if-uncached");
-		expect(fetchCalls).toBe(3); // 1 initial + 2 for accounts A & B
-		expect(registry.find("openai-codex", "model-a")).toBeDefined();
-		expect(registry.find("openai-codex", "gpt-6-astra")).toBeDefined();
+		expect(calls).toBe(3);
+		expect(registry.find("openai-codex", "m-a")).toBeDefined();
+		expect(registry.find("openai-codex", "m-b")).toBeDefined();
 	});
 
 	test("auto-discovers ollama models without provider config", async () => {
