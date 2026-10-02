@@ -36,11 +36,18 @@ const PRIORITY_2_5_SERVICE_TIER_COST: CodexTier = { flex: 0.5, priority: 2.5 };
 const PRIORITY_2_5_IDS: Readonly<Record<string, true>> = { "gpt-5.5": true, "gpt-6-astra": true };
 
 /**
- * Curated extended-context ceilings. Codex reports a stale 872K maximum for
- * these; OpenAI documents 1.05M total with at most 922K input. A higher live
- * maximum still wins.
+ * Curated extended-context ceilings. `/codex/models` reports an 872K maximum
+ * (observed 2026-10-02) that an offline regeneration cannot see, so it is
+ * recorded here. Astra and GPT-6.1 Sol report a stale 872K: OpenAI documents
+ * 1.05M total with at most 922K input. A higher live maximum still wins.
  */
 const CURATED_MAX_CONTEXT_WINDOW: Readonly<Record<string, number>> = {
+	"gpt-5.6-luna": 872_000,
+	"gpt-5.6-sol": 872_000,
+	"gpt-5.6-terra": 872_000,
+	"gpt-6-luna": 872_000,
+	"gpt-6-sol": 872_000,
+	"gpt-daybreak-blue-latest": 872_000,
 	"gpt-6-astra": 922_000,
 	"gpt-6.1-sol": 922_000,
 };
