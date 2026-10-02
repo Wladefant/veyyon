@@ -152,13 +152,10 @@ describe("Cursor MCP StrReplace fallback", () => {
 	});
 
 	it("projects CLI and replacement fields onto replace kwargs", () => {
-		expect(
-			normalizeCursorReplaceArgs({ path: "/tmp/n.txt", old_text: "a", new_text: "b", replaceAll: true }),
-		).toEqual({ path: "/tmp/n.txt", old_string: "a", new_string: "b", replace_all: true });
-		expect(normalizeCursorReplaceArgs({ path: "/tmp/n.txt", input: "[n]" })).toEqual({
-			path: "/tmp/n.txt",
-			input: "[n]",
+		expect(normalizeCursorReplaceArgs({ path: "/tmp/n.txt", old_text: "a", new_text: "b", replaceAll: true })).toEqual({
+			path: "/tmp/n.txt", old_string: "a", new_string: "b", replace_all: true,
 		});
+		expect(normalizeCursorReplaceArgs({ path: "/tmp/n.txt", input: "[n]" })).toEqual({ path: "/tmp/n.txt", input: "[n]" });
 	});
 
 	it("routes injected CLI names and replace-shaped edit onto the bridge", () => {

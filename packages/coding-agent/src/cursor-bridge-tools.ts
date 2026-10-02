@@ -12,14 +12,8 @@ import type { Tool, ToolSession } from "./tools";
  * used to 404 and fall through to bash/python string replace.
  */
 const CURSOR_STRREPLACE_MCP_NAMES: Record<string, true> = {
-	StrReplace: true,
-	str_replace: true,
-	strReplace: true,
-	SearchReplace: true,
-	search_replace: true,
-	Edit: true,
+	StrReplace: true, str_replace: true, strReplace: true, SearchReplace: true, search_replace: true, Edit: true,
 };
-
 export function isCursorStrReplaceMcpName(name: string): boolean {
 	return CURSOR_STRREPLACE_MCP_NAMES[name] === true;
 }
