@@ -81,6 +81,7 @@ import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { conversationIdForOpenCode, getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
+import { getVercelAiGatewayHeaders } from "../utils/vercel-headers";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
@@ -3349,6 +3350,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	}
 
 	// First in the merge below, so a caller-supplied header still wins.
+	const vercelHeaders = model.provider === "vercel-ai-gateway" ? getVercelAiGatewayHeaders() : undefined;
 	const openCodeHeaders = isOpenCodeProvider(model.provider) ? getOpenCodeHeaders(conversationId) : undefined;
 	const defaultHeaders = buildAnthropicHeaders({
 		apiKey,
@@ -3357,6 +3359,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		extraBetas: betaFeatures,
 		stream,
 		modelHeaders: mergeHeaders(
+			vercelHeaders,
 			openCodeHeaders,
 			model.headers,
 			foundryCustomHeaders,
