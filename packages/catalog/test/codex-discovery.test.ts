@@ -332,4 +332,88 @@ describe("Codex model discovery", () => {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
+	it("keeps account-listed API-unsupported models while pruning hidden models", async () => {
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-5.3-codex-spark",
+								display_name: "GPT-5.3 Codex Spark",
+								visibility: "list",
+								supported_in_api: false,
+								context_window: 128_000,
+								default_reasoning_level: "high",
+								input_modalities: ["text"],
+							},
+							{
+								slug: "hidden-model",
+								display_name: "Hidden model",
+								visibility: "hidden",
+								supported_in_api: true,
+							},
+							{
+								slug: "hide-model",
+								display_name: "Hide model",
+								visibility: "hide",
+								supported_in_api: true,
+							},
+						],
+					}),
+				),
+			{ preconnect() {} },
+		);
+
+		const result = await fetchCodexModels({
+			accessToken: "test-token",
+			fetchFn,
+		});
+
+		expect(result?.models.map(model => model.id)).toEqual(["gpt-5.3-codex-spark"]);
+		expect(result?.models[0]).toMatchObject({
+			contextWindow: 128_000,
+			maxTokens: 128_000,
+		});
+	});
+	it("normalizes Codex Daybreak aliases to the GPT-5.6 window and effort ladder", async () => {
+		const level = (effort: string) => ({ effort, description: `${effort} reasoning` });
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-daybreak-blue-latest",
+								display_name: "GPT-Daybreak Blue Latest",
+								context_window: 272_000,
+								default_reasoning_level: "medium",
+								supported_reasoning_levels: [level("low"), level("medium"), level("high"), level("xhigh")],
+								input_modalities: ["text", "image"],
+								visibility: "show",
+							},
+							{
+								slug: "gpt-daybreak-red-latest",
+								display_name: "GPT-Daybreak Red Latest",
+								context_window: 272_000,
+								default_reasoning_level: "high",
+								supported_reasoning_levels: [level("low"), level("medium"), level("high"), level("xhigh")],
+								input_modalities: ["text", "image"],
+								visibility: "show",
+							},
+						],
+					}),
+				),
+			{ preconnect() {} },
+		);
+
+		const result = await fetchCodexModels({
+			accessToken: "test-token",
+			fetchFn,
+		});
+
+		expect(result?.models).toHaveLength(2);
+		expect(result?.models[0]?.contextWindow).toBe(372_000);
+		expect(result?.models[1]?.contextWindow).toBe(372_000);
+	});
 });
