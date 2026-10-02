@@ -1,13 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Api, FetchImpl, Model } from "@veyyon/catalog/types";
 import { ConfigurationError, ValidationError } from "../src/error";
-import {
-	DEFAULT_XAI_SAMPLE_RATE,
-	isSpeechApi,
-	synthesizeOpenAiSpeech,
-	synthesizeSpeech,
-	synthesizeXaiSpeech,
-} from "../src/speech";
+import { DEFAULT_XAI_SAMPLE_RATE, synthesizeOpenAiSpeech, synthesizeSpeech, synthesizeXaiSpeech } from "../src/speech";
 
 const openaiModel = {
 	id: "tts-1",
@@ -24,12 +18,6 @@ const xaiModel = {
 } as unknown as Model<Api>;
 
 describe("speech adapters and router", () => {
-	it("isSpeechApi recognizes speech APIs and rejects others", () => {
-		expect(isSpeechApi("openai-speech")).toBe(true);
-		expect(isSpeechApi("xai-tts")).toBe(true);
-		expect(isSpeechApi("openai-completions")).toBe(false);
-	});
-
 	it("synthesizeOpenAiSpeech builds valid payload with default voice and rejects sampleRate/bitRate", async () => {
 		let captured: { url: string; body: Record<string, unknown> } | undefined;
 		const fetchImpl: FetchImpl = async (input, init) => {
@@ -60,8 +48,12 @@ describe("speech adapters and router", () => {
 		);
 		expect(captured?.body.voice).toBe("shimmer");
 
-		await expect(synthesizeOpenAiSpeech(openaiModel, { text: "err", format: "mp3", sampleRate: 16000 }, { apiKey: "k" })).rejects.toThrow(ValidationError);
-		await expect(synthesizeOpenAiSpeech(openaiModel, { text: "err", format: "mp3", bitRate: 64000 }, { apiKey: "k" })).rejects.toThrow(ValidationError);
+		await expect(
+			synthesizeOpenAiSpeech(openaiModel, { text: "err", format: "mp3", sampleRate: 16000 }, { apiKey: "k" }),
+		).rejects.toThrow(ValidationError);
+		await expect(
+			synthesizeOpenAiSpeech(openaiModel, { text: "err", format: "mp3", bitRate: 64000 }, { apiKey: "k" }),
+		).rejects.toThrow(ValidationError);
 	});
 
 	it("synthesizeXaiSpeech validates formats and options, constructing output_format", async () => {
@@ -84,11 +76,18 @@ describe("speech adapters and router", () => {
 			output_format: { codec: "wav", sample_rate: 48000 },
 		});
 
-		// Rejections: invalid format, speed, instructions, text length
-		await expect(synthesizeXaiSpeech(xaiModel, { text: "t", format: "flac" }, { apiKey: "k" })).rejects.toThrow(ValidationError);
-		await expect(synthesizeXaiSpeech(xaiModel, { text: "t", format: "mp3", speed: 1.5 }, { apiKey: "k" })).rejects.toThrow(ValidationError);
-		await expect(synthesizeXaiSpeech(xaiModel, { text: "t", format: "mp3", instructions: "whisper" }, { apiKey: "k" })).rejects.toThrow(ValidationError);
-		await expect(synthesizeXaiSpeech(xaiModel, { text: "a".repeat(15001), format: "mp3" }, { apiKey: "k" })).rejects.toThrow(ValidationError);
+		await expect(synthesizeXaiSpeech(xaiModel, { text: "t", format: "flac" }, { apiKey: "k" })).rejects.toThrow(
+			ValidationError,
+		);
+		await expect(
+			synthesizeXaiSpeech(xaiModel, { text: "t", format: "mp3", speed: 1.5 }, { apiKey: "k" }),
+		).rejects.toThrow(ValidationError);
+		await expect(
+			synthesizeXaiSpeech(xaiModel, { text: "t", format: "mp3", instructions: "whisper" }, { apiKey: "k" }),
+		).rejects.toThrow(ValidationError);
+		await expect(
+			synthesizeXaiSpeech(xaiModel, { text: "a".repeat(15001), format: "mp3" }, { apiKey: "k" }),
+		).rejects.toThrow(ValidationError);
 	});
 
 	it("synthesizeSpeech routes to provider adapter with distinct wire endpoints and payloads", async () => {
