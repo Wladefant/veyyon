@@ -1104,16 +1104,9 @@ class CodexStreamRuntime {
 		if (typeof input === "string") finalizeCustomToolCallInputDone(entry.block, input);
 	}
 	handleResponseCreated(rawEvent: Record<string, unknown>): void {
+		const response = (rawEvent as { response?: { id?: string } }).response;
 		const state = this.websocketState;
-		if (!state || this.transport !== "websocket") return;
-		const response = rawEvent.response;
-		if (
-			response &&
-			typeof response === "object" &&
-			"id" in response &&
-			typeof response.id === "string" &&
-			response.id.length > 0
-		) {
+		if (state && this.transport === "websocket" && typeof response?.id === "string" && response.id.length > 0) {
 			state.lastResponseId = response.id;
 		}
 	}

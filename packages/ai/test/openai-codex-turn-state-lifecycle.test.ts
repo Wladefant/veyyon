@@ -1,12 +1,19 @@
 import { describe, expect, it } from "bun:test";
+import { buildModel } from "@veyyon/catalog/build";
 import {
 	createOpenAICodexCompatibilityMetadata,
 	getOpenAICodexTransportDetails,
 	resetOpenAICodexHistoryAfterCompaction,
 } from "../src/providers/openai-codex-responses";
-import type { Model } from "../src/types";
 
 describe("openai-codex turn-state lifecycle", () => {
+	const model = buildModel({
+		id: "gpt-5.6-sol",
+		name: "GPT-5.6 Sol",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: "https://chatgpt.com/backend-api",
+	});
 	it("clears turn states on a new logical turn while preserving mid-turn calls", () => {
 		const providerSessionState = new Map();
 		const sessionId = "turn-state-lifecycle-session";
@@ -20,37 +27,19 @@ describe("openai-codex turn-state lifecycle", () => {
 		});
 		expect(firstTurnMeta.headers["x-codex-turn-metadata"]).toBeDefined();
 
-		const model: Model<"openai-codex-responses"> = {
-			id: "gpt-5.6-sol",
-			name: "GPT-5.6 Sol",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: "https://chatgpt.com/backend-api",
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000,
-			maxTokens: 128000,
-		};
-
-		// Turn details initially show no turn state
-		let details = getOpenAICodexTransportDetails(model, {
-			sessionId,
-			providerSessionState,
-		});
+		// Initially no turn state
+		let details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(false);
 
-		// Seed a turn-state cell into the session
+		// Seed compatibility-scoped turn-state cells into the session
 		const codexState = providerSessionState.get("openai-codex-responses");
 		expect(codexState).toBeDefined();
 		const metadataSession = codexState?.metadataSessions.get(sessionId);
 		expect(metadataSession).toBeDefined();
-		metadataSession?.turnStates.set("compat-key-2", { value: "token-2" });
 		metadataSession?.turnStates.set("compat-key-1", { value: "token-1" });
+		metadataSession?.turnStates.set("compat-key-2", { value: "token-2" });
 
-		details = getOpenAICodexTransportDetails(model, {
-			sessionId,
-			providerSessionState,
-		});
+		details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(true);
 
 		// Mid-turn call preserves turn state
@@ -60,10 +49,7 @@ describe("openai-codex turn-state lifecycle", () => {
 			requestKind: "turn",
 			startNewTurn: false,
 		});
-		details = getOpenAICodexTransportDetails(model, {
-			sessionId,
-			providerSessionState,
-		});
+		details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(true);
 
 		// Standalone compaction turn does not clear live turn states
@@ -71,34 +57,22 @@ describe("openai-codex turn-state lifecycle", () => {
 			sessionId,
 			providerSessionState,
 			requestKind: "compaction",
-			compaction: {
-				operationId: "standalone-op",
-				phase: "standalone_turn",
-				strategy: "memento",
-				trigger: "auto",
-				reason: "context_limit",
-				implementation: "responses",
-			},
 			startNewTurn: true,
+			compaction: { operationId: "comp-1", phase: "standalone_turn", strategy: "memento", trigger: "auto", reason: "context_limit", implementation: "responses" },
 		});
-		details = getOpenAICodexTransportDetails(model, {
-			sessionId,
-			providerSessionState,
-		});
+		details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(true);
 
-		// New logical turn clears the previous turn states
+		// New logical turn clears previous turn states
 		createOpenAICodexCompatibilityMetadata({
 			sessionId,
 			providerSessionState,
 			requestKind: "turn",
 			startNewTurn: true,
 		});
-		details = getOpenAICodexTransportDetails(model, {
-			sessionId,
-			providerSessionState,
-		});
+		details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(false);
+		expect(metadataSession?.turnStates.size).toBe(0);
 	});
 
 	it("preserves turn states during mid-turn compaction and clears on pre-turn compaction", () => {
@@ -112,35 +86,20 @@ describe("openai-codex turn-state lifecycle", () => {
 			startNewTurn: true,
 		});
 
-		const model: Model<"openai-codex-responses"> = {
-			id: "gpt-5.6-sol",
-			name: "GPT-5.6 Sol",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: "https://chatgpt.com/backend-api",
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000,
-			maxTokens: 128000,
-		};
-
 		const codexState = providerSessionState.get("openai-codex-responses");
 		const metadataSession = codexState?.metadataSessions.get(sessionId);
 		expect(metadataSession).toBeDefined();
 		metadataSession?.turnStates.set("compat-key", { value: "active-token" });
 
+		const compaction = (phase: "mid_turn" | "pre_turn") => ({
+			operationId: `${phase}-op`, phase, strategy: "memento" as const, trigger: "auto" as const, reason: "context_limit" as const, implementation: "responses" as const,
+		});
+
 		// Mid-turn compaction resets history but preserves turn states for within-turn follow-up
 		resetOpenAICodexHistoryAfterCompaction({
 			sessionId,
 			providerSessionState,
-			compaction: {
-				operationId: "mid-turn-op",
-				phase: "mid_turn",
-				strategy: "memento",
-				trigger: "auto",
-				reason: "context_limit",
-				implementation: "responses",
-			},
+			compaction: compaction("mid_turn"),
 		});
 		let details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(true);
@@ -149,14 +108,7 @@ describe("openai-codex turn-state lifecycle", () => {
 		resetOpenAICodexHistoryAfterCompaction({
 			sessionId,
 			providerSessionState,
-			compaction: {
-				operationId: "pre-turn-op",
-				phase: "pre_turn",
-				strategy: "memento",
-				trigger: "auto",
-				reason: "context_limit",
-				implementation: "responses",
-			},
+			compaction: compaction("pre_turn"),
 		});
 		details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(false);
