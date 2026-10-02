@@ -24,7 +24,9 @@
 - Extended the Codex WebSocket first-event timeout default and generic stream idle/first-event watchdog defaults to 300 seconds ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed Codex SSE request retries to re-serialize payloads per attempt, preserving onPayload hooks and zstd compression compatibility ([Refs #343](https://github.com/Wladefant/veyyon/pull/343)).
 - Fixed Codex stream close retries gating on committed visible content and emitted deltas rather than open empty blocks, emitting balancing end events before replay and classifying premature closes as stream corruption ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Corrected auth gateway video modality types and merged Codex continuation fixtures; provider behavior is unchanged.
 - Preserved Anthropic's shared harness cache breakpoint across PROJECT, SHORTHAND, HANDLES and memory recall suffixes while reserving a marker for the newest message ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1488be016d5d7925e0a7071561af23b98c13ca3b, 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).

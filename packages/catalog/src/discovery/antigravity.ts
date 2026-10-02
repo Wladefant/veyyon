@@ -69,6 +69,7 @@ export interface AntigravityDiscoveryAgentModelSort {
 export interface AntigravityDiscoveryApiResponse {
 	models?: Record<string, AntigravityDiscoveryApiModel>;
 	agentModelSorts?: AntigravityDiscoveryAgentModelSort[];
+	imageGenerationModelIds?: string[];
 }
 /**
  * Antigravity's `fetchAvailableModels` payload, read field by field.
@@ -157,6 +158,11 @@ function readDiscoveryResponse(value: unknown): AntigravityDiscoveryApiResponse 
 		response.agentModelSorts = parsed;
 	}
 
+	const imageModels = toStringArray(fields.imageGenerationModelIds);
+	if (imageModels) {
+		response.imageGenerationModelIds = imageModels.filter(id => id.length > 0);
+	}
+
 	return response;
 }
 /**
@@ -199,9 +205,29 @@ export interface FetchAntigravityDiscoveryModelsOptions {
  * Returns `null` on network/payload/auth failures.
  * Returns `[]` only when the endpoint responds successfully with no usable models.
  */
-export async function fetchAntigravityDiscoveryModels(
+/** Advertised image model and serving endpoint for one Antigravity account. */
+export interface AntigravityImageModel {
+	id: string;
+	endpoint: string;
+}
+
+/** Resolves the first image-generation model advertised by an Antigravity account. */
+export async function fetchAntigravityImageModel(
 	options: FetchAntigravityDiscoveryModelsOptions,
-): Promise<ModelSpec<"google-gemini-cli">[] | null> {
+): Promise<AntigravityImageModel | null> {
+	const discovered = await fetchAntigravityDiscoveryResponse(options);
+	const id = discovered?.payload.imageGenerationModelIds?.find(modelId => modelId.length > 0);
+	return id && discovered ? { id, endpoint: discovered.endpoint } : null;
+}
+
+interface AntigravityDiscoveryResponse {
+	payload: AntigravityDiscoveryApiResponse;
+	endpoint: string;
+}
+
+async function fetchAntigravityDiscoveryResponse(
+	options: FetchAntigravityDiscoveryModelsOptions,
+): Promise<AntigravityDiscoveryResponse | null> {
 	const fetcher = discoveryFetch(options.fetcher);
 	const endpoints = options.endpoint
 		? [trimTrailingSlashes(options.endpoint)]
@@ -239,52 +265,64 @@ export async function fetchAntigravityDiscoveryModels(
 			continue;
 		}
 
-		const models: ModelSpec<"google-gemini-cli">[] = [];
-
-		for (const [modelId, model] of Object.entries(parsed.models ?? {})) {
-			if (ANTIGRAVITY_DISCOVERY_DENYLIST.has(modelId)) {
-				continue;
-			}
-			if (model.isInternal === true) {
-				continue;
-			}
-
-			const supportsImages = model.supportsImages === true;
-			models.push({
-				id: modelId,
-				name: model.displayName || modelId,
-				api: "google-gemini-cli",
-				provider: "google-antigravity",
-				baseUrl: endpoint,
-				reasoning: model.supportsThinking === true,
-				// Google Gemini / Antigravity multimodal input (text, image, video): https://ai.google.dev/gemini-api/docs/multimodal
-				input: supportsImages ? ["text", "image", "video"] : ["text"],
-				// This endpoint publishes no pricing, so the zeros mean "not told", not "free".
-				cost: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-				},
-				pricing: "unknown",
-				// Reported when this endpoint says anything, else the catalog's own numbers for the
-				// proxied model, else the gateway assumption. `maxTokens`/`maxOutputTokens` are absent
-				// on most rows here, and falling straight to 200k described a 1M-window Gemini as a
-				// fifth of its size.
-				contextWindow: gatewayContextWindow(modelId, model.maxTokens),
-				maxTokens: gatewayMaxTokens(modelId, model.maxOutputTokens),
-			});
-		}
-
-		// Collapse effort-tier variants at the source so runtime discovery,
-		// the gemini-cli re-provision, and the catalog generator all see
-		// logical ids only.
-		const collapsed = collapseEffortVariants(models, options.collapseTable ?? ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
-		collapsed.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-		return collapsed;
+		return { payload: parsed, endpoint };
 	}
 
 	return null;
+}
+
+export async function fetchAntigravityDiscoveryModels(
+	options: FetchAntigravityDiscoveryModelsOptions,
+): Promise<ModelSpec<"google-gemini-cli">[] | null> {
+	const discovered = await fetchAntigravityDiscoveryResponse(options);
+	if (!discovered) {
+		return null;
+	}
+
+	const { payload: parsed, endpoint } = discovered;
+	const models: ModelSpec<"google-gemini-cli">[] = [];
+
+	for (const [modelId, model] of Object.entries(parsed.models ?? {})) {
+		if (ANTIGRAVITY_DISCOVERY_DENYLIST.has(modelId)) {
+			continue;
+		}
+		if (model.isInternal === true) {
+			continue;
+		}
+
+		const supportsImages = model.supportsImages === true;
+		models.push({
+			id: modelId,
+			name: model.displayName || modelId,
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: endpoint,
+			reasoning: model.supportsThinking === true,
+			// Google Gemini / Antigravity multimodal input (text, image, video): https://ai.google.dev/gemini-api/docs/multimodal
+			input: supportsImages ? ["text", "image", "video"] : ["text"],
+			// This endpoint publishes no pricing, so the zeros mean "not told", not "free".
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			pricing: "unknown",
+			// Reported when this endpoint says anything, else the catalog's own numbers for the
+			// proxied model, else the gateway assumption. `maxTokens`/`maxOutputTokens` are absent
+			// on most rows here, and falling straight to 200k described a 1M-window Gemini as a
+			// fifth of its size.
+			contextWindow: gatewayContextWindow(modelId, model.maxTokens),
+			maxTokens: gatewayMaxTokens(modelId, model.maxOutputTokens),
+		});
+	}
+
+	// Collapse effort-tier variants at the source so runtime discovery,
+	// the gemini-cli re-provision, and the catalog generator all see
+	// logical ids only.
+	const collapsed = collapseEffortVariants(models, options.collapseTable ?? ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+	collapsed.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+	return collapsed;
 }
 
 function parseAntigravityDiscoveryResponse(value: unknown): AntigravityDiscoveryApiResponse | null {

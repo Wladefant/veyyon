@@ -432,12 +432,15 @@ export class InputController {
 			}
 
 			if (this.ctx.loopModeEnabled) {
-				this.ctx.pauseLoop();
+				// Esc suspends the loop even mid-iteration: abort the live turn,
+				// then drop the captured prompt so the 800ms auto-resubmit never
+				// fires. Loop stays enabled (paused) — the next manual prompt
+				// resumes with a new body.
 				if (this.ctx.session.isStreaming) {
 					this.#abortStreamingTurn();
-				} else {
-					this.ctx.cancelPendingSubmission();
 				}
+				this.ctx.pauseLoop();
+				this.ctx.cancelPendingSubmission();
 				return;
 			}
 			if (this.ctx.focusedAgentId) {
