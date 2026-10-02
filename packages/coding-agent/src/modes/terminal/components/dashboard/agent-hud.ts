@@ -18,6 +18,8 @@
  * stood still.
  */
 
+import { Text } from "@veyyon/tui";
+import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { visibleWidth } from "@veyyon/utils/width";
 import { formatTaskId } from "../../../../task/task-id";
 import { theme } from "../../../../theme/theme";
@@ -70,9 +72,7 @@ function cell(text: string, width: number): string {
  * reason.
  */
 export function renderAgentHudLines(sessions: readonly ObservableSession[], options: AgentHudOptions): string[] {
-	const running = sessions.filter(
-		session => session.kind === "spawn" && session.status === "active" && session.detached === true,
-	);
+	const running = runningHudSessions(sessions);
 	if (running.length === 0) return [];
 
 	const dot = theme.styledSymbol("status.done", "accent");
@@ -145,4 +145,69 @@ export function renderAgentHudLines(sessions: readonly ObservableSession[], opti
 	const lines = [`${railCell} ${theme.bold(theme.fg("accent", cell("Agents", content)))}`];
 	for (const row of rows) lines.push(`${railCell} ${row}`.trimEnd());
 	return ["", ...lines];
+}
+
+/**
+ * The agents the block lists: detached spawns that are still running. One
+ * predicate for the render and the click map, so a click lands on the agent
+ * whose row was drawn.
+ */
+function runningHudSessions(sessions: readonly ObservableSession[]): ObservableSession[] {
+	return sessions.filter(
+		session => session.kind === "spawn" && session.status === "active" && session.detached === true,
+	);
+}
+
+/**
+ * The agent each line of {@link renderAgentHudLines} names, by line index.
+ *
+ * The block is a blank line, the header, one row per listed agent and an
+ * optional overflow count, so an agent row sits at `2 + i`. The blank, the
+ * header and the count name no agent. `lines` is the rendered block, passed so
+ * an empty block (nothing running, or too narrow to draw) maps to nothing.
+ */
+export function agentHudRowAgentIds(
+	sessions: readonly ObservableSession[],
+	lines: readonly string[],
+): (string | undefined)[] {
+	if (lines.length === 0) return [];
+	const ids: (string | undefined)[] = [undefined, undefined];
+	for (const session of runningHudSessions(sessions).slice(0, AGENT_HUD_VISIBLE_LIMIT)) ids.push(session.id);
+	while (ids.length < lines.length) ids.push(undefined);
+	return ids;
+}
+
+/**
+ * The anchored Agents block as a click target: a click on an agent's row
+ * focuses that agent, the same as picking it in `/agents`.
+ *
+ * Clicks arrive only while the engine holds the mouse, which is scroll
+ * isolation (`tui.scrollIsolation`); with the terminal keeping the mouse the
+ * block stays plain text and drag-select works on it. There is no hover paint:
+ * the engine tracks press and release only, so no motion report ever arrives.
+ */
+export class AgentHudBlock extends Text implements MouseRoutable {
+	readonly #rowAgentIds: readonly (string | undefined)[];
+	readonly #onFocusAgent: (id: string) => void;
+
+	constructor(
+		lines: readonly string[],
+		rowAgentIds: readonly (string | undefined)[],
+		paddingX: number,
+		onFocusAgent: (id: string) => void,
+	) {
+		super(lines.join("\n"), paddingX, 0);
+		this.#rowAgentIds = rowAgentIds;
+		this.#onFocusAgent = onFocusAgent;
+	}
+
+	wantsPointer(): boolean {
+		return this.#rowAgentIds.some(id => id !== undefined);
+	}
+
+	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
+		if (!event.leftClick) return;
+		const id = this.#rowAgentIds[line];
+		if (id !== undefined) this.#onFocusAgent(id);
+	}
 }

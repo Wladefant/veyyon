@@ -60,7 +60,7 @@ import { Container } from "./container";
 import { HardwareCursorTracker, type HardwareCursorUpdate, relativeMoveY } from "./cursor";
 import type { AssembledWindow, FrameTransition, PrefixReconciliation, RenderIntent, WindowPlan } from "./frame-plan";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./image-budget";
-import { footerWantsPointer, pinnedFooterScreenBounds, routeFooterMouse } from "./mouse-routing";
+import { footerWantsPointer, pinnedFooterScreenBounds, routeContentMouse, routeFooterMouse } from "./mouse-routing";
 import {
 	canAnimateOverlayExit,
 	drawScrollTrack,
@@ -2332,6 +2332,24 @@ export class TUI extends Container {
 						// Chat idiom: engaging the composer returns to the present.
 						this.scrollToLiveTail();
 					}
+				}
+				// A click above the footer reaches the root child drawn there when that
+				// child declares click targets. Only while following the live tail: a
+				// frozen scroll view draws scroll-space rows, not composed-frame rows.
+				if (
+					event.leftClick &&
+					this.#virtualScrollTop === null &&
+					event.row >= 0 &&
+					event.row < footerTop &&
+					event.row <= contentBottom &&
+					routeContentMouse(
+						this.#frameSegments,
+						this.#pinnedFooterChildCount,
+						event,
+						event.row + this.#windowTopRow,
+					)
+				) {
+					this.requestRender();
 				}
 				return;
 			}
