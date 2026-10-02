@@ -27,6 +27,7 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Kept the mnemopi embedding subprocess referenced while requests are in flight so headless print mode cannot exit prematurely ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed authoritative providers (e.g. `openai-codex`) refreshing expired OAuth credentials when a fresh cache exists, preventing unsupported bundled models from remaining selectable ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed image generation auto-detection to fall through when an official OpenAI Codex API key lacks ChatGPT subscription account claims (oh-my-pi d124cf286e08829c8db41a9a11a560468ff9f113, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Codex web search now accepts valid email-only OAuth credentials without requiring or fabricating a ChatGPT-Account-Id header (oh-my-pi e3198485aa15c6178675f543d7f9e0b7f7c2c623, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
