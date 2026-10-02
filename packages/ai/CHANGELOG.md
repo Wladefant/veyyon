@@ -14,10 +14,12 @@
 - Moved the `reasoning-budget` re-export below its import block in `stream.ts` and dropped a stray blank line before `applyCacheControlToLastTextBlock` so both files match the formatter and import-order rules; no behavior change.
 - `aws-credentials.ts` persists a refreshed SSO cache token through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the write stays atomic and the file stays mode `0600`.
 - The Antigravity usage label normalizer collapses whitespace through the shared `collapseWhitespace` helper; no behavior change.
+- Extended the Codex WebSocket first-event timeout default and generic stream idle/first-event watchdog defaults to 300 seconds ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 
 - Stored replay-sanitized Codex response items as the WebSocket append baseline, disabling append state when responses lack replayable assistant output ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Escaped reserved Harmony control tokens in client text and native replay for Harmony-dialect models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses Lite requests to force tool_choice to auto, support PI_CODEX_RESPONSES_LITE overrides, and force reasoning.context to all_turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

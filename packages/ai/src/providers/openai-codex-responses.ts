@@ -84,6 +84,7 @@ import {
 	openStallLadderBudget,
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
@@ -140,6 +141,7 @@ import {
 	createSequentialCutoffSummaryState,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
+	escapeReplayedClientText,
 	finalizeCustomToolCallInputDone,
 	finalizeMessageText,
 	finalizePendingResponsesToolCalls,
@@ -272,7 +274,7 @@ const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_IDLE_
  * SSE. Generous default so legitimately slow first-token providers still get
  * a chance on the WS transport before falling through.
  */
-const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 60_000);
+const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.VEYYON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 300_000);
 const CODEX_WEBSOCKET_RETRY_BUDGET = Number($env.VEYYON_CODEX_WEBSOCKET_RETRY_BUDGET || CODEX_MAX_RETRIES);
 const CODEX_WEBSOCKET_RETRY_DELAY_MS = Number($env.VEYYON_CODEX_WEBSOCKET_RETRY_DELAY_MS || CODEX_RETRY_DELAY_MS);
 // The codes Codex sends for a failure a replay can survive. A code is this provider's own vocabulary;
@@ -4258,7 +4260,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						customCallIds.add(maybe.call_id);
 					}
 				}
-				for (let hi = 0; hi < historyItems.length; hi++) messages.push(historyItems[hi]!);
+				const replayItems = isHarmonyDialectModel(model) ? escapeReplayedClientText(historyItems) : historyItems;
+				for (let hi = 0; hi < replayItems.length; hi++) messages.push(replayItems[hi]!);
 				msgIndex += 1;
 				continue;
 			}
@@ -4360,14 +4363,23 @@ function normalizeInputMessageContent(
 	model: Model<"openai-codex-responses">,
 	content: string | Array<TextContent | ImageContent | VideoContent>,
 ): ResponseInputContent[] {
+	// gpt-5.x codex rejects reserved Harmony control-token spellings in input
+	// data; escape the transport copy of untrusted user text so ordinary docs or
+	// grep results cannot poison the session (#6913). History is left untouched.
+	const escapeControlTokens = isHarmonyDialectModel(model);
 	if (typeof content === "string") {
 		if (!content || content.trim() === "") return [];
-		return [{ type: "input_text", text: content.toWellFormed() }];
+		const text = content.toWellFormed();
+		return [{ type: "input_text", text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text }];
 	}
 
 	return (
-		convertResponsesInputContent(content, model.input.includes("image"), model.compat.supportsImageDetailOriginal) ??
-		[]
+		convertResponsesInputContent(
+			content,
+			model.input.includes("image"),
+			model.compat.supportsImageDetailOriginal,
+			escapeControlTokens,
+		) ?? []
 	);
 }
 
