@@ -372,6 +372,7 @@ export class MnemopiSessionState {
 		const byId = new Map<string, number>();
 		const byContent = new Map<string, number>();
 		const failed: Array<{ bank: string; error: unknown }> = [];
+		let successfulTargets = 0;
 		const sharedFallbackQuery = deriveSharedRecallFallbackQuery(
 			query,
 			this.#scoped.retain.bank,
@@ -380,40 +381,38 @@ export class MnemopiSessionState {
 		for (const target of this.#scoped.recall) {
 			const queries =
 				target.bank === this.#scoped.global?.bank && sharedFallbackQuery ? [query, sharedFallbackQuery] : [query];
+			let targetSucceeded = false;
 			try {
 				for (const recallQuery of queries) {
 					const results = await target.memory.recallEnhanced(recallQuery, this.config.recallLimit, {
 						includeFacts: true,
 						channelId: target.bank,
 					});
+					targetSucceeded = true;
 					for (const result of results) {
 						mergeRecallResult(merged, byId, byContent, result);
 					}
 				}
 			} catch (error) {
-				// A bank that throws contributes nothing to the merge, so its memories
-				// vanish from the result and the caller cannot tell a broken bank from
-				// a bank with nothing to say. That is a recall loss, and it used to be
-				// reported at debug level AND gated behind `config.debug`, so in a
-				// normal session it was reported nowhere at all (Law 10).
-				//
-				// Carrying on across the remaining banks is still right: one unreadable
-				// bank must not cost the user the others. The loss just has to be
-				// visible.
+				// Preserve results from completed queries, but report the failed
+				// query even when another query in the same bank succeeded.
 				failed.push({ bank: target.bank, error });
-				logger.warn("Memory recall skipped a bank that failed to read", {
+				logger.warn("Memory recall query failed in a scoped bank", {
 					bank: target.bank,
 					error: String(error),
-					impact: "Memories in this bank were left out of the results for this query.",
+					impact: targetSucceeded
+						? "Completed query results were retained; fallback results are unavailable."
+						: "Memories in this bank were left out of the results for this query.",
 					fix: "Check the bank's database file is readable and not corrupt, or run /memory to inspect it.",
 				});
 			}
+			if (targetSucceeded) successfulTargets++;
 		}
 
 		// Every bank failing is not an empty result, it is a broken recall. Returning
 		// `[]` here makes the memory tools answer "No relevant memories found", which
 		// tells the model the search ran and came back clean. It did not run.
-		if (failed.length > 0 && failed.length === this.#scoped.recall.length) {
+		if (failed.length > 0 && successfulTargets === 0) {
 			const banks = failed.map(f => f.bank).join(", ");
 			throw new Error(
 				`Memory recall failed: none of the configured banks could be read (${banks}). ` +

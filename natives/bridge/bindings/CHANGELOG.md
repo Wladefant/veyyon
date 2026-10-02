@@ -9,6 +9,8 @@
 ### Fixed
 
 - On Windows, embedded utilities accept MSYS and WSL drive aliases, preserving Unicode path components in file, script and in-place-edit operands ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- On Windows, embedded `fd` and `find` print and match forward-slash paths while filesystem actions still use the original paths ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 - Fixed the edit tool's block-range detection across comment-only lines and trailing comments in indentation-based and end-delimited languages ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - On Windows, the embedded `tail` builtin no longer exits the host process when its output pipe is closed (a timed-out or cancelled `cmd | tail -N` pipeline), which silently killed Veyyon and every lane ([#73](https://github.com/Wladefant/veyyon/issues/73)). A workspace `clippy.toml` now rejects `std::process::exit`, `std::process::abort` and their `libc` equivalents in every crate, including the out-of-workspace shell crates `brush-core` and `brush-builtins` through `check:rs` and `lint:rs`, so no builtin can reintroduce it.

@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Fixed
 
+- Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Fixed file search silently clamping `limit` above 200 and then advising a `Use limit=` retry it would clamp straight back: a clamped request now says so, the suggestion is capped at 200, and at the cap the notice reports the count alone ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4997d101c2674e484595bf2b3d0dfa9e3d71c2db).
@@ -35,6 +41,8 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Preserved bearer token fallback when discovering OpenAI Codex models without stored OAuth accounts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed timed-out or interrupted glob searches keeping native filesystem workers alive and blocking subsequent agent turns (oh-my-pi 510f9e05c7397c69f373f01d4d4f098e917aa2e3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed memory recall blocks invalidating the prompt cache across refreshes by stripping volatile current time timestamps from recall preambles ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
 - Preserved plan mode state, model state, and active tool set when exiting plan mode encounters a restoration failure, preventing corrupted session state on failed plan exits (oh-my-pi 8a8ff498b3dd2f9cfb751dc44d73718e3cfd033c, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved live macOS update backups held by active sessions and tolerated EPERM/EACCES during project directory canonicalization ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
