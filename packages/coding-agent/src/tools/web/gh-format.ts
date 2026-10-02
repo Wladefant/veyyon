@@ -156,13 +156,18 @@ const HOST_REPO_PATTERN = new RegExp(`^([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])
  * there. A named host must pass {@link assertAllowedGhHost}. Callers pass only the parsed value on.
  */
 export function parseRepoRef(repo: string): GhRepoRef {
-	if (REPO_SLUG_PATTERN.test(repo)) return { slug: repo };
 	const match = HOST_REPO_PATTERN.exec(repo);
-	if (!match) {
+	const slug = match ? match[2] : repo;
+	if (!match && !REPO_SLUG_PATTERN.test(repo)) {
 		throw new ToolError(`invalid repository ${JSON.stringify(repo)}: expected OWNER/REPO or HOST/OWNER/REPO`);
 	}
+	// `.` and `..` pass the charset but are path traversal once the slug lands in `/repos/<slug>/...`.
+	if (slug.split("/").some(part => part === "." || part === "..")) {
+		throw new ToolError(`invalid repository ${JSON.stringify(repo)}: owner and repo must not be "." or ".."`);
+	}
+	if (!match) return { slug };
 	assertAllowedGhHost(match[1]);
-	return { host: match[1], slug: match[2] };
+	return { host: match[1], slug };
 }
 
 /** Join a known host and `OWNER/REPO` into the form `--repo` accepts. */

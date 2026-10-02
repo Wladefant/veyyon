@@ -173,3 +173,24 @@ describe("parseRepoRef accepts only OWNER/REPO or HOST/OWNER/REPO", () => {
 		expect(args).toEqual(["--repo", "github.com/o/r"]);
 	});
 });
+
+describe("parseRepoRef refuses dot segments", () => {
+	it("rejects . and .. as owner or repo, with or without a host, so /repos/<slug> cannot traverse", () => {
+		for (const repo of [
+			"../..",
+			"./.",
+			"o/..",
+			"../r",
+			"./r",
+			"o/.",
+			"github.com/../..",
+			"github.com/o/..",
+			"github.com/./r",
+		]) {
+			expect(() => parseRepoRef(repo)).toThrow(/must not be/);
+			expect(() => appendRepoFlag([], repo)).toThrow(/must not be/);
+		}
+		expect(parseRepoRef("o/.github")).toEqual({ slug: "o/.github" });
+		expect(parseRepoRef("o/r..x")).toEqual({ slug: "o/r..x" });
+	});
+});
