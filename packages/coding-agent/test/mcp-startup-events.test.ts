@@ -30,7 +30,9 @@ describe("mcp/startup-events — connection-status cross-module contract", () =>
 	});
 
 	it("accepts well-formed payloads and rejects malformed ones", () => {
-		expect(isMcpConnectionStatusEvent({ type: "connecting", serverNames: ["a"] })).toBe(true);
+		expect(isMcpConnectionStatusEvent({ type: "connecting", serverNames: ["a", "b"] })).toBe(true);
+		expect(isMcpConnectionStatusEvent({ type: "connecting", serverNames: [] })).toBe(true);
+		expect(isMcpConnectionStatusEvent({ type: "reconnecting", serverName: "a" })).toBe(true);
 		expect(isMcpConnectionStatusEvent({ type: "connected", serverName: "a" })).toBe(true);
 		expect(isMcpConnectionStatusEvent({ type: "failed", serverName: "a", error: "boom" })).toBe(true);
 		// `foreign` marks servers borrowed from another tool's config; the boot
@@ -41,10 +43,17 @@ describe("mcp/startup-events — connection-status cross-module contract", () =>
 		);
 
 		expect(isMcpConnectionStatusEvent(null)).toBe(false);
+		expect(isMcpConnectionStatusEvent(undefined)).toBe(false);
+		expect(isMcpConnectionStatusEvent("mcp:connection-status")).toBe(false);
 		expect(isMcpConnectionStatusEvent("connecting")).toBe(false);
+		expect(isMcpConnectionStatusEvent({})).toBe(false);
+		expect(isMcpConnectionStatusEvent({ type: "connecting", serverNames: "alpha" })).toBe(false);
 		expect(isMcpConnectionStatusEvent({ type: "connecting", serverNames: "a" })).toBe(false);
 		expect(isMcpConnectionStatusEvent({ type: "connecting", serverNames: [1] })).toBe(false);
+		expect(isMcpConnectionStatusEvent({ type: "connecting", serverNames: ["ok", 3] })).toBe(false);
+		expect(isMcpConnectionStatusEvent({ type: "reconnecting", serverName: 1 })).toBe(false);
 		expect(isMcpConnectionStatusEvent({ type: "connected" })).toBe(false);
+		expect(isMcpConnectionStatusEvent({ type: "connected", serverName: 1 })).toBe(false);
 		expect(isMcpConnectionStatusEvent({ type: "failed", serverName: "a" })).toBe(false);
 		expect(isMcpConnectionStatusEvent({ type: "unknown", serverName: "a" })).toBe(false);
 	});

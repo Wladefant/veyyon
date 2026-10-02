@@ -143,6 +143,48 @@ describe("InteractiveMode MCP connection status", () => {
 		expect(text).not.toContain("missing command");
 	});
 
+	it("retries one server without erasing other startup outcomes", () => {
+		const emit = (event: McpConnectionStatusEvent) => eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, event);
+
+		emit({
+			type: "connecting",
+			serverNames: ["alpha", "retry", "broken"],
+		});
+		expect(locationText(mode)).toContain("mcp 0/3");
+
+		emit({
+			type: "connected",
+			serverName: "alpha",
+		});
+		expect(locationText(mode)).toContain("mcp 1/3");
+
+		emit({
+			type: "failed",
+			serverName: "broken",
+			error: "bad config",
+		});
+		expect(locationText(mode)).toContain("mcp 1/3");
+
+		emit({
+			type: "failed",
+			serverName: "retry",
+			error: "timed out",
+		});
+		expect(locationText(mode)).toContain(`mcp ${theme.status.error}2 · /mcp list`);
+
+		emit({
+			type: "reconnecting",
+			serverName: "retry",
+		});
+		expect(locationText(mode)).toContain("mcp 1/3");
+
+		emit({
+			type: "connected",
+			serverName: "retry",
+		});
+		expect(locationText(mode)).toContain(`mcp ${theme.status.error}1 · /mcp list`);
+	});
+
 	it("rejects a malformed mcp:connection-status payload via the guard instead of letting it throw", () => {
 		const showStatusSpy = vi.spyOn(mode, "showStatus").mockImplementation(() => {});
 		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
