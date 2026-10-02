@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added Vercel AI Gateway app attribution headers (`http-referer` and `x-title`) on Anthropic and OpenAI-compatible routes while preserving caller-supplied attribution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Exposed catalog metadata fields (`context_length`, `max_output_tokens`, `input_modalities`, and `supports_tools`) in auth gateway `GET /v1/models` responses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
 
 ### Changed
@@ -12,10 +14,14 @@
 - Moved the `reasoning-budget` re-export below its import block in `stream.ts` and dropped a stray blank line before `applyCacheControlToLastTextBlock` so both files match the formatter and import-order rules; no behavior change.
 - `aws-credentials.ts` persists a refreshed SSO cache token through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the write stays atomic and the file stays mode `0600`.
 - The Antigravity usage label normalizer collapses whitespace through the shared `collapseWhitespace` helper; no behavior change.
+- Extended the Codex WebSocket first-event timeout default and generic stream idle/first-event watchdog defaults to 300 seconds ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 
 - Preserved workspace-scoped credential identity and usage report partitioning for OpenAI Codex ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0eeb6c38149905a7c1d9a8ae4bd98cff882721b8).
+- Allowed OpenAI Codex OAuth login without an account ID when an email identity is present ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 676bdd7bbc2b1657aa69b5156fe939b8e635bba7).
+- Escaped reserved Harmony control tokens in client text and native replay for Harmony-dialect models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Codex Responses Lite requests to force tool_choice to auto, support PI_CODEX_RESPONSES_LITE overrides, and force reasoning.context to all_turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Tracked projected thinking blocks by source index in the leaked-thinking stream wrapper so out-of-order thinking_end events update the correct signature after intervening blocks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

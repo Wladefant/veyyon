@@ -38,12 +38,62 @@ describe("auth-gateway model list", () => {
 					object: "model",
 					owned_by: "anthropic",
 					api: mockAnthropic.model.api,
+					display_name: "shared-model",
+					context_length: 200_000,
+					max_output_tokens: 32_768,
+					input_modalities: ["text"],
 				},
 				{
 					id: "devin/shared-model",
 					object: "model",
 					owned_by: "devin",
 					api: mockDevin1.model.api,
+					display_name: "shared-model",
+					context_length: 200_000,
+					max_output_tokens: 32_768,
+					input_modalities: ["text"],
+				},
+			]);
+		} finally {
+			await handle.close();
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("advertises catalog metadata and explicit false tool support", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gw-models-list-meta-"));
+		const storage = await AuthStorage.create(path.join(dir, "auth.db"));
+		const mockNoTools = Object.assign(
+			createMockModel({ provider: "custom", id: "no-tools-model", contextWindow: 128_000, maxTokens: 4096 }).model,
+			{ supportsTools: false },
+		);
+
+		const handle = startAuthGateway({
+			bind: "127.0.0.1:0",
+			bearerTokens: ["t"],
+			storage,
+			resolveModel: () => mockNoTools,
+			listModels: () => [mockNoTools],
+			version: "test",
+		});
+
+		try {
+			const res = await fetch(`${handle.url}/v1/models`, {
+				headers: { Authorization: "Bearer t" },
+			});
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { object: string; data: Record<string, unknown>[] };
+			expect(body.data).toEqual([
+				{
+					id: "custom/no-tools-model",
+					object: "model",
+					owned_by: "custom",
+					api: mockNoTools.api,
+					display_name: "no-tools-model",
+					context_length: 128_000,
+					max_output_tokens: 4096,
+					input_modalities: ["text"],
+					supports_tools: false,
 				},
 			]);
 		} finally {

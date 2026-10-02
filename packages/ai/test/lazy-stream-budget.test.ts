@@ -38,8 +38,8 @@ import {
 import { $env } from "@veyyon/utils/env";
 
 /** The generic defaults in `idle-iterator.ts` — what an unlimited provider inherits. */
-const GENERIC_FIRST_EVENT_MS = 100_000;
-const GENERIC_IDLE_MS = 120_000;
+const GENERIC_FIRST_EVENT_MS = 300_000;
+const GENERIC_IDLE_MS = 300_000;
 
 const ENV_KEYS = [
 	"VEYYON_STREAM_IDLE_TIMEOUT_MS",
@@ -191,7 +191,7 @@ describe("lazy provider stream budget", () => {
 			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
 
 			expect(budget.firstItemTimeoutMs).toBe(300_000);
-			expect(budget.firstItemTimeoutMs!).toBeGreaterThan(GENERIC_FIRST_EVENT_MS);
+			expect(budget.firstItemTimeoutMs!).toBeGreaterThanOrEqual(GENERIC_FIRST_EVENT_MS);
 		});
 
 		/**

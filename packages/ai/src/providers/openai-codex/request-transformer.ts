@@ -146,7 +146,11 @@ export function resolveCodexResponsesLite(model: CodexReasoningContextModel, req
 	if (!acceptsAllTurnsReasoningContext(model)) {
 		return false;
 	}
-	return requested ?? model.useResponsesLite === true;
+	if (requested !== undefined) return requested;
+	const env = (process.env.PI_CODEX_RESPONSES_LITE ?? process.env.VEYYON_CODEX_RESPONSES_LITE)?.trim().toLowerCase();
+	if (env === "1" || env === "true") return true;
+	if (env === "0" || env === "false") return false;
+	return model.useResponsesLite === true;
 }
 
 /**
@@ -322,6 +326,7 @@ function stripImageDetails(input: unknown[]): void {
 export interface CodexLiteShapedBody {
 	instructions?: unknown;
 	tools?: unknown;
+	tool_choice?: unknown;
 	input?: unknown;
 	parallel_tool_calls?: unknown;
 	reasoning?: { context?: string } & Record<string, unknown>;
@@ -363,6 +368,7 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 		});
 	}
 	body.input = prefix.concat(input);
+	body.tool_choice = "auto";
 	delete body.instructions;
 	delete body.tools;
 }
@@ -461,11 +467,15 @@ export async function transformRequestBody(
 		// universally supported and always pass through. Responses Lite forces
 		// `all_turns` because its server contract requires it, and it is only
 		// ever on for a model that accepts the value.
-		const context = responsesLite ? "all_turns" : (options.reasoningContext ?? "all_turns");
-		if (context === "all_turns" && !acceptsAllTurnsReasoningContext(model)) {
-			delete body.reasoning.context;
+		if (responsesLite) {
+			body.reasoning.context = "all_turns";
 		} else {
-			body.reasoning.context = context;
+			const context = options.reasoningContext ?? "all_turns";
+			if (context === "all_turns" && !acceptsAllTurnsReasoningContext(model)) {
+				delete body.reasoning.context;
+			} else {
+				body.reasoning.context = context;
+			}
 		}
 	} else {
 		delete body.reasoning;
