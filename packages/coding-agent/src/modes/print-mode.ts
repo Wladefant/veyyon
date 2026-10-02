@@ -7,13 +7,12 @@
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ImageContent } from "@veyyon/ai";
-import { logger, sanitizeText } from "@veyyon/utils";
+import { logger, postmortem, sanitizeText } from "@veyyon/utils";
 import { EXIT_FAILURE, EXIT_INTERRUPTED } from "../cli/exit-codes";
 import { awaitStdoutDrain } from "../cli/stdout-drain";
 import { transformProviderPayload } from "../provider-boundary";
 import { SECRET_SPEND_NOTICE_SOURCE } from "../secrets/notices";
-import type { AgentSession } from "../session/agent-session";
-import type { AgentSessionEvent } from "../session/agent-session-types";
+import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
 import { isSilentAbort } from "../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../slash-commands/types";
@@ -125,6 +124,17 @@ export type PrintModeSession =
  * Sends prompts to the agent and outputs the result.
  */
 export async function runPrintMode(session: PrintModeSession, options: PrintModeOptions): Promise<void> {
+	const cancelSignalTeardown = postmortem.register("print-mode-session", reason =>
+		session.dispose({ reason, mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS }),
+	);
+	try {
+		await runPrintModeCore(session, options);
+	} finally {
+		cancelSignalTeardown();
+	}
+}
+
+async function runPrintModeCore(session: PrintModeSession, options: PrintModeOptions): Promise<void> {
 	const { mode, messages = [], initialMessage, initialImages, printThoughts, commandRuntime } = options;
 
 	// Every byte `--mode json` writes to stdout goes through here, and there is

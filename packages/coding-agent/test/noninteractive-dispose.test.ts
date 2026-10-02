@@ -1,13 +1,15 @@
 /**
- * Contract: the print-mode assistant-error/aborted exit path MUST run the
- * awaited `session.dispose()` (which contains the bounded browser reaper
- * `releaseTabsForOwner`) before terminating the process. It previously called
- * `process.exit(1)` ahead of the `dispose()` at the end of `runPrintMode`, so
- * an owned Chromium survived the exit.
+ * Contract: non-interactive shutdown MUST await `session.dispose()` before the
+ * process exits. This releases owned resources and lets an interrupted agent
+ * finalize its partial assistant message into the session journal.
  */
+import * as path from "node:path";
 import { describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
+import { TempDir } from "@veyyon/utils";
 import { type PrintModeSession, runPrintMode } from "../src/modes/print-mode";
+import type { AgentSession } from "../src/session/agent-session";
+import * as telemetryExport from "../src/telemetry-export";
 
 /** Stand-in for `process.exit`: it terminates, so nothing after it should run. */
 class ProcessExit extends Error {
@@ -16,7 +18,7 @@ class ProcessExit extends Error {
 	}
 }
 
-describe("print-mode error exit disposes the session before exit", () => {
+describe("print mode disposes the session before exit", () => {
 	it("disposes on the assistant-error path before process.exit(1)", async () => {
 		const order: string[] = [];
 		const errorMsg: AssistantMessage = {
@@ -71,4 +73,24 @@ describe("print-mode error exit disposes the session before exit", () => {
 
 		expect(order).toEqual(["dispose", "exit"]);
 	});
+
+	it(
+		"disposes an active print session before SIGTERM exits",
+		async () => {
+			using tempDir = TempDir.createSync("@omp-print-signal-");
+			const marker = tempDir.join("disposed");
+			const fixture = path.join(import.meta.dir, "fixtures", "print-mode-signal.js");
+			const child = Bun.spawn([process.execPath, fixture, marker], {
+				stdio: ["ignore", "ignore", "ignore"],
+			});
+			const exitCode = await child.exited;
+			const markerFile = Bun.file(marker);
+
+			if (!(await markerFile.exists())) {
+				throw new Error(`Print session was not disposed before signal exit ${exitCode}`);
+			}
+			expect(await markerFile.text()).toBe("sigterm");
+		},
+		15_000,
+	);
 });
