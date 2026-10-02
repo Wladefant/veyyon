@@ -12,7 +12,7 @@ const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
 import { Database } from "bun:sqlite";
 import * as path from "node:path";
 import { discoverAuthStorage } from "@veyyon/ai/auth-broker/discover";
-import type { OAuthAccess } from "@veyyon/ai/auth-storage";
+import type { AuthStorage, OAuthAccess } from "@veyyon/ai/auth-storage";
 import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 import { getGitLabDuoModels } from "@veyyon/ai/providers/gitlab-duo";
 import { $env, getSharedAuthDir } from "@veyyon/utils";
@@ -604,10 +604,12 @@ async function fetchAntigravityModels(): Promise<ModelSpec<"google-gemini-cli">[
  * returns [] (non-authoritative), so a partial per-account snapshot never
  * replaces the previous bundle's model set.
  */
-async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-responses">[]> {
+export async function fetchCodexDiscoveryModels(
+	authStorageOverride?: AuthStorage,
+): Promise<ModelSpec<"openai-codex-responses">[]> {
 	const accounts: OpenAICodexAccount[] = [];
 	try {
-		const authStorage = await discoverAuthStorage();
+		const authStorage = authStorageOverride ?? (await discoverAuthStorage());
 		try {
 			const accesses = await authStorage.getOAuthAccesses("openai-codex");
 			for (const access of accesses) {
@@ -618,7 +620,9 @@ async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-resp
 				accounts.push({ accessToken: access.accessToken, accountId: access.accountId });
 			}
 		} finally {
-			authStorage.close();
+			if (!authStorageOverride) {
+				authStorage.close();
+			}
 		}
 	} catch (error) {
 		console.warn(
@@ -908,5 +912,6 @@ function canonicalizeModelCompat(model: ModelSpec<Api>): void {
 	}
 }
 
-// Run the generator
-generateModels().catch(console.error);
+if (import.meta.main) {
+	generateModels().catch(console.error);
+}
