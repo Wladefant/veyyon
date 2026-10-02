@@ -1423,7 +1423,7 @@ export function repairOrphanResponsesToolCalls(input: ResponseInput): ResponseIn
 	return repaired;
 }
 
-type ResponsesBatchItemKind = "call" | "output" | "assistant-message" | "other";
+type ResponsesBatchItemKind = "call" | "output" | "message" | "other";
 
 /** Classify a Responses input item for tool-call/output batch normalization. */
 function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
@@ -1431,7 +1431,7 @@ function classifyResponsesBatchItem(item: object): ResponsesBatchItemKind {
 	if (type === "function_call" || type === "custom_tool_call") return "call";
 	if (type === "function_call_output" || type === "custom_tool_call_output") return "output";
 	const role = "role" in item ? item.role : undefined;
-	if (type === "message" && role === "assistant") return "assistant-message";
+	if (type === "message" && (role === "assistant" || role === "user")) return "message";
 	return "other";
 }
 
@@ -1466,7 +1466,7 @@ export function hoistInterleavedResponsesToolBatchMessages<T extends object>(ite
 			const kind = classifyResponsesBatchItem(items[start - 1]);
 			if (kind === "call") {
 				sawCall = true;
-			} else if (kind === "assistant-message") {
+			} else if (kind === "message") {
 				messageIndexes.push(start - 1);
 			} else {
 				break;
@@ -1789,9 +1789,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		msgIndex++;
 	}
 
-	const hoisted = hoistInterleavedResponsesToolBatchMessages(messages);
-	const withRepairedOutputs = options.repairOrphanOutputs ? repairOrphanResponsesToolOutputs(hoisted) : hoisted;
-	return repairOrphanResponsesToolCalls(withRepairedOutputs);
+	// Repair orphan outputs/calls first: both can inject a message
+	// (an orphan result note, a computer call interrupted note) in place
+	// of, or beside, a tool item — wedging it between another call's
+	// function_call and function_call_output. Hoist runs last so it relocates
+	// any wedged message — model-streamed or repair-injected — out of the batch,
+	// preserving the Responses call→output pairing (#11473, extends #8789).
+	const withRepairedOutputs = options.repairOrphanOutputs ? repairOrphanResponsesToolOutputs(messages) : messages;
+	const withRepairedCalls = repairOrphanResponsesToolCalls(withRepairedOutputs);
+	return hoistInterleavedResponsesToolBatchMessages(withRepairedCalls);
 }
 
 type ResponsesReplayAssistantMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };

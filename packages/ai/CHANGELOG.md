@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Tracked projected thinking blocks by source index in the leaked-thinking stream wrapper so out-of-order thinking_end events update the correct signature after intervening blocks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Detected premature stream closure before block finalization on OpenAI completions streams, honored the `[DONE]` sentinel as clean completion when finish reason is omitted, and surfaced flat in-band stream error envelopes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Anthropic requests with thinking enabled failing on models whose output ceiling cannot fit the thinking budget by shrinking the budget below the ceiling and disabling thinking when its minimum cannot fit ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
