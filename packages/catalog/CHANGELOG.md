@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed Codex Daybreak aliases (e.g. `gpt-daybreak-blue-latest`) to classify under GPT-5.6 for wire capabilities without overwriting their reported context window in static catalog generation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed authenticated OpenAI Codex discovery dropping account-listed ChatGPT-only models such as GPT-5.3 Codex Spark when they are unavailable through the public API ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `xai/grok-4.7` shipping without its effort ladder: it is on the effort-capable Grok allowlist, so the bundled row now bakes the declared low/medium/high/xhigh tiers.
 - Fixed LiteLLM discovery leaking a colliding bundled model's provider-specific transport onto custom endpoints: a discovered alias matching a bundled model no longer inherits that model's wire-id transform or tool-schema flavor.
