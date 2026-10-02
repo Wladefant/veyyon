@@ -37,6 +37,10 @@ describe("auth-gateway dispatch core", () => {
 
 		const keyAccount = resolveGatewayAccount(storageWithoutOAuth, "openai", "sess", "raw-key");
 		expect(keyAccount.startsWith("key:")).toBe(true);
+		// Different credentials cannot share billing identity; sessions must not split it.
+		expect(resolveGatewayAccount(storageWithoutOAuth, "openai", "other-session", "raw-key")).toBe(keyAccount);
+		expect(resolveGatewayAccount(storageWithoutOAuth, "openai", "sess", "different-key")).not.toBe(keyAccount);
+		expect(keyAccount).not.toContain("raw-key");
 	});
 
 	it("returns 401 classification when no api key is available", async () => {
