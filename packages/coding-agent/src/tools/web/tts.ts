@@ -7,6 +7,7 @@ import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ApiKey } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { USER_AGENT } from "@veyyon/utils";
 import { lazy } from "@veyyon/utils/abortable";
 import { type } from "arktype";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
@@ -22,7 +23,7 @@ import { ttsClient } from "../../speech/tts/tts-client";
 import { encodeWav } from "../../speech/tts/wav";
 import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { formatPathRelativeToCwd, resolveToCwd } from "../core/path-utils";
-import { missingXAICredentialsMessage, resolveXAIHttpCredentials, veyyonXAIUserAgent } from "./xai-http";
+import { missingXAICredentialsMessage, resolveXAIHttpCredentials } from "./xai-http";
 
 // Hermes tts_tool.py L167-171
 const DEFAULT_XAI_VOICE_ID = "eve" as const;
@@ -178,7 +179,7 @@ async function synthesizeXai(
 					headers: {
 						Authorization: `Bearer ${key}`,
 						"Content-Type": "application/json",
-						"User-Agent": veyyonXAIUserAgent(),
+						"User-Agent": USER_AGENT,
 					},
 					body: JSON.stringify(payload),
 					signal: combinedSignal,

@@ -1,4 +1,3 @@
-import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
 import {
 	CHATGPT_WEB_PROVIDER_ID,
@@ -15,7 +14,7 @@ import {
 	OPENAI_HEADERS,
 } from "@veyyon/catalog/wire/codex";
 import { isTimeoutError } from "@veyyon/utils/abortable";
-import { getInstallId } from "@veyyon/utils/dirs";
+import { getInstallId, USER_AGENT } from "@veyyon/utils/dirs";
 import { $env, $flag } from "@veyyon/utils/env";
 import { structuredCloneJSON } from "@veyyon/utils/json";
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
@@ -24,7 +23,6 @@ import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { readSseJson } from "@veyyon/utils/stream";
 import { asRecord, errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import packageJson from "../../package.json" with { type: "json" };
 import {
 	beginCacheTrackedRequest,
 	type CacheEnforcement,
@@ -4181,7 +4179,7 @@ function createCodexHeaders(
 	headers.set(OPENAI_HEADERS.BETA, betaHeader);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
 	headers.set(OPENAI_HEADERS.VERSION, codexClientVersion);
-	headers.set("User-Agent", `pi/${packageJson.version} (${os.platform()} ${os.release()}; ${os.arch()})`);
+	headers.set("User-Agent", USER_AGENT);
 	if (sessionId) {
 		headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
 		headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);

@@ -1,5 +1,6 @@
 import { toBoolean, toNumber } from "@veyyon/catalog/utils";
 import { getCodexAccountEmail, getCodexAccountId } from "@veyyon/catalog/wire/codex";
+import { USER_AGENT } from "@veyyon/utils";
 import { clamp } from "@veyyon/utils/math";
 import { HOUR_MS, MINUTE_MS, WEEK_MS } from "@veyyon/utils/time";
 import { normalizeStoredEmail } from "../auth-credential-rows";
@@ -363,7 +364,7 @@ export const openaiCodexUsageProvider: UsageProvider = {
 
 		const headers: Record<string, string> = {
 			Authorization: `Bearer ${accessToken}`,
-			"User-Agent": "OpenCode-Status-Plugin/1.0",
+			"User-Agent": USER_AGENT,
 		};
 		if (accountId) {
 			headers["ChatGPT-Account-Id"] = accountId;

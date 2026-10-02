@@ -1,4 +1,5 @@
 import { toNumber } from "@veyyon/catalog/utils";
+import { USER_AGENT } from "@veyyon/utils";
 import { formatCount } from "@veyyon/utils/format";
 import { clamp01 } from "@veyyon/utils/math";
 import { DAY_MS, HOUR_MS, WEEK_MS } from "@veyyon/utils/time";
@@ -222,7 +223,7 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 	const headers: Record<string, string> = {
 		Authorization: credential.apiKey,
 		"Content-Type": "application/json",
-		"User-Agent": "OpenCode-Status-Plugin/1.0",
+		"User-Agent": USER_AGENT,
 	};
 
 	let payload: ZaiQuotaPayload | null = null;

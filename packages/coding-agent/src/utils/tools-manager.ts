@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isCancellation } from "@veyyon/utils/abortable";
-import { APP_NAME, getToolsDir } from "@veyyon/utils/dirs";
+import { getToolsDir, USER_AGENT } from "@veyyon/utils/dirs";
 // Owners, not the `@veyyon/utils` barrel: 8 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import * as ptree from "@veyyon/utils/ptree";
@@ -226,7 +226,7 @@ async function getLatestRelease(repo: string, signal?: AbortSignal): Promise<Lat
 		let response: Response;
 		try {
 			response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-				headers: { "User-Agent": `${APP_NAME}-coding-agent` },
+				headers: { "User-Agent": USER_AGENT },
 				signal: requestTimeout.signal,
 			});
 		} catch (err) {

@@ -11,7 +11,7 @@ import {
 	setPreferredImageProvider,
 } from "@veyyon/coding-agent/tools/web/image-gen";
 import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
-import { removeWithRetries } from "@veyyon/utils";
+import { removeWithRetries, USER_AGENT } from "@veyyon/utils";
 
 /**
  * isImageProviderPreference guards the persisted image-provider setting so an unknown or
@@ -545,7 +545,7 @@ describe("imageGenTool", () => {
 
 		expect(requestUrl).toBe("https://api.x.ai/v1/images/generations");
 		expect(captured.authorization).toBe("Bearer test-xai-token");
-		expect(captured.userAgent).toBe("veyyon/xai");
+		expect(captured.userAgent).toBe(USER_AGENT);
 		expect(requestBody).toMatchObject({
 			model: "grok-imagine-image",
 			prompt: "a cat.",

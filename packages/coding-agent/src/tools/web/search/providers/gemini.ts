@@ -22,7 +22,7 @@ import {
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "@veyyon/catalog/wire/gemini-headers";
-import { exponentialBackoffDelay, fetchWithRetry } from "@veyyon/utils";
+import { exponentialBackoffDelay, fetchWithRetry, USER_AGENT } from "@veyyon/utils";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import {
 	type ProviderTextTransformResolver,
@@ -350,7 +350,7 @@ async function callGeminiSearch(
 				requestId: `agent-${crypto.randomUUID()}`,
 			}
 		: {
-				userAgent: "veyyon",
+				userAgent: USER_AGENT,
 				requestId: `veyyon-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
 			};
 

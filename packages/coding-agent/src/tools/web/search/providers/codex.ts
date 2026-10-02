@@ -6,7 +6,6 @@
  * broker is the sole refresh authority — this module never opens a sibling
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
-import * as os from "node:os";
 import type { Api, AuthStorage, FetchImpl, Model } from "@veyyon/ai";
 import { withOAuthAccess } from "@veyyon/ai/auth-retry";
 import {
@@ -26,9 +25,8 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@veyyon/catalog/wire/codex";
-import { $env, readSseJson } from "@veyyon/utils";
+import { $env, readSseJson, USER_AGENT } from "@veyyon/utils";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
-import packageJson from "../../../../../package.json" with { type: "json" };
 import {
 	type ProviderTextTransformResolver,
 	resolveProviderTextTransform,
@@ -337,7 +335,7 @@ function buildCodexHeaders(accessToken: string, accountId?: string): Record<stri
 		[OPENAI_HEADERS.BETA]: OPENAI_HEADER_VALUES.BETA_RESPONSES,
 		[OPENAI_HEADERS.ORIGINATOR]: OPENAI_HEADER_VALUES.ORIGINATOR_CODEX,
 		[OPENAI_HEADERS.VERSION]: CODEX_CLIENT_VERSION,
-		"User-Agent": `pi/${packageJson.version} (${os.platform()} ${os.release()}; ${os.arch()})`,
+		"User-Agent": USER_AGENT,
 		Accept: "text/event-stream",
 		"Content-Type": "application/json",
 	};

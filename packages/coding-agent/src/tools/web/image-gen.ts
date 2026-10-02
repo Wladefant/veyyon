@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
-import type { ApiKey, FetchImpl, Model } from "@veyyon/ai";
+import { type ApiKey, type FetchImpl, getOpenRouterHeaders, type Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { ProviderHttpError } from "@veyyon/ai/error";
@@ -27,10 +27,10 @@ import {
 	readSseJson,
 	Snowflake,
 	trimTrailingSlashes,
+	USER_AGENT,
 	untilAborted,
 } from "@veyyon/utils";
 import { type } from "arktype";
-import packageJson from "../../../package.json" with { type: "json" };
 import { isAuthenticated } from "../../config/auth-state";
 import type { ModelRegistry } from "../../config/model-registry";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
@@ -40,7 +40,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { canonicalizeImageContent } from "../../utils/image-resize";
 import { resolveReadPath } from "../core/path-utils";
-import { missingXAICredentialsMessage, resolveXAIHttpCredentials, veyyonXAIUserAgent } from "./xai-http";
+import { missingXAICredentialsMessage, resolveXAIHttpCredentials } from "./xai-http";
 
 const DEFAULT_MODEL = "gemini-3-pro-image-preview";
 const DEFAULT_OPENROUTER_MODEL = "google/gemini-3-pro-image-preview";
@@ -932,7 +932,7 @@ function buildOpenAIImageHeaders(model: Model, apiKey: string, sessionId: string
 		}
 		headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
 		headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
-		headers.set("User-Agent", `pi/${packageJson.version} (${os.platform()} ${os.release()}; ${os.arch()})`);
+		headers.set("User-Agent", USER_AGENT);
 		if (sessionId) {
 			headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
 			headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);
@@ -1408,7 +1408,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 								headers: {
 									Authorization: `Bearer ${key}`,
 									"Content-Type": "application/json",
-									"User-Agent": veyyonXAIUserAgent(),
+									"User-Agent": USER_AGENT,
 								},
 								body: JSON.stringify(xaiBody),
 								signal: requestSignal,
@@ -1486,9 +1486,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 								headers: {
 									"Content-Type": "application/json",
 									Authorization: `Bearer ${key}`,
-									"HTTP-Referer": "https://veyyon.dev/",
-									"X-OpenRouter-Title": "Veyyon",
-									"X-OpenRouter-Categories": "cli-agent",
+									...getOpenRouterHeaders(),
 								},
 								body: JSON.stringify(requestBody),
 								signal: requestSignal,

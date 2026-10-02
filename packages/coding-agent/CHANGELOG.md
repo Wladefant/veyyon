@@ -13,6 +13,7 @@
 - Interactive launches now run under a direct parent supervisor that records retained heartbeat context and the real child exit status immediately after a silent death; `veyyon supervisor dumps` provides reversible, opt-in Windows LocalDumps configuration for `veyyon.exe` and `bun.exe` ([#100](https://github.com/Wladefant/veyyon/issues/100)).
 
 ### Changed
+- Standardized first-party outbound User-Agent headers on Veyyon/<version> via shared USER_AGENT and reused getOpenRouterHeaders in image generation ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged `santhreal/veyyon` `main` into the fork; thinking selector parsers moved to `thinking/constants.ts` and read-tool column notices name their unit ([#107](https://github.com/Wladefant/veyyon/issues/107)).

@@ -1,8 +1,8 @@
-import packageJson from "../../package.json" with { type: "json" };
+import { USER_AGENT } from "@veyyon/utils";
 
 export function getOpenRouterHeaders(): Record<string, string> {
 	return {
-		"User-Agent": `Veyyon/${packageJson.version}`,
+		"User-Agent": USER_AGENT,
 		"HTTP-Referer": "https://veyyon.dev/",
 		"X-OpenRouter-Title": "Veyyon",
 		"X-OpenRouter-Categories": "cli-agent",

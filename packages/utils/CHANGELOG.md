@@ -9,6 +9,7 @@
 - `once` is removed; `lazy(build)` returns a `Lazy<T>` whose `value` getter calls `build` on the first read and returns that result afterwards, and `typeof held.value` states the built type without building it.
 
 ### Added
+- Exported shared `USER_AGENT` constant formatted as `Veyyon/<version>` for outbound HTTP requests ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added `getDbBusyTimeoutMs()`, `isInteractiveHost()`, and `setInteractiveHost()` to `@veyyon/utils/env`, bounding SQLite busy waits to 1s in headless hosts while preserving 5s for interactive hosts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - `@veyyon/utils/inflight-marker` atomically records each concurrent tool call independently and durably reports abandoned calls in the normal dated log before removing their markers, including Linux zombies ([#73](https://github.com/Wladefant/veyyon/issues/73)).

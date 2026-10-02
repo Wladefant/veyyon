@@ -11,11 +11,6 @@ interface XAICredentials {
 	apiKey: string;
 	baseURL: string;
 }
-
-export function veyyonXAIUserAgent(): string {
-	return "veyyon/xai";
-}
-
 type XAIProvider = "xai-oauth" | "xai";
 
 /**

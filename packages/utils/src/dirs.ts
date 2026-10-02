@@ -19,7 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { YAML } from "bun";
 import { engines, version } from "../package.json" with { type: "json" };
-import { APP_DIRECTORY_SLUG } from "./app-identity";
+import { APP_DIRECTORY_SLUG, APP_DISPLAY_NAME } from "./app-identity";
 // FIRST, for its side effect: the environment scrub and `$HOME/.env`. Every path this module caches at
 // load is decided by `VEYYON_CODING_AGENT_DIR` and the `XDG_*` variables, so a user who sets one of those
 // in `$HOME/.env` has to be heard before the first `DirResolver` is built. `./dotenv-home` imports nothing
@@ -113,6 +113,9 @@ const INSTALL_ID_FILE = "install-id";
 
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;
+
+/** Default User-Agent header string (e.g. "Veyyon/1.5.5") */
+export const USER_AGENT = `${APP_DISPLAY_NAME}/${VERSION}`;
 
 /**
  * Build metadata tag embedded at compile time (e.g. "a19ab2a13-local").
