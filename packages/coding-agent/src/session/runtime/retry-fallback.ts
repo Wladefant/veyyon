@@ -30,7 +30,7 @@ import {
 	retryFallbackChainsForRoles,
 } from "../agent-session-retry-fallback";
 import type { AgentSessionEvent } from "../agent-session-types";
-import { hasReplayUnsafeToolOutput, isClassifierRefusal } from "../failed-turn";
+import { hasReplayUnsafeOutput, isClassifierRefusal } from "../failed-turn";
 
 /** What {@link RetryFallback} reads from the session's public surface. */
 export interface RetryFallbackSession {
@@ -219,8 +219,8 @@ export class RetryFallback {
 	 * model switch cannot fix or must not replay: cancellations (abort-flavored
 	 * errors are not model faults), context overflow (compaction's job),
 	 * classifier refusals (chain consult is handled on the retryable path with
-	 * `pinFallback`), and turns that already emitted a tool call (replaying
-	 * could duplicate work).
+	 * `pinFallback`), turns that already emitted a tool call (replaying
+	 * could duplicate work), and turns that already streamed visible text.
 	 */
 	hardErrorEligible(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
@@ -232,7 +232,7 @@ export class RetryFallback {
 		const id = this.#host.classify(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
-		if (hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages)) return false;
+		if (hasReplayUnsafeOutput(message, this.#session.agent.state.messages)) return false;
 		const currentSelector = formatRetryFallbackSelector(model, this.#session.thinkingLevel);
 		const source = this.#source();
 		const role = this.#activeFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
