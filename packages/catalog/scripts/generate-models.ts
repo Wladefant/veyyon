@@ -51,6 +51,14 @@ import {
 import type { Api, ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
+import {
+	CODEX_IMAGE_MODEL,
+	codexContextWindowFloor,
+	codexCostPatch,
+	codexLongContextCost,
+	codexServiceTierCost,
+	resolveCodexMaxContextWindow,
+} from "../src/provider-models/codex-subscription";
 import { getCodexAccountId } from "../src/wire/codex";
 import {
 	applyCanonicalLimitFallback,
@@ -338,6 +346,34 @@ function applyCodexPricingFallback(models: readonly ModelSpec[]): ModelSpec[] {
 			cost: { ...openAICost },
 		};
 	});
+}
+
+/**
+ * Fill what `/codex/models` leaves out of the subscription rows (see
+ * `codex-subscription.ts`): the 1M floor, the extended-context ceiling, tier
+ * multipliers, the >272K rate card and the curated prices, then seed the hosted
+ * image tool. A live discovery value that is already higher keeps winning.
+ */
+function applyCodexSubscriptionFields(models: readonly ModelSpec[]): ModelSpec[] {
+	const patched = models.map(model => {
+		if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses" || model.kind === "image") {
+			return model;
+		}
+		const floor = codexContextWindowFloor(model.id);
+		const maxContextWindow = resolveCodexMaxContextWindow(model.id, model.maxContextWindow);
+		const longContextCost = codexLongContextCost(model.id);
+		const costPatch = codexCostPatch(model.id);
+		return {
+			...model,
+			...(floor !== undefined ? { contextWindow: Math.max(model.contextWindow ?? 0, floor) } : {}),
+			...(maxContextWindow !== undefined ? { maxContextWindow } : {}),
+			serviceTierCost: codexServiceTierCost(model.id),
+			...(longContextCost !== undefined ? { longContextCost } : {}),
+			...(costPatch !== undefined ? { cost: { ...costPatch } } : {}),
+		};
+	});
+	if (patched.some(model => model.provider === "openai-codex" && model.id === CODEX_IMAGE_MODEL.id)) return patched;
+	return [...patched, CODEX_IMAGE_MODEL];
 }
 
 /**
@@ -748,6 +784,7 @@ async function generateModels() {
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
 	allModels = applyCodexPricingFallback(allModels);
+	allModels = applyCodexSubscriptionFields(allModels);
 	allModels = applyKimiMaxTokensCap(allModels);
 	allModels = applyFireworksDeepSeekReasoningShape(allModels);
 	allModels = filterModelsDevCatalogRows(allModels);

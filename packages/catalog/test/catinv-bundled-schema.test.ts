@@ -51,6 +51,8 @@ const SPEC_KEYS: Record<string, true> = {
 	longContextCost: true,
 	premiumMultiplier: true,
 	contextWindow: true,
+	maxContextWindow: true,
+	serviceTierCost: true,
 	maxTokens: true,
 	omitMaxOutputTokens: true,
 	headers: true,

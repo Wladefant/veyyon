@@ -18,6 +18,7 @@ import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
 import { applyCommandCodeContract } from "../src/provider-models/command-code";
+import { codexContextWindowFloor } from "../src/provider-models/codex-subscription";
 import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import {
 	applyXaiResponsesThinkingPolicy,
@@ -60,12 +61,6 @@ const CODEX_GPT_5_4_PRIORITY_BY_VARIANT: Partial<Record<OpenAIVariant, number>> 
 	base: 0,
 	mini: 1,
 	nano: 2,
-};
-
-const CODEX_GPT_5_6_372K_MODEL_IDS: Record<string, true> = {
-	"gpt-5.6-luna": true,
-	"gpt-5.6-sol": true,
-	"gpt-5.6-terra": true,
 };
 
 const COPILOT_GENERATED_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
@@ -417,12 +412,9 @@ function applyOpenAICatalogPolicy(model: ModelSpec<Api>, parsedModel: OpenAIMode
 			model.contextWindow = 272000;
 		}
 	}
-	// GPT-5.6 luna/sol/terra on the Codex transport: OpenAI's Codex model
-	// registry declares context_window = max_context_window = 372000, but Codex
-	// discovery under-reports it — omitting the field for some accounts and
-	// actively returning 272000 for others (#5705, #6259). Pin the true 372K
-	// input window on the bundled catalog; discovery enforces the same floor.
-	if (model.api === "openai-codex-responses" && CODEX_GPT_5_6_372K_MODEL_IDS[model.id]) {
-		model.contextWindow = 372000;
-	}
+	// GPT-5.6 luna/sol/terra on the Codex transport: OpenAI enabled a 1M window for
+	// subscription Codex while the registry still reports 272000; discovery
+	// enforces the same floor.
+	const codexFloor = model.api === "openai-codex-responses" ? codexContextWindowFloor(model.id) : undefined;
+	if (codexFloor !== undefined) model.contextWindow = codexFloor;
 }

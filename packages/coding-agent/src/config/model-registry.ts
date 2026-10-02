@@ -22,6 +22,7 @@ import {
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 } from "@veyyon/catalog/provider-models";
+import { modelKind } from "@veyyon/catalog/types";
 import {
 	collapseBuiltModelVariants,
 	getVariantAliasSources,
@@ -1387,7 +1388,11 @@ export class ModelRegistry {
 		const combined = mergeCustomModels(withConfigModels, runtimeOverlays);
 
 		const withModelOverrides = applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
-		const finalModels = this.#applyProviderReportedWindows(this.#applyRuntimeProviderOverrides(withModelOverrides));
+		// Runner models (image generation) ride in the catalog for their own tools; a
+		// session picks, resolves and falls back among chat models only.
+		const finalModels = this.#applyProviderReportedWindows(
+			this.#applyRuntimeProviderOverrides(withModelOverrides),
+		).filter(model => modelKind(model) === "chat");
 
 		this.#providerModels.set(provider, finalModels);
 		return finalModels;
