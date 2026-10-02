@@ -26,6 +26,10 @@ import {
 	untilAborted,
 	WEEK_MS,
 } from "@veyyon/utils";
+import { isProbablyBinaryHeader } from "@veyyon/utils/binary";
+import { formatBytes } from "@veyyon/utils/format";
+import { parseImageMetadata } from "@veyyon/utils/mime";
+import { loadImageAttachmentInput, webpExclusionForModel } from "../../utils/image-loading";
 import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import * as git from "../../utils/git";
@@ -206,6 +210,7 @@ const RUN_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "a
 const JOB_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required"]);
 const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
 	"repo_view",
+	"file_read",
 	"search_issues",
 	"search_prs",
 	"search_code",
@@ -217,10 +222,11 @@ const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
 const githubSchema = lazy(() =>
 	type({
 		op: type(
-			"'repo_view' | 'pr_create' | 'pr_checkout' | 'pr_push' | 'search_issues' | 'search_prs' | 'search_code' | 'search_commits' | 'search_repos' | 'run_watch'",
+			"'repo_view' | 'file_read' | 'pr_create' | 'pr_checkout' | 'pr_push' | 'search_issues' | 'search_prs' | 'search_code' | 'search_commits' | 'search_repos' | 'run_watch'",
 		).describe("github operation"),
 		"repo?": type("string").describe("owner/repo"),
 		"branch?": type("string").describe("branch"),
+		"path?": type("string").describe("repository-relative file path"),
 		"pr?": type("string | string[]").describe("pr number, url, or branch"),
 		"force?": type("boolean").describe("reset existing local branch"),
 		"forceWithLease?": type("boolean").describe("force-with-lease push"),
@@ -1947,6 +1953,8 @@ export class GithubTool implements AgentTool<typeof githubSchema.value, GhToolDe
 			switch (params.op) {
 				case "repo_view":
 					return executeRepoView(this.session, params, signal);
+				case "file_read":
+					return executeFileRead(this.session, params, signal);
 				case "pr_create":
 					return executePrCreate(this.session, params, signal);
 				case "pr_checkout":
@@ -2006,6 +2014,114 @@ async function executeRepoView(
 		repoProvided: Boolean(repo),
 	});
 	return buildTextResult(formatRepoView(data, { repo, branch }), data.url);
+}
+
+const BINARY_SNIFF_BYTES = 8192;
+
+interface GitHubContentsFile {
+	type?: string;
+	encoding?: string;
+	size?: number;
+	content?: string;
+	html_url?: string | null;
+}
+
+type GitHubContentsResponse = GitHubContentsFile | GitHubContentsFile[];
+
+function isGitHubContentsFile(response: GitHubContentsResponse): response is GitHubContentsFile {
+	return !Array.isArray(response) && response.type === "file";
+}
+
+
+async function executeFileRead(
+	session: ToolSession,
+	params: GithubInput,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<GhToolDetails>> {
+	const repo = await resolveGitHubRepo(session.cwd, normalizeOptionalString(params.repo), undefined, signal);
+	const filePath = requireNonEmpty(normalizeOptionalString(params.path), "path");
+	if (filePath.startsWith("/")) {
+		throw new ToolError("path must be repository-relative");
+	}
+	const branch = normalizeOptionalString(params.branch);
+	const endpointPath = filePath
+		.split("/")
+		.map(segment => encodeURIComponent(segment))
+		.join("/");
+	const args = [
+		"api",
+		`/repos/${repo}/contents/${endpointPath}`,
+		"--method",
+		"GET",
+		"-H",
+		"Accept: application/vnd.github+json",
+		"-H",
+		"Accept-Encoding: identity",
+	];
+	if (branch) {
+		args.push("-f", `ref=${branch}`);
+	}
+	const response = await git.github.json<GitHubContentsResponse>(session.cwd, args, signal, {
+		repoProvided: true,
+		trimOutput: false,
+	});
+	if (!isGitHubContentsFile(response)) {
+		throw new ToolError(`GitHub path '${filePath}' is not a file.`);
+	}
+
+	const fallbackSourceUrl = `https://github.com/${repo}/blob/${encodeURIComponent(branch ?? "HEAD")}/${endpointPath}`;
+	const sourceUrl = response.html_url || fallbackSourceUrl;
+	if (response.encoding !== "base64" || typeof response.content !== "string") {
+		const size =
+			typeof response.size === "number" && response.size >= 0 ? formatBytes(response.size) : "unknown size";
+		return buildTextResult(
+			`[GitHub did not return file bytes for '${filePath}' (${size}). Open ${sourceUrl} to view it.]`,
+			sourceUrl,
+			{ repo, branch },
+		);
+	}
+
+	const encoded = response.content.replaceAll(/\s/g, "");
+	const bytes = Buffer.from(encoded, "base64");
+	const imageMetadata = parseImageMetadata(bytes);
+	if (imageMetadata) {
+		const image = await loadImageAttachmentInput({
+			image: { type: "image", data: encoded, mimeType: imageMetadata.mimeType },
+			label: filePath,
+			uri: sourceUrl,
+			autoResize: session.settings.get("images.autoResize"),
+			excludeWebP: webpExclusionForModel(session.getActiveModel?.()),
+		});
+		if (image) {
+			const dimensions =
+				imageMetadata.width !== undefined && imageMetadata.height !== undefined
+					? `\nDimensions: ${imageMetadata.width}x${imageMetadata.height}`
+					: "";
+			return toolResult<GhToolDetails>({ repo, branch })
+				.content([
+					{
+						type: "text",
+						text: `Image file: ${filePath}\nMIME: ${image.mimeType}\nSize: ${formatBytes(bytes.byteLength)}${dimensions}`,
+					},
+					{ type: "image", data: image.data, mimeType: image.mimeType },
+				])
+				.sourceUrl(sourceUrl)
+				.done();
+		}
+	}
+
+	if (!isProbablyBinaryHeader(bytes.subarray(0, BINARY_SNIFF_BYTES))) {
+		try {
+			return buildTextResult(new TextDecoder("utf-8", { fatal: true }).decode(bytes), sourceUrl, { repo, branch });
+		} catch {
+			// Fall through to binary file result.
+		}
+	}
+	return buildTextResult(
+		`[Cannot read binary file '${filePath}' (${formatBytes(bytes.byteLength)}); not valid UTF-8 text. Open ${sourceUrl} to view it.]`,
+		sourceUrl,
+		{ repo, branch },
+	);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
