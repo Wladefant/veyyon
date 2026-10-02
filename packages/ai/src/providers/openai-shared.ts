@@ -1641,6 +1641,14 @@ export interface BuildResponsesInputOptions<TApi extends Api> {
 	repairOrphanOutputs?: boolean;
 	/** Preserve assistant message item IDs from text signatures during fallback replay. */
 	preserveAssistantMessageIds?: boolean;
+	/**
+	 * Synthesize a reasoning item for every replayed assistant turn that carries
+	 * content but no reasoning item. Set for DeepSeek-family Responses targets
+	 * that reject a thinking-mode continuation lacking `reasoning_text`.
+	 */
+	requiresReasoningReplayForAllTurns?: boolean;
+	/** As {@link requiresReasoningReplayForAllTurns}, but only for turns that contain a tool call. */
+	requiresReasoningReplayForToolCalls?: boolean;
 }
 
 /**
@@ -1804,10 +1812,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					{ supportsImageDetailOriginal },
 				);
 				const sanitizedHistoryItems = rawSanitizedHistoryItems
-					? adaptResponsesReplayItemsForModel(
-							rawSanitizedHistoryItems,
-							supportsCustomToolCalls,
-							customToolWireNameMap,
+					? ensureRequiredResponsesReasoningReplay(
+							adaptResponsesReplayItemsForModel(
+								rawSanitizedHistoryItems,
+								supportsCustomToolCalls,
+								customToolWireNameMap,
+							),
+							assistantMsg.stopReason,
+							options.requiresReasoningReplayForAllTurns ?? false,
+							options.requiresReasoningReplayForToolCalls ?? false,
 						)
 					: undefined;
 				if (nativeReplayEnabled && sanitizedHistoryItems) {
@@ -1834,6 +1847,8 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				options.preserveAssistantMessageIds,
 				supportsCustomToolCalls,
 				customToolWireNameMap,
+				options.requiresReasoningReplayForAllTurns ?? false,
+				options.requiresReasoningReplayForToolCalls ?? false,
 			);
 			const outputItems = suppressHiddenEmptyFallback
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
@@ -1883,6 +1898,74 @@ function parseResponseReasoningReplayItem(signature: string | undefined): Respon
 	}
 }
 
+export const SYNTHETIC_REASONING_REPLAY_PLACEHOLDER = "reasoning unavailable";
+
+function createSyntheticResponsesReasoningItem(
+	text = SYNTHETIC_REASONING_REPLAY_PLACEHOLDER,
+	id?: string,
+): ResponseReasoningItem {
+	const item = {
+		type: "reasoning",
+		...(id ? { id } : {}),
+		summary: [],
+		content: [{ type: "reasoning_text", text }],
+	} satisfies Omit<ResponseReasoningItem, "id"> & Partial<Pick<ResponseReasoningItem, "id">>;
+	// The vendored SDK type marks `id` required; the wire accepts its absence.
+	return item as ResponseReasoningItem;
+}
+
+function isResponsesAssistantTurnBoundary(item: ResponseInput[number]): boolean {
+	const type = "type" in item && typeof item.type === "string" ? item.type : undefined;
+	if (type === "function_call_output" || type === "custom_tool_call_output") return true;
+	if (type === "compaction") return true;
+	return "role" in item && item.role !== "assistant";
+}
+
+function ensureRequiredResponsesReasoningReplay(
+	items: ResponseInput,
+	stopReason: AssistantMessage["stopReason"],
+	requiresAllTurns: boolean,
+	requiresToolCalls: boolean,
+): ResponseInput {
+	if (stopReason === "error" || (!requiresAllTurns && !requiresToolCalls)) return items;
+
+	const insertBefore: number[] = [];
+	let turnStart = 0;
+	for (let index = 0; index <= items.length; index++) {
+		if (index < items.length && !isResponsesAssistantTurnBoundary(items[index]!)) continue;
+
+		let hasContent = false;
+		let hasReasoning = false;
+		let hasToolCall = false;
+		for (let turnIndex = turnStart; turnIndex < index; turnIndex++) {
+			const item = items[turnIndex]!;
+			const itemType = "type" in item && typeof item.type === "string" ? item.type : undefined;
+			if (itemType === "reasoning") {
+				hasReasoning = true;
+				continue;
+			}
+			hasContent = true;
+			if (classifyResponsesBatchItem(item) === "call") hasToolCall = true;
+		}
+		if (hasContent && !hasReasoning && (requiresAllTurns || (requiresToolCalls && hasToolCall))) {
+			insertBefore.push(turnStart);
+		}
+		turnStart = index + 1;
+	}
+	if (insertBefore.length === 0) return items;
+
+	const repaired: ResponseInput = [];
+	let insertionIndex = 0;
+	for (let index = 0; index < items.length; index++) {
+		if (insertBefore[insertionIndex] === index) {
+			repaired.push(createSyntheticResponsesReasoningItem());
+			insertionIndex++;
+		}
+		repaired.push(items[index]!);
+	}
+	return repaired;
+}
+
 export function convertResponsesAssistantMessage<TApi extends Api>(
 	assistantMsg: AssistantMessage,
 	model: Model<TApi>,
@@ -1893,6 +1976,8 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	preserveMessageIds = false,
 	supportsCustomToolCalls = true,
 	customToolWireNameMap?: ReadonlyMap<string, string>,
+	requiresReasoningReplayForAllTurns = false,
+	requiresReasoningReplayForToolCalls = false,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	let unsignedTextBlocks = 0;
@@ -1905,13 +1990,28 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	const isDifferentModel =
 		assistantMsg.model !== model.id && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
 
+	const requiresReasoningItem =
+		assistantMsg.stopReason !== "error" &&
+		(requiresReasoningReplayForAllTurns ||
+			(requiresReasoningReplayForToolCalls && assistantMsg.content.some(block => block.type === "toolCall")));
+	let reasoningItemEmitted = false;
+	const carriedReasoningTexts: string[] = [];
+	let synthesizedReasoningItemId: string | undefined;
+
 	for (const block of assistantMsg.content) {
 		if (block.type === "thinking" && assistantMsg.stopReason !== "error") {
+			if (requiresReasoningItem) {
+				if (block.itemId) synthesizedReasoningItemId ??= block.itemId;
+				if (block.thinking.trim().length > 0) carriedReasoningTexts.push(block.thinking);
+			}
 			if (!includeThinkingSignatures) {
 				continue;
 			}
 			const reasoningItem = parseResponseReasoningReplayItem(block.thinkingSignature);
-			if (reasoningItem) outputItems.push(reasoningItem);
+			if (reasoningItem) {
+				outputItems.push(reasoningItem);
+				reasoningItemEmitted = true;
+			}
 			continue;
 		}
 
@@ -1987,6 +2087,13 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			name: functionName,
 			arguments: stringifyJson(block.arguments) ?? "null",
 		});
+	}
+
+	if (requiresReasoningItem && !reasoningItemEmitted && outputItems.length > 0) {
+		const carriedReasoningText = carriedReasoningTexts.join("\n");
+		const reasoningText =
+			carriedReasoningText.length > 0 ? carriedReasoningText : SYNTHETIC_REASONING_REPLAY_PLACEHOLDER;
+		outputItems.unshift(createSyntheticResponsesReasoningItem(reasoningText, synthesizedReasoningItemId));
 	}
 
 	return outputItems;
