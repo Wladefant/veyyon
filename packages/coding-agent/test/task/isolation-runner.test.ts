@@ -277,6 +277,7 @@ describe("runIsolatedSubprocess", () => {
 			const outcome = await runIsolatedSubprocess({
 				baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id },
 				context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
+				preferredBackend: undefined,
 				agentId: id,
 				mergeMode: "patch",
 				artifactsDir,
@@ -320,6 +321,7 @@ describe("runIsolatedSubprocess", () => {
 		const outcome = await runIsolatedSubprocess({
 			baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id },
 			context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
+			preferredBackend: undefined,
 			agentId: id,
 			mergeMode: "patch",
 			artifactsDir: tmp,

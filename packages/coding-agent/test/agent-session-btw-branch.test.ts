@@ -443,68 +443,76 @@ describe("AgentSession.branchFromBtw", () => {
 			return activeSession;
 		}
 
-		it("settles at the drain deadline and leaves the transcript untouched", { timeout: 20_000 }, async () => {
-			const activeSession = await createSessionWithHungDrain();
-			const originalFile = activeSession.sessionFile;
-			const leafId = requiredLeafId(activeSession);
-			const entryCount = activeSession.sessionManager.getEntries().length;
+		it(
+			"settles at the drain deadline and leaves the transcript untouched",
+			async () => {
+				const activeSession = await createSessionWithHungDrain();
+				const originalFile = activeSession.sessionFile;
+				const leafId = requiredLeafId(activeSession);
+				const entryCount = activeSession.sessionManager.getEntries().length;
 
-			const startedAt = performance.now();
-			const outcome = await activeSession
-				.branchFromBtw("question", createBtwAssistant(), leafId, activeSession.sessionManager.getSessionId())
-				.then(
+				const startedAt = performance.now();
+				const outcome = await activeSession
+					.branchFromBtw("question", createBtwAssistant(), leafId, activeSession.sessionManager.getSessionId())
+					.then(
+						() => "resolved" as const,
+						(error: Error) => error.message,
+					);
+				const elapsedMs = performance.now() - startedAt;
+
+				expect(outcome).toBe("Timed out draining post-prompt tasks before /btw branch");
+				// Waited out the 5 s deadline (not an early refusal) and settled within its bound.
+				expect(elapsedMs).toBeGreaterThanOrEqual(4_900);
+				expect(elapsedMs).toBeLessThan(8_000);
+				expect(activeSession.sessionFile).toBe(originalFile);
+				expect(activeSession.sessionManager.getLeafId()).toBe(leafId);
+				expect(activeSession.sessionManager.getEntries()).toHaveLength(entryCount);
+			},
+			{ timeout: 20_000 },
+		);
+
+		it(
+			"returns the controller to an actionable state after the refused promotion",
+			async () => {
+				const activeSession = await createSessionWithHungDrain();
+				const manager = activeSession.sessionManager;
+				const btwContainer = new Container();
+				const showStatus = vi.fn();
+				const answer = createBtwAssistant();
+				const controller = new BtwController({
+					ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
+					btwContainer,
+					session: {
+						model: activeSession.model,
+						get isStreaming() {
+							return activeSession.isStreaming;
+						},
+						runEphemeralTurn: async () => ({ replyText: "the answer", assistantMessage: answer }),
+					} as unknown as InteractiveModeContext["session"],
+					sessionManager: manager,
+					showStatus,
+					showError: vi.fn(),
+					handleBtwBranch: (question, assistantMessage, leafId, sessionId) =>
+						activeSession.branchFromBtw(question, assistantMessage, leafId, sessionId).then(() => {}),
+				});
+				await controller.start("question");
+				await sleep(0);
+				expect(controller.canCopy()).toBe(true);
+
+				const branch = controller.handleBranch().then(
 					() => "resolved" as const,
 					(error: Error) => error.message,
 				);
-			const elapsedMs = performance.now() - startedAt;
+				expect(controller.handlesBranchKey()).toBe(true);
 
-			expect(outcome).toBe("Timed out draining post-prompt tasks before /btw branch");
-			// Waited out the 5 s deadline (not an early refusal) and settled within its bound.
-			expect(elapsedMs).toBeGreaterThanOrEqual(4_900);
-			expect(elapsedMs).toBeLessThan(8_000);
-			expect(activeSession.sessionFile).toBe(originalFile);
-			expect(activeSession.sessionManager.getLeafId()).toBe(leafId);
-			expect(activeSession.sessionManager.getEntries()).toHaveLength(entryCount);
-		});
-
-		it("returns the controller to an actionable state after the refused promotion", { timeout: 20_000 }, async () => {
-			const activeSession = await createSessionWithHungDrain();
-			const manager = activeSession.sessionManager;
-			const btwContainer = new Container();
-			const showStatus = vi.fn();
-			const answer = createBtwAssistant();
-			const controller = new BtwController({
-				ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
-				btwContainer,
-				session: {
-					model: activeSession.model,
-					get isStreaming() {
-						return activeSession.isStreaming;
-					},
-					runEphemeralTurn: async () => ({ replyText: "the answer", assistantMessage: answer }),
-				} as unknown as InteractiveModeContext["session"],
-				sessionManager: manager,
-				showStatus,
-				showError: vi.fn(),
-				handleBtwBranch: (question, assistantMessage, leafId, sessionId) =>
-					activeSession.branchFromBtw(question, assistantMessage, leafId, sessionId).then(() => {}),
-			});
-			await controller.start("question");
-			await sleep(0);
-			expect(controller.canCopy()).toBe(true);
-
-			const branch = controller.handleBranch().then(
-				() => "resolved" as const,
-				(error: Error) => error.message,
-			);
-			expect(controller.handlesBranchKey()).toBe(true);
-
-			expect(await branch).toBe("Timed out draining post-prompt tasks before /btw branch");
-			// Not stuck "in progress": Esc dismisses the panel instead of being refused.
-			expect(controller.handleEscape()).toBe(true);
-			expect(controller.hasActiveRequest()).toBe(false);
-			expect(showStatus.mock.calls.some(([msg]) => msg === "/btw branch is in progress")).toBe(false);
-		});
+				expect(await branch).toBe("Timed out draining post-prompt tasks before /btw branch");
+				// Not stuck "in progress": Esc dismisses the panel instead of being refused.
+				expect(controller.handleEscape()).toBe(true);
+				expect(controller.hasActiveRequest()).toBe(false);
+				expect(showStatus.mock.calls.some(([msg]) => msg === "/btw branch is in progress")).toBe(false);
+			},
+			{ timeout: 20_000 },
+		);
 	});
 
 	it("throws for in-memory sessions", async () => {
