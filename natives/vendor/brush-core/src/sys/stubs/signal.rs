@@ -14,11 +14,11 @@ pub enum Signal {}
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Signal {
 	/// Terminate signal.
-	Terminate,
+	Terminate = 15,
 	/// Kill signal.
-	Kill,
+	Kill = 9,
 	/// Interrupt signal.
-	Interrupt,
+	Interrupt = 2,
 }
 
 impl Signal {
@@ -72,7 +72,15 @@ impl TryFrom<i32> for Signal {
 	type Error = error::Error;
 
 	fn try_from(value: i32) -> Result<Self, Self::Error> {
-		Err(error::ErrorKind::InvalidSignal(std::format!("{value}")).into())
+		#[cfg(windows)]
+		match value {
+			15 => Ok(Self::Terminate),
+			9 => Ok(Self::Kill),
+			2 => Ok(Self::Interrupt),
+			_ => Err(error::ErrorKind::InvalidSignal(value.to_string()).into()),
+		}
+		#[cfg(not(windows))]
+		Err(error::ErrorKind::InvalidSignal(value.to_string()).into())
 	}
 }
 
@@ -82,7 +90,8 @@ pub(crate) fn continue_process(_pid: sys::process::ProcessId) -> Result<(), erro
 
 /// Sends a signal to a specific process.
 ///
-/// This is a stub implementation that returns an error.
+/// Windows protects host ancestry and supports non-delivering signal-zero probes;
+/// other unsupported platforms return an error.
 pub fn kill_process(
 	_pid: sys::process::ProcessId,
 	_signal: traps::TrapSignal,
@@ -91,19 +100,28 @@ pub fn kill_process(
 	{
 		use windows_sys::Win32::Foundation::CloseHandle;
 		use windows_sys::Win32::System::Threading::{
-			OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+			OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
 		};
 
 		let pid = u32::try_from(_pid).map_err(|_| error::ErrorKind::FailedToSendSignal)?;
-		// SAFETY: OpenProcess is called with PROCESS_TERMINATE for a numeric process id
-		// provided by brush's process tracking. A null handle is checked below.
-		let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+		let deliver = match _signal {
+			traps::TrapSignal::Signal(_) => true,
+			traps::TrapSignal::Exit => false,
+			_ => return Err(error::ErrorKind::InvalidSignal(_signal.to_string()).into()),
+		};
+		if deliver && crate::processes::termination_target_is_protected(pid) {
+			return Err(error::ErrorKind::ProtectedSignalTarget(_pid).into());
+		}
+		// SAFETY: the access mask permits only the requested operation. A null
+		// handle is checked before use; signal zero never opens termination access.
+		let access = if deliver { PROCESS_TERMINATE } else { PROCESS_QUERY_LIMITED_INFORMATION };
+		let handle = unsafe { OpenProcess(access, 0, pid) };
 		if handle.is_null() {
 			return Err(error::ErrorKind::FailedToSendSignal.into());
 		}
 
-		// SAFETY: The handle was returned by OpenProcess and checked for null.
-		let ok = unsafe { TerminateProcess(handle, 1) };
+		// SAFETY: the live handle has termination access when delivering a signal.
+		let ok = if deliver { unsafe { TerminateProcess(handle, 1) } } else { 1 };
 		// SAFETY: The handle was returned by OpenProcess and is closed exactly once here.
 		let _close_result = unsafe { CloseHandle(handle) };
 		if ok == 0 {

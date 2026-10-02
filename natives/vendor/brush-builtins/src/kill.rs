@@ -39,7 +39,7 @@ impl builtins::Command for KillCommand {
 		context: brush_core::ExecutionContext<'_, SE>,
 	) -> Result<brush_core::ExecutionResult, Self::Error> {
 		// Match shell and POSIX defaults by allowing graceful termination.
-		let mut trap_signal = TrapSignal::Signal(nix::sys::signal::Signal::SIGTERM);
+		let mut trap_signal = TrapSignal::try_from(15)?;
 
 		// Try parsing the signal name (if specified).
 		if let Some(signal_name) = &self.signal_name {

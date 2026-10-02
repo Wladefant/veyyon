@@ -365,30 +365,65 @@ pub fn protected_ancestor_pids() -> Option<std::collections::HashSet<u32>> {
 	}
 	// SAFETY: close the snapshot once after enumeration.
 	unsafe { CloseHandle(snapshot) };
-	ancestors_from_snapshot(std::process::id(), &parents)
+	ancestors_from_snapshot(std::process::id(), &parents, process_creation_time)
 }
 
 #[cfg(windows)]
 fn ancestors_from_snapshot(
 	host: u32,
 	parents: &std::collections::HashMap<u32, u32>,
+	mut creation_time: impl FnMut(u32) -> Option<u64>,
 ) -> Option<std::collections::HashSet<u32>> {
 	if !parents.contains_key(&host) {
 		return None;
 	}
 	let mut cursor = host;
+	let mut born = creation_time(cursor);
 	let mut seen = std::collections::HashSet::new();
 	while cursor != 0 && seen.insert(cursor) {
 		let Some(parent) = parents.get(&cursor) else {
 			break;
 		};
+		if *parent == 0 || !parents.contains_key(parent) {
+			break;
+		}
+		let parent_born = creation_time(*parent);
+		// A younger owner of a recorded parent PID is unrelated to the host.
+		if born.zip(parent_born).is_some_and(|(child, parent)| parent > child) {
+			break;
+		}
+		born = parent_born;
 		cursor = *parent;
 	}
 	Some(seen)
 }
 
 #[cfg(windows)]
-fn termination_target_is_protected(pid: u32) -> bool {
+fn process_creation_time(pid: u32) -> Option<u64> {
+	use windows_sys::Win32::{
+		Foundation::{CloseHandle, FILETIME},
+		System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+	};
+	// SAFETY: OpenProcess takes scalar values; a null result is checked below.
+	let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+	if handle.is_null() {
+		return None;
+	}
+	let mut creation = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+	let mut exit = creation;
+	let mut kernel = creation;
+	let mut user = creation;
+	// SAFETY: the process handle is live and all four outputs are initialized.
+	let ok = unsafe {
+		GetProcessTimes(handle, &raw mut creation, &raw mut exit, &raw mut kernel, &raw mut user)
+	};
+	// SAFETY: the owned process handle is closed exactly once after the query.
+	unsafe { CloseHandle(handle) };
+	(ok != 0).then_some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+}
+
+#[cfg(windows)]
+pub(crate) fn termination_target_is_protected(pid: u32) -> bool {
 	let refused = pid == 0
 		|| protected_ancestor_pids().is_none_or(|ancestors| ancestors.contains(&pid));
 	if refused {
@@ -404,21 +439,37 @@ mod ancestry_tests {
 
 	#[test]
 	fn absent_host_refuses_snapshot() {
-		assert!(ancestors_from_snapshot(42, &HashMap::new()).is_none());
+		assert!(ancestors_from_snapshot(42, &HashMap::new(), |_| None).is_none());
 	}
 
 	#[test]
 	fn exited_parent_ends_chain_without_blocking_unrelated_children() {
-		let ancestors = ancestors_from_snapshot(42, &HashMap::from([(42, 41), (43, 42)]));
-		assert_eq!(ancestors, Some(HashSet::from([42, 41])));
+		let ancestors = ancestors_from_snapshot(42, &HashMap::from([(42, 41), (43, 42)]), |_| None);
+		assert_eq!(ancestors, Some(HashSet::from([42])));
 	}
 
 	#[test]
 	fn ancestry_cycle_is_bounded() {
 		assert_eq!(
-			ancestors_from_snapshot(42, &HashMap::from([(42, 41), (41, 42)])),
+			ancestors_from_snapshot(42, &HashMap::from([(42, 41), (41, 42)]), |_| None),
 			Some(HashSet::from([42, 41])),
 		);
+	}
+
+	#[test]
+	fn a_recycled_parent_pid_is_not_protected() {
+		let parents = HashMap::from([(42, 41), (41, 40), (40, 0)]);
+		for (births, expected) in [
+			([(42, 300), (41, 200), (40, 100)], HashSet::from([42, 41, 40])),
+			([(42, 300), (41, 400), (40, 100)], HashSet::from([42])),
+			([(42, 300), (41, 200), (40, 400)], HashSet::from([42, 41])),
+		] {
+			let births = HashMap::from(births);
+			assert_eq!(
+				ancestors_from_snapshot(42, &parents, |pid| births.get(&pid).copied()),
+				Some(expected),
+			);
+		}
 	}
 }
 
