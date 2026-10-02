@@ -7,7 +7,7 @@ import { MoveOverlay } from "@veyyon/coding-agent/modes/terminal/components/sele
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 
-function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void>) {
+function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void>, isStreaming = false) {
 	const state = {
 		cwd: sourceDir,
 		movedTo: undefined as string | undefined,
@@ -18,9 +18,8 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 	const restoreState = vi.fn((snap: { cwd: string }) => {
 		state.cwd = snap.cwd;
 	});
-	const applyCwdChange = vi.fn(async (cwd: string) => {
+	const applyCwdChange = vi.fn(async (cwd: string): Promise<void> => {
 		expect(state.cwd).toBe(cwd);
-		return true;
 	});
 	const withBtwSessionMove = vi.fn(async (operation: () => Promise<boolean>) => {
 		const moved = await operation();
@@ -28,7 +27,7 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		return moved;
 	});
 	const ctx = {
-		session: { isStreaming: false },
+		session: { isStreaming },
 		sessionManager: {
 			getCwd: () => state.cwd,
 			moveTo: vi.fn(async (cwd: string) => {
@@ -135,7 +134,8 @@ describe("CommandController /move", () => {
 		async rejection => {
 			const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-source-"));
 			try {
-				const { ctx, state, withBtwSessionMove } = createMoveContext(sourceDir);
+				const isStreaming = rejection === "streaming";
+				const { ctx, state, withBtwSessionMove } = createMoveContext(sourceDir, undefined, isStreaming);
 				const controller = new CommandController(ctx);
 				let targetPath: string | undefined;
 
@@ -150,7 +150,6 @@ describe("CommandController /move", () => {
 					ctx.showHookConfirm = vi.fn(async () => false);
 				} else if (rejection === "streaming") {
 					targetPath = path.join(sourceDir, "destination");
-					ctx.session.isStreaming = true;
 				}
 
 				await controller.handleMoveCommand(targetPath);

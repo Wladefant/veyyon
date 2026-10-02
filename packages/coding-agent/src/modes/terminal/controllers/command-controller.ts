@@ -10,7 +10,8 @@ import { resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
-import type { SessionManagerStateSnapshot } from "@veyyon/kernel/session/session-manager";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+type SessionManagerStateSnapshot = Parameters<SessionManager["restoreState"]>[0];
 import { Loader, Markdown, type OverlayHandle, Spacer, Text } from "@veyyon/tui";
 import {
 	APP_NAME,
@@ -115,6 +116,7 @@ export type CommandControllerContext = Pick<
 	| "statusLine"
 	| "ui"
 	| "updateEditorBorderColor"
+	| "withBtwSessionMove"
 >;
 
 export class CommandController {
@@ -1132,15 +1134,10 @@ export class CommandController {
 			this.ctx.showError(`Move failed: ${errorMessage(err)}`);
 			return false;
 		}
-		let applied = false;
 		try {
-			applied = await this.ctx.applyCwdChange(resolvedPath);
+			await this.ctx.applyCwdChange(resolvedPath);
 		} catch (error) {
 			await this.#restoreAfterMoveFailure(previousState, error);
-			return false;
-		}
-		if (!applied) {
-			await this.#restoreAfterMoveFailure(previousState);
 			return false;
 		}
 
