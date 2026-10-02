@@ -32,7 +32,7 @@ export function json(status: number, body: unknown, headers?: Record<string, str
  */
 export function gatewayResponseHeaders(
 	model: Model<Api>,
-	info: { requestId: string; message?: AssistantMessage; startedAt?: number },
+	info: { requestId: string; message?: AssistantMessage; costUsd?: number; startedAt?: number },
 ): Record<string, string> {
 	const headers: Record<string, string> = {
 		"x-request-id": info.requestId,
@@ -40,7 +40,8 @@ export function gatewayResponseHeaders(
 		"x-litellm-model-id": model.id,
 	};
 	if (model.baseUrl) headers["x-litellm-model-api-base"] = model.baseUrl;
-	if (info.message) headers["x-litellm-response-cost"] = info.message.usage.cost.total.toString();
+	if (info.costUsd !== undefined) headers["x-litellm-response-cost"] = info.costUsd.toString();
+	else if (info.message) headers["x-litellm-response-cost"] = info.message.usage.cost.total.toString();
 	if (info.startedAt !== undefined) {
 		const elapsed = (performance.now() - info.startedAt).toFixed(0);
 		headers["x-litellm-response-duration-ms"] = elapsed;
