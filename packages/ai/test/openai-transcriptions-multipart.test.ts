@@ -73,4 +73,91 @@ describe("transcribeOpenAI multipart adapter", () => {
 		}).catch(e => e);
 		expect(malformed).toBeInstanceOf(AIError.ProviderResponseError);
 	});
+
+	it("validates declared segment and word fields while retaining provider extras", async () => {
+		const dummy: TranscriptionRequest = {
+			audio: new Uint8Array([1]),
+			mimeType: "audio/wav",
+			responseFormat: "verbose_json",
+		};
+		const validFetch: FetchImpl = async () =>
+			Response.json({
+				text: "Hello world.",
+				language: "en",
+				duration: 2.0,
+				segments: [
+					{
+						id: "seg_0",
+						start: 0,
+						end: 2.0,
+						text: "Hello world.",
+						speaker: 1,
+						avg_logprob: -0.25,
+						no_speech_prob: 0.02,
+					},
+				],
+				words: [
+					{
+						word: "Hello",
+						start: 0,
+						end: 0.9,
+						speaker: "SPEAKER_1",
+						confidence: 0.99,
+						custom_extra: "word_extra_val",
+					},
+				],
+			});
+
+		const res = await transcribeOpenAI(model, dummy, { apiKey: "k", fetch: validFetch });
+		expect(res.text).toBe("Hello world.");
+		expect(res.segments?.[0]).toEqual({
+			id: "seg_0",
+			start: 0,
+			end: 2.0,
+			text: "Hello world.",
+			speaker: 1,
+			avg_logprob: -0.25,
+			no_speech_prob: 0.02,
+		});
+		expect(res.words?.[0]).toEqual({
+			word: "Hello",
+			start: 0,
+			end: 0.9,
+			speaker: "SPEAKER_1",
+			confidence: 0.99,
+			custom_extra: "word_extra_val",
+		});
+	});
+
+	it("rejects malformed nested segment and word fields with ProviderResponseError", async () => {
+		const dummy: TranscriptionRequest = { audio: new Uint8Array([1]), mimeType: "audio/wav", responseFormat: "json" };
+		const invalidPayloads: unknown[] = [
+			// breaking review inputs: invalid types for required fields
+			{ text: "ok", segments: [{ start: "later", end: 1, text: 7 }] },
+			{ text: "ok", words: [{ word: 7, start: 0, end: 1 }] },
+			// missing required fields
+			{ text: "ok", segments: [{ start: 0, end: 1 }] }, // missing text
+			{ text: "ok", segments: [{ text: "hi", end: 1 }] }, // missing start
+			{ text: "ok", segments: [{ text: "hi", start: 0 }] }, // missing end
+			{ text: "ok", words: [{ start: 0, end: 1 }] }, // missing word
+			{ text: "ok", words: [{ word: "hi", end: 1 }] }, // missing start
+			{ text: "ok", words: [{ word: "hi", start: 0 }] }, // missing end
+			// invalid optional declared fields when present
+			{ text: "ok", segments: [{ id: true, start: 0, end: 1, text: "ok" }] },
+			{ text: "ok", segments: [{ speaker: true, start: 0, end: 1, text: "ok" }] },
+			{ text: "ok", words: [{ word: "hi", start: 0, end: 1, speaker: true }] },
+			{ text: "ok", words: [{ word: "hi", start: 0, end: 1, confidence: "high" }] },
+		];
+
+		for (const payload of invalidPayloads) {
+			const err = await transcribeOpenAI(model, dummy, {
+				apiKey: "k",
+				fetch: async () => Response.json(payload),
+			}).catch(e => e);
+			expect(err).toBeInstanceOf(AIError.ProviderResponseError);
+			if (err instanceof AIError.ProviderResponseError) {
+				expect(err.message).toContain("transcription response is malformed");
+			}
+		}
+	});
 });

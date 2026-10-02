@@ -16,12 +16,28 @@ export class TranscriptionApiError extends AIError.ProviderHttpError {
 	override readonly name = "TranscriptionApiError";
 }
 
+const transcriptionSegmentSchema = type({
+	start: "number",
+	end: "number",
+	text: "string",
+	"id?": "number | string",
+	"speaker?": "number | string",
+});
+
+const transcriptionWordSchema = type({
+	word: "string",
+	start: "number",
+	end: "number",
+	"speaker?": "number | string",
+	"confidence?": "number",
+});
+
 const upstreamResponseSchema = type({
 	text: "string",
 	"language?": "string",
 	"duration?": "number",
-	"segments?": "object[]",
-	"words?": "object[]",
+	"segments?": transcriptionSegmentSchema.array(),
+	"words?": transcriptionWordSchema.array(),
 	"usage?": "object",
 });
 
@@ -120,8 +136,8 @@ export async function transcribeOpenAI(
 		text: parsed.text,
 		language: parsed.language,
 		duration: parsed.duration,
-		segments: parsed.segments as unknown as TranscriptionSegment[],
-		words: parsed.words as unknown as TranscriptionWord[],
+		segments: parsed.segments as TranscriptionSegment[] | undefined,
+		words: parsed.words as TranscriptionWord[] | undefined,
 		seconds: decoded.seconds,
 		usage: decoded.usage,
 	};
