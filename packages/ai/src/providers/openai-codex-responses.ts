@@ -2296,12 +2296,15 @@ class CodexStreamProcessor {
 				// took for this attempt and nothing mutates it; a retry replaces it
 				// with a fresh one. Adopting it saves a second full clone per turn.
 				state.lastRequest = runtime.requestBodyForState;
-				if (responseId) {
+				const replayableResponseItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+					structuredCloneJSON(runtime.nativeOutputItems),
+				);
+				if (responseId && replayableResponseItems) {
 					state.lastResponseId = responseId;
-					state.lastResponseItems = stripInputItemIds(structuredCloneJSON(runtime.nativeOutputItems));
+					state.lastResponseItems = replayableResponseItems;
 					state.canAppend = rawEvent.type === "response.done" || rawEvent.type === "response.completed";
 				} else {
-					// Without a response id the append baseline cannot be trusted.
+					// Without both a response id and replayable output, the append baseline cannot be trusted.
 					state.canAppend = false;
 				}
 			}
@@ -3112,14 +3115,6 @@ export function getOpenAICodexTransportDetails(
 		hasTurnState: state?.turnState !== undefined,
 		lastFallbackAt: state?.lastFallbackAt,
 	};
-}
-
-function stripInputItemIds(items: Array<Record<string, unknown>>): InputItem[] {
-	return items.map(item => {
-		if (item.id == null) return item as InputItem;
-		const { id: _id, ...rest } = item;
-		return rest as InputItem;
-	});
 }
 
 /**

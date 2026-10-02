@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Stored replay-sanitized Codex response items as the WebSocket append baseline, disabling append state when responses lack replayable assistant output ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses Lite requests to force tool_choice to auto, support PI_CODEX_RESPONSES_LITE overrides, and force reasoning.context to all_turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
