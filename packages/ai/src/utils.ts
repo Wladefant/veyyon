@@ -232,7 +232,7 @@ function sanitizeOpenAIResponsesReasoningItemForReplay(item: Record<string, unkn
 function sanitizeOpenAIResponsesImageGenerationCallForReplay(
 	item: Record<string, unknown>,
 ): ResponseInputItem.ImageGenerationCall | undefined {
-	if (typeof item.id !== "string" || item.status !== "completed" || typeof item.result !== "string") {
+	if (typeof item.id !== "string" || typeof item.result !== "string" || item.result.length === 0) {
 		return undefined;
 	}
 	return {
@@ -289,10 +289,14 @@ export function getOpenAIResponsesHistoryItems(
 
 /**
  * Resolve cache retention preference.
- * Defaults to "short" and uses VEYYON_CACHE_RETENTION for backward compatibility.
+ * Defaults to "short" and honors VEYYON_CACHE_RETENTION or PI_CACHE_RETENTION.
  */
-export function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+export function resolveCacheRetention(
+	cacheRetention?: CacheRetention,
+	fallback: CacheRetention = "short",
+): CacheRetention {
 	if (cacheRetention) return cacheRetention;
-	if ($env.VEYYON_CACHE_RETENTION === "long") return "long";
-	return "short";
+	const env = $env.VEYYON_CACHE_RETENTION ?? $env.PI_CACHE_RETENTION;
+	if (env === "long" || env === "short" || env === "none") return env;
+	return fallback;
 }
