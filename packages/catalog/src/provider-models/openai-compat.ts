@@ -4488,6 +4488,8 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	const resolveReference = createReferenceResolver(providerRefs);
 	return {
 		providerId: "github-copilot",
+		// Version the credential/endpoint-scoped namespace so stale cross-provider routing rows are never restored.
+		cacheProviderId: `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`,
 		...(apiKey && {
 			fetchDynamicModels: async hooks => {
 				const longContextVariants: ModelSpec<Api>[] = [];
