@@ -65,9 +65,9 @@ describe("openSqliteDatabase", () => {
 		}
 
 		expect(rawError).toBeDefined();
-		expect(rawError?.message).not.toContain("Database \"/some/test/path\":");
+		expect(rawError?.message).not.toContain('Database "/some/test/path":');
 		const annotated = annotateSqliteError(rawError, "/some/test/path");
-		expect(annotated.message).toContain("Database \"/some/test/path\":");
+		expect(annotated.message).toContain('Database "/some/test/path":');
 	});
 
 	it("checkpointWal runs passive WAL checkpoint without error", async () => {
