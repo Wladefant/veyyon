@@ -67,17 +67,13 @@ export class BtwController {
 		return this.#branchUnavailableReason() === undefined;
 	}
 
-	/** Whether plain `b` is currently reserved for a completed or pending branch action. */
+	/**
+	 * Whether plain `b` is currently reserved for a completed or pending branch action. The panel is
+	 * branchable only after `#runRequest` stored the completed answer, so this is the one gate that
+	 * keeps a running, empty, aborted or failed panel from swallowing the key.
+	 */
 	handlesBranchKey(): boolean {
-		if (this.#branchInFlight) return true;
-		if (this.#activeRequest?.component.isBranchable() !== true) return false;
-		return (
-			this.#lastQuestion !== undefined &&
-			this.#lastReplyText !== undefined &&
-			this.#lastAssistantMessage !== undefined &&
-			this.#lastLeafId !== undefined &&
-			this.#lastSessionId !== undefined
-		);
+		return this.#branchInFlight || this.#activeRequest?.component.isBranchable() === true;
 	}
 
 	#branchUnavailableReason(): string | undefined {

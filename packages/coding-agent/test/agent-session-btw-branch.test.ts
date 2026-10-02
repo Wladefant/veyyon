@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -10,14 +11,22 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
+import { BtwController } from "@veyyon/coding-agent/modes/terminal/controllers/btw-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { Container, type TUI } from "@veyyon/tui";
 import { Snowflake } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
 // stub alone leaves it loading the developer's real ~/.veyyon agent.db.
 useIsolatedGlobalSettings();
+
+beforeAll(async () => {
+	await initTheme();
+});
 
 function createBtwAssistant(): AssistantMessage {
 	return {
@@ -381,6 +390,121 @@ describe("AgentSession.branchFromBtw", () => {
 			"Cannot branch /btw while session maintenance or user work is still running",
 		);
 		expect(activeSession.sessionFile).toBe(originalFile);
+	});
+
+	// WHY: a post-prompt task that never settles (a hung provider stream) must not park a /btw
+	// promotion forever. The 5 s drain deadline is the only bound on that wait. Closes the class
+	// "branchFromBtw never settles on a stuck drain" for the drain; the extension-hook and flush
+	// awaits around it are deliberately unbounded here, as upstream leaves them.
+	describe("when a post-prompt task never settles", () => {
+		// The hidden turn finishes quickly, then its `agent_end` extension hook never returns: the
+		// session is idle (not streaming) but a tracked post-prompt task is still in flight.
+		let hookGate = Promise.withResolvers<void>();
+
+		beforeEach(() => {
+			hookGate = Promise.withResolvers<void>();
+		});
+
+		afterEach(() => {
+			hookGate.resolve();
+		});
+
+		async function createSessionWithHungDrain() {
+			const extensionRunner = {
+				hasHandlers: () => false,
+				hasUI: () => false,
+				emit: async (event: { type: string }) => {
+					if (event.type === "agent_end") await hookGate.promise;
+					return undefined;
+				},
+				emitBeforeAgentStart: async () => undefined,
+				emitError: () => {},
+			} as unknown as ExtensionRunner;
+			const activeSession = await createSession({ extensionRunner });
+			activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+			await activeSession.sessionManager.flush();
+			activeSession.queueDeferredMessage({
+				role: "custom",
+				customType: "test-hidden-message",
+				content: "hidden",
+				display: false,
+				timestamp: Date.now(),
+			});
+			for (
+				let attempt = 0;
+				attempt < 200 && (activeSession.isStreaming || !activeSession.hasPostPromptWork);
+				attempt++
+			) {
+				await sleep(10);
+			}
+			expect(activeSession.isStreaming).toBe(false);
+			expect(activeSession.hasPostPromptWork).toBe(true);
+			await activeSession.sessionManager.flush();
+			return activeSession;
+		}
+
+		it("settles at the drain deadline and leaves the transcript untouched", { timeout: 20_000 }, async () => {
+			const activeSession = await createSessionWithHungDrain();
+			const originalFile = activeSession.sessionFile;
+			const leafId = requiredLeafId(activeSession);
+			const entryCount = activeSession.sessionManager.getEntries().length;
+
+			const startedAt = performance.now();
+			const outcome = await activeSession
+				.branchFromBtw("question", createBtwAssistant(), leafId, activeSession.sessionManager.getSessionId())
+				.then(
+					() => "resolved" as const,
+					(error: Error) => error.message,
+				);
+			const elapsedMs = performance.now() - startedAt;
+
+			expect(outcome).toBe("Timed out draining post-prompt tasks before /btw branch");
+			// Waited out the 5 s deadline (not an early refusal) and settled within its bound.
+			expect(elapsedMs).toBeGreaterThanOrEqual(4_900);
+			expect(elapsedMs).toBeLessThan(8_000);
+			expect(activeSession.sessionFile).toBe(originalFile);
+			expect(activeSession.sessionManager.getLeafId()).toBe(leafId);
+			expect(activeSession.sessionManager.getEntries()).toHaveLength(entryCount);
+		});
+
+		it("returns the controller to an actionable state after the refused promotion", { timeout: 20_000 }, async () => {
+			const activeSession = await createSessionWithHungDrain();
+			const manager = activeSession.sessionManager;
+			const btwContainer = new Container();
+			const showStatus = vi.fn();
+			const answer = createBtwAssistant();
+			const controller = new BtwController({
+				ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
+				btwContainer,
+				session: {
+					model: activeSession.model,
+					get isStreaming() {
+						return activeSession.isStreaming;
+					},
+					runEphemeralTurn: async () => ({ replyText: "the answer", assistantMessage: answer }),
+				} as unknown as InteractiveModeContext["session"],
+				sessionManager: manager,
+				showStatus,
+				showError: vi.fn(),
+				handleBtwBranch: (question, assistantMessage, leafId, sessionId) =>
+					activeSession.branchFromBtw(question, assistantMessage, leafId, sessionId).then(() => {}),
+			});
+			await controller.start("question");
+			await sleep(0);
+			expect(controller.canCopy()).toBe(true);
+
+			const branch = controller.handleBranch().then(
+				() => "resolved" as const,
+				(error: Error) => error.message,
+			);
+			expect(controller.handlesBranchKey()).toBe(true);
+
+			expect(await branch).toBe("Timed out draining post-prompt tasks before /btw branch");
+			// Not stuck "in progress": Esc dismisses the panel instead of being refused.
+			expect(controller.handleEscape()).toBe(true);
+			expect(controller.hasActiveRequest()).toBe(false);
+			expect(showStatus).not.toHaveBeenCalledWith("/btw branch is in progress", { dim: true });
+		});
 	});
 
 	it("throws for in-memory sessions", async () => {
