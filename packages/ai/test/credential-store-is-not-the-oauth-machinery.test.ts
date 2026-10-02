@@ -122,8 +122,15 @@ const ROWS_CEILING = 8;
  * that replaced `winston` and `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on this reach,
  * writes through it, and its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already
  * reached, so this closure gained a name and no edge.
+ *
+ * RE-MEASURED 2026-10-02 at 48. The 2026-09-29 change above and the `shared-project-providers.ts` change
+ * each added one module and each recorded the ceiling as 47, on parallel branches; the merge kept one
+ * number, so main sat one module over its own limit. `shared-project-providers.ts` is a zero-import leaf
+ * that owns which providers' accounts share one project id. `auth-credential-rows.ts` reads it so an
+ * Antigravity login naming no account is never keyed on the shared project, and `usage.ts` re-exports it.
+ * It imports nothing, so this closure gained a name and no edge.
  */
-const STORE_CEILING = 47;
+const STORE_CEILING = 48;
 
 describe("the row helpers are pure", () => {
 	/**
