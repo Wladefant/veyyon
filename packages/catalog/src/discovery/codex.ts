@@ -2,7 +2,7 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
 import { canonicalizeEfforts, type Effort, isEffort } from "../effort";
 import { parseKnownModel, semverEqual } from "../identity/classify";
-import type { ModelReasoningOptions, ModelSpec } from "../types";
+import type { FetchImpl, ModelReasoningOptions, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toNonEmptyString } from "../utils";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
@@ -72,7 +72,7 @@ export interface CodexModelDiscoveryOptions {
 	/** Abort signal for network request cancellation. */
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
-	fetchFn?: typeof fetch;
+	fetchFn?: FetchImpl;
 	/**
 	 * Called with the reason each route attempt produced nothing.
 	 *
