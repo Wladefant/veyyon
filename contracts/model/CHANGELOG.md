@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `image_end` to `AssistantMessageEvent` for streamed image completion events (Refs #107).
+
+### Fixed
+
+- Included native generated images in the assistant content contract used by Responses providers.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
