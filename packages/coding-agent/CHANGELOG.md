@@ -8,6 +8,7 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Fixed an eval cell whose idle timeout fired during kernel startup killing the whole host with an unhandled `TimeoutError` rejection, and the Python runner stderr drain splitting multi-byte characters across chunks ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation, while preserving configured endpoint failovers ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Fixed the embedded shell's `command -v`/`-V` honoring only the first operand: it now iterates every name like bash/zsh, printing one line per resolved name and skipping misses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4397d12100f63bc3085b573b983c120524ea58ed).
