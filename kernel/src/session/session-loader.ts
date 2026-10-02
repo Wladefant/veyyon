@@ -540,21 +540,32 @@ type BlobSite =
 	| { kind: "text-item"; owner: unknown[]; index: number };
 
 /**
- * Strings shorter than this stay unpooled. On a 372.7 MiB session of 107,918 entries, pooling from
- * 64 characters took the loaded heap from 608.7 MiB to 397.9 MiB; from 256 characters it reached
- * only 474.5 MiB, and from 8 characters it saved 17 MiB more than 64 for 105 ms more of the walk.
+ * Strings shorter than this are pooled per key, not by text. On a 372.7 MiB session of 107,918
+ * entries, pooling every string from 64 characters took the loaded heap from 608.7 MiB to
+ * 397.9 MiB; from 256 characters it reached only 474.5 MiB, and from 8 characters it saved 17 MiB
+ * more than 64 for 105 ms more of the walk, most of it spent inserting ids and timestamps no other
+ * string repeats.
  */
 const MIN_POOLED_LENGTH = 64;
+
+/**
+ * Distinct short strings one key pools before the load stops pooling that key. A key whose values
+ * come from a small set (`role`, `type`, `api`, `provider`, `model`, `stopReason`, a tool name)
+ * stays under it for a whole session; a key holding ids or timestamps reaches it within the first
+ * entries and costs one lookup per string after that.
+ */
+export const MAX_SHORT_VALUES_PER_KEY = 256;
 
 /**
  * One copy of each repeated string in the entries one load restores.
  *
  * A session file writes a text once for every place it occurs: a file read twice, an eval cell's
  * code beside the call that ran it, a card's text beside the result's own, each compaction's file
- * list. `JSON.parse` gives every occurrence its own string. Strings are immutable, so pointing each
- * occurrence at the first leaves the entries equal and lets the copies be collected. The load empties
- * the pool before it returns: JavaScriptCore kept the first load's pool reachable after that load
- * returned, which held every distinct pooled string of a session the caller had already released.
+ * list, and the role, api, provider and model of every message. `JSON.parse` gives every occurrence
+ * its own string. Strings are immutable, so pointing each occurrence at the first leaves the entries
+ * equal and lets the copies be collected. The load empties the pool before it returns:
+ * JavaScriptCore kept the first load's pool reachable after that load returned, which held every
+ * distinct pooled string of a session the caller had already released.
  *
  * A field a result codec rebuilds is not pooled: the rebuild is the result's content string or a
  * slice of it, and that content is pooled. Pooling the rebuilt fields of a 372.7 MiB session written
@@ -562,10 +573,31 @@ const MIN_POOLED_LENGTH = 64;
  */
 class StringPool {
 	readonly #strings = new Map<string, string>();
+	/**
+	 * The short strings pooled under each key, or `null` for a key that held more than
+	 * {@link MAX_SHORT_VALUES_PER_KEY} distinct ones; `undefined` when the pool keeps short strings
+	 * as they are.
+	 */
+	readonly #shortByKey: Map<string, Map<string, string> | null> | undefined;
 
-	/** The pooled string equal to `value`, pooling `value` when it is the first of its text. */
-	intern(value: string): string {
-		if (value.length < MIN_POOLED_LENGTH) return value;
+	/**
+	 * `pooledShort` pools strings shorter than {@link MIN_POOLED_LENGTH}: a load of a whole session
+	 * repeats them across entries, and the read-back of one entry does not.
+	 */
+	constructor(pooledShort: boolean) {
+		this.#shortByKey = pooledShort ? new Map() : undefined;
+	}
+
+	/**
+	 * The pooled string equal to `value`, pooling `value` when it is the first of its text. A string
+	 * shorter than {@link MIN_POOLED_LENGTH} is pooled with the strings under the same `key`, and a
+	 * string of one character, which the engine holds once already, is returned as it is.
+	 */
+	intern(value: string, key?: string): string {
+		if (value.length < MIN_POOLED_LENGTH) {
+			const byKey = this.#shortByKey;
+			return value.length < 2 || key === undefined || byKey === undefined ? value : internShort(byKey, value, key);
+		}
 		const known = this.#strings.get(value);
 		if (known !== undefined) return known;
 		this.#strings.set(value, value);
@@ -575,7 +607,26 @@ class StringPool {
 	/** Drop every pooled string, so a pool the engine keeps reachable holds no text. */
 	clear(): void {
 		this.#strings.clear();
+		this.#shortByKey?.clear();
 	}
+}
+
+/** {@link StringPool.intern} for a string shorter than {@link MIN_POOLED_LENGTH} under `key`. */
+function internShort(byKey: Map<string, Map<string, string> | null>, value: string, key: string): string {
+	let values = byKey.get(key);
+	if (values === null) return value;
+	if (values === undefined) {
+		values = new Map();
+		byKey.set(key, values);
+	}
+	const known = values.get(value);
+	if (known !== undefined) return known;
+	if (values.size >= MAX_SHORT_VALUES_PER_KEY) {
+		byKey.set(key, null);
+		return value;
+	}
+	values.set(value, value);
+	return value;
 }
 
 /** What the one walk over the loaded entries gathers. */
@@ -608,7 +659,7 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 			// the string by value and cannot rewrite the slot it lives in.
 			if (typeof item === "string") {
 				if (isTextBlobRef(item)) scan.sites.push({ kind: "text-item", owner: value, index });
-				else value[index] = scan.strings.intern(item);
+				else value[index] = scan.strings.intern(item, key);
 				continue;
 			}
 			scanEntryValue(item, scan, key);
@@ -627,7 +678,7 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 		// string value at an arbitrary key; restore the full content in place.
 		if (typeof item === "string") {
 			if (isTextBlobRef(item)) scan.sites.push({ kind: "text", owner: target, key: childKey });
-			else target[childKey] = scan.strings.intern(item);
+			else target[childKey] = scan.strings.intern(item, childKey);
 			continue;
 		}
 		scanEntryValue(item, scan, childKey);
@@ -767,8 +818,9 @@ export interface BlobResolutionOptions {
  * Restore what persistence moved out of each entry: every externalized payload the blob store still
  * holds, then every tool-result field a codec dropped, which a codec rebuilds from that restored
  * content. Every parsed or blob-restored string of 64 characters or more ends up sharing one copy
- * with each equal string in `entries`. Reports the payloads the blob store does not hold and returns
- * how many references stayed references.
+ * with each equal string in `entries`, and so does every shorter parsed string of two characters or
+ * more under a key holding at most 256 distinct ones. Reports the payloads the blob store does not
+ * hold and returns how many references stayed references.
  *
  * Two phases for the blobs: collect every reference in the session synchronously, then read them
  * through one bounded pool. The cap is session-wide rather than per-entry, so a transcript of a
@@ -780,7 +832,7 @@ export async function resolveBlobRefsInEntries(
 	options?: BlobResolutionOptions,
 ): Promise<number> {
 	const lost: LostPayloads = { count: 0 };
-	const scan: EntryScan = { sites: [], strings: new StringPool() };
+	const scan: EntryScan = { sites: [], strings: new StringPool(true) };
 	try {
 		for (const entry of entries) {
 			if (entry.type !== "session") scanEntryValue(entry, scan);
@@ -807,7 +859,7 @@ export async function resolveBlobRefsInEntries(
  */
 export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore): number {
 	const lost: LostPayloads = { count: 0 };
-	const scan: EntryScan = { sites: [], strings: new StringPool() };
+	const scan: EntryScan = { sites: [], strings: new StringPool(false) };
 	scanEntryValue(entry, scan);
 	for (const site of scan.sites) resolveBlobSiteSync(site, blobStore, lost, scan.strings);
 	restoreToolResultEntries([entry]);
