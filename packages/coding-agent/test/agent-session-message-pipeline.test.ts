@@ -522,11 +522,12 @@ describe("AgentSession message pipeline", () => {
 		const optionsList: SimpleStreamOptions[] = [];
 		registerCustomApi(api, (_model, context, options) => {
 			contexts.push(context);
-			optionsList.push(options);
+			if (options) optionsList.push(options);
 			const stream = new AssistantMessageEventStream();
 			queueMicrotask(() => {
 				const message = createAssistantMessage(`Answer ${contexts.length}`);
-				stream.push({ type: "text_delta", contentIndex: 0, delta: message.content[0].text, partial: message });
+				const text = message.content[0]?.type === "text" ? message.content[0].text : `Answer ${contexts.length}`;
+				stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
 				stream.push({ type: "done", reason: "stop", message });
 			});
 			return stream;
@@ -572,11 +573,7 @@ describe("AgentSession message pipeline", () => {
 				content: [{ type: "text", text: "First BTW question" }],
 				timestamp: 1,
 			},
-			{
-				role: "assistant",
-				content: [{ type: "text", text: "First BTW answer" }],
-				timestamp: 2,
-			},
+			createAssistantMessage("First BTW answer"),
 		];
 		const firstResult = await session.runEphemeralTurn({
 			promptText: "Follow-up question",

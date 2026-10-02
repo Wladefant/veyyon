@@ -1130,15 +1130,10 @@ export class CommandController {
 			this.ctx.showError(`Move failed: ${errorMessage(err)}`);
 			return false;
 		}
-		let applied = false;
 		try {
-			applied = await this.ctx.applyCwdChange(resolvedPath);
+			await this.ctx.applyCwdChange(resolvedPath);
 		} catch (error) {
 			await this.#restoreAfterMoveFailure(previousState, error);
-			return false;
-		}
-		if (!applied) {
-			await this.#restoreAfterMoveFailure(previousState);
 			return false;
 		}
 
