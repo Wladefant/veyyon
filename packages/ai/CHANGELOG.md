@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the GMI Cloud provider (`gmi-cloud`) registry definition with an API-key paste login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
