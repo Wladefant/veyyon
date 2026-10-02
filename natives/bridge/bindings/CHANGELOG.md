@@ -17,6 +17,8 @@
 
 ### Changed
 
+- Workspace startup scans skip excluded build directories and retain a bounded set of entries and directory rules ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 - Merged upstream v1.5.0.
 ### Added
 
