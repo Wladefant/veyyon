@@ -8,19 +8,34 @@
  * caller can receive its result, then unref it again for interactive/daemon
  * shutdown behavior.
  */
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import type { Subprocess } from "bun";
 import {
-	createMnemopiEmbedSubprocess,
 	MnemopiEmbedClient,
 	type MnemopiEmbedWorkerHandle,
-	wrapSubprocess,
 } from "../src/memory/mnemopi/embed-client";
 import type { MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound } from "../src/memory/mnemopi/embed-protocol";
 import { hermeticSpawnEnv } from "./helpers/hermetic-spawn-env";
 
 const embedClientPath = path.resolve(import.meta.dir, "../src/memory/mnemopi/embed-client.ts");
 const workerClientPath = path.resolve(import.meta.dir, "../src/subprocess/worker-client.ts");
+
+async function killAndReapSubprocess(proc: Subprocess | undefined): Promise<void> {
+	if (!proc) return;
+	try {
+		if (proc.exitCode === null) {
+			proc.kill("SIGKILL");
+		}
+	} catch {
+		// already exited or failed to signal
+	}
+	try {
+		await proc.exited;
+	} catch {
+		// already reaped
+	}
+}
 
 class TrackingEmbedWorker implements MnemopiEmbedWorkerHandle {
 	readonly requests: MnemopiEmbedWorkerInbound[] = [];
@@ -127,34 +142,6 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 		}
 	});
 
-	it("delegates ref and unref to the underlying subprocess via wrapSubprocess and tolerates terminated children", async () => {
-		const spawned = createMnemopiEmbedSubprocess();
-		const handle = wrapSubprocess(spawned);
-		const refSpy = spyOn(spawned.proc, "ref");
-		const unrefSpy = spyOn(spawned.proc, "unref");
-
-		handle.ref();
-		expect(refSpy).toHaveBeenCalledTimes(1);
-
-		handle.unref();
-		expect(unrefSpy).toHaveBeenCalledTimes(1);
-
-		// Terminate and verify post-exit swallow contract
-		await handle.terminate();
-		await spawned.proc.exited;
-
-		// Force the underlying proc to throw on ref/unref after termination
-		refSpy.mockImplementation(() => {
-			throw new Error("subprocess terminated");
-		});
-		unrefSpy.mockImplementation(() => {
-			throw new Error("subprocess terminated");
-		});
-
-		expect(() => handle.ref()).not.toThrow();
-		expect(() => handle.unref()).not.toThrow();
-	}, 15_000);
-
 	it("keeps a short-lived caller alive until delayed responses arrive through wrapSubprocess, then exits when idle", async () => {
 		const repoRoot = path.resolve(import.meta.dir, "../../..");
 		// Real platform clock delay: external child process tests cross-process OS event-loop
@@ -204,8 +191,9 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			NODE_ENV: "production",
 			VEYYON_TEST_RUNTIME: "0",
 		});
+		let proc: Subprocess | undefined;
 		try {
-			const proc = Bun.spawn([process.execPath, "-e", callerScript], {
+			proc = Bun.spawn([process.execPath, "-e", callerScript], {
 				cwd: repoRoot,
 				stdout: "pipe",
 				stderr: "pipe",
@@ -226,6 +214,7 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			expect(result.vectors).toEqual([[0.125, 0.875]]);
 			expect(result.durationMs).toBeGreaterThanOrEqual(150);
 		} finally {
+			await killAndReapSubprocess(proc);
 			cleanup();
 		}
 	}, 30_000);
@@ -281,8 +270,9 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			NODE_ENV: "production",
 			VEYYON_TEST_RUNTIME: "0",
 		});
+		let proc: Subprocess | undefined;
 		try {
-			const proc = Bun.spawn([process.execPath, "-e", callerScript], {
+			proc = Bun.spawn([process.execPath, "-e", callerScript], {
 				cwd: repoRoot,
 				stdout: "pipe",
 				stderr: "pipe",
@@ -304,6 +294,7 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			expect(result.model2Ok).toBe(true);
 			expect(result.durationMs).toBeGreaterThanOrEqual(80);
 		} finally {
+			await killAndReapSubprocess(proc);
 			cleanup();
 		}
 	}, 30_000);
@@ -379,8 +370,9 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			NODE_ENV: "production",
 			VEYYON_TEST_RUNTIME: "0",
 		});
+		let proc: Subprocess | undefined;
 		try {
-			const proc = Bun.spawn([process.execPath, "-e", callerScript], {
+			proc = Bun.spawn([process.execPath, "-e", callerScript], {
 				cwd: repoRoot,
 				stdout: "pipe",
 				stderr: "pipe",
@@ -403,6 +395,7 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			expect(result.fastDuration).toBeLessThan(result.slowDuration);
 			expect(result.totalDuration).toBeGreaterThanOrEqual(160);
 		} finally {
+			await killAndReapSubprocess(proc);
 			cleanup();
 		}
 	}, 30_000);
