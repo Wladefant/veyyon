@@ -283,6 +283,46 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(runA?.[2].text).toBe(runB?.[2].text);
 	});
 
+	it("caches before the project footer when active-repo context follows it (#7324)", () => {
+		const staticInstructions = "STATIC INSTRUCTIONS BLOCK";
+		const projectFooter = "PROJECT\nToday is 2026-08-01, cwd '/tmp'.";
+		const activeRepoContext = "The active repository is './repo'.";
+		const blocks = buildAnthropicSystemBlocks([staticInstructions, projectFooter, activeRepoContext], {
+			includeClaudeCodeInstruction: true,
+			cacheControl: { type: "ephemeral" },
+		});
+		expect(blocks).toBeDefined();
+		// [billing, CC identity, staticInstructions, projectFooter, activeRepoContext]
+		// Caching covers the last three blocks so the stable prefix before the footer
+		// is cached regardless of whether activeRepoContext is present.
+		expect(blocks![2].text).toBe(staticInstructions);
+		expect(blocks![2].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![3].text).toBe(projectFooter);
+		expect(blocks![3].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![4].text).toBe(activeRepoContext);
+		expect(blocks![4].cache_control).toEqual({ type: "ephemeral" });
+	});
+
+	it("caches before volatile memory recall blocks (#12447)", () => {
+		const staticInstructions = "STATIC INSTRUCTIONS BLOCK";
+		const projectFooter = "PROJECT\nToday is 2026-08-01, cwd '/tmp'.";
+		const recallBlock = "<memories>\n- User prefers TypeScript\n</memories>";
+		const blocks = buildAnthropicSystemBlocks([staticInstructions, projectFooter, recallBlock], {
+			includeClaudeCodeInstruction: true,
+			cacheControl: { type: "ephemeral" },
+		});
+		expect(blocks).toBeDefined();
+		// [billing, CC identity, staticInstructions, projectFooter, recallBlock]
+		// The volatile memory block must NOT receive cache_control; breakpoints
+		// anchor on the stable prefix ending at projectFooter.
+		expect(blocks![2].text).toBe(staticInstructions);
+		expect(blocks![2].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![3].text).toBe(projectFooter);
+		expect(blocks![3].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![4].text).toBe(recallBlock);
+		expect(blocks![4].cache_control).toBeUndefined();
+	});
+
 	it("caches Claude Code context and the last user block in OAuth request payloads", async () => {
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
 			systemPrompt: ["Stay concise."],

@@ -3182,16 +3182,48 @@ type SystemBlockOptions = {
 };
 
 /**
- * Place system-block cache breakpoints that survive a volatile trailing block.
+ * Trailing system-prompt segments carrying per-turn volatile content (memory
+ * recall blocks). They are rendered by the coding agent as their own
+ * `systemPrompt` array elements and always appended last, so on the wire they
+ * form a volatile suffix after the stable prefix. The system cache breakpoint
+ * anchors on the last stable segment instead of the array tail, so a recall
+ * refresh re-bills only the suffix and the message tail for one turn while
+ * the tools+stable-system prefix stays a cache hit.
  *
- * veyyon appends per-request project context (cwd, date, workspace tree) as the
- * final system block, so a single trailing breakpoint hashes the whole prefix
- * *including* that block — a new cwd or a midnight rollover then re-writes the
- * entire system cache (issue #7324). This caches the trailing block (full-match
- * reuse when nothing changed) AND the stable harness prefix at `firstCacheableIndex`
- * (preserving the shared prompt prefix across suffix/assignment changes).
+ * Detection is by our own markup, not model identity: recall blocks always
+ * open with `<memories>`. Stable segments containing recalled text elsewhere
+ * (e.g. quoted in conversation) are unaffected — only a leading tag counts.
+ */
+export const VOLATILE_SYSTEM_SEGMENT_MARKERS = ["<memories>"];
+
+export function stableSystemSuffixStart(systemBlocks: readonly AnthropicSystemBlock[]): number {
+	for (let index = 0; index < systemBlocks.length; index++) {
+		const text = systemBlocks[index]?.text ?? "";
+		if (VOLATILE_SYSTEM_SEGMENT_MARKERS.some(marker => text.startsWith(marker))) return index;
+	}
+	return systemBlocks.length;
+}
+
+/**
+ * Place system-block cache breakpoints that survive volatile project context
+ * and volatile memory recall suffixes.
  *
- * @returns breakpoints placed (0-2, capped by `maxBreakpoints`).
+ * veyyon normally appends its project footer (cwd, date, workspace tree) after the
+ * stable system prefix. When cwd is outside a single direct child repository,
+ * an active-repo context block follows that footer. Caching up to the last three
+ * eligible blocks therefore covers both layouts:
+ *
+ * - stable prefix, project footer
+ * - stable prefix, project footer, active-repo context
+ *
+ * When volatile recall blocks (like `<memories>`) follow the stable prefix,
+ * caching anchors on the stable prefix ending before `stableSystemSuffixStart(blocks)`
+ * so recall refreshes do not invalidate the stable system cache.
+ *
+ * A footer change can then fall back to the stable-prefix entry instead of
+ * re-writing the entire system cache (issue #7324).
+ *
+ * @returns breakpoints placed, capped by `maxBreakpoints`.
  */
 function cacheSystemPrefixBreakpoints(
 	blocks: AnthropicSystemBlock[],
@@ -3201,15 +3233,12 @@ function cacheSystemPrefixBreakpoints(
 ): number {
 	if (!cacheControl || maxBreakpoints <= 0) return 0;
 	let placed = 0;
-	const lastIndex = blocks.length - 1;
-	if (lastIndex >= firstCacheableIndex && blocks[lastIndex].cache_control == null) {
-		blocks[lastIndex] = { ...blocks[lastIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
-		placed++;
-	}
-	if (placed >= maxBreakpoints) return placed;
-	const stableIndex = firstCacheableIndex;
-	if (stableIndex < lastIndex && blocks[stableIndex].cache_control == null) {
-		blocks[stableIndex] = { ...blocks[stableIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
+	const suffixStart = stableSystemSuffixStart(blocks);
+	const startIndex =
+		suffixStart < blocks.length && suffixStart > firstCacheableIndex ? suffixStart - 1 : blocks.length - 1;
+	for (let index = startIndex; index >= firstCacheableIndex && placed < maxBreakpoints; index--) {
+		if (blocks[index].cache_control != null) continue;
+		blocks[index] = { ...blocks[index], cache_control: cloneAnthropicCacheControl(cacheControl) };
 		placed++;
 	}
 	return placed;
@@ -3248,7 +3277,7 @@ export function buildAnthropicSystemBlocks(
 		for (const prompt of sanitizedPrompts) {
 			blocks.push({ type: "text", text: prompt });
 		}
-		cacheSystemPrefixBreakpoints(blocks, cacheControl, 2, firstCacheableSystemIndex(blocks));
+		cacheSystemPrefixBreakpoints(blocks, cacheControl, 3, firstCacheableSystemIndex(blocks));
 
 		return blocks;
 	}
@@ -3553,17 +3582,18 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		isCCLayout =
 			params.system.length >= 3 &&
 			(params.system[0] as { text?: string }).text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX) === true;
+		const maxSystemBreakpoints = Math.min(3, MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed);
 		cacheBreakpointsUsed += cacheSystemPrefixBreakpoints(
 			params.system as AnthropicSystemBlock[],
 			cacheControl,
-			MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed,
+			maxSystemBreakpoints,
 			isCCLayout ? firstCacheableSystemIndex(params.system as AnthropicSystemBlock[]) : 0,
 		);
 	}
 	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
 
 	const start = isCCLayout ? Math.max(0, params.messages.length - 1) : Math.max(0, params.messages.length - 2);
-	for (let i = start; i < params.messages.length; i++) {
+	for (let i = params.messages.length - 1; i >= start; i--) {
 		if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) break;
 		const message = params.messages[i];
 		if (!message) continue;
