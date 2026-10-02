@@ -36,21 +36,12 @@ function migrateSessionDirPath(oldPath: string, newPath: string): void {
 			continue;
 		}
 		try {
-			fs.linkSync(src, dst);
+			fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
 		} catch (error) {
 			if (error instanceof Error && "code" in error && error.code === "EEXIST") continue;
-			if (!(error instanceof Error && "code" in error && (error.code === "EXDEV" || error.code === "EPERM"))) {
-				throw error;
-			}
-			try {
-				fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
-			} catch (copyError) {
-				if (copyError instanceof Error && "code" in copyError && copyError.code === "EEXIST") continue;
-				throw copyError;
-			}
+			throw error;
 		}
-		// Both publication paths fail atomically if another writer owns the destination.
-		fs.unlinkSync(src);
+		// A writer can replace the source path after publication; retain its unowned copy.
 	}
 	if (fs.readdirSync(oldPath).length === 0) fs.rmdirSync(oldPath);
 }

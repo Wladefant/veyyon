@@ -42,13 +42,13 @@ describe("hashed session directories remain discoverable", () => {
 				.slice(-80);
 			const digest = createHash("sha256").update(cwd.replaceAll("\\", "/")).digest("hex");
 			const hashed = path.join(sessions, `${scope}-${readable}-${digest}`);
-			fs.mkdirSync(hashed);
+			fs.mkdirSync(hashed, { recursive: true });
 			fs.writeFileSync(path.join(hashed, "stale.jsonl"), '{"type":"session","version":1}\n');
 			const storage = new FileSessionStorage();
 			const target = computeDefaultSessionDir(cwd, storage, sessions);
 			expect(fs.readFileSync(path.join(target, "stale.jsonl"), "utf8")).toBe('{"type":"session","version":1}\n');
-			expect(fs.existsSync(hashed)).toBe(false);
-			fs.mkdirSync(hashed);
+			expect(fs.existsSync(hashed)).toBe(true);
+			fs.mkdirSync(hashed, { recursive: true });
 			fs.writeFileSync(path.join(hashed, "stale.jsonl"), "different stale transcript\n");
 			fs.writeFileSync(path.join(hashed, "second.jsonl"), "second transcript\n");
 			expect(computeDefaultSessionDir(cwd, storage, sessions)).toBe(target);
