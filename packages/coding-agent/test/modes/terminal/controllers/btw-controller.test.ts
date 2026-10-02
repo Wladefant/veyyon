@@ -1,10 +1,16 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
+import { BtwHistoryPanel } from "@veyyon/coding-agent/modes/terminal/components/dialogs/btw-history-panel";
 import { BtwPanelComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/btw-panel";
 import { BtwController } from "@veyyon/coding-agent/modes/terminal/controllers/btw-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { BtwHistoryStore } from "@veyyon/coding-agent/session/btw-history";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import * as clipboard from "@veyyon/coding-agent/utils/clipboard";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Container, type TUI } from "@veyyon/tui";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 
@@ -55,12 +61,20 @@ function makeCtx(session: InteractiveModeContext["session"], btwContainer = new 
 	let leafId: string | null = "leaf-1";
 	let sessionId = "session-1";
 	return {
-		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
+		ui: {
+			requestRender: vi.fn(),
+			requestComponentRender: vi.fn(),
+			showOverlay: vi.fn(() => ({ hide: vi.fn() })),
+			setFocus: vi.fn(),
+			terminal: { rows: 30 },
+		} as unknown as TUI,
 		btwContainer,
 		session,
 		sessionManager: {
 			getLeafId: () => leafId,
 			getSessionId: () => sessionId,
+			getArtifactsDir: () => undefined,
+			ensureOnDisk: async () => {},
 		} as unknown as InteractiveModeContext["sessionManager"],
 		showStatus: vi.fn(),
 		showError: vi.fn(),
@@ -170,40 +184,28 @@ describe("BtwController", () => {
 		expect(rendered).toContain("b branch to chat");
 	});
 
-	it("replaces a previous request by aborting it before issuing the next runEphemeralTurn", async () => {
-		const signals: AbortSignal[] = [];
+	it("refuses a second question without cancelling a running request viewed in history", async () => {
 		const first = Promise.withResolvers<RunEphemeralTurnResult>();
-		const firstPromise = first.promise;
-		const runEphemeralTurn = vi
-			.fn<(args: RunEphemeralTurnArgs) => Promise<RunEphemeralTurnResult>>()
-			.mockImplementationOnce(async args => {
-				signals.push(args.signal as AbortSignal);
-				return firstPromise;
-			})
-			.mockImplementationOnce(async args => {
-				signals.push(args.signal as AbortSignal);
-				return { replyText: "second", assistantMessage: createAssistantMessage("second") };
-			});
-		const btwContainer = new Container();
-		const ctx = makeCtx(makeFakeSession(runEphemeralTurn), btwContainer);
+		const runEphemeralTurn = vi.fn((_args: RunEphemeralTurnArgs) => first.promise);
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
 		const controller = new BtwController(ctx);
 
 		await controller.start("First?");
+		await controller.start("");
 		await controller.start("Second?");
-		// Allow the second call to settle.
-		await Promise.resolve();
-		await Promise.resolve();
 
-		expect(runEphemeralTurn).toHaveBeenCalledTimes(2);
-		expect(signals[0]?.aborted).toBe(true);
-		expect(signals[1]?.aborted).toBe(false);
-		expect(btwContainer.children).toHaveLength(1);
-		// Allow the orphaned first request to finish to keep the test clean.
+		expect(runEphemeralTurn).toHaveBeenCalledTimes(1);
+		expect(runEphemeralTurn.mock.calls[0]?.[0].signal?.aborted).toBe(false);
 		first.resolve({ replyText: "first", assistantMessage: createAssistantMessage("first") });
+		await drainBtwRequest();
+		await controller.start("Third?");
+		expect(runEphemeralTurn).toHaveBeenCalledTimes(2);
+		await controller.dispose();
 	});
 
-	it("clears the panel when the active request is dismissed via Escape", async () => {
-		const runEphemeralTurn = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
+	it("cancels a running answer on Escape and closes its retained panel on the next Escape", async () => {
+		const pending = Promise.withResolvers<RunEphemeralTurnResult>();
+		const runEphemeralTurn = vi.fn((_args: RunEphemeralTurnArgs) => pending.promise);
 		const btwContainer = new Container();
 		const ctx = makeCtx(makeFakeSession(runEphemeralTurn), btwContainer);
 		const controller = new BtwController(ctx);
@@ -211,21 +213,29 @@ describe("BtwController", () => {
 		await controller.start("Question?");
 		expect(btwContainer.children).toHaveLength(1);
 		expect(controller.handleEscape()).toBe(true);
+		expect(runEphemeralTurn.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+		expect(btwContainer.children).toHaveLength(1);
+		expect(controller.hasActiveRequest()).toBe(true);
+		expect(controller.handleEscape()).toBe(true);
 		expect(btwContainer.children).toHaveLength(0);
 		expect(controller.hasActiveRequest()).toBe(false);
+		pending.resolve({ replyText: "Late answer", assistantMessage: createAssistantMessage("Late answer") });
+		await drainBtwRequest();
+		await controller.dispose();
 	});
 
-	it("rejects empty questions before issuing the side-channel call", async () => {
+	it("opens history without a model request when invoked without a question", async () => {
 		const runEphemeralTurn = vi.fn(async () => ({
 			replyText: "n/a",
 			assistantMessage: createAssistantMessage("n/a"),
 		}));
 		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
 		const controller = new BtwController(ctx);
-
 		await controller.start("   ");
 		expect(runEphemeralTurn).not.toHaveBeenCalled();
+		expect(ctx.ui.showOverlay).toHaveBeenCalledTimes(1);
 		expect(controller.hasActiveRequest()).toBe(false);
+		await controller.dispose();
 	});
 
 	it("shows an error message when no model is configured", async () => {
@@ -601,7 +611,135 @@ describe("BtwController", () => {
 		await disposeController.start("Question?");
 		await drainBtwRequest();
 		expect(disposeController.canBranch()).toBe(true);
-		disposeController.dispose();
+		await disposeController.dispose();
 		expect(disposeController.canBranch()).toBe(false);
+	});
+
+	it("keeps closed answers across resume without changing the main journal or model context", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-btw-history-controller-"));
+		const manager = SessionManager.create(directory, directory);
+		const session = makeFakeSession(async () => ({
+			replyText: "Saved side answer",
+			assistantMessage: createAssistantMessage("Saved side answer"),
+		}));
+		const ctx = makeCtx(session);
+		const showOverlay = vi.spyOn(ctx.ui, "showOverlay");
+		ctx.sessionManager = manager;
+		const controller = new BtwController(ctx);
+		try {
+			manager.appendMessage({ role: "user", content: "Main task", timestamp: Date.now() });
+			await manager.ensureOnDisk();
+			const file = manager.getSessionFile();
+			if (!file) throw new Error("Expected a session file");
+			const before = await fs.readFile(file, "utf8");
+			const leaf = manager.getLeafId();
+			await controller.start("Side question");
+			await drainBtwRequest();
+			controller.handleEscape();
+			await controller.flush();
+			expect(await fs.readFile(file, "utf8")).toBe(before);
+			expect(manager.getLeafId()).toBe(leaf);
+			expect(JSON.stringify(manager.buildSessionContext().messages)).not.toContain("Saved side answer");
+			await controller.dispose();
+
+			const restored = new BtwController(ctx);
+			await restored.start("");
+			const panel = showOverlay.mock.calls.at(-1)?.[0];
+			if (!(panel instanceof BtwHistoryPanel)) throw new Error("Expected BTW history");
+			expect(Bun.stripANSI(panel.render(120).join("\n"))).toContain("Side question");
+			const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+			panel.handleInput("c");
+			await drainBtwRequest();
+			expect(copy).toHaveBeenCalledWith("Saved side answer");
+			await restored.dispose();
+		} finally {
+			await controller.dispose();
+			await manager.flush();
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("persists cancellation and ignores late output after switching sessions", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-btw-cancel-"));
+		const pending = Promise.withResolvers<RunEphemeralTurnResult>();
+		const run = vi.fn((_args: RunEphemeralTurnArgs) => pending.promise);
+		const ctx = makeCtx(makeFakeSession(run));
+		const showOverlay = vi.spyOn(ctx.ui, "showOverlay");
+		ctx.sessionManager = SessionManager.create(directory, directory);
+		const controller = new BtwController(ctx);
+		try {
+			await controller.start("Cancel this");
+			const artifacts = ctx.sessionManager.getArtifactsDir();
+			if (!artifacts) throw new Error("Expected an artifacts directory");
+			run.mock.calls[0]?.[0].onTextDelta?.("Partial answer");
+			await controller.dispose();
+			ctx.sessionManager = SessionManager.inMemory();
+			pending.resolve({ replyText: "Late answer", assistantMessage: createAssistantMessage("Late answer") });
+			await drainBtwRequest();
+			await controller.flush();
+			const saved = (await BtwHistoryStore.open(artifacts)).getRecords();
+			expect(saved.map(record => [record.answer, record.status])).toEqual([["Partial answer", "cancelled"]]);
+			await controller.start("");
+			const panel = showOverlay.mock.calls.at(-1)?.[0];
+			if (!(panel instanceof BtwHistoryPanel)) throw new Error("Expected BTW history");
+			expect(Bun.stripANSI(panel.render(100).join("\n"))).not.toContain("Partial answer");
+		} finally {
+			await controller.dispose();
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a session move while an answer runs and retires history after a completed move", async () => {
+		const pending = Promise.withResolvers<RunEphemeralTurnResult>();
+		const run = vi.fn((_args: RunEphemeralTurnArgs) => pending.promise);
+		const btwContainer = new Container();
+		const ctx = makeCtx(makeFakeSession(run), btwContainer);
+		const controller = new BtwController(ctx);
+		const move = vi.fn(async () => true);
+
+		await controller.start("Question?");
+		expect(await controller.withSessionMove(move)).toBe(false);
+		expect(move).not.toHaveBeenCalled();
+		expect(ctx.showStatus).toHaveBeenCalledWith(
+			"Wait for the current /btw answer to finish or cancel it before moving.",
+			{ dim: true },
+		);
+
+		pending.resolve({ replyText: "Answer", assistantMessage: createAssistantMessage("Answer") });
+		await drainBtwRequest();
+		expect(controller.hasActiveRequest()).toBe(true);
+		expect(await controller.withSessionMove(move)).toBe(true);
+		expect(move).toHaveBeenCalledTimes(1);
+		expect(controller.hasActiveRequest()).toBe(false);
+		expect(btwContainer.children).toHaveLength(0);
+	});
+
+	it("keeps the inline answer when the session move reports no move", async () => {
+		const ctx = makeCtx(
+			makeFakeSession(async () => ({ replyText: "Answer", assistantMessage: createAssistantMessage("Answer") })),
+		);
+		const controller = new BtwController(ctx);
+		await controller.start("Question?");
+		await drainBtwRequest();
+		expect(await controller.withSessionMove(async () => false)).toBe(false);
+		expect(controller.hasActiveRequest()).toBe(true);
+		expect(controller.canFollowUp()).toBe(true);
+		await controller.dispose();
+	});
+
+	it("offers a follow-up only for a completed inline answer and opens history on it", async () => {
+		const pending = Promise.withResolvers<RunEphemeralTurnResult>();
+		const ctx = makeCtx(makeFakeSession(() => pending.promise));
+		const showOverlay = vi.spyOn(ctx.ui, "showOverlay");
+		const controller = new BtwController(ctx);
+		await controller.start("Question?");
+		expect(controller.canFollowUp()).toBe(false);
+		expect(controller.handleFollowUp()).toBe(false);
+		pending.resolve({ replyText: "Answer", assistantMessage: createAssistantMessage("Answer") });
+		await drainBtwRequest();
+		expect(controller.canFollowUp()).toBe(true);
+		expect(controller.handleFollowUp()).toBe(true);
+		expect(showOverlay.mock.calls.at(-1)?.[0]).toBeInstanceOf(BtwHistoryPanel);
+		await controller.dispose();
 	});
 });

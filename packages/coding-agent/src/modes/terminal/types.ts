@@ -138,9 +138,10 @@ export interface InteractiveModeContext {
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
 	/**
-	 * Execute a session relocation operation under BTW migration guards.
+	 * Run a session relocation only after BTW history is saved; refuses while a side answer runs
+	 * and retires the session's BTW state once the move succeeds.
 	 */
-	withBtwSessionMove?(operation: () => Promise<boolean>): Promise<boolean>;
+	withBtwSessionMove(operation: () => Promise<boolean>): Promise<boolean>;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

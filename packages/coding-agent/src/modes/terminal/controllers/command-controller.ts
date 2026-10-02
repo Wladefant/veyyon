@@ -9,8 +9,8 @@ import { getProviderDetails, type ProviderDetails } from "@veyyon/ai/provider-de
 import { resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
-import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
 import type { SessionManagerStateSnapshot } from "@veyyon/kernel/session/session-manager";
+import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
 import { Loader, Markdown, type OverlayHandle, Spacer, Text } from "@veyyon/tui";
 import {
 	APP_NAME,
@@ -115,6 +115,7 @@ export type CommandControllerContext = Pick<
 	| "statusLine"
 	| "ui"
 	| "updateEditorBorderColor"
+	| "withBtwSessionMove"
 >;
 
 export class CommandController {
@@ -1115,10 +1116,7 @@ export class CommandController {
 			return false;
 		}
 
-		if (this.ctx.withBtwSessionMove) {
-			return this.ctx.withBtwSessionMove(operation);
-		}
-		return operation();
+		return this.ctx.withBtwSessionMove(operation);
 	}
 
 	/** Relocate only while #withSessionMove holds the BTW gate; false means no successful move. */
@@ -1150,10 +1148,7 @@ export class CommandController {
 		return true;
 	}
 
-	async #restoreAfterMoveFailure(
-		previousState: SessionManagerStateSnapshot,
-		error?: unknown,
-	): Promise<void> {
+	async #restoreAfterMoveFailure(previousState: SessionManagerStateSnapshot, error?: unknown): Promise<void> {
 		this.ctx.sessionManager.restoreState(previousState);
 		try {
 			await this.ctx.applyCwdChange(previousState.cwd);

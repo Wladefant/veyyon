@@ -3598,6 +3598,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	async shutdown(): Promise<void> {
 		if (this.#isShuttingDown) return;
 		this.#isShuttingDown = true;
+		// BTW history must reach disk before the session closes; a storage stall
+		// keeps the session open and says so instead of losing side answers.
+		try {
+			await this.#btwController.dispose();
+		} catch (error) {
+			this.#isShuttingDown = false;
+			this.showError(`Could not close session: ${errorMessage(error)}`);
+			return;
+		}
 
 		// From this moment the session is leaving, so its editor must not take
 		// another keystroke. Teardown below can hold the terminal for seconds
@@ -3616,7 +3625,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			matchesKey(data, "ctrl+c") ? undefined : { consume: true },
 		);
 
-		this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.#focusController.dispose();
 
@@ -4125,36 +4133,40 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.handleContextCommand();
 	}
 
-	#prepareSessionSwitch(): void {
-		this.#btwController.dispose();
+	async #prepareSessionSwitch(): Promise<void> {
+		await this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.clearPinnedError();
 		this.#hidePlanReview();
 	}
 
-	handleClearCommand(): Promise<void> {
-		this.#prepareSessionSwitch();
-		return this.#commandController.handleClearCommand();
+	async handleClearCommand(): Promise<void> {
+		await this.#prepareSessionSwitch();
+		await this.#commandController.handleClearCommand();
 	}
 
 	handleFreshCommand(): Promise<void> {
 		return this.#commandController.handleFreshCommand();
 	}
 
-	handleDropCommand(): Promise<void> {
-		this.#prepareSessionSwitch();
-		return this.#commandController.handleDropCommand();
+	async handleDropCommand(): Promise<void> {
+		await this.#prepareSessionSwitch();
+		await this.#commandController.handleDropCommand();
 	}
 
-	handleForkCommand(): Promise<void> {
-		this.#btwController.dispose();
+	async handleForkCommand(): Promise<void> {
+		await this.#btwController.dispose();
 		this.#omfgController.dispose();
-		return this.#commandController.handleForkCommand();
+		await this.#commandController.handleForkCommand();
 	}
 
 	handleMoveCommand(targetPath?: string): Promise<void> {
 		return this.#commandController.handleMoveCommand(targetPath);
+	}
+
+	withBtwSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
+		return this.#btwController.withSessionMove(operation);
 	}
 
 	handleRenameCommand(title: string): Promise<void> {
@@ -4332,7 +4344,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleResumeSession(sessionPath: string): Promise<void> {
-		this.#btwController.dispose();
+		await this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.resetObserverRegistry();
 		await (await this.#selectors()).handleResumeSession(sessionPath);
@@ -4466,7 +4478,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.showStatus("/btw branch cancelled", { dim: true });
 				return;
 			}
-			this.#btwController.dispose();
+			await this.#btwController.dispose();
 			this.#omfgController.dispose();
 			this.renderInitialMessages({ clearTerminalHistory: true });
 			this.updateEditorBorderColor();
