@@ -127,6 +127,15 @@ export interface AcquireTabOptions {
 	target?: string;
 	signal?: AbortSignal;
 	timeoutMs: number;
+	/**
+	 * `performance.now()` timestamp at which the caller's timeout budget
+	 * started. Callers whose deadline began before this acquisition —
+	 * `browser.ts` `open` starts its clock before `acquireBrowser` — pass it
+	 * through so time spent in earlier phases within the caller's deadline
+	 * counts against the worker-init budget instead of restarting it.
+	 * Omit for a fresh clock.
+	 */
+	deadlineStartMs?: number;
 	dialogs?: DialogPolicy;
 	cmuxSurface?: string;
 	/**
@@ -157,12 +166,42 @@ const tabs = new Map<string, TabSession>();
 // Per-name acquisition chain: serializes concurrent `acquireTab` calls for the
 // same tab name so the existence check and `tabs.set` (separated by several
 // awaits) cannot interleave and leak a worker + browser refCount.
+// Headless targets a worker created before dying during init (page-created).
+// A killed worker can't close its own page; the supervisor closes the
+// recorded target instead. A shared browser's other targets must never be
+// touched.
+const workerPageTargets = new WeakMap<WorkerHandle, string>();
 const acquireChains = new Map<string, Promise<void>>();
 const GRACE_MS = 750;
+// Cold-start guard for the worker's `setup` handshake (realm usable: puppeteer
+// loaded, browser connected, page acquired). On hosts where the worker's cold
+// import stalls (observed: Bun worker inside a full RPC process), an
+// unbounded first-attempt init would consume the caller's entire timeout
+// before the inline fallback could engage. Budget: min(10s, remaining/3),
+// floor 2s, where remaining is what the caller's budget has left at attempt start.
+const SETUP_BUDGET_FLOOR_MS = 2_000;
+const SETUP_BUDGET_CAP_MS = 10_000;
+// Floor for the ready-phase budget: the 2s setup floor can consume more than
+// a sub-3s caller's entire init budget, so the remaining-budget math must
+// never hand raceWithTimeout a non-positive value.
+const READY_BUDGET_FLOOR_MS = 500;
 // Names of tabs the supervisor force-killed (timeout past grace, failed recycle),
 // mapped to the kill reason. Lets the next `run` on that name explain WHY the tab
 // vanished instead of a bare "not alive". Cleared when the name is opened again.
 const killedTabs = new Map<string, string>();
+
+const REPORTED_INIT_FAILURE = Symbol("reported-init-failure");
+
+type ReportedInitFailure = Error & { [REPORTED_INIT_FAILURE]?: true };
+
+function markReportedInitFailure(error: Error): Error {
+	Object.defineProperty(error, REPORTED_INIT_FAILURE, { value: true, configurable: true });
+	return error;
+}
+
+function isReportedInitFailure(error: unknown): boolean {
+	return error instanceof Error && REPORTED_INIT_FAILURE in error;
+}
 
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
@@ -187,6 +226,13 @@ async function acquireTabImpl(
 	browser: BrowserHandle,
 	opts: AcquireTabOptions,
 ): Promise<AcquireTabResult> {
+	// Worker-init deadline: the inline-fallback retry passes this same start
+	// so it can't restart the budget (which would let a cold import that
+	// consumed most of it spend the phase floors again for another full
+	// budget). Defaults to a fresh clock; callers whose own deadline started
+	// earlier (browser acquisition is not part of this budget) pass theirs
+	// through `deadlineStartMs` so that earlier time counts against it.
+	const startedAt = opts.deadlineStartMs ?? performance.now();
 	// Serialized opens can sit behind a slow predecessor in the per-name
 	// chain; honor an abort at dequeue instead of spawning a worker and
 	// browser hold nobody is waiting for.
@@ -278,15 +324,33 @@ async function acquireTabImpl(
 		if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
 		throw error;
 	}
+	// Init budget: the caller's timeout plus the supervisor grace — never a
+	// fixed floor. A floor larger than the caller's budget would keep a wedged
+	// worker (and its orphaned page on a shared browser) alive long after the
+	// caller gave up; the phase floors inside initializeTabWorker keep each
+	// phase positive for sub-second budgets, and the caller's abort signal is
+	// the hard backstop for floor overshoot.
+	const initBudgetMs = opts.timeoutMs + GRACE_MS;
 	let info: ReadyInfo;
 	try {
-		info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
+		info = await initializeTabWorker(worker, initPayload, initBudgetMs, startedAt);
 	} catch (error) {
 		// `BuildMessage`-class failures arrive asynchronously via the worker's `error` event,
 		// after `spawnTabWorker`'s synchronous try/catch has already returned. Fall back to
 		// the inline worker here so module-resolution failures don't poison every tab open.
 		await terminateWorker(worker, "open-init-failed");
-		if (worker.mode === "inline") {
+		// A headless worker that died mid-init may have already created its page in the
+		// shared browser — a killed worker can't close it, so close the target the worker
+		// reported (no-op when it never got that far).
+		closeAbandonedWorkerPage(browser, worker);
+		if (worker.mode === "inline" || isReportedInitFailure(error)) {
+			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+			throw error;
+		}
+		// Fail fast once the caller's init budget is exhausted: its timeout has already
+		// fired, so a retried result would only be discarded by the post-init abort check —
+		// don't spend the phase floors' excess on a cold start nobody is waiting for.
+		if (initBudgetExhausted(initBudgetMs, startedAt)) {
 			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
 			throw error;
 		}
@@ -295,14 +359,16 @@ async function acquireTabImpl(
 		});
 		worker = await spawnInlineWorker();
 		try {
-			info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
+			info = await initializeTabWorker(worker, initPayload, initBudgetMs, startedAt);
 		} catch (inlineError) {
 			await terminateWorker(worker, "open-inline-failed");
+			closeAbandonedWorkerPage(browser, worker);
 			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
 			const finalError = new ToolError(
 				`Failed to start browser tab worker (inline fallback also failed): ${errorMessage(inlineError)}`,
 			);
-			(finalError as { cause?: unknown }).cause = error;
+			Object.defineProperty(finalError, "cause", { value: error, configurable: true });
+			if (opts.signal?.aborted) finalError.isAbort = true;
 			throw finalError;
 		}
 	}
@@ -313,6 +379,7 @@ async function acquireTabImpl(
 	// a tab nobody is waiting for.
 	if (opts.signal?.aborted) {
 		await terminateWorker(worker, "open-aborted");
+		closeAbandonedWorkerPage(browser, worker);
 		// The browser release runs while an abort is already being raised; its own failure must not
 		// replace `ToolAbortError`, and the refCount it adjusts is dropped with the browser anyway.
 		// `|| browser.refCount === 0` matches every sibling error path above (:257, :269,
@@ -786,6 +853,9 @@ function toErrorPayload(error: unknown): TabRunErrorPayload {
 }
 
 async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number): Promise<void> {
+	// Same deadline carry-over as acquireTabImpl: the inline-fallback retry
+	// must not restart the recycle's init budget.
+	const startedAt = performance.now();
 	const oldWorker = tab.worker;
 	await terminateWorker(oldWorker, "recycle-timed-out");
 	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
@@ -801,16 +871,22 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 	};
 	let worker = await spawnTabWorker();
 	try {
-		const info = await initializeTabWorker(worker, payload, timeoutMs);
+		const info = await initializeTabWorker(worker, payload, timeoutMs, startedAt);
 		tab.worker = worker;
 		tab.info = info;
 		tab.state = "alive";
 		worker.onMessage(msg => handleTabMessage(tab, msg));
 	} catch (error) {
 		await terminateWorker(worker, "recycle-spawn-failed");
+		// The recycle's budget is exhausted: the run caller already timed out, so a
+		// retried init can't beat its deadline — fail fast and let the caller
+		// force-kill the tab instead of spending the phase floors' excess.
+		if (initBudgetExhausted(timeoutMs, startedAt)) {
+			throw error;
+		}
 		worker = await spawnInlineWorker();
 		try {
-			const info = await initializeTabWorker(worker, payload, timeoutMs);
+			const info = await initializeTabWorker(worker, payload, timeoutMs, startedAt);
 			tab.worker = worker;
 			tab.info = info;
 			tab.state = "alive";
@@ -845,18 +921,54 @@ async function forceKillTab(name: string, reason: string): Promise<void> {
 	tabs.delete(name);
 }
 
-async function closeOrphanTarget(tab: WorkerTabSession): Promise<void> {
-	for (const target of tab.browser.browser.targets()) {
-		// Closing an orphaned target after its worker died. Each step tolerates the target already being gone,
-		// which is the common case: an id that cannot be read cannot match, a target that will not hand over a
-		// page has nothing to close, and a close that fails means it closed itself first. Nothing depends on the
-		// outcome -- the tab is already out of the registry.
+/**
+ * Best-effort close of a specific page target in the browser. A gone target
+ * or a released browser is skipped: per-target lookups and the page close are
+ * individually caught.
+ */
+async function closeTargetById(browser: PuppeteerBrowserHandle, targetId: string): Promise<void> {
+	for (const target of browser.browser.targets()) {
 		const id = await optionalResult(targetIdForTarget(target), "an id that cannot be read cannot match");
-		if (id !== tab.targetId) continue;
+		if (id !== targetId) continue;
 		const page = await optionalResult(target.page(), "a target that hands over no page has nothing to close");
 		if (page) await bestEffort(page.close(), "a close that fails means the target closed itself first");
 		return;
 	}
+}
+
+/**
+ * Best-effort cleanup for a forced-kill path: close the page the tab's worker
+ * reported as created. A run caller is never a browser ref holder, so the
+ * browser is still in the registry; the tab's browser is the only place that
+ * page can be, so no targetId guesswork across multiple sessions.
+ */
+async function closeOrphanTarget(tab: WorkerTabSession): Promise<void> {
+	await closeTargetById(tab.browser, tab.targetId);
+}
+
+/**
+ * Close the page a worker created (page-created) before dying during init.
+ * Fire-and-forget: the caller has already timed out, so the close must not
+ * delay error propagation — `page.close()` on a page still stuck in the
+ * navigation that caused the timeout waits about as long again. A killed worker
+ * can't clean up after itself; a shared browser's other targets must never be
+ * touched.
+ */
+function closeAbandonedWorkerPage(browser: PuppeteerBrowserHandle, worker: WorkerHandle): void {
+	const targetId = workerPageTargets.get(worker);
+	workerPageTargets.delete(worker);
+	if (!targetId) return;
+	// The close outlives its caller, and every caller here may go on to release
+	// the last browser reference — `closeTargetById` yields before it looks the
+	// target up, so a disconnect in that gap turns the lookup into a caught
+	// failure and leaves the page on the instance for good. Hold the browser
+	// across the close instead of blocking on it: the hold defers the release
+	// (and the dispose behind it) rather than cancelling one, so the refCount
+	// ends where it would have, one turn later.
+	holdBrowser(browser);
+	void closeTargetById(browser, targetId)
+		.catch(() => undefined)
+		.finally(() => void releaseBrowser(browser, { kill: false }).catch(() => undefined));
 }
 
 async function waitForClosed(tab: WorkerTabSession): Promise<void> {
@@ -967,25 +1079,78 @@ async function spawnInlineWorker(): Promise<WorkerHandle> {
 	};
 }
 
+/**
+ * Init a tab worker under a single listener spanning the whole init: a short
+ * `setup` handshake (bounded by the cold-start guard so a stalled cold start
+ * triggers the inline fallback early) and the ready wait for page acquisition
+ * and the first navigation. Both phases are bounded by the time LEFT of the
+ * caller's `timeoutMs` budget, measured from `deadlineStart` (performance.now()
+ * when the caller's budget began): a retried attempt — the inline fallback
+ * after a failed isolated worker — passes the same start, so total init
+ * across attempts stays within the caller's timeout instead of the retry
+ * restarting the clock. A headless worker's `page-created` report (the new
+ * target, sent before the slow post-creation CDP work) is recorded in
+ * `workerPageTargets` so a supervisor that kills the worker during init
+ * (budget exhausted, aborted open) can close exactly the page the worker
+ * created — a killed worker can't clean up after itself. The listener is
+ * never removed between the phases: the inline transport delivers messages
+ * on microtasks, so a `ready` or `init-failed` emitted right after `setup`
+ * (e.g. a fast `page.goto` rejection) could otherwise reach the
+ * already-settled setup listener before a phase switch re-listens and be
+ * dropped.
+ */
 async function initializeTabWorker(
 	worker: WorkerHandle,
 	payload: WorkerInitPayload,
 	timeoutMs: number,
+	deadlineStart: number = performance.now(),
 ): Promise<ReadyInfo> {
-	const { promise, resolve, reject } = Promise.withResolvers<ReadyInfo>();
+	// Derive both phase budgets from the remaining caller budget so a
+	// retried attempt (inline fallback) cannot outlive the caller's timeout.
+	// The floors keep the budgets positive when the remaining time is tiny;
+	// the caller's abort signal remains the hard backstop for the overshoot.
+	const remainingMs = timeoutMs - Math.round(performance.now() - deadlineStart);
+	// Cold-start guard: min(10s, remaining/3), floor 2s (see SETUP_BUDGET_*).
+	const setupBudgetMs = Math.max(SETUP_BUDGET_FLOOR_MS, Math.min(SETUP_BUDGET_CAP_MS, Math.floor(remainingMs / 3)));
+	const setup = Promise.withResolvers<void>();
+	const ready = Promise.withResolvers<ReadyInfo>();
+	let setupDone = false;
+	// Reject only the active phase's promise: the other one may never be
+	// awaited (a phase that already failed leaves the rest un-run), so
+	// rejecting it would be an unhandled rejection.
+	const failStartup = (error: Error) => {
+		(setupDone ? ready : setup).reject(error);
+	};
 	const unlisten = worker.onMessage(msg => {
-		if (msg.type === "ready") resolve(msg.info);
-		else if (msg.type === "init-failed") reject(errorFromPayload(msg.error));
+		if (msg.type === "page-created") {
+			// Record the headless target before the (potentially slow)
+			// post-creation CDP work: if this init is killed before ready,
+			// the supervisor closes exactly this target.
+			workerPageTargets.set(worker, msg.targetId);
+		} else if (msg.type === "setup") {
+			setupDone = true;
+			setup.resolve();
+		} else if (msg.type === "ready") ready.resolve(msg.info);
+		else if (msg.type === "init-failed") failStartup(markReportedInitFailure(errorFromPayload(msg.error)));
 		else if (msg.type === "log") logWorkerMessage(msg);
 	});
 	const unlistenError = worker.onError(error => {
-		reject(new ToolError(`Tab worker failed during startup: ${error.message}`));
+		failStartup(new ToolError(`Tab worker failed during startup: ${error.message}`));
 	});
 	try {
 		worker.send({ type: "init", payload });
+		await raceWithTimeout(
+			setup.promise,
+			setupBudgetMs,
+			() => new ToolError("Timed out waiting for tab worker setup"),
+		);
+		// The ready wait gets only what is left of the caller's budget at
+		// this point; the floor covers sub-3s budgets where the 2s setup
+		// floor alone exceeds it.
+		const readyBudgetMs = Math.max(READY_BUDGET_FLOOR_MS, timeoutMs - Math.round(performance.now() - deadlineStart));
 		return await raceWithTimeout(
-			promise,
-			timeoutMs,
+			ready.promise,
+			readyBudgetMs,
 			() => new ToolError("Timed out initializing browser tab worker"),
 		);
 	} finally {
@@ -994,12 +1159,24 @@ async function initializeTabWorker(
 	}
 }
 
+/**
+ * True once the caller's init budget (elapsed since `deadlineStart`) is fully
+ * consumed. A retry from this point can't be published — the caller's timeout
+ * has already fired, so the post-init abort check would discard the result
+ * anyway — so callers fail fast instead of spending the phase floors' excess
+ * on a cold start nobody is waiting for.
+ */
+function initBudgetExhausted(budgetMs: number, deadlineStart: number): boolean {
+	return budgetMs - Math.round(performance.now() - deadlineStart) <= 0;
+}
+
 export function initializeTabWorkerForTest(
 	worker: WorkerHandle,
 	payload: WorkerInitPayload,
 	timeoutMs: number,
+	deadlineStart: number = performance.now(),
 ): Promise<ReadyInfo> {
-	return initializeTabWorker(worker, payload, timeoutMs);
+	return initializeTabWorker(worker, payload, timeoutMs, deadlineStart);
 }
 
 function errorFromWorkerEvent(event: ErrorEvent): Error {

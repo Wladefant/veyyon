@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Fixed the browser tool's first open timing out after 30 s on a slow or cold host: tab startup now runs under its own budget inside the caller's timeout, falls back to the inline worker in time, and no longer leaves an orphan page behind ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 66476e5270184f43458c3d246f3f8590aaa5e2e6).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).

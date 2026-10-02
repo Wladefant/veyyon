@@ -259,6 +259,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 			);
 		}
 
+		// Capture the deadline start as well: `acquireTab` counts its
+		// worker-init time against this same budget via `deadlineStartMs`
+		// instead of restarting the clock after acquisition.
+		const deadlineStart = performance.now();
 		const browser = await untilAborted(signal, () =>
 			acquireBrowser(kind, {
 				cwd: this.session.cwd,
@@ -287,6 +291,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 					: undefined,
 				target: params.app?.target,
 				timeoutMs,
+				deadlineStartMs: deadlineStart,
 				dialogs: params.dialogs,
 				signal,
 				ownerSessionId: this.session.getSessionId?.() ?? undefined,

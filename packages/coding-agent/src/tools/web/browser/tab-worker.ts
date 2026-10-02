@@ -714,19 +714,26 @@ export class WorkerCore {
 				defaultViewport: null,
 				protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 			});
+			// Realm setup is done: puppeteer loaded and browser connected. Sent before
+			// page acquisition so the supervisor's cold-start budget bounds only the
+			// realm setup; page creation and the first navigation run under the ready
+			// wait.
+			this.#transport.send({ type: "setup" });
 			if (payload.mode === "headless") {
 				this.#page = await this.#browser.newPage();
+				// Report the new target before the potentially slow post-creation CDP work
+				// (stealth, viewport): if this worker is killed during init, the supervisor
+				// closes exactly this target — a killed worker can't clean up after itself.
+				// Private-field peek, no CDP round-trip; the supervisor's targetIdForTarget
+				// relies on the same fast path.
+				const target = this.#page.target();
+				if ("_targetId" in target && typeof target._targetId === "string") {
+					this.#transport.send({ type: "page-created", targetId: target._targetId });
+				}
 				this.#observeDialogs();
 				await applyStealthPatches(this.#browser, this.#page, { browserSession: null, override: null });
 				await applyViewport(this.#page, payload.viewport);
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
-				if (payload.url) {
-					await this.#page.goto(payload.url, {
-						// Default to "load" because dev servers with HMR/WS never reach networkidle.
-						waitUntil: payload.waitUntil ?? "load",
-						timeout: payload.timeoutMs,
-					});
-				}
 			} else {
 				const target = await this.#findAttachedTarget(payload.targetId);
 				// Post-timeout recycle: unblock the target BEFORE adopting the page — an open
@@ -739,9 +746,23 @@ export class WorkerCore {
 				this.#observeDialogs();
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
 			}
+			if (payload.url) {
+				await this.#page.goto(payload.url, {
+					// Default to "load" because dev servers with HMR/WS never reach networkidle.
+					waitUntil: payload.waitUntil ?? "load",
+					timeout: payload.timeoutMs,
+				});
+			}
 			this.#targetId = await targetIdForPage(this.#page);
 			this.#transport.send({ type: "ready", info: await this.#currentReadyInfo() });
 		} catch (error) {
+			// A failed headless init leaves the worker's page orphaned in the shared
+			// browser (the supervisor retries with a fresh worker), so close it before
+			// reporting. Attach mode adopts an existing target — never close it.
+			const page = this.#page;
+			if (payload.mode === "headless" && page && !page.isClosed()) {
+				await page.close().catch(() => undefined);
+			}
 			this.#transport.send({ type: "init-failed", error: errorPayload(error) });
 		}
 	}
