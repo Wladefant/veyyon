@@ -8,6 +8,7 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Rejected GitHub hosts outside `github.com`, `GH_HOST` and the checkout host on every repo, PR, issue and run input, kept enterprise hosts out of API paths and cache keys, and pinned fork lookup to the PR host (Refs #107)
 - Fixed an eval cell whose idle timeout fired during kernel startup killing the whole host with an unhandled `TimeoutError` rejection, and the Python runner stderr drain splitting multi-byte characters across chunks ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation, while preserving configured endpoint failovers ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
