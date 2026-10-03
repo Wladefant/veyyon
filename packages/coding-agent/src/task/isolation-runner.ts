@@ -51,6 +51,36 @@ import {
 
 type IsoBackendKind = natives.IsoBackendKind;
 
+/** Which isolation outcome `isolation-summary.md` should describe. */
+export type IsolationSummaryKind =
+	| "captured"
+	| "capture-error"
+	| "nested-apply-failed"
+	| "not-applied"
+	| "branch-merge-failed"
+	| "merge-error";
+
+/** Context for `isolation-summary.md`; unused fields are simply absent. */
+export interface IsolationSummaryContext {
+	kind: IsolationSummaryKind;
+	branchName?: string;
+	/** Root patch path, only when it holds changes. */
+	rootPatchPath?: string;
+	nestedCount?: number;
+	nestedPatchPaths?: readonly string[];
+	error?: string;
+	conflict?: string;
+}
+
+/**
+ * Render one isolation outcome as the model-facing suffix appended to a task
+ * result. Always starts with a blank line so it separates from the output it
+ * follows.
+ */
+export function renderIsolationSummary(context: IsolationSummaryContext): string {
+	return `\n\n${prompt.render(toolsPrompts["tools/isolation-summary"].text, { ...context })}`;
+}
+
 /**
  * Decide the fate of a half-built task branch after apply-back threw.
  *
@@ -235,10 +265,11 @@ async function writeIsolationPatch(
 /**
  * Move a retained isolation workspace out of its deterministic
  * (`repoRoot` + agent id) slot into a globally unique sibling, so a later
- * isolated run with the same id cannot wipe it: `ensureIsolation`
- * unconditionally removes the deterministic base dir before writing its
- * owner marker. The owner marker and `m` mount move along, so
- * `veyyon worktree clear` still classifies and reclaims it. Mounting backends
+ * isolated run with the same id cannot be blocked by the retained slot:
+ * `ensureIsolation` claims the deterministic base dir atomically and refuses
+ * replacement if it already exists. The `m` mount moves along, and retained
+ * sibling names remain recognizable so `veyyon worktree clear` still
+ * classifies and reclaims them once metadata permits. Mounting backends
  * record a sidecar so cleanup unmounts before recursive removal instead of
  * traversing — and failing on — the live mount.
  */
@@ -581,8 +612,12 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 			if (changesApplied) {
 				summary = hadAnyChanges ? `\n\nMerged branch: ${result.branchName}` : "\n\nNo changes to apply.";
 			} else {
-				const conflictPart = mergeResult.conflict ? `\nConflict: ${mergeResult.conflict}` : "";
-				summary = `\n\n<system-notification>Branch merge failed: ${result.branchName}.${conflictPart}\nThe unmerged branch remains for manual resolution.</system-notification>`;
+				summary = renderIsolationSummary({
+					kind: "branch-merge-failed",
+					branchName: result.branchName,
+					conflict: mergeResult.conflict,
+					nestedPatchPaths: result.nestedPatchPaths,
+				});
 				failure = `Merge failed: branch ${result.branchName} did not merge${mergeResult.conflict ? ` (${mergeResult.conflict})` : ""}; the branch remains for manual resolution`;
 			}
 			if (mergeResult.stashConflict) {
@@ -648,9 +683,11 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		if (changesApplied) {
 			summary = hadAnyChanges ? "\n\nApplied patches: yes" : "\n\nNo changes to apply.";
 		} else {
-			const notification =
-				"<system-notification>Patches were not applied and must be handled manually.</system-notification>";
-			summary = `\n\n${notification}${patchArtifactsList(result)}`;
+			summary = renderIsolationSummary({
+				kind: "not-applied",
+				rootPatchPath: result.patchPath,
+				nestedPatchPaths: result.nestedPatchPaths,
+			});
 			failure = result.patchPath
 				? `Merge failed: the patch did not apply to the parent tree; it is preserved at ${result.patchPath}`
 				: "Merge failed: the run produced no patch artifact to apply";
@@ -658,11 +695,14 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		return { summary, changesApplied, failure, hadAnyChanges, mergedBranchForNestedPatches: false };
 	} catch (mergeErr) {
 		const msg = errorMessage(mergeErr);
-		const branchInfo = result.branchName
-			? `\nUnmerged branch preserved as ${result.branchName} for manual resolution.`
-			: "";
 		return {
-			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${branchInfo}${patchArtifactsList(result)}</system-notification>`,
+			summary: renderIsolationSummary({
+				kind: "merge-error",
+				error: msg,
+				branchName: result.branchName,
+				rootPatchPath: result.patchPath,
+				nestedPatchPaths: result.nestedPatchPaths,
+			}),
 			changesApplied: false,
 			failure: `Merge failed: ${msg}`,
 			hadAnyChanges: false,
@@ -719,7 +759,10 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
 		// whether they fail the run.
 		opts.onApplyFailure?.(error);
 		const msg = errorMessage(error);
-		const preserved = nestedPreservedList(result.nestedPatchPaths);
-		return `\n\n<system-notification>Some nested repository patches failed to apply: ${msg}${preserved}</system-notification>`;
+		return renderIsolationSummary({
+			kind: "nested-apply-failed",
+			error: msg,
+			nestedPatchPaths: result.nestedPatchPaths,
+		});
 	}
 }
