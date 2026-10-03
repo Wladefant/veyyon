@@ -74,7 +74,6 @@ function getConvertedAssistantText(message: Message | undefined): string {
 	return text.text;
 }
 
-
 async function withNativeDialectEnv<T>(fn: () => Promise<T>): Promise<T> {
 	const previous = Bun.env.VEYYON_DIALECT;
 	delete Bun.env.VEYYON_DIALECT;
@@ -585,12 +584,7 @@ describe("AgentSession message pipeline", () => {
 
 		const firstContext = contexts[0];
 		expect(firstContext).toBeDefined();
-		expect(firstContext!.messages.map(message => message.role)).toEqual([
-			"developer",
-			"user",
-			"assistant",
-			"user",
-		]);
+		expect(firstContext!.messages.map(message => message.role)).toEqual(["developer", "user", "assistant", "user"]);
 		expect(getConvertedUserText(firstContext!.messages[1])).toBe("First BTW question");
 		expect(getConvertedAssistantText(firstContext!.messages[2])).toBe("First BTW answer");
 		expect(getConvertedUserText(firstContext!.messages[3])).toBe("Follow-up question");

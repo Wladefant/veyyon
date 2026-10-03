@@ -77,7 +77,6 @@ describe("CommandController /move", () => {
 		vi.restoreAllMocks();
 	});
 
-
 	it("relocates the active session before re-scoping cwd-derived state", async () => {
 		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-source-"));
 		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-target-"));

@@ -1147,10 +1147,7 @@ export class CommandController {
 		return true;
 	}
 
-	async #restoreAfterMoveFailure(
-		previousState: SessionManagerStateSnapshot,
-		error?: unknown,
-	): Promise<void> {
+	async #restoreAfterMoveFailure(previousState: SessionManagerStateSnapshot, error?: unknown): Promise<void> {
 		this.ctx.sessionManager.restoreState(previousState);
 		try {
 			await this.ctx.applyCwdChange(previousState.cwd);
