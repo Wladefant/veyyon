@@ -181,16 +181,22 @@ describe("worktree isolation helpers", () => {
 			});
 			const started = Promise.withResolvers<void>();
 			const proceed = Promise.withResolvers<void>();
+			let starts = 0;
 			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				started.resolve();
-				await proceed.promise;
+				// Only the first start blocks, so a regression that lets a later task claim the slot fails
+				// the assertion instead of hanging on `proceed`.
+				if (++starts === 1) {
+					started.resolve();
+					await proceed.promise;
+				}
 				await fs.mkdir(mergedDir, { recursive: true });
 				await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
 			});
 			vi.spyOn(console, "log").mockImplementation(() => {});
 			const id = "claim-during-setup";
 			const first = ensureIsolation(repo, id);
-			await started.promise;
+			// Racing `first` fails fast when the claim itself throws, instead of waiting out the test timeout.
+			await Promise.race([started.promise, first]);
 
 			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
 			await clearWorktrees({ all: false, dryRun: false, json: true });
