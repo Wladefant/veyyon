@@ -24,7 +24,13 @@ const textResp = (text: string, id: string) =>
 		{
 			type: "response.output_item.done",
 			output_index: 0,
-			item: { type: "message", id: `m_${id}`, role: "assistant", status: "completed", content: [{ type: "output_text", text }] },
+			item: {
+				type: "message",
+				id: `m_${id}`,
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text }],
+			},
 		},
 		{ type: "response.completed", response: { id, status: "completed" } },
 	]);
@@ -77,9 +83,13 @@ describe("OpenAI Responses prepared request cache", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(onPayloadCount).toBe(1);
-		expect((sent[0]?.reasoning as Record<string, unknown> | undefined)?.effort ?? sent[0]?.reasoning_effort).toBe("high");
+		expect((sent[0]?.reasoning as Record<string, unknown> | undefined)?.effort ?? sent[0]?.reasoning_effort).toBe(
+			"high",
+		);
 		expect(sent[0]?.hooked).toBe(true);
-		expect((sent[1]?.reasoning as Record<string, unknown> | undefined)?.effort ?? sent[1]?.reasoning_effort).toBe("medium");
+		expect((sent[1]?.reasoning as Record<string, unknown> | undefined)?.effort ?? sent[1]?.reasoning_effort).toBe(
+			"medium",
+		);
 		expect(sent[1]?.hooked).toBe(true);
 	});
 
