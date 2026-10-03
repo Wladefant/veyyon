@@ -4050,7 +4050,6 @@ class CodexWebSocketConnection {
 			if (signal) signal.removeEventListener("abort", onAbort);
 		};
 		const onAbort = () => {
-
 			if (!settled) {
 				settled = true;
 				clearPending();
