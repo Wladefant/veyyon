@@ -59,6 +59,9 @@ function slimCells(cells: unknown[], body: string): unknown[] {
 /** How an eval result is written to a session file and read back. */
 export const evalResultCodec: ToolResultCodec = {
 	toolName: "eval" satisfies BuiltinToolName,
+	needsMigration(details) {
+		return isRecord(details) && Array.isArray(details.jsonOutputs) && details.displayVersion !== EVAL_DISPLAY_VERSION;
+	},
 	async migrate(details, context) {
 		if (!isRecord(details) || !Array.isArray(details.jsonOutputs)) return false;
 		if (details.displayVersion === EVAL_DISPLAY_VERSION) return false;
@@ -67,6 +70,25 @@ export const evalResultCodec: ToolResultCodec = {
 		}
 		const migrated: unknown[] = [];
 		for (const value of details.jsonOutputs) {
+			if (
+				isRecord(value) &&
+				typeof value.preview === "string" &&
+				value.truncated === true &&
+				typeof value.totalBytes === "number" &&
+				value.preview.includes("\n[…") &&
+				value.preview.endsWith("ch elided…]")
+			) {
+				migrated.push({
+					version: EVAL_DISPLAY_VERSION,
+					preview: value.preview,
+					truncated: true,
+					totalBytes: value.totalBytes,
+					...(typeof value.artifactId === "string"
+						? { artifactId: value.artifactId }
+						: { recoveryUnavailable: true }),
+				});
+				continue;
+			}
 			const formatted = formatDisplayJson(value);
 			if (!formatted.truncated) {
 				migrated.push(value);

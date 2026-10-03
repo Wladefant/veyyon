@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,7 +8,11 @@ import type { FileEntry } from "@veyyon/kernel/session/session-entries";
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { migrateSessionEntries, migrateToCurrentVersion } from "@veyyon/kernel/session/session-migrations";
+import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import { sessionFileStem } from "@veyyon/utils/session-file";
+import { evalResultCodec } from "../../src/tools/shell/eval-result-codec";
+
+registerToolResultCodecs([evalResultCodec]);
 
 function legacyEntries(cwd: string, values: unknown[]): FileEntry[] {
 	return [
@@ -52,15 +56,24 @@ for (const nested of [false, true]) {
 			const rawValue = nested ? { payload: reference, filler: "x".repeat(9000) } : reference;
 			const fullValue = nested ? { payload: value, filler: "x".repeat(9000) } : value;
 			const sessionFile = path.join(sessionDir, "legacy.jsonl");
-			await fs.writeFile(sessionFile, `${legacyEntries(root, [rawValue]).map(entry => JSON.stringify(entry)).join("\n")}\n`);
+			await fs.writeFile(
+				sessionFile,
+				`${legacyEntries(root, [rawValue])
+					.map(entry => JSON.stringify(entry))
+					.join("\n")}\n`,
+			);
 
+			const original = await fs.readFile(sessionFile, "utf8");
+			const originalStat = await fs.stat(sessionFile);
 			await loadSessionMessagesReadOnly(sessionFile);
 			const artifacts = new ArtifactManager(sessionFileStem(sessionFile));
-			const readOnlyFiles = await artifacts.listFiles();
-			expect(readOnlyFiles).toHaveLength(1);
-			expect(await fs.readFile(path.join(artifacts.dir, readOnlyFiles[0]!), "utf8")).toBe(JSON.stringify(fullValue, null, 2));
+			expect(await artifacts.listFiles()).toEqual([]);
+			expect(await fs.readFile(sessionFile, "utf8")).toBe(original);
+			expect((await fs.stat(sessionFile)).mtimeMs).toBe(originalStat.mtimeMs);
+			await expect(fs.stat(sessionFileStem(sessionFile))).rejects.toMatchObject({ code: "ENOENT" });
 
 			const manager = await SessionManager.open(sessionFile, root);
+			await manager.flush();
 			const output = outputOf(manager.getEntries()[0]);
 			expect(output.version).toBe(1);
 			expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(10000);
@@ -144,11 +157,17 @@ it("a read-only reader and a session migrator preserve both complete recovery va
 	try {
 		const sessionFile = path.join(root, "legacy.jsonl");
 		const values = [{ payload: "X".repeat(12000) }, { payload: "Y".repeat(12000) }];
-		await fs.writeFile(sessionFile, `${legacyEntries(root, values).map(entry => JSON.stringify(entry)).join("\n")}\n`);
+		await fs.writeFile(
+			sessionFile,
+			`${legacyEntries(root, values)
+				.map(entry => JSON.stringify(entry))
+				.join("\n")}\n`,
+		);
 		const [, manager] = await Promise.all([
 			loadSessionMessagesReadOnly(sessionFile),
 			SessionManager.open(sessionFile, root),
 		]);
+		await manager.flush();
 		const entries = manager.getEntries();
 		for (let index = 0; index < values.length; index++) {
 			const output = outputOf(entries[index]);
@@ -163,7 +182,7 @@ it("a read-only reader and a session migrator preserve both complete recovery va
 });
 
 for (const synchronous of [false, true]) {
-	it(`${synchronous ? "sync" : "async"} migration leaves all entries retryable when a later artifact save fails`, async () => {
+	it(`${synchronous ? "structural-first" : "direct"} registered migration stays retryable when a later artifact save fails`, async () => {
 		const entries = legacyEntries("/tmp", [{ first: "x".repeat(12000) }, { second: "y".repeat(12000) }]);
 		const original = structuredClone(entries);
 		let saves = 0;
@@ -172,16 +191,14 @@ for (const synchronous of [false, true]) {
 			if (++saves === 2) throw new Error("artifact write denied");
 			return `saved-${saves}`;
 		};
-		if (synchronous) {
-			expect(() => migrateSessionEntries(entries, { saveArtifact: failSecond })).toThrow("artifact write denied");
-		} else {
-			await expect(migrateToCurrentVersion(entries, { saveArtifact: failSecond })).rejects.toThrow("artifact write denied");
-		}
+		if (synchronous) migrateSessionEntries(entries);
+		await expect(migrateToCurrentVersion(entries, { saveArtifact: failSecond })).rejects.toThrow(
+			"artifact write denied",
+		);
 		expect(entries).toEqual(original);
 		saves = 0;
 		const succeed = (): string => `recovered-${++saves}`;
-		if (synchronous) migrateSessionEntries(entries, { saveArtifact: succeed });
-		else await migrateToCurrentVersion(entries, { saveArtifact: succeed });
+		await migrateToCurrentVersion(entries, { saveArtifact: succeed });
 		expect(saves).toBe(2);
 		const header = entries[0];
 		if (header?.type !== "session") throw new Error("Expected session header");

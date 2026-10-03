@@ -1,7 +1,6 @@
-import { EVAL_DISPLAY_VERSION } from "@veyyon/kernel/session/session-migrations";
 import { truncateHeadBytes } from "../../session/streaming-output";
 
-export { EVAL_DISPLAY_VERSION };
+export const EVAL_DISPLAY_VERSION = 1;
 const MAX_DISPLAY_TEXT_BYTES = 8000;
 const DISPLAY_ELISION_RESERVE_BYTES = 64;
 

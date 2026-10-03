@@ -75,7 +75,7 @@ import {
 	restoreEntryPayloadsSync,
 	type SessionFileLayout,
 } from "./session-loader";
-import { EVAL_DISPLAY_VERSION, generateId, migrateToCurrentVersion } from "./session-migrations";
+import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
 	hasPositiveMovedProjectEvidence,
@@ -95,7 +95,7 @@ import {
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 import { assertNotTerminalOwned } from "./terminal-ownership";
-import { migrateToolResultEntries } from "./tool-result-codecs";
+import { hasPendingToolResultMigrations } from "./tool-result-codecs";
 
 const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
@@ -250,24 +250,6 @@ function isSessionIncarnationTelemetry(entry: SessionEntry): boolean {
 	return entry.type === "session_lifecycle" || entry.type === "session_checkpoint";
 }
 
-function hasV3EvalMigrationTargets(entries: readonly FileEntry[]): boolean {
-	for (const entry of entries) {
-		if (entry.type !== "message") continue;
-		const message = entry.message as {
-			role?: string;
-			toolName?: string;
-			details?: Record<string, unknown>;
-		};
-		if (message.role !== "toolResult" || message.toolName !== "eval") continue;
-		const details = message.details;
-		if (!details || typeof details !== "object" || !Array.isArray(details.jsonOutputs)) continue;
-		const displayVersion = details.displayVersion;
-		if (displayVersion === EVAL_DISPLAY_VERSION) continue;
-		return true;
-	}
-	return false;
-}
-
 export type ReadonlySessionManager = Pick<
 	SessionManager,
 	| "getCwd"
@@ -313,7 +295,6 @@ export interface SessionManagerStateSnapshot {
 	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
-	evalMigrationRewriteRequired?: boolean;
 	draftOnlySessionCleanupArmed: boolean;
 	nextSequence: number;
 	lifecycleStarted: boolean;
@@ -399,13 +380,6 @@ export class SessionManager {
 	#fileIsCurrent = false;
 	/** In-memory entries diverged from disk (load-migration/sanitize) → next persist must full-rewrite. */
 	#rewriteRequired = false;
-	/**
-	 * Armed when v3->v4 eval representation migration occurred on load, which must
-	 * persist eagerly on flush to durable disk representations (bounded v4 previews
-	 * and artifacts) while old v1/v2 legacy migrations remain deferred in memory
-	 * until later persisted activity.
-	 */
-	#evalMigrationRewriteRequired = false;
 	/** Lazy gate crossed (ensureOnDisk / loaded file): every entry must persist from now on. */
 	#forceFileCreation = false;
 	/**
@@ -1045,7 +1019,6 @@ export class SessionManager {
 			this.#fileIsCurrent = true;
 			this.#materializeBreadcrumb();
 			this.#rewriteRequired = false;
-			this.#evalMigrationRewriteRequired = false;
 			this.#hasTitleSlot = true;
 			this.#coolUnreachablePayloads();
 		} catch (err) {
@@ -1078,7 +1051,6 @@ export class SessionManager {
 					this.#fileIsCurrent = true;
 					this.#materializeBreadcrumb();
 					this.#rewriteRequired = false;
-					this.#evalMigrationRewriteRequired = false;
 					this.#hasTitleSlot = true;
 					this.#coolUnreachablePayloads();
 				}
@@ -1448,7 +1420,6 @@ export class SessionManager {
 					this.#clearDiskError();
 					this.#fileIsCurrent = true;
 					this.#rewriteRequired = false;
-					this.#evalMigrationRewriteRequired = false;
 					this.#hasTitleSlot = true;
 				}
 			},
@@ -1496,7 +1467,6 @@ export class SessionManager {
 		this.#lifecycleEnded = false;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
-		this.#evalMigrationRewriteRequired = false;
 		this.#forceFileCreation = false;
 		this.#draftOnlySessionCleanupArmed = false;
 		this.#turnBudgetTotal = null;
@@ -1707,7 +1677,6 @@ export class SessionManager {
 			sessionFile: this.#sessionFile,
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
-			evalMigrationRewriteRequired: this.#evalMigrationRewriteRequired,
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			nextSequence: this.#nextSequence,
 			lifecycleStarted: this.#lifecycleStarted,
@@ -1731,7 +1700,6 @@ export class SessionManager {
 		this.#sessionFile = snapshot.sessionFile;
 		this.#fileIsCurrent = snapshot.onDisk;
 		this.#rewriteRequired = snapshot.needsRewrite;
-		this.#evalMigrationRewriteRequired = snapshot.evalMigrationRewriteRequired ?? false;
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
@@ -1782,24 +1750,7 @@ export class SessionManager {
 					operatorNotices: this.#operatorNotices,
 				},
 			);
-			const initialHeader = fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
-			const initialVersion = initialHeader?.version ?? 1;
-			const hadV3EvalTargets = initialVersion === 3 && hasV3EvalMigrationTargets(fileEntries);
-			const artifactManager = new ArtifactManager(sessionFileStem(resolvedSessionFile));
-			migrated = await migrateToCurrentVersion(fileEntries, {
-				saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
-			});
-			if (migrated && hadV3EvalTargets) {
-				this.#evalMigrationRewriteRequired = true;
-			}
-			const migrationArtifacts = new ArtifactManager(sessionFileStem(resolvedSessionFile));
-			if (
-				await migrateToolResultEntries(fileEntries, {
-					saveArtifact: (content, toolName) => migrationArtifacts.save(content, toolName),
-				})
-			) {
-				migrated = true;
-			}
+			migrated = await migrateToCurrentVersion(fileEntries);
 			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
@@ -1925,7 +1876,6 @@ export class SessionManager {
 		this.#hasTitleSlot = true;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
-		this.#evalMigrationRewriteRequired = false;
 		this.#forceFileCreation = true;
 		this.#draftOnlySessionCleanupArmed = false;
 		this.#nextSequence = nextSessionSequence(this.#entries);
@@ -1995,7 +1945,6 @@ export class SessionManager {
 		const previousForceFileCreation = this.#forceFileCreation;
 		const previousFileIsCurrent = this.#fileIsCurrent;
 		const previousRewriteRequired = this.#rewriteRequired;
-		const previousEvalMigrationRewriteRequired = this.#evalMigrationRewriteRequired;
 		const previousDiskFailure = this.#diskFailure;
 		const previousDiskFailureLogged = this.#diskFailureLogged;
 		let oldSessionFile: string | undefined;
@@ -2051,7 +2000,6 @@ export class SessionManager {
 			this.#forceFileCreation = previousForceFileCreation;
 			this.#fileIsCurrent = previousFileIsCurrent;
 			this.#rewriteRequired = previousRewriteRequired;
-			this.#evalMigrationRewriteRequired = previousEvalMigrationRewriteRequired;
 			this.#diskFailure = previousDiskFailure;
 			this.#diskFailureLogged = previousDiskFailureLogged;
 			this.#diskTail = Promise.resolve();
@@ -2083,7 +2031,16 @@ export class SessionManager {
 		// A flush is a request to make the file match memory, so a latched fault takes
 		// its attempt here instead of being rethrown at a caller who asked for the
 		// opposite of a refusal.
-		if (this.#retryPersistenceAfterFailure() || this.#evalMigrationRewriteRequired) await this.#rewriteAtomically();
+		const pendingMigration = hasPendingToolResultMigrations(this.#entries);
+		if (pendingMigration) {
+			const artifacts = this.#artifactManagerForSession();
+			if (!artifacts) throw new Error("Cannot migrate tool results without session artifact storage");
+			await migrateToCurrentVersion([this.#header, ...this.#entries], {
+				saveArtifact: (content, toolType) => artifacts.save(content, toolType),
+			});
+			this.#rewriteRequired = true;
+		}
+		if (this.#retryPersistenceAfterFailure() || pendingMigration) await this.#rewriteAtomically();
 		await this.#scheduleDiskWork(async () => {
 			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});
@@ -2319,7 +2276,6 @@ export class SessionManager {
 		const previousForceFileCreation = this.#forceFileCreation;
 		const previousFileIsCurrent = this.#fileIsCurrent;
 		const previousRewriteRequired = this.#rewriteRequired;
-		const previousEvalMigrationRewriteRequired = this.#evalMigrationRewriteRequired;
 		const previousDiskFailure = this.#diskFailure;
 		const previousDiskFailureLogged = this.#diskFailureLogged;
 		this.#cwd = resolvedCwd;
@@ -2341,7 +2297,6 @@ export class SessionManager {
 			this.#forceFileCreation = previousForceFileCreation;
 			this.#fileIsCurrent = previousFileIsCurrent;
 			this.#rewriteRequired = previousRewriteRequired;
-			this.#evalMigrationRewriteRequired = previousEvalMigrationRewriteRequired;
 			this.#diskFailure = previousDiskFailure;
 			this.#diskFailureLogged = previousDiskFailureLogged;
 			throw error;
@@ -3029,7 +2984,6 @@ export class SessionManager {
 			this.#sessionFile = undefined;
 			this.#fileIsCurrent = false;
 			this.#rewriteRequired = false;
-			this.#evalMigrationRewriteRequired = false;
 			this.#startLifecycle("created");
 			return undefined;
 		}
@@ -3037,7 +2991,6 @@ export class SessionManager {
 		this.#sessionFile = newSessionFile;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = true;
-		this.#evalMigrationRewriteRequired = false;
 		this.#startLifecycle("created");
 		if (!this.#lifecycleStarted) this.#rewriteSynchronously();
 		this.#rememberBreadcrumb(this.#cwd, newSessionFile);
@@ -3150,10 +3103,7 @@ export class SessionManager {
 			source: sourcePath,
 			operatorNotices: options?.operatorNotices,
 		});
-		const artifactManager = new ArtifactManager(sessionFileStem(sourcePath));
-		await migrateToCurrentVersion(sourceEntries, {
-			saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
-		});
+		await migrateToCurrentVersion(sourceEntries);
 
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const history = sourceEntries.filter((entry): entry is SessionEntry => {

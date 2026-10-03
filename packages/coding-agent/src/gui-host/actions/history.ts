@@ -1,11 +1,9 @@
-import { ArtifactManager } from "@veyyon/kernel/session/artifacts";
 import { BlobStore } from "@veyyon/kernel/session/blob-store";
 import type { SessionEntry, SessionHeader } from "@veyyon/kernel/session/session-entries";
 import { loadEntriesFromFile, resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
 import { migrateToCurrentVersion } from "@veyyon/kernel/session/session-migrations";
 import { contentText } from "@veyyon/utils/content-text";
 import { getBlobsDir } from "@veyyon/utils/dirs";
-import { sessionFileStem } from "@veyyon/utils/session-file";
 import { sessionInfoToSummary } from "../session-bridge";
 import { sessionEntriesToTranscript } from "../transcript-conversion";
 import type { SessionSummary } from "../wire";
@@ -18,10 +16,7 @@ async function readHistory(file: string): Promise<{ header: SessionHeader; entri
 	const header = loaded[0];
 	if (header?.type !== "session") throw new Error(`Session '${file}' has no readable session header`);
 	await resolveBlobRefsInEntries(loaded, new BlobStore(getBlobsDir()));
-	const artifactManager = new ArtifactManager(sessionFileStem(file));
-	await migrateToCurrentVersion(loaded, {
-		saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
-	});
+	await migrateToCurrentVersion(loaded);
 	return { header, entries: loaded.filter((entry): entry is SessionEntry => entry.type !== "session") };
 }
 

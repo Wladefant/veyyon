@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import type { FileEntry } from "@veyyon/kernel/session/session-entries";
 import { generateId, migrateSessionEntries, migrateToCurrentVersion } from "@veyyon/kernel/session/session-migrations";
+import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
+import { evalResultCodec } from "../../src/tools/shell/eval-result-codec";
+
+registerToolResultCodecs([evalResultCodec]);
 
 describe("migrateSessionEntries", () => {
 	it("should add id/parentId to v1 entries", () => {
@@ -27,7 +31,7 @@ describe("migrateSessionEntries", () => {
 
 		// Header should have version set to current
 		const header = entries[0];
-		if (!header || header.type !== "session") throw new Error("Expected session header");
+		if (header?.type !== "session") throw new Error("Expected session header");
 		expect(header.version).toBe(4);
 		// Entries should have id/parentId
 		const msg1 = entries[1] as any;
@@ -109,7 +113,7 @@ describe("migrateToCurrentVersion", () => {
 
 		expect(await migrateToCurrentVersion(entries)).toBe(true);
 		const v2Header = entries[0];
-		if (!v2Header || v2Header.type !== "session") throw new Error("Expected session header");
+		if (v2Header?.type !== "session") throw new Error("Expected session header");
 		expect(v2Header.version).toBe(4);
 		expect((entries[1] as any).message.role).toBe("custom");
 		// A non-hook message is left alone.
@@ -188,10 +192,10 @@ describe("migrateToCurrentVersion", () => {
 
 		expect(migrated).toBe(true);
 		const v3Header = entries[0];
-		if (!v3Header || v3Header.type !== "session") throw new Error("Expected session header");
+		if (v3Header?.type !== "session") throw new Error("Expected session header");
 		expect(v3Header.version).toBe(4);
 		const messageEntry = entries[1];
-		if (!messageEntry || messageEntry.type !== "message") throw new Error("Expected message entry");
+		if (messageEntry?.type !== "message") throw new Error("Expected message entry");
 		const message = messageEntry.message;
 		if (message.role !== "toolResult") throw new Error("Expected toolResult message");
 		const details = message.details as Record<string, unknown> | undefined;
