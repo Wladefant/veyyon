@@ -1004,7 +1004,7 @@ describe("OutputSink maxColumns (per-line cap)", () => {
 
 		sink.push("hello world to full device\n");
 		const status = await sink.dumpWithArtifactStatus();
-		expect(["write", "flush"]).toContain(status.artifactError);
+		expect(status.artifactError).toMatch(/^(write|flush)$/);
 		expect(status.artifactId).toBeUndefined();
 		expect(status.output).toBe("ll device\n");
 	});
