@@ -1741,7 +1741,10 @@ export class SessionManager {
 		let header: SessionHeader | undefined;
 		let adoptedCwd: string | undefined;
 		if (fileEntries.length > 0) {
-			migrated = migrateToCurrentVersion(fileEntries);
+			const artifactManager = new ArtifactManager(sessionFileStem(resolvedSessionFile));
+			migrated = await migrateToCurrentVersion(fileEntries, {
+				saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
+			});
 			await resolveBlobRefsInEntries(
 				fileEntries,
 				new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
@@ -2030,7 +2033,7 @@ export class SessionManager {
 		// A flush is a request to make the file match memory, so a latched fault takes
 		// its attempt here instead of being rethrown at a caller who asked for the
 		// opposite of a refusal.
-		if (this.#retryPersistenceAfterFailure()) await this.#rewriteAtomically();
+		if (this.#retryPersistenceAfterFailure() || this.#rewriteRequired) await this.#rewriteAtomically();
 		await this.#scheduleDiskWork(async () => {
 			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});
@@ -2372,6 +2375,16 @@ export class SessionManager {
 		if (manager) return manager.save(content, toolType);
 
 		// Non-persistent session: keep an in-memory copy so spill truncation works.
+		this.#inMemoryArtifacts ??= new Map();
+		const id = String(this.#inMemoryArtifactCounter++);
+		this.#inMemoryArtifacts.set(id, content);
+		return id;
+	}
+
+	saveArtifactSync(content: string, toolType: string): string | undefined {
+		const manager = this.#artifactManagerForSession();
+		if (manager) return manager.saveSync(content, toolType);
+
 		this.#inMemoryArtifacts ??= new Map();
 		const id = String(this.#inMemoryArtifactCounter++);
 		this.#inMemoryArtifacts.set(id, content);
@@ -3079,7 +3092,10 @@ export class SessionManager {
 		const sourceEntries = structuredClone(
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
 		) as FileEntry[];
-		migrateToCurrentVersion(sourceEntries);
+		const artifactManager = new ArtifactManager(sessionFileStem(sourcePath));
+		await migrateToCurrentVersion(sourceEntries, {
+			saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
+		});
 		await resolveBlobRefsInEntries(sourceEntries, new BlobStore(blobsDirForSessionDir(path.dirname(sourcePath))), {
 			source: sourcePath,
 			operatorNotices: options?.operatorNotices,

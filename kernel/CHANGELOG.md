@@ -13,6 +13,7 @@
 
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
+- Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#406](https://github.com/Wladefant/veyyon/pull/406)).
 
 ### Fixed
 - Fence fresh terminal breadcrumbs to an explicit session directory and require positive directory inode evidence before re-rooting moved projects (oh-my-pi 13fc0b6c33c536481221a1b23d16ef993f01d7b0, oh-my-pi cd46dd0ca51641560e53d3cd14e164cd4f241e9d, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

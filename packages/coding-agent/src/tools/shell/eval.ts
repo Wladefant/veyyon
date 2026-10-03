@@ -1,5 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
+import { EVAL_DISPLAY_VERSION } from "@veyyon/kernel/session/session-migrations";
 import { errorMessage, formatCount, lazy, logger, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
@@ -191,6 +192,7 @@ export function formatDisplayJson(value: unknown): FormattedDisplayJson {
 		fullText,
 		previewText,
 		detailsValue: {
+			version: EVAL_DISPLAY_VERSION,
 			preview: previewText,
 			truncated: true,
 			totalBytes,
@@ -631,6 +633,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					};
 					if (jsonOutputs.length > 0) {
 						details.jsonOutputs = jsonOutputs;
+						details.displayVersion = EVAL_DISPLAY_VERSION;
 					}
 					if (images.length > 0) {
 						details.images = images;
@@ -772,7 +775,17 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 							// so instead of persisting the bounded preview as though
 							// nothing was lost.
 							const mirror = await outputSink.ensureArtifactMirrored();
-							if (!mirror.mirrored) {
+							if (mirror.mirrored) {
+								const currentArtifactId = outputSink.artifactId ?? artifactId;
+								if (
+									currentArtifactId &&
+									typeof jsonOutputs[jsonOutputs.length - 1] === "object" &&
+									jsonOutputs[jsonOutputs.length - 1] !== null
+								) {
+									(jsonOutputs[jsonOutputs.length - 1] as Record<string, unknown>).artifactId =
+										currentArtifactId;
+								}
+							} else {
 								const reason = mirror.error ?? "unknown artifact write failure";
 								jsonOutputs[jsonOutputs.length - 1] = output.data;
 								cellDisplayTexts[cellDisplayTexts.length - 1] +=
@@ -853,6 +866,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 						cells: [cellResult],
 						jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
 						statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
+						displayVersion: jsonOutputs.length > 0 ? EVAL_DISPLAY_VERSION : undefined,
 					};
 					if (isError) details.isError = true;
 					if (notice) details.notice = notice;

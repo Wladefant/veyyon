@@ -44,7 +44,7 @@ declare module "@veyyon/session" {
 	}
 }
 
-export const CURRENT_SESSION_VERSION = 3;
+export const CURRENT_SESSION_VERSION = 4;
 
 export const SESSION_TITLE_SLOT_BYTES = 256;
 

@@ -4,9 +4,11 @@
  * Artifacts are stored in a directory alongside the session file,
  * accessible via artifact:// URLs.
  */
+
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { atomicWriteFileWith } from "@veyyon/utils/atomic-write";
+import { atomicWriteFileSync, atomicWriteFileWith } from "@veyyon/utils/atomic-write";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -65,6 +67,12 @@ export async function writeArtifactAtomically(path: string, content: string): Pr
 	return expectedBytes;
 }
 
+export function writeArtifactAtomicallySync(path: string, content: string): number {
+	const expectedBytes = Buffer.byteLength(content);
+	atomicWriteFileSync(path, content);
+	return expectedBytes;
+}
+
 /**
  * Manages artifact storage for a session.
  *
@@ -106,6 +114,38 @@ export class ArtifactManager {
 		// the readdir yield in #scanExistingIds (which would hand duplicate ids).
 		this.#initPromise ??= this.#scanExistingIds();
 		await this.#initPromise;
+	}
+
+	#ensureDirSync(): void {
+		if (!this.#dirCreated) {
+			fsSync.mkdirSync(this.#dir, { recursive: true });
+			this.#dirCreated = true;
+		}
+		if (this.#initPromise === null) {
+			this.#scanExistingIdsSync();
+		}
+	}
+
+	#scanExistingIdsSync(): void {
+		let maxId = -1;
+		try {
+			const files = fsSync.readdirSync(this.#dir);
+			for (const file of files) {
+				const match = file.match(/^(\d+)\..*\.log$/);
+				if (match) {
+					const id = parseInt(match[1], 10);
+					if (id > maxId) maxId = id;
+				}
+			}
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Artifact directory could not be read; truncated tool outputs are unreachable", {
+					dir: this.#dir,
+					error: errorMessage(err),
+				});
+			}
+		}
+		this.#nextId = maxId + 1;
 	}
 
 	/**
@@ -156,6 +196,25 @@ export class ArtifactManager {
 	async save(content: string, toolType: string): Promise<string> {
 		const { id, path } = await this.allocatePath(toolType);
 		await writeArtifactAtomically(path, content);
+		return id;
+	}
+
+	/**
+	 * Synchronously allocate a new artifact path and ID without writing content.
+	 */
+	allocatePathSync(toolType: string): { id: string; path: string } {
+		this.#ensureDirSync();
+		const id = String(this.allocateId());
+		const filename = `${id}.${sanitizeToolType(toolType)}.log`;
+		return { id, path: path.join(this.#dir, filename) };
+	}
+
+	/**
+	 * Synchronously save content as an artifact and return the artifact ID.
+	 */
+	saveSync(content: string, toolType: string): string {
+		const { id, path: targetPath } = this.allocatePathSync(toolType);
+		writeArtifactAtomicallySync(targetPath, content);
 		return id;
 	}
 
