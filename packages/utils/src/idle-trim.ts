@@ -1,21 +1,26 @@
+import { type ActivitySignal, processActivity } from "./activity-signal";
 import * as logger from "./logger";
+import { rearmingTimeout } from "./rearming-timeout";
 import { errorMessage } from "./type-guards";
+
+/**
+ * A window whose process CPU exceeds this share of its wall time is busy: an idle interactive
+ * session measures 0.5%, a streaming turn tens of percent.
+ */
+export const BUSY_CPU_RATIO = 0.05;
 
 export interface IdleTrimOptions {
 	/** Quiet time after the last busy window before the trim runs, in ms. Default 30 000. */
 	quietMs?: number;
 	/** Length of one CPU sampling window, in ms. Default 5 000. */
 	sampleMs?: number;
-	/**
-	 * A window whose process CPU exceeds this share of its wall time is busy. Default 0.05: an idle
-	 * interactive session measures 0.5%, a streaming turn tens of percent.
-	 */
+	/** A window whose process CPU exceeds this share of its wall time is busy. Default `BUSY_CPU_RATIO`. */
 	busyCpuRatio?: number;
 	/** Monotonic clock source; injectable for tests. Default `performance.now`. */
 	now?: () => number;
 	/** Process CPU consumed so far, in microseconds; injectable for tests. Default `process.cpuUsage`. */
 	cpuUsage?: () => { user: number; system: number };
-	/** Timer source; injectable for tests. Default `setTimeout`. */
+	/** Timer source; injectable for tests. Default `rearmingTimeout()`. */
 	schedule?: (cb: () => void, ms: number) => IdleTrimTimer;
 	/** The trim itself; injectable for tests and for a caller that releases more. Default `trimEngine`. */
 	trim?: () => void;
@@ -24,6 +29,8 @@ export interface IdleTrimOptions {
 	 * and again after each trim. Default none.
 	 */
 	release?: () => void;
+	/** Where work is reported; a trimmed process parks only while a host is attached. Default `processActivity`. */
+	activity?: ActivitySignal;
 }
 
 /**
@@ -67,7 +74,14 @@ interface IdleTrimTimer {
  * `quietMs` apart still drops what the release covers between them, and once more after each trim.
  * A release that throws is not called again; sampling and the trim continue.
  *
- * The sampling timer is `unref`'d and never keeps the process alive; stop() cancels it.
+ * After a trim, the first quiet window after the trim's own parks the sampling on `activity`
+ * when a host is attached to it: no window is armed until the host reports work, and the window
+ * armed then judges that work. Work the host does not report is not sampled, so a burst of it
+ * after a trim is followed by no second trim. Without a host the sampling continues every
+ * `sampleMs`.
+ *
+ * The sampling timer is `unref`'d and never keeps the process alive; stop() cancels it and drops a
+ * parked wake.
  */
 export class IdleTrim {
 	#quietMs: number;
@@ -94,21 +108,25 @@ export class IdleTrim {
 	#skipWindow = false;
 	/** The release ran and no busy window has been seen since. */
 	#released = false;
+	#activity: ActivitySignal;
+	#parked = false;
+	/** Arms the next window once work is reported after sampling parked. */
+	#wake = (): void => {
+		if (!this.#parked) return;
+		this.#parked = false;
+		this.#arm();
+	};
 
 	constructor(options: IdleTrimOptions = {}) {
 		this.#quietMs = options.quietMs ?? 30_000;
 		this.#sampleMs = options.sampleMs ?? 5_000;
-		this.#busyCpuRatio = options.busyCpuRatio ?? 0.05;
+		this.#busyCpuRatio = options.busyCpuRatio ?? BUSY_CPU_RATIO;
 		this.#now = options.now ?? (() => performance.now());
 		this.#cpuUsage = options.cpuUsage ?? (() => process.cpuUsage());
-		this.#schedule =
-			options.schedule ??
-			((cb, ms) => {
-				const timer = setTimeout(cb, ms);
-				return { unref: () => timer.unref?.(), cancel: () => clearTimeout(timer) };
-			});
+		this.#schedule = options.schedule ?? rearmingTimeout();
 		this.#trim = options.trim ?? trimEngine;
 		this.#release = options.release;
+		this.#activity = options.activity ?? processActivity;
 	}
 
 	/** Start sampling. The quiet period starts now. Idempotent. */
@@ -128,6 +146,8 @@ export class IdleTrim {
 		this.#generation++;
 		this.#handle?.cancel?.();
 		this.#handle = undefined;
+		this.#parked = false;
+		this.#activity.unpark(this.#wake);
 	}
 
 	get running(): boolean {
@@ -173,6 +193,9 @@ export class IdleTrim {
 				this.#skipWindow = true;
 				logger.debug("Idle trim ran", { quietMs: Math.round(now - this.#quietSinceMs) });
 				this.#runRelease();
+			} else if (this.#trimmed && this.#activity.park(this.#wake)) {
+				this.#parked = true;
+				return;
 			}
 		}
 		this.#arm();
