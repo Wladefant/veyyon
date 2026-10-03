@@ -4,7 +4,7 @@ import type { DiscoveryFailure, DiscoveryHooks } from "./discovery/failure";
 import { readModelCache, writeModelCache } from "./model-cache";
 import { type GeneratedProvider, getBundledModels } from "./models";
 import { defaultModelsDevFallback } from "./modelsdev-overlay";
-import type { Api, Model, ModelSpec, Provider } from "./types";
+import { type Api, type Model, type ModelSpec, modelKind, type Provider } from "./types";
 import { isRecord } from "./utils";
 import { collapseBuiltModelVariants } from "./variant-collapse";
 
@@ -425,7 +425,9 @@ function retainModelIds<TApi extends Api>(
 ): Model<TApi>[] {
 	if (retainedModels.length === 0 || models.length === 0) return [];
 	const retainedIds = new Set(retainedModels.map(model => model.id));
-	return models.filter(model => retainedIds.has(model.id));
+	// A chat endpoint never lists a role-specific runner (an image model), so
+	// authoritative discovery prunes chat rows only.
+	return models.filter(model => modelKind(model) !== "chat" || retainedIds.has(model.id));
 }
 
 /**

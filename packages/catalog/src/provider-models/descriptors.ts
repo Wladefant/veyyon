@@ -11,6 +11,7 @@ import type { ModelManagerConfig, ProviderCatalogEntry, ProviderDescriptor } fro
 import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
 import {
+	abliterationModelManagerOptions,
 	aimlApiModelManagerOptions,
 	alibabaCodingPlanModelManagerOptions,
 	anthropicModelManagerOptions,
@@ -22,14 +23,17 @@ import {
 	firepassModelManagerOptions,
 	fireworksModelManagerOptions,
 	githubCopilotModelManagerOptions,
+	gmiCloudModelManagerOptions,
 	groqModelManagerOptions,
 	huggingfaceModelManagerOptions,
 	kiloModelManagerOptions,
 	kimiCodeModelManagerOptions,
 	litellmModelManagerOptions,
 	lmStudioModelManagerOptions,
+	metaModelManagerOptions,
 	mistralModelManagerOptions,
 	moonshotModelManagerOptions,
+	museCodeModelManagerOptions,
 	nanoGptModelManagerOptions,
 	nousResearchModelManagerOptions,
 	novitaModelManagerOptions,
@@ -47,6 +51,7 @@ import {
 	resolveOpenrouterCacheProviderId,
 	resolveVllmCacheProviderId,
 	sakanaModelManagerOptions,
+	stepfunModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
 	umansModelManagerOptions,
@@ -70,6 +75,14 @@ import {
 } from "./special";
 
 export const CATALOG_PROVIDERS = [
+	{
+		id: "abliteration",
+		defaultModel: "abliterated-model",
+		envVars: ["ABLITERATION_API_KEY", "ABLIT_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => abliterationModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Abliteration" },
+	},
 	{
 		id: "aimlapi",
 		defaultModel: "gpt-5.5-2026-04-23",
@@ -209,6 +222,14 @@ export const CATALOG_PROVIDERS = [
 		dynamicModelsAuthoritative: true,
 	},
 	{
+		id: "gmi-cloud",
+		defaultModel: "deepseek-ai/DeepSeek-V4-Flash",
+		envVars: ["GMI_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => gmiCloudModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "GMI Cloud" },
+	},
+	{
 		id: "google",
 		defaultModel: "gemini-3.1-pro-preview",
 		envVars: ["GEMINI_API_KEY"],
@@ -291,6 +312,19 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "devstral-medium-latest",
 		envVars: ["MISTRAL_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => mistralModelManagerOptions(config),
+	},
+	{
+		id: "meta",
+		defaultModel: "muse-spark-1.1",
+		envVars: ["MODEL_API_KEY", "META_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => metaModelManagerOptions(config),
+		catalogDiscovery: { label: "Meta Model API" },
+	},
+	{
+		id: "muse-code",
+		defaultModel: "muse-spark-1.3",
+		createModelManagerOptions: (config: ModelManagerConfig) => museCodeModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
 	},
 	{
 		id: "moonshot",
@@ -406,6 +440,14 @@ export const CATALOG_PROVIDERS = [
 		createModelManagerOptions: (config: ModelManagerConfig) => sakanaModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Sakana AI" },
+	},
+	{
+		id: "stepfun",
+		defaultModel: "step-5-preview",
+		envVars: ["STEPFUN_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => stepfunModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "StepFun" },
 	},
 	{
 		id: "synthetic",
