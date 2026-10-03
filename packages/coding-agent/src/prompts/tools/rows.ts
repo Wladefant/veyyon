@@ -37,6 +37,8 @@ import toolsImageGen from "./image-gen.md" with { type: "text" };
 import toolsInspectImage from "./inspect-image.md" with { type: "text" };
 import toolsInspectImageSystem from "./inspect-image-system.md" with { type: "text" };
 import toolsIrc from "./irc.md" with { type: "text" };
+import toolsIsolationRecoveryHint from "./isolation-recovery-hint.md" with { type: "text" };
+import toolsIsolationSummary from "./isolation-summary.md" with { type: "text" };
 import toolsJob from "./job.md" with { type: "text" };
 import toolsLaunch from "./launch.md" with { type: "text" };
 import toolsLearn from "./learn.md" with { type: "text" };
@@ -98,6 +100,14 @@ export const toolsPrompts = definePromptRows({
 	"tools/inspect-image-system": {
 		text: toolsInspectImageSystem,
 		purpose: "answers a question about an image for the inspect_image tool",
+	},
+	"tools/isolation-recovery-hint": {
+		text: toolsIsolationRecoveryHint,
+		purpose: "recovery hint appended to an isolated run's failure",
+	},
+	"tools/isolation-summary": {
+		text: toolsIsolationSummary,
+		purpose: "summary appended to an isolated task run describing changes or failures",
 	},
 	"tools/irc": { text: toolsIrc, purpose: "the irc tool description" },
 	"tools/job": { text: toolsJob, purpose: "the job tool description" },
