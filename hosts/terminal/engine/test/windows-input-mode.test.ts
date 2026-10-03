@@ -82,6 +82,37 @@ describe("Win32InputModeDecoder", () => {
 	it("repeats auto-repeated keys", () => {
 		expect(new Win32InputModeDecoder().decode("\x1b[65;30;97;1;0;3_")).toEqual(["a", "a", "a"]);
 	});
+
+	it("rejects malformed, out-of-range, and overflow record fields without allocation", () => {
+		const decoder = new Win32InputModeDecoder();
+		// Unbounded / huge repeat count must not throw RangeError or allocate
+		expect(decoder.decode("\x1b[13;28;13;1;0;999999999999999999_")).toBeUndefined();
+		// Overflow ushort repeat count (> 65535)
+		expect(decoder.decode("\x1b[13;28;13;1;0;65536_")).toBeUndefined();
+		// Zero repeat count
+		expect(decoder.decode("\x1b[13;28;13;1;0;0_")).toBeUndefined();
+		// Negative or non-numeric repeat count
+		expect(decoder.decode("\x1b[13;28;13;1;0;-1_")).toBeUndefined();
+		// Overflow Uc (> 65535)
+		expect(decoder.decode("\x1b[13;28;65536;1;0;1_")).toBeUndefined();
+		// Overflow Cs flags (> 4294967295)
+		expect(decoder.decode("\x1b[13;28;13;1;4294967296;1_")).toBeUndefined();
+		// Overflow Vk (> 65535)
+		expect(decoder.decode("\x1b[65536;28;13;1;0;1_")).toBeUndefined();
+	});
+
+	it("accepts valid boundary values for ushort and uint32 fields", () => {
+		const decoder = new Win32InputModeDecoder();
+		// Valid max ushort repeat count (65535)
+		const maxRepeat = decoder.decode("\x1b[65;30;97;1;0;65535_");
+		expect(maxRepeat).toBeDefined();
+		expect(maxRepeat).toHaveLength(65535);
+		expect(maxRepeat![0]).toBe("a");
+		// Valid max uint32 Cs flags (4294967295)
+		expect(decoder.decode("\x1b[65;30;97;1;4294967295;1_")).toBeDefined();
+		// Valid max ushort Uc (65535)
+		expect(decoder.decode("\x1b[0;0;65535;1;0;1_")).toEqual([String.fromCharCode(65535)]);
+	});
 });
 
 class InputRecorder implements Component {

@@ -88,16 +88,40 @@ interface KeyRecord {
 	repeat: number;
 }
 
+const MAX_USHORT = 0xffff;
+const MAX_UINT32 = 0xffffffff;
+
+function parseUint(raw: string | undefined, max: number, fallback?: number): number | undefined {
+	if (raw === undefined || raw === "") return fallback;
+	if (!/^\d+$/.test(raw)) return undefined;
+	const val = Number(raw);
+	if (!Number.isSafeInteger(val) || val < 0 || val > max) return undefined;
+	return val;
+}
+
 function parseRecord(data: string): KeyRecord | undefined {
 	const match = W32IM_PATTERN.exec(data);
 	if (!match) return undefined;
 	const params = match[1]!.split(";");
-	if (params.length > 6) return undefined;
-	const at = (index: number, fallback: number): number => {
-		const raw = params[index];
-		return raw ? Number.parseInt(raw, 10) : fallback;
-	};
-	return { vk: at(0, 0), uc: at(2, 0), down: at(3, 0) === 1, state: at(4, 0), repeat: Math.max(1, at(5, 1)) };
+	if (params.length < 1 || params.length > 6) return undefined;
+	const vk = parseUint(params[0], MAX_USHORT, 0);
+	const sc = parseUint(params[1], MAX_USHORT, 0);
+	const uc = parseUint(params[2], MAX_USHORT, 0);
+	const kd = parseUint(params[3], 1, 1);
+	const cs = parseUint(params[4], MAX_UINT32, 0);
+	const rc = parseUint(params[5], MAX_USHORT, 1);
+	if (
+		vk === undefined ||
+		sc === undefined ||
+		uc === undefined ||
+		kd === undefined ||
+		cs === undefined ||
+		rc === undefined ||
+		rc === 0
+	) {
+		return undefined;
+	}
+	return { vk, uc, down: kd === 1, state: cs, repeat: rc };
 }
 
 /** Lowercase codepoint a letter/digit virtual key stands for, or 0. */
