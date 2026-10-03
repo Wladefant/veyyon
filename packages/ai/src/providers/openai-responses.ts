@@ -1,3 +1,4 @@
+import { scheduler } from "node:timers/promises";
 import { hostMatchesUrl } from "@veyyon/catalog/hosts";
 import { $flag } from "@veyyon/utils/env";
 import { structuredCloneJSON } from "@veyyon/utils/json";
@@ -181,6 +182,30 @@ const OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI responses stream timed out while waiting for the first event";
 /** Consecutive stale-previous-response failures before chaining is disabled for the session. */
 const OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT = 3;
+const OPENAI_RESPONSES_MAX_TRANSIENT_STREAM_RETRIES = 1;
+const OPENAI_RESPONSES_TRANSIENT_STREAM_RETRY_DELAY_MS = 500;
+
+function isOpenAIResponsesReplayUnsafeEvent(event: ResponseStreamEvent): boolean {
+	const t = event.type;
+	if (t === "response.reasoning_summary_part.done" || t === "response.output_item.done") return true;
+	return (
+		(t === "response.output_text.delta" ||
+			t === "response.refusal.delta" ||
+			t === "response.reasoning_summary_text.delta" ||
+			t === "response.reasoning_text.delta" ||
+			t === "response.function_call_arguments.delta" ||
+			t === "response.custom_tool_call_input.delta") &&
+		typeof event.delta === "string" &&
+		event.delta.length > 0
+	);
+}
+
+function isRetryableOpenAIResponsesStreamFailure(error: unknown): boolean {
+	return (
+		AIError.isTransientStreamParseError(error) ||
+		(error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream")
+	);
+}
 
 interface OpenAIResponsesProviderSessionState
 	extends ProviderSessionState,
@@ -534,8 +559,7 @@ class OpenAIResponsesStreamRun {
 		const output = this.#output;
 		try {
 			const plan = this.#plan();
-			const { handle, attempt } = await this.#open(plan);
-			const { reason, nativeOutputItems } = await this.#consume(plan, handle);
+			const { reason, nativeOutputItems, attempt } = await this.#consume(plan);
 			this.#recordChainBaseline(plan.sessionState, attempt.params, nativeOutputItems);
 			this.#stampTiming();
 			this.stream.push({ type: "done", reason, message: output });
@@ -807,18 +831,108 @@ class OpenAIResponsesStreamRun {
 		return { body: wireBodyJson };
 	}
 
-	/** Stream the response into the message; the native output items it produced, once it ended cleanly. */
+	#resetOutputForRetry(plan: OpenAIResponsesRequestPlan): void {
+		const o = this.#output;
+		const initial = createInitialResponsesAssistantMessage(this.model.api, this.model.provider, this.model.id);
+		o.content.length = 0;
+		o.responseId =
+			o.upstreamProvider =
+			o.errorMessage =
+			o.errorStatus =
+			o.errorId =
+			o.stopDetails =
+			o.providerPayload =
+			o.duration =
+			o.ttft =
+				undefined;
+		o.usage = initial.usage;
+		if (plan.premiumRequests !== undefined) o.usage.premiumRequests = plan.premiumRequests;
+		o.stopReason = "stop";
+		this.#firstTokenTime = undefined;
+	}
+
+	/** Stream the response into the message; retries once before replay-unsafe output on transient stream failure. */
 	async #consume(
 		plan: OpenAIResponsesRequestPlan,
-		handle: OpenAIStreamHandle<ResponseStreamEvent>,
-	): Promise<OpenAIResponsesConsumed> {
+	): Promise<OpenAIResponsesConsumed & { attempt: OpenAIResponsesAttempt }> {
 		const { model, options, stream } = this;
 		const output = this.#output;
 		const abortTracker = this.#abortTracker;
-		await notifyProviderResponse(options, handle.response, model, handle.requestId);
 		if (plan.premiumRequests !== undefined) output.usage.premiumRequests = plan.premiumRequests;
 		stream.push({ type: "start", partial: output });
 
+		let retryAttempt = 0;
+		let { handle, attempt } = await this.#open(plan);
+		while (true) {
+			let sawReplayUnsafe = false;
+			const attemptStream = new AssistantMessageEventStream();
+			let forwardLive = false;
+			const forwardEvents = () => {
+				for (const event of attemptStream.queue) stream.push(event);
+				attemptStream.queue.length = 0;
+			};
+			try {
+				const res = await this.#consumeAttempt(
+					plan,
+					handle,
+					attemptStream,
+					() => {
+						sawReplayUnsafe = true;
+						if (!forwardLive) {
+							forwardEvents();
+							forwardLive = true;
+						}
+					},
+					() => {
+						if (forwardLive) forwardEvents();
+					},
+				);
+				forwardEvents();
+				return { ...res, attempt };
+			} catch (error) {
+				const failure = abortTracker.getLocalAbortReason() ?? error;
+				if (
+					sawReplayUnsafe ||
+					abortTracker.requestSignal.aborted ||
+					abortTracker.wasCallerAbort() ||
+					retryAttempt >= OPENAI_RESPONSES_MAX_TRANSIENT_STREAM_RETRIES ||
+					!isRetryableOpenAIResponsesStreamFailure(failure)
+				) {
+					forwardEvents();
+					throw failure;
+				}
+				retryAttempt++;
+				logger.debug("OpenAI responses stream ended before replay-unsafe output; retrying", {
+					provider: model.provider,
+					model: model.id,
+					attempt: retryAttempt,
+					error: failure instanceof Error ? failure.message : String(failure),
+				});
+				this.#resetOutputForRetry(plan);
+				if (options?.providerRetryWait) {
+					await options.providerRetryWait(OPENAI_RESPONSES_TRANSIENT_STREAM_RETRY_DELAY_MS, options.signal);
+				} else {
+					await scheduler.wait(OPENAI_RESPONSES_TRANSIENT_STREAM_RETRY_DELAY_MS, { signal: options?.signal });
+				}
+				if (abortTracker.wasCallerAbort()) throw new AIError.RequestAbortError();
+				const reopened = await this.#open(plan);
+				handle = reopened.handle;
+				attempt = reopened.attempt;
+			}
+		}
+	}
+
+	async #consumeAttempt(
+		plan: OpenAIResponsesRequestPlan,
+		handle: OpenAIStreamHandle<ResponseStreamEvent>,
+		stream: AssistantMessageEventStream,
+		onReplayUnsafe: () => void,
+		onEventYielded: () => void,
+	): Promise<OpenAIResponsesConsumed> {
+		const { model, options } = this;
+		const output = this.#output;
+		const abortTracker = this.#abortTracker;
+		await notifyProviderResponse(options, handle.response, model, handle.requestId);
 		const nativeOutputItems: Array<Record<string, unknown>> = [];
 		let sawTerminalResponseEvent = false;
 		const events = iterateWithIdleTimeout(handle.events, {
@@ -831,13 +945,18 @@ class OpenAIResponsesStreamRun {
 			abortSignal: options?.signal,
 			isProgressItem: isOpenAIResponsesProgressEvent,
 		});
-		await processResponsesStream(events, output, stream, model, {
+		const observedEvents = (async function* (): AsyncGenerator<ResponseStreamEvent> {
+			for await (const event of events) {
+				if (isOpenAIResponsesReplayUnsafeEvent(event)) onReplayUnsafe();
+				yield event;
+				onEventYielded();
+			}
+		})();
+		await processResponsesStream(observedEvents, output, stream, model, {
 			onFirstToken: () => {
 				if (!this.#firstTokenTime) this.#firstTokenTime = performance.now();
 			},
 			onOutputItemDone: item => {
-				// `processResponsesStream` hands over a private clone already; no
-				// second deep copy needed (reasoning items carry multi-KB blobs).
 				nativeOutputItems.push(item as unknown as Record<string, unknown>);
 			},
 			onCompleted: () => {
@@ -845,14 +964,9 @@ class OpenAIResponsesStreamRun {
 			},
 			requestServiceTier: options?.serviceTier,
 		});
-
 		const localAbortReason = abortTracker.getLocalAbortReason();
 		if (localAbortReason) throw localAbortReason;
 		if (abortTracker.wasCallerAbort()) throw new AIError.RequestAbortError();
-		// Detect premature stream closure: the HTTP stream ended without the
-		// provider sending a recognized terminal response event. Custom/proxy
-		// providers may drop the connection mid-stream; without this guard the
-		// incomplete output is silently surfaced as a successful "stop".
 		if (!sawTerminalResponseEvent) {
 			throw new AIError.ProviderResponseError(
 				"OpenAI responses stream closed before a terminal response event was received",
