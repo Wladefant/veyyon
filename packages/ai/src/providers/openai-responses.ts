@@ -189,14 +189,22 @@ function isOpenAIResponsesReplayUnsafeEvent(event: ResponseStreamEvent): boolean
 	const t = event.type;
 	if (t === "response.reasoning_summary_part.done" || t === "response.output_item.done") return true;
 	return (
-		(t === "response.output_text.delta" || t === "response.refusal.delta" || t === "response.reasoning_summary_text.delta" ||
-			t === "response.reasoning_text.delta" || t === "response.function_call_arguments.delta" || t === "response.custom_tool_call_input.delta") &&
-		typeof event.delta === "string" && event.delta.length > 0
+		(t === "response.output_text.delta" ||
+			t === "response.refusal.delta" ||
+			t === "response.reasoning_summary_text.delta" ||
+			t === "response.reasoning_text.delta" ||
+			t === "response.function_call_arguments.delta" ||
+			t === "response.custom_tool_call_input.delta") &&
+		typeof event.delta === "string" &&
+		event.delta.length > 0
 	);
 }
 
 function isRetryableOpenAIResponsesStreamFailure(error: unknown): boolean {
-	return AIError.isTransientStreamParseError(error) || (error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream");
+	return (
+		AIError.isTransientStreamParseError(error) ||
+		(error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream")
+	);
 }
 
 interface OpenAIResponsesProviderSessionState
@@ -827,7 +835,16 @@ class OpenAIResponsesStreamRun {
 		const o = this.#output;
 		const initial = createInitialResponsesAssistantMessage(this.model.api, this.model.provider, this.model.id);
 		o.content.length = 0;
-		o.responseId = o.upstreamProvider = o.errorMessage = o.errorStatus = o.errorId = o.stopDetails = o.providerPayload = o.duration = o.ttft = undefined;
+		o.responseId =
+			o.upstreamProvider =
+			o.errorMessage =
+			o.errorStatus =
+			o.errorId =
+			o.stopDetails =
+			o.providerPayload =
+			o.duration =
+			o.ttft =
+				undefined;
 		o.usage = initial.usage;
 		if (plan.premiumRequests !== undefined) o.usage.premiumRequests = plan.premiumRequests;
 		o.stopReason = "stop";
