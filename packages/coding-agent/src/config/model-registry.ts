@@ -2975,10 +2975,8 @@ export class ModelRegistry {
 		sessionId?: string,
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
-7: 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
+		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		const apiKey = await this.authStorage.getApiKey(model.provider, sessionId, {
-8: 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
-		const apiKey = await this.authStorage.getApiKey(provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
 		});
@@ -3003,9 +3001,7 @@ export class ModelRegistry {
 		},
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
-7: 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
-		const apiKey = await this.authStorage.getApiKey(model.provider, sessionId, {
-8: 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
+		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		const apiKey = await this.authStorage.getApiKey(provider, sessionId, {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
