@@ -22,6 +22,24 @@ describe("renderMermaidAscii", () => {
 		expect(rendered).toMatch(/║\s+◎\s+║/);
 	});
 
+	// A bottom-to-top diagram is drawn top-down and then mirrored, so every corner glyph
+	// has to swap with its vertical twin. The start pseudostate and the rounded state box
+	// both use the rounded corners; unmapped, they come out with their bottom on top.
+	it("keeps rounded corners the right way up in a bottom-to-top state diagram", () => {
+		const rendered = renderMermaidAscii(
+			["stateDiagram-v2", "  direction BT", "  [*] --> Created", "  Created --> [*]"].join("\n"),
+			{ colorMode: "none" },
+		);
+		const rows = rendered.split("\n");
+		const marker = rows.findIndex(row => row.includes("●"));
+
+		expect(marker).toBeGreaterThan(0);
+		expect(rows[marker - 1]).toContain("╭");
+		expect(rows[marker - 1]).toContain("╮");
+		expect(rows[marker + 1]).toContain("╰");
+		expect(rows[marker + 1]).toContain("╯");
+	});
+
 	it("keeps dense transition labels intact above connector lines", () => {
 		const rendered = renderMermaidAscii(
 			[

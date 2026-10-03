@@ -372,6 +372,9 @@ const VERTICAL_FLIP_MAP: Record<string, string> = {
   // Unicode corners
   '┌': '└', '└': '┌',
   '┐': '┘', '┘': '┐',
+  // Rounded corners (rounded state boxes and the state-start pseudostate)
+  '╭': '╰', '╰': '╭',
+  '╮': '╯', '╯': '╮',
   // Unicode junctions (T-pieces flip vertically)
   '┬': '┴', '┴': '┬',
   // Box-start junctions (exit points from node boxes)
