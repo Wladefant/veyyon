@@ -491,6 +491,8 @@ export interface OpenAICompat {
 	 * true to opt a compatible gateway in, false to opt out.
 	 */
 	supportsServerCompaction?: boolean;
+	/** Whether Responses input accepts mid-conversation reasoning effort updates. Default: GPT-6 Astra only. */
+	supportsConfigurationUpdate?: boolean;
 	/** Strip leaked DeepSeek chat-template special tokens from visible content deltas. Default: auto-detected. */
 	stripDeepseekSpecialTokens?: boolean;
 	/** Heal leaked chat-template/tool-call/thinking markup from visible content deltas. Default: auto-detected. */
@@ -720,6 +722,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "streamMarkupHealingPattern"
 			| "reasoningDeltasMayBeCumulative"
 			| "supportsServerCompaction"
+			| "supportsConfigurationUpdate"
 			| "emptyLengthFinishIsContextError"
 			| "usesOpenAIToolCallIdLimit"
 			| "promptCacheSessionHeader"
@@ -770,6 +773,7 @@ export interface ResolvedOpenAIResponsesCompat
 	 * so a second compatible host opts in with this data entry alone.
 	 */
 	supportsServerCompaction: boolean;
+	supportsConfigurationUpdate: boolean;
 	streamIdleTimeoutMs?: number;
 }
 

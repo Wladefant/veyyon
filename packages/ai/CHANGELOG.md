@@ -10,6 +10,8 @@
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added Responses wire types for conversation reasoning configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Kept Responses request reasoning effort stable while replaying later effort changes inside Astra conversations ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared auth-gateway request dispatch, credential resolution, account identity, and abort mirroring helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Shared gateway usage-limit blocking and authentication-failure credential invalidation across request adapters.
 - Honored injected gateway transports for native and translated requests, in both streaming and completed responses.
