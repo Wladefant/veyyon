@@ -174,7 +174,10 @@ describe("BtwHistoryStore", () => {
 		await withFileLock(filePath, () => fs.rm(filePath));
 		await expect(store.upsert({ ...saved, answer: "Resurrected" })).rejects.toThrow("BTW history conflict");
 		expect(store.getRecords()).toBe(oldView);
-		const exists = await fs.access(filePath).then(() => true, () => false);
+		const exists = await fs.access(filePath).then(
+			() => true,
+			() => false,
+		);
 		expect(exists).toBe(false);
 	});
 
