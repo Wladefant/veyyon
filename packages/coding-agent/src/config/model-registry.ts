@@ -2889,11 +2889,24 @@ export class ModelRegistry {
 	 * (command execution + OAuth refresh) is resolved lazily per request via
 	 * {@link ModelRegistry.resolver}.
 	 */
+	#isKeylessProvider(provider: string): boolean {
+		if (this.#keylessProviders.has(provider)) return true;
+		const stored = this.authStorage.listStoredCredentials(provider);
+		return (
+			stored.length > 0 &&
+			stored.every(
+				(entry) =>
+					entry.credential.type === "api_key" &&
+					LOCAL_PROVIDER_PLACEHOLDERS.has(entry.credential.key),
+			)
+		);
+	}
+
 	hasConfiguredAuth(model: Model<Api>): boolean {
 		const keyConfig = this.#customProviderApiKeys.get(model.provider);
 		return (
 			isConfigValueCommand(keyConfig) ||
-			this.#keylessProviders.has(model.provider) ||
+			this.#isKeylessProvider(model.provider) ||
 			this.authStorage.hasAuth(model.provider)
 		);
 	}
@@ -2902,14 +2915,14 @@ export class ModelRegistry {
 	hasConcreteAuth(provider: string): boolean {
 		return (
 			isConfigValueCommand(this.#customProviderApiKeys.get(provider)) ||
-			this.#keylessProviders.has(provider) ||
+			this.#isKeylessProvider(provider) ||
 			this.authStorage.hasConcreteAuth(provider)
 		);
 	}
 
 	/** True when the provider is usable without stored credentials (ollama, lm-studio, …). */
 	isKeylessProvider(provider: string): boolean {
-		return this.#keylessProviders.has(provider);
+		return this.#isKeylessProvider(provider);
 	}
 
 	getDiscoverableProviders(): string[] {
@@ -2958,10 +2971,7 @@ export class ModelRegistry {
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
 		if (commandKey.configured) return commandKey.value;
-		if (
-			this.#keylessProviders.has(model.provider) &&
-			!this.authStorage.hasAuth(model.provider)
-		) {
+		if (this.#isKeylessProvider(model.provider)) {
 			return kNoAuth;
 		}
 		return this.authStorage.getApiKey(model.provider, sessionId, {
@@ -2989,10 +2999,7 @@ export class ModelRegistry {
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
 		if (commandKey.configured) return commandKey.value;
-		if (
-			this.#keylessProviders.has(provider) &&
-			!this.authStorage.hasAuth(provider)
-		) {
+		if (this.#isKeylessProvider(provider)) {
 			return kNoAuth;
 		}
 		return this.authStorage.getApiKey(provider, sessionId, {
