@@ -58,7 +58,14 @@ describe("openai-codex turn-state lifecycle", () => {
 			providerSessionState,
 			requestKind: "compaction",
 			startNewTurn: true,
-			compaction: { operationId: "comp-1", phase: "standalone_turn", strategy: "memento", trigger: "auto", reason: "context_limit", implementation: "responses" },
+			compaction: {
+				operationId: "comp-1",
+				phase: "standalone_turn",
+				strategy: "memento",
+				trigger: "auto",
+				reason: "context_limit",
+				implementation: "responses",
+			},
 		});
 		details = getOpenAICodexTransportDetails(model, { sessionId, providerSessionState });
 		expect(details.hasTurnState).toBe(true);
@@ -92,7 +99,12 @@ describe("openai-codex turn-state lifecycle", () => {
 		metadataSession?.turnStates.set("compat-key", { value: "active-token" });
 
 		const compaction = (phase: "mid_turn" | "pre_turn") => ({
-			operationId: `${phase}-op`, phase, strategy: "memento" as const, trigger: "auto" as const, reason: "context_limit" as const, implementation: "responses" as const,
+			operationId: `${phase}-op`,
+			phase,
+			strategy: "memento" as const,
+			trigger: "auto" as const,
+			reason: "context_limit" as const,
+			implementation: "responses" as const,
 		});
 
 		// Mid-turn compaction resets history but preserves turn states for within-turn follow-up

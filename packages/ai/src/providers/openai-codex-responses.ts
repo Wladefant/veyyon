@@ -1104,7 +1104,6 @@ class CodexStreamRuntime {
 		const input = (rawEvent as { input?: string }).input;
 		if (typeof input === "string") finalizeCustomToolCallInputDone(entry.block, input);
 	}
-
 }
 
 interface CodexWhitespaceToolCallArgumentsDeltaState {
