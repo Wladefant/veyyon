@@ -255,42 +255,120 @@ export function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSigna
 	};
 }
 
+export interface CodexCompactionV2AccumulatorOptions {
+	readonly sanitize?: (text: string) => string;
+	readonly deferProviderFailures?: boolean;
+}
+
+/**
+ * O(1)-retention accumulator and semantic validator for a Codex v2 compaction event stream.
+ * Exactly one compaction item with non-empty string encrypted_content is required,
+ * alongside response.completed. Provider errors are rejected immediately unless deferred for collection.
+ */
+export class CodexCompactionV2Accumulator {
+	private compactionItem: Record<string, unknown> | undefined;
+	private validCompactionCount = 0;
+	private malformedCompactionItems = 0;
+	private sawCompleted = false;
+	private providerFailure?: { event: CodexCompactionV2Event; type: string };
+	outputItemCount = 0;
+	usage?: CodexCompactionV2Usage;
+	private readonly sanitize: (text: string) => string;
+	private readonly deferProviderFailures: boolean;
+
+	constructor(sanitizeOrOptions: ((text: string) => string) | CodexCompactionV2AccumulatorOptions = text => text) {
+		if (typeof sanitizeOrOptions === "function") {
+			this.sanitize = sanitizeOrOptions;
+			this.deferProviderFailures = false;
+		} else {
+			this.sanitize = sanitizeOrOptions.sanitize ?? (text => text);
+			this.deferProviderFailures = sanitizeOrOptions.deferProviderFailures ?? false;
+		}
+	}
+
+	get hasProviderFailure(): boolean {
+		return this.providerFailure !== undefined;
+	}
+
+	get failureEvent(): CodexCompactionV2Event | undefined {
+		return this.providerFailure?.event;
+	}
+
+	observe(event: unknown): void {
+		if (!isRecord(event)) return;
+		const type = typeof event.type === "string" ? event.type : undefined;
+		if (type === "response.output_item.done") {
+			this.outputItemCount++;
+			if (isRecord(event.item) && event.item.type === "compaction") {
+				// The blob IS the compacted history. An item without one carries no
+				// window, so counting it as the compaction item stores an entry that
+				// every later turn discards.
+				if (typeof event.item.encrypted_content === "string") {
+					this.validCompactionCount++;
+					if (this.validCompactionCount === 1) {
+						this.compactionItem = event.item;
+					}
+				} else {
+					this.malformedCompactionItems++;
+				}
+			}
+			return;
+		}
+		if (type === "response.completed") {
+			this.sawCompleted = true;
+			this.usage = readUsage(event.response);
+			return;
+		}
+		if (type === "response.failed" || type === "response.incomplete" || type === "error") {
+			this.providerFailure = { event: event as CodexCompactionV2Event, type };
+			if (!this.deferProviderFailures) {
+				throw new Error(
+					`${describeFailure(event as CodexCompactionV2Event, type, this.sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
+				);
+			}
+		}
+	}
+
+	finish(): CodexCompactionV2StreamResult {
+		if (this.providerFailure) {
+			if (!this.deferProviderFailures) {
+				throw new Error(
+					`${describeFailure(this.providerFailure.event, this.providerFailure.type, this.sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
+				);
+			}
+			throw new Error(
+				"Codex compaction stream failed: provider error. The history was NOT compacted; the caller falls back to local compaction.",
+			);
+		}
+		if (!this.sawCompleted) {
+			throw new Error(
+				"Codex compaction stream closed before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+			);
+		}
+		if (this.malformedCompactionItems > 0 && this.validCompactionCount === 0) {
+			throw new Error(
+				`Codex compaction returned ${this.malformedCompactionItems} compaction items with no encrypted_content. The history was NOT compacted; the caller falls back to local compaction.`,
+			);
+		}
+		if (this.validCompactionCount !== 1 || !this.compactionItem) {
+			throw new Error(
+				`Codex compaction returned ${this.validCompactionCount} compaction items among ${this.outputItemCount} output items, expected exactly one. The history was NOT compacted; the caller falls back to local compaction.`,
+			);
+		}
+		return { compactionItem: this.compactionItem, usage: this.usage };
+	}
+}
+
 /** Collect decoded native events under the same window contract as the SSE transport. */
 export async function collectCodexCompactionV2Events(
 	events: AsyncIterable<unknown>,
 	signal: AbortSignal | undefined,
 	sanitize: (text: string) => string,
 ): Promise<CodexCompactionV2StreamResult> {
-	const compactionItems: Array<Record<string, unknown>> = [];
-	let malformedCompactionItems = 0;
-	let outputItemCount = 0;
-	let sawCompleted = false;
-	let usage: CodexCompactionV2Usage | undefined;
+	const accumulator = new CodexCompactionV2Accumulator(sanitize);
 
 	for await (const event of iterateWithAbort(events, signal)) {
-		if (!isRecord(event)) continue;
-		const type = typeof event.type === "string" ? event.type : undefined;
-		if (type === "response.output_item.done") {
-			outputItemCount++;
-			if (isRecord(event.item) && event.item.type === "compaction") {
-				// The blob IS the compacted history. An item without one carries no
-				// window, so counting it as the compaction item stores an entry that
-				// every later turn discards.
-				if (typeof event.item.encrypted_content === "string") compactionItems.push(event.item);
-				else malformedCompactionItems++;
-			}
-			continue;
-		}
-		if (type === "response.completed") {
-			sawCompleted = true;
-			usage = readUsage(event.response);
-			continue;
-		}
-		if (type === "response.failed" || type === "response.incomplete" || type === "error") {
-			throw new Error(
-				`${describeFailure(event, type, sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
-			);
-		}
+		accumulator.observe(event);
 	}
 
 	if (signal?.aborted) {
@@ -301,27 +379,13 @@ export async function collectCodexCompactionV2Events(
 		}
 		throw cancellationError("Codex compaction was aborted before response.completed");
 	}
-	if (!sawCompleted) {
-		throw new Error(
-			"Codex compaction stream closed before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
-		);
-	}
-	if (malformedCompactionItems > 0 && compactionItems.length === 0) {
-		throw new Error(
-			`Codex compaction returned ${malformedCompactionItems} compaction items with no encrypted_content. The history was NOT compacted; the caller falls back to local compaction.`,
-		);
-	}
-	const compactionItem = compactionItems[0];
-	if (compactionItems.length !== 1 || !compactionItem) {
-		throw new Error(
-			`Codex compaction returned ${compactionItems.length} compaction items among ${outputItemCount} output items, expected exactly one. The history was NOT compacted; the caller falls back to local compaction.`,
-		);
-	}
+
+	const result = accumulator.finish();
 	logger.debug("Codex compaction stream produced its window", {
-		outputItemCount,
-		...usage,
+		outputItemCount: accumulator.outputItemCount,
+		...result.usage,
 	});
-	return { compactionItem, usage };
+	return result;
 }
 
 function approxTokenCount(text: string): number {
