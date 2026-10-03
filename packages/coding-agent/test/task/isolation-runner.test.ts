@@ -333,6 +333,49 @@ describe("runIsolatedSubprocess", () => {
 		expect(await Bun.file(path.join(tmp, `${id}.nested-0-first.patch`)).exists()).toBe(false);
 	});
 
+	it("preserves pre-existing destination data when a nested patch collides on EEXIST", async () => {
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-iso-"));
+		tempRoots.push(tmp);
+		const id = "CollisionPreserve";
+		vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
+			mergedDir: "/repo/isolated",
+			backend: natives.IsoBackendKind.Rcopy,
+			fellBack: false,
+			fallbackReason: null,
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result({ id }));
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({
+			rootPatch: "diff --git a/a.txt b/a.txt\n+root\n",
+			nestedPatches: [
+				{ relativePath: "first", patch: "diff --git a/b.txt b/b.txt\n+1\n" },
+				{ relativePath: "second", patch: "diff --git a/c.txt b/c.txt\n+2\n" },
+			],
+		});
+		vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+
+		// Pre-create the second destination with unrecovered content
+		const preExistingFile = path.join(tmp, `${id}.nested-1-second.patch`);
+		await fs.writeFile(preExistingFile, "precious-unrecovered-data", "utf8");
+
+		const outcome = await runIsolatedSubprocess({
+			baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id },
+			context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
+			preferredBackend: undefined,
+			agentId: id,
+			mergeMode: "patch",
+			artifactsDir: tmp,
+			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+		});
+
+		expect(await Bun.file(preExistingFile).text()).toBe("precious-unrecovered-data");
+		expect(outcome.error).toContain("Isolation workspace retained at /repo/isolated");
+		expect(outcome.nestedPatchPaths).toBeUndefined();
+		// The newly created first patch was cleaned up
+		expect(await Bun.file(path.join(tmp, `${id}.nested-0-first.patch`)).exists()).toBe(false);
+		// The pre-existing file was preserved and untouched
+		expect(await Bun.file(preExistingFile).exists()).toBe(true);
+	});
+
 	it("removes the in-progress nested patch destination on mid-write failure", async () => {
 		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-iso-"));
 		tempRoots.push(tmp);
@@ -353,17 +396,20 @@ describe("runIsolatedSubprocess", () => {
 		});
 		vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
 
-		const originalWrite = Bun.write.bind(Bun);
-		let calls = 0;
-		vi.spyOn(Bun, "write").mockImplementation(async (destination: unknown, content: unknown) => {
-			calls += 1;
-			if (calls === 2) {
-				// Simulate a mid-write failure (ENOSPC, quota): the destination
-				// exists but holds truncated content when the write rejects.
-				await originalWrite(destination as string, "truncated-partial");
-				throw new Error("ENOSPC");
+		const originalOpen = fs.open.bind(fs);
+		let opens = 0;
+		vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+			const handle = await originalOpen(filePath, flags, mode);
+			opens += 1;
+			if (opens === 2) {
+				const originalWriteFile = handle.writeFile.bind(handle);
+				vi.spyOn(handle, "writeFile").mockImplementation(async () => {
+					// Simulate a mid-write failure (ENOSPC, quota): content partially written
+					await originalWriteFile("partial-corrupted");
+					throw new Error("ENOSPC");
+				});
 			}
-			return originalWrite(destination as string, content as string | Blob);
+			return handle;
 		});
 
 		const outcome = await runIsolatedSubprocess({
