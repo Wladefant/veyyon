@@ -1,3 +1,4 @@
+import { getInstallId } from "@veyyon/utils/dirs";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "../discovery/failure";
@@ -42,7 +43,7 @@ import {
 	PERSONAL_GITHUB_COPILOT_BASE_URL,
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
-import { getOpenCodeUserAgent } from "../wire/opencode-headers";
+import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
@@ -1087,6 +1088,145 @@ export function projectOpenAIProReasoningAliases(models: readonly ModelSpec<Api>
 		});
 	}
 	return out;
+}
+
+const GMI_CLOUD_BASE_URL = "https://api.gmi-serving.com/v1";
+
+/**
+ * Bundled fallback seed for GMI Cloud. Generation has no `GMI_API_KEY`, so a
+ * regen without credentials would leave the provider slice empty and the
+ * declared `defaultModel` unresolvable on a fresh install before the async
+ * runtime discovery fires. Live `/v1/models` discovery is authoritative and
+ * replaces this seed.
+ */
+export const GMI_CLOUD_STATIC_MODELS: readonly ModelSpec<"openai-completions">[] = [
+	{
+		id: "deepseek-ai/DeepSeek-V4-Flash",
+		name: "DeepSeek V4 Flash",
+		api: "openai-completions",
+		provider: "gmi-cloud",
+		baseUrl: GMI_CLOUD_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0.14, output: 0.28, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1048576,
+		maxTokens: 384000,
+		thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+	},
+];
+
+export interface GmiCloudModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function gmiCloudModelManagerOptions(
+	config?: GmiCloudModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions("gmi-cloud", GMI_CLOUD_BASE_URL, config);
+}
+
+const STEPFUN_BASE_URL = "https://api.stepfun.ai/v1";
+
+const STEPFUN_EXCLUDED_PREFIXES = ["stepaudio-", "step-image-", "step-tts-", "step-2x-large"];
+
+export function isStepfunChatModelId(id: string): boolean {
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) return false;
+	return !STEPFUN_EXCLUDED_PREFIXES.some(prefix => normalized.startsWith(prefix));
+}
+
+export const STEPFUN_STATIC_MODELS: readonly ModelSpec<"openai-completions">[] = [
+	{
+		id: "step-5-preview",
+		name: "Step 5 Preview",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 1, output: 2.7, cacheRead: 0.05, cacheWrite: 0 },
+		contextWindow: 1000000,
+		maxTokens: 1000000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+	{
+		id: "step-3.7-flash",
+		name: "Step 3.7 Flash",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: 256000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+	{
+		id: "step-3.5-flash",
+		name: "Step 3.5 Flash",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: 256000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+	{
+		id: "step-3.5-flash-2603",
+		name: "Step 3.5 Flash 2603",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: 256000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+];
+
+export interface StepfunModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function stepfunModelManagerOptions(
+	config?: StepfunModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? STEPFUN_BASE_URL;
+	const references = createBundledReferenceMap<"openai-completions">("stepfun");
+	return {
+		providerId: "stepfun",
+		...(apiKey && {
+			fetchDynamicModels: hooks =>
+				fetchOpenAICompatibleModels({
+					onFailure: hooks?.onFailure,
+					api: "openai-completions",
+					provider: "stepfun",
+					baseUrl,
+					apiKey,
+					filterModel: (_entry, model) => isStepfunChatModelId(model.id),
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -2531,8 +2671,13 @@ function openCodeModelManagerOptions(
 					baseUrl: discoveryBaseUrl,
 					apiKey,
 					// The gateway flags traffic with no client user agent, and discovery
-					// reads it with the same key as a completion request.
-					headers: { "User-Agent": getOpenCodeUserAgent() },
+					// reads it with the same key as a completion request. Discovery runs
+					// outside any conversation, so the session header carries the stable
+					// install id.
+					headers: {
+						"User-Agent": getOpenCodeUserAgent(),
+						"x-opencode-session": openCodeSessionHeaderValue(getInstallId()),
+					},
 					mapModel: (entry, defaults) => {
 						const reference = modelsDevReferences.get(defaults.id) ?? bundledReferences.get(defaults.id);
 						const name = toModelName(entry.name, reference?.name ?? defaults.name);
@@ -3694,6 +3839,258 @@ export function sakanaModelManagerOptions(config?: SakanaModelManagerConfig): Mo
 						return model;
 					},
 					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 16.7 Abliteration (abliteration.ai)
+// ---------------------------------------------------------------------------
+
+const ABLITERATION_DEFAULT_BASE_URL = "https://api.abliteration.ai/v1";
+const ABLITERATION_MODEL_COST = { input: 3, output: 3, cacheRead: 0.3, cacheWrite: 0 } as const;
+const ABLITERATION_LARGE_COST = { input: 5, output: 5, cacheRead: 0.5, cacheWrite: 0 } as const;
+const ABLITERATION_FULL_LADDER: ThinkingConfig = {
+	mode: "effort",
+	efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+};
+// abliterated-model-large-v2 runs three reasoning modes (low/high/max) and maps
+// disable-shaped controls to hidden low reasoning instead of honoring them.
+const ABLITERATION_LARGE_V2_LADDER: ThinkingConfig = {
+	mode: "effort",
+	efforts: [Effort.Low, Effort.High, Effort.Max],
+	defaultLevel: Effort.Max,
+	requiresEffort: true,
+};
+const ABLITERATION_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
+	includeEncryptedReasoning: false,
+	streamIdleTimeoutMs: 0,
+};
+
+function normalizeAbliterationBaseUrl(baseUrl: string | undefined): string {
+	const value = baseUrl?.trim() || ABLITERATION_DEFAULT_BASE_URL;
+	const normalized = value.replace(/\/+$/, "");
+	return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
+}
+
+function createAbliterationStaticModel(
+	id: string,
+	name: string,
+	cost: ModelSpec<"openai-responses">["cost"],
+	contextWindow: number,
+	maxTokens: number,
+	input: ModelSpec<"openai-responses">["input"],
+	thinking: ThinkingConfig,
+): ModelSpec<"openai-responses"> {
+	return {
+		id,
+		name,
+		api: "openai-responses",
+		provider: "abliteration",
+		baseUrl: ABLITERATION_DEFAULT_BASE_URL,
+		reasoning: true,
+		input: [...input],
+		cost: { ...cost },
+		contextWindow,
+		maxTokens,
+		thinking: { ...thinking },
+		compat: { ...ABLITERATION_RESPONSES_COMPAT },
+	};
+}
+
+/**
+ * Documented abliteration.ai catalog (docs.abliteration.ai/models, 2026-09)
+ * bundled so the provider is usable when generation and first boot have no
+ * live key. The `/v1/models` response is authoritative once discovery runs.
+ */
+export const ABLITERATION_STATIC_MODELS: readonly ModelSpec<"openai-responses">[] = [
+	createAbliterationStaticModel(
+		"abliterated-model",
+		"Abliterated Model",
+		ABLITERATION_MODEL_COST,
+		262_144,
+		262_134,
+		["text", "image"],
+		ABLITERATION_FULL_LADDER,
+	),
+	createAbliterationStaticModel(
+		"abliterated-model-large-v2",
+		"Abliterated Model Large V2",
+		ABLITERATION_LARGE_COST,
+		1_000_000,
+		999_990,
+		["text"],
+		ABLITERATION_LARGE_V2_LADDER,
+	),
+	createAbliterationStaticModel(
+		"abliterated-model-large",
+		"Abliterated Model Large",
+		ABLITERATION_LARGE_COST,
+		1_000_000,
+		999_990,
+		["text"],
+		ABLITERATION_FULL_LADDER,
+	),
+];
+
+const ABLITERATION_STATIC_MODEL_BY_ID: Partial<Record<string, ModelSpec<"openai-responses">>> = Object.fromEntries(
+	ABLITERATION_STATIC_MODELS.map(model => [model.id, model]),
+);
+const ABLITERATION_STATIC_MODEL_IDS = ABLITERATION_STATIC_MODELS.map(model => model.id);
+
+export interface AbliterationModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function abliterationModelManagerOptions(
+	config?: AbliterationModelManagerConfig,
+): ModelManagerOptions<"openai-responses"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = normalizeAbliterationBaseUrl(config?.baseUrl);
+	const references = createBundledReferenceMap<"openai-responses">("abliteration");
+	return {
+		providerId: "abliteration",
+		dynamicModelsAuthoritative: true,
+		dropCachedModelIdsOnStaticMismatch: ABLITERATION_STATIC_MODEL_IDS,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-responses",
+					provider: "abliteration",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id) ?? ABLITERATION_STATIC_MODEL_BY_ID[defaults.id];
+						const model = mapWithBundledReference(entry, defaults, reference);
+						if (!reference) {
+							return {
+								...model,
+								reasoning: true,
+								thinking: { ...ABLITERATION_FULL_LADDER },
+								compat: { ...ABLITERATION_RESPONSES_COMPAT },
+							};
+						}
+						return model;
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 16.8 Meta Model API & Muse Code
+// ---------------------------------------------------------------------------
+
+const META_MODEL_API_BASE_URL = "https://api.meta.ai/v1";
+const META_MUSE_SPARK_COST = { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 } as const;
+const META_MUSE_SPARK_CONTRIBUTOR_COST = { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 } as const;
+const META_MUSE_SPARK_THINKING: ThinkingConfig = {
+	mode: "effort",
+	efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+};
+
+function museSparkSpec(revision: string, tier: "standard" | "contributor"): ModelSpec<"openai-responses"> {
+	const contributor = tier === "contributor";
+	return {
+		id: contributor ? `muse-spark-${revision}-contributor` : `muse-spark-${revision}`,
+		name: contributor ? `Muse Spark ${revision} (C)` : `Muse Spark ${revision}`,
+		api: "openai-responses",
+		provider: "meta",
+		baseUrl: META_MODEL_API_BASE_URL,
+		reasoning: true,
+		input: ["text", "image"],
+		cost: contributor ? META_MUSE_SPARK_CONTRIBUTOR_COST : META_MUSE_SPARK_COST,
+		contextWindow: 1_048_576,
+		maxTokens: 131_072,
+		thinking: META_MUSE_SPARK_THINKING,
+		compat: {
+			supportsReasoningEffort: true,
+			includeEncryptedReasoning: true,
+		},
+	};
+}
+
+/**
+ * Muse Spark revisions served by Meta's first-party Responses API. Meta's
+ * `/v1/models` lists bare ids with no capability metadata, so every revision
+ * must be seeded here or discovery yields a text-only, non-reasoning model
+ * with an unknown context window.
+ */
+export const META_MUSE_STATIC_MODELS: readonly ModelSpec<"openai-responses">[] = [
+	museSparkSpec("1.1", "standard"),
+	museSparkSpec("1.2", "standard"),
+	museSparkSpec("1.2", "contributor"),
+	museSparkSpec("1.3", "standard"),
+	museSparkSpec("1.3", "contributor"),
+];
+
+const META_MUSE_MODEL_BY_ID: Partial<Record<string, ModelSpec<"openai-responses">>> = Object.fromEntries(
+	META_MUSE_STATIC_MODELS.map(model => [model.id, model]),
+);
+
+export interface MetaModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function metaModelManagerOptions(config?: MetaModelManagerConfig): ModelManagerOptions<"openai-responses"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? META_MODEL_API_BASE_URL;
+	return {
+		providerId: "meta",
+		staticModels: META_MUSE_STATIC_MODELS,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-responses",
+					provider: "meta",
+					baseUrl,
+					apiKey,
+					filterModel: (_entry, model) =>
+						!model.id.startsWith("muse-image-") && !model.id.startsWith("muse-voice-"),
+					mapModel: (entry, defaults) =>
+						mapWithBundledReference(entry, defaults, META_MUSE_MODEL_BY_ID[defaults.id]),
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+/** Muse Code is subscription-backed, so its model rows never accrue token charges. */
+export const MUSE_CODE_STATIC_MODELS: readonly ModelSpec<"openai-responses">[] = META_MUSE_STATIC_MODELS.map(model => ({
+	...model,
+	provider: "muse-code",
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+}));
+
+const MUSE_CODE_MODEL_BY_ID: Partial<Record<string, ModelSpec<"openai-responses">>> = Object.fromEntries(
+	MUSE_CODE_STATIC_MODELS.map(model => [model.id, model]),
+);
+
+export function museCodeModelManagerOptions(config?: MetaModelManagerConfig): ModelManagerOptions<"openai-responses"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? META_MODEL_API_BASE_URL;
+	return {
+		providerId: "muse-code",
+		staticModels: MUSE_CODE_STATIC_MODELS,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-responses",
+					provider: "muse-code",
+					baseUrl,
+					apiKey,
+					headers: { "x-api-version": "1.0.0" },
+					fetch: config?.fetch,
+					filterModel: (_entry, model) =>
+						!model.id.startsWith("muse-image-") && !model.id.startsWith("muse-voice-"),
+					mapModel: (entry, defaults) =>
+						mapWithBundledReference(entry, defaults, MUSE_CODE_MODEL_BY_ID[defaults.id]),
 				}),
 		}),
 	};

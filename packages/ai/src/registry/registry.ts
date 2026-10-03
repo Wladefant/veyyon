@@ -1,4 +1,5 @@
 import type { KnownProvider } from "@veyyon/catalog";
+import { abliterationProvider } from "./abliteration";
 import { aimlApiProvider } from "./aimlapi";
 import { alibabaCodingPlanProvider } from "./alibaba-coding-plan";
 import { amazonBedrockProvider } from "./amazon-bedrock";
@@ -19,6 +20,7 @@ import { fireworksProvider } from "./fireworks";
 import { githubCopilotProvider } from "./github-copilot";
 import { gitlabDuoProvider } from "./gitlab-duo";
 import { gitLabDuoWorkflowProvider } from "./gitlab-duo-workflow";
+import { gmiCloudProvider } from "./gmi-cloud";
 import { googleProvider } from "./google";
 import { googleAntigravityProvider } from "./google-antigravity";
 import { googleGeminiCliProvider } from "./google-gemini-cli";
@@ -31,11 +33,13 @@ import { kimiCodeProvider } from "./kimi-code";
 import { litellmProvider } from "./litellm";
 import { llamaCppProvider } from "./llama-cpp";
 import { lmStudioProvider } from "./lm-studio";
+import { metaProvider } from "./meta";
 import { minimaxProvider } from "./minimax";
 import { minimaxCodeProvider } from "./minimax-code";
 import { minimaxCodeCnProvider } from "./minimax-code-cn";
 import { mistralProvider } from "./mistral";
 import { moonshotProvider } from "./moonshot";
+import { museCodeProvider } from "./muse-code";
 import { nanogptProvider } from "./nanogpt";
 import { nousResearchProvider } from "./nous-research";
 import { nousResearchApiKeyProvider } from "./nous-research-api-key";
@@ -54,6 +58,7 @@ import { perplexityProvider } from "./perplexity";
 import { qianfanProvider } from "./qianfan";
 import { qwenPortalProvider } from "./qwen-portal";
 import { sakanaProvider } from "./sakana";
+import { stepfunProvider } from "./stepfun";
 import { syntheticProvider } from "./synthetic";
 import { tavilyProvider } from "./tavily";
 import { togetherProvider } from "./together";
@@ -82,6 +87,7 @@ import { zhipuCodingPlanProvider } from "./zhipu-coding-plan";
  */
 const ALL = [
 	azureProvider,
+	abliterationProvider,
 	openaiCodexProvider,
 	anthropicProvider,
 	zaiProvider,
@@ -150,9 +156,13 @@ const ALL = [
 	groqProvider,
 	mistralProvider,
 	minimaxProvider,
+	metaProvider,
+	museCodeProvider,
 	nousResearchProvider,
 	nousResearchApiKeyProvider,
 	amazonBedrockProvider,
+	gmiCloudProvider,
+	stepfunProvider,
 ];
 
 export type RegistryDef = (typeof ALL)[number];

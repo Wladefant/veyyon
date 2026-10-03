@@ -364,10 +364,10 @@ async function reconnectWithAbort(reconnect: MCPReconnect, signal?: AbortSignal)
  * provider accepts digits in a tool name, so dropping them bought nothing and
  * cost correctness.
  */
-function sanitizeMCPToolNamePart(value: string, fallback: string): string {
+function sanitizeMCPToolNamePart(value: string, fallback: string, keepDigits = true): string {
 	const sanitized = value
 		.toLowerCase()
-		.replace(/[^a-z0-9_]+/g, "_")
+		.replace(keepDigits ? /[^a-z0-9_]+/g : /[^a-z_]+/g, "_")
 		.replace(/_+/g, "_")
 		.replace(/^_+|_+$/g, "");
 
@@ -383,13 +383,20 @@ function sanitizeMCPToolNamePart(value: string, fallback: string): string {
  * name needed sanitizing the two never matched, so a reconnect failed to drop
  * the previous tools and pushed a second copy of every one of them.
  */
-export function mcpToolNamePrefix(serverName: string): string {
-	return `mcp__${sanitizeMCPToolNamePart(serverName, "server")}_`;
+export function mcpToolNamePrefix(serverName: string, keepDigits = true): string {
+	return `mcp__${sanitizeMCPToolNamePart(serverName, "server", keepDigits)}_`;
 }
 
-export function createMCPToolName(serverName: string, toolName: string): string {
-	const sanitizedServerName = sanitizeMCPToolNamePart(serverName, "server");
-	const sanitizedToolName = sanitizeMCPToolNamePart(toolName, "tool");
+/**
+ * Shared mint pipeline. `keepDigits` selects the sanitizer variant: the
+ * current mint keeps `0-9`, the legacy variant strips them exactly as the
+ * pre-fix `sanitizeMCPToolNamePart` did. Both halves route through this one
+ * function so the two mints can only ever differ by that character class —
+ * if the prefix-strip or prefix rules change, the legacy alias changes with them.
+ */
+function mintMCPToolName(serverName: string, toolName: string, keepDigits: boolean): string {
+	const sanitizedServerName = sanitizeMCPToolNamePart(serverName, "server", keepDigits);
+	const sanitizedToolName = sanitizeMCPToolNamePart(toolName, "tool", keepDigits);
 
 	// Strip redundant server name prefix from tool name if present
 	const prefixWithUnderscore = `${sanitizedServerName}_`;
@@ -399,7 +406,25 @@ export function createMCPToolName(serverName: string, toolName: string): string 
 		normalizedToolName = sanitizedToolName.slice(prefixWithUnderscore.length);
 	}
 
-	return `${mcpToolNamePrefix(serverName)}${normalizedToolName}`;
+	return `${mcpToolNamePrefix(serverName, keepDigits)}${normalizedToolName}`;
+}
+
+/**
+ * Mint the name {@link createMCPToolName} produced before digits were kept in
+ * sanitized parts (`[^a-z_]+` collapsed to `_`). Digit-bearing servers/tools
+ * were renamed by that fix, so user config keys written against the old form
+ * (`tools.approval`, `tools.xdevInlineDevices`) would no longer match.
+ * Approval resolution consults this legacy key as a fail-closed fallback.
+ * Returns `undefined` when minting is unchanged (no digits involved).
+ */
+export function createLegacyMCPToolName(serverName: string, toolName: string): string | undefined {
+	const legacyName = mintMCPToolName(serverName, toolName, false);
+	const currentName = createMCPToolName(serverName, toolName);
+	return legacyName !== currentName ? legacyName : undefined;
+}
+
+export function createMCPToolName(serverName: string, toolName: string): string {
+	return mintMCPToolName(serverName, toolName, true);
 }
 
 /**
