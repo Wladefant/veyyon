@@ -14,7 +14,7 @@ import {
   Up, Down, Left, Right, UpperLeft, UpperRight, LowerLeft, LowerRight, Middle,
   drawingCoordEquals,
 } from './types'
-import { mkCanvas, copyCanvas, getCanvasSize, mergeCanvases, drawText, mkRoleCanvas, setRole, mergeRoleCanvases } from './canvas'
+import { mkCanvas, copyCanvas, getCanvasSize, mergeCanvases, drawText, drawLabelText, mkRoleCanvas, setRole, mergeRoleCanvases } from './canvas'
 import type { RoleCanvas, CharRole } from './types'
 import { determineDirection, dirEquals } from './edge-routing'
 import { gridToDrawingCoord, lineToDrawing } from './grid'
@@ -76,16 +76,18 @@ function drawBoxWithGridDimensions(node: AsciiNode, graph: AsciiGraph): Canvas {
   // Get corner characters for this shape type
   const corners = getCorners(node.shape, useAscii)
 
-  // State-end uses double border to differentiate from state-start
-  const isDoubleBox = node.shape === 'state-end'
-  const hChar = useAscii ? (isDoubleBox ? '=' : '-') : (isDoubleBox ? '═' : '─')
-  const vChar = useAscii ? (isDoubleBox ? '‖' : '|') : (isDoubleBox ? '║' : '│')
+  const isStateStart = node.shape === 'state-start'
+  const isStateEnd = node.shape === 'state-end'
+  const hChar = useAscii ? (isStateEnd ? '=' : '-') : (isStateEnd ? '═' : '─')
+  const vChar = useAscii ? (isStateEnd ? '‖' : '|') : (isStateEnd ? '║' : '│')
 
-  // Double-box corners (for state-end)
-  const doubleCorners = useAscii
+  const stateStartCorners = useAscii
+    ? { tl: '.', tr: '.', bl: "'", br: "'" }
+    : { tl: '╭', tr: '╮', bl: '╰', br: '╯' }
+  const stateEndCorners = useAscii
     ? { tl: '#', tr: '#', bl: '#', br: '#' }
     : { tl: '╔', tr: '╗', bl: '╚', br: '╝' }
-  const effectiveCorners = isDoubleBox ? doubleCorners : corners
+  const effectiveCorners = isStateEnd ? stateEndCorners : isStateStart ? stateStartCorners : corners
 
   // Draw box border with shape-specific corners
   for (let x = from.x + 1; x < to.x; x++) box[x]![from.y] = hChar
@@ -98,7 +100,8 @@ function drawBoxWithGridDimensions(node: AsciiNode, graph: AsciiGraph): Canvas {
   box[to.x]![to.y] = effectiveCorners.br
 
   // Center the multi-line display label inside the box
-  const label = node.displayLabel
+  // Pseudostates have no source label; restore their UML marker explicitly.
+  const label = node.displayLabel || (isStateStart ? (useAscii ? '*' : '●') : isStateEnd ? (useAscii ? '*' : '◎') : '')
   const lines = splitLines(label)
   const textCenterY = from.y + Math.floor(h / 2)
   const startY = textCenterY - Math.floor((lines.length - 1) / 2)
@@ -677,7 +680,7 @@ function drawTextOnLine(canvas: Canvas, line: DrawingCoord[], label: string, isU
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i]!
     const startX = middleX - Math.floor(displayWidth(lineText) / 2)
-    drawText(canvas, { x: startX, y: startY + i }, lineText)
+    drawLabelText(canvas, { x: startX, y: startY + i }, lineText)
   }
 }
 
