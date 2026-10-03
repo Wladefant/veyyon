@@ -28,7 +28,11 @@ import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
+import {
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../core/output-meta";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice, TOOL_TIMEOUTS } from "../core/tool-timeouts";
@@ -641,6 +645,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				session.assertEvalExecutionAllowed?.();
 				outputSink = new OutputSink({
 					artifactPath,
+					artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(session.settings),
 					artifactId,
 					// eval is the single largest producer of tool-result bytes, and its
 					// largest tenth of results carried two thirds of them. Price the
@@ -936,5 +941,7 @@ async function summarizeFinal(
 		outputLines,
 		outputBytes,
 		artifactId: rawSummary.artifactId,
+		artifactElidedBytes: rawSummary.artifactElidedBytes,
+		artifactError: rawSummary.artifactError,
 	};
 }

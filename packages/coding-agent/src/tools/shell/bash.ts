@@ -38,7 +38,7 @@ import { truncateForPrompt } from "../core/approval";
 import { invalidateGithubCacheForBashCommand } from "../core/gh-cache-invalidation";
 import { inlineBudgetFor, inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
-import type { OutputMeta } from "../core/output-meta";
+import { formatArtifactErrorNotice, type OutputMeta } from "../core/output-meta";
 import { resolveToCwd } from "../core/path-utils";
 import { checkPolysimMainDenial } from "../core/polysim-main-guard";
 import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath } from "../core/render-utils";
@@ -649,23 +649,31 @@ export class BashTool
 		timeoutSec: number | undefined,
 		outputText: string,
 	): Promise<void> {
+		const captureNotice =
+			"artifactError" in result && result.artifactError
+				? `\n\n[${formatArtifactErrorNotice(result.artifactError)}]`
+				: "";
 		if (result.cancelled) {
 			// executeBash output already carries a `[Command cancelled]` notice from
 			// the sink; PTY/bridge interactive output does not, so annotate it here.
 			// The annotation is appended AFTER the cap so it is never elided.
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
 			const annotated = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out;
-			throw new ToolError(annotated || "Command aborted");
+			throw new ToolError(`${annotated || "Command aborted"}${captureNotice}`);
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
+			const captureNotice =
+				"artifactError" in result && result.artifactError
+					? `\n\n[${formatArtifactErrorNotice(result.artifactError)}]`
+					: "";
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
-			throw new ToolError(out ? `${out}\n\n[${message}]` : message);
+			throw new ToolError(`${out ? `${out}\n\n[${message}]` : message}${captureNotice}`);
 		}
 		if (result.exitCode === undefined) {
 			const out = await this.#boundBashOutput(outputText, result.artifactId);
-			throw new ToolError(`${out}\n\nCommand failed: missing exit status`);
+			throw new ToolError(`${out}\n\nCommand failed: missing exit status${captureNotice}`);
 		}
 	}
 
@@ -724,7 +732,10 @@ export class BashTool
 			// an early result is re-read for the rest of the session, a late one
 			// barely at all.
 			...inlineOutputPricing(this.session),
-			saveArtifact: full => saveBashOriginalArtifact(this.session, full),
+			saveArtifact:
+				"artifactError" in result && result.artifactError
+					? undefined
+					: full => saveBashOriginalArtifact(this.session, full),
 		});
 
 		const resultBuilder = toolResult(details)
@@ -768,6 +779,7 @@ export class BashTool
 				const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
 				const wallTimeStart = performance.now();
 				let latestProgressDetails: BashToolDetails | undefined;
+				let latestResult: BashResult | undefined;
 				try {
 					const result = await executeBash(options.command, {
 						cwd: options.commandCwd,
@@ -791,6 +803,7 @@ export class BashTool
 						},
 						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 					});
+					latestResult = result;
 					const wallTimeMs = performance.now() - wallTimeStart;
 					const finalResult = await this.#buildCompletedResult(result, options.timeoutSec, {
 						requestedTimeoutSec: options.requestedTimeoutSec,
@@ -801,6 +814,14 @@ export class BashTool
 					latestText = finalText;
 					latestProgressDetails = {
 						...finalResult.details,
+						...(result.artifactError
+							? {
+									meta: {
+										...finalResult.details?.meta,
+										artifactError: result.artifactError,
+									},
+								}
+							: {}),
 					};
 					// Hand the detailed result to the foreground auto-background
 					// waiter (which renders it, footer included) before deciding
@@ -818,6 +839,15 @@ export class BashTool
 					});
 					return finalText;
 				} catch (error) {
+					if (latestResult?.artifactError) {
+						latestProgressDetails = {
+							...latestProgressDetails,
+							meta: {
+								...latestProgressDetails?.meta,
+								artifactError: latestResult.artifactError,
+							},
+						};
+					}
 					const message = errorMessage(error);
 					latestText = message;
 					completion.resolve({ kind: "failed", error });
@@ -1300,6 +1330,10 @@ export class BashTool
 			const killReport = cpuLimit?.consumeKillReport();
 			if (killReport) notices.push(killReport);
 		}
+		const captureNotice =
+			"artifactError" in result && result.artifactError
+				? `\n\n[${formatArtifactErrorNotice(result.artifactError)}]`
+				: "";
 		if (result.cancelled) {
 			// PTY output carries no cancel/timeout notice of its own; annotate so
 			// the model can tell an abort from a plain failure. Cap first so a
@@ -1307,15 +1341,15 @@ export class BashTool
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
 			const message = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out || "Command aborted";
 			if (signal?.aborted) {
-				throw new ToolAbortError(message);
+				throw new ToolAbortError(`${message}${captureNotice}`);
 			}
-			throw new ToolError(message);
+			throw new ToolError(`${message}${captureNotice}`);
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
-			throw new ToolError(out ? `${out}\n\n[${message}]` : message);
+			throw new ToolError(`${out ? `${out}\n\n[${message}]` : message}${captureNotice}`);
 		}
 		return this.#buildCompletedResult(result, timeoutSec, {
 			requestedTimeoutSec: call.requestedTimeoutSec,

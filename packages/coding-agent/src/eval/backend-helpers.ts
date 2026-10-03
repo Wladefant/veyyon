@@ -3,6 +3,8 @@
  * index modules): session-id namespacing, settings access, and projection of
  * executor results into the ExecutorBackend result shape.
  */
+
+import type { OutputArtifactError } from "../session/streaming-output";
 import type { ToolSession } from "../tools";
 import {
 	type ExecutorBackend,
@@ -34,6 +36,8 @@ export function toExecutorBackendResult(result: {
 	cancelled: boolean;
 	truncated: boolean;
 	artifactId?: string | undefined;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
@@ -46,6 +50,8 @@ export function toExecutorBackendResult(result: {
 		cancelled: result.cancelled,
 		truncated: result.truncated,
 		artifactId: result.artifactId,
+		artifactElidedBytes: result.artifactElidedBytes,
+		artifactError: result.artifactError,
 		totalLines: result.totalLines,
 		totalBytes: result.totalBytes,
 		outputLines: result.outputLines,

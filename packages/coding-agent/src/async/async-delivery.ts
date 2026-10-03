@@ -1,6 +1,6 @@
 import { errorMessage, logger } from "@veyyon/utils";
 import { truncateMiddle } from "../session/streaming-output";
-import type { OutputMeta } from "../tools/core/output-meta";
+import { formatArtifactErrorNotice, type OutputMeta, stripOutputNotice } from "../tools/core/output-meta";
 
 export const ASYNC_INLINE_RESULT_MAX_CHARS = 12_000;
 export const ASYNC_PREVIEW_MAX_CHARS = 4_000;
@@ -21,6 +21,14 @@ export async function formatAsyncResultForFollowUp(
 ): Promise<string> {
 	if (result.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
 		return result;
+	}
+
+	// Strip the already-rendered source notice before taking the smaller preview,
+	// then retain its capture warning once even when the original footer is elided.
+	if (meta?.artifactError) {
+		const body = stripOutputNotice(result, meta).trimEnd();
+		const preview = `${body.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
+		return `${preview}\n[${formatArtifactErrorNotice(meta.artifactError)}]`;
 	}
 
 	// The producing tool's output sink already mirrored the raw stream to an

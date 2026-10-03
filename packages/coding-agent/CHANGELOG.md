@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Tool streaming output reports failed artifact captures without false recovery links, caps artifact files at tools.artifactMaxBytes, and preserves capture warnings in follow-up results ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi ac896ded0bd499cbc1c480b500c2a43b3abc2027, 6acbb161c8c8f3da58d987dbc76d833651c6d719, cbf7898ce150c8a903db24fabe8f111567a3dc97).
 
 ## [18.1.11] - 2026-09-05
 

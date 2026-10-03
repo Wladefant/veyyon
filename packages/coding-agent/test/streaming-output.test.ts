@@ -306,6 +306,47 @@ describe("OutputSink", () => {
 		expect(artifactText).toBe("headabcdefgh");
 	});
 
+	test("caps artifact file and records artifactElidedBytes when artifactMaxBytes is exceeded", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "capped.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "artifact-cap",
+			artifactMaxBytes: 100,
+			spillThreshold: 200,
+		});
+
+		const chunk = "0123456789\n".repeat(30);
+		sink.push(chunk);
+		const dumped = await sink.dump();
+
+		expect(dumped.artifactId).toBe("artifact-cap");
+		expect(dumped.artifactError).toBeUndefined();
+		expect(dumped.artifactElidedBytes).toBeGreaterThan(0);
+
+		const written = await fs.readFile(artifactPath, "utf-8");
+		expect(written).toContain("Full output was not saved completely (capped at 100 B)");
+		expect(written.length).toBeLessThanOrEqual(250);
+	});
+
+	test("records artifactError 'open' and omits artifactId when artifact file cannot be opened", async () => {
+		const artifactPath = path.join(
+			process.platform === "win32" ? "Z:\\nonexistent-drive-for-test" : "/dev/null/impossible",
+			"bad.log",
+		);
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "artifact-fail-open",
+			spillThreshold: 5,
+		});
+
+		sink.push("some output data");
+		const dumped = await sink.dump();
+
+		expect(dumped.artifactError).toBe("open");
+		expect(dumped.artifactId).toBeUndefined();
+	});
+
 	test("throttled onChunk coalesces held-back chunks instead of dropping them", async () => {
 		const chunks: string[] = [];
 		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 60_000 });

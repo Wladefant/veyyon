@@ -7,7 +7,12 @@ import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { OutputSink } from "../session/streaming-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/core/output-meta";
+import {
+	type OutputArtifactError,
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../tools/core/output-meta";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, isEvalTimeoutControlEvent } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 import {
@@ -93,6 +98,8 @@ export interface KernelExecutionResult {
 	cancelled: boolean;
 	truncated: boolean;
 	artifactId?: string | undefined;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
@@ -503,6 +510,7 @@ export async function executeWithKernelBase<
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		// Priced by how long the result will sit in context, through the same
 		// owner every other tool uses. Without this the sink keeps a flat 50KB
 		// tail, which is why eval results reached 71KB and then cost a re-read on
@@ -576,6 +584,8 @@ export async function executeWithKernelBase<
 				truncated: dumped.truncated,
 				output: dumped.output,
 				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
 				totalLines: dumped.totalLines,
 				totalBytes: dumped.totalBytes,
 				outputLines: dumped.outputLines,
@@ -593,6 +603,8 @@ export async function executeWithKernelBase<
 				truncated: dumped.truncated,
 				output: dumped.output,
 				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
 				totalLines: dumped.totalLines,
 				totalBytes: dumped.totalBytes,
 				outputLines: dumped.outputLines,
@@ -610,6 +622,8 @@ export async function executeWithKernelBase<
 			truncated: dumped.truncated,
 			output: dumped.output,
 			artifactId: dumped.artifactId ?? undefined,
+			artifactElidedBytes: dumped.artifactElidedBytes,
+			artifactError: dumped.artifactError,
 			totalLines: dumped.totalLines,
 			totalBytes: dumped.totalBytes,
 			outputLines: dumped.outputLines,
@@ -629,6 +643,8 @@ export async function executeWithKernelBase<
 				truncated: dumped.truncated,
 				output: dumped.output,
 				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
 				totalLines: dumped.totalLines,
 				totalBytes: dumped.totalBytes,
 				outputLines: dumped.outputLines,
