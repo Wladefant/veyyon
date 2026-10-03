@@ -134,6 +134,18 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 
 	const commandKey = "!printf command-fallback-key";
 
+	test("a literal extension fallback keeps saved login auth in discovery and requests", async () => {
+		register({ oauth: true, apiKey: "literal-fallback-key" });
+		await login();
+		await registry.refreshProvider(provider, "online");
+		expect(discoveryKeys).toEqual([savedKey]);
+		const model = registry.find(provider, "listed-model");
+		if (!model) throw new Error("missing listed model after login discovery");
+		expect(await registry.getApiKey(model)).toBe(savedKey);
+		expect(await registry.getApiKeyForProvider(provider)).toBe(savedKey);
+		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+	});
+
 	test("a command fallback keeps saved login auth during discovery", async () => {
 		register({ oauth: true, apiKey: commandKey });
 		await login();
