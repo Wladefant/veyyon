@@ -580,8 +580,9 @@ fi
 # The Mermaid scene photographs how a diagram fence is drawn, and both arms must
 # draw the same source, which no model can be asked for. Its own directory rather
 # than seed-sessions/, because the prose scenes copy every file there and a third
-# session would change what they list.
-if [ "${SCENE_NAME}" = "mermaid-state-diagram" ]; then
+# session would change what they list. The settings-exit scene reuses it as a
+# full screen of transcript that a stray alternate-screen frame would hide.
+if [ "${SCENE_NAME}" = "mermaid-state-diagram" ] || [ "${SCENE_NAME}" = "settings-exit-resize" ]; then
 	MERMAID_SESSIONS="${HOME:-/sandbox/home}/.veyyon/profiles/${VEYYON_PROFILE:-default}/agent/sessions/-demo"
 	mkdir -p "${MERMAID_SESSIONS}"
 	cp /repo/proof/docker/seed-mermaid/*.jsonl "${MERMAID_SESSIONS}/"
