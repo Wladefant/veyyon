@@ -94,7 +94,7 @@ export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<
 				await fs.rm(presencePath, { force: true });
 				continue;
 			}
-			if (daemonOwnerIsAlive(decoded)) live = true;
+			if (daemonOwnerIsAlive(decoded, (await fs.stat(presencePath)).mtimeMs)) live = true;
 			else await fs.rm(presencePath, { force: true });
 		} catch (error) {
 			if (!isEnoent(error)) await fs.rm(presencePath, { force: true });
@@ -114,7 +114,7 @@ async function hasLiveDaemonBroker(runtimeDir: string): Promise<boolean> {
 	if (typeof raw !== "object" || raw === null || !("pid" in raw) || typeof raw.pid !== "number") {
 		return false;
 	}
-	return daemonOwnerIsAlive(raw);
+	return daemonOwnerIsAlive(raw, (await fs.stat(daemonBrokerLeasePath(runtimeDir))).mtimeMs);
 }
 
 /**

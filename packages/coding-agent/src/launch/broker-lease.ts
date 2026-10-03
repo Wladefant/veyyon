@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import { atomicWriteFile, isEnoent } from "@veyyon/utils";
 import { tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
-import { getProcessStartIdentity, isProcessInstanceAlive } from "@veyyon/utils/process-liveness";
+import { getProcessStartIdentity, getProcessStartTime, isProcessInstanceAlive } from "@veyyon/utils/process-liveness";
 import { daemonBrokerLeasePath } from "./paths";
 
 export interface BrokerLease {
@@ -9,11 +9,16 @@ export interface BrokerLease {
 	instanceId: string;
 }
 
-/** Unknown identity is not proof of death: preserve legacy and inaccessible owners. */
-export function daemonOwnerIsAlive(raw: unknown): boolean {
+/** Preserve unknown owners unless identity or a legacy creation-time comparison proves PID reuse. */
+export function daemonOwnerIsAlive(raw: unknown, recordMtimeMs?: number): boolean {
 	if (typeof raw !== "object" || raw === null || !("pid" in raw) || typeof raw.pid !== "number") return false;
 	const identity = "processIdentity" in raw && typeof raw.processIdentity === "string" ? raw.processIdentity : null;
-	return isProcessInstanceAlive(raw.pid, identity);
+	if (!isProcessInstanceAlive(raw.pid, identity)) return false;
+	if (identity !== null || recordMtimeMs === undefined) return true;
+	const startedAt = getProcessStartTime(raw.pid);
+	// Linux btime is second-granular. A two-second margin also protects coarse
+	// legacy filesystem timestamps; inconclusive observations keep the owner.
+	return startedAt === null || startedAt <= recordMtimeMs + 2_000;
 }
 
 export async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLease | null> {
@@ -29,7 +34,7 @@ export async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLeas
 			} catch {
 				// No writer using this transition lock can still be publishing.
 			}
-			if (daemonOwnerIsAlive(raw)) return null;
+			if (daemonOwnerIsAlive(raw, (await fs.stat(leasePath)).mtimeMs)) return null;
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
 		}
