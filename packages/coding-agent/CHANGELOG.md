@@ -5,12 +5,15 @@
 ### Added
 
 - Added `STEPFUN_API_KEY` to the additional LLM provider help output ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Documented ABLITERATION_API_KEY and MODEL_API_KEY environment variables in help text ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hid non-chat runner models such as `gpt-image-2` from the session model picker and resolution ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the `extendedContext` setting: off caps Codex sessions at the 272K standard-pricing window, on allows the model's advertised maximum (up to 922K), and `gpt-image-2` no longer appears in completions, the auth gateway or Codex web search ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Dedicated Codex web searches keep hosted `web_search` tools at the top level for Lite catalog models instead of relocating them into ignored `additional_tools` input ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 22d02031d904bf2e0d5fc5a1b41caf6dc0a76e6b).
+- GitHub tool and internal URL cache compare effective repository hosts including `GH_HOST` defaults, preserve non-default host identity, and route fallback URLs to the effective host ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 92bd2a98827ca7b8b7f4cc38f62d6461c4d62dc6, 33a1f6092dc270a44aeb6221413c6dfa5e2487df, dcceed36822d8c99d8c3f8e25e304fd565039316).
 - The native ledger bridge locates its Python interpreter instead of assuming a bare `python` exists. `PYTHON_EXECUTABLE`/`PYTHON` still win, and the fallback now walks PATH (`python3` first on Linux and macOS, `python` first on Windows), so a host that ships only `python3` no longer fails every claim with `Executable not found in $PATH: "python"`. The topic-replenishment suite consequently stops planting `PYTHON`/`PYTHON_EXECUTABLE` in the process environment for every suite that follows it ([#25](https://github.com/Wladefant/veyyon/issues/25)).
 - Rejected `.` and `..` as owner or repo in GitHub repository refs so they cannot traverse the `/repos/` API path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Rejected GitHub hosts outside `github.com`, `GH_HOST` and the checkout host on every repo, PR, issue and run input, kept enterprise hosts out of API paths and cache keys, and pinned fork lookup to the PR host (Refs #107)

@@ -43,6 +43,7 @@ import {
 } from "./gh-fetch";
 import {
 	appendRepoFlag,
+	defaultGhHost,
 	formatAuthor,
 	formatLabels,
 	formatRepoRef,
@@ -2077,9 +2078,11 @@ async function executeFileRead(
 		.split("/")
 		.map(segment => encodeURIComponent(segment))
 		.join("/");
+	const ref = parseRepoRef(repo);
 	const args = [
 		"api",
-		`/repos/${repo}/contents/${endpointPath}`,
+		...ghApiHostArgs(ref),
+		`/repos/${ref.slug}/contents/${endpointPath}`,
 		"--method",
 		"GET",
 		"-H",
@@ -2098,7 +2101,9 @@ async function executeFileRead(
 		throw new ToolError(`GitHub path '${filePath}' is not a file.`);
 	}
 
-	const fallbackSourceUrl = `https://github.com/${repo}/blob/${encodeURIComponent(branch ?? "HEAD")}/${endpointPath}`;
+	// A host-less ref went to gh's default host, so the link has to match it.
+	const fallbackHost = ref.host ?? defaultGhHost();
+	const fallbackSourceUrl = `https://${fallbackHost}/${ref.slug}/blob/${encodeURIComponent(branch ?? "HEAD")}/${endpointPath}`;
 	const sourceUrl = response.html_url || fallbackSourceUrl;
 	if (response.encoding !== "base64" || typeof response.content !== "string") {
 		const size =

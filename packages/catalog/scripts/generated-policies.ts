@@ -106,7 +106,11 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	const requiresProviderAuthoredEffort =
 		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
 	const deploymentAuthored =
-		(model.provider === "command-code" || model.provider === "stepfun") && model.thinking !== undefined;
+		(model.provider === "command-code" ||
+			model.provider === "abliteration" ||
+			model.provider === "meta" ||
+			model.provider === "muse-code" ||
+			model.provider === "stepfun") &&
 	const thinking = resolveModelThinking(
 		deploymentAuthored ? model : { ...model, thinking: undefined },
 		buildCompat(model),

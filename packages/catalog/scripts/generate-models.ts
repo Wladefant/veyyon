@@ -42,6 +42,7 @@ import {
 import { PROVIDER_DESCRIPTORS, PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import { filterModelsDevCatalogRows } from "../src/provider-models/models-dev-policies";
 import {
+	ABLITERATION_STATIC_MODELS,
 	ANTHROPIC_CURATED_FALLBACK_MODELS,
 	buildFireworksFastSeed,
 	buildXaiOAuthStaticSeed,
@@ -50,7 +51,9 @@ import {
 	GMI_CLOUD_STATIC_MODELS,
 	isFireworksKimiK2ModelId,
 	isKimiK27CodeModelId,
+	META_MUSE_STATIC_MODELS,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
+	MUSE_CODE_STATIC_MODELS,
 	mapModelsDevToModels,
 	NOUS_RESEARCH_BUNDLED_MODELS,
 	projectOpenAIProReasoningAliases,
@@ -694,6 +697,15 @@ async function generateModels() {
 	// unavailable. Live discovery keeps the router's wider published catalog.
 	if (!authoritativeCatalogProviders.has("command-code")) {
 		allModels.push(...COMMAND_CODE_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("abliteration")) {
+		allModels.push(...ABLITERATION_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("meta")) {
+		allModels.push(...META_MUSE_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("muse-code")) {
+		allModels.push(...MUSE_CODE_STATIC_MODELS);
 	}
 	// Seed the GMI Cloud default model so a fresh install (and a regen without a
 	// `GMI_API_KEY`) still resolves the descriptor's `defaultModel` synchronously

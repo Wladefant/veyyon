@@ -5,6 +5,7 @@
 ### Added
 
 - Added the StepFun provider (`stepfun`) registry definition with an API-key login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added Abliteration, Meta Model API, and Muse Code provider definitions and login transports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the GMI Cloud provider (`gmi-cloud`) registry definition with an API-key paste login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -54,7 +55,7 @@
 - Preserved workspace-scoped credential identity and usage report partitioning for OpenAI Codex ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0eeb6c38149905a7c1d9a8ae4bd98cff882721b8).
 - Allowed OpenAI Codex OAuth login without an account ID when an email identity is present ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 676bdd7bbc2b1657aa69b5156fe939b8e635bba7).
 - Escaped reserved Harmony control tokens in client text and native replay for Harmony-dialect models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-- Fixed Codex Responses Lite requests to force tool_choice to auto, support PI_CODEX_RESPONSES_LITE overrides, and force reasoning.context to all_turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Codex Responses Lite requests preserve `none` and `required` tool choices, coerce forced hosted-tool choices to `auto`, support `PI_CODEX_RESPONSES_LITE` overrides, and force `reasoning.context` to `all_turns` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f0d8d97500dd42d26fc5b7066877b5b91dec21e).
 - Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Tracked projected thinking blocks by source index in the leaked-thinking stream wrapper so out-of-order thinking_end events update the correct signature after intervening blocks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
