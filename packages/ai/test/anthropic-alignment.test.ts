@@ -17,6 +17,7 @@ import {
 	isClaudeCloakingUserId,
 	mapStainlessArch,
 	mapStainlessOs,
+	stableSystemSuffixStart,
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@veyyon/ai/providers/anthropic";
@@ -321,6 +322,47 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(blocks![3].cache_control).toEqual({ type: "ephemeral" });
 		expect(blocks![4].text).toBe(recallBlock);
 		expect(blocks![4].cache_control).toBeUndefined();
+	});
+
+	it("classifies only trailing volatile runs as recall suffix and caches trailing stable policy blocks", () => {
+		const staticInstructions = "STATIC INSTRUCTIONS BLOCK";
+		const recallBlock = "<memories>\n- User prefers TypeScript\n</memories>";
+		const appendedPolicy = "STABLE EXTENSION POLICY\nAlways run tests before commit.";
+		const blocks = buildAnthropicSystemBlocks([staticInstructions, recallBlock, appendedPolicy], {
+			includeClaudeCodeInstruction: true,
+			cacheControl: { type: "ephemeral" },
+		});
+		expect(blocks).toBeDefined();
+		// [billing, CC identity, staticInstructions, recallBlock, appendedPolicy]
+		// Because appendedPolicy follows recallBlock, the volatile block is not a trailing run.
+		// stableSystemSuffixStart identifies no trailing suffix (start = blocks.length),
+		// so cache breakpoints anchor at the first cacheable block and at the tail (appendedPolicy).
+		expect(blocks![2].text).toBe(staticInstructions);
+		expect(blocks![2].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![3].text).toBe(recallBlock);
+		expect(blocks![4].text).toBe(appendedPolicy);
+		expect(blocks![4].cache_control).toEqual({ type: "ephemeral" });
+	});
+
+	it("classifies only genuinely trailing volatile runs in stableSystemSuffixStart", () => {
+		expect(stableSystemSuffixStart([])).toBe(0);
+		expect(stableSystemSuffixStart([{ text: "stable" }])).toBe(1);
+		expect(stableSystemSuffixStart([{ text: "stable" }, { text: "<memories>\nrecall\n</memories>" }])).toBe(1);
+		expect(
+			stableSystemSuffixStart([
+				{ text: "stable" },
+				{ text: "<memories>\nrecall 1\n</memories>" },
+				{ text: "<memories>\nrecall 2\n</memories>" },
+			]),
+		).toBe(1);
+		// Appended stable block after recall must not be classified as part of recall suffix:
+		expect(
+			stableSystemSuffixStart([
+				{ text: "stable" },
+				{ text: "<memories>\nrecall\n</memories>" },
+				{ text: "appended stable policy" },
+			]),
+		).toBe(3);
 	});
 
 	it("caches Claude Code context and the last user block in OAuth request payloads", async () => {
