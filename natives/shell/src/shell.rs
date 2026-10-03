@@ -1866,7 +1866,7 @@ async fn read_output(
 			} {
 				Ok(0) => break, // EOF
 				Ok(n) => n,
-				Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
+				Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
 				Err(_) => break,
 			}
 		};

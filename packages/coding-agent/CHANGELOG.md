@@ -7,6 +7,7 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Command output from native Windows tools on Chinese (and other non-UTF-8) locales is decoded using the system ANSI code page instead of turning into replacement characters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6d628ff863415f75004f992733f33daeb29b6a2b).
 - Preserved /login API key and OAuth credential precedence over extension fallback API keys, including command-backed values, during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
 - Fixed an uncaught `EPERM ... watch` that ended the whole process when the watched git HEAD or custom theme directory was deleted or locked: the watchers now log a warning, close and stop refreshing live ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed an implicit-any type error in the HTML export markdown test so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
