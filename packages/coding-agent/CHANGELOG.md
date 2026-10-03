@@ -168,6 +168,7 @@
 
 ### Fixed
 
+- The terminal components barrel exports `HOOK_EDITOR_TEXT_PAD_COLS`, `computeModalDims`, `sizingForArea` and the other modal sizing names again, which it dropped when they moved to `chrome/modal-geometry.ts`.
 - The compiled binary loads a legacy extension that imports `@mariozechner/pi-coding-agent`, `@earendil-works/pi-tui`, `@veyyon/ai` or another shimmed package root, or a `pi-` subpath such as `@mariozechner/pi-ai/oauth`, instead of failing it with `no bundled module registered for @veyyon/pi-coding-agent` or `Cannot find package '@mariozechner/pi-ai'`.
 - The slash popup a launch's first `/` opens states `/context` and `/compact` without a context figure while the session is at rest, instead of measuring it and building every active tool's schema inside the keystroke, so the first `/` echoes in 5.5 ms instead of 27.2 ms and its popup settles in 38.1 ms instead of 59.5 ms (median of 11).
 - A read card rebuilt on resume drops the file text it was built from once its card text exists, and a prune that replaces the read's result drops it too, so a resumed 600-turn session whose overflow prune superseded 398 reads holds 49.6 MiB of heap instead of 54.7 MiB and 244 MiB RSS after collection instead of 248-249 MiB (two runs each, 40-second settle).
