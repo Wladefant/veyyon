@@ -19,7 +19,7 @@
  */
 
 import { ProviderHttpError } from "@veyyon/ai/error/classes";
-import { parseAzureDeploymentNameMap } from "@veyyon/ai/providers/openai-shared";
+import { parseAzureDeploymentNameMap } from "@veyyon/ai/providers/azure-deployment-names";
 import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { $env, logger, scopedTimeoutSignal, stringifyJson } from "@veyyon/utils";
 

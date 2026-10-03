@@ -35,7 +35,7 @@
 
 import type { ApiKey, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
-import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex-responses";
+import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex/session-state";
 import { resolveServerCompactionTransport } from "@veyyon/ai/providers/openai-compaction";
 import type { CompactionPreparation, CompactionResult, SummaryOptions } from "./compaction";
 import { defaultConvertToLlm } from "./messages";

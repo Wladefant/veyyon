@@ -29,7 +29,7 @@ import {
 	summarizeRemoteCompactionWindow,
 } from "@veyyon/agent-core/compaction";
 import type { CodexCompactionContext, ToolResultMessage } from "@veyyon/ai";
-import { resetOpenAICodexHistoryAfterCompaction } from "@veyyon/ai/providers/openai-codex-responses";
+import { resetOpenAICodexHistoryAfterCompaction } from "@veyyon/ai/providers/openai-codex/session-state";
 import {
 	COMPACTION_CHECK_NONE,
 	type CompactionCheckResult,

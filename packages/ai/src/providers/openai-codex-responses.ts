@@ -40,7 +40,6 @@ import { getEnvApiKey } from "../stream";
 import type {
 	Api,
 	AssistantMessage,
-	CodexCompactionContext,
 	CodexCompactionRequestContext,
 	Context,
 	FetchImpl,
@@ -104,6 +103,12 @@ import {
 	transformRequestBody,
 } from "./openai-codex/request-transformer";
 import { CodexApiError } from "./openai-codex/response-handler";
+import {
+	CODEX_PROVIDER_SESSION_STATE_KEY,
+	getCodexWebSocketEnvValue,
+	isCodexProviderSessionState,
+	resetCodexWebSocketAppendState,
+} from "./openai-codex/session-state";
 import type {
 	ResponseCustomToolCall,
 	ResponseFunctionToolCall,
@@ -137,13 +142,13 @@ import {
 	finalizeToolCallArgumentsDone,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
-	normalizeOpenAIPromptCacheKey,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
 	resolveResponsesToolCallDeltaShape,
 	type SequentialCutoffSummaryState,
 	type ToolCallArgumentsDeltaShape,
 } from "./openai-shared";
+import { normalizeOpenAIPromptCacheKey } from "./openai-stable-ids";
 import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
@@ -201,30 +206,6 @@ export interface OpenAICodexCompatibilityMetadata {
 	headers: Record<string, string>;
 }
 
-/** Live Codex session state to preserve after a successful history rewrite. */
-export interface OpenAICodexCompactionResetOptions {
-	providerSessionState?: Map<string, ProviderSessionState>;
-	sessionId?: string;
-	compaction: CodexCompactionContext;
-}
-
-/** Add the selected wire implementation to one logical compaction context. */
-export function createOpenAICodexCompactionRequestContext(options: {
-	context: CodexCompactionContext | undefined;
-	implementation: "responses" | "responses_compaction_v2" | "responses_compact";
-}): CodexCompactionRequestContext | undefined {
-	const context = options.context;
-	if (!context) return undefined;
-	return {
-		operationId: context.operationId,
-		trigger: context.trigger,
-		reason: context.reason,
-		implementation: options.implementation,
-		phase: context.phase,
-		strategy: context.strategy,
-	};
-}
-
 const CODEX_DEBUG = $flag("VEYYON_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
 const CODEX_RETRY_DELAY_MS = 500;
@@ -271,7 +252,6 @@ const CODEX_WEBSOCKET_RETRY_DELAY_MS = Number($env.VEYYON_CODEX_WEBSOCKET_RETRY_
 // "internal error", "server error" — and drifted from it by two phrasings. Those two moved into
 // TRANSIENT_TRANSPORT_PATTERN, where every provider reads them.
 const CODEX_RETRYABLE_EVENT_CODES = new Set(["model_error", "server_error", "internal_error"]);
-const CODEX_PROVIDER_SESSION_STATE_KEY = "openai-codex-responses";
 const X_CODEX_TURN_STATE_HEADER = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER = "x-models-etag";
 /** WebSocket frames cannot carry per-request HTTP headers; codex-rs mirrors the lite marker into `client_metadata` under this key. */
@@ -328,7 +308,7 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 	return `${reason} (last event: ${lastEvent}; last progress: ${lastProgress})`;
 }
 
-type CodexTransport = "sse" | "websocket";
+export type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
 type CodexOutputBlock =
 	| ThinkingContent
@@ -427,7 +407,7 @@ export type CodexWebSocketSessionState = {
 	stats: OpenAICodexWebSocketDebugStats;
 };
 
-interface CodexProviderSessionState extends ProviderSessionState {
+export interface CodexProviderSessionState extends ProviderSessionState {
 	webSocketSessions: Map<string, CodexWebSocketSessionState>;
 	webSocketPublicToPrivate: Map<string, string>;
 	metadataSessions: Map<string, CodexMetadataSessionState>;
@@ -732,26 +712,6 @@ export function createOpenAICodexDirectRequest(options: {
 		// the turn body cannot drift apart on how the key is derived.
 		promptCacheKey: normalizeOpenAIPromptCacheKey(options.promptCacheKey ?? options.sessionId),
 	};
-}
-
-/**
- * Invalidate Codex history-dependent transport state after compaction while
- * retaining the session identity and live connection.
- */
-export function resetOpenAICodexHistoryAfterCompaction(options: OpenAICodexCompactionResetOptions): void {
-	const providerState = options.providerSessionState?.get(CODEX_PROVIDER_SESSION_STATE_KEY);
-	if (!isCodexProviderSessionState(providerState)) return;
-	for (const websocketState of providerState.webSocketSessions.values()) {
-		resetCodexWebSocketAppendState(websocketState);
-		if (options.compaction.phase !== "mid_turn") websocketState.turnState = undefined;
-	}
-	const sessionId = normalizeOpenAIPromptCacheKey(options.sessionId);
-	if (!sessionId) return;
-	const metadataSession = providerState.metadataSessions.get(sessionId);
-	if (!metadataSession) return;
-	metadataSession.windowId = crypto.randomUUID();
-	metadataSession.compactionOperationId = undefined;
-	metadataSession.reuseTurnForNextRequest = options.compaction.phase !== "standalone_turn";
 }
 
 interface CodexRequestContext {
@@ -1076,18 +1036,6 @@ function createCodexProviderSessionState(): CodexProviderSessionState {
 		},
 	};
 	return state;
-}
-
-function isCodexProviderSessionState(state: ProviderSessionState | undefined): state is CodexProviderSessionState {
-	return (
-		state !== undefined &&
-		"webSocketSessions" in state &&
-		state.webSocketSessions instanceof Map &&
-		"webSocketPublicToPrivate" in state &&
-		state.webSocketPublicToPrivate instanceof Map &&
-		"metadataSessions" in state &&
-		state.metadataSessions instanceof Map
-	);
 }
 
 function getCodexProviderSessionState(
@@ -2892,13 +2840,6 @@ function getCodexWebSocketSessionState(
 	return created;
 }
 
-function resetCodexWebSocketAppendState(state: CodexWebSocketSessionState): void {
-	state.canAppend = false;
-	state.lastRequest = undefined;
-	state.lastResponseId = undefined;
-	state.lastResponseItems = undefined;
-}
-
 /** Drops the append baseline and the turn-state and models-etag headers, so the next request replays in full. */
 function resetCodexWebSocketChain(state: CodexWebSocketSessionState): void {
 	resetCodexWebSocketAppendState(state);
@@ -2947,14 +2888,6 @@ export function recordCodexWebSocketFailure(
 	}
 }
 
-function getCodexWebSocketEnvValue(): boolean | undefined {
-	const envVal = $env.VEYYON_CODEX_WEBSOCKET;
-	if (envVal !== undefined) {
-		return $flag("VEYYON_CODEX_WEBSOCKET");
-	}
-	return undefined;
-}
-
 function shouldUseCodexWebSocket(
 	model: Model<"openai-codex-responses">,
 	state: CodexWebSocketSessionState | undefined,
@@ -2970,83 +2903,6 @@ function shouldUseCodexWebSocket(
 	// Negative preference overrides model preference; otherwise use the model's preference.
 	if (preferWebsockets === false) return false;
 	return true;
-}
-
-export interface OpenAICodexTransportDetails {
-	websocketPreferred: boolean;
-	lastTransport?: CodexTransport;
-	websocketDisabled: boolean;
-	websocketConnected: boolean;
-	fallbackCount: number;
-	canAppend: boolean;
-	prewarmed: boolean;
-	hasSessionState: boolean;
-	hasTurnState: boolean;
-	lastFallbackAt?: number;
-}
-
-function getCodexWebSocketStateForPublicSession(
-	model: Model<"openai-codex-responses">,
-	options:
-		| {
-				sessionId?: string;
-				baseUrl?: string;
-				providerSessionState?: Map<string, ProviderSessionState>;
-		  }
-		| undefined,
-): CodexWebSocketSessionState | undefined {
-	const baseUrl = options?.baseUrl || model.baseUrl || CODEX_BASE_URL;
-	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const normalizedSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
-	const publicSessionKey = normalizedSessionId ? `${baseUrl}:${model.id}:${normalizedSessionId}` : undefined;
-	const privateSessionKey = publicSessionKey
-		? providerSessionState?.webSocketPublicToPrivate.get(publicSessionKey)
-		: undefined;
-	return privateSessionKey ? providerSessionState?.webSocketSessions.get(privateSessionKey) : undefined;
-}
-
-export function getOpenAICodexWebSocketDebugStats(
-	model: Model<"openai-codex-responses">,
-	options?: {
-		sessionId?: string;
-		baseUrl?: string;
-		providerSessionState?: Map<string, ProviderSessionState>;
-	},
-): OpenAICodexWebSocketDebugStats | undefined {
-	const stats = getCodexWebSocketStateForPublicSession(model, options)?.stats;
-	return stats ? { ...stats } : undefined;
-}
-
-export function getOpenAICodexTransportDetails(
-	model: Model<"openai-codex-responses">,
-	options?: {
-		sessionId?: string;
-		baseUrl?: string;
-		preferWebsockets?: boolean;
-		providerSessionState?: Map<string, ProviderSessionState>;
-	},
-): OpenAICodexTransportDetails {
-	const envVal = getCodexWebSocketEnvValue();
-	const websocketPreferred =
-		envVal !== undefined
-			? envVal
-			: options?.preferWebsockets === false
-				? false
-				: options?.preferWebsockets === true || model.preferWebsockets === true;
-	const state = getCodexWebSocketStateForPublicSession(model, options);
-
-	return {
-		websocketPreferred,
-		lastTransport: state?.lastTransport,
-		websocketDisabled: state?.disableWebsocket ?? false,
-		websocketConnected: state?.connection?.isOpen() ?? false,
-		fallbackCount: state?.fallbackCount ?? 0,
-		canAppend: state?.canAppend ?? false,
-		prewarmed: state?.prewarmed ?? false,
-		hasSessionState: state !== undefined,
-		hasTurnState: state?.turnState !== undefined,
-		lastFallbackAt: state?.lastFallbackAt,
-	};
 }
 
 function stripInputItemIds(items: Array<Record<string, unknown>>): InputItem[] {

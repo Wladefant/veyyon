@@ -78,7 +78,7 @@ import type {
 } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
-import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic";
+import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";

@@ -4,10 +4,8 @@
  */
 
 import type { Model, ProviderSessionState } from "@veyyon/ai";
-import {
-	getOpenAICodexTransportDetails,
-	prewarmOpenAICodexResponses,
-} from "@veyyon/ai/providers/openai-codex-responses";
+import { getOpenAICodexTransportDetails } from "@veyyon/ai/providers/openai-codex/session-state";
+import { loadOpenAICodexResponses } from "@veyyon/ai/providers/register-builtins";
 import { errorMessage, logger } from "@veyyon/utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
@@ -27,7 +25,8 @@ export interface CodexPrewarmInput {
 /**
  * Open the Codex websocket in the background when the session's model is served over one, so the
  * first request does not pay the handshake. Does nothing for any other model, or without a key; a
- * failed prewarm is logged at debug level and the first request connects on its own.
+ * failed prewarm is logged at debug level and the first request connects on its own. The Codex client
+ * loads inside the background task, so a session on any other model never evaluates it.
  */
 export function prewarmCodexTransport(input: CodexPrewarmInput): void {
 	if (input.model?.api !== "openai-codex-responses") return;
@@ -44,6 +43,7 @@ export function prewarmCodexTransport(input: CodexPrewarmInput): void {
 		try {
 			const apiKey = await input.modelRegistry.getApiKey(model, input.sessionId);
 			if (!apiKey) return;
+			const { prewarmOpenAICodexResponses } = await loadOpenAICodexResponses();
 			await logger.time("prewarmOpenAICodexResponses", prewarmOpenAICodexResponses, model, {
 				apiKey,
 				sessionId: input.sessionId,

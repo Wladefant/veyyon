@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `clearAnthropicFastModeFallback` moved from `@veyyon/ai/providers/anthropic` to `@veyyon/ai/providers/anthropic-session-state`, `deriveClaudeDeviceId` to `providers/claude-device-id`, `createOpenAICodexCompactionRequestContext`, `resetOpenAICodexHistoryAfterCompaction`, `getOpenAICodexTransportDetails`, `getOpenAICodexWebSocketDebugStats` and their option and result types from `providers/openai-codex-responses` to `providers/openai-codex/session-state`, `normalizeOpenAIPromptCacheKey` and `normalizeOpenRouterResponsesSessionId` from `providers/openai-shared` to `providers/openai-stable-ids`, `parseAzureDeploymentNameMap` from `providers/openai-shared` to `providers/azure-deployment-names`, and `signaturePolicy`, `sendsSignature`, `elidedSignatureBytes`, `firstRetainedAssistantIndex` and `SignaturePolicy` from `providers/google-shared` to `providers/google-thought-signatures`; the `@veyyon/ai` barrel keeps every name it exported.
+
 ### Changed
 
 - The output-loop guard compares a streamed tail's candidate repeats char by char in place instead of slicing both sides of every candidate length on each delta, cutting its cost on a 200,000-char non-looping stream from 228 ms to 26 ms at 12-char deltas with identical verdicts across 200,000 generated tails.
@@ -34,6 +38,7 @@
 - `utils/schema/wire.ts` holds no Zod value: the `@veyyon/ai` barrel installs Zod's core converter through `@veyyon/ai/utils/schema/zod-core`, so a process whose tools are all ArkType never evaluates Zod, and a process that loads no barrel converts a classic Zod schema through its own `toJSONSchema` and rejects a `zod/mini` schema with an error naming that import.
 - `usageWireSchemas` from `@veyyon/ai/usage/report-wire` is a `Lazy` holder read through `.value` instead of a function, and the Gemini CLI credentials validator is built on the first credentials read instead of when the provider module loads.
 - The Gemini usage reader takes the Gemini CLI headers from `@veyyon/catalog/wire/gemini-headers` instead of the Cloud Code Assist client, so a launch no longer evaluates that client and its validation helper (44 KiB of source).
+- The Anthropic session-state key and fast-mode reset, the Claude device id, the Codex session-state readers, the OpenAI cache-key normalizers, the Gemini thought-signature accounting and the Azure deployment map are defined in leaf modules, and `providers/openai-compaction` loads its request half on the first server-side compaction, so a caller of any of them no longer evaluates the Anthropic, Codex, Google or OpenAI shared modules; `providers/register-builtins` exports `loadOpenAICodexResponses`, the one loader of the Codex client.
 
 ### Fixed
 

@@ -69,6 +69,7 @@ import {
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
+import { parseAzureDeploymentNameMap } from "./azure-deployment-names";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import type {
 	ChatCompletionAssistantMessageParam,
@@ -117,7 +118,6 @@ import {
 	type OpenAIStrictToolsScope,
 	type OpenAIStrictToolsState,
 	type OpenAIToolChoiceState,
-	parseAzureDeploymentNameMap,
 	rejectToolChoiceForScope,
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,

@@ -268,11 +268,23 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `tools/core/` `acp-bridge.ts`, `diagnostics.ts`, `fs-cache-invalidation.ts`, `plan-mode-guard.ts` and
  * `result-notice.ts`. `test/architecture/a-launch-loads-no-language-server-client.test.ts` pins the cut.
  *
+ * 1603 to 1582: the session, its provider wire, compaction and the remote summarizer each took a constant
+ * or a function from a provider client, which put the client and its subtree on the launch graph. They
+ * take them from leaves split out of the clients: `providers/anthropic-session-state.ts` and
+ * `providers/claude-device-id.ts` (from `anthropic.ts`), `providers/openai-codex/session-state.ts` and
+ * `providers/openai-stable-ids.ts` (from `openai-codex-responses.ts` and `openai-shared.ts`),
+ * `providers/google-thought-signatures.ts` (from `google-shared.ts`) and
+ * `providers/azure-deployment-names.ts` (from `openai-shared.ts`). `openai-compaction.ts` loads its
+ * request half on the first server-side compaction. 27 modules (691 KiB) left: the Anthropic and Codex
+ * clients, `google-shared.ts`, `openai-shared.ts`, the Codex compaction window, the four `ai/cache/`
+ * modules, and the stream utilities only they import; the six leaves arrived.
+ * `test/architecture/a-launch-loads-no-provider-client.test.ts` pins the provider modules a launch reaches.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1603;
+const LAUNCH_REACH_CEILING = 1582;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

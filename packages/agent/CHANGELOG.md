@@ -22,6 +22,7 @@
 - `Agent` holds each system prompt section as the shared copy of its text, whether it arrives in the initial state or through `setSystemPrompt`, so live agents with equal sections hold one buffer of each.
 - `normalizeTools` holds a description with an appended examples block as the shared copy of its text, so live agents with the same tools hold one buffer of each, which cut the heap after 40 live subagents from 96.9 MiB to 95.4 MiB (median of 3 runs).
 - `estimateTokens` caches both option variants of a message in one record of four numbers instead of a holder object plus an object per variant, which cut the heap and extra memory of an idle resumed 600-turn session from 123,632 KiB to 123,399 KiB and its live objects from 708,261 to 702,908 (median of five).
+- Compaction reads the Codex compaction request context from `@veyyon/ai/providers/openai-codex/session-state` and the remote summarizer reads the Azure deployment map from `@veyyon/ai/providers/azure-deployment-names`, so the compaction engine loads 303 modules instead of 322 and the remote summarizer 100 instead of 225.
 
 ### Fixed
 

@@ -125,9 +125,20 @@ const PRUNING_CEILING = 195;
  * `catalog/catalog-spans.ts`, the zero-import leaf `catalog/models.ts` indexes each provider's span of
  * `models.json` through. The engine also lost `ai/providers/gitlab-duo-workflow.ts`, which `ai/stream.ts`
  * now registers lazily, so its count is unchanged; the remote summarizer never reached `ai/stream.ts`.
+ *
+ * RE-MEASURED 2026-10-03: engine 303, remote summarizer 100. The engine read the Codex compaction request
+ * context from `ai/providers/openai-codex-responses.ts`, the ChatGPT Codex client; it reads it from
+ * `ai/providers/openai-codex/session-state.ts` now, so the client and the 21 modules only it reached left
+ * (its response handler and request transformer, `providers/openai-shared.ts` and what only it reaches,
+ * `providers/grammar.ts`, the four `ai/cache/` modules, `dialect/demotion.ts`, and `utils/` `sse-debug`,
+ * `provider-response`, `provider-fetch`, `first-event-budget` and `empty-completion-retry`). The engine
+ * gained the session-state leaf and `providers/openai-stable-ids.ts`, the OpenAI cache-key normalizers it
+ * imports. Both reaches gained `ai/providers/azure-deployment-names.ts`, the zero-import leaf holding the
+ * Azure deployment map: the remote summarizer took it from `providers/openai-shared.ts`, which put the
+ * bundled catalog, the dialect renderers and the schema normalizers (125 modules) behind one parser.
  */
-const COMPACTION_ENGINE_CEILING = 322;
-const REMOTE_SUMMARIZER_CEILING = 225;
+const COMPACTION_ENGINE_CEILING = 303;
+const REMOTE_SUMMARIZER_CEILING = 100;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {

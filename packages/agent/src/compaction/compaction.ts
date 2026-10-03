@@ -28,7 +28,7 @@ import { withAuth } from "@veyyon/ai/auth-retry";
 import { ProviderHttpError } from "@veyyon/ai/error/classes";
 import { Flag, is as hasFlag } from "@veyyon/ai/error/flag";
 import { classify as classifyError } from "@veyyon/ai/error/flags";
-import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex-responses";
+import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex/session-state";
 import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { Effort } from "@veyyon/catalog/effort";
 import { preferredDialect } from "@veyyon/catalog/identity";

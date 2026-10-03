@@ -4,10 +4,10 @@ import {
 	type RequestBody,
 	transformRequestBody,
 } from "@veyyon/ai/providers/openai-codex/request-transformer";
+import { resetOpenAICodexHistoryAfterCompaction } from "@veyyon/ai/providers/openai-codex/session-state";
 import {
 	buildTransformedCodexRequestBody,
 	convertCodexResponsesMessages,
-	resetOpenAICodexHistoryAfterCompaction,
 	streamOpenAICodexResponses,
 } from "@veyyon/ai/providers/openai-codex-responses";
 import { isOpenAIResponsesProgressEvent } from "@veyyon/ai/providers/openai-shared";
