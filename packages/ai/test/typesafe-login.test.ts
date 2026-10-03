@@ -47,6 +47,7 @@ describe("typesafe login", () => {
 		const seen: string[] = [];
 
 		await loginTypeSafe({
+			onAuth: () => {},
 			onPrompt: async () => "ts-test-key",
 			fetch: modelsFetch(seen),
 		});
