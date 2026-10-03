@@ -211,9 +211,11 @@ describe("SessionManager temp cwd session dirs", () => {
 		if (!sessionFile) throw new Error("Expected session file path");
 
 		const expectedDir = path.join(getSessionsDir(), expectedTempSessionDirName(tempCwd));
-		expect(fs.existsSync(legacyDir)).toBe(false);
+		expect(fs.existsSync(legacyDir)).toBe(true);
+		expect(fs.readFileSync(markerFile, "utf-8")).toBe("marker\n");
 		expect(path.dirname(sessionFile)).toBe(expectedDir);
 		expect(fs.existsSync(path.join(expectedDir, "carried.jsonl"))).toBe(true);
+		expect(fs.readFileSync(path.join(expectedDir, "carried.jsonl"), "utf-8")).toBe("marker\n");
 	});
 });
 
