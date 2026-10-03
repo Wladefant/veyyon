@@ -196,7 +196,14 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			)
 			.sort();
 		expect(installations).toEqual(
-			["sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "session/agent-session.ts"].map(
+			[
+				"cursor-bridge-tools.ts",
+				"sdk.ts",
+				"sdk.ts",
+				"sdk.ts",
+				"session/agent-session.ts",
+				"session/factory-tools.ts",
+			].map(
 				site => `packages/coding-agent/src/${site}`,
 			),
 		);
