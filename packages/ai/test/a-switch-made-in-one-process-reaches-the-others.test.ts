@@ -14,9 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeWithRetries } from "../../utils/src/temp";
 import { AuthStorage } from "../src/auth-storage";
 import { SqliteAuthCredentialStore } from "../src/auth-storage-sqlite";
-import { removeWithRetries } from "../../utils/src/temp";
 
 const PROVIDER = "anthropic";
 
