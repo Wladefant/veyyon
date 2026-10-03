@@ -260,11 +260,19 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `@veyyon/ai` `providers/gitlab-duo-workflow.ts`, `providers/google-gemini-cli.ts` and
  * `utils/google-validation.ts` provider modules, now registered lazily.
  *
+ * 1624 to 1603: the edit tool's write path, `executePatchSingle` and `LspFileSystem`, moved out of
+ * `edit/modes/patch.ts` into `edit/modes/patch-execute.ts`. The streaming edit guard imports `patch.ts`
+ * on every launch to preview a patch, and the write path imported the LSP writethrough, so 21 modules
+ * left: fourteen under `lsp/` (the client, its server table and config, the linter clients, the edit
+ * applier, the multiplexer and the view), `utils/jsonrpc-framing.ts`, `edit/snapshot-details.ts`, and
+ * `tools/core/` `acp-bridge.ts`, `diagnostics.ts`, `fs-cache-invalidation.ts`, `plan-mode-guard.ts` and
+ * `result-notice.ts`. `test/architecture/a-launch-loads-no-language-server-client.test.ts` pins the cut.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1624;
+const LAUNCH_REACH_CEILING = 1603;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
