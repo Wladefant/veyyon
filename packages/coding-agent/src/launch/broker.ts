@@ -10,7 +10,6 @@ import {
 	errorMessage,
 	exponentialBackoffDelay,
 	isEnoent,
-	isProcessAlive,
 	logger,
 	postmortem,
 	sanitizeText,
@@ -133,7 +132,6 @@ interface ManagedDaemon {
 	/** Attribution for the death of the CURRENT generation, set before the signal goes out. */
 	termination?: DaemonTerminationSource;
 }
-
 
 interface DaemonLogRead {
 	text: string;
@@ -276,7 +274,6 @@ class DaemonLog {
 		this.#currentBytes = 0;
 	}
 }
-
 
 function connectPort(host: string, port: number): Promise<boolean> {
 	const { promise, resolve } = Promise.withResolvers<boolean>();

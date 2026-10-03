@@ -50,7 +50,12 @@ export async function registerDaemonProjectPresence(
 	const presencePath = daemonPresenceEntryPath(clientsDir, id);
 	await atomicWriteFile(
 		presencePath,
-		JSON.stringify({ pid: process.pid, processIdentity: getProcessStartIdentity(process.pid), id, projectDir: canonical }),
+		JSON.stringify({
+			pid: process.pid,
+			processIdentity: getProcessStartIdentity(process.pid),
+			id,
+			projectDir: canonical,
+		}),
 	);
 	await fs.chmod(presencePath, 0o600);
 	let closed = false;

@@ -21,7 +21,10 @@ it("reclaims a stale lease when its recorded PID belongs to a different process 
 	const dir = await runtime();
 	const identity = getProcessStartIdentity(process.pid);
 	expect(identity).not.toBeNull();
-	await fs.writeFile(daemonBrokerLeasePath(dir), JSON.stringify({ pid: process.pid, processIdentity: `${identity}:old` }));
+	await fs.writeFile(
+		daemonBrokerLeasePath(dir),
+		JSON.stringify({ pid: process.pid, processIdentity: `${identity}:old` }),
+	);
 	const lease = await acquireBrokerLease(dir);
 	expect(lease).not.toBeNull();
 	if (lease) await releaseBrokerLease(lease);
@@ -39,7 +42,10 @@ it("keeps a genuinely live owner's lease and preserves it after a competing star
 
 it("two competing starts cannot both acquire a stale lease", async () => {
 	const dir = await runtime();
-	await fs.writeFile(daemonBrokerLeasePath(dir), JSON.stringify({ pid: process.pid, processIdentity: "previous-incarnation" }));
+	await fs.writeFile(
+		daemonBrokerLeasePath(dir),
+		JSON.stringify({ pid: process.pid, processIdentity: "previous-incarnation" }),
+	);
 	const leases = await Promise.all([acquireBrokerLease(dir), acquireBrokerLease(dir)]);
 	const winners = leases.filter(lease => lease !== null);
 	expect(winners).toHaveLength(1);
@@ -52,7 +58,10 @@ it("prunes only stale presence and retains a matching live incarnation", async (
 	await fs.mkdir(clients);
 	const identity = getProcessStartIdentity(process.pid);
 	expect(identity).not.toBeNull();
-	await fs.writeFile(path.join(clients, "stale.json"), JSON.stringify({ pid: process.pid, processIdentity: `${identity}:old` }));
+	await fs.writeFile(
+		path.join(clients, "stale.json"),
+		JSON.stringify({ pid: process.pid, processIdentity: `${identity}:old` }),
+	);
 	await fs.writeFile(path.join(clients, "live.json"), JSON.stringify({ pid: process.pid, processIdentity: identity }));
 	expect(await hasLiveDaemonProjectPresence(dir)).toBe(true);
 	expect(await fs.readdir(clients)).toEqual(["live.json"]);
