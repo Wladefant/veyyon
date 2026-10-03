@@ -45,6 +45,18 @@ describe("isLightTheme (standalone)", () => {
 	});
 });
 
+describe("empty foreground contrast", () => {
+	it("emits explicit contrasting ANSI foregrounds for empty theme tokens", async () => {
+		const light = await getThemeByName("light");
+		const dark = await getThemeByName("dark");
+		if (!light || !dark) throw new Error("Base light/dark themes are unavailable");
+
+		expect(["\x1b[38;2;0;0;0m", "\x1b[38;5;16m"]).toContain(light.getFgAnsi("text"));
+		expect(["\x1b[38;2;0;0;0m", "\x1b[38;5;16m"]).toContain(light.getFgAnsi("userMessageText"));
+		expect(["\x1b[38;2;229;229;231m", "\x1b[38;5;231m"]).toContain(dark.getFgAnsi("text"));
+	});
+});
+
 describe("getResolvedThemeColors HTML export defaults", () => {
 	// Regression for #2516: empty color tokens fell back to #e5e5e7 (the
 	// dark-theme grey) for every theme not literally named "light", making the
