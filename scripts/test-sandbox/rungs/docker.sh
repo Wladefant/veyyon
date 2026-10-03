@@ -63,21 +63,6 @@ run_docker() {
 	# operator's history. Empty on a checkout that owns its own `.git`.
 	[ -n "${SANDBOX_GITDIR:-}" ] &&
 		mount_args+=(--mount "type=bind,src=${SANDBOX_GITDIR},dst=${SANDBOX_GITDIR},readonly")
-	if [ -L "${REPO_ROOT}/node_modules" ]; then
-		local nm_target
-		nm_target="$(readlink "${REPO_ROOT}/node_modules" 2>/dev/null || true)"
-		if [ -n "$nm_target" ] && [ -d "$nm_target" ]; then
-			local nm_parent
-			nm_parent="$(dirname "$nm_target")"
-			mount_args+=(--mount "type=bind,src=${nm_parent},dst=${nm_parent},readonly")
-			if [ -d "${REPO_ROOT}/packages" ] && [ -d "${nm_parent}/packages" ]; then
-				mount_args+=(--mount "type=bind,src=${REPO_ROOT}/packages,dst=${nm_parent}/packages")
-			fi
-			if [ -d "${REPO_ROOT}/kernel" ] && [ -d "${nm_parent}/kernel" ]; then
-				mount_args+=(--mount "type=bind,src=${REPO_ROOT}/kernel,dst=${nm_parent}/kernel")
-			fi
-		fi
-	fi
 
 	if [ -d "${HOST_HOME}/.rustup" ]; then
 		mount_args+=(--mount "type=bind,src=${HOST_HOME}/.rustup,dst=/sandbox/rustup,readonly")
