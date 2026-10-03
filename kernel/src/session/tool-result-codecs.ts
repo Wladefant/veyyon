@@ -13,7 +13,7 @@
  * registered twice is a no-op, so a composition root may run more than once in one process.
  */
 import type { ToolResultMessage } from "@veyyon/ai";
-import type { ToolResultCodec } from "../registry/tool-result-codec";
+import type { ToolResultCodec, ToolResultMigrationContext } from "../registry/tool-result-codec";
 import type { FileEntry } from "./session-entries";
 
 const codecs = new Map<string, ToolResultCodec>();
@@ -63,4 +63,17 @@ export function restoreToolResultEntries(entries: readonly FileEntry[]): void {
 		const coded = codedResult(entry);
 		coded?.codec.restore(coded.message.details, coded.message.content);
 	}
+}
+
+/** Apply domain-owned payload migrations without teaching the kernel tool details. */
+export async function migrateToolResultEntries(
+	entries: readonly FileEntry[],
+	context: ToolResultMigrationContext,
+): Promise<boolean> {
+	let migrated = false;
+	for (const entry of entries) {
+		const coded = codedResult(entry);
+		if (coded?.codec.migrate && (await coded.codec.migrate(coded.message.details, context))) migrated = true;
+	}
+	return migrated;
 }

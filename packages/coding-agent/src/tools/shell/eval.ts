@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
-import { errorMessage, formatCount, lazy, logger, prompt, truncate } from "@veyyon/utils";
+import { errorMessage, formatCount, lazy, logger, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../eval/bridge-timeout";
@@ -8,13 +8,7 @@ import { IdleTimeout } from "../../eval/idle-timeout";
 import type { BackendProbeOptions } from "../../eval/probe";
 import { defaultEvalSessionId } from "../../eval/session-id";
 import { upsertStatusEvent } from "../../eval/status-events";
-import type {
-	EvalCellResult,
-	EvalDisplayOutput,
-	EvalLanguage,
-	EvalStatusEvent,
-	EvalToolDetails,
-} from "../../eval/types";
+import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../../eval/types";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../../session/streaming-output";
@@ -33,6 +27,7 @@ import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice, TOOL_TIMEOUTS } from "../core/tool-timeouts";
 import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
+import { EVAL_DISPLAY_VERSION, formatDisplayJson } from "./eval-display";
 import { evalToolView } from "./eval-view";
 import { evalBackendLoaders } from "./manifest";
 
@@ -152,38 +147,6 @@ export type EvalToolResult = {
 };
 
 export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
-
-/** Cap per `display()` value sent back to the model. */
-const MAX_DISPLAY_TEXT_CHARS = 8000;
-
-export function formatDisplayJsonForText(value: unknown): string {
-	let text: string;
-	try {
-		text = JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		text = String(value);
-	}
-	if (text.length <= MAX_DISPLAY_TEXT_CHARS) return text;
-	const chars = [...text];
-	if (chars.length <= MAX_DISPLAY_TEXT_CHARS) return text;
-	return `${truncate(text, MAX_DISPLAY_TEXT_CHARS, "")}\n[…${chars.length - MAX_DISPLAY_TEXT_CHARS}ch elided…]`;
-}
-
-/**
- * Format display() JSON values into text the model can see. Images are surfaced
- * separately as ImageContent so the model can actually inspect them; this helper
- * intentionally does not touch images.
- */
-function formatDisplayOutputsForText(outputs: EvalDisplayOutput[]): string {
-	const chunks: string[] = [];
-	let displayIndex = 0;
-	for (const output of outputs) {
-		if (output.type !== "json") continue;
-		displayIndex++;
-		chunks.push(`display[${displayIndex}]:\n${formatDisplayJsonForText(output.data)}`);
-	}
-	return chunks.join("\n\n");
-}
 
 export interface EvalToolDescriptionOptions {
 	py?: boolean;
@@ -613,6 +576,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					};
 					if (jsonOutputs.length > 0) {
 						details.jsonOutputs = jsonOutputs;
+						details.displayVersion = EVAL_DISPLAY_VERSION;
 					}
 					if (images.length > 0) {
 						details.images = images;
@@ -733,13 +697,26 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				const durationMs = Date.now() - startTime;
 
 				const cellStatusEvents: EvalStatusEvent[] = [];
-				const cellDisplayOutputs: EvalDisplayOutput[] = [];
+				const cellDisplayTexts: string[] = [];
 				const cellImageNotes: string[] = [];
 				let cellHasMarkdown = false;
 				for (const output of result.displayOutputs) {
 					if (output.type === "json") {
-						jsonOutputs.push(output.data);
-						cellDisplayOutputs.push(output);
+						const formatted = formatDisplayJson(output.data);
+						const storageNotice =
+							formatted.truncated && !artifactPath
+								? "\n[Full display value was not kept: artifact storage is unavailable]"
+								: "";
+						const displayText = `${formatted.previewText}${storageNotice}`;
+						const label = `display[${cellDisplayTexts.length + 1}]:\n`;
+						jsonOutputs.push(formatted.detailsValue);
+						cellDisplayTexts.push(`${label}${displayText}`);
+						if (formatted.truncated) {
+							outputSink.push(`${label}${formatted.fullText}\n`, {
+								inline: `${label}${displayText}\n`,
+								emitInline: false,
+							});
+						}
 					}
 					if (output.type === "image") {
 						const resized = await resizeImage(
@@ -756,11 +733,6 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 							mimeType: resized.mimeType,
 						};
 						images.push(image);
-						cellDisplayOutputs.push({
-							type: "image",
-							data: image.data,
-							mimeType: image.mimeType,
-						});
 						const dimensionNote = formatDimensionNote(resized);
 						if (dimensionNote) {
 							cellImageNotes.push(`display image ${cellImageNotes.length + 1}: ${dimensionNote}`);
@@ -777,7 +749,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 
 				const stdoutTrimmed = result.output.trim();
 				const imageText = cellImageNotes.join("\n");
-				const displayText = formatDisplayOutputsForText(cellDisplayOutputs);
+				const displayText = cellDisplayTexts.join("\n\n");
 				const visibleDisplayText =
 					displayText && imageText ? `${displayText}\n\n${imageText}` : displayText || imageText;
 				const cellOutput =
@@ -812,6 +784,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 						languages,
 						cells: [cellResult],
 						jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
+						displayVersion: EVAL_DISPLAY_VERSION,
 						statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
 					};
 					if (isError) details.isError = true;
