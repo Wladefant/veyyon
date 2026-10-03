@@ -289,6 +289,7 @@ export class AuthStorage {
 	#data: Map<string, StoredCredential[]> = new Map();
 	#runtimeOverrides: Map<string, string> = new Map();
 	#configOverrides: Map<string, string> = new Map();
+	#configFallbacks: Map<string, string> = new Map();
 	/** Tracks next credential index per provider:type key for round-robin distribution (non-session use). */
 	#providerRoundRobinIndex: Map<string, number> = new Map();
 	/** Session stickiness, session pins and the provider-wide account selection. */
@@ -551,8 +552,18 @@ export class AuthStorage {
 	 * Lower priority than {@link setRuntimeApiKey} so a CLI `--api-key`
 	 * still wins for the duration of a single invocation.
 	 */
-	setConfigApiKey(provider: string, apiKey: string): void {
-		this.#configOverrides.set(provider, apiKey);
+	setConfigApiKey(
+		provider: string,
+		apiKey: string,
+		options?: { fallback?: boolean },
+	): void {
+		if (options?.fallback) {
+			this.#configOverrides.delete(provider);
+			this.#configFallbacks.set(provider, apiKey);
+		} else {
+			this.#configFallbacks.delete(provider);
+			this.#configOverrides.set(provider, apiKey);
+		}
 	}
 
 	/**
@@ -560,6 +571,7 @@ export class AuthStorage {
 	 */
 	removeConfigApiKey(provider: string): void {
 		this.#configOverrides.delete(provider);
+		this.#configFallbacks.delete(provider);
 	}
 
 	/**
@@ -568,6 +580,7 @@ export class AuthStorage {
 	 */
 	clearConfigApiKeys(): void {
 		this.#configOverrides.clear();
+		this.#configFallbacks.clear();
 	}
 
 	/**
@@ -2164,6 +2177,7 @@ export class AuthStorage {
 		if (this.#runtimeOverrides.has(provider)) return true;
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#configFallbacks.has(provider)) return true;
 		if (getEnvApiKey(provider)) return true;
 		if (this.#chatgptWebOAuthFallback(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
@@ -2175,6 +2189,7 @@ export class AuthStorage {
 		if (this.#runtimeOverrides.has(provider)) return true;
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#configFallbacks.has(provider)) return true;
 		if (this.#chatgptWebOAuthFallback(provider)) return true;
 		const envKey = getEnvApiKey(provider);
 		if (envKey && envKey !== AUTHENTICATED_API_KEY_SENTINEL) return true;
@@ -2197,14 +2212,16 @@ export class AuthStorage {
 		if (this.#runtimeOverrides.has(provider)) return true;
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#configFallbacks.has(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
 		return false;
 	}
 
 	/**
 	 * Classify where a provider's auth comes from, following the same precedence
-	 * as {@link AuthStorage.getApiKey}: runtime override → config override →
-	 * stored OAuth → login-stored api_key → env var → stored api_key →
+	 * as {@link AuthStorage.getApiKey}: runtime override → nonfallback config override →
+	 * stored OAuth → login-stored api_key → extension config fallback →
+	 * env var → stored api_key →
 	 * fallback resolver. Returns undefined when no auth is configured.
 	 *
 	 * Compact, structured counterpart to {@link describeCredentialSource}.
@@ -2223,6 +2240,7 @@ export class AuthStorage {
 		) {
 			return { kind: "api_key" };
 		}
+		if (this.#configFallbacks.has(provider)) return { kind: "config" };
 		if (getEnvApiKey(provider))
 			return { kind: "env", envVar: getEnvApiKeyName(provider) };
 		if (stored.some((credential) => credential.type === "api_key"))
@@ -4643,6 +4661,10 @@ export class AuthStorage {
 		if (loginApiKeySelection) {
 			return this.#configValueResolver(loginApiKeySelection.credential.key);
 		}
+		const fallbackKey = this.#configFallbacks.get(provider);
+		if (fallbackKey) {
+			return this.#configValueResolver(fallbackKey);
+		}
 
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
@@ -4670,12 +4692,13 @@ export class AuthStorage {
 	 * Get API key for a provider.
 	 * Priority (first match wins):
 	 * 1. Runtime override (CLI --api-key)
-	 * 2. Config override (models.yml `providers.<name>.apiKey`)
+	 * 2. Nonfallback config override (models.yml `providers.<name>.apiKey`)
 	 * 3. OAuth token from storage (auto-refreshed)
 	 * 4. API key persisted by a successful `/login`
-	 * 5. Environment variable
-	 * 6. Stored API key (e.g. a broker-migrated copy) — last resort, so an explicit env var wins
-	 * 7. Fallback resolver (models.yml custom providers, last-resort)
+	 * 5. Extension config fallback (including command-backed keys)
+	 * 6. Environment variable
+	 * 7. Stored API key (e.g. a broker-migrated copy) — last resort, so an explicit env var wins
+	 * 8. Fallback resolver (models.yml custom providers, last-resort)
 	 */
 	async getApiKey(
 		provider: string,
@@ -4730,6 +4753,10 @@ export class AuthStorage {
 		if (sessionId)
 			this.#routing.forgetStickySessionCredential(provider, sessionId);
 
+		const fallbackKey = this.#configFallbacks.get(provider);
+		if (fallbackKey) {
+			return this.#configValueResolver(fallbackKey);
+		}
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
 		const apiKeySelection = await this.#selectApiKeyCredential(
@@ -5905,12 +5932,13 @@ export class AuthStorage {
 	 *
 	 * Mirrors {@link AuthStorage.getApiKey} precedence, highest first:
 	 *   1. Runtime override (`--api-key`).
-	 *   2. Config override (`models.yml` `providers.<name>.apiKey`).
+	 *   2. Nonfallback config override (`models.yml` `providers.<name>.apiKey`).
 	 *   3. Stored OAuth credential.
 	 *   4. API key persisted by a successful `/login`.
-	 *   5. Env var — overrides a stored static api_key (e.g. a stale broker copy).
-	 *   6. Stored api_key credential.
-	 *   7. Fallback resolver.
+	 *   5. Extension config fallback (including command-backed keys).
+	 *   6. Env var — overrides a stored static api_key (e.g. a stale broker copy).
+	 *   7. Stored api_key credential.
+	 *   8. Fallback resolver.
 	 *
 	 * The string is purely informational; consumers must not parse it.
 	 */
@@ -5967,6 +5995,7 @@ export class AuthStorage {
 				credential.type === "api_key" && credential.source === "login",
 		);
 		if (loginApiKeySource) return loginApiKeySource;
+		if (this.#configFallbacks.has(provider)) return "provider config (fallback)";
 		if (getEnvApiKey(provider)) return `env (over ${baseLabel})`;
 		const apiKeySource = describeStored(
 			"api_key",
