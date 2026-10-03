@@ -41,6 +41,8 @@ describe("isSqliteBusyError", () => {
 	test("rejects non-BUSY codes and non-error values", () => {
 		expect(isSqliteBusyError(makeBusyError("SQLITE_LOCKED", 6))).toBe(false);
 		expect(isSqliteBusyError(makeBusyError("SQLITE_CORRUPT", 11))).toBe(false);
+		expect(isSqliteBusyError(makeBusyError("SQLITE_IOERR", 10))).toBe(false);
+		expect(isSqliteBusyError(makeBusyError("SQLITE_PERM", 3))).toBe(false);
 		expect(isSqliteBusyError(new Error("plain"))).toBe(false);
 		expect(isSqliteBusyError(null)).toBe(false);
 		expect(isSqliteBusyError(undefined)).toBe(false);
@@ -159,6 +161,51 @@ describe("SqliteAuthCredentialStore.open SQLITE_BUSY handling", () => {
 		) {
 			runCalls++;
 			if (runCalls === 1) {
+				const err = new Error("disk I/O error") as SqliteBusyShape;
+				err.code = "SQLITE_IOERR";
+				err.errno = 10;
+				throw err;
+			}
+			return realRun.apply(this, args);
+		});
+
+		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow("disk I/O error");
+		// Single attempt: the retry loop must NOT keep banging on a fatal error.
+		expect(runCalls).toBe(1);
+	});
+
+	test("permission errors short-circuit retries without recovery", async () => {
+		const dbPath = path.join(tempDir, "perm.db");
+		const realRun = Database.prototype.run;
+		let runCalls = 0;
+		vi.spyOn(Database.prototype, "run").mockImplementation(function (
+			this: Database,
+			...args: Parameters<typeof realRun>
+		) {
+			runCalls++;
+			if (runCalls === 1) {
+				const err = new Error("access permission denied") as SqliteBusyShape;
+				err.code = "SQLITE_PERM";
+				err.errno = 3;
+				throw err;
+			}
+			return realRun.apply(this, args);
+		});
+
+		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow("access permission denied");
+		expect(runCalls).toBe(1);
+	});
+
+	test("SQLITE_CORRUPT triggers corruption recovery and resolves a fresh store", async () => {
+		const dbPath = path.join(tempDir, "corrupt.db");
+		const realRun = Database.prototype.run;
+		let runCalls = 0;
+		vi.spyOn(Database.prototype, "run").mockImplementation(function (
+			this: Database,
+			...args: Parameters<typeof realRun>
+		) {
+			runCalls++;
+			if (runCalls === 1) {
 				const err = new Error("disk image malformed") as SqliteBusyShape;
 				err.code = "SQLITE_CORRUPT";
 				err.errno = 11;
@@ -167,9 +214,14 @@ describe("SqliteAuthCredentialStore.open SQLITE_BUSY handling", () => {
 			return realRun.apply(this, args);
 		});
 
-		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow("disk image malformed");
-		// Single attempt: the retry loop must NOT keep banging on a fatal error.
-		expect(runCalls).toBe(1);
+		const store = await SqliteAuthCredentialStore.open(dbPath);
+		try {
+			expect(store).toBeInstanceOf(SqliteAuthCredentialStore);
+			expect(runCalls).toBeGreaterThan(1);
+			expect(store.listAuthCredentials()).toEqual([]);
+		} finally {
+			store.close();
+		}
 	});
 
 	test("exhausts retries and surfaces an error that includes the DB path", async () => {

@@ -39,6 +39,8 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Recovered corrupt SQLite credential stores automatically on startup by quarantining broken database files and sidecars ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 042028fd018b1282fbe660ab7255ebad18dd4db5).
+- Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 
 - Fixed the Codex unexpected-stream-end debug log reading the removed `turnState` field of the WebSocket session state; it now reads the request's turn-state cell ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered the `local`, `web` and `typesafe` catalog providers in the provider registry, restoring its compile-time completeness check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
