@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { getBundledModel } from "@veyyon/catalog/models";
 import { openrouterModelManagerOptions } from "@veyyon/catalog/provider-models/openai-compat";
 
 /**
@@ -90,4 +91,41 @@ describe("OpenRouter pricing never produces a NaN cost", () => {
 			expect(value).toBe(0);
 		}
 	});
+});
+
+// Zero discovery limits must not overwrite a known model's bundled limits.
+// Unknown models retain unknown limits rather than inventing a context window.
+describe("OpenRouter zero discovery limits preserve bundled limits", () => {
+	for (const limits of [
+		{ context: 0, output: 0 },
+		{ context: 0, output: 2048 },
+		{ context: 8192, output: 0 },
+	]) {
+		it(`preserves fallback limits for context ${limits.context} and output ${limits.output}`, async () => {
+			const reference = getBundledModel("openrouter", "anthropic/claude-sonnet-4.6");
+			expect(reference.contextWindow).toBeGreaterThan(0);
+			expect(reference.maxTokens).toBeGreaterThan(0);
+			const options = openrouterModelManagerOptions({
+				fetch: async () =>
+					new Response(
+						JSON.stringify({
+							data: [
+								{
+									id: reference.id,
+									supported_parameters: ["tools"],
+									architecture: { modality: "text" },
+									context_length: limits.context,
+									top_provider: { max_completion_tokens: limits.output },
+								},
+							],
+						}),
+						{ status: 200, headers: { "content-type": "application/json" } },
+					),
+			});
+			const models = await options.fetchDynamicModels?.();
+			expect(models?.map(model => model.id)).toEqual([reference.id]);
+			expect(models?.[0]?.contextWindow).toBe(limits.context || reference.contextWindow);
+			expect(models?.[0]?.maxTokens).toBe(limits.output || reference.maxTokens);
+		});
+	}
 });

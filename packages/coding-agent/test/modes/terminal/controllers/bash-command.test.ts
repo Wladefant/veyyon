@@ -62,6 +62,58 @@ describe("bash shortcut command", () => {
 			useUserShell: true,
 		});
 	});
+
+	it("rejects persistent cd commands while streaming", async () => {
+		const executeBash = vi.fn();
+		const showWarning = vi.fn();
+		const ctx = {
+			session: { isStreaming: true, executeBash },
+			showWarning,
+			refreshComposerShortcuts: vi.fn(),
+			dismissWelcome: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new CommandController(ctx);
+
+		await controller.handleBashCommand("cd /tmp");
+
+		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("Wait for the current response"));
+		expect(executeBash).not.toHaveBeenCalled();
+	});
+
+	it("guards persistent cd commands with withBtwSessionMove", async () => {
+		const executeBash = vi.fn().mockResolvedValue({
+			output: "",
+			exitCode: 0,
+			cancelled: false,
+			truncated: false,
+			totalLines: 0,
+			totalBytes: 0,
+			outputLines: 0,
+			outputBytes: 0,
+		});
+		const withBtwSessionMove = vi.fn(async (operation: () => Promise<boolean>) => {
+			return operation();
+		});
+		const ctx = {
+			session: { isStreaming: false, executeBash },
+			settings: { flush: vi.fn(async () => {}) },
+			chatContainer: createContainer(),
+			pendingMessagesContainer: createContainer(),
+			pendingBashComponents: [],
+			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
+			present: vi.fn(),
+			showError: vi.fn(),
+			withBtwSessionMove,
+			refreshComposerShortcuts: vi.fn(),
+			dismissWelcome: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new CommandController(ctx);
+
+		await controller.handleBashCommand("cd /tmp");
+
+		expect(withBtwSessionMove).toHaveBeenCalledTimes(1);
+		expect(executeBash).toHaveBeenCalled();
+	});
 });
 
 interface ShortcutBlock {
