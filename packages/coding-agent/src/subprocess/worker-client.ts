@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { $env, isBunTestRuntime, isCompiledBinary } from "@veyyon/utils/env";
 import * as logger from "@veyyon/utils/logger";
 import { stripWindowsExtendedLengthPathPrefix } from "@veyyon/utils/path";
+import * as postmortem from "@veyyon/utils/postmortem";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { workerHostEntry } from "@veyyon/utils/worker-host";
 import type { Subprocess } from "bun";
@@ -182,6 +183,9 @@ export function createWorkerSubprocess<Outbound>(options: {
 		stderrDrainStarted = true;
 		void drainStderrCapture(stderrCapture, options.exitLabel, stderrTail).finally(() => stderrDrained.resolve());
 	};
+	// Reassigned once the worker IPC fault handler is registered (after spawn);
+	// invoked from onExit to drop the registration.
+	let unregisterFault: () => void = () => {};
 	const proc = Bun.spawn({
 		cmd: options.spawnCommand.cmd,
 		cwd: options.spawnCommand.cwd,
@@ -196,6 +200,7 @@ export function createWorkerSubprocess<Outbound>(options: {
 			for (const handler of inbound) handler(message as Outbound);
 		},
 		onExit(_proc, exitCode, signalCode) {
+			unregisterFault();
 			startStderrDrain();
 			if (exitCode === 0 && !options.reportCleanExit) return;
 			// Swallow only the expected SIGKILL from `terminate()`; every other
@@ -213,6 +218,26 @@ export function createWorkerSubprocess<Outbound>(options: {
 				for (const handler of errors) handler(err);
 			});
 		},
+	});
+	// Bun raises a malformed advanced-serialization frame as a process-global
+	// uncaughtException with no channel attribution (oven-sh/bun#37287). Register
+	// a fault handler so that failure rejects this worker's in-flight requests and
+	// recycles it — a worker that sent a bad frame but stays alive never fires
+	// onExit, so callers would otherwise await forever. Unregistered in onExit.
+	let faulted = false;
+	unregisterFault = postmortem.registerWorkerIpcFaultHandler(cause => {
+		if (faulted) return;
+		faulted = true;
+		const err = new Error(`${options.exitLabel}: worker sent a malformed IPC frame; recycling worker`, { cause });
+		for (const handler of errors) handler(err);
+		// Recycle the (possibly still-alive) worker; mark the exit intentional so
+		// the SIGKILL's onExit does not surface a duplicate error.
+		intentionalExit.value = true;
+		try {
+			proc.kill("SIGKILL");
+		} catch {
+			// Already gone.
+		}
 	});
 	// Shared service workers (tiny title model, embeddings, speech, JS eval)
 	// belong to no single session, so they join the root session's CPU budget

@@ -14,6 +14,10 @@
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
 
 ### Fixed
+- Fence fresh terminal breadcrumbs to an explicit session directory and require positive directory inode evidence before re-rooting moved projects (oh-my-pi 13fc0b6c33c536481221a1b23d16ef993f01d7b0, oh-my-pi cd46dd0ca51641560e53d3cd14e164cd4f241e9d, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Session discovery recovers hashed-layout transcripts without changing active directory names or deleting conflicting stale copies ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed terminal breadcrumbs being rewritten when unchanged, skipping redundant disk writes when re-recording identical session pointers (oh-my-pi aa4136eb4a9e8cbe99e9f17435e7fd2b207ba655, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Validate `Type.Unsafe` against the draft-2020-12 upgraded schema so raw JSON Schema draft-07 documents validate consistently with wire validation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Config source stamps use WebCrypto SHA-256 without loading `node:crypto` on the launch-card path; digest bytes are unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `SettingsStore.forkWithRuntimeOverrides` dropping `#configPath` on forked in-memory instances, so subagents and runtime forks can compute `configSourceStamp()` and detect on-disk config changes.
 
