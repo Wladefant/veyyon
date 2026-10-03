@@ -451,10 +451,12 @@ describe("openCodexCompactionEventStream", () => {
 	});
 
 	test("bounds: exceeding frame count limit triggers fallback to SSE without exposing partial events", async () => {
+		let wsAttempts = 0;
 		class FloodFramesWs extends BaseMockWs {
 			send(data: string) {
 				const frame = JSON.parse(data) as Record<string, unknown>;
 				if (frame.type === "response.create") {
+					wsAttempts++;
 					queueMicrotask(() => {
 						for (let i = 0; i <= CODEX_COMPACTION_WS_MAX_BUFFERED_EVENTS; i++) {
 							this.emit({
@@ -472,26 +474,35 @@ describe("openCodexCompactionEventStream", () => {
 			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "compaction", encrypted_content: "sse_recovery_frames" } })}`,
 			`data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 42 } } })}`,
 		].join("\n\n");
-		const fetchMock: FetchImpl = async () =>
-			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		let sseCalled = false;
+		const fetchMock: FetchImpl = async () => {
+			sseCalled = true;
+			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		};
 
+		const pState = new Map<string, ProviderSessionState>();
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_bounds_frames",
+			providerSessionState: pState,
 			preferWebsockets: true,
 			fetch: fetchMock,
 		});
 
 		const result = await collectCodexCompactionV2Events(stream, undefined, t => t);
+		expect(wsAttempts).toBe(1);
+		expect(sseCalled).toBe(true);
 		expect(result.compactionItem.encrypted_content).toBe("sse_recovery_frames");
 		expect(result.usage?.inputTokens).toBe(42);
 	});
 
 	test("bounds: exceeding byte budget triggers fallback to SSE without exposing partial events", async () => {
+		let wsAttempts = 0;
 		class OversizedFrameWs extends BaseMockWs {
 			send(data: string) {
 				const frame = JSON.parse(data) as Record<string, unknown>;
 				if (frame.type === "response.create") {
+					wsAttempts++;
 					queueMicrotask(() => {
 						this.emit({
 							type: "response.output_item.done",
@@ -510,17 +521,24 @@ describe("openCodexCompactionEventStream", () => {
 			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "compaction", encrypted_content: "sse_recovery_bytes" } })}`,
 			`data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 99 } } })}`,
 		].join("\n\n");
-		const fetchMock: FetchImpl = async () =>
-			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		let sseCalled = false;
+		const fetchMock: FetchImpl = async () => {
+			sseCalled = true;
+			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		};
 
+		const pState = new Map<string, ProviderSessionState>();
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_bounds_bytes",
+			providerSessionState: pState,
 			preferWebsockets: true,
 			fetch: fetchMock,
 		});
 
 		const result = await collectCodexCompactionV2Events(stream, undefined, t => t);
+		expect(wsAttempts).toBe(1);
+		expect(sseCalled).toBe(true);
 		expect(result.compactionItem.encrypted_content).toBe("sse_recovery_bytes");
 		expect(result.usage?.inputTokens).toBe(99);
 	});
