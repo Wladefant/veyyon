@@ -421,11 +421,12 @@ describe("retained isolation cleanup", () => {
 		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
 
 		const childScriptPath = path.join(root, "child-crash.ts");
+		const worktreeModule = path.join(process.cwd(), "packages/coding-agent/src/task/worktree").replace(/\\/g, "/");
 		const childScript = `
-import { vi } from "bun:test";
+import { vi, spyOn } from "bun:test";
 import * as natives from "@veyyon/natives";
 import * as utils from "@veyyon/utils";
-import { ensureIsolation } from "${path.resolve("packages/coding-agent/src/task/worktree").replace(/\\/g, "/")}";
+import { ensureIsolation } from "${worktreeModule}";
 
 const workspacesDir = process.env.TEST_WORKSPACES_DIR!;
 const repo = process.env.TEST_REPO_DIR!;
@@ -434,20 +435,22 @@ const id = process.env.TEST_TASK_ID!;
 process.env.VEYYON_WORKTREE_DIR = workspacesDir;
 utils.setWorktreesDir(workspacesDir);
 
-vi.spyOn(natives, "isoResolve").mockReturnValue({
+const mockSpy = (typeof vi !== "undefined" && vi.spyOn) ? vi.spyOn : spyOn;
+mockSpy(natives, "isoResolve").mockReturnValue({
 	kind: natives.IsoBackendKind.Rcopy,
 	candidates: [natives.IsoBackendKind.Rcopy],
 	fellBack: false,
 	reason: undefined,
 });
 
-vi.spyOn(natives, "isoStart").mockImplementation(async () => {
+mockSpy(natives, "isoStart").mockImplementation(async () => {
 	process.exit(42);
 });
 
 try {
 	await ensureIsolation(repo, id);
-} catch {
+} catch (err) {
+	console.error("CHILD_ERR:", err);
 	process.exit(1);
 }
 `;
@@ -457,14 +460,18 @@ try {
 			cwd: process.cwd(),
 			env: {
 				...process.env,
+				NODE_PATH: path.join(process.cwd(), "node_modules").replace(/\\/g, "/"),
 				TEST_WORKSPACES_DIR: path.join(root, "workspaces"),
 				TEST_REPO_DIR: repo,
 				TEST_TASK_ID: id,
 			},
 			encoding: "utf8",
 		});
+		if (childRes.status !== 42) {
+			console.error("CHILD STDERR:", childRes.stderr);
+			console.error("CHILD STDOUT:", childRes.stdout);
+		}
 		expect(childRes.status).toBe(42);
-
 		// Verify on-disk state: canonicalDir exists, has ONLY owner record, NO "m"
 		expect(await exists(canonicalDir)).toBe(true);
 		expect(await exists(path.join(canonicalDir, "m"))).toBe(false);

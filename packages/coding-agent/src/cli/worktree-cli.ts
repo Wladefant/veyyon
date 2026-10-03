@@ -342,6 +342,7 @@ async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
 	const hasRetainedSidecar = (await statPath(path.join(dir, RETAINED_BACKEND_FILE)))?.found?.isFile();
 	if (isTaskIsolationDir(dir) || hasOwnerRecord || hasRetainedSidecar) {
 		for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
+			const mountPath = path.join(dir, mountDir);
 			const mountStat = await statPath(mountPath);
 			if (!mountStat) {
 				return { path: dir, kind: "task-isolation", undeterminedReason: `cannot stat ${mountPath}` };

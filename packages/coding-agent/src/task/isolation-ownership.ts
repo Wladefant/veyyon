@@ -4,11 +4,13 @@
  */
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as natives from "@veyyon/natives";
 import {
 	errorMessage,
 	getProcessStartIdentity,
+	getWorktreesDir,
 	isEnoent,
 	isProcessInstanceAlive,
 	tryWithFileLock,
@@ -173,18 +175,21 @@ export async function isAbandonedEmptyReservation(baseDir: string): Promise<bool
 		return false;
 	}
 }
-
 /**
  * Path for a base directory's exclusive lifecycle lock outside the scanned
  * `wt` directory (under a sibling `isolation-locks` directory).
  */
 export function getIsolationLifecycleLockPath(baseDir: string): string {
 	const resolved = path.resolve(baseDir);
-	const wtDir = path.dirname(resolved);
-	const parentDir = path.dirname(wtDir);
-	const locksDir = path.join(parentDir, "isolation-locks");
 	const name = path.basename(resolved);
 	const hash = crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 16);
+	let locksDir: string;
+	try {
+		const wtRoot = path.resolve(getWorktreesDir());
+		locksDir = path.join(path.dirname(wtRoot), "isolation-locks");
+	} catch {
+		locksDir = path.join(os.tmpdir(), "veyyon-isolation-locks");
+	}
 	return path.join(locksDir, `${name}-${hash}`);
 }
 
