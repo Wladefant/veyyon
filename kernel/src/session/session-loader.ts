@@ -4,7 +4,9 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import { isEnoent } from "@veyyon/utils/fs-error";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import * as logger from "@veyyon/utils/logger";
+import { sessionFileStem } from "@veyyon/utils/session-file";
 import { StreamFrameLimitError, streamFrameCeiling } from "@veyyon/utils/stream";
+import { ArtifactManager } from "./artifacts";
 import {
 	BlobStore,
 	blobsDirForSessionDir,
@@ -823,7 +825,10 @@ export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore)
 export async function loadSessionMessagesReadOnly(filePath: string): Promise<AgentMessage[]> {
 	const entries = await loadEntriesFromFile(filePath);
 	if (entries.length === 0) return [];
-	migrateToCurrentVersion(entries);
+	const artifactManager = new ArtifactManager(sessionFileStem(filePath));
+	await migrateToCurrentVersion(entries, {
+		saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
+	});
 	await resolveBlobRefsInEntries(entries, new BlobStore(blobsDirForSessionDir(path.dirname(filePath))));
 	const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
 	return buildSessionContext(sessionEntries).messages;

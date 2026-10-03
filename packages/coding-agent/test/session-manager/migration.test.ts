@@ -26,8 +26,9 @@ describe("migrateSessionEntries", () => {
 		migrateSessionEntries(entries);
 
 		// Header should have version set to current
-		expect((entries[0] as any).version).toBe(3);
-
+		const header = entries[0];
+		if (!header || header.type !== "session") throw new Error("Expected session header");
+		expect(header.version).toBe(4);
 		// Entries should have id/parentId
 		const msg1 = entries[1] as any;
 		const msg2 = entries[2] as any;
@@ -87,7 +88,7 @@ describe("migrateSessionEntries", () => {
  * longer knows where its retained history begins, or a needless rewrite of an up-to-date file).
  */
 describe("migrateToCurrentVersion", () => {
-	it("renames the legacy hookMessage role to custom on the v2->v3 step and reports a change", () => {
+	it("renames the legacy hookMessage role to custom on the v2->v3 step and reports a change", async () => {
 		const entries = [
 			{ type: "session", id: "s", version: 2, timestamp: "t", cwd: "/tmp" },
 			{
@@ -106,21 +107,23 @@ describe("migrateToCurrentVersion", () => {
 			},
 		] as unknown as FileEntry[];
 
-		expect(migrateToCurrentVersion(entries)).toBe(true);
-		expect((entries[0] as any).version).toBe(3);
+		expect(await migrateToCurrentVersion(entries)).toBe(true);
+		const v2Header = entries[0];
+		if (!v2Header || v2Header.type !== "session") throw new Error("Expected session header");
+		expect(v2Header.version).toBe(4);
 		expect((entries[1] as any).message.role).toBe("custom");
 		// A non-hook message is left alone.
 		expect((entries[2] as any).message.role).toBe("user");
 	});
 
-	it("converts a v1 compaction's firstKeptEntryIndex into the retained entry's new id", () => {
+	it("converts a v1 compaction's firstKeptEntryIndex into the retained entry's new id", async () => {
 		const entries = [
 			{ type: "session", id: "s", timestamp: "t", cwd: "/tmp" },
 			{ type: "message", timestamp: "t1", message: { role: "user", content: "hi", timestamp: 1 } },
 			{ type: "compaction", timestamp: "t2", firstKeptEntryIndex: 1, summary: "s" },
 		] as unknown as FileEntry[];
 
-		expect(migrateToCurrentVersion(entries)).toBe(true);
+		expect(await migrateToCurrentVersion(entries)).toBe(true);
 		const keptMessage = entries[1] as any;
 		const compaction = entries[2] as any;
 		expect(keptMessage.id.length).toBe(8);
@@ -128,9 +131,9 @@ describe("migrateToCurrentVersion", () => {
 		expect("firstKeptEntryIndex" in compaction).toBe(false);
 	});
 
-	it("returns false and mutates nothing when the session is already at the current version", () => {
+	it("returns false and mutates nothing when the session is already at the current version", async () => {
 		const entries = [
-			{ type: "session", id: "s", version: 3, timestamp: "t", cwd: "/tmp" },
+			{ type: "session", id: "s", version: 4, timestamp: "t", cwd: "/tmp" },
 			{
 				type: "message",
 				id: "a",
@@ -141,17 +144,65 @@ describe("migrateToCurrentVersion", () => {
 		] as unknown as FileEntry[];
 		const before = JSON.stringify(entries);
 
-		expect(migrateToCurrentVersion(entries)).toBe(false);
+		expect(await migrateToCurrentVersion(entries)).toBe(false);
 		expect(JSON.stringify(entries)).toBe(before);
 	});
 
-	it("treats a missing session header as v1 and migrates the entries", () => {
+	it("treats a missing session header as v1 and migrates the entries", async () => {
 		const entries = [
 			{ type: "message", timestamp: "t1", message: { role: "user", content: "hi", timestamp: 1 } },
 		] as unknown as FileEntry[];
 
-		expect(migrateToCurrentVersion(entries)).toBe(true);
+		expect(await migrateToCurrentVersion(entries)).toBe(true);
 		expect((entries[0] as any).id.length).toBe(8);
+	});
+
+	it("migrates v3 eval oversized jsonOutputs to versioned bounded previews and stores artifacts", async () => {
+		const savedArtifacts: Record<string, string> = {};
+		let counter = 0;
+		const largePayload = { big: "x".repeat(10000) };
+		const entries = [
+			{ type: "session", id: "s", version: 3, timestamp: "t", cwd: "/tmp" },
+			{
+				type: "message",
+				id: "a",
+				parentId: null,
+				timestamp: "t1",
+				message: {
+					role: "toolResult",
+					toolName: "eval",
+					details: {
+						jsonOutputs: [largePayload, { small: 123 }],
+					},
+				},
+			},
+		] as unknown as FileEntry[];
+
+		const migrated = await migrateToCurrentVersion(entries, {
+			saveArtifact: (content, _toolType) => {
+				const id = String(++counter);
+				savedArtifacts[id] = content;
+				return id;
+			},
+		});
+
+		expect(migrated).toBe(true);
+		const v3Header = entries[0];
+		if (!v3Header || v3Header.type !== "session") throw new Error("Expected session header");
+		expect(v3Header.version).toBe(4);
+		const messageEntry = entries[1];
+		if (!messageEntry || messageEntry.type !== "message") throw new Error("Expected message entry");
+		const message = messageEntry.message;
+		if (message.role !== "toolResult") throw new Error("Expected toolResult message");
+		const details = message.details as Record<string, unknown> | undefined;
+		expect(details?.displayVersion).toBe(1);
+		const outputs = details?.jsonOutputs as Array<Record<string, unknown>> | undefined;
+		expect(outputs?.[0]?.version).toBe(1);
+		expect(outputs?.[0]?.truncated).toBe(true);
+		expect(outputs?.[0]?.artifactId).toBe("1");
+		expect(savedArtifacts["1"]).toBe(JSON.stringify(largePayload, null, 2));
+		// Small output untouched
+		expect(outputs?.[1]).toEqual({ small: 123 });
 	});
 });
 
