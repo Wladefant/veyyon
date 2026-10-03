@@ -12,7 +12,11 @@ import { styleTerminalRow } from "../../modes/terminal/draw/terminal-row";
 import { OutputSink, type OutputSummary } from "../../session/streaming-output";
 import type { Theme } from "../../theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
+import {
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../core/output-meta";
 import { formatStatusIcon, replaceTabs } from "../core/render-utils";
 import { loadXtermTerminal, readTerminalRows } from "./terminal-output";
 
@@ -329,6 +333,7 @@ export async function runInteractiveBashPty(
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		...(options.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),

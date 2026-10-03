@@ -19,16 +19,20 @@ export async function formatAsyncResultForFollowUp(
 	meta?: OutputMeta,
 	allocator?: ArtifactAllocator,
 ): Promise<string> {
-	if (result.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
-		return result;
-	}
-
 	// Strip the already-rendered source notice before taking the smaller preview,
-	// then retain its capture warning once even when the original footer is elided.
+	// then retain its capture warning once even when the result is short or the original footer is elided.
 	if (meta?.artifactError) {
 		const body = stripOutputNotice(result, meta).trimEnd();
+		const notice = `[${formatArtifactErrorNotice(meta.artifactError)}]`;
+		if (body.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
+			return body ? `${body}\n\n${notice}` : notice;
+		}
 		const preview = `${body.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
-		return `${preview}\n[${formatArtifactErrorNotice(meta.artifactError)}]`;
+		return `${preview}\n${notice}`;
+	}
+
+	if (result.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
+		return result;
 	}
 
 	// The producing tool's output sink already mirrored the raw stream to an
@@ -41,7 +45,12 @@ export async function formatAsyncResultForFollowUp(
 			maxBytes: ASYNC_PREVIEW_MAX_CHARS,
 			maxHeadBytes: ASYNC_PREVIEW_MAX_CHARS - ASYNC_PREVIEW_TAIL_CHARS,
 		}).content;
-		return `${headTail}\nFull output: artifact://${rawArtifactId}`;
+		const isCapped = Boolean(
+			(meta?.artifactElidedBytes && meta.artifactElidedBytes > 0) ||
+				(meta?.truncation?.artifactElidedBytes && meta.truncation.artifactElidedBytes > 0),
+		);
+		const label = isCapped ? "Output" : "Full output";
+		return `${headTail}\n${label}: artifact://${rawArtifactId}`;
 	}
 
 	const preview = `${result.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;

@@ -38,6 +38,7 @@ import {
 	type ToolViewResult,
 	truncateToWidth,
 } from "../core/render-utils";
+import { formatArtifactErrorNotice } from "../core/output-meta";
 import type { AgentActivitySnapshot, JobSnapshot, JobToolDetails } from "./job";
 import { resolveJobSnapshots } from "./job-result-codec";
 
@@ -182,6 +183,13 @@ function jobLines(job: JobSnapshot, context: ToolViewContext): ViewLine[] {
 		const tone: ViewTone = job.errorText ? "error" : "dim";
 		for (const line of getPreviewLines(preview, maxLines, PREVIEW_LINE_WIDTH, Ellipsis.Unicode)) {
 			lines.push([{ text: ROW_BODY_INDENT }, { text: line, tone }]);
+		}
+	}
+	if (job.meta?.artifactError) {
+		const warning = `[${formatArtifactErrorNotice(job.meta.artifactError)}]`;
+		const rawWarning = formatArtifactErrorNotice(job.meta.artifactError);
+		if (!preview.includes(warning) && !preview.includes(rawWarning)) {
+			lines.push([{ text: ROW_BODY_INDENT }, { text: warning, tone: "warning" }]);
 		}
 	}
 	return lines;

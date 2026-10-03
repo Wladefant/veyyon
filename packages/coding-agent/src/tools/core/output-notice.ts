@@ -50,6 +50,8 @@ export interface TruncationMeta {
 	elidedLines?: number;
 	/** Artifact ID if full output was saved */
 	artifactId?: string;
+	/** Bytes the artifact cap dropped from the middle of the saved file. When set, artifactId holds a sample, not full output. */
+	artifactElidedBytes?: number;
 	/** Next offset for pagination (head truncation only) */
 	nextOffset?: number;
 	/**
@@ -120,6 +122,8 @@ export interface OutputMeta {
 	truncation?: TruncationMeta;
 	/** Artifact capture failed independently of command execution or inline truncation. */
 	artifactError?: OutputArtifactError;
+	/** Bytes elided from the artifact file when capped (holds a sample, not full output). */
+	artifactElidedBytes?: number;
 	source?: SourceMeta;
 	diagnostics?: DiagnosticMeta;
 	limits?: LimitsMeta;
@@ -131,6 +135,10 @@ export function formatArtifactErrorNotice(error: OutputArtifactError): string {
 
 export function formatFullOutputReference(artifactId: string): string {
 	return `Read artifact://${artifactId} for full output`;
+}
+
+export function formatArtifactReference(artifactId: string, capped = false): string {
+	return capped ? `Read artifact://${artifactId}` : formatFullOutputReference(artifactId);
 }
 
 type ResultTextContent = ReadonlyArray<{ type?: string; text?: string } | string> | string | undefined;
@@ -261,12 +269,15 @@ export function stripGeneratedOutputNotice(text: string): string {
 
 export function formatTruncationMetaNotice(truncation: TruncationMeta, source?: SourceMeta): string {
 	let notice: string;
+	const isCapped = Boolean(truncation.artifactElidedBytes && truncation.artifactElidedBytes > 0);
 	const artifactReference =
 		truncation.artifactId == null
 			? undefined
 			: source?.type === "report"
-				? `Read artifact://${truncation.artifactId} for full report (${source.value})`
-				: formatFullOutputReference(truncation.artifactId);
+				? isCapped
+					? `Read artifact://${truncation.artifactId} for report (${source.value})`
+					: `Read artifact://${truncation.artifactId} for full report (${source.value})`
+				: formatArtifactReference(truncation.artifactId, isCapped);
 
 	if (truncation.direction === "middle") {
 		const head = truncation.headRange;
@@ -342,10 +353,16 @@ export function formatColumnTruncatedNotice(meta: OutputMeta): string | undefine
 	const notice = `Some lines truncated to ${c.maxColumn} ${c.unit ?? "chars"}`;
 	// The window notice already names the same capture when the output was also window-truncated.
 	if (c.artifactId != null && c.artifactId !== meta.truncation?.artifactId) {
+		const isCapped = Boolean(
+			(meta.artifactElidedBytes && meta.artifactElidedBytes > 0) ||
+				(meta.truncation?.artifactElidedBytes && meta.truncation.artifactElidedBytes > 0),
+		);
 		const ref =
 			meta.source?.type === "report"
-				? `Read artifact://${c.artifactId} for full report (${meta.source.value})`
-				: formatFullOutputReference(c.artifactId);
+				? isCapped
+					? `Read artifact://${c.artifactId} for report (${meta.source.value})`
+					: `Read artifact://${c.artifactId} for full report (${meta.source.value})`
+				: formatArtifactReference(c.artifactId, isCapped);
 		return `${notice}. ${ref}`;
 	}
 	return notice;

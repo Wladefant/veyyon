@@ -259,6 +259,7 @@ export const APPEARANCE_SETTINGS = {
 		type: "number",
 		default: 16,
 		ui: {
+			min: 0,
 			tab: "tools",
 			group: "Output Limits",
 			label: "Artifact File Cap (MB)",

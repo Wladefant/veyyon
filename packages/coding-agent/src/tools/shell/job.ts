@@ -5,7 +5,7 @@ import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../../async";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import type { AgentRegistry } from "../../registry/agent-registry";
-import type { OutputMeta } from "../core/output-meta";
+import { formatArtifactErrorNotice, type OutputMeta } from "../core/output-meta";
 import { formatDuration, PREVIEW_LIMITS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import type { ToolSession } from "../index";
@@ -401,13 +401,17 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			resultText?: string;
 			errorText?: string;
 			queued?: boolean;
+			meta?: OutputMeta;
 		}[],
 	): JobSnapshot[] {
 		const now = Date.now();
 		return jobs.map(j => {
 			const current = this.session.asyncJobManager?.getJob(j.id);
 			const latest = current ?? j;
-			const meta = (current?.latestDetails as { meta?: OutputMeta } | undefined)?.meta;
+			const meta =
+				(current?.latestDetails as { meta?: OutputMeta } | undefined)?.meta ??
+				(latest as { meta?: OutputMeta } | undefined)?.meta ??
+				j.meta;
 			return {
 				id: latest.id,
 				type: latest.type,
@@ -468,6 +472,12 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 				}
 				if (j.errorText) {
 					lines.push(`Error: ${j.errorText}`);
+				}
+				if (j.meta?.artifactError) {
+					const notice = `[${formatArtifactErrorNotice(j.meta.artifactError)}]`;
+					if (!j.resultText?.includes(notice) && !j.errorText?.includes(notice)) {
+						lines.push(notice);
+					}
 				}
 				lines.push("");
 			}

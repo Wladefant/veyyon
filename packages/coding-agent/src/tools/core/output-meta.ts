@@ -46,6 +46,7 @@ export type {
 // diagnostic renderer.
 export {
 	formatArtifactErrorNotice,
+	formatArtifactReference,
 	formatColumnTruncatedNotice,
 	formatFullOutputReference,
 	formatOutputNotice,
@@ -58,6 +59,7 @@ export {
 import type { ColumnUnit, OutputMeta, TruncationMeta } from "./output-notice";
 import {
 	formatArtifactErrorNotice,
+	formatArtifactReference,
 	formatFullOutputReference,
 	formatOutputNotice,
 	formatTruncationMetaNotice,
@@ -74,6 +76,7 @@ export interface TruncationOptions {
 	/** The scan stopped after the shown window; `result.totalLines` is a lower bound, not the file length. */
 	totalLinesUnknown?: boolean;
 	artifactId?: string;
+	artifactElidedBytes?: number;
 }
 
 export interface TruncationSummaryOptions {
@@ -117,19 +120,36 @@ export type LimitsInput = {
  * 0 means unbounded.
  */
 export function resolveOutputSinkArtifactMaxBytes(settings: Settings | undefined): number {
-	const mb = settings?.getNumber("tools.artifactMaxBytes") ?? (getDefault("tools.artifactMaxBytes") as number);
-	if (mb <= 0) return 0;
+	const mb = settings?.get("tools.artifactMaxBytes") ?? (getDefault("tools.artifactMaxBytes") as number);
+	if (!Number.isFinite(mb) || mb < 0) {
+		throw new RangeError(`tools.artifactMaxBytes must be a non-negative number (got ${mb})`);
+	}
+	if (mb === 0) return 0;
 	return mb * 1024 * 1024;
 }
 
 export class OutputMetaBuilder {
 	#meta: OutputMeta = {};
 
+	/** Bytes elided from the artifact file when capped (holds a sample, not full output). */
+	artifactElidedBytes(bytes: number | undefined): this {
+		if (bytes != null && bytes > 0) {
+			this.#meta.artifactElidedBytes = bytes;
+			if (this.#meta.truncation) {
+				this.#meta.truncation.artifactElidedBytes = bytes;
+			}
+		}
+		return this;
+	}
+
 	/** Add truncation info from TruncationResult. No-op if not truncated. */
 	truncation(result: TruncationResult, options: TruncationOptions): this {
 		if (!result.truncated) return this;
 
-		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId } = options;
+		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId, artifactElidedBytes } = options;
+		if (artifactElidedBytes && artifactElidedBytes > 0) {
+			this.#meta.artifactElidedBytes = artifactElidedBytes;
+		}
 		const outputLines = result.outputLines ?? result.totalLines;
 		const outputBytes = result.outputBytes ?? result.totalBytes;
 		const isMiddle = direction === "middle" || result.truncatedBy === "middle";
@@ -163,6 +183,7 @@ export class OutputMetaBuilder {
 				elidedLines,
 				elidedBytes,
 				artifactId,
+				artifactElidedBytes,
 			};
 			return this;
 		}
@@ -187,6 +208,7 @@ export class OutputMetaBuilder {
 			outputBytes,
 			shownRange: { start: shownStart, end: shownEnd },
 			artifactId,
+			artifactElidedBytes,
 			nextOffset: direction === "head" ? shownEnd + 1 : undefined,
 			...(totalLinesUnknown ? { totalLinesUnknown } : {}),
 		};
@@ -199,7 +221,11 @@ export class OutputMetaBuilder {
 		if (summary.artifactError) {
 			this.#meta.artifactError = summary.artifactError;
 		}
+		if (summary.artifactElidedBytes && summary.artifactElidedBytes > 0) {
+			this.#meta.artifactElidedBytes = summary.artifactElidedBytes;
+		}
 		const artifactId = summary.artifactError ? undefined : summary.artifactId;
+		const artifactElidedBytes = summary.artifactError ? undefined : summary.artifactElidedBytes;
 		// A per-line column cap only trims individual lines (with a `…` marker);
 		// it is not a window/byte truncation, so surface it as its own limit
 		// notice rather than a "Showing lines X-Y … limit" range. This runs even
@@ -232,6 +258,7 @@ export class OutputMetaBuilder {
 				elidedBytes: summary.elidedBytes,
 				elidedLines,
 				artifactId,
+				artifactElidedBytes,
 			};
 			return this;
 		}
@@ -252,6 +279,7 @@ export class OutputMetaBuilder {
 				outputBytes: summary.outputBytes,
 				elidedAmountUnknown: true,
 				artifactId,
+				artifactElidedBytes,
 			};
 			return this;
 		}
@@ -283,6 +311,7 @@ export class OutputMetaBuilder {
 			outputBytes: summary.outputBytes,
 			shownRange: { start: shownStart, end: shownEnd },
 			artifactId,
+			artifactElidedBytes,
 			nextOffset: direction === "head" ? shownEnd + 1 : undefined,
 		};
 
