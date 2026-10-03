@@ -5659,12 +5659,13 @@ describe("openai-codex abort cause preservation and bounded error reads", () => 
 				vi.spyOn(requestDebug, "isRequestDebugEnabled").mockReturnValue(true);
 				vi.spyOn(requestDebug, "createRequestDebugSession").mockImplementation(async () => {
 					controller.abort(abortReason);
-					return undefined;
+					// The abort ends the stream before the session is read.
+					return undefined as never;
 				});
 			}
 
 			class TimeoutWebSocket extends MockWebSocket {
-				constructor(url: string, options?: WsOptions) {
+				constructor(url: string, options?: { headers?: WsHeaders }) {
 					super(url, options);
 					if (phase === "during handshake") queueMicrotask(() => controller.abort(abortReason));
 					else this.scheduleOpen();
@@ -5733,10 +5734,13 @@ describe("openai-codex abort cause preservation and bounded error reads", () => 
 			response.clone = () => {
 				const copy = clone(),
 					text = copy.text.bind(copy);
-				copy.text = () => {
-					markBodyStarted();
-					return text();
-				};
+				Object.defineProperty(copy, "text", {
+					configurable: true,
+					value: () => {
+						markBodyStarted();
+						return text();
+					},
+				});
 				return copy;
 			};
 			return response;
