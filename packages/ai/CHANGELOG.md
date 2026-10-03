@@ -40,6 +40,9 @@
 
 ### Fixed
 - Prevented malformed function-call errors from bypassing replay-unsafe turn checks after earlier output or tool execution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9733d138).
+
+- Fixed the Codex unexpected-stream-end debug log reading the removed `turnState` field of the WebSocket session state; it now reads the request's turn-state cell ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Registered the `local`, `web` and `typesafe` catalog providers in the provider registry, restoring its compile-time completeness check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 - Preserved pre-stream provider error provenance in `errorMessage` while keeping assistant content empty, preventing pre-stream diagnostic text from blocking safe transient retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9f80d24e20014d98748bdca81356661741e00f94).
 - Deferred projected native thinking end events in the leaked-thinking stream wrapper until their source block ends, preserving signatures on late completion ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 764a1f7e9c06ef40953e9b7a8bbafddc168fcd34).
