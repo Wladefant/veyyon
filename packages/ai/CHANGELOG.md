@@ -8,6 +8,7 @@
 
 ### Changed
 
+- The in-band tag scanners find a held-back partial tag by comparing in place at the positions holding the tag's first character instead of slicing every candidate prefix on each delta, cutting the leaked-thinking scan of a 60,000-char answer at 24-char deltas from 2.6 ms to 0.4 ms with identical holds across every text and tag over a three-symbol alphabet.
 - The output-loop guard compares a streamed tail's candidate repeats char by char in place instead of slicing both sides of every candidate length on each delta, cutting its cost on a 200,000-char non-looping stream from 228 ms to 26 ms at 12-char deltas with identical verdicts across 200,000 generated tails.
 - The output-loop guard answers an ASCII char's letter test from its char code, probes only the repeat lengths at which the tail's last char recurs, keeps the recent vocabulary as per-word counts, matches a paragraph's references only when a low-novelty paragraph needs them and stops a trigram comparison once 0.8 is out of reach, cutting its cost on a 200,000-char non-looping stream from 53.0 to 35.7 ms at 4-char deltas and from 20.3 to 10.9 ms at 64-char deltas with identical verdicts across 8,000 generated streams.
 - `stream.ts` reaches the GitLab Duo Workflow provider through the lazy loader in `register-builtins.ts`, so a process loads its 3,000-line protocol client on the first `gitlab-duo-agent` turn instead of at startup.

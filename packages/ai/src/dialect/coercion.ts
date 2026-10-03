@@ -114,10 +114,23 @@ export function mintToolCallId(): string {
 	return `ptc_${Date.now().toString(36)}_${idCounter.toString(36)}`;
 }
 
+/**
+ * The length of the longest proper prefix of `tag` that `text` ends with: the
+ * part of a tag a scanner holds back until the next delta shows whether the tag
+ * completes. Runs on every streamed delta, so it allocates nothing and compares
+ * only at positions holding the tag's first character.
+ */
 export function partialSuffixOverlap(text: string, tag: string): number {
-	const max = Math.min(text.length, tag.length - 1);
-	for (let k = max; k > 0; k--) {
-		if (text.endsWith(tag.slice(0, k))) return k;
+	const end = text.length;
+	const max = Math.min(end, tag.length - 1);
+	if (max <= 0) return 0;
+	const first = tag[0];
+	// The longest overlap starts earliest, so candidate starts are scanned left to right.
+	for (let start = text.indexOf(first, end - max); start !== -1; start = text.indexOf(first, start + 1)) {
+		const k = end - start;
+		let i = 1;
+		while (i < k && text.charCodeAt(start + i) === tag.charCodeAt(i)) i++;
+		if (i === k) return k;
 	}
 	return 0;
 }

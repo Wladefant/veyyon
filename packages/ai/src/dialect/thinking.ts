@@ -1,4 +1,4 @@
-import { partialSuffixOverlapAny, ThinkingSection } from "./coercion";
+import { partialSuffixOverlap, partialSuffixOverlapAny, ThinkingSection } from "./coercion";
 import { FencedThinkingScanner } from "./fenced-thinking";
 import type { InbandScanEvent, InbandScanner } from "./types";
 import { THINK_CLOSE, THINK_OPEN, XML_THINKING_CLOSE, XML_THINKING_OPEN } from "./wire-tags";
@@ -77,7 +77,7 @@ export class ThinkingInbandScanner implements InbandScanner {
 			if (this.#closeTag) {
 				const close = this.#buffer.indexOf(this.#closeTag);
 				if (close === -1) {
-					const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, [this.#closeTag]);
+					const hold = final ? 0 : partialSuffixOverlap(this.#buffer, this.#closeTag);
 					this.#thinking.delta(this.#buffer.slice(0, this.#buffer.length - hold), events);
 					this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
 					break;
