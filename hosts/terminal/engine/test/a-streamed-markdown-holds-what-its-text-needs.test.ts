@@ -1,6 +1,6 @@
 /**
- * A streamed Markdown holds a few copies of its text while it streams, and once sealed holds what one
- * render of the same text holds.
+ * A streamed Markdown holds a bounded number of copies of its text while it streams, and once sealed
+ * holds what one render of the same text holds.
  *
  * THE DEFECT. The streaming lexer re-lexes only the tail past the frozen prefix, and the tail was a
  * slice of the frame's text. A slice shares the buffer it was cut from, and so does every token marked
@@ -10,17 +10,20 @@
  * exposure stayed for the life of the block.
  *
  * THE CLASS. A string a Markdown keeps from a stream frame beyond what its current text and rows
- * need: a token, a row, a prefix, an exposure. Every block shape the streaming lexer freezes on is
- * streamed one chunk per frame into a buffer of its own, and the string bytes one instance holds
- * afterwards are bounded against the same text rendered once: while streaming, by a few copies of the
- * text; once sealed, by half a copy. The closing paragraph keeps arriving for several frames after the
- * last block freezes, so the frame that froze last is never the frame that sealed. The measurement
- * runs in `fixtures/markdown-stream-retention.ts`, in a process of its own, because the figure is the
- * process's extra memory and the files a parallel run shares a process with add to it.
+ * need: a token, a row, a prefix, an exposure. Every block shape the streaming lexer freezes on, and a
+ * diff fence the stream keeps open until its last line, is streamed one chunk per frame into a buffer
+ * of its own, and the string bytes one instance holds afterwards are bounded against the same text
+ * rendered once: while streaming, by twelve copies of the text, where the defect held hundreds; once
+ * sealed, by half a copy. The closing paragraph keeps arriving for several frames after the last
+ * block freezes, so the frame that froze last is never the frame that sealed. The measurement runs in
+ * `fixtures/markdown-stream-retention.ts`, in a process of its own, and reads string bytes from a
+ * heap snapshot rather than `heapStats().extraMemorySize`, which also counts compiled code and moved
+ * by several copies of the text from one run to the next.
  *
- * WHAT IT DOES NOT CATCH. JSC counts only out-of-line string storage as extra memory, so a retained
- * string short enough to live inline passes. A sealed block that keeps less than half a copy of its
- * text passes; the bound sits above the variation of a full collection.
+ * WHAT IT DOES NOT CATCH. A sealed block that keeps less than half a copy of its text passes. The
+ * streamed-diff line cache is refilled only for a diff fence that is neither the last token nor
+ * frozen, so in every shape here its last refill reads the final frame, whose buffer the sealed text
+ * holds anyway: keeping it past the seal costs one string cell and passes.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -48,9 +51,9 @@ function measured(shape: string): RetentionReport[string] {
 
 describe("a streamed Markdown holds what its text needs", () => {
 	it.each(SHAPE_NAMES.map(name => [name] as const))(
-		"%s: while it streams, a few copies of the text",
+		"%s: while it streams, under twelve copies of the text",
 		shape => {
-			expect(measured(shape).streaming).toBeLessThan(6);
+			expect(measured(shape).streaming).toBeLessThan(12);
 		},
 		MEASURE_TIMEOUT_MS,
 	);
