@@ -1,7 +1,7 @@
+import { EVAL_DISPLAY_VERSION } from "@veyyon/kernel/session/session-migrations";
 import { truncateHeadBytes } from "../../session/streaming-output";
 
-/** Version of persisted structured display previews and their recovery references. */
-export const EVAL_DISPLAY_VERSION = 1;
+export { EVAL_DISPLAY_VERSION };
 const MAX_DISPLAY_TEXT_BYTES = 8000;
 const DISPLAY_ELISION_RESERVE_BYTES = 64;
 
@@ -32,7 +32,7 @@ export function formatDisplayJson(value: unknown): FormattedDisplayJson {
 	return {
 		fullText,
 		previewText,
-		detailsValue: { preview: previewText, truncated: true, totalBytes },
+		detailsValue: { version: EVAL_DISPLAY_VERSION, preview: previewText, truncated: true, totalBytes },
 		truncated: true,
 	};
 }
