@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added raw decoded WebSocket event stream for provider-native Codex compaction ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered DeepInfra as a built-in provider with chat-completion API key validation ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added core image generation data types and metadata contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Added image response decoding, data URL formatting, and dimension mapping utilities ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
@@ -14,6 +15,8 @@
 - Added Abliteration, Meta Model API, and Muse Code provider definitions and login transports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the GMI Cloud provider (`gmi-cloud`) registry definition with an API-key paste login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added OpenAI/OpenRouter multipart audio transcription adapter and transcription types ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
+- Added audio transcription dispatcher routing model catalog APIs to matching transcription adapters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Responses wire types for conversation reasoning configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -39,6 +42,16 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Fixed type errors in the Anthropic alignment and Codex stream test fixtures so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Classified only trailing volatile segments as memory recall suffix in Anthropic prompt caching, preserving cache breakpoints when stable policy blocks follow recalled content ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7c5549d1db5cbc637be93ff0f36ca199f22b8fc4).
+- Fixed Codex compaction WebSocket cleanup types: `return()` calls pass their argument and the wrapped generator implements `Symbol.asyncDispose` by delegating to `return()` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Unified Codex compaction semantic validation between collector and transport layers with shared O(1) accumulator (`CodexCompactionV2Accumulator`), deferred `turnState` and `modelsEtag` metadata commits until semantic validation succeeds with rollback on rejection, and enforced frame count (1024) and byte budget (16 MiB) bounds on buffered WebSocket compaction streams before falling back to SSE ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
+- Fixed Codex WebSocket abort cause preservation and bounded error-body reads with pre-response deadlines ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed the `ai` test fixtures (codex compaction collector listener types, codex turn-state model, typesafe login callbacks) to match current types so `check:ts` passes in an isolated workspace ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed the Codex unexpected-stream-end debug log reading the removed `turnState` field of the WebSocket session state; it now reads the request's turn-state cell ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Registered the `local`, `web` and `typesafe` catalog providers in the provider registry, restoring its compile-time completeness check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Corrected the `typesafe` login to the values from its catalog auth rule: console URL `https://console.typesafe.ai/`, and a models-endpoint check that honours `TYPESAFE_BASE_URL` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 - Preserved pre-stream provider error provenance in `errorMessage` while keeping assistant content empty, preventing pre-stream diagnostic text from blocking safe transient retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9f80d24e20014d98748bdca81356661741e00f94).
 - Deferred projected native thinking end events in the leaked-thinking stream wrapper until their source block ends, preserving signatures on late completion ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 764a1f7e9c06ef40953e9b7a8bbafddc168fcd34).
@@ -48,6 +61,7 @@
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Validated declared segment and word fields in OpenAI transcription responses while preserving provider-specific extras ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Responses prepared request caching to rebuild wire body on reasoning-effort fallback and retain sent payload in diagnostics ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 21cb04bd3e6b72fcd05bb4e2f02fe441cf2d2a60).
 - Retried one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex turn-state lifecycle to isolate compatibility-scoped cells and clear stale tokens on fresh non-compaction turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
