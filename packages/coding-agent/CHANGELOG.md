@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Subagent MCP proxy tools honor parent transport request deadlines rather than capping calls at 60 seconds ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9b5ec143e5fbe77e5e69478338a26bbc323ad30e).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
 
 ## [18.1.11] - 2026-09-05
