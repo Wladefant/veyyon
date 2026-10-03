@@ -146,4 +146,31 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 		]);
 		expect(argumentsJson).toContain("\\u0067hp_");
 	});
+	for (const role of ["user", "assistant"] as const) {
+		it(`rejects colliding credential keys in ${role} native JSON arguments`, () => {
+			const model = createCodexModel("gpt-5.1-codex");
+			const first = "ghp_ABCdef1234567890ABCdef1234567890ABCdef";
+			const second = "ghp_XYZdef1234567890ABCdef1234567890ABCdef";
+			const argumentsJson = JSON.stringify({ [first]: "first value", [second]: "second value" });
+			const message = {
+				role,
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				content: role === "user" ? "archive" : [],
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: model.provider,
+					dt: true,
+					items: [{ type: "function_call", name: "f", call_id: "call_1", arguments: argumentsJson }],
+				},
+				usage: { ...zeroCost, totalTokens: 0, cost: { ...zeroCost, total: 0 } },
+				stopReason: "stop",
+				timestamp: 0,
+			} as Context["messages"][number];
+			expect(() => convertCodexResponsesMessages(model, { messages: [message] })).toThrow(
+				/Redacted property key collision/,
+			);
+		});
+	}
 });

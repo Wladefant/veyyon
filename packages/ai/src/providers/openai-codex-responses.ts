@@ -4920,9 +4920,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				| Array<ResponseInput[number]>
 				| undefined;
 			if (historyItems) {
-				const redactedHistoryItems = (
-					redactSensitiveInObject(historyItems).result as Array<ResponseInput[number]>
-				).map(sanitizeReplayedAssistantNativeItem);
+				const redactedHistoryItems = redactSensitiveInObject(historyItems.map(sanitizeReplayedAssistantNativeItem))
+					.result as Array<ResponseInput[number]>;
 				for (const item of redactedHistoryItems) {
 					const maybe = item as { type?: string; call_id?: string };
 					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {

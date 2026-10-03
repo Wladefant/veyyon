@@ -1229,14 +1229,18 @@ export function redactSensitiveInObject(val: unknown): { result: unknown; change
 }
 
 export function redactJsonFunctionCallArguments(argsText: string): { result: string; changed: boolean } {
+	let parsed: unknown;
 	try {
-		const parsed = JSON.parse(argsText);
-		if (parsed !== null && typeof parsed === "object") {
-			const { result, changed } = redactSensitiveInObject(parsed);
-			if (changed) return { result: JSON.stringify(result), changed: true };
-			return { result: argsText, changed: false };
-		}
-	} catch {}
+		parsed = JSON.parse(argsText);
+	} catch {
+		const raw = redactSensitiveCredentials(argsText);
+		return { result: raw, changed: raw !== argsText };
+	}
+	if (parsed !== null && typeof parsed === "object") {
+		const { result, changed } = redactSensitiveInObject(parsed);
+		if (changed) return { result: JSON.stringify(result), changed: true };
+		return { result: argsText, changed: false };
+	}
 	const raw = redactSensitiveCredentials(argsText);
 	return { result: raw, changed: raw !== argsText };
 }
