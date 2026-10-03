@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Preserved verbatim and device path prefixes on Windows during path normalization in file searches ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 499778383b6b950580964461e7e5c3ca536480de).
 
 ## [18.1.11] - 2026-09-05
 
