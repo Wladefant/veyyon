@@ -46,7 +46,9 @@ function parseModelCard(value: unknown): TypeSafeModelCard | null {
 }
 
 /** Validate and de-duplicate the official `{ models: [...] }` response. */
-export function parseTypeSafeModelCards(payload: unknown): TypeSafeModelCard[] | null {
+export function parseTypeSafeModelCards(
+	payload: unknown,
+): TypeSafeModelCard[] | null {
 	if (!isRecord(payload) || !Array.isArray(payload.models)) return null;
 	const cards: TypeSafeModelCard[] = [];
 	const seen = new Set<string>();
@@ -70,7 +72,9 @@ export function parseTypeSafeModelCards(payload: unknown): TypeSafeModelCard[] |
 export async function fetchTypeSafeModels(
 	options: FetchTypeSafeModelsOptions,
 ): Promise<ModelSpec<"typesafe">[] | null> {
-	const baseUrl = normalizeBaseUrl(options.baseUrl ?? TYPESAFE_DEFAULT_BASE_URL);
+	const baseUrl = normalizeBaseUrl(
+		options.baseUrl ?? TYPESAFE_DEFAULT_BASE_URL,
+	);
 	if (baseUrl === null) return null;
 
 	let response: Response;

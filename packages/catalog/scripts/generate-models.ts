@@ -12,18 +12,25 @@ const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
 import { Database } from "bun:sqlite";
 import * as path from "node:path";
 import { discoverAuthStorage } from "@veyyon/ai/auth-broker/discover";
-import type { OAuthAccess } from "@veyyon/ai/auth-storage";
+import type { AuthStorage, OAuthAccess } from "@veyyon/ai/auth-storage";
 import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 import { getGitLabDuoModels } from "@veyyon/ai/providers/gitlab-duo";
 import { $env, getSharedAuthDir } from "@veyyon/utils";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
-import { fetchCodexModels } from "../src/discovery/codex";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { isOpenAIOSeriesModelId } from "../src/identity/family";
 import { createModelManager } from "../src/model-manager";
 import { hasBillableCost } from "../src/models";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import { toModelSpec } from "../src/provider-models/bundled-references";
+import {
+	CODEX_IMAGE_MODEL,
+	codexContextWindowFloor,
+	codexCostPatch,
+	codexLongContextCost,
+	codexServiceTierCost,
+	resolveCodexMaxContextWindow,
+} from "../src/provider-models/codex-subscription";
 import { COMMAND_CODE_STATIC_MODELS } from "../src/provider-models/command-code";
 import {
 	allowsUnauthenticatedCatalogDiscovery,
@@ -34,24 +41,29 @@ import {
 import { PROVIDER_DESCRIPTORS, PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import { filterModelsDevCatalogRows } from "../src/provider-models/models-dev-policies";
 import {
+	ABLITERATION_STATIC_MODELS,
 	ANTHROPIC_CURATED_FALLBACK_MODELS,
 	buildFireworksFastSeed,
 	buildXaiOAuthStaticSeed,
 	clampFireworksKimiMaxTokens,
 	clampKimiK27CodeMaxTokens,
+	GMI_CLOUD_STATIC_MODELS,
 	isFireworksKimiK2ModelId,
 	isKimiK27CodeModelId,
+	META_MUSE_STATIC_MODELS,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
+	MUSE_CODE_STATIC_MODELS,
 	mapModelsDevToModels,
 	NOUS_RESEARCH_BUNDLED_MODELS,
 	projectOpenAIProReasoningAliases,
 	SAKANA_FUGU_STATIC_MODELS,
+	STEPFUN_STATIC_MODELS,
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
+import { type OpenAICodexAccount, openaiCodexModelManagerOptions } from "../src/provider-models/special";
 import type { Api, ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
-import { getCodexAccountId } from "../src/wire/codex";
 import {
 	applyCanonicalLimitFallback,
 	applyGeneratedModelPolicies,
@@ -341,6 +353,34 @@ function applyCodexPricingFallback(models: readonly ModelSpec[]): ModelSpec[] {
 }
 
 /**
+ * Fill what `/codex/models` leaves out of the subscription rows (see
+ * `codex-subscription.ts`): the 1M floor, the extended-context ceiling, tier
+ * multipliers, the >272K rate card and the curated prices, then seed the hosted
+ * image tool. A live discovery value that is already higher keeps winning.
+ */
+function applyCodexSubscriptionFields(models: readonly ModelSpec[]): ModelSpec[] {
+	const patched = models.map(model => {
+		if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses" || model.kind === "image") {
+			return model;
+		}
+		const floor = codexContextWindowFloor(model.id);
+		const maxContextWindow = resolveCodexMaxContextWindow(model.id, model.maxContextWindow);
+		const longContextCost = codexLongContextCost(model.id);
+		const costPatch = codexCostPatch(model.id);
+		return {
+			...model,
+			...(floor !== undefined ? { contextWindow: Math.max(model.contextWindow ?? 0, floor) } : {}),
+			...(maxContextWindow !== undefined ? { maxContextWindow } : {}),
+			serviceTierCost: codexServiceTierCost(model.id),
+			...(longContextCost !== undefined ? { longContextCost } : {}),
+			...(costPatch !== undefined ? { cost: { ...costPatch } } : {}),
+		};
+	});
+	if (patched.some(model => model.provider === "openai-codex" && model.id === CODEX_IMAGE_MODEL.id)) return patched;
+	return [...patched, CODEX_IMAGE_MODEL];
+}
+
+/**
  * The Kimi Code subscription endpoint aliases `kimi-for-coding` and
  * `kimi-for-coding-highspeed` to its current flagship (K3) server-side;
  * models.dev declares the alias rows with empty reasoning_options because
@@ -555,35 +595,54 @@ async function fetchAntigravityModels(): Promise<ModelSpec<"google-gemini-cli">[
 		return [];
 	}
 }
-
-async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-responses">[]> {
-	const access = await getOAuthAccessFromStorage("openai-codex");
-	if (!access) {
+/**
+ * Resolve every stored Codex OAuth account and union their account-scoped
+ * `/models` catalogs through the same manager path the runtime uses (#6265).
+ * Fails closed: any account that cannot resolve or fetch aborts discovery and
+ * returns [] (non-authoritative), so a partial per-account snapshot never
+ * replaces the previous bundle's model set.
+ */
+export async function fetchCodexDiscoveryModels(
+	authStorageOverride?: AuthStorage,
+): Promise<ModelSpec<"openai-codex-responses">[]> {
+	const accounts: OpenAICodexAccount[] = [];
+	try {
+		const authStorage = authStorageOverride ?? (await discoverAuthStorage());
+		try {
+			const accesses = await authStorage.getOAuthAccesses("openai-codex");
+			for (const access of accesses) {
+				if (!access.ok) {
+					console.warn(`Codex account failed to resolve (${access.error}), keeping previous models.`);
+					return [];
+				}
+				accounts.push({ accessToken: access.accessToken, accountId: access.accountId });
+			}
+		} finally {
+			if (!authStorageOverride) {
+				authStorage.close();
+			}
+		}
+	} catch (error) {
+		console.warn(
+			"Warning: Failed to retrieve Codex credentials:",
+			error instanceof Error ? error.message : String(error),
+		);
+		return [];
+	}
+	if (accounts.length === 0) {
 		console.log("No Codex credentials found, will use previous models.");
 		console.log("Tip: If you are logged in under a specific profile, run with VEYYON_PROFILE=<name>.");
 		return [];
 	}
-	try {
-		console.log("Fetching models from Codex API...");
-		const accessToken = access.accessToken;
-		const accountId = access.accountId ?? getCodexAccountId(accessToken);
-		const codexDiscovery = await fetchCodexModels({
-			accessToken,
-			accountId: accountId ?? undefined,
-		});
-		if (codexDiscovery === null) {
-			console.warn("Codex API fetch failed");
-			return [];
-		}
-		if (codexDiscovery.models.length > 0) {
-			console.log(`Fetched ${codexDiscovery.models.length} models from Codex API`);
-			return codexDiscovery.models;
-		}
-		return [];
-	} catch (error) {
-		console.error("Failed to fetch Codex models:", error);
+	console.log(`Fetching models from Codex API for ${accounts.length} account(s)...`);
+	const options = openaiCodexModelManagerOptions({ resolveAccounts: async () => accounts });
+	const models = await options.fetchDynamicModels?.();
+	if (!models) {
+		console.warn("Codex API fetch failed, keeping previous models.");
 		return [];
 	}
+	console.log(`Fetched ${models.length} models from Codex API`);
+	return [...models];
 }
 
 async function generateModels() {
@@ -656,6 +715,24 @@ async function generateModels() {
 	// unavailable. Live discovery keeps the router's wider published catalog.
 	if (!authoritativeCatalogProviders.has("command-code")) {
 		allModels.push(...COMMAND_CODE_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("abliteration")) {
+		allModels.push(...ABLITERATION_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("meta")) {
+		allModels.push(...META_MUSE_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("muse-code")) {
+		allModels.push(...MUSE_CODE_STATIC_MODELS);
+	}
+	// Seed the GMI Cloud default model so a fresh install (and a regen without a
+	// `GMI_API_KEY`) still resolves the descriptor's `defaultModel` synchronously
+	// at boot. If live `/v1/models` discovery succeeds, it is authoritative.
+	if (!authoritativeCatalogProviders.has("gmi-cloud")) {
+		allModels.push(...GMI_CLOUD_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("stepfun")) {
+		allModels.push(...STEPFUN_STATIC_MODELS);
 	}
 	// Seed the GitLab Duo Agent fallback model so a fresh install (no credentialed
 	// dynamic discovery/cache yet) still surfaces the provider's default model in the
@@ -748,6 +825,7 @@ async function generateModels() {
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
 	allModels = applyCodexPricingFallback(allModels);
+	allModels = applyCodexSubscriptionFields(allModels);
 	allModels = applyKimiMaxTokensCap(allModels);
 	allModels = applyFireworksDeepSeekReasoningShape(allModels);
 	allModels = filterModelsDevCatalogRows(allModels);
@@ -856,5 +934,6 @@ function canonicalizeModelCompat(model: ModelSpec<Api>): void {
 	}
 }
 
-// Run the generator
-generateModels().catch(console.error);
+if (import.meta.main) {
+	generateModels().catch(console.error);
+}

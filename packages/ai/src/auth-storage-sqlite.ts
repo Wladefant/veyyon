@@ -17,21 +17,22 @@
  * `auth-storage.ts` re-exports this class, so every existing importer of `@veyyon/ai/auth-storage` or of
  * the package barrel is unaffected.
  */
-import { constants, Database, type Statement } from "bun:sqlite";
+import { constants, type Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { scheduler } from "node:timers/promises";
-import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getAgentDbPath } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
-import { SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
+import {
+	openSqliteDatabase,
+	SQLITE_NOW_EPOCH,
+	tableExists,
+} from "@veyyon/utils/sqlite";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import {
 	AUTH_SCHEMA_VERSION,
 	type AuthRow,
 	type CredentialBlockRow,
 	deserializeCredential,
-	isSqliteBusyError,
 	matchesReplacementCredential,
 	normalizeDisabledCause,
 	resolveCredentialIdentityKey,
@@ -54,10 +55,9 @@ import {
 	isRecordFromFutureClock,
 	msToEpochSeconds,
 } from "./credential-clock";
-import { ConfigurationError } from "./error/validation";
 import type { OAuthCredentials } from "./registry/oauth/types";
 import type { Provider } from "./types";
-import type { UsageCostHistoryEntry, UsageCostHistoryQuery, UsageHistoryEntry, UsageHistoryQuery } from "./usage";
+import type { UsageHistoryEntry, UsageHistoryQuery } from "./usage";
 
 /**
  * Default SQLite-backed implementation of {@link AuthCredentialStore}.
@@ -98,8 +98,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#releaseCredentialRefreshLeaseStmt: Statement;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
 	#insertUsageHistoryStmt: Statement;
-	#insertUsageCostStmt: Statement;
-	#listUsageCostsStmt: Statement;
 	#getAccountNameStmt: Statement;
 	#listAccountNamesStmt: Statement;
 	#upsertAccountNameStmt: Statement;
@@ -164,16 +162,24 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#deleteByProviderStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE provider = ? AND disabled_cause IS NULL`,
 		);
-		this.#hardDeleteStmt = this.#db.prepare("DELETE FROM auth_credentials WHERE id = ?");
+		this.#hardDeleteStmt = this.#db.prepare(
+			"DELETE FROM auth_credentials WHERE id = ?",
+		);
 		this.#getCacheStmt = this.#db.prepare(
 			`SELECT value FROM cache WHERE key = ? AND expires_at > ${SQLITE_NOW_EPOCH}`,
 		);
-		this.#getCacheIncludingExpiredStmt = this.#db.prepare("SELECT value FROM cache WHERE key = ?");
+		this.#getCacheIncludingExpiredStmt = this.#db.prepare(
+			"SELECT value FROM cache WHERE key = ?",
+		);
 		this.#upsertCacheStmt = this.#db.prepare(
 			"INSERT INTO cache (key, value, expires_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
 		);
-		this.#deleteCachePrefixStmt = this.#db.prepare("DELETE FROM cache WHERE substr(key, 1, ?) = ?");
-		this.#deleteExpiredCacheStmt = this.#db.prepare(`DELETE FROM cache WHERE expires_at <= ${SQLITE_NOW_EPOCH}`);
+		this.#deleteCachePrefixStmt = this.#db.prepare(
+			"DELETE FROM cache WHERE substr(key, 1, ?) = ?",
+		);
+		this.#deleteExpiredCacheStmt = this.#db.prepare(
+			`DELETE FROM cache WHERE expires_at <= ${SQLITE_NOW_EPOCH}`,
+		);
 		this.#getCredentialBlockStmt = this.#db.prepare(
 			"SELECT blocked_until_ms, updated_at FROM auth_credential_blocks WHERE credential_id = ? AND provider_key = ? AND block_scope = ? AND blocked_until_ms > ?",
 		);
@@ -187,7 +193,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				blocked_until_ms = MAX(blocked_until_ms, excluded.blocked_until_ms),
 				updated_at = excluded.updated_at`,
 		);
-		this.#deleteCredentialBlocksStmt = this.#db.prepare("DELETE FROM auth_credential_blocks WHERE credential_id = ?");
+		this.#deleteCredentialBlocksStmt = this.#db.prepare(
+			"DELETE FROM auth_credential_blocks WHERE credential_id = ?",
+		);
 		this.#deleteExpiredCredentialBlocksStmt = this.#db.prepare(
 			"DELETE FROM auth_credential_blocks WHERE blocked_until_ms <= ?",
 		);
@@ -242,19 +250,19 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#listUsageHistoryStmt = this.#db.prepare(
 			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
 		);
-		this.#insertUsageCostStmt = this.#db.prepare(
-			"INSERT INTO usage_cost_history (recorded_at, provider, account_key, cost_usd) VALUES (?, ?, ?, ?)",
+		this.#getAccountNameStmt = this.#db.prepare(
+			"SELECT name FROM auth_account_names WHERE identity = ?",
 		);
-		this.#listUsageCostsStmt = this.#db.prepare(
-			"SELECT recorded_at, provider, account_key, cost_usd FROM usage_cost_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) AND (? IS NULL OR account_key = ?) ORDER BY recorded_at ASC",
+		this.#listAccountNamesStmt = this.#db.prepare(
+			"SELECT identity, name FROM auth_account_names",
 		);
-		this.#getAccountNameStmt = this.#db.prepare("SELECT name FROM auth_account_names WHERE identity = ?");
-		this.#listAccountNamesStmt = this.#db.prepare("SELECT identity, name FROM auth_account_names");
 		this.#upsertAccountNameStmt = this.#db.prepare(
 			`INSERT INTO auth_account_names (identity, name, updated_at) VALUES (?, ?, ${SQLITE_NOW_EPOCH})
 			 ON CONFLICT(identity) DO UPDATE SET name = excluded.name, updated_at = ${SQLITE_NOW_EPOCH}`,
 		);
-		this.#deleteAccountNameStmt = this.#db.prepare("DELETE FROM auth_account_names WHERE identity = ?");
+		this.#deleteAccountNameStmt = this.#db.prepare(
+			"DELETE FROM auth_account_names WHERE identity = ?",
+		);
 		this.#getProviderSelectionStmt = this.#db.prepare(
 			"SELECT identity FROM auth_provider_selection WHERE provider = ?",
 		);
@@ -262,10 +270,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			`INSERT INTO auth_provider_selection (provider, identity, updated_at) VALUES (?, ?, ${SQLITE_NOW_EPOCH})
 			 ON CONFLICT(provider) DO UPDATE SET identity = excluded.identity, updated_at = ${SQLITE_NOW_EPOCH}`,
 		);
-		this.#deleteProviderSelectionStmt = this.#db.prepare("DELETE FROM auth_provider_selection WHERE provider = ?");
+		this.#deleteProviderSelectionStmt = this.#db.prepare(
+			"DELETE FROM auth_provider_selection WHERE provider = ?",
+		);
 	}
 
-	static async open(dbPath: string = getAgentDbPath()): Promise<SqliteAuthCredentialStore> {
+	/** Opens credential storage with bounded busy retries and path-attributed initialization errors. */
+	static async open(
+		dbPath: string = getAgentDbPath(),
+	): Promise<SqliteAuthCredentialStore> {
 		const dir = path.dirname(dbPath);
 		// Fails CLOSED into the `mkdir` below: an unstattable parent is treated as absent, and `mkdir` then
 		// raises the real error (EACCES, ENOTDIR) with the path in it. Reporting the stat failure here would
@@ -273,44 +286,20 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		// from proceeding.
 		const dirExists = await fs
 			.stat(dir)
-			.then(s => s.isDirectory())
+			.then((s) => s.isDirectory())
 			.catch(() => false);
 		if (!dirExists) {
 			await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 		}
 
-		// Concurrent veyyon startups can race against WAL recovery and the schema
-		// init's first lock-taking statement. Bun's default `busy_timeout` is 0,
-		// so retry the open on `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY` with bounded
-		// exponential backoff before surfacing the failure. See issue #2421.
-		const maxAttempts = 4;
-		const baseDelayMs = 100;
-		let lastBusyError: Error | undefined;
-		for (let attempt = 0; attempt < maxAttempts; attempt++) {
-			let db: Database | undefined;
+		return openSqliteDatabase(dbPath, async (db) => {
 			try {
-				db = new Database(dbPath);
-				try {
-					await fs.chmod(dbPath, 0o600);
-				} catch {
-					// Ignore chmod failures (e.g., Windows)
-				}
-				return new SqliteAuthCredentialStore(db);
-			} catch (err) {
-				db?.close();
-				if (!isSqliteBusyError(err)) {
-					throw err;
-				}
-				lastBusyError = err instanceof Error ? err : new Error(String(err));
-				if (attempt < maxAttempts - 1) {
-					await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: baseDelayMs, jitter: 0 }));
-				}
+				await fs.chmod(dbPath, 0o600);
+			} catch {
+				// Ignore chmod failures (e.g., Windows)
 			}
-		}
-		throw new ConfigurationError(
-			`Failed to open auth database at '${dbPath}' after ${maxAttempts} attempts: ${lastBusyError?.message}`,
-			{ cause: lastBusyError },
-		);
+			return new SqliteAuthCredentialStore(db);
+		});
 	}
 
 	#initializeSchema(): void {
@@ -352,14 +341,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				resets_at INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_series ON usage_history(provider, account_key, limit_id, recorded_at);
-			CREATE TABLE IF NOT EXISTS usage_cost_history (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				recorded_at INTEGER NOT NULL,
-				provider TEXT NOT NULL,
-				account_key TEXT NOT NULL,
-				cost_usd REAL NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS idx_usage_cost_history_lookup ON usage_cost_history(provider, account_key, recorded_at);
 			CREATE TABLE IF NOT EXISTS auth_account_names (
 				identity TEXT PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -397,7 +378,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#backfillCredentialIdentityKeys();
 		// Rewriting an already-current version row is a no-op write transaction
 		// on every boot; only persist when the recorded version actually changes.
-		if (recordedVersion !== AUTH_SCHEMA_VERSION && schemaVersion <= AUTH_SCHEMA_VERSION) {
+		if (
+			recordedVersion !== AUTH_SCHEMA_VERSION &&
+			schemaVersion <= AUTH_SCHEMA_VERSION
+		) {
 			this.#writeAuthSchemaVersion(AUTH_SCHEMA_VERSION);
 		}
 	}
@@ -407,7 +391,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#readAuthSchemaVersion(): number | null {
-		const stmt = this.#db.prepare("SELECT version FROM auth_schema_version WHERE id = 1");
+		const stmt = this.#db.prepare(
+			"SELECT version FROM auth_schema_version WHERE id = 1",
+		);
 		try {
 			const row = stmt.get() as { version?: number } | undefined;
 			return typeof row?.version === "number" ? row.version : null;
@@ -417,7 +403,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#writeAuthSchemaVersion(version: number): void {
-		const stmt = this.#db.prepare("INSERT OR REPLACE INTO auth_schema_version(id, version) VALUES (1, ?)");
+		const stmt = this.#db.prepare(
+			"INSERT OR REPLACE INTO auth_schema_version(id, version) VALUES (1, ?)",
+		);
 		try {
 			stmt.run(version);
 		} finally {
@@ -508,12 +496,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			let hasDisabled = false;
 			try {
 				const v0Cols = stmt.all() as Array<{ name?: string }>;
-				hasDisabled = v0Cols.some(col => col.name === "disabled");
+				hasDisabled = v0Cols.some((col) => col.name === "disabled");
 			} finally {
 				stmt.finalize();
 			}
 
-			this.#db.run("ALTER TABLE auth_credentials RENAME TO auth_credentials_v0");
+			this.#db.run(
+				"ALTER TABLE auth_credentials RENAME TO auth_credentials_v0",
+			);
 			this.#db.run(`
 				CREATE TABLE auth_credentials (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,7 +534,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 	#migrateAuthSchemaV1OrV2ToV3(): void {
 		const migrate = this.#db.transaction(() => {
-			this.#db.run("ALTER TABLE auth_credentials RENAME TO auth_credentials_legacy");
+			this.#db.run(
+				"ALTER TABLE auth_credentials RENAME TO auth_credentials_legacy",
+			);
 			this.#createAuthCredentialsTable();
 			this.#db.run(`
 				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
@@ -566,7 +558,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 	#migrateAuthSchemaV3ToV4(): void {
 		const migrate = this.#db.transaction(() => {
-			this.#db.run("ALTER TABLE auth_credentials RENAME TO auth_credentials_v3");
+			this.#db.run(
+				"ALTER TABLE auth_credentials RENAME TO auth_credentials_v3",
+			);
 			this.#createAuthCredentialsTable();
 			this.#db.run(`
 				INSERT INTO auth_credentials (id, provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
@@ -619,7 +613,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				// Rows whose identity cannot be derived stay NULL; writing NULL over
 				// NULL would just burn a write transaction on every boot.
 				if (identityKey === null) continue;
-				updateIdentity ??= this.#db.prepare("UPDATE auth_credentials SET identity_key = ? WHERE id = ?");
+				updateIdentity ??= this.#db.prepare(
+					"UPDATE auth_credentials SET identity_key = ? WHERE id = ?",
+				);
 				updateIdentity.run(identityKey, row.id);
 			}
 		} finally {
@@ -644,106 +640,155 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		return results;
 	}
 
-	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[] {
-		const replace = this.#db.transaction((providerName: string, items: AuthCredential[]) => {
-			const existingRows = this.#listActiveByProviderStmt.all(providerName) as AuthRow[];
-			const existing = existingRows.map(row => ({
-				id: row.id,
-				credential: deserializeCredential(row),
-				identityKey: resolveRowCredentialIdentityKey(providerName, row),
-			}));
+	replaceAuthCredentialsForProvider(
+		provider: string,
+		credentials: AuthCredential[],
+	): StoredAuthCredential[] {
+		const replace = this.#db.transaction(
+			(providerName: string, items: AuthCredential[]) => {
+				const existingRows = this.#listActiveByProviderStmt.all(
+					providerName,
+				) as AuthRow[];
+				const existing = existingRows.map((row) => ({
+					id: row.id,
+					credential: deserializeCredential(row),
+					identityKey: resolveRowCredentialIdentityKey(providerName, row),
+				}));
 
-			const result: StoredAuthCredential[] = [];
-			const matchedExistingIds = new Set<number>();
+				const result: StoredAuthCredential[] = [];
+				const matchedExistingIds = new Set<number>();
 
-			for (const credential of items) {
-				const serialized = serializeCredential(providerName, credential);
-				if (!serialized) continue;
-				const match = existing.find(
-					entry =>
-						!matchedExistingIds.has(entry.id) &&
-						matchesReplacementCredential(providerName, entry.credential, entry.identityKey, credential),
-				);
-				if (match) {
-					matchedExistingIds.add(match.id);
-					this.#updateStmt.run(serialized.credentialType, serialized.data, serialized.identityKey, match.id);
-					result.push({ id: match.id, provider: providerName, credential, disabledCause: null });
-				} else {
-					const row = this.#insertStmt.get(
-						providerName,
-						serialized.credentialType,
-						serialized.data,
-						serialized.identityKey,
-					) as { id?: number } | undefined;
-					if (row?.id) {
-						result.push({ id: row.id, provider: providerName, credential, disabledCause: null });
+				for (const credential of items) {
+					const serialized = serializeCredential(providerName, credential);
+					if (!serialized) continue;
+					const match = existing.find(
+						(entry) =>
+							!matchedExistingIds.has(entry.id) &&
+							matchesReplacementCredential(
+								providerName,
+								entry.credential,
+								entry.identityKey,
+								credential,
+							),
+					);
+					if (match) {
+						matchedExistingIds.add(match.id);
+						this.#updateStmt.run(
+							serialized.credentialType,
+							serialized.data,
+							serialized.identityKey,
+							match.id,
+						);
+						result.push({
+							id: match.id,
+							provider: providerName,
+							credential,
+							disabledCause: null,
+						});
+					} else {
+						const row = this.#insertStmt.get(
+							providerName,
+							serialized.credentialType,
+							serialized.data,
+							serialized.identityKey,
+						) as { id?: number } | undefined;
+						if (row?.id) {
+							result.push({
+								id: row.id,
+								provider: providerName,
+								credential,
+								disabledCause: null,
+							});
+						}
 					}
 				}
-			}
 
-			for (const row of existing) {
-				if (!matchedExistingIds.has(row.id)) {
-					this.#deleteStmt.run("replaced by newer credential", row.id);
+				for (const row of existing) {
+					if (!matchedExistingIds.has(row.id)) {
+						this.#deleteStmt.run("replaced by newer credential", row.id);
+					}
 				}
-			}
 
-			return result;
-		});
+				return result;
+			},
+		);
 
 		const result = replace(provider, credentials);
 		this.#purgeSupersededDisabledRows(provider, result);
 		return result;
 	}
 
-	upsertAuthCredentialForProvider(provider: string, credential: AuthCredential): StoredAuthCredential[] {
-		const upsert = this.#db.transaction((providerName: string, item: AuthCredential) => {
-			const serialized = serializeCredential(providerName, item);
-			if (!serialized) return this.listAuthCredentials(providerName);
-			const existingRows = this.#listActiveByProviderStmt.all(providerName) as AuthRow[];
-			const existing = existingRows.map(row => ({
-				id: row.id,
-				credential: deserializeCredential(row),
-				identityKey: resolveRowCredentialIdentityKey(providerName, row),
-			}));
+	upsertAuthCredentialForProvider(
+		provider: string,
+		credential: AuthCredential,
+	): StoredAuthCredential[] {
+		const upsert = this.#db.transaction(
+			(providerName: string, item: AuthCredential) => {
+				const serialized = serializeCredential(providerName, item);
+				if (!serialized) return this.listAuthCredentials(providerName);
+				const existingRows = this.#listActiveByProviderStmt.all(
+					providerName,
+				) as AuthRow[];
+				const existing = existingRows.map((row) => ({
+					id: row.id,
+					credential: deserializeCredential(row),
+					identityKey: resolveRowCredentialIdentityKey(providerName, row),
+				}));
 
-			if (item.type === "oauth") {
-				for (const row of existing) {
-					if (row.credential && row.credential.type === "api_key") {
-						this.#deleteStmt.run("replaced by oauth login", row.id);
+				if (item.type === "oauth") {
+					for (const row of existing) {
+						if (row.credential && row.credential.type === "api_key") {
+							this.#deleteStmt.run("replaced by oauth login", row.id);
+						}
 					}
 				}
-			}
 
-			let targetId: number | null = null;
-			for (const row of existing) {
-				if (!matchesReplacementCredential(providerName, row.credential, row.identityKey, item)) continue;
-				if (targetId === null) {
-					targetId = row.id;
-					this.#updateStmt.run(serialized.credentialType, serialized.data, serialized.identityKey, row.id);
-					continue;
+				let targetId: number | null = null;
+				for (const row of existing) {
+					if (
+						!matchesReplacementCredential(
+							providerName,
+							row.credential,
+							row.identityKey,
+							item,
+						)
+					)
+						continue;
+					if (targetId === null) {
+						targetId = row.id;
+						this.#updateStmt.run(
+							serialized.credentialType,
+							serialized.data,
+							serialized.identityKey,
+							row.id,
+						);
+						continue;
+					}
+					this.#deleteStmt.run("replaced by newer credential", row.id);
 				}
-				this.#deleteStmt.run("replaced by newer credential", row.id);
-			}
 
-			if (targetId === null) {
-				const row = this.#insertStmt.get(
+				if (targetId === null) {
+					const row = this.#insertStmt.get(
+						providerName,
+						serialized.credentialType,
+						serialized.data,
+						serialized.identityKey,
+					) as { id?: number } | undefined;
+					targetId = row?.id ?? null;
+				}
+
+				const activeRows = this.#listActiveByProviderStmt.all(
 					providerName,
-					serialized.credentialType,
-					serialized.data,
-					serialized.identityKey,
-				) as { id?: number } | undefined;
-				targetId = row?.id ?? null;
-			}
-
-			const activeRows = this.#listActiveByProviderStmt.all(providerName) as AuthRow[];
-			const result: StoredAuthCredential[] = [];
-			for (const row of activeRows) {
-				const activeCredential = deserializeCredential(row);
-				if (!activeCredential) continue;
-				result.push(toStoredAuthCredential(row, activeCredential));
-			}
-			return result;
-		});
+				) as AuthRow[];
+				const result: StoredAuthCredential[] = [];
+				for (const row of activeRows) {
+					const activeCredential = deserializeCredential(row);
+					if (!activeCredential) continue;
+					result.push(toStoredAuthCredential(row, activeCredential));
+				}
+				return result;
+			},
+		);
 
 		const result = upsert(provider, credential);
 		this.#purgeSupersededDisabledRows(provider, result);
@@ -755,7 +800,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	 * OAuth credentials match by identity key; API keys match by provider and type.
 	 * Disabled rows without an active same-type replacement remain recoverable.
 	 */
-	#purgeSupersededDisabledRows(provider: string, activeRows: StoredAuthCredential[]): void {
+	#purgeSupersededDisabledRows(
+		provider: string,
+		activeRows: StoredAuthCredential[],
+	): void {
 		try {
 			let hasActiveApiKey = false;
 			const activeIdentityKeys = new Set<string>();
@@ -764,12 +812,17 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 					hasActiveApiKey = true;
 					continue;
 				}
-				const identityKey = resolveCredentialIdentityKey(provider, row.credential);
+				const identityKey = resolveCredentialIdentityKey(
+					provider,
+					row.credential,
+				);
 				if (identityKey) activeIdentityKeys.add(identityKey);
 			}
 			if (!hasActiveApiKey && activeIdentityKeys.size === 0) return;
 
-			const disabledRows = this.#listDisabledByProviderStmt.all(provider) as AuthRow[];
+			const disabledRows = this.#listDisabledByProviderStmt.all(
+				provider,
+			) as AuthRow[];
 			for (const row of disabledRows) {
 				if (hasActiveApiKey && row.credential_type === "api_key") {
 					this.#hardDeleteStmt.run(row.id);
@@ -804,7 +857,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	 * the token, since the peer's row may itself have been disabled.
 	 */
 	readAuthCredentialById(id: number): StoredAuthCredential | undefined {
-		const stmt = this.#db.prepare("SELECT * FROM auth_credentials WHERE id = ?");
+		const stmt = this.#db.prepare(
+			"SELECT * FROM auth_credentials WHERE id = ?",
+		);
 		try {
 			const row = stmt.get(id) as AuthRow | undefined;
 			if (!row) return undefined;
@@ -843,9 +898,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
-	#writeCredential(id: number, credential: AuthCredential, reenable: boolean): void {
+	#writeCredential(
+		id: number,
+		credential: AuthCredential,
+		reenable: boolean,
+	): void {
 		try {
-			const providerStmt = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?");
+			const providerStmt = this.#db.prepare(
+				"SELECT provider FROM auth_credentials WHERE id = ?",
+			);
 			let providerRow: { provider?: string } | undefined;
 			try {
 				providerRow = providerStmt.get(id) as { provider?: string } | undefined;
@@ -856,9 +917,17 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			const serialized = serializeCredential(provider, credential);
 			if (!serialized) return;
 			const statement = reenable ? this.#updateEnablingStmt : this.#updateStmt;
-			statement.run(serialized.credentialType, serialized.data, serialized.identityKey, id);
+			statement.run(
+				serialized.credentialType,
+				serialized.data,
+				serialized.identityKey,
+				id,
+			);
 			if (provider) {
-				this.#purgeSupersededDisabledRows(provider, this.listAuthCredentials(provider));
+				this.#purgeSupersededDisabledRows(
+					provider,
+					this.listAuthCredentials(provider),
+				);
 			}
 		} catch (error) {
 			// NEVER silent. A dropped credential write is the logout bug: the caller
@@ -879,7 +948,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		credential: AuthCredential,
 		lease?: CredentialRefreshLeaseFence,
 	): boolean {
-		const providerStmt = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?");
+		const providerStmt = this.#db.prepare(
+			"SELECT provider FROM auth_credentials WHERE id = ?",
+		);
 		let providerRow: { provider?: string } | undefined;
 		try {
 			providerRow = providerStmt.get(id) as { provider?: string } | undefined;
@@ -909,15 +980,24 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				) as { changes: number });
 		if (result.changes !== 1) return false;
 		if (provider) {
-			this.#purgeSupersededDisabledRows(provider, this.listAuthCredentials(provider));
+			this.#purgeSupersededDisabledRows(
+				provider,
+				this.listAuthCredentials(provider),
+			);
 		}
 		return true;
 	}
 
 	deleteAuthCredential(id: number, disabledCause: string): void {
-		disable(this.#deleteStmt, id, disabledCause, "Auth credential could not be disabled; it stays in rotation", {
+		disable(
+			this.#deleteStmt,
 			id,
-		});
+			disabledCause,
+			"Auth credential could not be disabled; it stays in rotation",
+			{
+				id,
+			},
+		);
 	}
 
 	/**
@@ -941,12 +1021,19 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 					lease.owner,
 					lease.nowMs,
 				) as { changes: number })
-			: (this.#deleteIfMatchesStmt.run(normalizeDisabledCause(disabledCause), id, expectedData) as {
+			: (this.#deleteIfMatchesStmt.run(
+					normalizeDisabledCause(disabledCause),
+					id,
+					expectedData,
+				) as {
 					changes: number;
 				});
 		return result.changes === 1;
 	}
-	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
+	deleteAuthCredentialsForProvider(
+		provider: string,
+		disabledCause: string,
+	): void {
 		disable(
 			this.#deleteByProviderStmt,
 			provider,
@@ -984,7 +1071,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 	getCache(key: string, options?: { includeExpired?: boolean }): string | null {
 		try {
-			const stmt = options?.includeExpired === true ? this.#getCacheIncludingExpiredStmt : this.#getCacheStmt;
+			const stmt =
+				options?.includeExpired === true
+					? this.#getCacheIncludingExpiredStmt
+					: this.#getCacheStmt;
 			const row = stmt.get(key) as { value?: string } | undefined;
 			return row?.value ?? null;
 		} catch (error) {
@@ -1022,36 +1112,59 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
-	getCredentialBlock(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+	getCredentialBlock(
+		credentialId: number,
+		providerKey: string,
+		blockScope: string,
+	): number | undefined {
 		const nowMs = Date.now();
 		this.#deleteExpiredCredentialBlocksStmt.run(nowMs);
-		const row = this.#getCredentialBlockStmt.get(credentialId, providerKey, blockScope, nowMs) as
-			| { blocked_until_ms?: number; updated_at?: number }
-			| undefined;
+		const row = this.#getCredentialBlockStmt.get(
+			credentialId,
+			providerKey,
+			blockScope,
+			nowMs,
+		) as { blocked_until_ms?: number; updated_at?: number } | undefined;
 		if (typeof row?.blocked_until_ms !== "number") return undefined;
 		// `updated_at` is whole seconds. A row written after the clock we are
 		// reading with cannot be measured against it; drop the block rather than
 		// hold the credential for the length of the jump. This matters more here
 		// than in memory: a persisted block survives restarts, so without the
 		// check the credential stays unusable across every later process too.
-		if (isRecordFromFutureClock(epochSecondsToMs(row.updated_at), nowMs)) return undefined;
+		if (isRecordFromFutureClock(epochSecondsToMs(row.updated_at), nowMs))
+			return undefined;
 		return row.blocked_until_ms;
 	}
 
-	getCredentialBlockReconcileAfter(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+	getCredentialBlockReconcileAfter(
+		credentialId: number,
+		providerKey: string,
+		blockScope: string,
+	): number | undefined {
 		const nowMs = Date.now();
 		this.#deleteExpiredCredentialBlocksStmt.run(nowMs);
-		const row = this.#getCredentialBlockStmt.get(credentialId, providerKey, blockScope, nowMs) as
-			| { blocked_until_ms?: number; updated_at?: number }
-			| undefined;
+		const row = this.#getCredentialBlockStmt.get(
+			credentialId,
+			providerKey,
+			blockScope,
+			nowMs,
+		) as { blocked_until_ms?: number; updated_at?: number } | undefined;
 		if (typeof row?.blocked_until_ms !== "number") return undefined;
 		const memoryReconcileAfter =
-			this.#credentialBlockReconcileAfter.get(`${credentialId}\0${providerKey}\0${blockScope}`) ?? 0;
+			this.#credentialBlockReconcileAfter.get(
+				`${credentialId}\0${providerKey}\0${blockScope}`,
+			) ?? 0;
 		const writtenAtMs = epochSecondsToMs(row.updated_at);
 		if (isRecordFromFutureClock(writtenAtMs, nowMs)) return undefined;
-		const persistedReconcileAfter = writtenAtMs === undefined ? 0 : writtenAtMs + USAGE_REPORT_TTL_MS;
-		const reconcileAfter = Math.max(memoryReconcileAfter, persistedReconcileAfter);
-		return reconcileAfter > nowMs ? Math.min(row.blocked_until_ms, reconcileAfter) : undefined;
+		const persistedReconcileAfter =
+			writtenAtMs === undefined ? 0 : writtenAtMs + USAGE_REPORT_TTL_MS;
+		const reconcileAfter = Math.max(
+			memoryReconcileAfter,
+			persistedReconcileAfter,
+		);
+		return reconcileAfter > nowMs
+			? Math.min(row.blocked_until_ms, reconcileAfter)
+			: undefined;
 	}
 
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
@@ -1070,7 +1183,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	deleteCredentialBlocks(credentialId: number): void {
 		this.#deleteCredentialBlocksStmt.run(credentialId);
 		for (const key of this.#credentialBlockReconcileAfter.keys()) {
-			if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
+			if (key.startsWith(`${credentialId}\0`))
+				this.#credentialBlockReconcileAfter.delete(key);
 		}
 	}
 
@@ -1085,13 +1199,18 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	 * make a rename incapable of breaking a login.
 	 */
 	getAccountName(identity: string): string | undefined {
-		const row = this.#getAccountNameStmt.get(identity) as { name?: string } | undefined;
+		const row = this.#getAccountNameStmt.get(identity) as
+			| { name?: string }
+			| undefined;
 		const name = row?.name?.trim();
 		return name && name.length > 0 ? name : undefined;
 	}
 
 	listAccountNames(): Array<{ identity: string; name: string }> {
-		const rows = this.#listAccountNamesStmt.all() as Array<{ identity?: string; name?: string }>;
+		const rows = this.#listAccountNamesStmt.all() as Array<{
+			identity?: string;
+			name?: string;
+		}>;
 		const names: Array<{ identity: string; name: string }> = [];
 		for (const row of rows) {
 			const identity = row.identity?.trim();
@@ -1119,8 +1238,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	 */
 	getProviderSelection(provider: string): string | undefined {
 		const row = this.#getProviderSelectionStmt.get(provider);
-		if (!row || typeof row !== "object" || !("identity" in row)) return undefined;
-		const identity = typeof row.identity === "string" ? row.identity.trim() : "";
+		if (!row || typeof row !== "object" || !("identity" in row))
+			return undefined;
+		const identity =
+			typeof row.identity === "string" ? row.identity.trim() : "";
 		return identity.length > 0 ? identity : undefined;
 	}
 
@@ -1135,11 +1256,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	cleanExpiredCredentialBlocks(nowMs: number): void {
 		this.#deleteExpiredCredentialBlocksStmt.run(nowMs);
 		for (const [key, reconcileAfterMs] of this.#credentialBlockReconcileAfter) {
-			if (reconcileAfterMs <= nowMs) this.#credentialBlockReconcileAfter.delete(key);
+			if (reconcileAfterMs <= nowMs)
+				this.#credentialBlockReconcileAfter.delete(key);
 		}
 	}
 
-	listCredentialBlocks(credentialIds: readonly number[]): StoredCredentialBlock[] {
+	listCredentialBlocks(
+		credentialIds: readonly number[],
+	): StoredCredentialBlock[] {
 		if (credentialIds.length === 0) return [];
 		const nowMs = Date.now();
 		this.cleanExpiredCredentialBlocks(nowMs);
@@ -1148,7 +1272,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		for (const credentialId of credentialIds) {
 			if (seenCredentialIds.has(credentialId)) continue;
 			seenCredentialIds.add(credentialId);
-			const rows = this.#listCredentialBlocksByCredentialStmt.all(credentialId, nowMs) as CredentialBlockRow[];
+			const rows = this.#listCredentialBlocksByCredentialStmt.all(
+				credentialId,
+				nowMs,
+			) as CredentialBlockRow[];
 			for (const row of rows) {
 				blocks.push({
 					credentialId: row.credential_id,
@@ -1162,14 +1289,20 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		return blocks;
 	}
 
-	tryAcquireCredentialRefreshLease(credentialId: number, owner: string, expiresAtMs: number): boolean {
+	tryAcquireCredentialRefreshLease(
+		credentialId: number,
+		owner: string,
+		expiresAtMs: number,
+	): boolean {
 		const nowMs = Date.now();
 		// The second bound steals a lease stamped by a clock ahead of this one.
 		// Without it, a backward clock jump makes the row unstealable for the
 		// length of the jump and every refresh waiter polls until the clock
 		// catches up: a hung OAuth refresh, not a slow one. `updated_at` is whole
 		// seconds, so the tolerance is applied before the conversion.
-		const staleWriteCutoffSeconds = Math.ceil((nowMs + CREDENTIAL_CLOCK_TOLERANCE_MS) / 1000);
+		const staleWriteCutoffSeconds = Math.ceil(
+			(nowMs + CREDENTIAL_CLOCK_TOLERANCE_MS) / 1000,
+		);
 		const result = this.#acquireCredentialRefreshLeaseStmt.run(
 			credentialId,
 			owner,
@@ -1192,11 +1325,16 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		if (row.expires_at_ms <= nowMs) return undefined;
 		// Report a lease from a future clock as absent so the waiter retries the
 		// acquire (which now steals it) instead of sleeping out the jump.
-		if (isRecordFromFutureClock(epochSecondsToMs(row.updated_at), nowMs)) return undefined;
+		if (isRecordFromFutureClock(epochSecondsToMs(row.updated_at), nowMs))
+			return undefined;
 		return row.expires_at_ms;
 	}
 
-	renewCredentialRefreshLease(credentialId: number, owner: string, expiresAtMs: number): boolean {
+	renewCredentialRefreshLease(
+		credentialId: number,
+		owner: string,
+		expiresAtMs: number,
+	): boolean {
 		const result = this.#renewCredentialRefreshLeaseStmt.run(
 			expiresAtMs,
 			msToEpochSeconds(Date.now()),
@@ -1220,10 +1358,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		try {
 			for (const entry of entries) {
 				const bucket = Math.floor(entry.recordedAt / USAGE_HISTORY_BUCKET_MS);
-				const last = this.#lastUsageHistoryStmt.get(entry.provider, entry.accountKey, entry.limitId) as
-					| { id: number; recorded_at: number }
-					| undefined;
-				if (last && Math.floor(last.recorded_at / USAGE_HISTORY_BUCKET_MS) === bucket) {
+				const last = this.#lastUsageHistoryStmt.get(
+					entry.provider,
+					entry.accountKey,
+					entry.limitId,
+				) as { id: number; recorded_at: number } | undefined;
+				if (
+					last &&
+					Math.floor(last.recorded_at / USAGE_HISTORY_BUCKET_MS) === bucket
+				) {
 					this.#updateUsageHistoryStmt.run(
 						entry.recordedAt,
 						entry.email ?? null,
@@ -1259,7 +1402,11 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
 		try {
 			const provider = query?.provider ?? null;
-			const rows = this.#listUsageHistoryStmt.all(query?.sinceMs ?? 0, provider, provider) as Array<{
+			const rows = this.#listUsageHistoryStmt.all(
+				query?.sinceMs ?? 0,
+				provider,
+				provider,
+			) as Array<{
 				recorded_at: number;
 				provider: string;
 				account_key: string;
@@ -1272,7 +1419,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				status: string | null;
 				resets_at: number | null;
 			}>;
-			return rows.map(row => ({
+			return rows.map((row) => ({
 				recordedAt: row.recorded_at,
 				provider: row.provider as Provider,
 				accountKey: row.account_key,
@@ -1289,57 +1436,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			// An empty list is how this says "you have no recorded usage", so a failed query used to present a
 			// database it could not read as a clean history. The caller keeps its empty list, because a usage
 			// panel that cannot query is more useful empty than crashed, and the report is the difference.
-			logger.warn("Usage history could not be read; the usage view is showing none of it", {
-				error: errorMessage(error),
-			});
-			return [];
-		}
-	}
-	recordUsageCosts(entries: UsageCostHistoryEntry[]): void {
-		try {
-			for (const entry of entries) {
-				this.#insertUsageCostStmt.run(entry.recordedAt, entry.provider, entry.accountKey, entry.costUsd);
-			}
-		} catch (error) {
-			// Still not fatal to the request, but this is money: a dropped batch makes
-			// the cost view under-report spend, and an under-report is indistinguishable
-			// from cheap usage unless the drop is named.
-			logger.warn("Usage costs could not be recorded; the cost view will under-report this spend", {
-				entries: entries.length,
-				error: errorMessage(error),
-			});
-		}
-	}
-
-	listUsageCosts(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[] {
-		try {
-			const provider = query?.provider ?? null;
-			const accountKey = query?.accountKey ?? null;
-			const rows = this.#listUsageCostsStmt.all(
-				query?.sinceMs ?? 0,
-				provider,
-				provider,
-				accountKey,
-				accountKey,
-			) as Array<{
-				recorded_at: number;
-				provider: string;
-				account_key: string;
-				cost_usd: number;
-			}>;
-			return rows.map(row => ({
-				recordedAt: row.recorded_at,
-				provider: row.provider as Provider,
-				accountKey: row.account_key,
-				costUsd: row.cost_usd,
-			}));
-		} catch (error) {
-			// Same as `listUsageHistory`: zero recorded cost and an unreadable cost table are the same empty
-			// list, and reporting a total of $0 for a database that could not be queried is worse than saying
-			// so. The empty list is still returned so the view renders.
-			logger.warn("Usage cost history could not be read; the reported totals are missing all of it", {
-				error: errorMessage(error),
-			});
+			logger.warn(
+				"Usage history could not be read; the usage view is showing none of it",
+				{
+					error: errorMessage(error),
+				},
+			);
 			return [];
 		}
 	}
@@ -1445,8 +1547,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#lastUsageHistoryStmt.finalize();
 		this.#listUsageHistoryStmt.finalize();
 		this.#updateUsageHistoryStmt.finalize();
-		this.#insertUsageCostStmt.finalize();
-		this.#listUsageCostsStmt.finalize();
 		this.#getAccountNameStmt.finalize();
 		this.#listAccountNamesStmt.finalize();
 		this.#upsertAccountNameStmt.finalize();
@@ -1458,11 +1558,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 }
 
-function inferAuthSchemaVersionFromColumns(cols: Array<{ name?: string }>): number {
-	const hasDisabledCause = cols.some(column => column.name === "disabled_cause");
-	const hasIdentityKey = cols.some(column => column.name === "identity_key");
-	const hasAccountId = cols.some(column => column.name === "account_id");
-	const hasEmail = cols.some(column => column.name === "email");
+function inferAuthSchemaVersionFromColumns(
+	cols: Array<{ name?: string }>,
+): number {
+	const hasDisabledCause = cols.some(
+		(column) => column.name === "disabled_cause",
+	);
+	const hasIdentityKey = cols.some((column) => column.name === "identity_key");
+	const hasAccountId = cols.some((column) => column.name === "account_id");
+	const hasEmail = cols.some((column) => column.name === "email");
 	if (hasIdentityKey) return 3;
 	if (hasAccountId || hasEmail) return 2;
 	if (hasDisabledCause) return 1;
@@ -1485,6 +1589,10 @@ function disable(
 	try {
 		stmt.run(normalizeDisabledCause(disabledCause), target);
 	} catch (error) {
-		logger.warn(warning, { ...details, disabledCause, error: errorMessage(error) });
+		logger.warn(warning, {
+			...details,
+			disabledCause,
+			error: errorMessage(error),
+		});
 	}
 }
