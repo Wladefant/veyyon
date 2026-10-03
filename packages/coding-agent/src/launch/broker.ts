@@ -9,7 +9,6 @@ import {
 	clampLow,
 	errorMessage,
 	exponentialBackoffDelay,
-	isEexist,
 	isEnoent,
 	isProcessAlive,
 	logger,
@@ -19,10 +18,10 @@ import {
 import { processHandle } from "@veyyon/utils/native-process";
 import { truncateHead, truncateHeadBytes, truncateTail, truncateTailBytes } from "../session/streaming-output";
 import { workerEnvFromParent } from "../subprocess/worker-client";
+import { acquireBrokerLease, releaseBrokerLease } from "./broker-lease";
 import { appendDaemonCompletion, readDaemonCompletions } from "./completions";
 import {
 	daemonBrokerEndpoint,
-	daemonBrokerLeasePath,
 	daemonBrokerTokenPath,
 	managedDaemonDir,
 	managedDaemonLogPath,
@@ -135,10 +134,6 @@ interface ManagedDaemon {
 	termination?: DaemonTerminationSource;
 }
 
-interface BrokerLease {
-	path: string;
-	instanceId: string;
-}
 
 interface DaemonLogRead {
 	text: string;
@@ -282,49 +277,6 @@ class DaemonLog {
 	}
 }
 
-async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLease | null> {
-	const pidPath = daemonBrokerLeasePath(runtimeDir);
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			const handle = await fs.open(pidPath, "wx", 0o600);
-			const instanceId = crypto.randomUUID();
-			try {
-				await handle.writeFile(JSON.stringify({ pid: process.pid, instanceId }), "utf8");
-			} finally {
-				await handle.close();
-			}
-			return { path: pidPath, instanceId };
-		} catch (error) {
-			if (!isEexist(error)) throw error;
-			try {
-				// fs.readFile, not Bun.file().json(): a Bun.file read does not ref
-				// the event loop, so a broker that reaches this await with nothing
-				// else pending can exit 0 mid-read instead of settling the retry.
-				const raw: unknown = JSON.parse(await fs.readFile(pidPath, "utf8"));
-				if (typeof raw === "object" && raw !== null && "pid" in raw && typeof raw.pid === "number") {
-					// A live owner keeps its claim. Anything else leaves a stale PID
-					// file that the next loop iteration claims.
-					if (isProcessAlive(raw.pid)) return null;
-				}
-			} catch {
-				// Malformed or partially-written PID files are stale.
-			}
-			await fs.rm(pidPath, { force: true });
-		}
-	}
-	return null;
-}
-
-async function releaseBrokerLease(lease: BrokerLease): Promise<void> {
-	try {
-		const raw: unknown = JSON.parse(await fs.readFile(lease.path, "utf8"));
-		if (typeof raw === "object" && raw !== null && "instanceId" in raw && raw.instanceId === lease.instanceId) {
-			await fs.rm(lease.path, { force: true });
-		}
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-	}
-}
 
 function connectPort(host: string, port: number): Promise<boolean> {
 	const { promise, resolve } = Promise.withResolvers<boolean>();
