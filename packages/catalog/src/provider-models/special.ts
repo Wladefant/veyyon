@@ -228,6 +228,58 @@ export function zaiModelManagerOptions(_config: ZaiModelManagerConfig = {}): Mod
 }
 
 // ---------------------------------------------------------------------------
+// Synthetic role providers
+// ---------------------------------------------------------------------------
+
+export const LOCAL_STATIC_MODELS: readonly ModelSpec<"local-inference">[] = [
+	{ id: "kokoro", name: "Kokoro-82M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tts", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "parakeet-tdt-0.6b-v3", name: "Parakeet TDT 0.6B v3", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "whisper-base", name: "Whisper Base", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "whisper-small", name: "Whisper Small", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "whisper-large-v3-turbo", name: "Whisper Large v3 Turbo", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "lfm2.5-230m", name: "LFM2.5 230M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "lfm2.5-350m", name: "LFM2.5 350M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "falcon-h1-90m", name: "Falcon H1 Tiny 90M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "qwen3-1.7b", name: "Qwen3 1.7B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "llama3.2:3b", name: "Llama 3.2 3B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "gemma-3-1b", name: "Gemma 3 1B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "qwen2.5-1.5b", name: "Qwen2.5 1.5B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "lfm2-1.2b", name: "LFM2 1.2B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+];
+
+export function localModelManagerOptions(): ModelManagerOptions<"local-inference"> {
+	return {
+		providerId: "local",
+		staticModels: LOCAL_STATIC_MODELS,
+	};
+}
+
+export const WEB_STATIC_MODELS: readonly ModelSpec<"web-search">[] = [
+	"parallel", "perplexity", "zai", "exa", "tinyfish", "jina", "kagi", "tavily",
+	"firecrawl", "brave", "kimi", "synthetic", "ollama", "searxng", "startpage",
+	"duckduckgo", "ecosia", "google", "mojeek", "public",
+].map(id => ({
+	id,
+	name: id === "public" ? "Public Web" : id === "zai" ? "Z.AI" : id.charAt(0).toUpperCase() + id.slice(1),
+	api: "web-search" as const,
+	provider: "web" as const,
+	baseUrl: "web://search",
+	kind: "search" as const,
+	reasoning: false,
+	input: ["text" as const],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: null,
+	maxTokens: null,
+}));
+
+export function webModelManagerOptions(): ModelManagerOptions<"web-search"> {
+	return {
+		providerId: "web",
+		staticModels: WEB_STATIC_MODELS,
+	};
+}
+
+// ---------------------------------------------------------------------------
 // TypeSafe
 // ---------------------------------------------------------------------------
 

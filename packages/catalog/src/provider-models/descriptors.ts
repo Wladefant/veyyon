@@ -71,7 +71,9 @@ import {
 	gitLabDuoWorkflowModelManagerOptions,
 	resolveCursorCacheProviderId,
 	resolveGitLabDuoWorkflowCacheProviderId,
+	localModelManagerOptions,
 	typesafeModelManagerOptions,
+	webModelManagerOptions,
 	zaiModelManagerOptions,
 } from "./special";
 
@@ -285,6 +287,12 @@ export const CATALOG_PROVIDERS = [
 		createModelManagerOptions: (config: ModelManagerConfig) => litellmModelManagerOptions(config),
 		resolveCacheProviderId: resolveLitellmCacheProviderId,
 		catalogDiscovery: { label: "LiteLLM", allowUnauthenticated: true },
+	},
+	{
+		id: "local",
+		defaultModel: "lfm2.5-230m",
+		createModelManagerOptions: () => localModelManagerOptions(),
+		catalogDiscovery: { label: "Local Inference", allowUnauthenticated: true },
 	},
 	{
 		id: "lm-studio",
@@ -508,6 +516,12 @@ export const CATALOG_PROVIDERS = [
 			label: "Wafer Serverless",
 			oauthProvider: "wafer-serverless",
 		},
+	},
+	{
+		id: "web",
+		defaultModel: "public",
+		createModelManagerOptions: () => webModelManagerOptions(),
+		catalogDiscovery: { label: "Web Search", allowUnauthenticated: true },
 	},
 	{
 		id: "coreweave",

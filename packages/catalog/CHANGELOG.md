@@ -6,6 +6,7 @@
 
 - Declared GPT-6 Astra reasoning configuration-update support and generated first-party GPT-6 freeform `apply_patch` metadata ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved specialist runner models across authoritative dynamic discovery pruning and collision resolution, and inherited model kinds and web search grounding capabilities ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Registered local inference and web search synthetic role providers with specialist static model seeds ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added TypeSafe dynamic judge model discovery and catalog descriptor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the StepFun provider (`stepfun`) with live model discovery, reasoning-effort controls, and bundled default models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added catalog descriptors and static model definitions for Abliteration, Meta Model API, and Muse Code ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
