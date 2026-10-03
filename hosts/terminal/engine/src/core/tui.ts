@@ -69,13 +69,11 @@ import {
 	OverlayStack,
 } from "./overlay";
 import {
-	altScreenSequence,
 	chunkStillPainted,
 	firstChangedRow,
 	fullPaintReplay,
 	homeRewriteSequence,
 	lastChangedRow,
-	sameAltPaint,
 	scrollAppendSequence,
 	seamRewriteSequence,
 	windowDiffSequence,
@@ -3736,6 +3734,11 @@ export class TUI extends Container {
 				this.terminal.showCursor();
 				this.#cursor.recordRowOnly(cursor.row, true);
 				this.#altPreviousCursor = cursor;
+			} else if (this.#altPreviousCursor !== undefined) {
+				// Rows are unchanged but the caret marker is gone: the paint prologue hides the
+				// hardware cursor, which a skipped paint would leave on screen.
+				this.terminal.write(`${this.#paintBeginSequence}${this.#paintEndSequence}`);
+				this.#altPreviousCursor = undefined;
 			}
 			return;
 		}
