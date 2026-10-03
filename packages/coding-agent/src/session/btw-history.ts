@@ -130,9 +130,7 @@ export class BtwHistoryStore {
 	 * each focused agent's side conversations apart from main and its siblings.
 	 */
 	static async open(artifactsDir: string | undefined, scope?: string): Promise<BtwHistoryStore> {
-		const store = new BtwHistoryStore(
-			artifactsDir === undefined ? undefined : historyDirectory(artifactsDir, scope),
-		);
+		const store = new BtwHistoryStore(artifactsDir === undefined ? undefined : historyDirectory(artifactsDir, scope));
 		if (store.#directory === undefined) return store;
 		let names: string[];
 		try {
