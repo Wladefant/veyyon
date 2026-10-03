@@ -19,6 +19,11 @@ export interface FileLockOptions {
 	retryDelayMs?: number;
 }
 
+/** An exclusive advisory lock handle. Releasing an already-released handle is idempotent and safe. */
+export interface FileLockHandle {
+	release(): Promise<void>;
+}
+
 const DEFAULT_OPTIONS: Required<FileLockOptions> = {
 	staleMs: 10_000,
 	retries: 50,
@@ -952,6 +957,26 @@ function acquireLockSync(filePath: string, options: FileLockOptions = {}): () =>
 }
 
 /**
+ * Acquire an exclusive advisory file lock on `filePath`.
+ *
+ * Returns a {@link FileLockHandle} whose `release()` method releases the
+ * advisory lock. Calling `release()` multiple times is idempotent and safe.
+ */
+export async function acquireFileLock(filePath: string, options: FileLockOptions = {}): Promise<FileLockHandle> {
+	const release = await acquireLock(filePath, options);
+	let released = false;
+	let releasePromise: Promise<void> | undefined;
+	return {
+		async release(): Promise<void> {
+			if (!released) {
+				released = true;
+				releasePromise = release();
+			}
+			await releasePromise;
+		},
+	};
+}
+/**
  * Run `fn` while holding a cross-process advisory lock on the pathname.
  *
  * This API deliberately has generic pathname-only alias semantics: two callers
@@ -964,11 +989,11 @@ export async function withFileLock<T>(
 	fn: () => Promise<T>,
 	options: FileLockOptions = {},
 ): Promise<T> {
-	const release = await acquireLock(filePath, options);
+	const handle = await acquireFileLock(filePath, options);
 	try {
 		return await fn();
 	} finally {
-		await release();
+		await handle.release();
 	}
 }
 
