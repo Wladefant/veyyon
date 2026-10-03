@@ -111,6 +111,7 @@ packages/coding-agent/test/core/prompt-registry-coverage.test.ts
 packages/coding-agent/test/export/custom-share.test.ts
 packages/coding-agent/test/extensibility/legacy-pi-ai-type-remap.test.ts
 packages/coding-agent/test/extensibility/legacy-pi-inplace-load.test.ts
+packages/coding-agent/test/fixtures/legacy-module-table.ts
 packages/coding-agent/test/fixtures/run-root-command-piped-stdin.ts
 packages/coding-agent/test/image-b64poly.test.ts
 packages/coding-agent/test/oracles/historical-loader.ts

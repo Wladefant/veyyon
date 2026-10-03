@@ -32,19 +32,25 @@ const IS_COMPILED_BINARY = isCompiledBinary();
 // from current package exports inside a Bun build plugin: no generated source
 // or duplicate key list exists on disk. Runtime extension loading stays lazy —
 // the virtual module is evaluated only when an extension requests a host
-// package — but the compiler still sees every possible edge at build time.
+// package, and a key's export record is built only when an extension imports
+// that key — but the compiler still sees every possible edge at build time.
 const BUNDLED_VIRTUAL_SCHEME = "veyyon-legacy-pi-bundled:";
 const BUNDLED_VIRTUAL_NAMESPACE = "veyyon-legacy-pi-bundled";
 const BUNDLED_MODULES_GLOBAL = "__veyyonLegacyPiBundledModules";
 const TYPEBOX_BUNDLED_MODULE_KEY = "typebox";
 
-type BundledModules = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+type BundledModule = Readonly<Record<string, unknown>>;
+type BundledModuleLoaders = Readonly<Record<string, () => BundledModule>>;
 
-let bundledModulesPromise: Promise<BundledModules> | null = null;
+let bundledModuleLoadersPromise: Promise<BundledModuleLoaders> | null = null;
+
+/** Export records built so far, by key; the synthetic module source reads them through `globalThis`. */
+const bundledModules: Record<string, BundledModule> = {};
 
 /**
- * Lazy-load the build-supplied host modules and stash them on `globalThis` for
- * the synthetic module source emitted by `synthesizeBundledModuleSource`.
+ * Lazy-load the build-supplied table of host module loaders and stash the
+ * export records for the synthetic module source emitted by
+ * `synthesizeBundledModuleSource` on `globalThis`.
  *
  * `globalThis` is the bridge: each `veyyon-legacy-pi-bundled:<key>` source string
  * becomes a separate ES module and cannot close over this file's lexical scope.
@@ -52,17 +58,17 @@ let bundledModulesPromise: Promise<BundledModules> | null = null;
  * never execute it; binary builds resolve the literal through the in-memory
  * plugin in `scripts/legacy-pi-virtual-module.ts`.
  */
-function ensureBundledModulesLoaded(): Promise<BundledModules> {
+function ensureBundledModuleLoaders(): Promise<BundledModuleLoaders> {
 	if (!IS_COMPILED_BINARY) {
 		return Promise.reject(new Error("veyyon:legacy-pi-shim: bundled modules are only available in compiled mode"));
 	}
-	if (!bundledModulesPromise) {
-		bundledModulesPromise = import("veyyon-legacy-pi-modules").then(module => {
-			Reflect.set(globalThis, BUNDLED_MODULES_GLOBAL, module.BUNDLED_PI_MODULES);
+	if (!bundledModuleLoadersPromise) {
+		bundledModuleLoadersPromise = import("veyyon-legacy-pi-modules").then(module => {
+			Reflect.set(globalThis, BUNDLED_MODULES_GLOBAL, bundledModules);
 			return module.BUNDLED_PI_MODULES;
 		});
 	}
-	return bundledModulesPromise;
+	return bundledModuleLoadersPromise;
 }
 
 function bundledModuleVirtualSpecifier(moduleKey: string): string {
@@ -77,7 +83,10 @@ function isBundledVirtualSpecifier(value: string): boolean {
  * Build a synthetic ES module for one live bundled namespace. Every export
  * reads through the global bridge; no bunfs path or copied package is involved.
  */
-function synthesizeBundledModuleSourceFromModules(moduleKey: string, modules: BundledModules): string {
+function synthesizeBundledModuleSourceFromModules(
+	moduleKey: string,
+	modules: Readonly<Record<string, BundledModule>>,
+): string {
 	const mod = modules[moduleKey];
 	if (!mod) {
 		throw new Error(`veyyon:legacy-pi-shim: no bundled module registered for ${moduleKey}`);
@@ -105,14 +114,17 @@ function synthesizeBundledModuleSourceFromModules(moduleKey: string, modules: Bu
  * `veyyon-legacy-pi-bundled:<key>` import.
  */
 async function synthesizeBundledModuleSource(moduleKey: string): Promise<string> {
-	const modules = await ensureBundledModulesLoaded();
-	return synthesizeBundledModuleSourceFromModules(moduleKey, modules);
+	const loaders = await ensureBundledModuleLoaders();
+	if (!Object.hasOwn(bundledModules, moduleKey) && Object.hasOwn(loaders, moduleKey)) {
+		bundledModules[moduleKey] = loaders[moduleKey]!();
+	}
+	return synthesizeBundledModuleSourceFromModules(moduleKey, bundledModules);
 }
 
 /** Test seam for the virtual module's named/default export forwarding. */
 export function __synthesizeLegacyPiBundledSourceWithModules(
 	moduleKey: string,
-	modules: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+	modules: Readonly<Record<string, BundledModule>>,
 ): string {
 	return synthesizeBundledModuleSourceFromModules(moduleKey, modules);
 }
@@ -455,8 +467,8 @@ function ensureLegacyPiOverridesReady(): Promise<void> {
 		return Promise.resolve();
 	}
 	if (!legacyPiOverridesReadyPromise) {
-		legacyPiOverridesReadyPromise = ensureBundledModulesLoaded().then(modules => {
-			legacyPiPackageRootOverrides = __buildLegacyPiPackageRootOverrides(true, Object.keys(modules));
+		legacyPiOverridesReadyPromise = ensureBundledModuleLoaders().then(loaders => {
+			legacyPiPackageRootOverrides = __buildLegacyPiPackageRootOverrides(true, Object.keys(loaders));
 		});
 	}
 	return legacyPiOverridesReadyPromise;
