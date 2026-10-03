@@ -29,7 +29,7 @@ import type { ToolSession } from "../tools";
 import * as git from "../utils/git";
 import type { ExecutorOptions } from "./executor";
 import { runSubprocess } from "./executor";
-import { isMountingIsolationBackend, writeRetainedBackend } from "./isolation-ownership";
+import { writeRetainedBackend } from "./isolation-ownership";
 import type { SingleResult } from "./types";
 import * as worktree from "./worktree";
 import {
@@ -261,7 +261,7 @@ export async function retainIsolationWorkspace(
 ): Promise<RetainedWorkspace> {
 	const baseDir = path.dirname(isolationDir);
 	let retainedBase = baseDir;
-	const needsSidecar = backend !== undefined && isMountingIsolationBackend(backend);
+	const needsSidecar = backend !== undefined;
 	// Projfs owns process-local handles keyed by the original root. Moving that
 	// live root would detach it from the only process that can stop it.
 	if (backend !== natives.IsoBackendKind.Projfs) {

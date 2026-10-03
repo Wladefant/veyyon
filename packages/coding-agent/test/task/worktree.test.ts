@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
 	applyNestedPatches,
 	captureBaseline,
@@ -134,6 +135,35 @@ describe("worktree isolation helpers", () => {
 			vi.restoreAllMocks();
 		});
 
+		// WHY: a retained Projfs projection remains in its original deterministic
+		// slot. Retrying the task must never remove it, with or without metadata.
+		// Native mount setup is substituted; actual kernel mounts are not proved.
+		for (const sidecarFails of [false, true]) {
+			it(`preserves a retained projection on slot reuse when metadata ${sidecarFails ? "fails" : "succeeds"}`, async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Projfs,
+					candidates: [natives.IsoBackendKind.Projfs],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+					await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "unrecovered projection");
+				});
+				const id = `retained-projection-${sidecarFails}`;
+				const handle = await ensureIsolation(repo, id);
+				if (sidecarFails) {
+					vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("ENOSPC"));
+				}
+				const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
+				expect(retained.sidecarOk).toBe(!sidecarFails);
+				expect(retained.dir).toBe(handle.mergedDir);
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+				expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe(
+					"unrecovered projection",
+				);
+			});
+		}
 		it("retries isoResolve candidates when a backend is path-unavailable", async () => {
 			const unavailable = new Error("ISO_UNAVAILABLE: btrfs source is not a subvolume");
 			const isoResolve = vi.spyOn(natives, "isoResolve").mockReturnValue({

@@ -511,7 +511,7 @@ describe("retainIsolationWorkspace", () => {
 		expect(await readRetainedMountBackend(baseDir)).toBe(natives.IsoBackendKind.Projfs);
 	});
 
-	it("records no sidecar for copy backends that need no unmount", async () => {
+	it("records copy backends so cleanup can distinguish them from unknown mounts", async () => {
 		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-rcopy-"));
 		tempRoots.push(parent);
 		const isolationDir = path.join(parent, "wt_abc123", "m");
@@ -520,7 +520,11 @@ describe("retainIsolationWorkspace", () => {
 		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Rcopy);
 
 		expect(retained.sidecarOk).toBe(true);
-		expect(await Bun.file(path.join(path.dirname(retained.dir), RETAINED_BACKEND_FILE)).exists()).toBe(false);
+		expect(await readRetainedMountBackend(path.dirname(retained.dir))).toBeUndefined();
+		const metadata = JSON.parse(
+			await fs.readFile(path.join(path.dirname(retained.dir), RETAINED_BACKEND_FILE), "utf8"),
+		);
+		expect(metadata.backend).toBe(natives.IsoBackendKind.Rcopy);
 		tempRoots.push(path.dirname(retained.dir));
 	});
 

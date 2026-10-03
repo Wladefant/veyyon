@@ -482,9 +482,18 @@ export async function ensureIsolation(
 	const resolution = natives.isoResolve(preferred ?? null);
 	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
 	let fallbackReason = resolution.reason ?? null;
+	// Claim the slot atomically. An existing directory may be a retained live
+	// projection, even when writing its backend metadata failed.
+	await fs.mkdir(path.dirname(baseDir), { recursive: true });
 
 	for (const candidate of candidates) {
-		await fs.rm(baseDir, { recursive: true, force: true });
+		try {
+			await fs.mkdir(baseDir);
+		} catch (error) {
+			throw new Error(`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement`, {
+				cause: error,
+			});
+		}
 		try {
 			await natives.isoStart(candidate, repoRoot, mergedDir);
 			const fellBack = candidate !== resolution.kind || resolution.fellBack;

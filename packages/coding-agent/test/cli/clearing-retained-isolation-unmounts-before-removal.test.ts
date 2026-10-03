@@ -182,12 +182,14 @@ describe("retained isolation cleanup", () => {
 		expect(process.exitCode).toBe(0);
 	});
 
-	it("keeps the ordinary clear path for a workspace without a retained sidecar", async () => {
+	it("preserves workspace data when retained backend metadata is missing", async () => {
 		const workspace = await makeWorkspace();
-		vi.spyOn(natives, "isoStop").mockRejectedValue(new Error("Ordinary workspace was stopped"));
+		vi.spyOn(natives, "isoStop").mockRejectedValue(new Error("Unknown workspace was stopped"));
 		await clearWorktrees({ all: false, dryRun: false, json: true });
-		expect(JSON.parse(stdout)).toMatchObject({ removed: 1, failed: 0 });
-		expect(await exists(workspace)).toBe(false);
+		const result = JSON.parse(stdout);
+		expect(result).toMatchObject({ removed: 0, failed: 1 });
+		expect(result.results[0].error).toContain("Missing retained backend metadata");
+		expect(await fs.readFile(path.join(workspace, "m", "changes.txt"), "utf8")).toBe("unrecovered changes");
 	});
 
 	it("preserves workspace data and refuses clear when retained metadata is corrupted", async () => {

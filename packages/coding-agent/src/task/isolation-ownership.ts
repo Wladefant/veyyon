@@ -23,9 +23,8 @@ export function isMountingIsolationBackend(backend: unknown): backend is natives
 }
 
 /**
- * Record which backend mounted a retained workspace, so cleanup can unmount
- * it before removal. Best-effort: retention stays valid without it (the
- * workspace merely falls back to plain recursive removal).
+ * Record every retained backend. Cleanup requires this record to distinguish
+ * copy workspaces from mounts; a missing record never authorizes removal.
  */
 export async function writeRetainedBackend(baseDir: string, backend: natives.IsoBackendKind): Promise<void> {
 	await fs.writeFile(
@@ -37,9 +36,8 @@ export async function writeRetainedBackend(baseDir: string, backend: natives.Iso
 
 /**
  * Backend recorded for a retained workspace when it needs unmount-before-
- * remove. `undefined` for ordinary sandboxes without a sidecar. When the sidecar
- * is present, any failure to read, parse, or validate the mounting backend throws
- * so cleanup fails closed rather than performing destructive recursive removal.
+ * remove. `undefined` only for a recorded copy or snapshot backend. Missing,
+ * unreadable or invalid metadata fails closed.
  */
 export async function readRetainedMountBackend(dir: string): Promise<natives.IsoBackendKind | undefined> {
 	const sidecarPath = path.join(dir, RETAINED_BACKEND_FILE);
@@ -47,7 +45,7 @@ export async function readRetainedMountBackend(dir: string): Promise<natives.Iso
 	try {
 		raw = await fs.readFile(sidecarPath, "utf8");
 	} catch (error) {
-		if (isEnoent(error)) return undefined;
+		if (isEnoent(error)) throw new Error(`Missing retained backend metadata in ${dir}; refusing removal`);
 		throw error;
 	}
 	let decoded: unknown;
