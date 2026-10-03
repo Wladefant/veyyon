@@ -76,8 +76,15 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * `@veyyon/utils/stall-sampler`, the event-loop stall profile `core/tui.ts` arms. Both import
  * `node:` built-ins and utils leaves the shell already evaluates. The ceiling keeps the one leaf of
  * margin.
+ *
+ * RE-MEASURED 2026-10-03 at 358, from 355: `@veyyon/utils/activity-signal`, the keystroke and frame
+ * report that parks the samplers of a resting session, which `core/tui.ts` reports to;
+ * `@veyyon/utils/rearming-timeout`, the timer the samplers re-arm in place; and
+ * `@veyyon/utils/idle-trim`, whose busy-CPU threshold the loop watchdog `core/tui.ts` arms reads. The
+ * first two import nothing, and `idle-trim` imports them, the logger and `@veyyon/natives`, which the
+ * shell already evaluates. The ceiling keeps the one leaf of margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 357;
+const SHELL_GRAPH_MODULE_CEILING = 360;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });
