@@ -4847,6 +4847,21 @@ function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }
+
+/**
+ * An assistant `message` item's array content is typed per shape: a native output
+ * message carries `output_text` / `refusal` parts, an easy input message carries
+ * `input_*` parts. Only a part of the first kind holds model text to redact, so
+ * the guard selects the item by whether its content holds one.
+ */
+function isOutputMessageWithRedactableParts(item: ResponseInput[number]): item is ResponseOutputMessage {
+	return (
+		item.type === "message" &&
+		Array.isArray(item.content) &&
+		item.content.some(part => part.type === "output_text" || part.type === "refusal")
+	);
+}
+
 function sanitizeReplayedAssistantNativeItem(item: ResponseInput[number]): ResponseInput[number] {
 	if (item.type === "reasoning") return item;
 	if (item.type === "function_call" && "arguments" in item && typeof item.arguments === "string") {
@@ -4862,7 +4877,7 @@ function sanitizeReplayedAssistantNativeItem(item: ResponseInput[number]): Respo
 			const redacted = redactSensitiveCredentials(item.content);
 			return redacted !== item.content ? { ...item, content: redacted } : item;
 		}
-		if (Array.isArray(item.content)) {
+		if (isOutputMessageWithRedactableParts(item)) {
 			let changed = false;
 			const content = item.content.map(part => {
 				if (part.type === "output_text" && typeof part.text === "string") {

@@ -54,8 +54,8 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 			}) as unknown as AssistantMessage;
 
 		const resAppend = convertCodexResponsesMessages(model, { messages: [mkMsg(true)] });
-		expect(resAppend[0]).toEqual({ type: "reasoning", encrypted_content: "enc_data" });
-		expect(resAppend[1]).toEqual({
+		expect<unknown>(resAppend[0]).toEqual({ type: "reasoning", encrypted_content: "enc_data" });
+		expect<unknown>(resAppend[1]).toEqual({
 			type: "message",
 			role: "assistant",
 			content: [{ type: "output_text", text: "key: [github_token_redacted]" }],
@@ -71,8 +71,8 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 			messages: [{ role: "user", content: "hi", timestamp: 0 }, mkMsg(false)],
 		});
 		expect(resSplice.length).toBe(3);
-		expect(resSplice[0]).toEqual({ type: "reasoning", encrypted_content: "enc_data" });
-		expect(resSplice[1]).toEqual({
+		expect<unknown>(resSplice[0]).toEqual({ type: "reasoning", encrypted_content: "enc_data" });
+		expect<unknown>(resSplice[1]).toEqual({
 			type: "message",
 			role: "assistant",
 			content: [{ type: "output_text", text: "key: [github_token_redacted]" }],
@@ -109,7 +109,7 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 				messages: [{ role: "user", content: "prefix", timestamp: 0 }, assistant],
 			});
 			expect(JSON.stringify(replay)).not.toContain(token);
-			expect(replay.at(-1)).toEqual({
+			expect<unknown>(replay.at(-1)).toEqual({
 				type: "message",
 				role: "assistant",
 				content: [{ type: "output_text", text: "[github_token_redacted]" }],
