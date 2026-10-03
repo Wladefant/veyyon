@@ -370,6 +370,10 @@ describe("collectCodexCompactionV2Events", () => {
 		);
 		expect(returnCalled).toBe(true);
 	});
+	// The ai program has no DOM lib, so name the listener types through AbortSignal itself.
+	type AbortListener = Parameters<AbortSignal["addEventListener"]>[1];
+	type AbortAddOptions = Parameters<AbortSignal["addEventListener"]>[2];
+	type AbortRemoveOptions = Parameters<AbortSignal["removeEventListener"]>[2];
 	function createTrackedSignal(): {
 		signal: AbortSignal;
 		abort: (reason?: unknown) => void;
@@ -380,15 +384,11 @@ describe("collectCodexCompactionV2Events", () => {
 		const controller = new AbortController();
 		let addCalls = 0;
 		let removeCalls = 0;
-		const active = new Set<EventListenerOrEventListenerObject>();
+		const active = new Set<AbortListener>();
 		const origAdd = controller.signal.addEventListener.bind(controller.signal);
 		const origRemove = controller.signal.removeEventListener.bind(controller.signal);
 
-		controller.signal.addEventListener = (
-			type: string,
-			listener: EventListenerOrEventListenerObject,
-			options?: boolean | AddEventListenerOptions,
-		) => {
+		controller.signal.addEventListener = (type: string, listener: AbortListener, options?: AbortAddOptions) => {
 			if (type === "abort") {
 				addCalls++;
 				active.add(listener);
@@ -396,11 +396,7 @@ describe("collectCodexCompactionV2Events", () => {
 			return origAdd(type, listener, options);
 		};
 
-		controller.signal.removeEventListener = (
-			type: string,
-			listener: EventListenerOrEventListenerObject,
-			options?: boolean | EventListenerOptions,
-		) => {
+		controller.signal.removeEventListener = (type: string, listener: AbortListener, options?: AbortRemoveOptions) => {
 			if (type === "abort") {
 				removeCalls++;
 				active.delete(listener);

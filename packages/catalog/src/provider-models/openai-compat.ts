@@ -3024,6 +3024,73 @@ function normalizeOpenCodeBasePath(
 function openCodeBaseUrlForApi(api: Api, basePath: string): string {
 	return api === "anthropic-messages" ? basePath : `${basePath}/v1`;
 }
+// Per-id API pins correcting upstream metadata mismatches on the OpenCode
+// gateways. Applied in two places: the models.dev resolver rules
+// (OPENCODE_ZEN_API_RESOLUTION / OPENCODE_GO_API_RESOLUTION) and the live
+// /v1/models discovery mapper in openCodeModelManagerOptions — the gateways
+// list ids that models.dev omits entirely (muse-spark-1.2[-contributor] on
+// opencode-go, #8957), so discovery cannot rely on bundled references alone.
+//
+// OpenCode Zen: models.dev declares minimax-m3-free (and forward-compat
+// minimax-m3) with `provider.npm = "@ai-sdk/anthropic"`, but the Zen gateway
+// only serves them at https://opencode.ai/zen/v1/chat/completions (verified
+// against the live /v1/models response — minimax-m3-free is listed there, and
+// the gateway has no /v1/messages route for it). Without this override the
+// resolver POSTs anthropic-shaped requests to /v1/messages and the UI surfaces
+// raw <invoke>/<|minimax|>/<tool_call> markup (#1617).
+export const OPENCODE_ZEN_API_ID_OVERRIDES: Readonly<Record<string, Api>> = {
+	"minimax-m3": "openai-completions",
+	"minimax-m3-free": "openai-completions",
+};
+// OpenCode Go: models.dev declares minimax-m2.7 / qwen3.5-plus / qwen3.6-plus
+// (and now also minimax-m3) with `provider.npm = "@ai-sdk/anthropic"`, but
+// the OpenCode Go gateway only serves them at
+// `https://opencode.ai/zen/go/v1/chat/completions` (verified against
+// https://opencode.ai/zen/go/v1/models and the upstream endpoint table at
+// https://opencode.ai/docs/go/#endpoints — minimax-m2.5 works the same way
+// and lacks an `npm` field on models.dev so it already falls through to the
+// openai-completions default). Without this override the resolver would POST
+// anthropic-style requests to /v1/messages and the gateway would return its
+// `Page Not Found` HTML (issue #887 for the qwen/m2.7 entries; minimax-m3
+// and minimax-m3-free added under #1617 for the same root cause).
+//
+// deepseek-v4-flash is the inverse case: it falls through to
+// openai-completions by default, but the Go gateway's
+// /zen/go/v1/chat/completions route does not work for this model while
+// /zen/go/v1/responses does (user-verified against the live gateway,
+// 2026-08-08; Flash only — deepseek-v4-pro serves fine on chat completions).
+//
+// muse-spark-1.2 / muse-spark-1.2-contributor are the same inverse case, but
+// worse: models.dev does not list them under opencode-go at all, so they have
+// no bundled reference and only exist via live gateway discovery. Without the
+// discovery-side pin they default to openai-completions even though the
+// gateway only serves them at /zen/go/v1/responses (@ai-sdk/openai per
+// https://opencode.ai/docs/go/#endpoints). The completions parser then closes
+// the stream with no finish_reason on every tool-call turn (#8957).
+export const OPENCODE_GO_API_ID_OVERRIDES: Readonly<Record<string, Api>> = {
+	"deepseek-v4-flash": "openai-responses",
+	"muse-spark-1.2": "openai-responses",
+	"muse-spark-1.2-contributor": "openai-responses",
+	"minimax-m2.7": "openai-completions",
+	"minimax-m3": "openai-completions",
+	"minimax-m3-free": "openai-completions",
+	"qwen3.5-plus": "openai-completions",
+	"qwen3.6-plus": "openai-completions",
+};
+
+// Billing-variant suffixes the OpenCode gateways append to a base model id
+// without changing its transport (`deepseek-v4-flash-free`,
+// `muse-spark-1.2-contributor`).
+const OPENCODE_VARIANT_SUFFIXES = ["-contributor", "-free"] as const;
+
+/** Strips a billing-variant suffix; null when `id` is not a variant. */
+function openCodeBaseModelId(id: string): string | null {
+	for (const suffix of OPENCODE_VARIANT_SUFFIXES) {
+		if (id.endsWith(suffix) && id.length > suffix.length) return id.slice(0, -suffix.length);
+	}
+	return null;
+}
+
 
 function resolveOpenCodeDiscoveryBaseUrl(
 	baseUrl: string | undefined,
@@ -3113,6 +3180,31 @@ function openCodeModelManagerOptions(
 		basePath,
 	);
 	const bundledReferences = createBundledReferenceMap<Api>(providerId);
+	// Both gateways share one operator with identical endpoint semantics, so
+	// the sibling's bundled catalog is a routing hint for ids models.dev has
+	// not picked up under this gateway yet.
+	const siblingReferences = createBundledReferenceMap<Api>(
+		providerId === "opencode-go" ? "opencode-zen" : "opencode-go",
+	);
+	const apiOverrides =
+		providerId === "opencode-go"
+			? OPENCODE_GO_API_ID_OVERRIDES
+			: OPENCODE_ZEN_API_ID_OVERRIDES;
+	// Routes a discovered id with no same-provider metadata. models.dev lags
+	// the gateway (muse-spark-1.2[-contributor] shipped gateway-first, #8957),
+	// so borrow the openai-responses route from the sibling gateway or the
+	// billing-variant base id. Responses ONLY: openai-completions is already
+	// the default, and anthropic-messages transports genuinely diverge across
+	// gateways (e.g. minimax-m2.5), so borrowing them would import upstream
+	// metadata noise as hard routing errors.
+	const fallbackApi = (id: string, base: string | null): Api | undefined => {
+		const hints = [
+			siblingReferences.get(id)?.api,
+			base ? bundledReferences.get(base)?.api : undefined,
+			base ? siblingReferences.get(base)?.api : undefined,
+		];
+		return hints.includes("openai-responses") ? "openai-responses" : undefined;
+	};
 	return {
 		providerId,
 		cacheProviderId: openCodeModelCacheProviderId(
@@ -3121,6 +3213,12 @@ function openCodeModelManagerOptions(
 			discoveryBaseUrl,
 		),
 		dynamicModelsAuthoritative: true,
+		// The per-id API pins are cache identity: without this, rows cached
+		// before a pin was added keep the wrong endpoint until TTL expiry
+		// (#8957 — 17.3.7 caches held muse-spark-1.2[-contributor] on chat
+		// completions after the pin shipped). Sibling-catalog drift is bounded
+		// by the 2h cache TTL instead.
+		dropCachedModelIdsOnStaticMismatch: Object.keys(apiOverrides),
 		...(apiKey && {
 			fetchDynamicModels: async (hooks) => {
 				const modelsDevReferences = await loadOpenCodeModelsDevReferences(
@@ -3149,17 +3247,31 @@ function openCodeModelManagerOptions(
 							entry.name,
 							reference?.name ?? defaults.name,
 						);
+						const base = openCodeBaseModelId(defaults.id);
+						// Pins win over bundled references (stale bundled routes
+						// must not stick), and a base-id pin covers its billing
+						// variants; the responses fallback covers gateway-first ids.
+						const api =
+							apiOverrides[defaults.id] ??
+							(base ? apiOverrides[base] : undefined) ??
+							reference?.api ??
+							fallbackApi(defaults.id, base) ??
+							defaults.api;
+						const baseUrl = openCodeBaseUrlForApi(api, basePath);
 						if (!reference) {
 							return {
 								...defaults,
 								name,
+								api,
+								baseUrl,
 							};
 						}
 						return {
 							...reference,
 							id: defaults.id,
 							name,
-							baseUrl: openCodeBaseUrlForApi(reference.api, basePath),
+							api,
+							baseUrl,
 							contextWindow: toPositiveNumber(
 								entry.context_length,
 								reference.contextWindow,
@@ -3351,14 +3463,14 @@ export function openrouterModelManagerOptions(
 							cacheWrite:
 								toPositiveNumber(pricing?.input_cache_write, 0) * 1_000_000,
 						},
-						contextWindow:
-							typeof entry.context_length === "number"
-								? entry.context_length
-								: baseModel.contextWindow,
-						maxTokens:
-							typeof topProvider?.max_completion_tokens === "number"
-								? topProvider.max_completion_tokens
-								: baseModel.maxTokens,
+						contextWindow: toPositiveNumber(
+							entry.context_length,
+							baseModel.contextWindow,
+						),
+						maxTokens: toPositiveNumber(
+							topProvider?.max_completion_tokens,
+							baseModel.maxTokens,
+						),
 						...(!supportsToolChoice && {
 							compat: {
 								...(baseModel.compat ?? {}),
@@ -6394,40 +6506,11 @@ function createOpenCodeApiResolution(
 // raw <invoke>/<|minimax|>/<tool_call> markup (#1617).
 const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution(
 	"https://opencode.ai/zen",
-	{
-		"minimax-m3": "openai-completions",
-		"minimax-m3-free": "openai-completions",
-	},
+	OPENCODE_ZEN_API_ID_OVERRIDES,
 );
-// OpenCode Go: models.dev declares minimax-m2.7 / qwen3.5-plus / qwen3.6-plus
-// (and now also minimax-m3) with `provider.npm = "@ai-sdk/anthropic"`, but
-// the OpenCode Go gateway only serves them at
-// `https://opencode.ai/zen/go/v1/chat/completions` (verified against
-// https://opencode.ai/zen/go/v1/models and the upstream endpoint table at
-// https://opencode.ai/docs/go/#endpoints — minimax-m2.5 works the same way
-// and lacks an `npm` field on models.dev so it already falls through to the
-// openai-completions default). Without this override the resolver would POST
-// anthropic-style requests to /v1/messages and the gateway would return its
-// `Page Not Found` HTML (issue #887 for the qwen/m2.7 entries; minimax-m3
-// and minimax-m3-free added under #1617 for the same root cause).
-//
-// muse-spark-1.2 / muse-spark-1.2-contributor are the same inverse case: the
-// Go gateway's /zen/go/v1/models discovery drops the `provider.npm` hint, so
-// without an override they fall through to openai-completions even though the
-// gateway only serves them at /zen/go/v1/responses (@ai-sdk/openai per
-// https://opencode.ai/docs/go/#endpoints). The completions parser then closes
-// the stream with no finish_reason on every tool-call turn (#8957).
 const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution(
 	"https://opencode.ai/zen/go",
-	{
-		"muse-spark-1.2": "openai-responses",
-		"muse-spark-1.2-contributor": "openai-responses",
-		"minimax-m2.7": "openai-completions",
-		"minimax-m3": "openai-completions",
-		"minimax-m3-free": "openai-completions",
-		"qwen3.5-plus": "openai-completions",
-		"qwen3.6-plus": "openai-completions",
-	},
+	OPENCODE_GO_API_ID_OVERRIDES,
 );
 
 const COPILOT_DEFAULT_RESOLUTION = {

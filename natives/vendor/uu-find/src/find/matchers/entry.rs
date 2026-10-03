@@ -186,12 +186,24 @@ pub struct WalkEntry {
 	display: Option<PathBuf>,
 }
 
+/// Forward-slash spelling of a Windows display path, or `None` when the path
+/// already displays as-is (non-Windows, no backslashes, verbatim prefix, or
+/// non-Unicode names that must stay native).
+fn forward_slash_display(path: &Path) -> Option<PathBuf> {
+	if !cfg!(windows) || path.to_str().is_none() {
+		return None;
+	}
+	match veyyon_walker::normalize_path(path) {
+		std::borrow::Cow::Owned(text) => Some(PathBuf::from(text)),
+		std::borrow::Cow::Borrowed(_) => None,
+	}
+}
+
 impl WalkEntry {
 	/// Create a new WalkEntry for a specific file.
 	pub fn new(path: impl Into<PathBuf>, depth: usize, follow: Follow) -> Self {
 		let path = path.into();
-		let display = cfg!(windows)
-			.then(|| PathBuf::from(veyyon_walker::normalize_path(&path).as_ref()));
+		let display = forward_slash_display(&path);
 		Self { path, depth, follow, meta: OnceCell::new(), display }
 	}
 
@@ -223,7 +235,7 @@ impl WalkEntry {
 			Ok(rel) => operand.join(rel),
 			Err(_) => return,
 		};
-		self.display = Some(PathBuf::from(veyyon_walker::normalize_path(&display).as_ref()));
+		self.display = Some(forward_slash_display(&display).unwrap_or(display));
 	}
 
 	/// Get the name of this entry.

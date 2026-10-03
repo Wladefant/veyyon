@@ -54,21 +54,21 @@ export interface ReplaceBatchParams {
 	>;
 }
 
-export type ReplaceExecutionEntry =
-	| ReplaceEditEntry
-	| {
-			old_string: string;
-			new_string: string;
-			replace_all?: boolean;
-	  }
-	| {
-			old_text?: string;
-			new_text?: string;
-			all?: boolean;
-			old_string?: string;
-			new_string?: string;
-			replace_all?: boolean;
-	  };
+/**
+ * One replace request as the executor reads it: the batch entry spelling
+ * (`old_text`/`new_text`/`all`), the single-call spelling
+ * (`old_string`/`new_string`/`replace_all`), or a mix. Every field is optional so a
+ * read of either spelling type-checks on any member; `executeReplaceSingle`
+ * rejects an entry that supplies neither text.
+ */
+export interface ReplaceExecutionEntry {
+	old_text?: string;
+	new_text?: string;
+	all?: boolean;
+	old_string?: string;
+	new_string?: string;
+	replace_all?: boolean;
+}
 
 export interface ExecuteReplaceSingleOptions {
 	session: ToolSession;

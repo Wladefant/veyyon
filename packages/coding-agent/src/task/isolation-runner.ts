@@ -22,12 +22,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type * as natives from "@veyyon/natives";
-import { errorMessage, logger } from "@veyyon/utils";
+import { errorMessage, logger, prompt } from "@veyyon/utils";
+import { toolsPrompts } from "../prompts/tools/rows";
 import type { ToolSession } from "../tools";
 import * as git from "../utils/git";
 import type { ExecutorOptions } from "./executor";
 import { runSubprocess } from "./executor";
 import type { SingleResult } from "./types";
+import * as worktree from "./worktree";
 import {
 	applyNestedPatches,
 	type CommitToBranchResult,
@@ -40,13 +42,42 @@ import {
 	getRepoRoot,
 	type IsolationHandle,
 	isolationModeName,
-	mergeTaskBranches,
 	type NestedRepoPatch,
 	TASK_BRANCH_PREFIX,
 	type WorktreeBaseline,
 } from "./worktree";
 
 type IsoBackendKind = natives.IsoBackendKind;
+
+/** Which isolation outcome `isolation-summary.md` should describe. */
+export type IsolationSummaryKind =
+	| "captured"
+	| "capture-error"
+	| "nested-apply-failed"
+	| "not-applied"
+	| "branch-merge-failed"
+	| "merge-error";
+
+/** Context for `isolation-summary.md`; unused fields are simply absent. */
+export interface IsolationSummaryContext {
+	kind: IsolationSummaryKind;
+	branchName?: string;
+	/** Root patch path, only when it holds changes. */
+	rootPatchPath?: string;
+	nestedCount?: number;
+	nestedPatchPaths?: readonly string[];
+	error?: string;
+	conflict?: string;
+}
+
+/**
+ * Render one isolation outcome as the model-facing suffix appended to a task
+ * result. Always starts with a blank line so it separates from the output it
+ * follows.
+ */
+export function renderIsolationSummary(context: IsolationSummaryContext): string {
+	return `\n\n${prompt.render(toolsPrompts["tools/isolation-summary"].text, { ...context })}`;
+}
 
 /**
  * Decide the fate of a half-built task branch after apply-back threw.
@@ -163,27 +194,44 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 }
 
-// Persist nested patches before workspace cleanup; cleans partial files on failure.
+/**
+ * Persist each captured nested patch to `artifactsDir` so later recovery can find it.
+ *
+ * Each destination is reserved exclusively with `fs.open(..., 'wx')` before writing.
+ * Tracking occurs only after exclusive create succeeds, ensuring pre-existing files
+ * (and collision data on EEXIST) are preserved rather than overwritten or mistakenly
+ * unlinked. On mid-write failure (e.g. ENOSPC), the owned handle is closed and only
+ * newly-created files are unlinked best-effort.
+ */
 export async function persistNestedPatches(
 	artifactsDir: string,
 	agentId: string,
 	nestedPatches: readonly NestedRepoPatch[],
 ): Promise<string[]> {
-	const saved: string[] = [];
+	const created: string[] = [];
 	try {
 		for (const [index, nestedPatch] of nestedPatches.entries()) {
 			const destination = path.join(
 				artifactsDir,
 				`${agentId}.nested-${index}-${nestedPatch.relativePath.replace(/[^a-zA-Z0-9._-]/g, "_") || "root"}.patch`,
 			);
-			await Bun.write(destination, nestedPatch.patch);
-			saved.push(destination);
+			// Reserve the destination exclusively: 'wx' fails with EEXIST if destination
+			// already exists, preserving pre-existing collision data without tracking.
+			const handle = await fs.open(destination, "wx");
+			created.push(destination);
+			try {
+				await handle.writeFile(nestedPatch.patch, "utf8");
+			} finally {
+				await handle.close();
+			}
 		}
 	} catch (error) {
-		await Promise.all(saved.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
+		// Clean up only owned newly-created files; pre-existing files that caused EEXIST
+		// were never added to `created` and remain untouched.
+		await Promise.all(created.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
 		throw error;
 	}
-	return saved;
+	return created;
 }
 
 export interface IsolationPatchArtifacts {
@@ -449,7 +497,7 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 					mergedBranchForNestedPatches: canApplyNestedOnly,
 				};
 			}
-			const mergeResult = await mergeTaskBranches(repoRoot, [
+			const mergeResult = await worktree.mergeTaskBranches(repoRoot, [
 				{
 					branchName: result.branchName,
 					taskId: result.id,
@@ -466,8 +514,12 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 			if (changesApplied) {
 				summary = hadAnyChanges ? `\n\nMerged branch: ${result.branchName}` : "\n\nNo changes to apply.";
 			} else {
-				const conflictPart = mergeResult.conflict ? `\nConflict: ${mergeResult.conflict}` : "";
-				summary = `\n\n<system-notification>Branch merge failed: ${result.branchName}.${conflictPart}\nThe unmerged branch remains for manual resolution.</system-notification>`;
+				summary = renderIsolationSummary({
+					kind: "branch-merge-failed",
+					branchName: result.branchName,
+					conflict: mergeResult.conflict,
+					nestedPatchPaths: result.nestedPatchPaths,
+				});
 				failure = `Merge failed: branch ${result.branchName} did not merge${mergeResult.conflict ? ` (${mergeResult.conflict})` : ""}; the branch remains for manual resolution`;
 			}
 			if (mergeResult.stashConflict) {
@@ -533,9 +585,11 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		if (changesApplied) {
 			summary = hadAnyChanges ? "\n\nApplied patches: yes" : "\n\nNo changes to apply.";
 		} else {
-			const notification =
-				"<system-notification>Patches were not applied and must be handled manually.</system-notification>";
-			summary = `\n\n${notification}${patchArtifactsList(result)}`;
+			summary = renderIsolationSummary({
+				kind: "not-applied",
+				rootPatchPath: result.patchPath,
+				nestedPatchPaths: result.nestedPatchPaths,
+			});
 			failure = result.patchPath
 				? `Merge failed: the patch did not apply to the parent tree; it is preserved at ${result.patchPath}`
 				: "Merge failed: the run produced no patch artifact to apply";
@@ -544,7 +598,13 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 	} catch (mergeErr) {
 		const msg = errorMessage(mergeErr);
 		return {
-			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${patchArtifactsList(result)}</system-notification>`,
+			summary: renderIsolationSummary({
+				kind: "merge-error",
+				error: msg,
+				branchName: result.branchName,
+				rootPatchPath: result.patchPath,
+				nestedPatchPaths: result.nestedPatchPaths,
+			}),
 			changesApplied: false,
 			failure: `Merge failed: ${msg}`,
 			hadAnyChanges: false,
@@ -601,7 +661,10 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
 		// whether they fail the run.
 		opts.onApplyFailure?.(error);
 		const msg = errorMessage(error);
-		const preserved = nestedPreservedList(result.nestedPatchPaths);
-		return `\n\n<system-notification>Some nested repository patches failed to apply: ${msg}${preserved}</system-notification>`;
+		return renderIsolationSummary({
+			kind: "nested-apply-failed",
+			error: msg,
+			nestedPatchPaths: result.nestedPatchPaths,
+		});
 	}
 }

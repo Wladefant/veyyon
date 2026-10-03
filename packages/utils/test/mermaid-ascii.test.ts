@@ -13,6 +13,49 @@ describe("renderMermaidAscii", () => {
 		expect(rendered).not.toContain("──A─");
 	});
 
+	it("renders state pseudostates with their UML markers", () => {
+		const rendered = renderMermaidAscii(["stateDiagram-v2", "  [*] --> Created", "  Created --> [*]"].join("\n"), {
+			colorMode: "none",
+		});
+
+		expect(rendered).toMatch(/│\s+●\s+│/);
+		expect(rendered).toMatch(/║\s+◎\s+║/);
+	});
+
+	// A bottom-to-top diagram is drawn top-down and then mirrored, so every corner glyph
+	// has to swap with its vertical twin. The start pseudostate and the rounded state box
+	// both use the rounded corners; unmapped, they come out with their bottom on top.
+	it("keeps rounded corners the right way up in a bottom-to-top state diagram", () => {
+		const rendered = renderMermaidAscii(
+			["stateDiagram-v2", "  direction BT", "  [*] --> Created", "  Created --> [*]"].join("\n"),
+			{ colorMode: "none" },
+		);
+		const rows = rendered.split("\n");
+		const marker = rows.findIndex(row => row.includes("●"));
+
+		expect(marker).toBeGreaterThan(0);
+		expect(rows[marker - 1]).toContain("╭");
+		expect(rows[marker - 1]).toContain("╮");
+		expect(rows[marker + 1]).toContain("╰");
+		expect(rows[marker + 1]).toContain("╯");
+	});
+
+	it("keeps dense transition labels intact above connector lines", () => {
+		const rendered = renderMermaidAscii(
+			[
+				"stateDiagram-v2",
+				"  Working --> Working: sessions die and respawn freely",
+				"  Working --> Archived: cheap exit, branches kept",
+				"  Archived --> Working: resume rebuilds substrate",
+			].join("\n"),
+			{ colorMode: "none" },
+		);
+
+		expect(rendered).toContain("sessions die and respawn freely");
+		expect(rendered).toContain("cheap exit, branches kept");
+		expect(rendered).toContain("resume rebuilds substrate");
+	});
+
 	it("returns a bounded fallback for declaration orders that make a clean route unreachable", () => {
 		const rendered = renderMermaidAsciiSafe(
 			[

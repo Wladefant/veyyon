@@ -606,6 +606,15 @@ function waitForProviderInFlightSignal(provider: string, signal?: AbortSignal): 
 				finish(resolve);
 			}
 		});
+		// An async watch failure (EPERM on Windows when the directory is removed) must
+		// degrade to the fallback timer, not become an uncaught exception.
+		watcher.on("error", error => {
+			logger.warn("Provider in-flight watcher failed; waiting on the fallback timer", {
+				provider,
+				error: String(error),
+			});
+			watcher?.close();
+		});
 		void fs.stat(signalPath).then(
 			stat => {
 				if (stat.mtimeMs >= waitStarted) finish(resolve);

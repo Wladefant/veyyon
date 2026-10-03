@@ -3184,11 +3184,19 @@ type SystemBlockOptions = {
 /**
  * Trailing system-prompt segments carrying per-turn volatile content (memory
  * recall blocks). They are rendered by the coding agent as their own
- * `systemPrompt` array elements and always appended last, so on the wire they
- * form a volatile suffix after the stable prefix. The system cache breakpoint
- * anchors on the last stable segment instead of the array tail, so a recall
- * refresh re-bills only the suffix and the message tail for one turn while
- * the tools+stable-system prefix stays a cache hit.
+ * `systemPrompt` array elements and appended last, so on the wire they
+ * normally form a volatile suffix after the stable prefix. The system cache
+ * breakpoint anchors on the last stable segment instead of the array tail, so
+ * a recall refresh re-bills only the suffix and the message tail for one turn
+ * while the tools+stable-system prefix stays a cache hit.
+ *
+ * Only a genuinely trailing volatile run counts: a `before_agent_start`
+ * extension override may append a stable policy block after the staged recall
+ * block, and that block must stay fingerprinted stable (a change to it has to
+ * re-baseline). A volatile block stranded mid-array still poisons the prefix
+ * at its position — prefix caching is positional, so no classification can
+ * save the bytes after it — but the stable tail is at least fingerprinted
+ * instead of silently excluded.
  *
  * Detection is by our own markup, not model identity: recall blocks always
  * open with `<memories>`. Stable segments containing recalled text elsewhere
@@ -3197,11 +3205,13 @@ type SystemBlockOptions = {
 export const VOLATILE_SYSTEM_SEGMENT_MARKERS = ["<memories>"];
 
 export function stableSystemSuffixStart(systemBlocks: readonly AnthropicSystemBlock[]): number {
-	for (let index = 0; index < systemBlocks.length; index++) {
-		const text = systemBlocks[index]?.text ?? "";
-		if (VOLATILE_SYSTEM_SEGMENT_MARKERS.some(marker => text.startsWith(marker))) return index;
+	let start = systemBlocks.length;
+	while (start > 0) {
+		const text = systemBlocks[start - 1]?.text ?? "";
+		if (!VOLATILE_SYSTEM_SEGMENT_MARKERS.some(marker => text.startsWith(marker))) break;
+		start--;
 	}
-	return systemBlocks.length;
+	return start;
 }
 
 /**

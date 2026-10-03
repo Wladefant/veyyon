@@ -31,9 +31,10 @@ use std::{
 
 pub use cache::{
 	FilteredEntries, cache_ttl_ms, classify_file_type, collect_entries_filtered, contains_component,
-	empty_recheck_ms, ensure_readable_dir, invalidate_all, invalidate_path, invalidate_path_string,
-	max_cache_entries, normalize_path, normalize_relative_path, parallel_for_each,
-	parallel_for_each_init, resolve_search_path, should_parallelize, should_skip_path, walk_workers,
+	empty_recheck_ms, ensure_readable_dir, has_literal_prefix, has_literal_prefix_str,
+	invalidate_all, invalidate_path, invalidate_path_string, max_cache_entries, normalize_path,
+	normalize_relative_path, normalize_windows_path_str, parallel_for_each, parallel_for_each_init,
+	resolve_search_path, should_parallelize, should_skip_path, walk_workers,
 };
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 

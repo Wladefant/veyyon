@@ -135,6 +135,53 @@ describe("print mode working indicator", () => {
 
 		expect(stdoutOutput.join("")).toBe("final answer\n");
 	});
+	it("enters default plan mode before submitting the initial prompt", async () => {
+		let planModeAtPrompt: unknown;
+		const modeChanges: Array<{ mode: string; data?: unknown }> = [];
+		let planState: { enabled: boolean; planFilePath: string } | undefined;
+		const session = {
+			state: { messages: [] },
+			sessionManager: {
+				getHeader: () => undefined,
+				buildSessionContext: () => ({ messages: [] }),
+				getEntries: () => [],
+				appendModeChange: (mode: string, data?: unknown) => {
+					modeChanges.push({ mode, data });
+					return "mode-change";
+				},
+			},
+			settings: {
+				get: (key: string) => key === "plan.enabled" || key === "plan.defaultOnStartup",
+			},
+			extensionRunner: undefined,
+			subscribe: () => () => {},
+			prompt: async () => {
+				planModeAtPrompt = planState;
+				return true;
+			},
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => true,
+			dispose: async () => {},
+			displayAssistantContent: (content: AssistantMessage["content"]) => content,
+			obfuscateProviderText: (text: string) => text,
+			getPlanReferencePath: () => "",
+			getActiveToolNames: () => ["read"],
+			hasBuiltInTool: (name: string) => name === "write",
+			setActiveToolsByName: async () => {},
+			setPlanModeState: (state: unknown) => {
+				planState = state as { enabled: boolean; planFilePath: string };
+			},
+			resolveRoleModelWithThinking: () => undefined,
+		} as unknown as PrintModeSession;
+
+		await runPrintMode(session, { mode: "text", initialMessage: "/plan hello" });
+
+		expect(planModeAtPrompt).toMatchObject({
+			enabled: true,
+			planFilePath: "local://PLAN.md",
+		});
+		expect(modeChanges).toEqual([{ mode: "plan", data: { planFilePath: "local://PLAN.md" } }]);
+	});
 
 	it("does not write the text-mode working indicator in JSON mode while the prompt is pending", async () => {
 		const delayed = createDelayedSession(makeAssistantMessage("json answer"));

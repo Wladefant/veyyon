@@ -37,6 +37,8 @@ const NO_LOGIN_EXCEPTIONS: Readonly<Record<string, string>> = {
 	"amazon-bedrock": "needs AWS credentials (access key id, secret, region, optional session token), not a pasted key",
 	"chatgpt-web":
 		"the local bridge daemon authenticates its own signed-in Chrome profile through its `setup` command; there is no credential Veyyon could paste, and declaring one would mint OFFICIAL openai-codex credentials from a second /login row",
+	local: "synthetic role provider backed by on-device inference; it has no remote account and no credential to paste",
+	web: "synthetic role provider for web search; it has no account of its own and no credential to paste",
 };
 
 /** Registry ids that lack a login and have no recorded reason. Empty means every case was decided. */
@@ -183,6 +185,8 @@ describe("single-key providers have a real /login", () => {
 			"azure",
 			"chatgpt-web",
 			"google-vertex",
+			"local",
+			"web",
 		]);
 		for (const [id, reason] of Object.entries(NO_LOGIN_EXCEPTIONS)) {
 			expect(providerById(id).login).toBeUndefined();

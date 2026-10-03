@@ -171,17 +171,44 @@ fn cache_key(root: &Path, mut options: WalkOptions) -> CacheKey {
 }
 
 /// Normalize a filesystem path to a forward-slash string on Windows.
+///
+/// Verbatim (`\\?\`) and device (`\\.\`) paths are returned unchanged: Windows
+/// only honors those prefixes with backslash separators.
 pub fn normalize_path(path: &Path) -> Cow<'_, str> {
 	if cfg!(windows) {
-		let path = path.to_string_lossy();
-		if path.contains('\\') {
-			Cow::Owned(path.replace('\\', "/"))
+		let text = path.to_string_lossy();
+		if text.contains('\\') && !has_literal_prefix(path) {
+			Cow::Owned(text.replace('\\', "/"))
 		} else {
-			path
+			text
 		}
 	} else {
 		path.to_string_lossy()
 	}
+}
+
+/// Normalize a filesystem path string using Windows path normalization rules.
+///
+/// Verbatim (`\\?\`) and device (`\\.\`) paths are returned unchanged: Windows
+/// only honors those prefixes with backslash separators.
+pub fn normalize_windows_path_str(text: &str) -> Cow<'_, str> {
+	if text.contains('\\') && !has_literal_prefix_str(text) {
+		Cow::Owned(text.replace('\\', "/"))
+	} else {
+		Cow::Borrowed(text)
+	}
+}
+
+/// Return whether a path string starts with a Windows verbatim (`\\?\`) or
+/// device (`\\.\`) prefix.
+pub fn has_literal_prefix_str(text: &str) -> bool {
+	text.starts_with(r"\\?\") || text.starts_with(r"\\.\")
+}
+
+/// Return whether a filesystem path starts with a Windows verbatim (`\\?\`) or
+/// device (`\\.\`) prefix.
+pub fn has_literal_prefix(path: &Path) -> bool {
+	has_literal_prefix_str(&path.to_string_lossy())
 }
 
 /// Normalize a filesystem path to a forward-slash relative string.
@@ -870,5 +897,39 @@ mod tests {
 		super::ensure_readable_dir(guard.path()).expect("an empty readable directory passes");
 		fs::write(guard.path().join("file.txt"), b"x").expect("seed a file");
 		super::ensure_readable_dir(guard.path()).expect("a populated readable directory passes");
+	}
+	#[test]
+	fn normalize_windows_path_preserves_verbatim_and_device_prefixes() {
+		assert!(super::has_literal_prefix_str(r"\\?\C:\Users\foo\bar"));
+		assert!(super::has_literal_prefix_str(r"\\.\COM1"));
+		assert!(!super::has_literal_prefix_str(r"C:\Users\foo\bar"));
+		assert!(!super::has_literal_prefix_str(r"foo\bar\baz"));
+
+		assert_eq!(
+			super::normalize_windows_path_str(r"\\?\C:\Users\foo\bar"),
+			r"\\?\C:\Users\foo\bar"
+		);
+		assert_eq!(super::normalize_windows_path_str(r"\\.\COM1"), r"\\.\COM1");
+		assert_eq!(super::normalize_windows_path_str(r"C:\Users\foo\bar"), "C:/Users/foo/bar");
+		assert_eq!(super::normalize_windows_path_str(r"foo\bar\baz"), "foo/bar/baz");
+	}
+
+	#[test]
+	fn normalize_path_respects_host_os_contract() {
+		use std::path::Path;
+		#[cfg(windows)]
+		{
+			assert_eq!(
+				super::normalize_path(Path::new(r"\\?\C:\Users\foo\bar")),
+				r"\\?\C:\Users\foo\bar"
+			);
+			assert_eq!(super::normalize_path(Path::new(r"\\.\COM1")), r"\\.\COM1");
+			assert_eq!(super::normalize_path(Path::new(r"C:\Users\foo\bar")), "C:/Users/foo/bar");
+			assert_eq!(super::normalize_path(Path::new(r"foo\bar\baz")), "foo/bar/baz");
+		}
+		#[cfg(not(windows))]
+		{
+			assert_eq!(super::normalize_path(Path::new("/tmp/foo/bar")), "/tmp/foo/bar");
+		}
 	}
 }

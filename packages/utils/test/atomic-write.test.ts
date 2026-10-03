@@ -779,6 +779,10 @@ describe("atomicWriteFile", () => {
 // the owner's logic; convert one only if that stops being true, then drop it.
 const ATOMIC_OWNER = "utils/src/atomic-write.ts";
 const HANDROLLED_ATOMIC_ALLOWED = new Map<string, string>([
+	// Corrupt-store recovery copies the whole SQLite store (db + sidecars) into a
+	// staging DIRECTORY and renames the directory into place. The owner writes a
+	// single file, not a populated tree.
+	["utils/src/sqlite.ts", "temp backup directory, not a file write"],
 	// A synchronous commit-guard fence checks a revoke flag and renames with no
 	// await gap between them; the owner's async open/close would reintroduce the
 	// gap the fence exists to close.

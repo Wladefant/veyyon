@@ -253,8 +253,9 @@ describe("exhaustive error domain sweep", () => {
 				expect(retriable(classifiedId)).toBe(false);
 			}
 
+			expect(retriable(classifiedId, { replayUnsafe: true })).toBe(false);
 			if (domain.replaySafe) {
-				expect(retriable(classifiedId, { replayUnsafe: true })).toBe(true);
+				expect(retriable(classifiedId)).toBe(true);
 			}
 		}
 	});

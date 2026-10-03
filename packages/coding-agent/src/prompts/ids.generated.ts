@@ -164,6 +164,8 @@ export const PROMPT_IDS: readonly string[] = [
 	"tools/inspect-image",
 	"tools/inspect-image-system",
 	"tools/irc",
+	"tools/isolation-recovery-hint",
+	"tools/isolation-summary",
 	"tools/job",
 	"tools/launch",
 	"tools/learn",

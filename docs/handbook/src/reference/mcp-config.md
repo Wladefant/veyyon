@@ -97,6 +97,8 @@ Shared fields for every transport:
 
 Set `VEYYON_MCP_TIMEOUT_MS=0` to disable the client-side timeout for every MCP server in the current process. Set it to a positive millisecond value, such as `VEYYON_MCP_TIMEOUT_MS=120000`, to apply one global timeout without editing each server entry.
 
+These request deadlines also govern subagent MCP calls over borrowed parent connections. The proxy adds no independent timeout; caller cancellation still stops the subagent's wait.
+
 ### `stdio` transport
 
 `stdio` is the default when `type` is omitted.

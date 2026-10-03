@@ -68,6 +68,12 @@ The readability proofs (clauses A-D) cannot hold on a host and are replaced, not
 the real-data tripwire stays preloaded and still refuses every mutating call that names
 the real home. A process that sets the flag and meets none of this exits 1.
 
+`bun run test:host-browser` builds that environment for you (`scripts/test-host-browser.ts`):
+a throwaway home, the newest Chrome in `~/.cache/puppeteer/chrome` (or `--chrome <path>`
+/ `PUPPETEER_EXECUTABLE_PATH`), system Chrome hidden, and only the three suites named.
+Launch Chromium under a build slot (`build_slot.py run <name> -- bun run test:host-browser`)
+so concurrent lanes do not start several at once.
+
 A pinned boundary that is unavailable is an error, never a quiet fall back to a weaker
 one. If no boundary is available at all, the suite does not run. Read
 `scripts/test-sandbox/README.md` before changing any of it.

@@ -29,6 +29,16 @@
  */
 export const WIDE_PAD = '\u0000'
 
+/**
+ * Space owned by a text label rather than unused canvas. Merge layers treat
+ * ordinary spaces as transparent, so labels use this sentinel to clear edge
+ * lines between words. Serialization converts it back to a regular space.
+ */
+export const OPAQUE_SPACE = '\u0001'
+
+/** Prefix marking a one-column cell as label-owned through canvas merges. */
+export const LABEL_CELL_PREFIX = '\u0002'
+
 const graphemeSegmenter = new Intl.Segmenter()
 
 /**

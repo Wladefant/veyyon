@@ -33,7 +33,9 @@ use crate::windows::configure_windows_path;
 use crate::{
 	cancel::{AbortReason, AbortToken, CancelToken},
 	cpu_budget::{self, BudgetGroup},
-	minimizer, process,
+	minimizer,
+	output_decode::{OutputDecoder, decode_bytes},
+	process,
 };
 
 struct ShellSessionCore {
@@ -1824,10 +1826,9 @@ async fn read_output(
 	cancel_token: CancellationToken,
 	activity: Sender<()>,
 ) {
-	const REPLACEMENT: &str = "\u{FFFD}";
 	const BUF: usize = 65536;
-	let mut buf = vec![0u8; BUF + 4]; // +4 for max UTF-8 char
-	let mut it = 0;
+	let mut buf = vec![0u8; BUF];
+	let mut decoder = OutputDecoder::new();
 
 	#[cfg(unix)]
 	let Ok(reader) = register_nonblocking_pipe(reader) else {
@@ -1847,7 +1848,7 @@ async fn read_output(
 			}) else {
 				break;
 			};
-			match readiness.try_io(|inner| read_nonblocking(inner.get_ref(), &mut buf[it..BUF])) {
+			match readiness.try_io(|inner| read_nonblocking(inner.get_ref(), &mut buf)) {
 				Ok(Ok(0)) => break,
 				Ok(Ok(n)) => n,
 				Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -1857,7 +1858,7 @@ async fn read_output(
 		};
 		#[cfg(not(unix))]
 		let n = {
-			let read_future = reader.read(&mut buf[it..BUF]);
+			let read_future = reader.read(&mut buf);
 			tokio::pin!(read_future);
 			match tokio::select! {
 				res = &mut read_future => res,
@@ -1871,58 +1872,16 @@ async fn read_output(
 		};
 		if n > 0 {
 			let _ = activity.try_send(());
-		}
-		it += n;
-
-		// Consume as much of `pending` as is decodable *right now*.
-		while it > 0 {
-			let pending = &buf[..it];
-			match str::from_utf8(pending) {
-				Ok(text) => {
-					emit_chunk(text, on_chunk.as_ref()).await;
-					it = 0;
-					break;
-				},
-				Err(err) => {
-					let p = err.valid_up_to();
-					if p > 0 {
-						// SAFETY: [..p] is guaranteed valid UTF-8 by valid_up_to().
-						let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
-						emit_chunk(text, on_chunk.as_ref()).await;
-						// copy p..it to the beginning of the buffer
-						buf.copy_within(p..it, 0);
-						it -= p;
-					}
-
-					match err.error_len() {
-						Some(p) => {
-							// Invalid byte sequence: emit replacement and drop those bytes.
-							emit_chunk(REPLACEMENT, on_chunk.as_ref()).await;
-							// copy p..it to the beginning of the buffer
-							buf.copy_within(p..it, 0);
-							it -= p;
-							// continue loop in case more bytes remain after the
-							// invalid sequence
-						},
-						None => {
-							// Incomplete UTF-8 sequence at end: keep bytes for next read.
-							break;
-						},
-					}
-				},
+			let text = decoder.push(&buf[..n]);
+			if !text.is_empty() {
+				emit_chunk(&text, on_chunk.as_ref()).await;
 			}
 		}
 	}
 
-	// Flush whatever is left at EOF (including an incomplete final sequence).
-	for chunk in buf[..it].utf8_chunks() {
-		let valid = chunk.valid();
-		if !valid.is_empty() {
-			emit_chunk(valid, on_chunk.as_ref()).await;
-		}
-		if !chunk.invalid().is_empty() {
-			emit_chunk(REPLACEMENT, on_chunk.as_ref()).await;
-		}
+	let rest = decoder.finish();
+	if !rest.is_empty() {
+		emit_chunk(&rest, on_chunk.as_ref()).await;
 	}
 }
 
@@ -1933,16 +1892,12 @@ async fn read_output_buffered(
 	activity: Sender<()>,
 	max_capture_bytes: usize,
 ) -> BufferedOutput {
-	const REPLACEMENT: &str = "\u{FFFD}";
 	const BUF: usize = 65536;
 	let mut buf = vec![0u8; BUF];
 	let mut input_bytes = 0usize;
 	let mut captured = Vec::new();
 	let mut exceeded = false;
-	// Pending bytes from a prior read that ended mid-UTF-8 sequence. We hold
-	// them back so we emit only valid UTF-8 to the streaming callback while
-	// still capturing every byte into `captured` for post-processing.
-	let mut pending = Vec::<u8>::new();
+	let mut decoder = OutputDecoder::new();
 
 	#[cfg(unix)]
 	let Ok(reader) = register_nonblocking_pipe(reader) else {
@@ -2000,52 +1955,18 @@ async fn read_output_buffered(
 			}
 		}
 
-		// Stream whatever is validly decodable *right now* to the callback,
-		// carrying incomplete trailing UTF-8 bytes over to the next iteration.
-		if let Some(cb) = on_chunk.as_ref() {
-			pending.extend_from_slice(&buf[..n]);
-			while !pending.is_empty() {
-				match str::from_utf8(&pending) {
-					Ok(text) => {
-						emit_chunk(text, Some(cb)).await;
-						pending.clear();
-						break;
-					},
-					Err(err) => {
-						let p = err.valid_up_to();
-						if p > 0 {
-							// SAFETY: [..p] is valid UTF-8 per valid_up_to().
-							let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
-							emit_chunk(text, Some(cb)).await;
-							pending.drain(..p);
-						}
-						match err.error_len() {
-							Some(skip) => {
-								emit_chunk(REPLACEMENT, Some(cb)).await;
-								pending.drain(..skip);
-							},
-							None => break,
-						}
-					},
-				}
-			}
+		let text = decoder.push(&buf[..n]);
+		if !text.is_empty() {
+			emit_chunk(&text, on_chunk.as_ref()).await;
 		}
 	}
 
-	// Flush any trailing bytes the streaming decoder held back at EOF.
-	if let Some(cb) = on_chunk.as_ref() {
-		for chunk in pending.utf8_chunks() {
-			let valid = chunk.valid();
-			if !valid.is_empty() {
-				emit_chunk(valid, Some(cb)).await;
-			}
-			if !chunk.invalid().is_empty() {
-				emit_chunk(REPLACEMENT, Some(cb)).await;
-			}
-		}
+	let rest = decoder.finish();
+	if !rest.is_empty() {
+		emit_chunk(&rest, on_chunk.as_ref()).await;
 	}
 
-	BufferedOutput { text: String::from_utf8_lossy(&captured).into_owned(), input_bytes, exceeded }
+	BufferedOutput { text: decode_bytes(&captured), input_bytes, exceeded }
 }
 
 #[cfg(unix)]
@@ -4429,6 +4350,68 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			.await
 			.expect("reader task should stop after cancellation")
 			.expect("reader task should not panic");
+	}
+
+	/// Feed `parts` through `read_output_buffered` as separate reads and return
+	/// the concatenated streamed chunks with the final buffered text.
+	async fn buffered_read_of(parts: &[&[u8]]) -> (String, BufferedOutput) {
+		use std::io::Write as _;
+
+		let (reader, mut writer) = pipe_to_files("test").expect("test pipe should be created");
+		let (chunk_tx, chunk_rx) = flume::unbounded::<String>();
+		let (activity_tx, _activity_rx) = flume::bounded(1);
+		let handle = tokio::spawn(read_output_buffered(
+			reader,
+			Some(chunk_tx),
+			CancellationToken::new(),
+			activity_tx,
+			1 << 20,
+		));
+		for part in parts {
+			writer.write_all(part).expect("write to test pipe");
+			writer.flush().expect("flush test pipe");
+			time::sleep(Duration::from_millis(50)).await;
+		}
+		drop(writer);
+		let output = time::timeout(Duration::from_secs(5), handle)
+			.await
+			.expect("reader should finish at EOF")
+			.expect("reader task should not panic");
+		let mut streamed = String::new();
+		while let Ok(chunk) = chunk_rx.try_recv() {
+			streamed.push_str(&chunk);
+		}
+		(streamed, output)
+	}
+
+	/// A multibyte character split across two reads is streamed whole, and the
+	/// streamed text equals the final buffered text. On a GBK host (ACP 936) the
+	/// pair `d6 d0 ce c4` must read as 中文, not as four U+FFFD.
+	#[tokio::test]
+	async fn buffered_reader_streams_split_pair_and_matches_final_text() {
+		let (streamed, output) = buffered_read_of(&[&[0xd6], &[0xd0, 0xce], &[0xc4, b'\n']]).await;
+		assert_eq!(streamed, output.text, "streamed chunks must equal the buffered text");
+		assert_eq!(output.text, decode_bytes(&[0xd6, 0xd0, 0xce, 0xc4, b'\n']));
+		#[cfg(windows)]
+		{
+			// SAFETY: GetACP has no preconditions.
+			if unsafe { windows_sys::Win32::Globalization::GetACP() } == 936 {
+				assert_eq!(output.text, "中文\n");
+			}
+		}
+
+		let (streamed, output) = buffered_read_of(&[&[0xe4], &[0xb8, 0xad]]).await;
+		assert_eq!(streamed, "中");
+		assert_eq!(output.text, "中");
+	}
+
+	/// A byte sequence still incomplete at EOF is flushed by `decoder.finish()`,
+	/// so the streamed text and the buffered text agree on the replacement.
+	#[tokio::test]
+	async fn buffered_reader_flushes_incomplete_tail_at_eof() {
+		let (streamed, output) = buffered_read_of(&[b"ok ", &[0xe4]]).await;
+		assert_eq!(output.text, "ok \u{FFFD}");
+		assert_eq!(streamed, output.text, "finish() must flush the held byte to the stream");
 	}
 
 	#[cfg(unix)]

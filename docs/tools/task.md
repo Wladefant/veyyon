@@ -119,7 +119,7 @@ Artifacts and side channels:
   - Creates/removes worktrees or overlay mount directories; branch mode creates temporary worktrees and task branches.
 - Network
   - Child sessions may use whichever networked tools/models their active tool set permits.
-  - MCP proxy tools can call existing parent MCP connections with a 60_000 ms timeout.
+  - MCP proxy tools reuse parent connections and their configured transport deadlines; the proxy adds no independent timeout.
 - Subprocesses / native bindings
   - Isolation backends run through the `veyyon-natives` PAL (`natives/fs/iso`): kernel `overlay` with `fuse-overlayfs`/`fusermount[3]` fallback on Linux, APFS/Btrfs/ZFS/reflink clones, ProjFS on Windows, recursive copy as last resort.
   - Git operations for baseline capture, patch apply, worktrees, branches, stash, cherry-pick, commits.
@@ -139,7 +139,7 @@ Artifacts and side channels:
 - Idle TTL: `agent.idleTtlMs`, default 5 minutes. A positive millisecond value overrides it; `<= 0` disables parking and keeps idle sessions live until exit.
 - Per-agent output truncation: `MAX_OUTPUT_BYTES = 500_000` and `MAX_OUTPUT_LINES = 5000` in `packages/coding-agent/src/task/types.ts` (overridable via `VEYYON_TASK_MAX_OUTPUT_BYTES` / `VEYYON_TASK_MAX_OUTPUT_LINES`). Full raw output is still written to `<id>.md`.
 - Progress coalescing: `PROGRESS_COALESCE_MS = 150`; recent-output tail: `RECENT_OUTPUT_TAIL_BYTES = 8 * 1024` (last 8 non-empty lines).
-- Missing-`yield` reminder retries: `MAX_YIELD_RETRIES = 3`; MCP proxy timeout: `MCP_CALL_TIMEOUT_MS = 60_000`: both in `packages/coding-agent/src/task/executor.ts`.
+- Missing-`yield` reminder retries: `MAX_YIELD_RETRIES = 3` in `packages/coding-agent/src/task/executor.ts`; MCP proxy tools share parent connection transport deadlines.
 - Name/label caps: the wire `name` has no schema length cap (prompt text suggests `≤32` chars: guidance only); one-line display text (roster line, registry `displayName`) is normalized by `oneLineLabel(...)` and capped at `LABEL_MAX = 80` chars in `packages/coding-agent/src/task/types.ts`.
 - Soft request budget (`agent.softRequestBudget`) and wall clock (`agent.maxRuntimeMs`) apply to every spawn.
 - Nested spawn depth gate: `agent.maxNestedSpawnDepth`, or `agent.agents.<name>.maxNestedSpawnDepth` for one agent. A session may spawn while its own depth is at or below the limit, so the default `0` still permits direct children and forbids grandchildren; `-1` removes the cap. `packages/coding-agent/src/tools/index.ts` hides the `task` tool once depth is past the limit, and `runSubprocess(...)` also strips child `task` access at max depth.

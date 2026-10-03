@@ -182,7 +182,7 @@ describe("SqliteAuthCredentialStore.open SQLITE_BUSY handling", () => {
 		// Skip the sleep so the test doesn't take 700ms+ of real time.
 		const waitSpy = vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 
-		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow(dbPath);
+		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow(JSON.stringify(dbPath));
 		// open uses `maxAttempts = 4`, so the loop waits between attempts 0..2
 		// (three times, doubling from 100ms) then throws after attempt 3 without waiting again.
 		expect(waitSpy.mock.calls.map(call => call[0])).toEqual([100, 200, 400]);

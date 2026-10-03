@@ -6,10 +6,12 @@
  * - `veyyon --mode json "prompt"` - JSON event stream
  */
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { AssistantMessage, ImageContent } from "@veyyon/ai";
+import type { AssistantMessage, ImageContent, Model } from "@veyyon/ai";
 import { logger, postmortem, sanitizeText } from "@veyyon/utils";
 import { EXIT_FAILURE, EXIT_INTERRUPTED } from "../cli/exit-codes";
 import { awaitStdoutDrain } from "../cli/stdout-drain";
+import type { ResolvedModelRoleValue } from "../config/model-resolver";
+import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import { transformProviderPayload } from "../provider-boundary";
 import { SECRET_SPEND_NOTICE_SOURCE } from "../secrets/notices";
 import type { AgentSession } from "../session/agent-session";
@@ -18,6 +20,7 @@ import { isSilentAbort } from "../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../slash-commands/types";
 import { flushTelemetryExport } from "../telemetry-export";
+import type { ConfiguredThinkingLevel } from "../thinking";
 import { initializeExtensions } from "./runtime-init";
 
 /**
@@ -130,8 +133,23 @@ export type PrintModeSession =
 			// the whole SessionManager class. A caller that has just these can drive
 			// print mode, and that is worth being able to say.
 			state: { messages: readonly AgentMessage[] };
-			sessionManager: { getHeader(): unknown };
+			sessionManager: {
+				getHeader(): unknown;
+				buildSessionContext?(): { messages: readonly unknown[] };
+				getEntries?(): Array<{ type: string }>;
+				appendModeChange?(mode: string, data?: unknown): unknown;
+			};
 			extensionRunner?: undefined;
+			settings?: { get(key: string): unknown };
+			model?: Model;
+			getPlanReferencePath?(): string;
+			getActiveToolNames?(): string[];
+			hasBuiltInTool?(name: string): boolean;
+			setActiveToolsByName?(names: string[]): Promise<void>;
+			setPlanModeState?(state: unknown): void;
+			resolveRoleModelWithThinking?(role: string): ResolvedModelRoleValue | undefined;
+			setThinkingLevel?(level: ConfiguredThinkingLevel): void;
+			setModelTemporary?(model: Model, level?: ConfiguredThinkingLevel): Promise<void>;
 	  });
 
 /**
@@ -209,6 +227,63 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 	}
 
 	// Always subscribe to enable session persistence via _handleAgentEvent
+	// InteractiveMode applies the same startup default during TUI initialization.
+	// Print mode has no TUI bootstrap, so arm the shared session directly before
+	// the first prompt; persisting the mode_change also lets a later interactive
+	// attachment restore and review the generated plan.
+	const hasConversationContext =
+		typeof session.sessionManager.buildSessionContext === "function" &&
+		session.sessionManager.buildSessionContext().messages.length > 0;
+	const hasExplicitMode =
+		typeof session.sessionManager.getEntries === "function" &&
+		session.sessionManager.getEntries().some(entry => entry.type === "mode_change");
+	if (
+		!hasConversationContext &&
+		!hasExplicitMode &&
+		session.settings?.get("plan.defaultOnStartup") &&
+		session.settings?.get("plan.enabled") &&
+		typeof session.setPlanModeState === "function"
+	) {
+		const planFilePath =
+			(typeof session.getPlanReferencePath === "function" ? session.getPlanReferencePath() : "") ||
+			"local://PLAN.md";
+		const previousTools = typeof session.getActiveToolNames === "function" ? session.getActiveToolNames() : [];
+		const planAugmentations = ["resolve"];
+		if (typeof session.hasBuiltInTool === "function" && session.hasBuiltInTool("write")) {
+			planAugmentations.push("write");
+		}
+		const uniquePlanTools = Array.from(
+			new Set(previousTools.filter(name => name !== "goal").concat(planAugmentations)),
+		);
+		if (typeof session.setActiveToolsByName === "function") {
+			await session.setActiveToolsByName(uniquePlanTools);
+		}
+		session.setPlanModeState({
+			enabled: true,
+			planFilePath,
+			workflow: "parallel",
+		});
+		if (typeof session.sessionManager.appendModeChange === "function") {
+			session.sessionManager.appendModeChange("plan", { planFilePath });
+		}
+
+		if (typeof session.resolveRoleModelWithThinking === "function") {
+			const resolved = session.resolveRoleModelWithThinking("plan");
+			if (resolved) {
+				const transition = resolvePlanModelTransition(session.model as Model | undefined, resolved, false);
+				if (transition.kind === "thinking") {
+					session.setThinkingLevel?.(transition.thinkingLevel);
+				} else if (transition.kind === "apply") {
+					try {
+						await session.setModelTemporary?.(transition.model, transition.thinkingLevel);
+					} catch (error) {
+						logger.warn("Failed to switch to plan model for print mode", { error: String(error) });
+					}
+				}
+			}
+		}
+	}
+
 	session.subscribe(event => {
 		// In JSON mode, output all events
 		if (mode === "json") {

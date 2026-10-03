@@ -12,8 +12,7 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
-import { errorMessage } from "@veyyon/utils";
+import { atomicWriteFile, errorMessage } from "@veyyon/utils";
 import { bestEffort } from "@veyyon/utils/discarded-fault";
 import { type } from "arktype";
 import type { BrowserContext, Cookie, CookieData, Frame, HTTPRequest } from "puppeteer-core";
@@ -115,24 +114,7 @@ export async function readStorageStateFile(file: string): Promise<StorageState> 
  * when `file` is readable with looser permissions than 0600.
  */
 export async function writeStorageStateFile(file: string, state: StorageState): Promise<void> {
-	await fs.promises.mkdir(path.dirname(file), { recursive: true });
-	const staging = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
-	try {
-		const handle = await fs.promises.open(staging, "wx", 0o600);
-		try {
-			await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`);
-			await handle.sync();
-		} finally {
-			await handle.close();
-		}
-		await fs.promises.rename(staging, file);
-	} catch (error) {
-		await bestEffort(
-			fs.promises.rm(staging, { force: true }),
-			"a staging file that cannot be removed must not hide the write error it follows",
-		);
-		throw error;
-	}
+	await atomicWriteFile(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 
 function toStorageCookie(cookie: Cookie): StorageCookie {

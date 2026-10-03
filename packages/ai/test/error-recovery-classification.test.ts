@@ -226,10 +226,9 @@ describe("AIError.Flag retry decisions", () => {
 	});
 
 	it("refuses to replay any flag once a tool call may already have run", () => {
-		// The one exception is a call that was never well-formed enough to
-		// execute, so there is no side effect to duplicate.
-		for (const [name, flag] of Object.entries(AIError.Flag)) {
-			expect(AIError.retriable(AIError.create(flag), { replayUnsafe: true })).toBe(name === "MalformedFunctionCall");
+		// An invalid later call does not erase earlier output or executed tools in the same turn.
+		for (const flag of Object.values(AIError.Flag)) {
+			expect(AIError.retriable(AIError.create(flag), { replayUnsafe: true })).toBe(false);
 		}
 	});
 });

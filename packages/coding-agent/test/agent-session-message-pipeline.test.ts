@@ -60,6 +60,19 @@ function getConvertedUserText(message: Message | undefined): string {
 	}
 	return text.text;
 }
+function getConvertedAssistantText(message: Message | undefined): string {
+	if (message?.role !== "assistant") {
+		throw new Error("Expected converted assistant message");
+	}
+	if (typeof message.content === "string") {
+		return message.content;
+	}
+	const text = message.content.find((content): content is TextContent => content.type === "text");
+	if (!text) {
+		throw new Error("Expected converted text content");
+	}
+	return text.text;
+}
 
 async function withNativeDialectEnv<T>(fn: () => Promise<T>): Promise<T> {
 	const previous = Bun.env.VEYYON_DIALECT;
@@ -501,6 +514,167 @@ describe("AgentSession message pipeline", () => {
 		expect(capturedContext).toBeDefined();
 		// The secret entered only via the user prompt, which the opt-in obfuscator redacts.
 		expect(JSON.stringify(capturedContext)).not.toContain(secret);
+	});
+	it("preserves the provider prefix when ephemeral followups append structured history", async () => {
+		const api = "test-ephemeral-history-prefix-parity";
+		const contexts: Context[] = [];
+		const optionsList: SimpleStreamOptions[] = [];
+		registerCustomApi(api, (_model, context, options) => {
+			contexts.push(context);
+			if (options) optionsList.push(options);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage(`Answer ${contexts.length}`);
+				const text = message.content[0]?.type === "text" ? message.content[0].text : `Answer ${contexts.length}`;
+				stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = buildModel({
+			id: "side-model-history-prefix-parity",
+			name: "Side Model History Prefix Parity",
+			api,
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const tool: AgentTool = {
+			name: "side_tool",
+			label: "Side Tool",
+			description: "A tool in the main catalog",
+			parameters: { type: "object", properties: {} },
+			execute: async () => ({ content: [], details: {} }),
+		};
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [tool],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: createModelRegistryStub() as never,
+		});
+		sessions.push(session);
+
+		const firstHistoryTurn: Message[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "First BTW question" }],
+				timestamp: 1,
+			},
+			createAssistantMessage("First BTW answer"),
+		];
+		const firstResult = await session.runEphemeralTurn({
+			promptText: "Follow-up question",
+			history: firstHistoryTurn,
+			conversationKey: "topic-1",
+		});
+		expect(firstResult.replyText).toBe("Answer 1");
+		expect(optionsList[0]?.sessionId).toBe(`${session.sessionId}:side:conversation:topic-1`);
+
+		const firstContext = contexts[0];
+		expect(firstContext).toBeDefined();
+		expect(firstContext!.messages.map(message => message.role)).toEqual(["developer", "user", "assistant", "user"]);
+		expect(getConvertedUserText(firstContext!.messages[1])).toBe("First BTW question");
+		expect(getConvertedAssistantText(firstContext!.messages[2])).toBe("First BTW answer");
+		expect(getConvertedUserText(firstContext!.messages[3])).toBe("Follow-up question");
+
+		const standaloneResult = await session.runEphemeralTurn({
+			promptText: "Standalone question",
+		});
+		expect(standaloneResult.replyText).toBe("Answer 2");
+		expect(optionsList[1]?.sessionId).toMatch(new RegExp(`^${session.sessionId}:side:[0-9a-fA-F]+$`));
+	});
+
+	it("snapshots and obfuscates ephemeral history before asynchronous context conversion", async () => {
+		const conversionStarted = Promise.withResolvers<void>();
+		const continueConversion = Promise.withResolvers<void>();
+		const api = "test-ephemeral-history-snapshot";
+		const secret = "SECRET_TOKEN_98765";
+		const obfuscator = new SecretObfuscator([{ type: "plain", origin: "config", content: secret }]);
+		let capturedContext: Context | undefined;
+		registerCustomApi(api, (_model, context, _options) => {
+			capturedContext = context;
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("Answer");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = buildModel({
+			id: "side-model-history-snapshot",
+			name: "Side Model History Snapshot",
+			api,
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: createModelRegistryStub() as never,
+			obfuscator,
+			transformContext: async messages => {
+				conversionStarted.resolve();
+				await continueConversion.promise;
+				return messages;
+			},
+		});
+		sessions.push(session);
+
+		const mutableHistory: Message[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: `History containing ${secret}` }],
+				timestamp: 1,
+			},
+		];
+		const turnPromise = session.runEphemeralTurn({
+			promptText: "Current prompt",
+			history: mutableHistory,
+			conversationKey: "topic-snapshot",
+		});
+
+		await conversionStarted.promise;
+		// Mutate caller-owned history while conversion is paused in-flight.
+		(mutableHistory[0].content as { type: "text"; text: string }[])[0].text = "Mutated after pass";
+		continueConversion.resolve();
+
+		const result = await turnPromise;
+		expect(result.replyText).toBe("Answer");
+		expect(capturedContext).toBeDefined();
+
+		const convertedHistoryMessage = capturedContext!.messages[1];
+		expect(convertedHistoryMessage?.role).toBe("user");
+		const text = getConvertedUserText(convertedHistoryMessage);
+		expect(text).not.toContain(secret);
+		expect(text).not.toContain("Mutated after pass");
+		expect(text).toContain("History containing");
 	});
 
 	it("keeps obfuscated side-channel stable prefix byte-identical to the main turn", async () => {

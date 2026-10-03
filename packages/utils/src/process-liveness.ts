@@ -250,6 +250,41 @@ export function getProcessStartIdentity(
 }
 
 /**
+ * OS process creation time in Unix milliseconds, for migrating timestamped
+ * legacy PID records. Unknown or inconsistent observations remain unverifiable.
+ * Linux boot time is second-granular; callers must allow for that uncertainty.
+ */
+export function getProcessStartTime(
+	pid: number,
+	dependencies: ProcessIdentityDependencies = DEFAULT_PROCESS_IDENTITY_DEPENDENCIES,
+): number | null {
+	const identity = getProcessStartIdentity(pid, dependencies);
+	if (identity === null) return null;
+	try {
+		let milliseconds: number;
+		if (identity.startsWith("win32:")) {
+			milliseconds = Number(BigInt(identity.slice(6)) / 10_000n - 11_644_473_600_000n);
+		} else if (identity.startsWith("darwin:")) {
+			const start = identity.split(":")[2]!.split(".");
+			milliseconds = Number(start[0]) * 1_000 + Number(start[1]) / 1_000;
+		} else if (identity.startsWith("linux:")) {
+			const boot = dependencies.readBoundedTextFile("/proc/stat")?.match(/^btime (\d+)$/m);
+			const hzText = dependencies.querySystem("/usr/bin/getconf", ["CLK_TCK"]);
+			if (!boot || !hzText || !/^\d+$/.test(hzText.trim())) return null;
+			const hz = Number(hzText.trim());
+			if (!Number.isSafeInteger(hz) || hz <= 0) return null;
+			milliseconds = Number(boot[1]) * 1_000 + (Number(identity.split(":")[2]) * 1_000) / hz;
+		} else {
+			return null;
+		}
+		if (!Number.isFinite(milliseconds) || milliseconds <= 0) return null;
+		return getProcessStartIdentity(pid, dependencies) === identity ? milliseconds : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Whether `pid` is still the same process incarnation recorded by an owner.
  *
  * Missing identity support or an unreadable process record is deliberately

@@ -17,6 +17,7 @@ import {
 	colorToAnsi,
 	detectColorMode,
 	fgAnsi,
+	isValidThemeColor,
 	QUIET_TOKEN_DEFAULTS,
 	resolveToHex,
 	type ThemeBg,
@@ -201,9 +202,12 @@ export class Theme {
 
 		this.#fgColors = {} as Record<ThemeColor, string>;
 		this.#hexFgColors = {} as Record<ThemeColor, string>;
-		for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
-			this.#fgColors[key] = fgAnsi(value, mode);
-			this.#hexFgColors[key] = resolveToHex(value, slIsLight);
+		for (const key in fgColors) {
+			if (!isValidThemeColor(key)) continue;
+			const value = fgColors[key];
+			const hex = resolveToHex(value, slIsLight);
+			this.#fgColors[key] = fgAnsi(value === "" ? hex : value, mode);
+			this.#hexFgColors[key] = hex;
 		}
 		// `link` (bare-URL/interactive link color) is optional in theme JSON;
 		// themes without it inherit the markdown link color.

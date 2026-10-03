@@ -1,6 +1,6 @@
 import { vi } from "bun:test";
 import { type Component, TUI } from "@veyyon/tui";
-import { ProcessTerminal } from "@veyyon/tui/terminal";
+import { ProcessTerminal, type ProcessTerminalOptions } from "@veyyon/tui/terminal";
 import { setTerminalHeadless } from "@veyyon/utils";
 
 // Pristine descriptors, captured once at module load. Every dispose() restores
@@ -76,6 +76,7 @@ export interface ProcessTerminalRenderHarness {
 export function createProcessTerminalRenderHarness(
 	initialColumns = 100,
 	initialRows = 30,
+	terminalOptions: ProcessTerminalOptions = { conpty: false },
 ): ProcessTerminalRenderHarness {
 	// This harness exercises the real ProcessTerminal I/O pipeline, so it opts
 	// out of the test-default headless suppression and restores the prior value
@@ -103,7 +104,7 @@ export function createProcessTerminalRenderHarness(
 		}),
 	];
 
-	const terminal = new ProcessTerminal();
+	const terminal = new ProcessTerminal(terminalOptions);
 	const tui = new TUI(terminal);
 	const probe = new WidthProbe();
 	tui.addChild(probe);

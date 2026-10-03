@@ -151,6 +151,53 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(result?.items.map(item => item.value)).toEqual(["skill:humanizer"]);
 		});
 
+		it("matches leading skills from hyphen-delimited bare-name segments", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:research-last30days", description: "Research the last 30 days" },
+					{ name: "skill:code-ponytail", description: "Ponytail coding workflow" },
+				],
+				"/tmp",
+			);
+
+			for (const [input, expected] of [
+				["/last", "skill:research-last30days"],
+				["/last30days", "skill:research-last30days"],
+				["/research-last30days", "skill:research-last30days"],
+				["/ponytail", "skill:code-ponytail"],
+			] as const) {
+				const result = await provider.getSuggestions([input], 0, input.length);
+				expect(result?.items[0]?.value).toBe(expected);
+			}
+		});
+
+		it("ranks an exact project command above a skill hyphen-segment match", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:research-last30days", description: "Research the last 30 days" },
+					{ name: "last30days", description: "Project command" },
+				],
+				"/tmp",
+			);
+
+			const result = await provider.getSuggestions(["/last30days"], 0, "/last30days".length);
+
+			expect(result?.items.map(item => item.value)).toEqual(["last30days", "skill:research-last30days"]);
+		});
+
+		it("matches mid-prompt skills from hyphen-delimited bare-name segments", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[{ name: "skill:design-impeccable", description: "Improve interface design" }],
+				"/tmp",
+			);
+			const line = "polish this /impec";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result?.prefix).toBe("/impec");
+			expect(result?.items.map(item => item.value)).toEqual(["skill:design-impeccable"]);
+		});
+
 		it("lists every skill while typing toward the skill: namespace mid-prompt", async () => {
 			const provider = new CombinedAutocompleteProvider(
 				[

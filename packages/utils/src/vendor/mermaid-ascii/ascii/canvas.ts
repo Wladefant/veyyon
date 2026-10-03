@@ -8,7 +8,7 @@
 
 import type { Canvas, DrawingCoord, RoleCanvas, CharRole, AsciiTheme, ColorMode } from './types'
 import { colorizeLine, DEFAULT_ASCII_THEME } from './ansi'
-import { displayWidth, toCells, WIDE_PAD } from '../text-metrics'
+import { displayWidth, toCells, LABEL_CELL_PREFIX, OPAQUE_SPACE, WIDE_PAD } from '../text-metrics'
 
 /**
  * Create a blank canvas filled with spaces.
@@ -189,7 +189,7 @@ export function isJunctionChar(c: string): boolean {
  * letter/digit test misses.
  */
 function isLabelChar(c: string): boolean {
-  return c === WIDE_PAD || displayWidth(c) === 2 || /[\p{L}\p{N}]/u.test(c)
+  return c === OPAQUE_SPACE || c.startsWith(LABEL_CELL_PREFIX) || c === WIDE_PAD || displayWidth(c) === 2 || /[\p{L}\p{N}]/u.test(c)
 }
 
 /**
@@ -328,7 +328,9 @@ export function canvasToString(canvas: Canvas, options?: CanvasToStringOptions):
       for (let x = 0; x <= maxX; x++) {
         const c = canvas[x]![y]!
         // Skip wide-glyph continuation cells: the glyph itself spans 2 columns
-        if (c !== WIDE_PAD) line += c
+        if (c !== WIDE_PAD) {
+          line += c === OPAQUE_SPACE ? ' ' : c.startsWith(LABEL_CELL_PREFIX) ? c.slice(LABEL_CELL_PREFIX.length) : c
+        }
       }
       lines.push(line)
     } else {
@@ -338,7 +340,7 @@ export function canvasToString(canvas: Canvas, options?: CanvasToStringOptions):
       for (let x = 0; x <= maxX; x++) {
         const c = canvas[x]![y]!
         if (c === WIDE_PAD) continue
-        chars.push(c)
+        chars.push(c === OPAQUE_SPACE ? ' ' : c.startsWith(LABEL_CELL_PREFIX) ? c.slice(LABEL_CELL_PREFIX.length) : c)
         roles.push(roleCanvas[x]?.[y] ?? null)
       }
       lines.push(colorizeLine(chars, roles, theme, colorMode))
@@ -370,6 +372,9 @@ const VERTICAL_FLIP_MAP: Record<string, string> = {
   // Unicode corners
   '┌': '└', '└': '┌',
   '┐': '┘', '┘': '┐',
+  // Rounded corners (rounded state boxes and the state-start pseudostate)
+  '╭': '╰', '╰': '╭',
+  '╮': '╯', '╯': '╮',
   // Unicode junctions (T-pieces flip vertically)
   '┬': '┴', '┴': '┬',
   // Box-start junctions (exit points from node boxes)
@@ -439,6 +444,26 @@ export function drawText(
       }
     } else if (forceOverwrite || canvas[x]![start.y] === ' ') {
       writeCell(canvas, x, start.y, cell)
+    }
+  }
+}
+
+/**
+ * Draw edge-label text with ownership markers so later canvas merges preserve
+ * punctuation and spaces while allowing the label to clear connector strokes.
+ */
+export function drawLabelText(canvas: Canvas, start: DrawingCoord, text: string): void {
+  const cells = toCells(text)
+  increaseSize(canvas, start.x + cells.length, start.y)
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i]!
+    if (cell === WIDE_PAD) continue
+    const x = start.x + i
+    if (cells[i + 1] === WIDE_PAD) {
+      writeCell(canvas, x, start.y, cell)
+      writeCell(canvas, x + 1, start.y, WIDE_PAD)
+    } else {
+      writeCell(canvas, x, start.y, cell === ' ' ? OPAQUE_SPACE : LABEL_CELL_PREFIX + cell)
     }
   }
 }

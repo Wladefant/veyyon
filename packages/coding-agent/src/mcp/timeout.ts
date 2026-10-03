@@ -33,14 +33,13 @@ export function getNeverAbortSignal(): AbortSignal {
 	return neverAbortController.signal;
 }
 
-export function createMCPTimeout(
-	timeoutMs: number,
-	signal?: AbortSignal,
-): {
+export interface MCPTimeoutOperation {
 	signal?: AbortSignal;
 	clear: () => void;
 	isTimeoutAbort: (error: unknown) => boolean;
-} {
+}
+
+export function createMCPTimeout(timeoutMs: number, signal?: AbortSignal): MCPTimeoutOperation {
 	if (!isMCPTimeoutEnabled(timeoutMs)) {
 		return {
 			signal,

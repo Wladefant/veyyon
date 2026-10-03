@@ -1,20 +1,9 @@
-import {
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	vi,
-} from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import {
-	resetSettingsForTest,
-	Settings,
-} from "@veyyon/coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -37,14 +26,11 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-issue-816-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		authStorage = await AuthStorage.create(
-			path.join(tempDir.path(), "testauth.db"),
-		);
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		const defaultModel = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!defaultModel)
-			throw new Error("Expected claude-sonnet-4-5 in registry");
+		if (!defaultModel) throw new Error("Expected claude-sonnet-4-5 in registry");
 
 		session = new AgentSession({
 			agent: new Agent({
@@ -59,7 +45,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		session.settings.set("startup.welcome", false);
+		session.settings.set("startup.quiet", true);
 		mode = new InteractiveMode(session, "test");
 		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
 	});
@@ -94,9 +80,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// Avoid kicking off real session work during plan mode entry.
 		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);
 
-		const setModelSpy = vi
-			.spyOn(session, "setModelTemporary")
-			.mockResolvedValue(undefined);
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
 
 		// Enter plan mode → snapshots default, queues pending switch to plan model.
 		await mode.handlePlanModeCommand();
@@ -117,18 +101,14 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 	});
 
 	it("discards a deferred plan-role change when the role returns to the active model", async () => {
-		await mode.init({ suppressWelcomeIntro: true });
+		await mode.init();
 		await mode.handlePlanModeCommand();
 		const activePlanModel = session.model;
 		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
 		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
-		if (!activePlanModel || !haiku || !opus)
-			throw new Error("Expected plan models");
+		if (!activePlanModel || !haiku || !opus) throw new Error("Expected plan models");
 		const replacementPlanModel =
-			activePlanModel.provider === haiku.provider &&
-			activePlanModel.id === haiku.id
-				? opus
-				: haiku;
+			activePlanModel.provider === haiku.provider && activePlanModel.id === haiku.id ? opus : haiku;
 
 		let isStreaming = false;
 		Object.defineProperty(session, "isStreaming", {
@@ -137,51 +117,34 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		});
 
 		isStreaming = true;
-		session.settings.setModelRole(
-			"plan",
-			`${replacementPlanModel.provider}/${replacementPlanModel.id}`,
-		);
-		session.settings.setModelRole(
-			"plan",
-			`${activePlanModel.provider}/${activePlanModel.id}`,
-		);
+		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
+		session.settings.setModelRole("plan", `${activePlanModel.provider}/${activePlanModel.id}`);
 		isStreaming = false;
 
-		const setModelSpy = vi
-			.spyOn(session, "setModelTemporary")
-			.mockResolvedValue(undefined);
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
 		await mode.flushPendingModelSwitch();
 
 		expect(setModelSpy).not.toHaveBeenCalled();
 	});
 
 	it("applies a plan-role reassignment to an active plan session", async () => {
-		await mode.init({ suppressWelcomeIntro: true });
+		await mode.init();
 		await mode.handlePlanModeCommand();
 		const activePlanModel = session.model;
 		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
 		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
-		if (!activePlanModel || !haiku || !opus)
-			throw new Error("Expected plan models");
+		if (!activePlanModel || !haiku || !opus) throw new Error("Expected plan models");
 		const replacementPlanModel =
-			activePlanModel.provider === haiku.provider &&
-			activePlanModel.id === haiku.id
-				? opus
-				: haiku;
+			activePlanModel.provider === haiku.provider && activePlanModel.id === haiku.id ? opus : haiku;
 
 		// The role-change listener resolves the plan role through real async
 		// storage hops (project-scoped roles), so await the apply itself rather
 		// than assuming it lands within one microtask.
 		const applied = Promise.withResolvers<void>();
-		const setModelSpy = vi
-			.spyOn(session, "setModelTemporary")
-			.mockImplementation(async () => {
-				applied.resolve();
-			});
-		session.settings.setModelRole(
-			"plan",
-			`${replacementPlanModel.provider}/${replacementPlanModel.id}`,
-		);
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockImplementation(async () => {
+			applied.resolve();
+		});
+		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
 		await applied.promise;
 
 		expect(setModelSpy).toHaveBeenCalledWith(replacementPlanModel, undefined);
@@ -194,9 +157,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		await mode.handlePlanModeCommand();
 
 		expect(mode.planModeEnabled).toBe(false);
-		expect(warning).toHaveBeenCalledWith(
-			"Plan mode is disabled. Enable it in settings (plan.enabled).",
-		);
+		expect(warning).toHaveBeenCalledWith("Plan mode is disabled. Enable it in settings (plan.enabled).");
 	});
 
 	it("allows /plan to pause an active plan mode after plan.enabled is disabled", async () => {

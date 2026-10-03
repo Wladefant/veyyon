@@ -64,7 +64,11 @@
 					return `<pre><code class="hljs">${highlight(token.text, token.lang)}</code></pre>`;
 				},
 				text(token) {
-					return token.tokens ? this.parser.parseInline(token.tokens) : escapeHtmlTags(escapeHtml(token.text));
+					return token.tokens
+						? this.parser.parseInline(token.tokens)
+						: token.escaped
+							? token.text
+							: escapeHtmlTags(escapeHtml(token.text));
 				},
 				codespan(token) {
 					return `<code>${escapeHtml(token.text)}</code>`;
@@ -78,6 +82,18 @@
 					if (url === null) return inner;
 					const titleAttr = token.title ? ` title="${escapeHtml(token.title)}"` : "";
 					return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener">${inner}</a>`;
+				},
+				image(token) {
+					// marked's default emits the alt text into the attribute unescaped, so a quote in
+					// `![" onerror=...](x)` breaks out of it. Escape every value and refuse script schemes.
+					const rawAlt = token.tokens
+						? this.parser.parseInline(token.tokens, this.parser.textRenderer)
+						: token.text;
+					const alt = escapeHtml(rawAlt);
+					const url = safeHref(token.href);
+					if (url === null) return alt;
+					const titleAttr = token.title ? ` title="${escapeHtml(token.title)}"` : "";
+					return `<img src="${escapeHtml(url)}" alt="${alt}"${titleAttr}>`;
 				},
 			},
 		});

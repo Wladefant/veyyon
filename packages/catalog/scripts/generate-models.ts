@@ -90,6 +90,33 @@ const RETIRED_PROVIDERS = new Set(["wafer-pass", "wandb"]);
  * which the type import cannot express.
  */
 const previousSnapshot = prevModelsJson as unknown as Record<string, Record<string, ModelSpec>>;
+/**
+ * Restores unfetched rows from a previous generated catalog while pruning
+ * providers whose snapshots are no longer valid.
+ */
+export function mergePreviousSnapshotModels(
+	models: readonly ModelSpec[],
+	previousModels: Readonly<Record<string, Readonly<Record<string, ModelSpec>>>>,
+	excludedProviders: ReadonlySet<string>,
+): ModelSpec[] {
+	const merged = [...models];
+	const fetchedKeys = new Set(models.map(model => `${model.provider}/${model.id}`));
+	for (const provider in previousModels) {
+		const providerModels = previousModels[provider];
+		for (const id in providerModels) {
+			const model = providerModels[id];
+			if (
+				!fetchedKeys.has(`${model.provider}/${model.id}`) &&
+				!DISCOVERY_ONLY_PROVIDERS.has(model.provider) &&
+				!RETIRED_PROVIDERS.has(model.provider) &&
+				!excludedProviders.has(model.provider)
+			) {
+				merged.push(model);
+			}
+		}
+	}
+	return merged;
+}
 
 /**
  * `--providers=a,b` regenerates only the named providers and carries every
@@ -802,25 +829,13 @@ async function generateModels() {
 	// or authoritative models.dev sources keep that upstream list exactly, so
 	// retired entries from the previous snapshot do not reappear during regeneration.
 	// Discovery-only providers (local inference servers) — never bundle static models.
-	const fetchedKeys = new Set(allModels.map(model => `${model.provider}/${model.id}`));
+	const previousSnapshotExcludedProviders = new Set([
+		...authoritativeCatalogProviders,
+		...authoritativeSpecialDiscoveryProviders,
+		...modelsDevSnapshotExcludedProviders,
+	]);
 
-	// Previous-snapshot entries may carry an older ThinkingConfig vocabulary;
-	// applyGeneratedModelPolicies re-bakes `thinking` for every model, so the
-	// inbound shape is irrelevant beyond identity/pricing/compat fields.
-	for (const models of Object.values(previousSnapshot)) {
-		for (const model of Object.values(models)) {
-			if (
-				!fetchedKeys.has(`${model.provider}/${model.id}`) &&
-				!DISCOVERY_ONLY_PROVIDERS.has(model.provider) &&
-				!RETIRED_PROVIDERS.has(model.provider) &&
-				!authoritativeCatalogProviders.has(model.provider) &&
-				!authoritativeSpecialDiscoveryProviders.has(model.provider) &&
-				!modelsDevSnapshotExcludedProviders.has(model.provider)
-			) {
-				allModels.push(model);
-			}
-		}
-	}
+	allModels = mergePreviousSnapshotModels(allModels, previousSnapshot, previousSnapshotExcludedProviders);
 
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
