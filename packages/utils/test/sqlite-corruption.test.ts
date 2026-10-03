@@ -105,7 +105,7 @@ test("recovery preserves all sidecars under one private backup prefix", async ()
 	const dirStat = await fs.stat(backupDir);
 	expect(dirStat.isDirectory()).toBe(true);
 	for (const [ext, data] of Object.entries(sidecars)) {
-		expect(await fs.readFile(path.join(backupDir, `store.db${ext}`))).toEqual(data);
+		expect(Buffer.compare(await fs.readFile(path.join(backupDir, `store.db${ext}`)), data)).toBe(0);
 	}
 });
 
@@ -421,7 +421,7 @@ test("compatibility: deterministic injected parent openSync wx EACCES allows hea
 	const originalOpenSync = nodeFs.openSync.bind(nodeFs);
 	let probeDenialChecked = 0;
 	const openSpy = spyOn(nodeFs, "openSync").mockImplementation(
-		(targetPath: nodeFs.PathLike, flags?: nodeFs.OpenMode, mode?: nodeFs.Mode) => {
+		(targetPath: nodeFs.PathLike, flags: nodeFs.OpenMode = "r", mode?: nodeFs.Mode | null) => {
 			if (
 				typeof targetPath === "string" &&
 				path.basename(targetPath).startsWith(".sqlite-write-probe-") &&
