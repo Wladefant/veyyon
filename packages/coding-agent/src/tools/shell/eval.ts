@@ -23,6 +23,7 @@ import { truncateForPrompt } from "../core/approval";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import {
+	formatArtifactErrorNotice,
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
 	resolveOutputSinkHeadBytes,
@@ -823,7 +824,8 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					// They asked for the stop, and telling them their cell timed out when
 					// they cancelled it is the same conflation in the other direction.
 					if (signal?.aborted || sessionAbortController.signal.aborted) {
-						await finalizeOutput();
+						const finalSummary = await finalizeOutput();
+						const artifactError = finalSummary?.artifactError ?? result.artifactError;
 						// `result.output` is empty for an interrupted cell, so the streamed
 						// text is the only surviving record of how far the work got, and it
 						// is what the operator needs to decide whether to re-run.
@@ -833,6 +835,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 								`Eval cancelled: ${describeEvalCell(cell)} started and did NOT finish`,
 								"any state it had already mutated is still in the kernel",
 								partial ? `output so far:\n${partial}` : "it produced no output before the cancellation",
+								...(artifactError ? [formatArtifactErrorNotice(artifactError)] : []),
 							].join("; "),
 							{ cause: signal?.reason ?? sessionAbortController.signal.reason },
 						);

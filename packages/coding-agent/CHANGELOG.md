@@ -8,6 +8,7 @@
 
 ### Fixed
 - Capped artifacts no longer claim to contain full output. Interactive bash honors the configured cap, negative caps are rejected, and short background results and job snapshots keep artifact capture warnings ([PR 432](https://github.com/Wladefant/veyyon/pull/432)).
+- A cancelled eval call now names a failed artifact capture in its abort message, and job cards show the capture warning whenever the visible preview lacks it ([PR 432](https://github.com/Wladefant/veyyon/pull/432)).
 - Fixed `OutputSink.dump()` skipping artifact writer cleanup when a throttled `onChunk` preview flush threw: the writer now ends once and the original error still propagates ([Refs #446](https://github.com/Wladefant/veyyon/issues/446)).
 - Command output from native Windows tools on Chinese (and other non-UTF-8) locales is decoded using the system ANSI code page instead of turning into replacement characters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6d628ff863415f75004f992733f33daeb29b6a2b).
 - Daemon startup recovers stale broker leases after PID reuse, including legacy PID-only records whose process started after the record. Lease transitions are serialized, and stale client presence no longer pins brokers or runtime scopes ([#411](https://github.com/Wladefant/veyyon/issues/411)).
