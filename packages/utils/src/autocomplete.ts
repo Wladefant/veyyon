@@ -303,7 +303,12 @@ function buildSlashCommandCompletions(
 					: isSkillCommand
 						? Math.max(
 								scoreCommandTextMatch(lowerPrefix, name.toLowerCase()),
-								skillBareNameBreakoutTier(lowerPrefix, name.slice(SKILL_NAMESPACE.length).toLowerCase()),
+								// Capped below a prefix (900) and an exact (1000) command-name match so a project
+								// command named like a skill segment keeps winning Enter-applies-first-match.
+								Math.min(
+									skillBareNameBreakoutTier(lowerPrefix, name.slice(SKILL_NAMESPACE.length).toLowerCase()),
+									899,
+								),
 							)
 						: scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
 			const lowerDesc = staticDesc.toLowerCase();
