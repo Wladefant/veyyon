@@ -3,7 +3,7 @@
 use std::{
 	borrow::Cow,
 	fmt,
-	path::{Component, Path, PathBuf, Prefix},
+	path::{Path, PathBuf},
 	sync::LazyLock,
 	time::{Duration, Instant},
 };
@@ -175,20 +175,40 @@ fn cache_key(root: &Path, mut options: WalkOptions) -> CacheKey {
 /// Verbatim (`\\?\`) and device (`\\.\`) paths are returned unchanged: Windows
 /// only honors those prefixes with backslash separators.
 pub fn normalize_path(path: &Path) -> Cow<'_, str> {
-	let text = path.to_string_lossy();
-	if cfg!(windows) && text.contains('\\') && !has_literal_prefix(path) {
-		Cow::Owned(text.replace('\\', "/"))
+	if cfg!(windows) {
+		let text = path.to_string_lossy();
+		if text.contains('\\') && !has_literal_prefix(path) {
+			Cow::Owned(text.replace('\\', "/"))
+		} else {
+			text
+		}
 	} else {
-		text
+		path.to_string_lossy()
 	}
 }
 
-fn has_literal_prefix(path: &Path) -> bool {
-	matches!(
-		path.components().next(),
-		Some(Component::Prefix(prefix))
-			if prefix.kind().is_verbatim() || matches!(prefix.kind(), Prefix::DeviceNS(_))
-	)
+/// Normalize a filesystem path string using Windows path normalization rules.
+///
+/// Verbatim (`\\?\`) and device (`\\.\`) paths are returned unchanged: Windows
+/// only honors those prefixes with backslash separators.
+pub fn normalize_windows_path_str(text: &str) -> Cow<'_, str> {
+	if text.contains('\\') && !has_literal_prefix_str(text) {
+		Cow::Owned(text.replace('\\', "/"))
+	} else {
+		Cow::Borrowed(text)
+	}
+}
+
+/// Return whether a path string starts with a Windows verbatim (`\\?\`) or
+/// device (`\\.\`) prefix.
+pub fn has_literal_prefix_str(text: &str) -> bool {
+	text.starts_with(r"\\?\") || text.starts_with(r"\\.\")
+}
+
+/// Return whether a filesystem path starts with a Windows verbatim (`\\?\`) or
+/// device (`\\.\`) prefix.
+pub fn has_literal_prefix(path: &Path) -> bool {
+	has_literal_prefix_str(&path.to_string_lossy())
 }
 
 /// Normalize a filesystem path to a forward-slash relative string.
@@ -879,38 +899,37 @@ mod tests {
 		super::ensure_readable_dir(guard.path()).expect("a populated readable directory passes");
 	}
 	#[test]
-	fn normalize_path_preserves_verbatim_and_device_prefixes_on_windows() {
+	fn normalize_windows_path_preserves_verbatim_and_device_prefixes() {
+		assert!(super::has_literal_prefix_str(r"\\?\C:\Users\foo\bar"));
+		assert!(super::has_literal_prefix_str(r"\\.\COM1"));
+		assert!(!super::has_literal_prefix_str(r"C:\Users\foo\bar"));
+		assert!(!super::has_literal_prefix_str(r"foo\bar\baz"));
+
+		assert_eq!(
+			super::normalize_windows_path_str(r"\\?\C:\Users\foo\bar"),
+			r"\\?\C:\Users\foo\bar"
+		);
+		assert_eq!(super::normalize_windows_path_str(r"\\.\COM1"), r"\\.\COM1");
+		assert_eq!(super::normalize_windows_path_str(r"C:\Users\foo\bar"), "C:/Users/foo/bar");
+		assert_eq!(super::normalize_windows_path_str(r"foo\bar\baz"), "foo/bar/baz");
+	}
+
+	#[test]
+	fn normalize_path_respects_host_os_contract() {
 		use std::path::Path;
 		#[cfg(windows)]
 		{
-			assert!(super::has_literal_prefix(Path::new(r"\\?\C:\Users\foo\bar")));
-			assert!(super::has_literal_prefix(Path::new(r"\\.\COM1")));
-			assert!(!super::has_literal_prefix(Path::new(r"C:\Users\foo\bar")));
-			assert!(!super::has_literal_prefix(Path::new(r"foo\bar\baz")));
-
 			assert_eq!(
 				super::normalize_path(Path::new(r"\\?\C:\Users\foo\bar")),
 				r"\\?\C:\Users\foo\bar"
 			);
-			assert_eq!(
-				super::normalize_path(Path::new(r"\\.\COM1")),
-				r"\\.\COM1"
-			);
-			assert_eq!(
-				super::normalize_path(Path::new(r"C:\Users\foo\bar")),
-				"C:/Users/foo/bar"
-			);
-			assert_eq!(
-				super::normalize_path(Path::new(r"foo\bar\baz")),
-				"foo/bar/baz"
-			);
+			assert_eq!(super::normalize_path(Path::new(r"\\.\COM1")), r"\\.\COM1");
+			assert_eq!(super::normalize_path(Path::new(r"C:\Users\foo\bar")), "C:/Users/foo/bar");
+			assert_eq!(super::normalize_path(Path::new(r"foo\bar\baz")), "foo/bar/baz");
 		}
 		#[cfg(not(windows))]
 		{
-			assert_eq!(
-				super::normalize_path(Path::new("/tmp/foo/bar")),
-				"/tmp/foo/bar"
-			);
+			assert_eq!(super::normalize_path(Path::new("/tmp/foo/bar")), "/tmp/foo/bar");
 		}
 	}
 }
