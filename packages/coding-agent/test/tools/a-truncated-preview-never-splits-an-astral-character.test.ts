@@ -24,7 +24,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { truncateForPrompt } from "@veyyon/coding-agent/tools/core/approval";
 import { AstEditTool } from "@veyyon/coding-agent/tools/search/ast-edit";
-import { formatDisplayJsonForText } from "@veyyon/coding-agent/tools/shell/eval";
+import { formatDisplayJsonForText } from "@veyyon/coding-agent/tools/shell/eval-display";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 import { makeToolSession } from "../helpers/tool-session";
