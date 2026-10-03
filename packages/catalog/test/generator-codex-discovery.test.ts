@@ -19,20 +19,34 @@ describe("fetchCodexDiscoveryModels", () => {
 		} as unknown as AuthStorage;
 
 		const requestedAccounts: string[] = [];
-		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-			const accountId = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
+		globalThis.fetch = (async (
+			_url: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			const accountId =
+				new Headers(init?.headers).get("chatgpt-account-id") ?? "";
 			requestedAccounts.push(accountId);
 			if (accountId === "acc-a") {
 				return Response.json({
 					models: [
-						{ slug: "model-a", display_name: "Model A", context_window: 128_000, input_modalities: ["text"] },
+						{
+							slug: "model-a",
+							display_name: "Model A",
+							context_window: 128_000,
+							input_modalities: ["text"],
+						},
 					],
 				});
 			}
 			if (accountId === "acc-b") {
 				return Response.json({
 					models: [
-						{ slug: "model-b", display_name: "Model B", context_window: 256_000, input_modalities: ["text"] },
+						{
+							slug: "model-b",
+							display_name: "Model B",
+							context_window: 256_000,
+							input_modalities: ["text"],
+						},
 					],
 				});
 			}
@@ -41,7 +55,7 @@ describe("fetchCodexDiscoveryModels", () => {
 
 		const models = await fetchCodexDiscoveryModels(authStorage);
 		expect(requestedAccounts.sort()).toEqual(["acc-a", "acc-b"]);
-		const slugs = models.map(m => m.id);
+		const slugs = models.map((m) => m.id);
 		expect(slugs).toContain("model-a");
 		expect(slugs).toContain("model-b");
 	});
