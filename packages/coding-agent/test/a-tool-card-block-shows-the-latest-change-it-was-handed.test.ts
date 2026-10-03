@@ -100,9 +100,11 @@ const CHANGES: Record<string, Record<string, Change>> = {
 
 /** Members that read the producer and change nothing it shows. */
 const READS = [
+	"args",
 	"block",
 	"callPreview",
 	"constructor",
+	"followsFrame",
 	"isPartial",
 	"policies",
 	"produceBlock",
