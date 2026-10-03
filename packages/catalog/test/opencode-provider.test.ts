@@ -274,5 +274,14 @@ describe("issue #10416 — retired provider snapshot pruning", () => {
 		);
 
 		expect(merged.map(model => `${model.provider}/${model.id}`)).toEqual(["fixture-provider/live-fallback-model"]);
+
+		const fetchedModel: ModelSpec = { ...liveModel, contextWindow: 256_000 };
+		const previous = { "fixture-provider": { [liveModel.id]: liveModel } };
+		expect(mergePreviousSnapshotModels([fetchedModel], previous, new Set())).toEqual([fetchedModel]);
+		expect(mergePreviousSnapshotModels([], previous, new Set(["fixture-provider"]))).toEqual([]);
+		// Exclusion limits snapshot restoration, not authoritative fetched rows.
+		expect(mergePreviousSnapshotModels([fetchedModel], previous, new Set(["fixture-provider"]))).toEqual([
+			fetchedModel,
+		]);
 	});
 });
