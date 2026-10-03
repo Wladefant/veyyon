@@ -23,6 +23,13 @@ const SESSION_STICKY_CACHE_PREFIX = "session:sticky:";
  */
 const SESSION_PIN_CACHE_PREFIX = "session:pin:";
 
+/**
+ * How long a process trusts its read of the global account choice. The choice lives in a database
+ * every veyyon process shares, so a memo that never expired made a process spend the account that
+ * was chosen when it first asked, whatever the operator switched to afterwards.
+ */
+const PROVIDER_SELECTION_TTL_MS = 500;
+
 /** How long a pin survives with no further use, matching the sticky record's window. */
 const SESSION_PIN_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -50,10 +57,11 @@ export class CredentialRouting {
 	 */
 	#sessionPinnedCredential: Map<string, Map<string, number>> = new Map();
 	/**
-	 * Global per-provider account choice, memoised. `null` means "asked the store, it has none",
-	 * which is what keeps a provider without a choice from re-querying on every credential resolve.
+	 * Global per-provider account choice, memoised for {@link PROVIDER_SELECTION_TTL_MS}. `null`
+	 * means "asked the store, it has none". The memo keeps a resolve burst from querying once per
+	 * credential; it expires so a choice made by another process is seen.
 	 */
-	#providerSelection: Map<string, string | null> = new Map();
+	#providerSelection: Map<string, { identity: string | null; readAtMs: number }> = new Map();
 
 	/** `rows` returns the provider's loaded credential rows, in the order indices refer to. */
 	constructor(store: AuthCredentialStore, rows: (provider: string) => StoredCredential[]) {
@@ -328,11 +336,12 @@ export class CredentialRouting {
 	 * costs one query per process rather than one per credential resolve.
 	 */
 	#readProviderSelection(provider: string): string | undefined {
+		const now = Date.now();
 		const memo = this.#providerSelection.get(provider);
-		if (memo !== undefined) return memo ?? undefined;
+		if (memo !== undefined && now - memo.readAtMs < PROVIDER_SELECTION_TTL_MS) return memo.identity ?? undefined;
 		const read = this.#store.getProviderSelection;
 		const identity = read ? read.call(this.#store, provider) : undefined;
-		this.#providerSelection.set(provider, identity ?? null);
+		this.#providerSelection.set(provider, { identity: identity ?? null, readAtMs: now });
 		return identity;
 	}
 
@@ -360,7 +369,7 @@ export class CredentialRouting {
 		const entry = this.#rows(provider).find(row => row.id === credentialId);
 		if (!entry) return false;
 		const identity = resolveAccountNameIdentity(provider, entry);
-		this.#providerSelection.set(provider, identity);
+		this.#providerSelection.set(provider, { identity, readAtMs: Date.now() });
 		const write = this.#store.setProviderSelection;
 		if (write) {
 			try {
@@ -381,7 +390,7 @@ export class CredentialRouting {
 
 	/** See {@link AuthStorage.clearProviderSelection}. */
 	clearProviderSelection(provider: string, sessionId: string | undefined): void {
-		this.#providerSelection.set(provider, null);
+		this.#providerSelection.set(provider, { identity: null, readAtMs: Date.now() });
 		const clear = this.#store.clearProviderSelection;
 		if (clear) {
 			try {
