@@ -1,5 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
+import * as crypto from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -319,10 +321,20 @@ test("regression: interrupted sidecar removal writes quarantine-pending marker a
 
 test("compatibility: in-memory sqlite store opens async and sync with default and opt-in recovery", async () => {
 	const asyncDefault = await openSqliteDatabase(":memory:", async db => {
+		const list = db.query<{ seq: number; name: string; file: string }, []>("PRAGMA database_list").all();
+		expect(list[0]?.file).toBe("");
 		db.run("CREATE TABLE entries (key TEXT, val INTEGER); INSERT INTO entries VALUES ('k1', 101);");
 		return db.query<{ val: number }, []>("SELECT val FROM entries WHERE key = 'k1'").get();
 	});
 	expect(asyncDefault).toEqual({ val: 101 });
+
+	await openSqliteDatabase(":memory:", async db => {
+		const list = db.query<{ seq: number; name: string; file: string }, []>("PRAGMA database_list").all();
+		expect(list[0]?.file).toBe("");
+		expect(
+			db.query<{ count: number }, []>("SELECT count(*) as count FROM sqlite_master WHERE name = 'entries'").get(),
+		).toEqual({ count: 0 });
+	});
 
 	const asyncRecover = await openSqliteDatabase(
 		":memory:",
@@ -335,10 +347,20 @@ test("compatibility: in-memory sqlite store opens async and sync with default an
 	expect(asyncRecover).toEqual({ val: 102 });
 
 	const syncDefault = openSqliteDatabaseSync(":memory:", db => {
+		const list = db.query<{ seq: number; name: string; file: string }, []>("PRAGMA database_list").all();
+		expect(list[0]?.file).toBe("");
 		db.run("CREATE TABLE entries (key TEXT, val INTEGER); INSERT INTO entries VALUES ('k3', 103);");
 		return db.query<{ val: number }, []>("SELECT val FROM entries WHERE key = 'k3'").get();
 	});
 	expect(syncDefault).toEqual({ val: 103 });
+
+	openSqliteDatabaseSync(":memory:", db => {
+		const list = db.query<{ seq: number; name: string; file: string }, []>("PRAGMA database_list").all();
+		expect(list[0]?.file).toBe("");
+		expect(
+			db.query<{ count: number }, []>("SELECT count(*) as count FROM sqlite_master WHERE name = 'entries'").get(),
+		).toEqual({ count: 0 });
+	});
 
 	const syncRecover = openSqliteDatabaseSync(
 		":memory:",
@@ -385,171 +407,579 @@ test("compatibility: temporary empty path sqlite store opens async and sync with
 	expect(syncRecover).toEqual({ val: 204 });
 });
 
-test("compatibility: deterministic injected parent accessSync EACCES allows healthy reads while pending marker blocks", async () => {
+test("compatibility: deterministic injected parent openSync wx EACCES allows healthy reads while pending marker blocks", async () => {
 	await using dir = await TempDir.create("@omp-corrupt-readonly-parent-");
 	const dbPath = dir.join("store.db");
 	const initDb = new Database(dbPath);
 	initDb.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('healthy-parent-ro');");
 	initDb.close();
 
-	const originalAccessSync = nodeFs.accessSync.bind(nodeFs);
-	const parentDir = path.dirname(dbPath);
-	let parentAccessChecked = 0;
-	const accessSpy = spyOn(nodeFs, "accessSync").mockImplementation((checkPath: nodeFs.PathLike, mode?: number) => {
-		if (
-			checkPath === parentDir &&
-			(mode === nodeFs.constants.W_OK || (typeof mode === "number" && (mode & nodeFs.constants.W_OK) !== 0))
-		) {
-			parentAccessChecked++;
-			const error = new Error("EACCES: permission denied, access");
-			(error as NodeJS.ErrnoException).code = "EACCES";
-			throw error;
-		}
-		return originalAccessSync(checkPath, mode);
-	});
+	const originalOpenSync = nodeFs.openSync.bind(nodeFs);
+	let probeDenialChecked = 0;
+	const openSpy = spyOn(nodeFs, "openSync").mockImplementation(
+		(targetPath: nodeFs.PathLike, flags?: nodeFs.OpenMode, mode?: nodeFs.Mode) => {
+			if (
+				typeof targetPath === "string" &&
+				path.basename(targetPath).startsWith(".sqlite-write-probe-") &&
+				(flags === "wx" || flags === "xw")
+			) {
+				probeDenialChecked++;
+				const error = new Error("EACCES: permission denied, open");
+				(error as NodeJS.ErrnoException).code = "EACCES";
+				throw error;
+			}
+			return originalOpenSync(targetPath, flags, mode);
+		},
+	);
 
 	try {
 		const asyncRow = await openSqliteDatabase(dbPath, async db => {
-			return db.query<{ v: string }, []>("SELECT v FROM t").get();
+			try {
+				return db.query<{ v: string }, []>("SELECT v FROM t").get();
+			} finally {
+				db.close();
+			}
 		});
 		expect(asyncRow).toEqual({ v: "healthy-parent-ro" });
 
 		const syncRow = openSqliteDatabaseSync(dbPath, db => {
-			return db.query<{ v: string }, []>("SELECT v FROM t").get();
+			try {
+				return db.query<{ v: string }, []>("SELECT v FROM t").get();
+			} finally {
+				db.close();
+			}
 		});
 		expect(syncRow).toEqual({ v: "healthy-parent-ro" });
-		expect(parentAccessChecked).toBeGreaterThan(0);
+		expect(probeDenialChecked).toBeGreaterThan(0);
 
 		await fs.writeFile(`${dbPath}.quarantine-pending`, JSON.stringify({ reason: "interrupted" }));
 
-		await expect(openSqliteDatabase(dbPath, db => db.query("SELECT 1").all())).rejects.toThrow(
-			/quarantine.*pending|pending.*quarantine/i,
-		);
-		expect(() => openSqliteDatabaseSync(dbPath, db => db.query("SELECT 1").all())).toThrow(
-			/quarantine.*pending|pending.*quarantine/i,
-		);
+		await expect(
+			openSqliteDatabase(dbPath, async db => {
+				try {
+					return db.query("SELECT 1").all();
+				} finally {
+					db.close();
+				}
+			}),
+		).rejects.toThrow(/quarantine.*pending|pending.*quarantine/i);
+		expect(() =>
+			openSqliteDatabaseSync(dbPath, db => {
+				try {
+					return db.query("SELECT 1").all();
+				} finally {
+					db.close();
+				}
+			}),
+		).toThrow(/quarantine.*pending|pending.*quarantine/i);
 	} finally {
-		accessSpy.mockRestore();
+		openSpy.mockRestore();
 	}
 });
 
-test("regression: real URI memory store opens async and sync with default and opt-in recovery without filesystem operations", async () => {
-	const interceptedOps: string[] = [];
-	const fsOps = [
-		"statSync",
-		"lstatSync",
-		"mkdirSync",
-		"accessSync",
-		"existsSync",
-		"openSync",
-		"readFileSync",
-		"writeFileSync",
-		"chmodSync",
-		"unlinkSync",
-		"renameSync",
-		"rmdirSync",
-		"rmSync",
-		"readdirSync",
-	] as const;
+test.skipIf(process.platform !== "win32")(
+	"regression: real NTFS ACL denied-create-directory allows healthy reads while marker blocks both",
+	async () => {
+		await using dir = await TempDir.create("@omp-corrupt-ntfs-acl-");
+		const parentDir = dir.path();
+		const dbPath = dir.join("store.db");
 
-	const originals = {
-		statSync: nodeFs.statSync,
-		lstatSync: nodeFs.lstatSync,
-		mkdirSync: nodeFs.mkdirSync,
-		accessSync: nodeFs.accessSync,
-		existsSync: nodeFs.existsSync,
-		openSync: nodeFs.openSync,
-		readFileSync: nodeFs.readFileSync,
-		writeFileSync: nodeFs.writeFileSync,
-		chmodSync: nodeFs.chmodSync,
-		unlinkSync: nodeFs.unlinkSync,
-		renameSync: nodeFs.renameSync,
-		rmdirSync: nodeFs.rmdirSync,
-		rmSync: nodeFs.rmSync,
-		readdirSync: nodeFs.readdirSync,
-	};
-	const spies = fsOps.map(op => {
-		const orig = (originals[op] as (...args: unknown[]) => unknown).bind(nodeFs);
-		return spyOn(nodeFs, op).mockImplementation((...args: unknown[]) => {
-			const targetPath = args[0];
-			if (typeof targetPath === "string" && targetPath.startsWith("file:")) {
-				interceptedOps.push(`${op}:${targetPath}`);
-				throw new Error(`Unexpected filesystem call ${op} for URI path: ${targetPath}`);
+		const initDb = new Database(dbPath);
+		initDb.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('healthy-ntfs-acl');");
+		initDb.close();
+
+		let sid: string;
+		try {
+			const whoamiOut = childProcess.execFileSync("whoami", ["/user", "/fo", "csv", "/nh"], {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 5000,
+			});
+			const match = whoamiOut.match(/"(S-1-[^"]+)"/);
+			if (!match) throw new Error(`Could not parse SID from whoami output: ${whoamiOut}`);
+			sid = match[1];
+		} catch (error) {
+			throw new Error(
+				`Failed to determine current user SID for NTFS ACL fixture: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+
+		try {
+			childProcess.execFileSync("icacls", [parentDir, "/deny", `*${sid}:(WD,AD)`], {
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 5000,
+			});
+		} catch (error) {
+			throw new Error(
+				`Failed to configure NTFS ACL deny (WD,AD) on ${parentDir}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+
+		try {
+			let accessWOkSucceeded = false;
+			try {
+				nodeFs.accessSync(parentDir, nodeFs.constants.W_OK);
+				accessWOkSucceeded = true;
+			} catch {
+				accessWOkSucceeded = false;
 			}
-			return orig(...args);
+			expect(accessWOkSucceeded).toBe(true);
+
+			let createFailed = false;
+			const probePath = path.join(parentDir, `.probe-test-${Date.now()}.tmp`);
+			try {
+				const fd = nodeFs.openSync(probePath, "wx");
+				nodeFs.closeSync(fd);
+			} catch (e) {
+				createFailed = true;
+				expect(["EACCES", "EPERM"]).toContain((e as NodeJS.ErrnoException).code ?? "");
+			}
+			expect(createFailed).toBe(true);
+
+			const directDb = new Database(dbPath);
+			try {
+				const directRow = directDb.query<{ v: string }, []>("SELECT v FROM t").get();
+				expect(directRow).toEqual({ v: "healthy-ntfs-acl" });
+			} finally {
+				directDb.close();
+			}
+
+			const asyncRow = await openSqliteDatabase(dbPath, async db => {
+				try {
+					return db.query<{ v: string }, []>("SELECT v FROM t").get();
+				} finally {
+					db.close();
+				}
+			});
+			expect(asyncRow).toEqual({ v: "healthy-ntfs-acl" });
+
+			const syncRow = openSqliteDatabaseSync(dbPath, db => {
+				try {
+					return db.query<{ v: string }, []>("SELECT v FROM t").get();
+				} finally {
+					db.close();
+				}
+			});
+			expect(syncRow).toEqual({ v: "healthy-ntfs-acl" });
+		} finally {
+			childProcess.execFileSync("icacls", [parentDir, "/remove:d", `*${sid}`], {
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 5000,
+			});
+		}
+
+		const markerPath = `${dbPath}.quarantine-pending`;
+		await fs.writeFile(markerPath, JSON.stringify({ reason: "interrupted" }));
+
+		childProcess.execFileSync("icacls", [parentDir, "/deny", `*${sid}:(WD,AD)`], {
+			stdio: ["ignore", "pipe", "pipe"],
+			timeout: 5000,
 		});
+
+		try {
+			await expect(
+				openSqliteDatabase(dbPath, async db => {
+					try {
+						return db.query("SELECT 1").all();
+					} finally {
+						db.close();
+					}
+				}),
+			).rejects.toThrow(/quarantine.*pending|pending.*quarantine/i);
+			expect(() =>
+				openSqliteDatabaseSync(dbPath, db => {
+					try {
+						return db.query("SELECT 1").all();
+					} finally {
+						db.close();
+					}
+				}),
+			).toThrow(/quarantine.*pending|pending.*quarantine/i);
+		} finally {
+			childProcess.execFileSync("icacls", [parentDir, "/remove:d", `*${sid}`], {
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 5000,
+			});
+		}
+	},
+);
+
+test("regression: physical URI-looking filenames exact starts-file subprocess runner asserts backing, persistence, and quarantine block", async () => {
+	await using dir = await TempDir.create("@omp-corrupt-uri-runner-");
+	const repoRoot = path.resolve(__dirname, "../../..");
+	const sqliteModulePath = path.join(repoRoot, "packages/utils/src/sqlite.ts").replaceAll("\\", "/");
+	const script = `
+		import { Database } from "bun:sqlite";
+		import { openSqliteDatabase, openSqliteDatabaseSync } from "${sqliteModulePath}";
+		import * as fs from "node:fs";
+
+		const uris = [
+			"file:store-plain.db?mode=memory&cache=shared",
+			"file:store-dup.db?mode=memory&cache=shared&mode=memory",
+			"file:store-encval.db?mode=%6d%65%6d%6f%72%79&cache=shared",
+			"file:store-mem-rwc.db?mode=memory&cache=shared&mode=rwc",
+			"file:store-rwc-mem.db?mode=rwc&cache=shared&mode=memory",
+			"file:store-encname.db?%6d%6f%64%65=memory&cache=shared",
+			"file:store-encboth.db?%6d%6f%64%65=%6d%65%6d%6f%72%79&cache=shared",
+		];
+
+		for (const uri of uris) {
+			openSqliteDatabaseSync(uri, db => {
+				try {
+					const list = db.query("PRAGMA database_list").all();
+					const mainFile = list[0]?.file;
+					if (!mainFile || mainFile.length === 0) throw new Error("main.file was empty for " + uri);
+					db.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('sentinel');");
+				} finally {
+					db.close();
+				}
+			});
+
+			const reopenedSync = openSqliteDatabaseSync(uri, db => {
+				try {
+					return db.query("SELECT v FROM t").all();
+				} finally {
+					db.close();
+				}
+			});
+			if (reopenedSync.length !== 1 || reopenedSync[0].v !== "sentinel") {
+				throw new Error("sentinel did not persist sync reopen for " + uri);
+			}
+
+			const reopenedAsync = await openSqliteDatabase(uri, async db => {
+				try {
+					return db.query("SELECT v FROM t").all();
+				} finally {
+					db.close();
+				}
+			});
+			if (reopenedAsync.length !== 1 || reopenedAsync[0].v !== "sentinel") {
+				throw new Error("sentinel did not persist async reopen for " + uri);
+			}
+
+			const marker = \`\${uri}.quarantine-pending\`;
+			fs.writeFileSync(marker, JSON.stringify({ reason: "interrupted" }));
+
+			let syncDefBlocked = false;
+			try {
+				openSqliteDatabaseSync(uri, db => {
+					try {
+						return db.query("SELECT 1").all();
+					} finally {
+						db.close();
+					}
+				});
+			} catch (e) {
+				if (/quarantine.*pending|pending.*quarantine/i.test(e.message)) syncDefBlocked = true;
+			}
+			if (!syncDefBlocked) throw new Error("sync default not blocked by marker for " + uri);
+
+			let syncOptBlocked = false;
+			try {
+				openSqliteDatabaseSync(
+					uri,
+					db => {
+						try {
+							return db.query("SELECT 1").all();
+						} finally {
+							db.close();
+						}
+					},
+					{ recoverCorruption: true },
+				);
+			} catch (e) {
+				if (/quarantine.*pending|pending.*quarantine/i.test(e.message)) syncOptBlocked = true;
+			}
+			if (!syncOptBlocked) throw new Error("sync opt-in not blocked by marker for " + uri);
+
+			let asyncDefBlocked = false;
+			try {
+				await openSqliteDatabase(uri, async db => {
+					try {
+						return db.query("SELECT 1").all();
+					} finally {
+						db.close();
+					}
+				});
+			} catch (e) {
+				if (/quarantine.*pending|pending.*quarantine/i.test(e.message)) asyncDefBlocked = true;
+			}
+			if (!asyncDefBlocked) throw new Error("async default not blocked by marker for " + uri);
+
+			let asyncOptBlocked = false;
+			try {
+				await openSqliteDatabase(
+					uri,
+					async db => {
+						try {
+							return db.query("SELECT 1").all();
+						} finally {
+							db.close();
+						}
+					},
+					{ recoverCorruption: true },
+				);
+			} catch (e) {
+				if (/quarantine.*pending|pending.*quarantine/i.test(e.message)) asyncOptBlocked = true;
+			}
+			if (!asyncOptBlocked) throw new Error("async opt-in not blocked by marker for " + uri);
+
+			fs.unlinkSync(marker);
+		}
+	`;
+
+	const child = childProcess.spawnSync(process.execPath, ["-e", script], {
+		cwd: dir.path(),
+		stdio: ["ignore", "pipe", "pipe"],
+		timeout: 15000,
+		encoding: "utf8",
 	});
 
-	const uriAsyncDef = "file:transient-uri-async-def?mode=memory&cache=shared";
-	const uriAsyncRec = "file:transient-uri-async-rec?mode=memory&cache=shared";
-	const uriSyncDef = "file:transient-uri-sync-def?mode=memory&cache=shared";
-	const uriSyncRec = "file:transient-uri-sync-rec?mode=memory&cache=shared";
+	if (child.error) throw child.error;
+	if (child.status !== 0) {
+		throw new Error(`Isolated URI runner failed (status ${child.status}):\n${child.stderr}\n${child.stdout}`);
+	}
+}, 45000);
 
-	try {
-		const asyncDefRows = await openSqliteDatabase(uriAsyncDef, async db => {
-			try {
-				db.run(
-					"CREATE TABLE IF NOT EXISTS t_async_def (id INTEGER, val TEXT); INSERT INTO t_async_def VALUES (1, 'async-def');",
-				);
-				return db.query<{ id: number; val: string }, []>("SELECT id, val FROM t_async_def WHERE id = 1").all();
-			} finally {
-				db.close();
+test.skipIf(process.platform !== "win32")(
+	"regression: windows NTFS ADS corrupt-header recovery and interrupted unlink guard",
+	async () => {
+		await using dir = await TempDir.create("@omp-corrupt-ads-");
+		const baseDb = dir.join("base.db");
+		nodeFs.writeFileSync(baseDb, "base-content");
+		const adsPath = `${baseDb}:stream.db`;
+		const damagedAds = Buffer.from("damaged ads sqlite header bytes 1234567890");
+		nodeFs.writeFileSync(adsPath, damagedAds);
+
+		const expectedHash = crypto.createHash("sha256").update(path.resolve(adsPath)).digest("hex");
+		const expectedStem = path.join(path.dirname(adsPath), `.sqlite-${expectedHash}`);
+		const hashedMarker = path.resolve(`${expectedStem}.quarantine-pending`);
+
+		// 1. Interrupted unlink injection leaves hashed marker
+		const originalUnlinkSync = nodeFs.unlinkSync.bind(nodeFs);
+		const unlinkSpy = spyOn(nodeFs, "unlinkSync").mockImplementation((targetPath: nodeFs.PathLike) => {
+			if (typeof targetPath === "string" && targetPath.includes(adsPath)) {
+				const err = new Error("EPERM: operation not permitted, unlink");
+				(err as NodeJS.ErrnoException).code = "EPERM";
+				throw err;
 			}
+			return originalUnlinkSync(targetPath);
 		});
-		expect(asyncDefRows).toEqual([{ id: 1, val: "async-def" }]);
 
-		const asyncRecRows = await openSqliteDatabase(
-			uriAsyncRec,
-			async db => {
+		try {
+			await expect(
+				openSqliteDatabase(
+					adsPath,
+					async db => {
+						try {
+							return db.query("SELECT 1").all();
+						} finally {
+							db.close();
+						}
+					},
+					{ recoverCorruption: true },
+				),
+			).rejects.toThrow();
+		} finally {
+			unlinkSpy.mockRestore();
+		}
+
+		expect(nodeFs.existsSync(hashedMarker)).toBe(true);
+
+		// Both sync and async openers fail closed due to hashed pending marker
+		expect(() =>
+			openSqliteDatabaseSync(adsPath, db => {
 				try {
-					db.run(
-						"CREATE TABLE IF NOT EXISTS t_async_rec (id INTEGER, val TEXT); INSERT INTO t_async_rec VALUES (2, 'async-rec');",
-					);
-					return db.query<{ id: number; val: string }, []>("SELECT id, val FROM t_async_rec WHERE id = 2").all();
+					return db.query("SELECT 1").all();
 				} finally {
 					db.close();
 				}
-			},
-			{ recoverCorruption: true },
-		);
-		expect(asyncRecRows).toEqual([{ id: 2, val: "async-rec" }]);
-		const syncDefRows = openSqliteDatabaseSync(uriSyncDef, db => {
-			try {
-				db.run(
-					"CREATE TABLE IF NOT EXISTS t_sync_def (id INTEGER, val TEXT); INSERT INTO t_sync_def VALUES (3, 'sync-def');",
-				);
-				return db.query<{ id: number; val: string }, []>("SELECT id, val FROM t_sync_def WHERE id = 3").all();
-			} finally {
-				db.close();
-			}
-		});
-		expect(syncDefRows).toEqual([{ id: 3, val: "sync-def" }]);
+			}),
+		).toThrow(/quarantine.*pending|pending.*quarantine/i);
 
-		const syncRecRows = openSqliteDatabaseSync(
-			uriSyncRec,
+		await expect(
+			openSqliteDatabase(adsPath, async db => {
+				try {
+					return db.query("SELECT 1").all();
+				} finally {
+					db.close();
+				}
+			}),
+		).rejects.toThrow(/quarantine.*pending|pending.*quarantine/i);
+
+		nodeFs.unlinkSync(hashedMarker);
+
+		// Exact original path marker also fails closed
+		const exactMarker = `${adsPath}.quarantine-pending`;
+		nodeFs.writeFileSync(exactMarker, JSON.stringify({ reason: "interrupted" }));
+		expect(() =>
+			openSqliteDatabaseSync(adsPath, db => {
+				try {
+					return db.query("SELECT 1").all();
+				} finally {
+					db.close();
+				}
+			}),
+		).toThrow(/quarantine.*pending|pending.*quarantine/i);
+		await expect(
+			openSqliteDatabase(adsPath, async db => {
+				try {
+					return db.query("SELECT 1").all();
+				} finally {
+					db.close();
+				}
+			}),
+		).rejects.toThrow(/quarantine.*pending|pending.*quarantine/i);
+		nodeFs.unlinkSync(exactMarker);
+
+		// 2. Corrupt-header recovery sync: proves hashed backup path, bytes, and fresh usable store
+		nodeFs.writeFileSync(adsPath, damagedAds);
+		let syncBackupPath: string | undefined;
+		const syncRows = openSqliteDatabaseSync(
+			adsPath,
 			db => {
 				try {
-					db.run(
-						"CREATE TABLE IF NOT EXISTS t_sync_rec (id INTEGER, val TEXT); INSERT INTO t_sync_rec VALUES (4, 'sync-rec');",
-					);
-					return db.query<{ id: number; val: string }, []>("SELECT id, val FROM t_sync_rec WHERE id = 4").all();
+					db.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('ads-sync-recovered');");
+					return db.query<{ v: string }, []>("SELECT v FROM t").all();
 				} finally {
 					db.close();
 				}
 			},
-			{ recoverCorruption: true },
+			{
+				recoverCorruption: true,
+				onCorruptionPreserved: p => {
+					syncBackupPath = p;
+				},
+			},
 		);
-		expect(syncRecRows).toEqual([{ id: 4, val: "sync-rec" }]);
+		expect(syncRows).toEqual([{ v: "ads-sync-recovered" }]);
+		expect(syncBackupPath).toBeDefined();
+		expect(syncBackupPath).toContain(expectedHash);
+		expect(nodeFs.readFileSync(syncBackupPath!)).toEqual(damagedAds);
 
-		expect(interceptedOps).toEqual([]);
-	} finally {
-		for (const spy of spies) {
-			spy.mockRestore();
-		}
-		for (const uri of [uriAsyncDef, uriAsyncRec, uriSyncDef, uriSyncRec]) {
-			nodeFs.rmSync(uri, { force: true });
-		}
+		const syncReopened = openSqliteDatabaseSync(adsPath, db => {
+			try {
+				return db.query<{ v: string }, []>("SELECT v FROM t").all();
+			} finally {
+				db.close();
+			}
+		});
+		expect(syncReopened).toEqual([{ v: "ads-sync-recovered" }]);
+
+		// 3. Corrupt-header recovery async: proves hashed backup path, bytes, and fresh usable store
+		nodeFs.writeFileSync(adsPath, damagedAds);
+		let asyncBackupPath: string | undefined;
+		const asyncRows = await openSqliteDatabase(
+			adsPath,
+			async db => {
+				try {
+					db.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('ads-async-recovered');");
+					return db.query<{ v: string }, []>("SELECT v FROM t").all();
+				} finally {
+					db.close();
+				}
+			},
+			{
+				recoverCorruption: true,
+				onCorruptionPreserved: p => {
+					asyncBackupPath = p;
+				},
+			},
+		);
+		expect(asyncRows).toEqual([{ v: "ads-async-recovered" }]);
+		expect(asyncBackupPath).toBeDefined();
+		expect(asyncBackupPath).toContain(expectedHash);
+		expect(nodeFs.readFileSync(asyncBackupPath!)).toEqual(damagedAds);
+
+		const asyncReopened = await openSqliteDatabase(adsPath, async db => {
+			try {
+				return db.query<{ v: string }, []>("SELECT v FROM t").all();
+			} finally {
+				db.close();
+			}
+		});
+		expect(asyncReopened).toEqual([{ v: "ads-async-recovered" }]);
+	},
+	45000,
+);
+
+test("regression: physical URI corrupt-header recovery preserves backup bytes and recreates fresh usable store", async () => {
+	await using dir = await TempDir.create("@omp-corrupt-uri-recovery-");
+	const uri = dir.join("file:corrupt-uri.db?mode=memory&cache=shared");
+	const damagedUri = Buffer.from("damaged physical uri header bytes 1234567890");
+	nodeFs.writeFileSync(uri, damagedUri);
+
+	let syncBackupPath: string | undefined;
+	const syncRows = openSqliteDatabaseSync(
+		uri,
+		db => {
+			try {
+				db.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('uri-sync-recovered');");
+				return db.query<{ v: string }, []>("SELECT v FROM t").all();
+			} finally {
+				db.close();
+			}
+		},
+		{
+			recoverCorruption: true,
+			onCorruptionPreserved: p => {
+				syncBackupPath = p;
+			},
+		},
+	);
+	expect(syncRows).toEqual([{ v: "uri-sync-recovered" }]);
+	expect(syncBackupPath).toBeDefined();
+	if (process.platform === "win32") {
+		const expectedHash = crypto.createHash("sha256").update(path.resolve(uri)).digest("hex");
+		expect(syncBackupPath).toContain(expectedHash);
 	}
+	expect(nodeFs.readFileSync(syncBackupPath!)).toEqual(damagedUri);
+
+	const syncReopened = openSqliteDatabaseSync(uri, db => {
+		try {
+			return db.query<{ v: string }, []>("SELECT v FROM t").all();
+		} finally {
+			db.close();
+		}
+	});
+	expect(syncReopened).toEqual([{ v: "uri-sync-recovered" }]);
+
+	// Async recovery
+	nodeFs.writeFileSync(uri, damagedUri);
+	let asyncBackupPath: string | undefined;
+	const asyncRows = await openSqliteDatabase(
+		uri,
+		async db => {
+			try {
+				db.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('uri-async-recovered');");
+				return db.query<{ v: string }, []>("SELECT v FROM t").all();
+			} finally {
+				db.close();
+			}
+		},
+		{
+			recoverCorruption: true,
+			onCorruptionPreserved: p => {
+				asyncBackupPath = p;
+			},
+		},
+	);
+	expect(asyncRows).toEqual([{ v: "uri-async-recovered" }]);
+	expect(asyncBackupPath).toBeDefined();
+	if (process.platform === "win32") {
+		const expectedHash = crypto.createHash("sha256").update(path.resolve(uri)).digest("hex");
+		expect(asyncBackupPath).toContain(expectedHash);
+	}
+	expect(nodeFs.readFileSync(asyncBackupPath!)).toEqual(damagedUri);
+
+	const asyncReopened = await openSqliteDatabase(uri, async db => {
+		try {
+			return db.query<{ v: string }, []>("SELECT v FROM t").all();
+		} finally {
+			db.close();
+		}
+	});
+	expect(asyncReopened).toEqual([{ v: "uri-async-recovered" }]);
 });
 
 test.skipIf(process.platform !== "win32")(
@@ -653,56 +1083,4 @@ test("regression: transient corruption surfaces error without quarantine and clo
 	).toThrow(/database disk image is malformed/);
 	expect(syncMemoryPreserved).toBe(0);
 	expect(() => syncMemoryDb?.query("SELECT 1").all()).toThrow(/closed database/i);
-
-	// 3. Asynchronous URI memory store with recoverCorruption: true
-	let asyncUriDb: Database | undefined;
-	let asyncUriPreserved = 0;
-	const uriAsync = "file:transient-corrupt-async?mode=memory&cache=shared";
-	const uriSync = "file:transient-corrupt-sync?mode=memory&cache=shared";
-	try {
-		await expect(
-			openSqliteDatabase(
-				uriAsync,
-				async db => {
-					asyncUriDb = db;
-					throw createCorruptionError();
-				},
-				{
-					recoverCorruption: true,
-					onCorruptionPreserved: () => {
-						asyncUriPreserved++;
-					},
-				},
-			),
-		).rejects.toThrow(/database disk image is malformed/);
-		expect(asyncUriPreserved).toBe(0);
-		expect(() => asyncUriDb?.query("SELECT 1").all()).toThrow(/closed database/i);
-
-		// 4. Synchronous URI memory store with recoverCorruption: true
-		let syncUriDb: Database | undefined;
-		let syncUriPreserved = 0;
-		expect(() =>
-			openSqliteDatabaseSync(
-				uriSync,
-				db => {
-					syncUriDb = db;
-					throw createCorruptionError();
-				},
-				{
-					recoverCorruption: true,
-					onCorruptionPreserved: () => {
-						syncUriPreserved++;
-					},
-				},
-			),
-		).toThrow(/database disk image is malformed/);
-		expect(syncUriPreserved).toBe(0);
-		expect(() => syncUriDb?.query("SELECT 1").all()).toThrow(/closed database/i);
-	} finally {
-		for (const uri of [uriAsync, uriSync]) {
-			try {
-				nodeFs.unlinkSync(uri);
-			} catch {}
-		}
-	}
 });

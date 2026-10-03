@@ -24,6 +24,7 @@
 ### Fixed
 
 - SQLite recovery rechecks the current store under its recovery lock, leaves healthy main databases intact when a secondary store fails, and reports permission failures. Damaged stores and sidecars are published as one private backup directory. Interrupted removal leaves a durable guard that blocks reopening until repair ([#293](https://github.com/Wladefant/veyyon/pull/293)).
+- SQLite openers treat URI-looking filenames as physical stores under Bun's default flags. NTFS stream stores use safe lock and backup names while honoring exact-path pending markers. A real file-create probe preserves readable-store access under denied-create directory ACLs.
 
 ### Changed
 
