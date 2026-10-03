@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Keep terminal text readable on painted surfaces by emitting explicit contrasting ANSI foregrounds for empty theme tokens ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 3634ec23229951ed4902dae6ca9a2b021b65392e).
 
 ## [18.1.11] - 2026-09-05
 
