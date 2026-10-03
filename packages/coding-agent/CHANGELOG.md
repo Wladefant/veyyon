@@ -33,6 +33,7 @@
 - Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Persistent session-local BTW history storage records conversation checkpoints with optimistic concurrency control and atomic file replacement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Ephemeral side-channel agent turns isolate side-conversation prompt cache keys and clone detached history snapshots, and session relocation operations guard directory creation and shell cd transitions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 - Fixed Windows stdio MCP batch command paths containing percent syntax expanding environment variables before launch by escaping the command token for cmd.exe ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e509fc3cbcda5c7579067d7d19e0764f9b33a4b7).
