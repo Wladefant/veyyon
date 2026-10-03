@@ -56,6 +56,4 @@ export interface EvalToolDetails {
 	languages?: EvalLanguage[];
 	/** Optional human-readable notice (e.g. fallback explanation). */
 	notice?: string;
-	/** Schema version discriminator for eval display outputs (e.g. 1 for versioned previews). */
-	displayVersion?: number;
 }
