@@ -4,7 +4,12 @@ import { expect, it } from "bun:test";
 import { buildModel } from "@veyyon/catalog/build";
 import type { OpenAIResponsesOptions } from "../src/providers/openai-responses";
 import { streamOpenAIResponses } from "../src/providers/openai-responses";
-import type { Context, FetchImpl, Model, ProviderSessionState } from "../src/types";
+import type {
+	Context,
+	FetchImpl,
+	Model,
+	ProviderSessionState,
+} from "../src/types";
 
 interface WireItem {
 	type?: string;
@@ -43,12 +48,19 @@ function endpoint(requests: WireRequest[]): FetchImpl {
 			{ type: "response.output_item.done", item },
 			{
 				type: "response.completed",
-				response: { id: "fake-response", status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+				response: {
+					id: "fake-response",
+					status: "completed",
+					usage: { input_tokens: 1, output_tokens: 1 },
+				},
 			},
 		];
-		return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-			headers: { "content-type": "text/event-stream" },
-		});
+		return new Response(
+			events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+			{
+				headers: { "content-type": "text/event-stream" },
+			},
+		);
 	};
 }
 async function turn(
@@ -56,7 +68,11 @@ async function turn(
 	context: Context,
 	options: OpenAIResponsesOptions,
 ): Promise<void> {
-	const response = await streamOpenAIResponses(selected, context, options).result();
+	const response = await streamOpenAIResponses(
+		selected,
+		context,
+		options,
+	).result();
 	expect(response.stopReason).toBe("stop");
 	context.messages.push(response);
 }
@@ -64,7 +80,9 @@ async function turn(
 it("keeps the request prefix pinned while replaying successive effort updates", async () => {
 	const requests: WireRequest[] = [];
 	const states = new Map<string, ProviderSessionState>();
-	const context: Context = { messages: [{ role: "user", content: "first", timestamp: 0 }] };
+	const context: Context = {
+		messages: [{ role: "user", content: "first", timestamp: 0 }],
+	};
 	const options: OpenAIResponsesOptions = {
 		apiKey: "fake-key",
 		sessionId: "fake-session",
@@ -74,11 +92,23 @@ it("keeps the request prefix pinned while replaying successive effort updates", 
 	};
 	for (const effort of ["low", "high", "medium"] as const) {
 		if (requests.length)
-			context.messages.push({ role: "user", content: `turn ${requests.length}`, timestamp: requests.length });
+			context.messages.push({
+				role: "user",
+				content: `turn ${requests.length}`,
+				timestamp: requests.length,
+			});
 		await turn(model, context, { ...options, reasoning: effort });
 	}
-	expect(requests.map(request => request.reasoning?.effort)).toEqual(["low", "low", "low"]);
-	expect(requests.map(request => request.input.filter(item => item.type === "configuration_update"))).toEqual([
+	expect(requests.map((request) => request.reasoning?.effort)).toEqual([
+		"low",
+		"low",
+		"low",
+	]);
+	expect(
+		requests.map((request) =>
+			request.input.filter((item) => item.type === "configuration_update"),
+		),
+	).toEqual([
 		[],
 		[{ type: "configuration_update", reasoning: { effort: "high" } }],
 		[
@@ -92,13 +122,17 @@ it("keeps the request prefix pinned while replaying successive effort updates", 
 	context.messages.push({ role: "user", content: "after reset", timestamp: 4 });
 	await turn(model, context, { ...options, reasoning: "high" });
 	expect(requests[3].reasoning?.effort).toBe("high");
-	expect(requests[3].input.filter(item => item.type === "configuration_update")).toEqual([]);
+	expect(
+		requests[3].input.filter((item) => item.type === "configuration_update"),
+	).toEqual([]);
 });
 
 it("drops a transition-free baseline when the provider session closes", async () => {
 	const requests: WireRequest[] = [];
 	const states = new Map<string, ProviderSessionState>();
-	const context: Context = { messages: [{ role: "user", content: "first", timestamp: 0 }] };
+	const context: Context = {
+		messages: [{ role: "user", content: "first", timestamp: 0 }],
+	};
 	const options: OpenAIResponsesOptions = {
 		apiKey: "fake-key",
 		sessionId: "reset-session",
@@ -110,17 +144,31 @@ it("drops a transition-free baseline when the provider session closes", async ()
 	for (const state of states.values()) state.close();
 	context.messages.push({ role: "user", content: "after close", timestamp: 1 });
 	await turn(model, context, { ...options, reasoning: "high" });
-	expect(requests.map(request => request.reasoning?.effort)).toEqual(["low", "high"]);
-	expect(requests.flatMap(request => request.input.filter(item => item.type === "configuration_update"))).toEqual([]);
+	expect(requests.map((request) => request.reasoning?.effort)).toEqual([
+		"low",
+		"high",
+	]);
+	expect(
+		requests.flatMap((request) =>
+			request.input.filter((item) => item.type === "configuration_update"),
+		),
+	).toEqual([]);
 	for (const state of states.values()) state.close();
 });
 
 it("does not emit updates without the capability, a routing session or provider state", async () => {
 	for (const mode of ["unsupported", "no-session", "no-state"] as const) {
 		const requests: WireRequest[] = [];
-		const context: Context = { messages: [{ role: "user", content: "first", timestamp: 0 }] };
+		const context: Context = {
+			messages: [{ role: "user", content: "first", timestamp: 0 }],
+		};
 		const selected =
-			mode === "unsupported" ? { ...model, compat: { ...model.compat, supportsConfigurationUpdate: false } } : model;
+			mode === "unsupported"
+				? {
+						...model,
+						compat: { ...model.compat, supportsConfigurationUpdate: false },
+					}
+				: model;
 		const options: OpenAIResponsesOptions = {
 			apiKey: "fake-key",
 			statefulResponses: false,
@@ -131,9 +179,14 @@ it("does not emit updates without the capability, a routing session or provider 
 		await turn(selected, context, { ...options, reasoning: "low" });
 		context.messages.push({ role: "user", content: "second", timestamp: 1 });
 		await turn(selected, context, { ...options, reasoning: "high" });
-		expect(requests.map(request => request.reasoning?.effort)).toEqual(["low", "high"]);
-		expect(requests.flatMap(request => request.input.filter(item => item.type === "configuration_update"))).toEqual(
-			[],
-		);
+		expect(requests.map((request) => request.reasoning?.effort)).toEqual([
+			"low",
+			"high",
+		]);
+		expect(
+			requests.flatMap((request) =>
+				request.input.filter((item) => item.type === "configuration_update"),
+			),
+		).toEqual([]);
 	}
 });
