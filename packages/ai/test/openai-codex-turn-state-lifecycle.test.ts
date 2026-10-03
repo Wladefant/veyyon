@@ -13,6 +13,10 @@ describe("openai-codex turn-state lifecycle", () => {
 		api: "openai-codex-responses",
 		provider: "openai-codex",
 		baseUrl: "https://chatgpt.com/backend-api",
+		reasoning: true,
+		input: ["text"],
+		contextWindow: 272000,
+		maxTokens: 128000,
 	});
 	it("clears turn states on a new logical turn while preserving mid-turn calls", () => {
 		const providerSessionState = new Map();
