@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { clearWorktrees } from "@veyyon/coding-agent/cli/worktree-cli";
+import { ISOLATION_CLAIM_FILE } from "@veyyon/coding-agent/task/isolation-ownership";
 import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
 	applyNestedPatches,
@@ -18,7 +20,7 @@ import {
 import * as git from "@veyyon/coding-agent/utils/git";
 import * as jj from "@veyyon/coding-agent/utils/jj";
 import * as natives from "@veyyon/natives";
-import { removeWithRetries, setWorktreesDir } from "@veyyon/utils";
+import { getWorktreesDir, removeWithRetries, setWorktreesDir } from "@veyyon/utils";
 import { useIsolatedAgentDir, useIsolatedWorktreesDir } from "../helpers/isolated-agent-dir";
 
 // Spawning a task writes a session (and, for worktree runs, a checkout) under the
@@ -164,6 +166,54 @@ describe("worktree isolation helpers", () => {
 				);
 			});
 		}
+		// WHY: a slot claimed by ensureIsolation holds no mount directory until the
+		// native start returns, which reads to `veyyon worktree clear` as an empty
+		// orphan. Clear removed the claim, so a third same-id task claimed the slot
+		// while the first was still being set up. A live claim must survive an
+		// ordinary clear; a claim left by a dead process must not. Native mount
+		// setup is substituted; actual kernel mounts are not proved.
+		it("keeps a slot claimed during native setup through an ordinary clear", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			const started = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+				started.resolve();
+				await proceed.promise;
+				await fs.mkdir(mergedDir, { recursive: true });
+				await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
+			});
+			vi.spyOn(console, "log").mockImplementation(() => {});
+			const id = "claim-during-setup";
+			const first = ensureIsolation(repo, id);
+			await started.promise;
+
+			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+			await clearWorktrees({ all: false, dryRun: false, json: true });
+			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+
+			proceed.resolve();
+			const handle = await first;
+			expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
+			const left = await fs.readdir(path.dirname(handle.mergedDir));
+			expect(left).toEqual([path.basename(handle.mergedDir)]);
+		});
+
+		it("clears a claim whose process is gone", async () => {
+			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+			await gone.exited;
+			const slot = path.join(getWorktreesDir(), "tdeadclaim");
+			await fs.mkdir(slot, { recursive: true });
+			await fs.writeFile(path.join(slot, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: gone.pid }));
+			vi.spyOn(console, "log").mockImplementation(() => {});
+			await clearWorktrees({ all: false, dryRun: false, json: true });
+			await expect(fs.stat(slot)).rejects.toThrow();
+		});
+
 		it("retries isoResolve candidates when a backend is path-unavailable", async () => {
 			const unavailable = new Error("ISO_UNAVAILABLE: btrfs source is not a subvolume");
 			const isoResolve = vi.spyOn(natives, "isoResolve").mockReturnValue({

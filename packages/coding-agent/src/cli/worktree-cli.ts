@@ -21,7 +21,7 @@ import * as path from "node:path";
 import * as natives from "@veyyon/natives";
 import { errorMessage, formatCount, getWorktreesDir, isEnoent } from "@veyyon/utils";
 import chalk from "chalk";
-import { readRetainedMountBackend } from "../task/isolation-ownership";
+import { isolationClaimIsLive, readRetainedMountBackend } from "../task/isolation-ownership";
 import * as git from "../utils/git";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
@@ -277,6 +277,8 @@ async function statPath(target: string): Promise<{ found: Stats | null } | undef
 }
 
 async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
+	// A slot mid-setup holds no mount dir yet; the process that claimed it owns it.
+	if (await isolationClaimIsLive(dir)) return { path: dir, kind: "task-isolation" };
 	const gitEntry = path.join(dir, ".git");
 	const gitStat = await statPath(gitEntry);
 	if (!gitStat) {
