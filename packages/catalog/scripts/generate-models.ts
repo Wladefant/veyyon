@@ -12,12 +12,11 @@ const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
 import { Database } from "bun:sqlite";
 import * as path from "node:path";
 import { discoverAuthStorage } from "@veyyon/ai/auth-broker/discover";
-import type { OAuthAccess } from "@veyyon/ai/auth-storage";
+import type { AuthStorage, OAuthAccess } from "@veyyon/ai/auth-storage";
 import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 import { getGitLabDuoModels } from "@veyyon/ai/providers/gitlab-duo";
 import { $env, getSharedAuthDir } from "@veyyon/utils";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
-import { fetchCodexModels } from "../src/discovery/codex";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { isOpenAIOSeriesModelId } from "../src/identity/family";
 import { createModelManager } from "../src/model-manager";
@@ -61,10 +60,10 @@ import {
 	STEPFUN_STATIC_MODELS,
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
+import { type OpenAICodexAccount, openaiCodexModelManagerOptions } from "../src/provider-models/special";
 import type { Api, ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
-import { getCodexAccountId } from "../src/wire/codex";
 import {
 	applyCanonicalLimitFallback,
 	applyGeneratedModelPolicies,
@@ -596,35 +595,54 @@ async function fetchAntigravityModels(): Promise<ModelSpec<"google-gemini-cli">[
 		return [];
 	}
 }
-
-async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-responses">[]> {
-	const access = await getOAuthAccessFromStorage("openai-codex");
-	if (!access) {
+/**
+ * Resolve every stored Codex OAuth account and union their account-scoped
+ * `/models` catalogs through the same manager path the runtime uses (#6265).
+ * Fails closed: any account that cannot resolve or fetch aborts discovery and
+ * returns [] (non-authoritative), so a partial per-account snapshot never
+ * replaces the previous bundle's model set.
+ */
+export async function fetchCodexDiscoveryModels(
+	authStorageOverride?: AuthStorage,
+): Promise<ModelSpec<"openai-codex-responses">[]> {
+	const accounts: OpenAICodexAccount[] = [];
+	try {
+		const authStorage = authStorageOverride ?? (await discoverAuthStorage());
+		try {
+			const accesses = await authStorage.getOAuthAccesses("openai-codex");
+			for (const access of accesses) {
+				if (!access.ok) {
+					console.warn(`Codex account failed to resolve (${access.error}), keeping previous models.`);
+					return [];
+				}
+				accounts.push({ accessToken: access.accessToken, accountId: access.accountId });
+			}
+		} finally {
+			if (!authStorageOverride) {
+				authStorage.close();
+			}
+		}
+	} catch (error) {
+		console.warn(
+			"Warning: Failed to retrieve Codex credentials:",
+			error instanceof Error ? error.message : String(error),
+		);
+		return [];
+	}
+	if (accounts.length === 0) {
 		console.log("No Codex credentials found, will use previous models.");
 		console.log("Tip: If you are logged in under a specific profile, run with VEYYON_PROFILE=<name>.");
 		return [];
 	}
-	try {
-		console.log("Fetching models from Codex API...");
-		const accessToken = access.accessToken;
-		const accountId = access.accountId ?? getCodexAccountId(accessToken);
-		const codexDiscovery = await fetchCodexModels({
-			accessToken,
-			accountId: accountId ?? undefined,
-		});
-		if (codexDiscovery === null) {
-			console.warn("Codex API fetch failed");
-			return [];
-		}
-		if (codexDiscovery.models.length > 0) {
-			console.log(`Fetched ${codexDiscovery.models.length} models from Codex API`);
-			return codexDiscovery.models;
-		}
-		return [];
-	} catch (error) {
-		console.error("Failed to fetch Codex models:", error);
+	console.log(`Fetching models from Codex API for ${accounts.length} account(s)...`);
+	const options = openaiCodexModelManagerOptions({ resolveAccounts: async () => accounts });
+	const models = await options.fetchDynamicModels?.();
+	if (!models) {
+		console.warn("Codex API fetch failed, keeping previous models.");
 		return [];
 	}
+	console.log(`Fetched ${models.length} models from Codex API`);
+	return [...models];
 }
 
 async function generateModels() {
@@ -916,5 +934,6 @@ function canonicalizeModelCompat(model: ModelSpec<Api>): void {
 	}
 }
 
-// Run the generator
-generateModels().catch(console.error);
+if (import.meta.main) {
+	generateModels().catch(console.error);
+}
