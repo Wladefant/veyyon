@@ -137,7 +137,7 @@ export interface GhRepoRef {
 	slug: string;
 }
 
-function splitRepoRef(repo: string): GhRepoRef {
+export function splitRepoRef(repo: string): GhRepoRef {
 	const firstSlash = repo.indexOf("/");
 	if (firstSlash < 0) return { slug: repo };
 	const secondSlash = repo.indexOf("/", firstSlash + 1);
@@ -183,6 +183,11 @@ export function ghApiHostArgs(ref: GhRepoRef): string[] {
 	return ref.host ? ["--hostname", ref.host] : [];
 }
 
+/** The host `gh` falls back to for any ref that names none. */
+export function defaultGhHost(): string {
+	return (process.env.GH_HOST?.trim() || GITHUB_HOST).toLowerCase();
+}
+
 function registerCheckoutHost(host: string): void {
 	checkoutHosts.add(host.toLowerCase());
 }
@@ -190,10 +195,10 @@ function registerCheckoutHost(host: string): void {
 const REPO_URL_PATTERN = /^https?:\/\/([^/]+)\/([^/]+)\/([^/?#]+)/;
 
 /**
- * `https://HOST/OWNER/REPO` → the repository's identity: `OWNER/REPO` on
- * github.com, `HOST/OWNER/REPO` anywhere else. Used for the session
- * checkout, whose identity should read the way users write it, and it records
- * the host as the checkout's for the allowlist.
+ * `https://HOST/OWNER/REPO` → the repository's identity. The host is dropped
+ * only when it is the one `gh` would have assumed anyway, so a bare identity
+ * can never be redirected: with `GH_HOST` set elsewhere, even a github.com
+ * checkout keeps its host.
  */
 export function repoFromUrl(value: string | undefined): string | undefined {
 	const match = REPO_URL_PATTERN.exec(value?.trim() ?? "");
@@ -201,21 +206,23 @@ export function repoFromUrl(value: string | undefined): string | undefined {
 	const host = match[1].toLowerCase();
 	registerCheckoutHost(host);
 	const slug = `${match[2]}/${match[3]}`;
-	return host === GITHUB_HOST ? slug : formatRepoRef(host, slug);
+	return host === defaultGhHost() ? slug : formatRepoRef(host, slug);
 }
 
 /**
- * Case-insensitive repo comparison. Hosts are compared only when both sides
- * name one: a host-less ref means "wherever `gh` resolves it", so it must not
- * be declared a mismatch against the same slug on a named host.
+ * Case-insensitive repo comparison over the instance each ref actually
+ * resolves to. A host-less ref is not a wildcard: `gh` sends it to `GH_HOST`,
+ * so comparing slugs alone would call a bare `owner/repo` the same repository
+ * as `ghe.example.com/owner/repo` and let a caller act on one while the
+ * request goes to the other.
  */
 export function githubRepoSlugEquals(left: string | undefined, right: string): boolean {
 	if (left === undefined) return false;
 	const leftRef = splitRepoRef(left);
 	const rightRef = splitRepoRef(right);
-	if (leftRef.host && rightRef.host && leftRef.host.toLowerCase() !== rightRef.host.toLowerCase()) {
-		return false;
-	}
+	const leftHost = leftRef.host?.toLowerCase() ?? defaultGhHost();
+	const rightHost = rightRef.host?.toLowerCase() ?? defaultGhHost();
+	if (leftHost !== rightHost) return false;
 	return leftRef.slug.toLowerCase() === rightRef.slug.toLowerCase();
 }
 
