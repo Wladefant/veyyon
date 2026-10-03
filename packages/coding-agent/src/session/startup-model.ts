@@ -11,11 +11,18 @@
 
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
-import { getRestorableSessionModels, type SessionContext } from "@veyyon/kernel/session/session-context";
+import {
+	getRestorableSessionModels,
+	type SessionContext,
+} from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger } from "@veyyon/utils";
 import { isAuthenticated, kNoAuth } from "../config/auth-state";
-import { type EffortSource, resolveEffort, withLegacyDefaultEffort } from "../config/effort-resolver";
+import {
+	type EffortSource,
+	resolveEffort,
+	withLegacyDefaultEffort,
+} from "../config/effort-resolver";
 import type { ModelRegistry } from "../config/model-registry";
 import { modelResolutionFailureMessage } from "../config/model-resolution-failure";
 import {
@@ -74,8 +81,11 @@ function isMatched(result: ParsedModelResult): result is MatchedModel {
 }
 
 /** The deferred `--model` patterns, trimmed, with empty ones dropped. */
-function deferredModelPatterns(modelPattern: string | string[] | undefined): string[] {
-	if (Array.isArray(modelPattern)) return modelPattern.map(pattern => pattern.trim()).filter(Boolean);
+function deferredModelPatterns(
+	modelPattern: string | string[] | undefined,
+): string[] {
+	if (Array.isArray(modelPattern))
+		return modelPattern.map((pattern) => pattern.trim()).filter(Boolean);
 	const trimmed = modelPattern?.trim();
 	return trimmed ? [trimmed] : [];
 }
@@ -87,7 +97,9 @@ function deferredModelPatterns(modelPattern: string | string[] | undefined): str
  */
 function preconnectModelHost(baseUrl: string | undefined): void {
 	if (!baseUrl) return;
-	const preconnect = (globalThis.fetch as typeof fetch & { preconnect?: (url: string) => void }).preconnect;
+	const preconnect = (
+		globalThis.fetch as typeof fetch & { preconnect?: (url: string) => void }
+	).preconnect;
 	if (typeof preconnect !== "function") return;
 	try {
 		preconnect(baseUrl);
@@ -110,11 +122,18 @@ function installPatternFallbackChain(
 	availableModels: readonly Model[],
 	matchPreferences: ModelMatchPreferences,
 ): void {
-	const primarySelector = formatModelSelectorValue(formatModelStringWithRouting(primary.model), primary.thinkingLevel);
+	const primarySelector = formatModelSelectorValue(
+		formatModelStringWithRouting(primary.model),
+		primary.thinkingLevel,
+	);
 	const seenSelectors = new Set<string>([primarySelector]);
 	const fallbackSelectors: string[] = [];
 	for (const fallbackPattern of laterPatterns) {
-		const fallback = parseModelPattern(fallbackPattern, availableModels, matchPreferences);
+		const fallback = parseModelPattern(
+			fallbackPattern,
+			availableModels,
+			matchPreferences,
+		);
 		if (!fallback.model) continue;
 		const fallbackSelector = formatModelSelectorValue(
 			formatModelStringWithRouting(fallback.model),
@@ -135,10 +154,13 @@ function installPatternFallbackChain(
 	modelRoles[role] = primarySelector;
 	settings.override("modelRoles", modelRoles);
 
-	const fallbackChains: Record<string, string[]> = { [role]: fallbackSelectors };
+	const fallbackChains: Record<string, string[]> = {
+		[role]: fallbackSelectors,
+	};
 	const existingFallbackChains = settings.get("retry.fallbackChains");
 	for (const chainRole in existingFallbackChains) {
-		if (chainRole !== role) fallbackChains[chainRole] = existingFallbackChains[chainRole];
+		if (chainRole !== role)
+			fallbackChains[chainRole] = existingFallbackChains[chainRole];
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
 }
@@ -161,19 +183,29 @@ export class StartupModelSelection {
 	#thinkingSource: EffortSource = "model-default";
 
 	/** Run the first pass: the session's last model, else the settings default. */
-	static async begin(inputs: StartupModelInputs): Promise<StartupModelSelection> {
+	static async begin(
+		inputs: StartupModelInputs,
+	): Promise<StartupModelSelection> {
 		const { settings, modelRegistry } = inputs;
 		const matchPreferences = getModelMatchPreferences(settings);
 		const allowedModels = await logger.time("resolveAllowedModels", () =>
 			resolveAllowedModels(modelRegistry, settings, matchPreferences),
 		);
 		const defaultRoleSpec = logger.time("resolveDefaultModelRole", () =>
-			resolveModelRoleValue(settings.getModelRole(DEFAULT_MODEL_SLOT), allowedModels, {
-				settings,
-				matchPreferences,
-			}),
+			resolveModelRoleValue(
+				settings.getModelRole(DEFAULT_MODEL_SLOT),
+				allowedModels,
+				{
+					settings,
+					matchPreferences,
+				},
+			),
 		);
-		const selection = new StartupModelSelection(inputs, matchPreferences, defaultRoleSpec);
+		const selection = new StartupModelSelection(
+			inputs,
+			matchPreferences,
+			defaultRoleSpec,
+		);
 		selection.#restoreSessionModel();
 		selection.#useSettingsDefault();
 		const model = selection.#model;
@@ -192,16 +224,21 @@ export class StartupModelSelection {
 		matchPreferences: ModelMatchPreferences,
 		defaultRoleSpec: ResolvedModelRoleValue,
 	) {
-		const { options, sessionManager, existingSession, hasExistingSession } = inputs;
+		const { options, sessionManager, existingSession, hasExistingSession } =
+			inputs;
 		this.#inputs = inputs;
 		this.#deferredPatterns = deferredModelPatterns(options.modelPattern);
-		this.hasExplicitModel = options.model !== undefined || this.#deferredPatterns.length > 0;
+		this.hasExplicitModel =
+			options.model !== undefined || this.#deferredPatterns.length > 0;
 		this.#matchPreferences = matchPreferences;
 		this.#defaultRoleSpec = defaultRoleSpec;
 		this.#model = options.model;
 		this.#sessionModelStrings =
 			!this.hasExplicitModel && hasExistingSession
-				? getRestorableSessionModels(existingSession.models, sessionManager.getLastModelChangeRole())
+				? getRestorableSessionModels(
+						existingSession.models,
+						sessionManager.getLastModelChangeRole(),
+					)
 				: [];
 	}
 
@@ -237,8 +274,10 @@ export class StartupModelSelection {
 	/** Run the second pass, after extension providers registered. */
 	async completeAfterExtensions(): Promise<void> {
 		this.#reclaimSessionModel();
-		if (!this.#model && this.#deferredPatterns.length > 0) await this.#resolveDeferredPatterns();
-		if (!this.#model && this.#deferredPatterns.length === 0) await this.#resolveFallbackModel();
+		if (!this.#model && this.#deferredPatterns.length > 0)
+			await this.#resolveDeferredPatterns();
+		if (!this.#model && this.#deferredPatterns.length === 0)
+			await this.#resolveFallbackModel();
 		await this.#refreshSelectedMetadata();
 	}
 
@@ -256,15 +295,23 @@ export class StartupModelSelection {
 	}
 
 	/** The authenticated model session candidate `index` names, or undefined when it names none. */
-	#sessionCandidate(index: number): { model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined } | undefined {
+	#sessionCandidate(
+		index: number,
+	):
+		| { model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined }
+		| undefined {
 		const { modelRegistry } = this.#inputs;
 		const parsedModel = parseModelString(this.#sessionModelStrings[index], {
 			allowMaxSuffix: true,
 			allowAutoAlias: true,
-			isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
+			isLiteralModelId: (provider, id) =>
+				modelRegistry.find(provider, id) !== undefined,
 		});
 		if (!parsedModel) return undefined;
-		const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
+		const restoredModel = modelRegistry.find(
+			parsedModel.provider,
+			parsedModel.id,
+		);
 		if (!restoredModel || !this.#hasAuth(restoredModel)) return undefined;
 		return { model: restoredModel, thinkingLevel: parsedModel.thinkingLevel };
 	}
@@ -274,7 +321,12 @@ export class StartupModelSelection {
 	 * not visible yet, so `#reclaimSessionModel` retries the preferred candidates once they are.
 	 */
 	#restoreSessionModel(): void {
-		if (this.hasExplicitModel || this.#model || this.#sessionModelStrings.length === 0) return;
+		if (
+			this.hasExplicitModel ||
+			this.#model ||
+			this.#sessionModelStrings.length === 0
+		)
+			return;
 		logger.time("restoreSessionModel", () => {
 			let failedSessionModel: string | undefined;
 			for (let i = 0; i < this.#sessionModelStrings.length; i++) {
@@ -305,8 +357,16 @@ export class StartupModelSelection {
 	}
 
 	/** Resolve one effort axis and remember its source. */
-	#pickInitialThinkingLevel(selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined {
-		const { options, settings, existingSession, hasExistingSession, hasThinkingEntry } = this.#inputs;
+	#pickInitialThinkingLevel(
+		selectedModel: Model | undefined,
+	): ConfiguredThinkingLevel | undefined {
+		const {
+			options,
+			settings,
+			existingSession,
+			hasExistingSession,
+			hasThinkingEntry,
+		} = this.#inputs;
 		if (options.thinkingLevel !== undefined) {
 			this.#thinkingSource = options.thinkingSource ?? "session";
 			return options.thinkingLevel;
@@ -322,14 +382,22 @@ export class StartupModelSelection {
 			this.#thinkingSource = "session";
 			return this.#restoredThinkingLevel;
 		}
-		if (!this.hasExplicitModel && !hasThinkingEntry && this.#defaultRoleSpec.explicitThinkingLevel) {
+		if (
+			!this.hasExplicitModel &&
+			!hasThinkingEntry &&
+			this.#defaultRoleSpec.explicitThinkingLevel
+		) {
 			this.#thinkingSource = "selector";
 			return this.#defaultRoleSpec.thinkingLevel;
 		}
 		const saved = resolveEffort({
-			modelSelector: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined,
+			modelSelector: selectedModel
+				? `${selectedModel.provider}/${selectedModel.id}`
+				: undefined,
 			defaultEffort: withLegacyDefaultEffort(
-				settings.isConfigured("defaultEffort") ? settings.get("defaultEffort") : undefined,
+				settings.isConfigured("defaultEffort")
+					? settings.get("defaultEffort")
+					: undefined,
 				settings.get("defaultThinkingLevel"),
 			),
 		});
@@ -372,7 +440,10 @@ export class StartupModelSelection {
 	 * makes resume honor the last active role in either case.
 	 */
 	#reclaimSessionModel(): void {
-		const retryLimit = this.#restoredIndex >= 0 ? this.#restoredIndex : this.#sessionModelStrings.length;
+		const retryLimit =
+			this.#restoredIndex >= 0
+				? this.#restoredIndex
+				: this.#sessionModelStrings.length;
 		if (this.hasExplicitModel) return;
 		for (let i = 0; i < retryLimit; i++) {
 			const candidate = this.#sessionCandidate(i);
@@ -392,7 +463,10 @@ export class StartupModelSelection {
 	 */
 	async #resolveDeferredPatterns(): Promise<void> {
 		const { options, settings, modelRegistry } = this.#inputs;
-		const expandedModelPatterns = resolveConfiguredModelPatterns(this.#deferredPatterns, settings);
+		const expandedModelPatterns = resolveConfiguredModelPatterns(
+			this.#deferredPatterns,
+			settings,
+		);
 		let availableModels = modelRegistry.getAll();
 		const matchPreferences = getModelMatchPreferences(settings);
 		// The background refresh (refreshInBackground at startup) may not have completed yet.
@@ -401,14 +475,33 @@ export class StartupModelSelection {
 		// won't resolve against the static-only registry. Do a synchronous cache-aware discovery
 		// pass and retry before reporting failure. This mirrors the non-explicit fallback in
 		// `#resolveFallbackModel`.
-		if (!expandedModelPatterns.some(pattern => parseModelPattern(pattern, availableModels, matchPreferences).model)) {
-			await logger.time("resolveExplicitModelDiscovery", () => modelRegistry.refresh("online-if-uncached"));
+		if (
+			!expandedModelPatterns.some(
+				(pattern) =>
+					parseModelPattern(pattern, availableModels, matchPreferences).model,
+			)
+		) {
+			await logger.time("resolveExplicitModelDiscovery", () =>
+				modelRegistry.refresh("online-if-uncached"),
+			);
 			availableModels = modelRegistry.getAll();
 		}
-		for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
-			const primary = parseModelPattern(expandedModelPatterns[patternIndex], availableModels, matchPreferences);
+		for (
+			let patternIndex = 0;
+			patternIndex < expandedModelPatterns.length;
+			patternIndex += 1
+		) {
+			const primary = parseModelPattern(
+				expandedModelPatterns[patternIndex],
+				availableModels,
+				matchPreferences,
+			);
 			if (!isMatched(primary)) continue;
-			const authFallback = await this.#authFallback(primary, availableModels, matchPreferences);
+			const authFallback = await this.#authFallback(
+				primary,
+				availableModels,
+				matchPreferences,
+			);
 			const selected = authFallback ?? primary;
 			if (authFallback === undefined && options.modelPatternFallbackRole) {
 				installPatternFallbackChain(
@@ -431,7 +524,10 @@ export class StartupModelSelection {
 		// what sent a real investigation into model allowlists for a day (BACKLOG
 		// AUTH-FAILURE-BLAMES-MODEL-ID). The classification is `modelResolutionFailureMessage`,
 		// under test.
-		this.#fallbackMessage = modelResolutionFailureMessage(this.#deferredPatterns, modelRegistry);
+		this.#fallbackMessage = modelResolutionFailureMessage(
+			this.#deferredPatterns,
+			modelRegistry,
+		);
 	}
 
 	/**
@@ -447,7 +543,11 @@ export class StartupModelSelection {
 		if (!options.modelPatternAuthFallback) return undefined;
 		const primaryKey = await modelRegistry.getApiKey(primary.model);
 		if (primaryKey === kNoAuth || isAuthenticated(primaryKey)) return undefined;
-		const fallback = parseModelPattern(options.modelPatternAuthFallback, availableModels, matchPreferences);
+		const fallback = parseModelPattern(
+			options.modelPatternAuthFallback,
+			availableModels,
+			matchPreferences,
+		);
 		if (!isMatched(fallback)) return undefined;
 		const fallbackKey = await modelRegistry.getApiKey(fallback.model);
 		return isAuthenticated(fallbackKey) ? fallback : undefined;
@@ -463,10 +563,14 @@ export class StartupModelSelection {
 		await this.#tryResolveDefaultRole();
 
 		if (!this.#model) {
-			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
+			const fallbackCandidates = await resolveAllowedModels(
+				modelRegistry,
+				settings,
+				this.#matchPreferences,
+			);
 			let pick = pickDefaultAvailableModel(
-				fallbackCandidates.filter(candidate => this.#hasAuth(candidate)),
-				provider => modelRegistry.hasConcreteAuth(provider),
+				fallbackCandidates.filter((candidate) => this.#hasAuth(candidate)),
+				(provider) => modelRegistry.hasConcreteAuth(provider),
 			);
 
 			// Cold-cache discovery race (issues #6114, #6162): a discovery provider (models.yml
@@ -479,18 +583,26 @@ export class StartupModelSelection {
 			// discovery pass and retry when a default role is configured (must win over `pick`) or
 			// nothing resolved at all. The common path — role already resolved, or a `pick` with no
 			// configured default — never pays for it.
-			const defaultRoleConfigured = Boolean(settings.getModelRole(DEFAULT_MODEL_SLOT));
+			const defaultRoleConfigured = Boolean(
+				settings.getModelRole(DEFAULT_MODEL_SLOT),
+			);
 			if (
 				!this.hasExplicitModel &&
 				(defaultRoleConfigured || !pick) &&
 				modelRegistry.getDiscoverableProviders().length > 0
 			) {
-				await logger.time("resolveModelDiscoveryFallback", () => modelRegistry.refresh("online-if-uncached"));
+				await logger.time("resolveModelDiscoveryFallback", () =>
+					modelRegistry.refresh("online-if-uncached"),
+				);
 				if (!(await this.#tryResolveDefaultRole()) && !this.#model) {
-					const refreshedCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
+					const refreshedCandidates = await resolveAllowedModels(
+						modelRegistry,
+						settings,
+						this.#matchPreferences,
+					);
 					pick = pickDefaultAvailableModel(
-						refreshedCandidates.filter(candidate => this.#hasAuth(candidate)),
-						provider => modelRegistry.hasConcreteAuth(provider),
+						refreshedCandidates.filter((candidate) => this.#hasAuth(candidate)),
+						(provider) => modelRegistry.hasConcreteAuth(provider),
 					);
 				}
 			}
@@ -532,11 +644,19 @@ export class StartupModelSelection {
 		const { settings, modelRegistry } = this.#inputs;
 		// Re-resolve the allowed set: extension factories and discovery refreshes may have
 		// registered models not visible earlier.
-		const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
-		const reResolvedRoleSpec = resolveModelRoleValue(settings.getModelRole(DEFAULT_MODEL_SLOT), fallbackCandidates, {
+		const fallbackCandidates = await resolveAllowedModels(
+			modelRegistry,
 			settings,
-			matchPreferences: this.#matchPreferences,
-		});
+			this.#matchPreferences,
+		);
+		const reResolvedRoleSpec = resolveModelRoleValue(
+			settings.getModelRole(DEFAULT_MODEL_SLOT),
+			fallbackCandidates,
+			{
+				settings,
+				matchPreferences: this.#matchPreferences,
+			},
+		);
 		const resolvedDefaultModel = reResolvedRoleSpec.model;
 		if (!resolvedDefaultModel) return false;
 		// Set before adopting: the thinking pick reads the role's explicit selector (e.g. `:max`).
@@ -549,8 +669,10 @@ export class StartupModelSelection {
 	async #refreshSelectedMetadata(): Promise<void> {
 		const selectedModel = this.#model;
 		if (!selectedModel) return;
-		const refreshedModel = await logger.time("refreshInitialModelMetadata", () =>
-			this.#inputs.modelRegistry.refreshSelectedModelMetadata(selectedModel),
+		const refreshedModel = await logger.time(
+			"refreshInitialModelMetadata",
+			() =>
+				this.#inputs.modelRegistry.refreshSelectedModelMetadata(selectedModel),
 		);
 		if (refreshedModel === selectedModel) return;
 		this.#model = refreshedModel;
