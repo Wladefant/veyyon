@@ -1193,6 +1193,8 @@ export class CommandController {
 			this.ctx[slot]?.setComplete(undefined, false);
 			this.ctx.showError(`${failure}: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
+		// A `!` or `%` command may have moved the tree, and an idle row has no other reason to look.
+		this.ctx.statusLine.refreshGitStatus();
 	}
 
 	async handleCompactCommand(

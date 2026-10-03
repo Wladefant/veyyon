@@ -40,6 +40,11 @@ A rebase detaches HEAD, so without the suffix the segment could only say `detach
 
 The `pr` segment is skipped while any of these operations is in progress. A branch being rebased does not yet point where it is going to end up, so a pull request looked up against it would describe a state that is about to be replaced.
 
+The `git` segment appends the dirty marker (`*`) when the working tree has staged, unstaged or
+untracked changes. `git status` runs when a turn ends, after a `!` or `%` command and when HEAD
+changes, and otherwise at most once every 10 seconds. A file a tool writes during a turn sets the
+marker within 10 seconds.
+
 The `profile` segment shows the active profile name (`work`, `rec`, a client sandbox), so the status line states which profile's config, sessions, and keys are live. It is hidden on the built-in `default` profile, so an unconfigured status line shows no profile segment. Every built-in preset places it, so switching profiles is visible without any configuration.
 
 The `path` segment shows the working directory, shortened in three steps: a workspace root is

@@ -1419,6 +1419,8 @@ export class EventController {
 		// next turn opens fresh from `thinking` rather than mid-motion.
 		setShimmerActivity("idle");
 		this.ctx.statusLine.markActivityEnd();
+		// The turn's tools may have moved the tree; the marker is otherwise up to GIT_STATUS_MAX_AGE_MS old.
+		this.ctx.statusLine.refreshGitStatus();
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
 		if (this.ctx.clearWorkingLoader()) {
