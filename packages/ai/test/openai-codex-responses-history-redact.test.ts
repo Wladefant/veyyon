@@ -84,4 +84,66 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 			arguments: '{"t":"[github_token_redacted]"}',
 		});
 	});
+	for (const incremental of [true, false]) {
+		it(`redacts native output_text in ${incremental ? "incremental" : "replacement"} replay without changing the stored payload`, () => {
+			const model = createCodexModel("gpt-5.1-codex");
+			const token = "ghp_ABCdef1234567890ABCdef1234567890ABCdef";
+			const items = [{ type: "message", role: "assistant", content: [{ type: "output_text", text: token }] }];
+			const assistant = {
+				role: "assistant",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				content: [],
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: model.provider,
+					...(incremental ? { dt: true } : {}),
+					items,
+				},
+				usage: { ...zeroCost, totalTokens: 0, cost: { ...zeroCost, total: 0 } },
+				stopReason: "stop",
+				timestamp: 0,
+			} as AssistantMessage;
+			const replay = convertCodexResponsesMessages(model, {
+				messages: [{ role: "user", content: "prefix", timestamp: 0 }, assistant],
+			});
+			expect(JSON.stringify(replay)).not.toContain(token);
+			expect(replay.at(-1)).toEqual({
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "[github_token_redacted]" }],
+			});
+			expect(replay.length).toBe(incremental ? 2 : 1);
+			expect(items[0].content[0].text).toBe(token);
+		});
+	}
+
+	it("redacts Unicode-escaped credentials in native JSON function arguments", () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const argumentsJson = '{"token":"\\u0067hp_ABCdef1234567890ABCdef1234567890ABCdef","safe":"keep"}';
+		const replay = convertCodexResponsesMessages(model, {
+			messages: [
+				{
+					role: "user",
+					content: "archive",
+					timestamp: 0,
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						provider: model.provider,
+						items: [{ type: "function_call", name: "f", call_id: "call_1", arguments: argumentsJson }],
+					},
+				},
+			],
+		});
+		expect(replay).toEqual([
+			{
+				type: "function_call",
+				name: "f",
+				call_id: "call_1",
+				arguments: '{"token":"[github_token_redacted]","safe":"keep"}',
+			},
+		]);
+		expect(argumentsJson).toContain("\\u0067hp_");
+	});
 });
