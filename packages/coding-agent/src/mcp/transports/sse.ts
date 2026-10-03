@@ -36,6 +36,7 @@ export class LegacySseTransport implements MCPTransport {
 	#endpointUrl: string | null = null;
 	#sseConnection: AbortController | null = null;
 	#pending = new Map<string | number, PendingLegacySseRequest>();
+	#requestController = new AbortController();
 	#config: MCPSseServerConfig;
 
 	onClose?: () => void;
@@ -60,6 +61,7 @@ export class LegacySseTransport implements MCPTransport {
 	async connect(): Promise<void> {
 		if (this.#connected) return;
 		if (this.#sseConnection) return;
+		if (this.#requestController.signal.aborted) this.#requestController = new AbortController();
 
 		const connection = new AbortController();
 		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
@@ -240,7 +242,10 @@ export class LegacySseTransport implements MCPTransport {
 			params: params ?? {},
 		};
 		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
-		const operation = createMCPTimeout(timeout, options?.signal);
+		const signal = options?.signal
+			? AbortSignal.any([options.signal, this.#requestController.signal])
+			: this.#requestController.signal;
+		const operation = createMCPTimeout(timeout, signal);
 		const deferred = Promise.withResolvers<unknown>();
 		// Observe the response promise synchronously so a stream-close rejection
 		// from `#rejectPending` that lands while `request()` is still awaiting the
@@ -257,9 +262,9 @@ export class LegacySseTransport implements MCPTransport {
 				this.#pending.delete(id);
 				operation.clear();
 				deferred.reject(
-					options?.signal?.aborted && options.signal.reason instanceof Error
-						? options.signal.reason
-						: new Error(mcpTimeoutMessage({ url: this.#config.url }, `request "${method}"`, timeout)),
+					operation.signal?.reason instanceof Error
+						? operation.signal.reason
+						: new DOMException("MCP request was aborted", "AbortError"),
 				);
 			};
 			operation.signal.addEventListener("abort", pending.abortHandler, { once: true });
@@ -291,7 +296,7 @@ export class LegacySseTransport implements MCPTransport {
 		}
 
 		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
-		const operation = createMCPTimeout(timeout);
+		const operation = createMCPTimeout(timeout, this.#requestController.signal);
 		try {
 			const response = await this.#postJson(
 				{
@@ -347,7 +352,7 @@ export class LegacySseTransport implements MCPTransport {
 		};
 		let retryBody: typeof body = body;
 		if ("params" in body) {
-			const retryParams = await rebuildMCPToolCallParamsForAttempt(body.params);
+			const retryParams = await untilAborted(signal, rebuildMCPToolCallParamsForAttempt(body.params));
 			retryBody = { ...body, params: retryParams } as typeof body;
 		}
 		response = await fetch(endpointUrl, {
@@ -382,7 +387,7 @@ export class LegacySseTransport implements MCPTransport {
 	async #sendServerResponse(id: string | number, result?: unknown, error?: JsonRpcError): Promise<void> {
 		if (!this.#connected) return;
 		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
-		const operation = createMCPTimeout(timeout);
+		const operation = createMCPTimeout(timeout, this.#requestController.signal);
 		try {
 			const response = await this.#postJson(
 				error ? { jsonrpc: "2.0" as const, id, error } : { jsonrpc: "2.0" as const, id, result: result ?? {} },
@@ -402,6 +407,7 @@ export class LegacySseTransport implements MCPTransport {
 	}
 
 	#rejectPending(error: Error): void {
+		this.#requestController.abort(error);
 		for (const [id, pending] of this.#pending) {
 			this.#pending.delete(id);
 			pending.operation.clear();

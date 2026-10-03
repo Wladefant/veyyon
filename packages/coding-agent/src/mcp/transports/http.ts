@@ -95,6 +95,7 @@ export class HttpTransport implements MCPTransport {
 	#connected = false;
 	#sessionId: string | null = null;
 	#sseConnection: AbortController | null = null;
+	#requestController = new AbortController();
 
 	onClose?: () => void;
 	onError?: (error: Error) => void;
@@ -119,6 +120,7 @@ export class HttpTransport implements MCPTransport {
 	 */
 	async connect(): Promise<void> {
 		if (this.#connected) return;
+		if (this.#requestController.signal.aborted) this.#requestController = new AbortController();
 		this.#connected = true;
 	}
 
@@ -241,7 +243,10 @@ export class HttpTransport implements MCPTransport {
 		options?: MCPRequestOptions,
 	): Promise<T> {
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout, options?.signal);
+		const signal = options?.signal
+			? AbortSignal.any([options.signal, this.#requestController.signal])
+			: this.#requestController.signal;
+		const operation = createMCPTimeout(timeout, signal);
 		try {
 			return await this.#executeRequest<T>(method, params, options, operation, timeout);
 		} catch (error) {
@@ -253,7 +258,7 @@ export class HttpTransport implements MCPTransport {
 					if (newHeaders && !operation.signal?.aborted) {
 						// Persist refreshed headers so subsequent requests use them directly
 						this.config = { ...this.config, headers: newHeaders };
-						const retryParams = await rebuildMCPToolCallParamsForAttempt(params);
+						const retryParams = await untilAborted(operation.signal, rebuildMCPToolCallParamsForAttempt(params));
 						return await this.#executeRequest<T>(method, retryParams, options, operation, timeout);
 					}
 				} catch (authError) {
@@ -452,7 +457,7 @@ export class HttpTransport implements MCPTransport {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout);
+		const operation = createMCPTimeout(timeout, this.#requestController.signal);
 		try {
 			const resp = await fetch(this.config.url, {
 				method: "POST",
@@ -513,7 +518,7 @@ export class HttpTransport implements MCPTransport {
 		}
 
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout);
+		const operation = createMCPTimeout(timeout, this.#requestController.signal);
 
 		try {
 			const response = await fetch(this.config.url, {
@@ -537,7 +542,7 @@ export class HttpTransport implements MCPTransport {
 				if (this.#sseConnection) {
 					void this.#readSSEStream(response.body, this.#sseConnection.signal);
 				} else {
-					const readOperation = createMCPTimeout(timeout);
+					const readOperation = createMCPTimeout(timeout, this.#requestController.signal);
 					const signal = readOperation.signal ?? getNeverAbortSignal();
 					void this.#readSSEStream(response.body, signal).finally(() => readOperation.clear());
 				}
@@ -557,6 +562,7 @@ export class HttpTransport implements MCPTransport {
 	async close(): Promise<void> {
 		if (!this.#connected) return;
 		this.#connected = false;
+		this.#requestController.abort(new DOMException("MCP transport was closed by this client", "AbortError"));
 
 		// Abort SSE listener
 		if (this.#sseConnection) {
