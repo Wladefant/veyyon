@@ -160,6 +160,8 @@ class LeakedThinkingProjector {
 	#toolBlocks = new Map<number, { index: number; block: StreamingToolCall }>();
 	/** Projected native thinking blocks, keyed by the inner stream's `contentIndex`. */
 	#thinkingBlocks = new Map<number, number>();
+	/** Native thinking blocks whose projected `thinking_end` awaits the source end event. */
+	#pendingThinkingEnds = new Set<number>();
 	constructor(out: AssistantMessageEventStream, seed: AssistantMessage) {
 		this.#out = out;
 		this.#partial = { ...seed, content: [] };
@@ -177,8 +179,10 @@ class LeakedThinkingProjector {
 	thinking(srcIndex: number, delta: string, signature: string | undefined): void {
 		let index = this.#thinkingBlocks.get(srcIndex);
 		if (index === undefined) {
+			if (this.#thinking && this.#pendingThinkingEnds.has(this.#thinking.index)) this.#closeThinking();
 			index = this.#openThinking();
 			this.#thinkingBlocks.set(srcIndex, index);
+			this.#pendingThinkingEnds.add(index);
 		}
 		const block = this.#partial.content[index] as ThinkingContent;
 		block.thinking += delta;
@@ -203,9 +207,9 @@ class LeakedThinkingProjector {
 			if (signature !== undefined) {
 				(this.#partial.content[index] as ThinkingContent).thinkingSignature = signature;
 			}
-			if (this.#thinking?.index === index) {
-				this.#closeThinking();
-			}
+			if (!this.#pendingThinkingEnds.delete(index)) return;
+			if (this.#thinking?.index === index) this.#thinking = undefined;
+			this.#emitThinkingEnd(index);
 			return;
 		}
 		if (this.#thinking) {
@@ -315,6 +319,10 @@ class LeakedThinkingProjector {
 		// reached the projector at all (e.g. a terminal message assembled from
 		// blocks that skipped per-item events) must still survive with their
 		// text and signature intact.
+		for (const [srcIndex] of this.#thinkingBlocks) {
+			const block = message.content[srcIndex];
+			this.thinkingEnd(srcIndex, block?.type === "thinking" ? block.thinkingSignature : undefined, "");
+		}
 		for (const [at, block] of message.content.entries()) {
 			if (block?.type !== "thinking" || !block.thinkingSignature) continue;
 			if (this.#thinking) {
@@ -406,13 +414,19 @@ class LeakedThinkingProjector {
 
 	#closeThinking(): void {
 		if (!this.#thinking) return;
-		const block = this.#partial.content[this.#thinking.index] as ThinkingContent;
+		const index = this.#thinking.index;
+		this.#thinking = undefined;
+		if (this.#pendingThinkingEnds.has(index)) return;
+		this.#emitThinkingEnd(index);
+	}
+
+	#emitThinkingEnd(index: number): void {
+		const block = this.#partial.content[index] as ThinkingContent;
 		this.#out.push({
 			type: "thinking_end",
-			contentIndex: this.#thinking.index,
+			contentIndex: index,
 			content: block.thinking,
 			partial: this.#partial,
 		});
-		this.#thinking = undefined;
 	}
 }
