@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { CATALOG_PROVIDERS } from "../src/provider-models/descriptors";
 import {
 	LOCAL_STATIC_MODELS,
-	WEB_STATIC_MODELS,
 	localModelManagerOptions,
+	WEB_STATIC_MODELS,
 	webModelManagerOptions,
 } from "../src/provider-models/special";
 
@@ -14,17 +14,33 @@ describe("Specialist synthetic role providers", () => {
 		expect(options.staticModels).toBe(LOCAL_STATIC_MODELS);
 		expect(LOCAL_STATIC_MODELS).toHaveLength(13);
 
-		const kinds = new Set(LOCAL_STATIC_MODELS.map(model => model.kind));
+		const kinds = new Set(LOCAL_STATIC_MODELS.map((model) => model.kind));
 		expect([...kinds].sort()).toEqual(["stt", "tiny", "tts"]);
 
-		const kokoro = LOCAL_STATIC_MODELS.find(model => model.id === "kokoro");
-		expect(kokoro).toMatchObject({ kind: "tts", api: "local-inference", provider: "local" });
+		const kokoro = LOCAL_STATIC_MODELS.find((model) => model.id === "kokoro");
+		expect(kokoro).toMatchObject({
+			kind: "tts",
+			api: "local-inference",
+			provider: "local",
+		});
 
-		const whisper = LOCAL_STATIC_MODELS.find(model => model.id === "whisper-base");
-		expect(whisper).toMatchObject({ kind: "stt", api: "local-inference", provider: "local" });
+		const whisper = LOCAL_STATIC_MODELS.find(
+			(model) => model.id === "whisper-base",
+		);
+		expect(whisper).toMatchObject({
+			kind: "stt",
+			api: "local-inference",
+			provider: "local",
+		});
 
-		const tiny = LOCAL_STATIC_MODELS.find(model => model.id === "lfm2.5-230m");
-		expect(tiny).toMatchObject({ kind: "tiny", api: "local-inference", provider: "local" });
+		const tiny = LOCAL_STATIC_MODELS.find(
+			(model) => model.id === "lfm2.5-230m",
+		);
+		expect(tiny).toMatchObject({
+			kind: "tiny",
+			api: "local-inference",
+			provider: "local",
+		});
 	});
 
 	test("web provider configures search specialist models", () => {
@@ -39,20 +55,24 @@ describe("Specialist synthetic role providers", () => {
 			expect(model.provider).toBe("web");
 		}
 
-		expect(WEB_STATIC_MODELS.map(m => m.id)).toContain("public");
-		expect(WEB_STATIC_MODELS.map(m => m.id)).toContain("duckduckgo");
-		expect(WEB_STATIC_MODELS.map(m => m.id)).toContain("parallel");
+		expect(WEB_STATIC_MODELS.map((m) => m.id)).toContain("public");
+		expect(WEB_STATIC_MODELS.map((m) => m.id)).toContain("duckduckgo");
+		expect(WEB_STATIC_MODELS.map((m) => m.id)).toContain("parallel");
 	});
 
 	test("descriptors wire local and web providers into catalog registry", () => {
-		const localDesc = CATALOG_PROVIDERS.find(p => p.id === "local");
+		const localDesc = CATALOG_PROVIDERS.find((p) => p.id === "local");
 		expect(localDesc).toBeDefined();
 		expect(localDesc?.defaultModel).toBe("lfm2.5-230m");
-		expect(localDesc?.createModelManagerOptions?.({} as never).providerId).toBe("local");
+		expect(localDesc?.createModelManagerOptions?.({} as never).providerId).toBe(
+			"local",
+		);
 
-		const webDesc = CATALOG_PROVIDERS.find(p => p.id === "web");
+		const webDesc = CATALOG_PROVIDERS.find((p) => p.id === "web");
 		expect(webDesc).toBeDefined();
 		expect(webDesc?.defaultModel).toBe("public");
-		expect(webDesc?.createModelManagerOptions?.({} as never).providerId).toBe("web");
+		expect(webDesc?.createModelManagerOptions?.({} as never).providerId).toBe(
+			"web",
+		);
 	});
 });

@@ -523,6 +523,7 @@ export const CATALOG_PROVIDERS = [
 		createModelManagerOptions: () => webModelManagerOptions(),
 		catalogDiscovery: { label: "Web Search", allowUnauthenticated: true },
 	},
+	{
 		id: "coreweave",
 		defaultModel: "openai/gpt-oss-120b",
 		envVars: ["COREWEAVE_API_KEY", "WANDB_API_KEY"],
