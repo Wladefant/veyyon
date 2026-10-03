@@ -343,4 +343,94 @@ describe("Extension hot reload", () => {
 		expect(outputAlias[0]).toContain("config: unchanged");
 		expect(outputAlias[0]).toContain("extensions: none");
 	}, 60000);
+
+	it("drops the usage backend when a reload of the same source registers the provider without usage", async () => {
+		const extFile = path.join(tempDir.path(), "usage-ext.ts");
+		const withUsage = `
+			export default function(pi: { registerProvider: (name: string, config: object) => void }) {
+				pi.registerProvider("custom-provider", {
+					usage: {
+						cacheVersion: "v1",
+						async fetchUsage() {
+							return { provider: "custom-provider", fetchedAt: 1, limits: [] };
+						},
+					},
+				});
+			}
+		`;
+		await fs.writeFile(extFile, withUsage);
+		const eventBus = new EventBus();
+		const runtime = new ExtensionRuntime();
+		const loaded = await loadExtension(extFile, tempDir.path(), eventBus, runtime);
+		expect(loaded.extension).not.toBeNull();
+		modelRegistry.adoptExtensionProviders([extFile], runtime.pendingProviderRegistrations);
+		runtime.pendingProviderRegistrations = [];
+		const runner = new ExtensionRunner(
+			[loaded.extension!],
+			runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			eventBus,
+		);
+		try {
+			expect(authStorage.usageProviderFor("custom-provider")?.cacheVersion).toBe("v1");
+
+			await fs.writeFile(
+				extFile,
+				`
+				export default function(pi: { registerProvider: (name: string, config: object) => void }) {
+					pi.registerProvider("custom-provider", {});
+				}
+				`,
+			);
+			const results = await runner.reloadExtensions();
+			expect(results.map(result => result.status)).toEqual(["reloaded"]);
+			expect(authStorage.usageProviderFor("custom-provider")).toBeUndefined();
+		} finally {
+			modelRegistry.clearSourceRegistrations(extFile);
+		}
+	}, 60000);
+
+	it("serializes overlapping reloads of one source so exactly one extension remains", async () => {
+		const extFile = path.join(tempDir.path(), "overlap-ext.ts");
+		await fs.writeFile(
+			extFile,
+			`export default function(api: { on: (e: string, h: () => void) => void }) { api.on("turn_end", () => {}); }`,
+		);
+		const eventBus = new EventBus();
+		const runtime = new ExtensionRuntime();
+		const loaded = await loadExtension(extFile, tempDir.path(), eventBus, runtime);
+		expect(loaded.extension).not.toBeNull();
+		const runner = new ExtensionRunner(
+			[loaded.extension!],
+			runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			eventBus,
+		);
+
+		// Every load suspends until released, so both reloads are mid-load at the same time.
+		const release = Promise.withResolvers<void>();
+		const suspendedLoader = async (extensionPath: string) => {
+			await release.promise;
+			return await loadExtension(extensionPath, tempDir.path(), eventBus, runtime);
+		};
+		const first = runner.reloadExtensions(suspendedLoader);
+		const second = runner.reloadExtensions(suspendedLoader);
+		release.resolve();
+		const results = await Promise.all([first, second]);
+
+		expect(results.map(batch => batch.map(result => result.status))).toEqual([["reloaded"], ["reloaded"]]);
+		expect(runner.getExtensionPaths()).toEqual([extFile]);
+	}, 60000);
 });

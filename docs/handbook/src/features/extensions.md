@@ -124,6 +124,22 @@ Core methods:
 - `registerProvider`
 - `events` (shared event bus)
 
+`registerProvider` accepts `usage`, a usage backend with `fetchUsage` and optional
+`cacheVersion` fields. The registry installs it in the session's `AuthStorage` and
+removes it when the extension unloads. Broker reports remain authoritative for
+providers they contain; the client fetches only registered extension providers
+missing from the broker response.
+
+SDK hosts can install the same per-process override with
+`authStorage.setUsageProvider(provider, implementation)` and remove it with
+`authStorage.removeUsageProvider(provider)`. The implementation's `id` must match
+the provider. These overrides do not change the global provider registry.
+
+Cached usage reports live in the shared `agent.db`, keyed by provider name and the
+usage provider's `cacheVersion`. When overriding a built-in provider, set a `cacheVersion`
+distinct from the built-in one so processes without the extension (older sessions,
+`--no-extensions` runs, SDK scripts) never serve their reports to yours, or yours to them.
+
 In interactive mode, `input` handlers run before the built-in first-message auto-title check. Extensions that call `await pi.setSessionName(...)` from `input` can set the persisted session name and prevent the default auto-generated title from running for that session.
 
 Also exposed:

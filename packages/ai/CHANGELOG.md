@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added per-process usage backend registration and removal for extension providers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added raw decoded WebSocket event stream for provider-native Codex compaction ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered DeepInfra as a built-in provider with chat-completion API key validation ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added core image generation data types and metadata contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
@@ -42,6 +43,9 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Keyed usage report cache by effective usage provider and supported `cacheVersion` overrides ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 5cefe326dfa10b85a29a98575b3afb72a34381f5).
+- Encoded usage report cache keys as JSON arrays so a provider id or `cacheVersion` containing `:` cannot share a row with another provider; rows written under the old layout are no longer read ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Merged local and extension usage reports with broker usage when the broker lacks those providers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi f81261100acb73725cbb2e92f9641682d59fa8c8).
 - Prevented malformed function-call errors from bypassing replay-unsafe turn checks after earlier output or tool execution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9733d138).
 - Fixed the type errors in credential redaction of Codex replayed assistant items and outbound messages that turned the root tools type check red (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Saved /login API key and OAuth credentials take precedence over literal, environment, and command-backed fallback API keys registered by extensions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).

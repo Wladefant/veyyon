@@ -20,9 +20,11 @@ import type {
 	Context,
 	Model,
 	ModelSpec,
+	Provider,
 	SimpleStreamOptions,
 	ThinkingConfig,
 } from "@veyyon/ai/types";
+import type { UsageProvider } from "@veyyon/ai/usage";
 import type { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
 import { shareCompat } from "@veyyon/catalog/compat/share";
@@ -3069,6 +3071,7 @@ export class ModelRegistry {
 		);
 		this.#runtimeModelManagers.delete(providerName);
 		this.authStorage.removeConfigApiKey(providerName);
+		this.authStorage.removeUsageProvider(providerName as Provider);
 	}
 
 	/**
@@ -3205,6 +3208,17 @@ export class ModelRegistry {
 		if (sourceHandoff) {
 			this.#lastStaticLoadMtime = null;
 			this.#reloadStaticModels();
+		}
+
+		if (config.usage) {
+			this.authStorage.setUsageProvider(providerName as Provider, {
+				...config.usage,
+				id: providerName as Provider,
+			});
+		} else {
+			// A re-registration is the provider's whole new declaration: an omitted `usage`
+			// retires the backend an earlier registration of the same name installed.
+			this.authStorage.removeUsageProvider(providerName as Provider);
 		}
 
 		if (config.apiKey) {
@@ -3713,6 +3727,8 @@ function applyModelOverrides(
  * Input type for registerProvider API (from extensions).
  */
 export interface ProviderConfigInput {
+	/** Process-local usage backend, scoped to this provider registration. */
+	usage?: Omit<UsageProvider, "id">;
 	baseUrl?: string;
 	apiKey?: string;
 	api?: Api;

@@ -23,8 +23,14 @@ import {
 	type StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
 import { AUTH_HTTP_CONCURRENCY_LIMIT } from "@veyyon/ai/auth-storage/http-concurrency";
-import type { UsageLimit, UsageReport } from "@veyyon/ai/usage";
+import { buildUsageReportCacheKey } from "@veyyon/ai/auth-storage/usage-requests";
+import type { UsageLimit, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import * as claudeUsage from "@veyyon/ai/usage/claude";
+
+/** The row AuthStorage persists for an anthropic OAuth credential, derived from the production key builder. */
+function usageReportRowKey(accountId: string, email: string): string {
+	return `usage_cache:${buildUsageReportCacheKey({ provider: "anthropic", credential: { type: "oauth", accountId, email } })}`;
+}
 
 function anthropicReports(reports: UsageReport[] | null): UsageReport[] {
 	return (reports ?? []).filter(r => r.provider === "anthropic");
@@ -667,7 +673,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		// is in the past (so `get()` misses) but the entry is still reachable via
 		// `getStale()`. Mirrors what the prior poll would have written.
 		const lastGood = makeReport("a@example.com");
-		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-1|email:a@example.com";
+		const cacheKey = usageReportRowKey("account-1", "a@example.com");
 		cache.set(cacheKey, {
 			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -745,7 +751,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		};
 
 		const lastGood = makeReport("b@example.com");
-		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-2|email:b@example.com";
+		const cacheKey = usageReportRowKey("account-2", "b@example.com");
 		cache.set(cacheKey, {
 			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -825,6 +831,111 @@ describe("AuthStorage usage cache: org-only identity stability", () => {
 		} finally {
 			storage.close();
 			vi.restoreAllMocks();
+		}
+	});
+	it("keys reports by a runtime usage provider's cache version, not the configured resolver's", async () => {
+		const base = makeReport("a@example.com");
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue({
+			...base,
+			metadata: { ...base.metadata, source: "built-in" },
+		});
+		const store = makeStore([
+			{
+				id: 1,
+				provider: "anthropic",
+				credential: {
+					type: "oauth",
+					access: "oat-test",
+					refresh: "refresh-test",
+					expires: Date.now() + 3_600_000,
+					email: "a@example.com",
+				},
+				disabledCause: null,
+			},
+		]);
+		// A second process on the same agent.db, without the extension provider.
+		const extensionless = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await extensionless.reload();
+		const overrideProvider: UsageProvider = {
+			...claudeUsage.claudeUsageProvider,
+			cacheVersion: 2564,
+			async fetchUsage() {
+				return { ...base, metadata: { ...base.metadata, source: "override" } };
+			},
+		};
+		const overriddenStorage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await overriddenStorage.reload();
+
+		try {
+			expect(anthropicReports(await overriddenStorage.fetchUsageReports())[0]?.metadata?.source).toBe("built-in");
+			overriddenStorage.setUsageProvider("anthropic", overrideProvider);
+			const shared = anthropicReports(await extensionless.fetchUsageReports());
+			const overridden = anthropicReports(await overriddenStorage.fetchUsageReports());
+
+			expect(shared[0]?.metadata?.source).toBe("built-in");
+			expect(overridden[0]?.metadata?.source).toBe("override");
+
+			// Removing the override restores the configured backend's shared cache.
+			overriddenStorage.removeUsageProvider("anthropic");
+			expect(anthropicReports(await overriddenStorage.fetchUsageReports())[0]?.metadata?.source).toBe("built-in");
+		} finally {
+			extensionless.close();
+			overriddenStorage.close();
+			vi.restoreAllMocks();
+		}
+	});
+	it("rejects registering a usage provider whose id does not match the provider name and leaves the backend unchanged", async () => {
+		const base = makeReport("a@example.com");
+		const builtInProvider: UsageProvider = {
+			id: "anthropic",
+			cacheVersion: 100,
+			async fetchUsage() {
+				return { ...base, metadata: { ...base.metadata, source: "built-in" } };
+			},
+		};
+		const store = makeStore([
+			{
+				id: 1,
+				provider: "anthropic",
+				credential: {
+					type: "oauth",
+					access: "oat-test",
+					refresh: "refresh-test",
+					expires: Date.now() + 3_600_000,
+					email: "a@example.com",
+				},
+				disabledCause: null,
+			},
+		]);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? builtInProvider : undefined),
+		});
+		await storage.reload();
+
+		const mismatchProvider: UsageProvider = {
+			id: "openai-codex",
+			cacheVersion: 200,
+			async fetchUsage() {
+				return { ...base, provider: "openai-codex", metadata: { ...base.metadata, source: "mismatch" } };
+			},
+		};
+
+		try {
+			expect(storage.usageProviderFor("anthropic")).toBe(builtInProvider);
+			expect(anthropicReports(await storage.fetchUsageReports())[0]?.metadata?.source).toBe("built-in");
+
+			expect(() => storage.setUsageProvider("anthropic", mismatchProvider)).toThrow(
+				'Usage provider "openai-codex" does not match "anthropic".',
+			);
+
+			expect(storage.usageProviderFor("anthropic")).toBe(builtInProvider);
+			expect(anthropicReports(await storage.fetchUsageReports())[0]?.metadata?.source).toBe("built-in");
+		} finally {
+			storage.close();
 		}
 	});
 });

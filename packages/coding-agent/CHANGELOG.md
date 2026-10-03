@@ -7,6 +7,8 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Extensions can register usage backends that stay visible beside broker usage reports, and the usage CLI reloads credentials before probing ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi f81261100acb73725cbb2e92f9641682d59fa8c8).
+- A same-source extension reload that registers a provider without `usage` now removes the old usage backend, and overlapping reloads of one extension run one after another instead of duplicating it ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Daemon startup recovers stale broker leases after PID reuse, including legacy PID-only records whose process started after the record. Lease transitions are serialized, and stale client presence no longer pins brokers or runtime scopes ([#411](https://github.com/Wladefant/veyyon/issues/411)).
 - Preserved /login API key and OAuth credential precedence over extension fallback API keys, including command-backed values, during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
 - Fixed an uncaught `EPERM ... watch` that ended the whole process when the watched git HEAD or custom theme directory was deleted or locked: the watchers now log a warning, close and stop refreshing live ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).

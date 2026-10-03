@@ -293,6 +293,8 @@ export class ExtensionRunner {
 	 * {@link MAX_PENDING_CREDENTIAL_DISABLED}; oldest entries are dropped under pressure.
 	 */
 	#pendingCredentialDisabled: CredentialDisabledEvent[] = [];
+	/** Tail of the reload queue: resolves when the last queued reload has finished. */
+	#reloadTurn: Promise<void> = Promise.resolve();
 	#eventBus: EventBus;
 	#adoptSpawnedPid?: (pid: number) => void;
 	#gateSpawn?: (what: string) => Promise<void>;
@@ -458,6 +460,20 @@ export class ExtensionRunner {
 	 *    register any new providers, and report success with hook count.
 	 */
 	async reloadExtensions(
+		customLoader?: (path: string) => Promise<{ extension: LoadedExtension | null; error: string | null }>,
+	): Promise<ExtensionReloadResult[]> {
+		// Reloads replace entries of `this.extensions` by identity, so two overlapping ones would
+		// both snapshot the old entry and the loser would append a duplicate of the same path.
+		// Each reload waits for the previous one and snapshots only once it holds the turn.
+		const turn = this.#reloadTurn.then(() => this.#reloadExtensionsExclusive(customLoader));
+		this.#reloadTurn = turn.then(
+			() => undefined,
+			() => undefined,
+		);
+		return await turn;
+	}
+
+	async #reloadExtensionsExclusive(
 		customLoader?: (path: string) => Promise<{ extension: LoadedExtension | null; error: string | null }>,
 	): Promise<ExtensionReloadResult[]> {
 		const results: ExtensionReloadResult[] = [];

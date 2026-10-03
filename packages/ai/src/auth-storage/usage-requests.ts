@@ -6,7 +6,7 @@
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
-import type { UsageCredential } from "../usage";
+import type { UsageCredential, UsageProvider } from "../usage";
 import type { StoredCredential } from "./credentials";
 import type { AuthCredential, OAuthCredential } from "./types";
 import { REMOTE_REFRESH_SENTINEL } from "./types";
@@ -25,6 +25,8 @@ export type UsageRequestDescriptor = {
 	provider: Provider;
 	credential: UsageCredential;
 	baseUrl?: string;
+	cacheVersion?: number | string;
+	usageProvider?: UsageProvider;
 };
 
 export function buildUsageCredential(credential: AuthCredential): UsageCredential {
@@ -81,41 +83,52 @@ function normalizeUsageBaseUrl(baseUrl?: string): string {
 	return baseUrl ? trimTrailingSlashes(baseUrl.trim()) : "";
 }
 
+/**
+ * Layout version of the persisted report key. A row written under an older layout (bare
+ * `:`-joined parts, where provider `a` + version `x:y` collided with provider `y:a` + version
+ * `x`) lives under a different key and is never read: bump this when the layout changes.
+ */
+const USAGE_REPORT_KEY_LAYOUT_VERSION = 2;
+
+/**
+ * The request's namespace as a JSON array, so no part can masquerade as another through a
+ * delimiter it contains. Shared by the persistent report key and the aggregate flight key.
+ */
+function encodeUsageRequestKey(request: UsageRequestDescriptor): string {
+	return JSON.stringify([
+		USAGE_REPORT_KEY_LAYOUT_VERSION,
+		request.provider,
+		request.cacheVersion ?? USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider] ?? null,
+		normalizeUsageBaseUrl(request.baseUrl) || "default",
+		buildUsageCacheIdentity(request.credential),
+	]);
+}
+
 export function buildUsageReportCacheKey(request: UsageRequestDescriptor): string {
-	const baseUrl = normalizeUsageBaseUrl(request.baseUrl) || "default";
-	const identity = buildUsageCacheIdentity(request.credential);
-	const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
-	const providerKey = versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
-	return `report:${providerKey}:${baseUrl}:${identity}`;
+	return `report:${encodeUsageRequestKey(request)}`;
 }
 
 export function buildUsageReportsCacheKey(requests: ReadonlyArray<UsageRequestDescriptor>): string {
-	const snapshot = requests
-		.map(request => {
-			const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
-			const providerKey =
-				versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
-			return `${providerKey}:${normalizeUsageBaseUrl(request.baseUrl) || "default"}:${buildUsageCacheIdentity(request.credential)}`;
-		})
-		.sort()
-		.join("\n");
-	return `reports:${Bun.hash(snapshot).toString(16)}`;
+	const snapshot = requests.map(encodeUsageRequestKey).sort().join("\n");
+	return `reports:${USAGE_REPORT_KEY_LAYOUT_VERSION}:${Bun.hash(snapshot).toString(16)}`;
 }
 
 export function buildUsageRequest(
 	provider: Provider,
 	credential: UsageCredential,
 	baseUrl?: string,
+	usageProvider?: UsageProvider,
 ): UsageRequestDescriptor {
-	return { provider, credential, baseUrl };
+	return { provider, credential, baseUrl, cacheVersion: usageProvider?.cacheVersion, usageProvider };
 }
 
 export function buildUsageRequestForOauth(
 	provider: Provider,
 	credential: OAuthCredential,
 	baseUrl?: string,
+	usageProvider?: UsageProvider,
 ): UsageRequestDescriptor {
-	return buildUsageRequest(provider, buildUsageCredential(credential), baseUrl);
+	return buildUsageRequest(provider, buildUsageCredential(credential), baseUrl, usageProvider);
 }
 
 export function buildRefreshableOauthCredential(credential: UsageCredential): OAuthCredential | null {
