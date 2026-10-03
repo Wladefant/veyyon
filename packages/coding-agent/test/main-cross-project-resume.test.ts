@@ -352,7 +352,7 @@ describe("runRootCommand — a resumed session continues in its recorded directo
 
 		// Launch scope had no patterns, so the only resolution is the post-switch
 		// one; the pre-fix code never recomputed and would not call it at all.
-		expect(resolveModelScope).toHaveBeenCalledTimes(1);
+		expect(resolveModelScope.mock.calls).toHaveLength(1);
 		expect(resolveModelScope.mock.calls[0]?.[0]).toEqual(["model-resumed"]);
 	}, 15_000);
 });

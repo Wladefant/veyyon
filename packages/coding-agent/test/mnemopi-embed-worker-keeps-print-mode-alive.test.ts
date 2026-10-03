@@ -188,7 +188,7 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			NODE_ENV: "production",
 			VEYYON_TEST_RUNTIME: "0",
 		});
-		let proc: Subprocess | undefined;
+		let proc: Subprocess<"ignore", "pipe", "pipe"> | undefined;
 		try {
 			proc = Bun.spawn([process.execPath, "-e", callerScript], {
 				cwd: repoRoot,
@@ -267,7 +267,7 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			NODE_ENV: "production",
 			VEYYON_TEST_RUNTIME: "0",
 		});
-		let proc: Subprocess | undefined;
+		let proc: Subprocess<"ignore", "pipe", "pipe"> | undefined;
 		try {
 			proc = Bun.spawn([process.execPath, "-e", callerScript], {
 				cwd: repoRoot,
@@ -367,7 +367,7 @@ describe("issue #12067 — pending mnemopi requests keep print mode alive", () =
 			NODE_ENV: "production",
 			VEYYON_TEST_RUNTIME: "0",
 		});
-		let proc: Subprocess | undefined;
+		let proc: Subprocess<"ignore", "pipe", "pipe"> | undefined;
 		try {
 			proc = Bun.spawn([process.execPath, "-e", callerScript], {
 				cwd: repoRoot,
