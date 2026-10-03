@@ -931,6 +931,18 @@ export interface Model<TApi extends Api = Api> {
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
 	contextWindow: number | null;
+	/**
+	 * Larger prompt window the model accepts when extended context is enabled.
+	 * {@link contextWindow} stays the default window; a catalog or discovery
+	 * source sets this only when the provider states a higher ceiling.
+	 */
+	maxContextWindow?: number;
+	/**
+	 * Bill multipliers per service tier for providers that scale the whole
+	 * request by tier (Codex: `flex` is half price, `priority` a premium). A
+	 * tier the record omits bills at 1x.
+	 */
+	serviceTierCost?: Readonly<Partial<Record<"flex" | "priority", number>>>;
 	maxTokens: number | null;
 	/**
 	 * When `true`, providers MUST omit `max_output_tokens` (Responses) /

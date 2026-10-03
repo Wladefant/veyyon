@@ -327,7 +327,9 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 		result[key] =
 			SCHEMA_MAP_KEYWORDS.has(key) && isRecord(entry)
 				? normalizeSchemaMap(entry, { ...options, isSubschema: true, insideSchemaMap: true })
-				: normalizeSchemaNode(entry, { ...options, isSubschema, insideSchemaMap: false });
+				: isSubschema
+					? normalizeSchemaNode(entry, { ...options, isSubschema, insideSchemaMap: false })
+					: entry;
 	}
 	if (combiner === undefined) {
 		settleNodeType(result, constValue, options);
