@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { TempDir } from "@veyyon/utils/temp";
 import * as evalIndex from "@veyyon/coding-agent/eval";
 import * as pyKernel from "@veyyon/coding-agent/eval/py/kernel";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { TempDir } from "@veyyon/utils/temp";
 
 function makeSession(): ToolSession {
 	return {
