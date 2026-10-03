@@ -48,6 +48,7 @@ import {
 	resolveOpenrouterCacheProviderId,
 	resolveVllmCacheProviderId,
 	sakanaModelManagerOptions,
+	stepfunModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
 	umansModelManagerOptions,
@@ -415,6 +416,14 @@ export const CATALOG_PROVIDERS = [
 		createModelManagerOptions: (config: ModelManagerConfig) => sakanaModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Sakana AI" },
+	},
+	{
+		id: "stepfun",
+		defaultModel: "step-5-preview",
+		envVars: ["STEPFUN_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => stepfunModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "StepFun" },
 	},
 	{
 		id: "synthetic",

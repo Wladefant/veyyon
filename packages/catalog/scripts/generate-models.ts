@@ -55,6 +55,7 @@ import {
 	NOUS_RESEARCH_BUNDLED_MODELS,
 	projectOpenAIProReasoningAliases,
 	SAKANA_FUGU_STATIC_MODELS,
+	STEPFUN_STATIC_MODELS,
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
 import type { Api, ModelSpec } from "../src/types";
@@ -699,6 +700,9 @@ async function generateModels() {
 	// at boot. If live `/v1/models` discovery succeeds, it is authoritative.
 	if (!authoritativeCatalogProviders.has("gmi-cloud")) {
 		allModels.push(...GMI_CLOUD_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("stepfun")) {
+		allModels.push(...STEPFUN_STATIC_MODELS);
 	}
 	// Seed the GitLab Duo Agent fallback model so a fresh install (no credentialed
 	// dynamic discovery/cache yet) still surfaces the provider's default model in the

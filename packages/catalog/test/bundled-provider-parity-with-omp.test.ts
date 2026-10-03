@@ -99,7 +99,6 @@ const OMP_PROVIDER_OPT_OUTS: Readonly<Record<string, string>> = {
 	local: "open port, PR 351 (synthetic role provider)",
 	meta: "port pending (Refs #107)",
 	"muse-code": "port pending (Refs #107)",
-	stepfun: "port pending (Refs #107)",
 	typesafe: "open port, PR 345",
 	web: "open port, PR 351 (synthetic role provider)",
 	"yolo-auto": "port pending (Refs #107)",

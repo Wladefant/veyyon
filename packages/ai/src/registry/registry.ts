@@ -54,6 +54,7 @@ import { perplexityProvider } from "./perplexity";
 import { qianfanProvider } from "./qianfan";
 import { qwenPortalProvider } from "./qwen-portal";
 import { sakanaProvider } from "./sakana";
+import { stepfunProvider } from "./stepfun";
 import { syntheticProvider } from "./synthetic";
 import { tavilyProvider } from "./tavily";
 import { togetherProvider } from "./together";
@@ -153,6 +154,7 @@ const ALL = [
 	nousResearchApiKeyProvider,
 	amazonBedrockProvider,
 	gmiCloudProvider,
+	stepfunProvider,
 ];
 
 export type RegistryDef = (typeof ALL)[number];

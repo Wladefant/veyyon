@@ -1127,6 +1127,108 @@ export function gmiCloudModelManagerOptions(
 	return createSimpleOpenAICompletionsOptions("gmi-cloud", GMI_CLOUD_BASE_URL, config);
 }
 
+const STEPFUN_BASE_URL = "https://api.stepfun.ai/v1";
+
+const STEPFUN_EXCLUDED_PREFIXES = ["stepaudio-", "step-image-", "step-tts-", "step-2x-large"];
+
+export function isStepfunChatModelId(id: string): boolean {
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) return false;
+	return !STEPFUN_EXCLUDED_PREFIXES.some(prefix => normalized.startsWith(prefix));
+}
+
+export const STEPFUN_STATIC_MODELS: readonly ModelSpec<"openai-completions">[] = [
+	{
+		id: "step-5-preview",
+		name: "Step 5 Preview",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 1, output: 2.7, cacheRead: 0.05, cacheWrite: 0 },
+		contextWindow: 1000000,
+		maxTokens: 1000000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+	{
+		id: "step-3.7-flash",
+		name: "Step 3.7 Flash",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: 256000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+	{
+		id: "step-3.5-flash",
+		name: "Step 3.5 Flash",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: 256000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+	{
+		id: "step-3.5-flash-2603",
+		name: "Step 3.5 Flash 2603",
+		api: "openai-completions",
+		provider: "stepfun",
+		baseUrl: STEPFUN_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: 256000,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		compat: { maxTokensField: "max_tokens", supportsReasoningEffort: true },
+	},
+];
+
+export interface StepfunModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function stepfunModelManagerOptions(
+	config?: StepfunModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? STEPFUN_BASE_URL;
+	const references = createBundledReferenceMap<"openai-completions">("stepfun");
+	return {
+		providerId: "stepfun",
+		...(apiKey && {
+			fetchDynamicModels: hooks =>
+				fetchOpenAICompatibleModels({
+					onFailure: hooks?.onFailure,
+					api: "openai-completions",
+					provider: "stepfun",
+					baseUrl,
+					apiKey,
+					filterModel: (_entry, model) => isStepfunChatModelId(model.id),
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
 // ---------------------------------------------------------------------------
 // 2. Groq
 // ---------------------------------------------------------------------------
