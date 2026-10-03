@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- Fixed Mermaid ASCII state diagram pseudostate markers and preserved transition labels above connector strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Mermaid `direction BT` diagrams draw rounded state boxes and the start pseudostate with their rounded corners the right way up ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the SQLite corruption test fixtures (`Buffer` comparison, `openSync` mock signature) to type-check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - SQLite recovery rechecks the current store under its recovery lock, leaves healthy main databases intact when a secondary store fails, and reports permission failures. Damaged stores and sidecars are published as one private backup directory. Interrupted removal leaves a durable guard that blocks reopening until repair ([#293](https://github.com/Wladefant/veyyon/pull/293)).
 - SQLite openers treat URI-looking filenames as physical stores under Bun's default flags. NTFS stream stores use safe lock and backup names while honoring exact-path pending markers. A real file-create probe preserves readable-store access under denied-create directory ACLs.
