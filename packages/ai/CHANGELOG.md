@@ -15,6 +15,8 @@
 - Added Abliteration, Meta Model API, and Muse Code provider definitions and login transports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the GMI Cloud provider (`gmi-cloud`) registry definition with an API-key paste login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added OpenAI/OpenRouter multipart audio transcription adapter and transcription types ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
+- Added audio transcription dispatcher routing model catalog APIs to matching transcription adapters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Responses wire types for conversation reasoning configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -40,6 +42,8 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Saved /login API key and OAuth credentials take precedence over literal, environment, and command-backed fallback API keys registered by extensions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
+- Fixed the provider in-flight wakeup watcher throwing an uncaught `EPERM` when its directory vanished: it now warns, closes and falls back to the timer ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed type errors in the Anthropic alignment and Codex stream test fixtures so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Classified only trailing volatile segments as memory recall suffix in Anthropic prompt caching, preserving cache breakpoints when stable policy blocks follow recalled content ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7c5549d1db5cbc637be93ff0f36ca199f22b8fc4).
 - Fixed Codex compaction WebSocket cleanup types: `return()` calls pass their argument and the wrapped generator implements `Symbol.asyncDispose` by delegating to `return()` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -61,6 +65,7 @@
 
 - Sanitized client-visible assistant native history payloads during Codex replay while keeping opaque signed reasoning intact ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6f0d61f7ca170788f2b97c7ab1a7753e6c2544d9).
 - Dropped stale thinking signatures after credential redaction in outbound messages, instructions, and native history replay to avoid provider rejection on replay ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Validated declared segment and word fields in OpenAI transcription responses while preserving provider-specific extras ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Responses prepared request caching to rebuild wire body on reasoning-effort fallback and retain sent payload in diagnostics ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 21cb04bd3e6b72fcd05bb4e2f02fe441cf2d2a60).
 - Retried one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex turn-state lifecycle to isolate compatibility-scoped cells and clear stale tokens on fresh non-compaction turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
