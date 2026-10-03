@@ -29,10 +29,14 @@ test("SqliteAuthCredentialStore.open automatically quarantines a corrupt databas
 		store.close();
 	}
 
-	const backups = (await backupNames(dir.path())).filter(name => !/-wal$|-shm$|-journal$/.test(name));
+	const backups = (await backupNames(dir.path())).filter(
+		name => !name.endsWith(".tmp") && !/-wal$|-shm$|-journal$/.test(name),
+	);
 	expect(backups).toHaveLength(1);
 	const backupPath = path.join(dir.path(), backups[0]!);
-	expect(await fs.promises.readFile(backupPath)).toEqual(damaged);
+	const stat = await fs.promises.stat(backupPath);
+	const preservedFile = stat.isDirectory() ? path.join(backupPath, "auth.db") : backupPath;
+	expect(await fs.promises.readFile(preservedFile)).toEqual(damaged);
 });
 
 test("negative control: without corruption recovery an unrecoverable database throws without quarantine", async () => {
