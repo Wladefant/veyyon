@@ -131,19 +131,25 @@ export async function readIsolationOwner(baseDir: string): Promise<IsolationOwne
 	} catch (error) {
 		throw new Error(`Failed to parse isolation owner record in ${baseDir}: ${errorMessage(error)}`);
 	}
-	if (
-		typeof decoded !== "object" ||
-		decoded === null ||
-		typeof (decoded as Record<string, unknown>).pid !== "number" ||
-		typeof (decoded as Record<string, unknown>).token !== "string"
-	) {
-		throw new Error(`Invalid isolation owner record in ${baseDir}: missing required fields`);
+	if (typeof decoded !== "object" || decoded === null) {
+		throw new Error(`Invalid isolation owner record in ${baseDir}: record must be an object`);
 	}
 	const rec = decoded as Record<string, unknown>;
+	if (
+		typeof rec.pid !== "number" ||
+		!Number.isInteger(rec.pid) ||
+		rec.pid <= 0 ||
+		rec.pid > 0x7fffffff
+	) {
+		throw new Error(`Invalid isolation owner record in ${baseDir}: pid must be a positive integer <= 0x7fffffff`);
+	}
+	if (typeof rec.token !== "string" || rec.token.trim().length === 0) {
+		throw new Error(`Invalid isolation owner record in ${baseDir}: token must be a non-empty string`);
+	}
 	return {
-		pid: rec.pid as number,
+		pid: rec.pid,
 		startIdentity: typeof rec.startIdentity === "string" ? rec.startIdentity : null,
-		token: rec.token as string,
+		token: rec.token,
 		createdAt: typeof rec.createdAt === "string" ? rec.createdAt : "",
 	};
 }

@@ -570,4 +570,40 @@ try {
 		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
 		expect(await exists(path.join(canonicalDir, "mystery.txt"))).toBe(true);
 	});
+
+	it("refuses clear and replacement when owner record is malformed (invalid pid or empty token)", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo, { recursive: true });
+		child_process.execFileSync("git", ["init", "-q", repo]);
+
+		const id = "malformed-owner-regression";
+		const repoRootDir = await getRepoRoot(repo);
+		const segment = getTaskIsolationSegment(repoRootDir, id);
+		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
+
+		await fs.mkdir(canonicalDir, { recursive: true });
+		// Write corrupt/malformed owner record with negative PID and empty token
+		await fs.writeFile(
+			path.join(canonicalDir, ISOLATION_OWNER_FILE),
+			JSON.stringify({ pid: -1, token: "   ", createdAt: new Date().toISOString() }),
+			"utf8",
+		);
+
+		stdout = "";
+		await clearWorktrees({ all: false, dryRun: false, json: true });
+		const result = JSON.parse(stdout);
+		expect(result).toMatchObject({ removed: 0, failed: 1 });
+		expect(result.results[0].error).toContain("Missing retained backend metadata");
+		expect(await exists(canonicalDir)).toBe(true);
+
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+
+		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+		expect(await exists(canonicalDir)).toBe(true);
+	});
 });
