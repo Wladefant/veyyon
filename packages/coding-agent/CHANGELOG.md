@@ -18,6 +18,7 @@
 - Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Templated task isolation summaries and recovery hints, naming unmerged branches and nested patches on root merge failures ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved verbatim and device path prefixes on Windows during path normalization in file searches ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 499778383b6b950580964461e7e5c3ca536480de).
 - Fixed `plan.defaultOnStartup` being ignored by headless print mode sessions so initial prompts run in plan mode ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a5ff9f9a3032ee4789066256e55228f06a9e3dd1).
 - Fixed Mermaid ASCII diagrams rendering on subtle chrome borders by using theme muted foreground for structural strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
