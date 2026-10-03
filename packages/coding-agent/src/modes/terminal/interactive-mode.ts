@@ -60,6 +60,7 @@ import chalk from "chalk";
 import type { CollabGuestLink } from "../../collab/guest";
 import type { CollabHost } from "../../collab/host";
 import { KeybindingsManager } from "../../config/keybindings";
+import { recordLaunchFacts } from "../../config/launch-facts";
 import {
 	isSettingsInitialized,
 	type QuarantinedSettingsFile,
@@ -145,7 +146,6 @@ import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { messageHasDisplayableThinking } from "../../utils/thinking-display";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
-import { recordLaunchFacts } from "../launch-facts";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,

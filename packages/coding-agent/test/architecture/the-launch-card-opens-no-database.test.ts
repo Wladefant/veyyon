@@ -89,7 +89,7 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * increase then: the segment table the row composes was already reachable, because the hand-written
  * copy called into it for the location and the branch.
  *
- * The one after that is `modes/launch-facts.ts`, which lets the card state the model name, the
+ * The one after that is `config/launch-facts.ts`, which lets the card state the model name, the
  * dirty marker and the context percentage the last launch recorded instead of placeholders. It is a
  * leaf over `@veyyon/utils` entry points the card already reached — dirs, atomic-write, fs-error,
  * logger and type-guards — so it costs itself and nothing under it.

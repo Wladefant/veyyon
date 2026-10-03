@@ -36,7 +36,7 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 10108 lines. Model target selection left earlier — the role resolver, the
+ * MEASURED at 9643 lines. Model target selection left earlier — the role resolver, the
  * configured-target reader, the compaction candidate walk and its effort map — and provider request
  * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
  * after it, because not one of those members read or wrote a field of the runtime: every input was
@@ -54,12 +54,13 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * ledger with the rewind, verification and review reminders, and the approval state (the
  * auto-approve flag, the `/yolo` bypass, the kept per-tool decisions and the ACP permission proxy)
  * and the provider wire shaping (the tool-call id map, the relativization root and the bytes each
- * request left out) left as collaborators under `runtime/`.
- * The number falls
- * again when the next one leaves. It ratchets: slack is what it takes to not fail on the next honest
- * edit, and a ceiling left far above a shrinking file stops being a bound.
+ * request left out), the extension event forwarding with its turn index, the session title refresh
+ * on a re-plan, the serialized scope transitions with the cwd re-scoping they run, and the in-flight
+ * prompt count with the macOS power assertion left as collaborators under `runtime/`.
+ * The number falls again when the next one leaves. It ratchets: slack is what it takes to not fail
+ * on the next honest edit, and a ceiling left far above a shrinking file stops being a bound.
  */
-const RUNTIME_CEILING = 10_125;
+const RUNTIME_CEILING = 9_660;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -76,6 +77,7 @@ const COLLABORATORS = [
 	"compaction-runtime.ts",
 	"compaction-summarizer.ts",
 	"context-accounting.ts",
+	"extension-event-forwarder.ts",
 	"finalize-reminders.ts",
 	"history-rewrites.ts",
 	"irc-inbox.ts",
@@ -88,9 +90,11 @@ const COLLABORATORS = [
 	"provider-sessions.ts",
 	"provider-usage.ts",
 	"provider-wire.ts",
+	"replan-title-refresh.ts",
 	"retry-fallback.ts",
 	"retry-runtime.ts",
 	"session-approvals.ts",
+	"session-scope.ts",
 	"session-secrets.ts",
 	"stop-retries.ts",
 	"streaming-edit-guard.ts",
@@ -98,6 +102,7 @@ const COLLABORATORS = [
 	"todo-runtime.ts",
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
+	"turns-in-flight.ts",
 	"user-executions.ts",
 	"yield-tracker.ts",
 ] as const;
