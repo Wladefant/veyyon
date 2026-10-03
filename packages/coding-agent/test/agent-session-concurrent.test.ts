@@ -548,7 +548,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		await session.prompt("First message");
 		await session.waitForIdle();
 		expect(abortCompleted).toBe(true);
-		expect(emitSessionStop).not.toHaveBeenCalled();
+		expect(emitSessionStop.mock.calls).toEqual([]);
 	});
 
 	it("does not emit session_stop when abort starts before the settle pass", async () => {
