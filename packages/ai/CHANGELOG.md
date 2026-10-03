@@ -168,6 +168,7 @@
 
 ### Fixed
 
+- A running process re-reads the globally chosen account from the shared credential store every 500 ms, so an `/account use` made in another process reaches running lanes instead of leaving them on the earlier, possibly quota-held, account. A choice that never reached the store (no store getter, or a failed write or clear) stays authoritative in the process that made it ([#435](https://github.com/Wladefant/veyyon/issues/435)).
 - The Anthropic client waits the window stated by an `anthropic-ratelimit-*-reset` header on a 429 that carries no `retry-after`, instead of retrying on the backoff curve.
 - Strict-mode schema preparation no longer adds a `const` value to the caller's own `enum` array, so preparing a tool schema leaves it unchanged and a frozen `enum` beside a `const` no longer drops the tool out of strict mode.
 - A tool parameter named after a JSON Schema keyword keeps its name and schema for Google, Cloud Code Assist, MCP and Moonshot; a property named `const` was folded into an `enum` over its siblings, a property named `nullable` was dropped while `required` still listed it, and Cloud Code Assist sent such a tool the empty fallback schema.

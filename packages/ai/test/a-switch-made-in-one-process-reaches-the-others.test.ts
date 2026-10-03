@@ -70,4 +70,24 @@ describe("an account switch made in another process", () => {
 			switcher.close();
 		}
 	});
+
+	it("keeps a choice that could not be written to the store in the process that made it", async () => {
+		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		store.saveOAuth(PROVIDER, oauthCredential("first"));
+		store.saveOAuth(PROVIDER, oauthCredential("second"));
+		const storage = new AuthStorage(store, { loadBalancing: true });
+		await storage.reload();
+		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
+		store.setProviderSelection = () => {
+			throw new Error("disk full");
+		};
+		try {
+			expect(storage.selectProviderCredential(PROVIDER, second!)).toBe(true);
+			vi.spyOn(Date, "now").mockReturnValue(Date.now() + 700);
+			expect(await storage.getApiKey(PROVIDER, "s")).toBe("access-second");
+		} finally {
+			vi.restoreAllMocks();
+			storage.close();
+		}
+	});
 });

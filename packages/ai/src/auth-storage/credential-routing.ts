@@ -61,7 +61,7 @@ export class CredentialRouting {
 	 * means "asked the store, it has none". The memo keeps a resolve burst from querying once per
 	 * credential; it expires so a choice made by another process is seen.
 	 */
-	#providerSelection: Map<string, { identity: string | null; readAtMs: number }> = new Map();
+	#providerSelection: Map<string, { identity: string | null; readAtMs: number; persisted: boolean }> = new Map();
 
 	/** `rows` returns the provider's loaded credential rows, in the order indices refer to. */
 	constructor(store: AuthCredentialStore, rows: (provider: string) => StoredCredential[]) {
@@ -338,10 +338,19 @@ export class CredentialRouting {
 	#readProviderSelection(provider: string): string | undefined {
 		const now = Date.now();
 		const memo = this.#providerSelection.get(provider);
-		if (memo !== undefined && now - memo.readAtMs < PROVIDER_SELECTION_TTL_MS) return memo.identity ?? undefined;
+		// A memo expires only when the store holds the same fact: re-reading a choice that never
+		// reached the store (no getter, or a failed write/clear) would replace the user's switch
+		// with whatever the store still says.
+		if (memo !== undefined && (!memo.persisted || now - memo.readAtMs < PROVIDER_SELECTION_TTL_MS)) {
+			return memo.identity ?? undefined;
+		}
 		const read = this.#store.getProviderSelection;
 		const identity = read ? read.call(this.#store, provider) : undefined;
-		this.#providerSelection.set(provider, { identity: identity ?? null, readAtMs: now });
+		this.#providerSelection.set(provider, {
+			identity: identity ?? null,
+			readAtMs: now,
+			persisted: read !== undefined,
+		});
 		return identity;
 	}
 
@@ -369,11 +378,12 @@ export class CredentialRouting {
 		const entry = this.#rows(provider).find(row => row.id === credentialId);
 		if (!entry) return false;
 		const identity = resolveAccountNameIdentity(provider, entry);
-		this.#providerSelection.set(provider, { identity, readAtMs: Date.now() });
+		let persisted = false;
 		const write = this.#store.setProviderSelection;
 		if (write) {
 			try {
 				write.call(this.#store, provider, identity);
+				persisted = true;
 			} catch (err) {
 				// The in-process choice still holds, so the switch the user just made does take
 				// effect; it simply will not survive a restart. Loud, because a choice that quietly
@@ -381,6 +391,7 @@ export class CredentialRouting {
 				this.reportStickyCacheFailure("selection-write", provider, err);
 			}
 		}
+		this.#providerSelection.set(provider, { identity, readAtMs: Date.now(), persisted });
 		// A session pin would outrank the global choice at the chokepoint, so the switch the user
 		// just made must retire it rather than sit behind it.
 		this.clearSessionCredentialPin(provider, sessionId);
@@ -390,15 +401,17 @@ export class CredentialRouting {
 
 	/** See {@link AuthStorage.clearProviderSelection}. */
 	clearProviderSelection(provider: string, sessionId: string | undefined): void {
-		this.#providerSelection.set(provider, { identity: null, readAtMs: Date.now() });
+		let persisted = false;
 		const clear = this.#store.clearProviderSelection;
 		if (clear) {
 			try {
 				clear.call(this.#store, provider);
+				persisted = true;
 			} catch (err) {
 				this.reportStickyCacheFailure("selection-clear", provider, err);
 			}
 		}
+		this.#providerSelection.set(provider, { identity: null, readAtMs: Date.now(), persisted });
 		this.clearSessionCredential(provider, sessionId);
 	}
 }
