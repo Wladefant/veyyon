@@ -33,6 +33,7 @@
 - The JSON Schema value validator walks one instance path it pushes and pops instead of copying the path into every child, applies each keyword group in its own step, and lists an object's keys and builds its type list only when a keyword reads them, cutting validation of a 60-entry tool argument from 45 µs to 22 µs with identical issues across 600,000 generated schemas and values.
 - `utils/schema/wire.ts` holds no Zod value: the `@veyyon/ai` barrel installs Zod's core converter through `@veyyon/ai/utils/schema/zod-core`, so a process whose tools are all ArkType never evaluates Zod, and a process that loads no barrel converts a classic Zod schema through its own `toJSONSchema` and rejects a `zod/mini` schema with an error naming that import.
 - `usageWireSchemas` from `@veyyon/ai/usage/report-wire` is a `Lazy` holder read through `.value` instead of a function, and the Gemini CLI credentials validator is built on the first credentials read instead of when the provider module loads.
+- The Gemini usage reader takes the Gemini CLI headers from `@veyyon/catalog/wire/gemini-headers` instead of the Cloud Code Assist client, so a launch no longer evaluates that client and its validation helper (44 KiB of source).
 
 ### Fixed
 
