@@ -141,9 +141,20 @@ class StreamingJsonStringExtractor {
 	#targetUnicode = "";
 	#values: Record<string, string> = {};
 	#changed = false;
+	/** The source length just past the opening quote of the value being read, or -1 outside one. */
+	#valueOpenedAt = -1;
 
 	constructor(keys: readonly string[]) {
 		this.#keys = new Set(keys);
+	}
+
+	/**
+	 * The source length just past the opening quote of the string value the extractor is reading, or
+	 * -1 when it is reading none. Every byte of the source beyond it belongs to that value, so a parse
+	 * of a prefix at least this long has read every byte outside the value.
+	 */
+	get valueOpenedAt(): number {
+		return this.#valueOpenedAt;
 	}
 
 	reset(): void {
@@ -160,6 +171,7 @@ class StreamingJsonStringExtractor {
 		this.#targetUnicode = "";
 		this.#values = {};
 		this.#changed = false;
+		this.#valueOpenedAt = -1;
 	}
 
 	update(prefix: string): StreamingJsonStringExtractorResult {
@@ -281,6 +293,7 @@ class StreamingJsonStringExtractor {
 			this.#targetUnicode = "";
 			this.#state = "target";
 			this.#offset++;
+			this.#valueOpenedAt = this.#offset;
 			return;
 		}
 		this.#targetKey = undefined;
@@ -310,6 +323,7 @@ class StreamingJsonStringExtractor {
 		if (ch === '"') {
 			this.#targetKey = undefined;
 			this.#state = "scan";
+			this.#valueOpenedAt = -1;
 			this.#offset++;
 			return;
 		}
@@ -417,7 +431,13 @@ function resetDisplayState(entry: RevealEntry): void {
  * growth-throttled cadence providers use, so a long `write` payload cannot make
  * the reveal loop re-parse the whole growing buffer every frame. Renderers that
  * read raw JSON directly still receive fresh `__partialJson` prefixes; other
- * renderers get a stable object reference while parsed fields are unchanged. */
+ * renderers get a stable object reference while parsed fields are unchanged.
+ *
+ * While the bytes that arrived since the last parse all belong to a string value
+ * the extractor reads, the prefix is not parsed at all: a parse would recover
+ * every other field as the last one did, and the extractor's value replaces the
+ * parsed one. Parsing every STREAMING_JSON_PARSE_MIN_GROWTH bytes regardless, the
+ * reveal of a 128 KB `write` parsed 27 MB of JSON; it parses the call once. */
 function displayArgsForPrefix(entry: RevealEntry, prefix: string, forceParse = false): DisplayArgsStep {
 	if (entry.rawInput) {
 		if (prefix === entry.displayPrefix) return { args: entry.displayArgs, changed: false };
@@ -431,12 +451,14 @@ function displayArgsForPrefix(entry: RevealEntry, prefix: string, forceParse = f
 		return { args, changed: true };
 	}
 
+	const extracted = entry.stringExtractor?.update(prefix);
+	const valueOpenedAt = entry.stringExtractor?.valueOpenedAt ?? -1;
 	let parsedChanged = false;
 	if (forceParse || (prefix.length > 0 && prefix.length < STREAMING_JSON_PARSE_MIN_GROWTH)) {
 		entry.parsedArgs = expandStreamedValues(entry.argot, parseStreamingJson<Record<string, unknown>>(prefix));
 		entry.parsedLen = prefix.length;
 		parsedChanged = true;
-	} else {
+	} else if (valueOpenedAt < 0 || entry.parsedLen < valueOpenedAt) {
 		const throttled = parseStreamingJsonThrottled<Record<string, unknown>>(prefix, entry.parsedLen);
 		if (throttled) {
 			entry.parsedArgs = expandStreamedValues(entry.argot, throttled.value);
@@ -444,7 +466,6 @@ function displayArgsForPrefix(entry: RevealEntry, prefix: string, forceParse = f
 			parsedChanged = true;
 		}
 	}
-	const extracted = entry.stringExtractor?.update(prefix);
 	if (extracted?.changed) {
 		entry.parsedArgs = { ...entry.parsedArgs, ...expandStreamedValues(entry.argot, extracted.values) };
 		parsedChanged = true;

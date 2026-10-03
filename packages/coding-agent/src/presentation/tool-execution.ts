@@ -384,13 +384,33 @@ export function buildToolExecutionBlock(
 	const blockOutput = isError ? undefined : textOutput;
 	const blockError = isError ? textOutput : undefined;
 
+	if (memo === undefined) {
+		return {
+			kind: "tool-execution",
+			id,
+			toolCallId,
+			toolName,
+			status,
+			input: serializeToolInput(args),
+			output: blockOutput,
+			error: blockError,
+			durationMs: params.durationMs,
+			timestamp,
+			display,
+		};
+	}
+	// A producer builds a block for each step a streaming call reveals, each with new arguments, and
+	// the card drawing it reads the arguments rather than their serialized form. A long write's
+	// arguments serialize to the whole file, so `input` is serialized when it is read.
 	return {
 		kind: "tool-execution",
 		id,
 		toolCallId,
 		toolName,
 		status,
-		input: inputOf(args, memo),
+		get input() {
+			return inputOf(args, memo);
+		},
 		output: blockOutput,
 		error: blockError,
 		durationMs: params.durationMs,
@@ -399,8 +419,7 @@ export function buildToolExecutionBlock(
 	};
 }
 
-function inputOf(args: unknown, memo: ToolExecutionBuildMemo | undefined): string {
-	if (memo === undefined) return serializeToolInput(args);
+function inputOf(args: unknown, memo: ToolExecutionBuildMemo): string {
 	if (memo.input === undefined || memo.inputArgs !== args) {
 		memo.input = serializeToolInput(args);
 		memo.inputArgs = args;
