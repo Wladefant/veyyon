@@ -98,6 +98,10 @@ import { normalizeOpenAIPromptCacheKey, normalizeOpenRouterResponsesSessionId } 
 import { staleToolResultNote, transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 
+// `openai-compaction.ts` is byte-locked (`scripts/the-codex-compaction-route-is-locked.test.ts`) and imports
+// this name from here.
+export { parseAzureDeploymentNameMap } from "./azure-deployment-names";
+
 export interface OpenAIModelIdentity {
 	provider: string;
 	id: string;

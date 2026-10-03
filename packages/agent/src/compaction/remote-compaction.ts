@@ -36,7 +36,7 @@
 import type { ApiKey, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex/session-state";
-import { resolveServerCompactionTransport } from "@veyyon/ai/providers/openai-compaction";
+import { resolveServerCompactionTransport } from "@veyyon/ai/providers/server-compaction-transport";
 import type { CompactionPreparation, CompactionResult, SummaryOptions } from "./compaction";
 import { defaultConvertToLlm } from "./messages";
 import {
@@ -50,17 +50,19 @@ export type {
 	ServerCompactionRequest,
 	ServerCompactionResult,
 	ServerCompactionTransport,
-} from "@veyyon/ai/providers/openai-compaction";
+} from "@veyyon/ai/providers/server-compaction-transport";
 
 // The capability surface the session layer gates on. Support is data on the
 // model row; resolution lives with the provider implementations in pi-ai.
 // `serverCompactionRouteAbsent` is the reason half: it separates a model that
 // never supported this from one a 404 took it away from, which the session
 // layer must tell apart to know whether a local fallback is worth announcing.
+// Both evaluate the transport on first use.
 export {
 	resolveServerCompactionTransport,
 	serverCompactionRouteAbsent,
-} from "@veyyon/ai/providers/openai-compaction";
+} from "@veyyon/ai/providers/server-compaction-transport";
+
 export * from "./remote-compaction-entry";
 
 /**

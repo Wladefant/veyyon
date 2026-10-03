@@ -2,13 +2,13 @@
  * WHY THIS SUITE EXISTS.
  *
  * THE DEFECT IT CLOSES. The `ai` package loads each provider client through `import()` on its first
- * turn (`providers/register-builtins.ts`), and loads the server-side compaction request on the first
- * compaction (`providers/openai-compaction.ts`). A launch still evaluated three of them statically: the
- * session imported the Anthropic fast-mode reset and the Claude device id from `providers/anthropic.ts`,
+ * turn (`providers/register-builtins.ts`). A launch still evaluated two of them statically: the session
+ * imported the Anthropic fast-mode reset and the Claude device id from `providers/anthropic.ts`, and
  * compaction and `/session` imported the Codex session-state readers from
- * `providers/openai-codex-responses.ts`, and `openai-compaction.ts` imported its own request half. A
- * session on any model paid for the Anthropic and Codex clients and the Responses compaction encoder
- * before its first request.
+ * `providers/openai-codex-responses.ts`. The server-side compaction transport,
+ * `providers/openai-compaction.ts`, imports the Codex client and the OpenAI request builders, and the
+ * session's compaction gate imported it statically. A session on any model paid for the Anthropic and
+ * Codex clients and the Responses compaction encoder before its first request.
  *
  * THE CLASS. A module the `ai` package loads through `import()` is reached statically from a launch entry.
  * The set is read at run time from every `import("...")` under `packages/ai/src`, so a new lazy provider
@@ -23,14 +23,25 @@
  * launch entry reaches is pinned by exact equality as well, so a new provider module on the launch graph
  * turns this red whether or not anything loads it lazily.
  *
+ * THE LOCKED TRANSPORT. `providers/openai-compaction.ts` is byte-locked
+ * (`scripts/the-codex-compaction-route-is-locked.test.ts`), so it keeps its static import of the Codex
+ * client, and `providers/server-compaction-transport.ts` defers it with a synchronous `require` behind
+ * the two functions the session calls. The static walk does not read `require`, so the deferral is
+ * measured at run time: a process evaluates every launch module, reads the module cache, then asks the
+ * gate for a transport and observes the transport and the Codex client arrive.
+ *
  * WHAT IT DOES NOT CATCH. The walk is static, so a module loaded through `await import(...)` from a launch
- * module is outside it by design. Size is not measured: a module recorded below can grow without limit.
- * That a turn still streams through each lazily loaded client is the provider suites' contract.
+ * module is outside it by design; the runtime census covers the compaction transport and nothing else.
+ * Size is not measured: a module recorded below can grow without limit. That a turn still streams through
+ * each lazily loaded client is the provider suites' contract.
  */
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { TempDir } from "@veyyon/utils";
 import { dynamicImportSpecifiersIn, moduleReach, resolveModuleSpecifier } from "@veyyon/utils/module-reach";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 import { CACHE, PACKAGES, RESOLUTION, SRC } from "../helpers/module-reach-gate";
 
 const AI_SRC = path.join(PACKAGES, "ai", "src");
@@ -60,13 +71,14 @@ const LAUNCH_PROVIDER_MODULES = [
 	"providers/openai-anthropic-shim.ts",
 	// Compaction and the startup prewarm read the Codex transport details and reset its history.
 	"providers/openai-codex/session-state.ts",
-	// Remote compaction resolves the server-side compaction transport; the request half loads on use.
-	"providers/openai-compaction.ts",
 	// The Codex session state normalizes its prompt cache key.
 	"providers/openai-stable-ids.ts",
 	"providers/pi-native-client.ts",
 	// The table of lazy client loaders.
 	"providers/register-builtins.ts",
+	// The session's compaction calls resolve the server-side transport through it; the transport, which
+	// imports the Codex client, loads on the first call.
+	"providers/server-compaction-transport.ts",
 	"providers/synthetic.ts",
 ];
 
@@ -104,11 +116,7 @@ function reachedProviders(entry: string): string[] {
 describe("a launch loads no provider client", () => {
 	it("reads a lazy module set worth judging", () => {
 		expect(lazyAiModules()).toEqual(
-			expect.arrayContaining([
-				"providers/anthropic.ts",
-				"providers/openai-codex-responses.ts",
-				"providers/openai-compaction-request.ts",
-			]),
+			expect.arrayContaining(["providers/anthropic.ts", "providers/openai-codex-responses.ts"]),
 		);
 	});
 
@@ -125,4 +133,94 @@ describe("a launch loads no provider client", () => {
 			expect(reachedProviders(entry)).toEqual(LAUNCH_PROVIDER_MODULES);
 		});
 	}
+});
+
+/** Modules a launch evaluates whose static graph reached the compaction transport before it was deferred. */
+const COMPACTION_GATE_IMPORTERS = [
+	"main.ts",
+	"sdk.ts",
+	"modes/terminal/interactive-mode.ts",
+	"presentation/summary-builder.ts",
+	"session/runtime/compaction-summarizer.ts",
+];
+
+const REMOTE_COMPACTION = path.join(PACKAGES, "agent", "src", "compaction", "remote-compaction.ts");
+
+/** What the census process prints: the deferred provider modules it held at each point. */
+interface CompactionCensus {
+	readonly evaluated: number;
+	readonly atLaunch: string[];
+	readonly afterGate: string[];
+	readonly transportResolved: boolean;
+}
+
+/**
+ * An entry that statically imports every launch module, reads the module cache, then asks the compaction
+ * gate for a Codex model's transport and reads it again.
+ */
+function compactionCensusEntry(modules: readonly string[]): string {
+	const imports = modules.map(file => `import ${JSON.stringify(file)};`).join("\n");
+	return `${imports}
+import { resolveServerCompactionTransport } from ${JSON.stringify(REMOTE_COMPACTION)};
+const DEFERRED = /[\\\\/]providers[\\\\/](?:openai-compaction|openai-codex-responses)\\.ts$/;
+const deferred = () => Object.keys(require.cache).filter(file => DEFERRED.test(file)).map(file => file.split(/[\\\\/]/).pop()).sort();
+const atLaunch = deferred();
+const transport = resolveServerCompactionTransport({
+	provider: "openai-codex",
+	api: "openai-codex-responses",
+	id: "census",
+	compat: { supportsServerCompaction: true },
+});
+process.stdout.write(JSON.stringify({
+	evaluated: Object.keys(require.cache).length,
+	atLaunch,
+	afterGate: deferred(),
+	transportResolved: transport !== undefined,
+}));
+process.exit(0);
+`;
+}
+
+describe("a launch evaluates the server-side compaction transport only when a compaction asks for it", () => {
+	let tempDir: TempDir;
+	let census: CompactionCensus;
+
+	beforeAll(async () => {
+		tempDir = TempDir.createSync("@compaction-census-");
+		const entry = path.join(tempDir.path(), "census.ts");
+		fs.writeFileSync(entry, compactionCensusEntry(COMPACTION_GATE_IMPORTERS.map(file => path.join(SRC, file))));
+		const { env, cleanup } = hermeticSpawnEnv();
+		try {
+			const child = spawn(process.execPath, [entry], { cwd: tempDir.path(), env, stdio: ["ignore", "pipe", "pipe"] });
+			let stdout = "";
+			let stderr = "";
+			child.stdout.on("data", chunk => {
+				stdout += String(chunk);
+			});
+			child.stderr.on("data", chunk => {
+				stderr += String(chunk);
+			});
+			const exited = Promise.withResolvers<number | null>();
+			child.on("exit", code => exited.resolve(code));
+			const code = await exited.promise;
+			if (code !== 0) throw new Error(`census process exited ${code}:\n${stderr}`);
+			census = JSON.parse(stdout) as CompactionCensus;
+		} finally {
+			cleanup();
+		}
+	}, 120_000);
+
+	afterAll(() => {
+		tempDir?.removeSync();
+	});
+
+	it("evaluates neither the transport nor the Codex client while every launch module is loaded", () => {
+		expect(census.evaluated).toBeGreaterThan(1000);
+		expect(census.atLaunch).toEqual([]);
+	});
+
+	it("evaluates both when the gate is asked, and the gate resolves the transport", () => {
+		expect(census.afterGate).toEqual(["openai-codex-responses.ts", "openai-compaction.ts"]);
+		expect(census.transportResolved).toBe(true);
+	});
 });

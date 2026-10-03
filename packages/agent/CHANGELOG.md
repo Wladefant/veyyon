@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Remote compaction resolves the server-side transport through `@veyyon/ai/providers/server-compaction-transport`, so a session evaluates the Codex client on its first server-side compaction instead of with the compaction module; no user-visible change.
 - Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `Agent` reads its fallback Google model only when the initial state names no model, so a session that brings its own model no longer builds the Google provider's bundled models, and a launch with no credential builds 478 model specs instead of 521.
 - The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
