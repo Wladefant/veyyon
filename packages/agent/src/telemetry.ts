@@ -23,16 +23,8 @@
  * cheap pass-throughs.
  */
 
-import {
-	type Attributes,
-	type AttributeValue,
-	context,
-	type Span,
-	SpanKind,
-	SpanStatusCode,
-	type Tracer,
-	trace,
-} from "@opentelemetry/api";
+import type * as OpenTelemetry from "@opentelemetry/api";
+import type { Attributes, AttributeValue, Span, Tracer } from "@opentelemetry/api";
 import type { AssistantMessage, Message, Model, ServiceTier, StopReason, ToolChoice, Usage } from "@veyyon/ai";
 // The one runtime name this module needs from `@veyyon/ai`, taken from the module that declares it.
 // The package entry point re-exports the streaming engine, so the barrel spelling would cost 363
@@ -44,6 +36,31 @@ import type { AgentTool } from "./types";
 
 /** Default tracer name. Override via {@link AgentTelemetryConfig.tracerName}. */
 export const DEFAULT_TRACER_NAME = "@veyyon/agent-core";
+
+let openTelemetry: typeof OpenTelemetry | undefined;
+
+/**
+ * The `@opentelemetry/api` module namespace. The first call evaluates the package.
+ *
+ * Evaluating it reads 44 modules. A launch starts no agent loop, so it reaches no tracer before its
+ * first frame, and a static import evaluated the package with the module graph anyway.
+ */
+function loadOpenTelemetry(): typeof OpenTelemetry {
+	// `require`, because `bun build --compile` (Bun 1.4.0) evaluates an `import defer` namespace with the
+	// rest of the graph, and `await import()` cannot answer the synchronous span helpers. Bun resolves
+	// `require` and `import` to the package's one `default` entry, so the bundle holds one copy.
+	openTelemetry ??= require("@opentelemetry/api") as typeof OpenTelemetry;
+	return openTelemetry;
+}
+
+/**
+ * The OTLP values of the two span kinds and the one status this module sets. Each is typed as its enum
+ * member, so a release that renumbered one fails the type check instead of mislabelling a span. Reading
+ * them from the package would evaluate it for a span helper that a disabled telemetry handle returns from.
+ */
+const SPAN_KIND_INTERNAL: OpenTelemetry.SpanKind.INTERNAL = 0;
+const SPAN_KIND_CLIENT: OpenTelemetry.SpanKind.CLIENT = 2;
+const SPAN_STATUS_ERROR: OpenTelemetry.SpanStatusCode.ERROR = 2;
 
 /** Env var matching the OTEL semconv content-capture toggle. */
 const CONTENT_CAPTURE_ENV = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
@@ -415,7 +432,7 @@ export function resolveTelemetry(
 	sessionId: string | undefined,
 ): AgentTelemetry | undefined {
 	if (!config) return undefined;
-	const tracer = config.tracer ?? trace.getTracer(config.tracerName ?? DEFAULT_TRACER_NAME);
+	const tracer = config.tracer ?? loadOpenTelemetry().trace.getTracer(config.tracerName ?? DEFAULT_TRACER_NAME);
 	const contentCapture = resolveContentCapture(config.captureMessageContent);
 	return {
 		config,
@@ -463,7 +480,7 @@ function startSpan(
 	kind: TelemetrySpanKind,
 	name: string,
 	options: {
-		readonly spanKind: SpanKind;
+		readonly spanKind: OpenTelemetry.SpanKind;
 		readonly model?: Model;
 		readonly parent?: Span;
 		readonly attributes?: Attributes;
@@ -494,6 +511,7 @@ function startSpan(
 	const textSanitizer = telemetry.config.textSanitizer ? createTelemetryTextSanitizer(telemetry) : undefined;
 	const spanName = textSanitizer ? textSanitizer.sanitizeText(name) || kind : name;
 	const initialAttributes = textSanitizer ? textSanitizer.sanitizeSpanAttributes(attrs) : attrs;
+	const { context, trace } = loadOpenTelemetry();
 	const ctx = options.parent ? trace.setSpan(context.active(), options.parent) : context.active();
 	const rawSpan = telemetry.tracer.startSpan(spanName, { kind: options.spanKind, attributes: initialAttributes }, ctx);
 	const span = textSanitizer ? wrapSpanWithTextSanitizer(telemetry, rawSpan, textSanitizer) : rawSpan;
@@ -987,7 +1005,7 @@ function safeOnSpanEnd(telemetry: AgentTelemetry | undefined, ctx: TelemetryHook
 export function startInvokeAgentSpan(telemetry: AgentTelemetry | undefined, model: Model): Span | undefined {
 	const agentName = telemetry?.agent ? normalizeAgentIdentity(telemetry, telemetry.agent).name : undefined;
 	const name = agentName ? `invoke_agent ${agentName}` : "invoke_agent";
-	return startSpan(telemetry, "invoke_agent", name, { spanKind: SpanKind.INTERNAL, model });
+	return startSpan(telemetry, "invoke_agent", name, { spanKind: SPAN_KIND_INTERNAL, model });
 }
 
 /** Stamp the final step count on the `invoke_agent` span. */
@@ -1010,7 +1028,7 @@ export function startChatSpan(
 	},
 ): Span | undefined {
 	const span = startSpan(telemetry, "chat", `chat ${model.id}`, {
-		spanKind: SpanKind.CLIENT,
+		spanKind: SPAN_KIND_CLIENT,
 		model,
 		parent: options.parent,
 		stepNumber: options.stepNumber,
@@ -1516,10 +1534,10 @@ export function failChatSpan(
 	if (err instanceof Error) {
 		span.recordException(err);
 		span.setAttribute(GenAIAttr.ErrorType, options.errorType ?? err.name ?? "Error");
-		span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+		span.setStatus({ code: SPAN_STATUS_ERROR, message: err.message });
 	} else {
 		span.setAttribute(GenAIAttr.ErrorType, options.errorType ?? "Error");
-		span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+		span.setStatus({ code: SPAN_STATUS_ERROR, message: String(err) });
 	}
 	telemetry?.collector.failChat(span, {
 		errorType: options.errorType ?? (err instanceof Error ? err.name || "Error" : "Error"),
@@ -1842,7 +1860,7 @@ function mapStopReason(reason: StopReason | undefined): string | undefined {
 function applyTerminalStatus(span: Span, stopReason: StopReason | undefined, errorMessage: string | undefined): void {
 	if (stopReason === "error" || stopReason === "aborted") {
 		span.setAttribute(GenAIAttr.ErrorType, stopReason);
-		span.setStatus({ code: SpanStatusCode.ERROR, message: errorMessage ?? stopReason });
+		span.setStatus({ code: SPAN_STATUS_ERROR, message: errorMessage ?? stopReason });
 	}
 }
 
@@ -1876,7 +1894,7 @@ export async function recordManualChatTelemetry(
 	const candidate =
 		options.span ??
 		startSpan(telemetry, "chat", `chat ${options.model.id}`, {
-			spanKind: SpanKind.CLIENT,
+			spanKind: SPAN_KIND_CLIENT,
 			model: options.model,
 			parent: options.parent,
 			stepNumber: options.stepNumber,
@@ -1961,7 +1979,7 @@ export function startExecuteToolSpan(
 	};
 	if (options.tool?.description) attrs[GenAIAttr.ToolDescription] = options.tool.description;
 	const span = startSpan(telemetry, "execute_tool", `execute_tool ${options.toolName}`, {
-		spanKind: SpanKind.INTERNAL,
+		spanKind: SPAN_KIND_INTERNAL,
 		parent: options.parent,
 		toolCallId: options.toolCallId,
 		toolName: options.toolName,
@@ -2027,7 +2045,7 @@ export function finishExecuteToolSpan(
 		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
 		const msg =
 			options.errorObject instanceof Error ? options.errorObject.message : (options.errorMessage ?? errorType);
-		span.setStatus({ code: SpanStatusCode.ERROR, message: msg });
+		span.setStatus({ code: SPAN_STATUS_ERROR, message: msg });
 	} else {
 		span.setAttribute(EXECUTE_TOOL_STATUS_ATTR, status);
 	}
@@ -2104,7 +2122,7 @@ export function finishInvokeAgentSpan(
 	if (options.errorObject instanceof Error) {
 		span.recordException(options.errorObject);
 		span.setAttribute(GenAIAttr.ErrorType, options.errorObject.name || "Error");
-		span.setStatus({ code: SpanStatusCode.ERROR, message: options.errorObject.message });
+		span.setStatus({ code: SPAN_STATUS_ERROR, message: options.errorObject.message });
 	}
 	span.end();
 	return snapshot;
@@ -2205,6 +2223,7 @@ function applyAggregateAttributes(span: Span, summary: AgentRunSummary, coverage
  */
 export function runInActiveSpan<T>(span: Span | undefined, fn: () => Promise<T>): Promise<T> {
 	if (!span) return fn();
+	const { context, trace } = loadOpenTelemetry();
 	return context.with(trace.setSpan(context.active(), span), fn);
 }
 
@@ -2236,7 +2255,7 @@ export function recordHandoff(
 			: `handoff to ${toAgent.name}`
 		: "handoff";
 	const span = startSpan(telemetry, "handoff", name, {
-		spanKind: SpanKind.INTERNAL,
+		spanKind: SPAN_KIND_INTERNAL,
 		parent: options.parent,
 		attributes: { ...attrs, ...options.attributes },
 	});
@@ -2260,8 +2279,25 @@ export function setSpanAttribute(span: Span | undefined, key: string, value: Att
 	span.setAttribute(key, value);
 }
 
-/** Re-exports so consumers can write hooks without depending on @opentelemetry/api directly. */
-export { type Attributes, type Span, SpanKind, SpanStatusCode, type Tracer, trace };
+/**
+ * A stand-in for the `@opentelemetry/api` export `key`, so a hook written against this module needs no
+ * direct dependency on the package and a launch evaluates none of it. A property read or an `in` check
+ * evaluates the package and answers from the export; other reflection reads the stand-in itself.
+ */
+function deferredExport<K extends "SpanKind" | "SpanStatusCode" | "trace">(key: K): (typeof OpenTelemetry)[K] {
+	const handler: ProxyHandler<object> = {
+		get: (_target, property) => Reflect.get(loadOpenTelemetry()[key], property),
+		has: (_target, property) => Reflect.has(loadOpenTelemetry()[key], property),
+	};
+	return new Proxy({}, handler) as (typeof OpenTelemetry)[K];
+}
+
+export type SpanKind = OpenTelemetry.SpanKind;
+export const SpanKind: typeof OpenTelemetry.SpanKind = deferredExport("SpanKind");
+export type SpanStatusCode = OpenTelemetry.SpanStatusCode;
+export const SpanStatusCode: typeof OpenTelemetry.SpanStatusCode = deferredExport("SpanStatusCode");
+export const trace: typeof OpenTelemetry.trace = deferredExport("trace");
+export type { Attributes, Span, Tracer };
 
 /** Render a span attribute. The shared owner never yields "[object Object]". */
 function safeJson(value: unknown): string {

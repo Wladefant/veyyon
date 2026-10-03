@@ -31,9 +31,11 @@
 - `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `trimEngine()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
 - `@veyyon/utils/idle-trim` exports `trimEngine`, the trim `IdleTrim` runs when no `trim` is given, which calls `Bun.shrink()` and then returns the free pages of the C allocator's arenas with `releaseFreeHeapPages()`, so a session that read four 8 MiB web pages settles at 216 MiB RSS instead of 504 MiB.
 - `@veyyon/utils/log-file` exports `RotatingLogFile`, which appends each line to the profile's day file in one `write(2)`, moves a full file to the next free numbered generation, gzips a generation no writer has appended to for 3 seconds and keeps the newest five files, and `logFileName`, the day file's name for a local date.
+- `@veyyon/utils/yaml-sync` exports `loadYaml`, which returns the `yaml` module namespace and evaluates the package on its first call.
 
 ### Changed
 
+- `@veyyon/utils/yaml-sync` evaluates the `yaml` package on the first settings file edit instead of when the module loads, which keeps 72 modules off a launch that edits no settings file.
 - Six class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `@veyyon/utils/json-snapshot` frames each snapshot with a layout version, payload byte length and CRC-32 instead of a SHA-256 digest, and rejects snapshots framed by the previous layout.
 - `utf8ByteLength` measures a whole string, or a range longer than 64 code units, with `Buffer.byteLength`, and `isWellFormedUtf16` answers with `String.prototype.isWellFormed`, instead of looping over code units, cutting a 3 KB ASCII string from 11.1 µs to 28 ns and from 1.3 µs to 4.5 ns with identical answers.
