@@ -1648,7 +1648,8 @@ async function* streamCodexCompactionEvents(
 ): AsyncGenerator<Record<string, unknown>> {
 	let completed = false;
 	const websocketState = requestContext.websocketState;
-	const previousTurnState = websocketState?.turnState;
+	const turnState = requestContext.turnState;
+	const previousTurnState = turnState?.value;
 	const previousModelsEtag = websocketState?.modelsEtag;
 	try {
 		if (initial.transport === "websocket") {
@@ -1668,7 +1669,7 @@ async function* streamCodexCompactionEvents(
 				if (state) recordCodexWebSocketFailure(state, true);
 				const fallback = await openCodexSseTransport(model, requestContext, requestSetup, options, state);
 				if (state) state.lastTransport = fallback.transport;
-				yield* drainCodexCompactionEvents(fallback.eventStream, requestContext.websocketState);
+				yield* drainCodexCompactionEvents(fallback.eventStream, turnState, requestContext.websocketState);
 				completed = true;
 				return;
 			}
@@ -1676,18 +1677,20 @@ async function* streamCodexCompactionEvents(
 			// Apply metadata only once the WebSocket attempt succeeded: a discarded
 			// attempt must not leak its `x-codex-turn-state` into the session.
 			for (const event of bufferedEvents) {
-				applyCodexCompactionResponseMetadata(requestContext.websocketState, event);
+				applyCodexCompactionResponseMetadata(turnState, requestContext.websocketState, event);
 				yield event;
 			}
 		} else {
-			yield* drainCodexCompactionEvents(initial.eventStream, requestContext.websocketState);
+			yield* drainCodexCompactionEvents(initial.eventStream, turnState, requestContext.websocketState);
 		}
 		completed = true;
 	} finally {
 		if (!completed) {
 			requestSetup.requestAbortController.abort();
+			if (turnState) {
+				turnState.value = previousTurnState;
+			}
 			if (websocketState) {
-				websocketState.turnState = previousTurnState;
 				websocketState.modelsEtag = previousModelsEtag;
 			}
 		}
@@ -1700,19 +1703,21 @@ async function* streamCodexCompactionEvents(
  * the latest turn state, matching the normal Codex stream processor.
  */
 function applyCodexCompactionResponseMetadata(
+	turnState: CodexTurnStateCell | undefined,
 	state: CodexWebSocketSessionState | undefined,
 	event: Record<string, unknown>,
 ): void {
-	if (!state || event.type !== "response.metadata") return;
-	updateCodexSessionMetadataFromHeaders(state, toCodexHeaders(event.headers));
+	if ((!turnState && !state) || event.type !== "response.metadata") return;
+	updateCodexSessionMetadataFromHeaders(turnState, state, toCodexHeaders(event.headers));
 }
 
 async function* drainCodexCompactionEvents(
 	events: AsyncGenerator<Record<string, unknown>>,
+	turnState: CodexTurnStateCell | undefined,
 	state: CodexWebSocketSessionState | undefined,
 ): AsyncGenerator<Record<string, unknown>> {
 	for await (const event of events) {
-		applyCodexCompactionResponseMetadata(state, event);
+		applyCodexCompactionResponseMetadata(turnState, state, event);
 		yield event;
 	}
 }
