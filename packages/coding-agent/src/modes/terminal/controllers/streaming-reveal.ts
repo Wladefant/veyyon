@@ -72,7 +72,8 @@ function segmentFrom(text: string, start: number, clusters: number): { end: numb
  *  grow by appending, and an append can only alter the final grapheme cluster of
  *  the previous text, so only the suffix from that cluster needs re-segmenting. */
 export class BlockUnitCounter {
-	#entries = new Map<number, { text: string; count: number; tailStart: number }>();
+	/** `base` is the text this entry extended, verified as its prefix when the entry was stored. */
+	#entries = new Map<number, { text: string; count: number; tailStart: number; base: string | undefined }>();
 	#sliceEntries = new Map<number, { text: string; units: number; end: number; lastStart: number }>();
 
 	count(index: number, text: string): number {
@@ -81,13 +82,13 @@ export class BlockUnitCounter {
 			if (entry.text === text) return entry.count;
 			if (entry.count > 0 && text.length > entry.text.length && text.startsWith(entry.text)) {
 				const tail = countGraphemesFrom(text, entry.tailStart);
-				const next = { text, count: entry.count - 1 + tail.count, tailStart: tail.tailStart };
+				const next = { text, count: entry.count - 1 + tail.count, tailStart: tail.tailStart, base: entry.text };
 				this.#entries.set(index, next);
 				return next.count;
 			}
 		}
 		const full = countGraphemesFrom(text, 0);
-		this.#entries.set(index, { text, count: full.count, tailStart: full.tailStart });
+		this.#entries.set(index, { text, count: full.count, tailStart: full.tailStart, base: undefined });
 		return full.count;
 	}
 
@@ -107,7 +108,7 @@ export class BlockUnitCounter {
 		if (entry !== undefined && entry.text === text && entry.units === units) {
 			return entry.end >= text.length ? text : text.slice(0, entry.end);
 		}
-		if (entry !== undefined && (entry.text === text || text.startsWith(entry.text)) && units >= entry.units) {
+		if (entry !== undefined && units >= entry.units && this.#extends(index, entry.text, text)) {
 			const extra = units - entry.units + 1;
 			const seg = segmentFrom(text, entry.lastStart, extra);
 			this.#sliceEntries.set(index, { text, units, end: seg.end, lastStart: seg.lastStart });
@@ -116,6 +117,15 @@ export class BlockUnitCounter {
 		const seg = segmentFrom(text, 0, units);
 		this.#sliceEntries.set(index, { text, units, end: seg.end, lastStart: seg.lastStart });
 		return seg.end >= text.length ? text : text.slice(0, seg.end);
+	}
+
+	/** Whether `text` begins with `prefix`. A streamed block is counted before it is sliced, so the
+	 *  count's own prefix check usually answers this without comparing the whole text again. */
+	#extends(index: number, prefix: string, text: string): boolean {
+		if (prefix === text) return true;
+		const counted = this.#entries.get(index);
+		if (counted !== undefined && counted.text === text && counted.base === prefix) return true;
+		return text.startsWith(prefix);
 	}
 }
 
@@ -211,6 +221,8 @@ export class StreamingRevealController {
 	#component: StreamingRevealComponent | undefined;
 	#timer: NodeJS.Timeout | undefined;
 	#revealed = 0;
+	/** The target changed since the component last rendered it. */
+	#pending = false;
 	#hideThinkingBlock = false;
 	#proseOnlyThinking = true;
 	#smoothStreaming = true;
@@ -271,25 +283,26 @@ export class StreamingRevealController {
 		if (!this.#component) return;
 		if (!this.#smoothStreaming) {
 			const total = this.#visibleUnits(message);
+			this.#pending = false;
 			this.#component.updateContent(this.#build(message, total), { transient: true });
 			return;
 		}
-		const total = this.#visibleUnits(message);
 		if (message.segments.some(block => block.kind === "tool-call")) {
 			// A tool call is a transcript-order boundary: finish any leading
 			// assistant text before EventController renders the separate tool card.
-			this.#revealed = total;
+			this.#revealed = this.#visibleUnits(message);
+			this.#pending = false;
 			this.#stopTimer();
 			this.#component.updateContent(this.#build(message, this.#revealed), {
 				transient: true,
 			});
 			return;
 		}
-		if (this.#revealed > total) {
-			this.#revealed = total;
-		}
-		this.#renderCurrent();
-		this.#syncTimer(total);
+		// The revealed prefix only moves on a tick, so the next tick renders the
+		// new target. Counting, slicing and rendering it here would repeat that
+		// work for every provider delta between two frames.
+		this.#pending = true;
+		this.#startTimer();
 	}
 
 	stop(): void {
@@ -297,6 +310,7 @@ export class StreamingRevealController {
 		this.#target = undefined;
 		this.#component = undefined;
 		this.#revealed = 0;
+		this.#pending = false;
 		this.#unitCounter.reset();
 	}
 
@@ -340,6 +354,7 @@ export class StreamingRevealController {
 		// Every controller render is an in-flight streaming snapshot, even when
 		// smooth reveal has temporarily caught up to the current target. The
 		// message_end handler performs the only stable non-transient render.
+		this.#pending = false;
 		this.#component.updateContent(this.#build(this.#target, this.#revealed), { transient: true });
 	}
 
@@ -373,15 +388,22 @@ export class StreamingRevealController {
 			return;
 		}
 		const total = this.#visibleUnits(target);
-		if (this.#revealed >= total) {
-			this.#stopTimer();
-			return;
+		const advanced = this.#revealed < total;
+		if (advanced) {
+			this.#revealed = Math.min(total, this.#revealed + nextStep(total - this.#revealed));
+		} else {
+			// A target that shrank below the revealed prefix shows all of itself.
+			this.#revealed = total;
 		}
-		this.#revealed = Math.min(total, this.#revealed + nextStep(total - this.#revealed));
-		component.updateContent(this.#build(target, this.#revealed), {
-			transient: true,
-		});
-		this.#requestRender(component);
+		if (advanced || this.#pending) {
+			this.#pending = false;
+			component.updateContent(this.#build(target, this.#revealed), {
+				transient: true,
+			});
+			// A target that changed without revealing more is rendered for its
+			// metadata and left to the next paint, as an in-place update would be.
+			if (advanced) this.#requestRender(component);
+		}
 		if (this.#revealed >= total) {
 			this.#stopTimer();
 		}
