@@ -909,4 +909,4 @@ Metadata extraction for `getRecentSessions` reads a prefix via `readTextSlices(.
 
 Use session files for conversation graph/state replay; use `HistoryStorage` for prompt history UX.
 
-*Verified against `1bb5e29d36` on 2026-09-26.*
+*Verified against `71619ee74c` on 2026-10-03.*
