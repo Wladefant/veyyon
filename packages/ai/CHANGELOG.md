@@ -15,6 +15,8 @@
 - Added Abliteration, Meta Model API, and Muse Code provider definitions and login transports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the GMI Cloud provider (`gmi-cloud`) registry definition with an API-key paste login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added OpenAI/OpenRouter multipart audio transcription adapter and transcription types ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
+- Added audio transcription dispatcher routing model catalog APIs to matching transcription adapters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Responses wire types for conversation reasoning configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -59,6 +61,7 @@
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Validated declared segment and word fields in OpenAI transcription responses while preserving provider-specific extras ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Responses prepared request caching to rebuild wire body on reasoning-effort fallback and retain sent payload in diagnostics ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 21cb04bd3e6b72fcd05bb4e2f02fe441cf2d2a60).
 - Retried one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex turn-state lifecycle to isolate compatibility-scoped cells and clear stale tokens on fresh non-compaction turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
