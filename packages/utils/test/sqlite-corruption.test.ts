@@ -547,11 +547,7 @@ test("regression: real URI memory store opens async and sync with default and op
 			spy.mockRestore();
 		}
 		for (const uri of [uriAsyncDef, uriAsyncRec, uriSyncDef, uriSyncRec]) {
-			try {
-				nodeFs.unlinkSync(uri);
-			} catch (error) {
-				if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-			}
+			nodeFs.rmSync(uri, { force: true });
 		}
 	}
 });
