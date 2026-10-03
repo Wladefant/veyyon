@@ -31,6 +31,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 - Preserved pre-stream provider error provenance in `errorMessage` while keeping assistant content empty, preventing pre-stream diagnostic text from blocking safe transient retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9f80d24e20014d98748bdca81356661741e00f94).
 - Deferred projected native thinking end events in the leaked-thinking stream wrapper until their source block ends, preserving signatures on late completion ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 764a1f7e9c06ef40953e9b7a8bbafddc168fcd34).
 - Escaped Harmony control tokens on replayed client messages omitting the type field while leaving non-message items untouched ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi baa9a8282d4069fe4ceab24fddb94da17978ad73).

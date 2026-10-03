@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
+
+### Fixed
+
+- Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+
+## [18.1.11] - 2026-09-05
+
 ### Added
 
 - Added `STEPFUN_API_KEY` to the additional LLM provider help output ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -22,6 +32,8 @@
 - Fixed an eval cell whose idle timeout fired during kernel startup killing the whole host with an unhandled `TimeoutError` rejection, and the Python runner stderr drain splitting multi-byte characters across chunks ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation, while preserving configured endpoint failovers ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed superseded deferred plan-role model switches lingering across role resets and restored plan mode transitions deterministically ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1713364b2555e7f2cccf05c734e9cc88c75e44e1, oh-my-pi 85b9c01f1c6e306f0e3510d2a26cbe3d2e256af9).
+- In-memory file read results now constrain context expansion to content lines so the empty trailing newline anchor line is not exposed as context ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e49f8f4fb27c9fb73dc5e1e2d019388513672101).
 - Persist nested-repo patches before task isolation teardown, retain workspace on write failure, and stop advertising isolated agents as resumable ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi bdf400b69fc448dbead1c1d6bcfa216cb7697ae6, 207b925541814d4d6132a2525921fd33056fc19c, 1a65c7a99757f19f87498751816b232cfc3de962).
 - `/btw` branch promotion is refused while the main turn is running or once the session or its leaf moved since the question was asked; the panel hides the branch hint while it is unavailable, a refused `b` reports why instead of typing into the composer, and a `b` typed before the answer completes still reaches the composer ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a1183da91225eec2dd4e46dfa037e66567d8980, 98f484bd2f9a11571f807b8b0b1441cc7a7a6671, a54a2f79cbfd9b3a3e7b136cea83533064ca9d0a).
 - Fixed the embedded shell's `command -v`/`-V` honoring only the first operand: it now iterates every name like bash/zsh, printing one line per resolved name and skipping misses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4397d12100f63bc3085b573b983c120524ea58ed).
@@ -50,6 +62,7 @@
 
 ### Changed
 
+- Support simple single-replacement parameters in replace edit mode while preserving internal batch parameters for multi-edit bridges ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi cc2265f681ee26e0e7e3a57d84626059d4eba2ff).
 - Removed unused asynchronous file loading methods from ConfigFile; no user-visible effect ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16608553c9ce132fe4ce43084c0f0caa9dcc1022).
 - Parameterized MCP tool name sanitization and unified current and legacy name minting under one shared pipeline (oh-my-pi 24aa8aa6279e815e338623e9d9be3f7792f6c193, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared foreground-wait and auto-background helper primitives (`formatBackgroundNotice`, `resolveAutoBackgroundWaitMs`, `raceJobSettlement`) into `async/auto-background.ts` with cancellable threshold timers (oh-my-pi aeed1e6195abfa971b15e291c6c598bc9c1065b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
