@@ -144,7 +144,10 @@ describe("a session event reaches an extension in order with its turn index", ()
 
 		release.resolve();
 		await Promise.all([first, second]);
-		expect(sink.events.map(event => `${event.type}:${event.text}`)).toEqual(["message_start:first", "message_end:second"]);
+		expect(sink.events.map(event => `${event.type}:${event.text}`)).toEqual([
+			"message_start:first",
+			"message_end:second",
+		]);
 	});
 
 	it("tells an extension a tool that reported no error state did not fail", async () => {

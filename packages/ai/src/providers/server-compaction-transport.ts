@@ -7,8 +7,9 @@
  * because both functions are synchronous; a relative specifier, because the package `exports` map
  * declares only the `import` condition and a `require` of `@veyyon/ai/providers/...` does not resolve.
  */
-import type * as ServerCompaction from "./openai-compaction";
+
 import type { Api, Model } from "../types";
+import type * as ServerCompaction from "./openai-compaction";
 
 export type { ServerCompactionRequest, ServerCompactionResult, ServerCompactionTransport } from "./openai-compaction";
 

@@ -126,7 +126,11 @@ describe("every request of a session is shaped by one wire", () => {
 		expect(toolCallIdsOf(sideRequest)).toEqual(["tc_1", "tc_1"]);
 
 		// A call the session has not seen takes the next handle rather than reusing one.
-		const extended = await shape(sessionWire, [...history, toolCall("call_provider_b"), toolResult("call_provider_b", "ok")]);
+		const extended = await shape(sessionWire, [
+			...history,
+			toolCall("call_provider_b"),
+			toolResult("call_provider_b", "ok"),
+		]);
 		expect(toolCallIdsOf(extended)).toEqual(["tc_1", "tc_1", "tc_2", "tc_2"]);
 	});
 

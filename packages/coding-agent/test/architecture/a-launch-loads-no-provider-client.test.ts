@@ -191,7 +191,11 @@ describe("a launch evaluates the server-side compaction transport only when a co
 		fs.writeFileSync(entry, compactionCensusEntry(COMPACTION_GATE_IMPORTERS.map(file => path.join(SRC, file))));
 		const { env, cleanup } = hermeticSpawnEnv();
 		try {
-			const child = spawn(process.execPath, [entry], { cwd: tempDir.path(), env, stdio: ["ignore", "pipe", "pipe"] });
+			const child = spawn(process.execPath, [entry], {
+				cwd: tempDir.path(),
+				env,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
 			let stdout = "";
 			let stderr = "";
 			child.stdout.on("data", chunk => {
