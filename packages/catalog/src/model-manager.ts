@@ -453,6 +453,8 @@ function retainModelIds<TApi extends Api>(
 ): Model<TApi>[] {
 	if (models.length === 0) return [];
 	const retainedIds = new Set(retainedModels.map(model => model.id));
+	// A chat endpoint never lists a role-specific runner (an image model), so
+	// authoritative discovery prunes chat rows only.
 	return models.filter(model => modelKind(model) !== "chat" || retainedIds.has(model.id));
 }
 

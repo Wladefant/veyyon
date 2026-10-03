@@ -4,7 +4,11 @@
 
 ### Added
 
+- Added the StepFun provider (`stepfun`) registry definition with an API-key login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added Abliteration, Meta Model API, and Muse Code provider definitions and login transports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the GMI Cloud provider (`gmi-cloud`) registry definition with an API-key paste login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared auth-gateway request dispatch, credential resolution, account identity, and abort mirroring helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Shared gateway usage-limit blocking and authentication-failure credential invalidation across request adapters.
@@ -22,9 +26,21 @@
 - `aws-credentials.ts` persists a refreshed SSO cache token through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the write stays atomic and the file stays mode `0600`.
 - The Antigravity usage label normalizer collapses whitespace through the shared `collapseWhitespace` helper; no behavior change.
 - Extended the Codex WebSocket first-event timeout default and generic stream idle/first-event watchdog defaults to 300 seconds ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- OpenCode Go usage now reads the real rolling, weekly and monthly percent quotas from `GET /zen/go/v1/usage` (resets included) instead of dollar limits computed from locally recorded request costs, and the local cost ledger (`recordUsageCost`, `listUsageCosts`) is removed. A 401 or 403 from the endpoint fails the credential check and purges the stale cached quota; a malformed or partial payload keeps serving the last good report. Multi-key pools rank on the rolling and weekly windows; monthly is display-only ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9eff02d36c, 990984f19b, 2dbb36ff26).
+- Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
+- Preserved pre-stream provider error provenance in `errorMessage` while keeping assistant content empty, preventing pre-stream diagnostic text from blocking safe transient retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9f80d24e20014d98748bdca81356661741e00f94).
+- Deferred projected native thinking end events in the leaked-thinking stream wrapper until their source block ends, preserving signatures on late completion ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 764a1f7e9c06ef40953e9b7a8bbafddc168fcd34).
+- Escaped Harmony control tokens on replayed client messages omitting the type field while leaving non-message items untouched ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi baa9a8282d4069fe4ceab24fddb94da17978ad73).
+- Preserved literal schema payloads without recursing or normalizing non-subschema values during schema normalization ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 2f579e1ac1ddc2e9e7af1ad88688c69c6a955766).
+- Asserted exact preserved completion text on [DONE]-terminated OpenAI completions without a finish reason ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 344c75bf8782b19a7c679183b3da4e97e0e4ace4).
+- Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Distinguished concrete credentials from ambient AWS and Vertex sources during startup model selection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Codex SSE request retries to re-serialize payloads per attempt, preserving onPayload hooks and zstd compression compatibility ([Refs #343](https://github.com/Wladefant/veyyon/pull/343)).
 - Fixed Codex stream close retries gating on committed visible content and emitted deltas rather than open empty blocks, emitting balancing end events before replay and classifying premature closes as stream corruption ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Corrected auth gateway video modality types and merged Codex continuation fixtures; provider behavior is unchanged.
 - Preserved Anthropic's shared harness cache breakpoint across PROJECT, SHORTHAND, HANDLES and memory recall suffixes while reserving a marker for the newest message ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1488be016d5d7925e0a7071561af23b98c13ca3b, 49a2404d5e5ad6857040d7cfa2e64e3310e0bc43).
@@ -42,7 +58,7 @@
 - Preserved workspace-scoped credential identity and usage report partitioning for OpenAI Codex ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0eeb6c38149905a7c1d9a8ae4bd98cff882721b8).
 - Allowed OpenAI Codex OAuth login without an account ID when an email identity is present ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 676bdd7bbc2b1657aa69b5156fe939b8e635bba7).
 - Escaped reserved Harmony control tokens in client text and native replay for Harmony-dialect models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-- Fixed Codex Responses Lite requests to force tool_choice to auto, support PI_CODEX_RESPONSES_LITE overrides, and force reasoning.context to all_turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Codex Responses Lite requests preserve `none` and `required` tool choices, coerce forced hosted-tool choices to `auto`, support `PI_CODEX_RESPONSES_LITE` overrides, and force `reasoning.context` to `all_turns` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f0d8d97500dd42d26fc5b7066877b5b91dec21e).
 - Fixed Codex Responses append chains falling back to full-context replay when replay-sanitized assistant items differ only by output-only IDs or lifecycle status ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hoisted interleaved messages after orphan repair in Responses replay so repair-injected notes cannot wedge inside a tool-call batch ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Tracked projected thinking blocks by source index in the leaked-thinking stream wrapper so out-of-order thinking_end events update the correct signature after intervening blocks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
