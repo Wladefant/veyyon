@@ -58,6 +58,11 @@ import type { CacheControlEphemeral } from "./anthropic-wire";
 import { compactGrammarDefinition } from "./grammar";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import {
+	getOpenAIEffortControlState,
+	type OpenAIEffortControlState,
+	planStableOpenAIEffort,
+} from "./openai-configuration-update";
+import {
 	formatOpenAIInputText,
 	isOfficialOpenAIResponsesEndpoint,
 	type OpenAIPromptCachePolicy,
@@ -76,6 +81,7 @@ import {
 } from "./openai-reasoning-fallback";
 import type {
 	Tool as OpenAITool,
+	ReasoningEffort,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
 	ResponseStreamEvent,
@@ -111,6 +117,7 @@ import {
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
+	resolveOpenAIResponsesOutputClamp,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";
 
@@ -182,14 +189,22 @@ function isOpenAIResponsesReplayUnsafeEvent(event: ResponseStreamEvent): boolean
 	const t = event.type;
 	if (t === "response.reasoning_summary_part.done" || t === "response.output_item.done") return true;
 	return (
-		(t === "response.output_text.delta" || t === "response.refusal.delta" || t === "response.reasoning_summary_text.delta" ||
-			t === "response.reasoning_text.delta" || t === "response.function_call_arguments.delta" || t === "response.custom_tool_call_input.delta") &&
-		typeof event.delta === "string" && event.delta.length > 0
+		(t === "response.output_text.delta" ||
+			t === "response.refusal.delta" ||
+			t === "response.reasoning_summary_text.delta" ||
+			t === "response.reasoning_text.delta" ||
+			t === "response.function_call_arguments.delta" ||
+			t === "response.custom_tool_call_input.delta") &&
+		typeof event.delta === "string" &&
+		event.delta.length > 0
 	);
 }
 
 function isRetryableOpenAIResponsesStreamFailure(error: unknown): boolean {
-	return AIError.isTransientStreamParseError(error) || (error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream");
+	return (
+		AIError.isTransientStreamParseError(error) ||
+		(error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream")
+	);
 }
 
 interface OpenAIResponsesProviderSessionState
@@ -200,7 +215,10 @@ interface OpenAIResponsesProviderSessionState
 	nativeHistoryReplayWarmed: boolean;
 	/** Stateful `previous_response_id` chain baselines, keyed by baseUrl/model/session. */
 	chains: Map<string, OpenAIResponsesChainState>;
+	effortControls: Map<string, OpenAIEffortControlState<ResponsesStableEffort>>;
 }
+
+type ResponsesStableEffort = Exclude<ReasoningEffort, "none" | null>;
 
 interface OpenAIResponsesChainState {
 	/**
@@ -228,9 +246,11 @@ function createOpenAIResponsesProviderSessionState(): OpenAIResponsesProviderSes
 		...toolChoiceState,
 		nativeHistoryReplayWarmed: false,
 		chains: new Map(),
+		effortControls: new Map(),
 		close: () => {
 			state.nativeHistoryReplayWarmed = false;
 			state.chains.clear();
+			state.effortControls.clear();
 			clearOpenAIStrictToolsState(state);
 			clearOpenAIReasoningEffortFallbackState(state);
 			clearOpenAIToolChoiceState(state);
@@ -826,7 +846,16 @@ class OpenAIResponsesStreamRun {
 		const o = this.#output;
 		const initial = createInitialResponsesAssistantMessage(this.model.api, this.model.provider, this.model.id);
 		o.content.length = 0;
-		o.responseId = o.upstreamProvider = o.errorMessage = o.errorStatus = o.errorId = o.stopDetails = o.providerPayload = o.duration = o.ttft = undefined;
+		o.responseId =
+			o.upstreamProvider =
+			o.errorMessage =
+			o.errorStatus =
+			o.errorId =
+			o.stopDetails =
+			o.providerPayload =
+			o.duration =
+			o.ttft =
+				undefined;
 		o.usage = initial.usage;
 		if (plan.premiumRequests !== undefined) o.usage.premiumRequests = plan.premiumRequests;
 		o.stopReason = "stop";
@@ -1146,6 +1175,7 @@ export function buildParams(
 		omitMaxOutputTokens: model.omitMaxOutputTokens ?? false,
 		routedUpstreamSelfCaps: model.compat.routedUpstreamSelfCaps,
 		alwaysSendMaxTokens: model.compat.alwaysSendMaxTokens,
+		providerOutputClamp: resolveOpenAIResponsesOutputClamp(model),
 	});
 
 	applyCommonResponsesSamplingParams(params, { ...options, maxTokens: outputToken?.value }, model);
@@ -1222,12 +1252,35 @@ export function buildParams(
 	if (model.reasoningMode) {
 		params.reasoning = { ...params.reasoning, mode: model.reasoningMode };
 	}
+	applyResponsesStableEffort(model, params, messages, options, providerSessionState);
 
 	applyOpenAIGatewayRouting(params, model.compat);
 
 	applyOpenAIExtraBody(params, options?.extraBody);
 
 	return { params, strictToolsApplied };
+}
+
+/** Pin request effort and replay subsequent effort changes inside the conversation. */
+function applyResponsesStableEffort(
+	model: Model<"openai-responses">,
+	params: OpenAIResponsesSamplingParams,
+	input: ResponseInput,
+	options: OpenAIResponsesOptions | undefined,
+	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
+): void {
+	if (!model.compat.supportsConfigurationUpdate || !providerSessionState) return;
+	const reasoning = params.reasoning;
+	if (!reasoning || !("effort" in reasoning)) return;
+	const effort = reasoning.effort;
+	if (effort === undefined || effort === null || effort === "none") return;
+	const sessionId = getOpenAIResponsesRoutingSessionId(options);
+	if (!sessionId) return;
+	const state = getOpenAIEffortControlState(
+		providerSessionState.effortControls,
+		`${model.baseUrl ?? ""}\u0000${model.id}\u0000${sessionId}`,
+	);
+	params.reasoning = { ...reasoning, effort: planStableOpenAIEffort(state, input, effort) };
 }
 
 /**

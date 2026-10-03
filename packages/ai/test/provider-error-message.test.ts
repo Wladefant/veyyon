@@ -9,10 +9,11 @@ const model = getBundledModel("openai", "gpt-4o-mini") as Model<Api>;
 // when a request throws: the error text carried verbatim, the model identity
 // preserved, and a zeroed usage/cost envelope so a failed call bills nothing.
 describe("createProviderErrorMessage", () => {
-	it("renders the error text into an assistant text turn stamped with the model identity", () => {
+	it("renders the error text into an assistant diagnostic turn stamped with the model identity", () => {
 		const message = createProviderErrorMessage(model, new Error("upstream 503"));
 		expect(message.role).toBe("assistant");
-		expect(message.content).toEqual([{ type: "text", text: "upstream 503" }]);
+		expect(message.content).toEqual([]);
+		expect(message.errorMessage).toBe("upstream 503");
 		expect(message.api).toBe(model.api);
 		expect(message.provider).toBe(model.provider);
 		expect(message.model).toBe(model.id);
@@ -20,9 +21,14 @@ describe("createProviderErrorMessage", () => {
 		expect(typeof message.timestamp).toBe("number");
 	});
 
-	it("stringifies non-Error throwables through errorMessage", () => {
-		expect(createProviderErrorMessage(model, "boom").content[0].text).toBe("boom");
-		expect(createProviderErrorMessage(model, { code: 42 }).content[0].text).toBe("[object Object]");
+	it("stringifies non-Error throwables through errorMessage into the diagnostic envelope", () => {
+		const boomMessage = createProviderErrorMessage(model, "boom");
+		expect(boomMessage.content).toEqual([]);
+		expect(boomMessage.errorMessage).toBe("boom");
+
+		const objectMessage = createProviderErrorMessage(model, { code: 42 });
+		expect(objectMessage.content).toEqual([]);
+		expect(objectMessage.errorMessage).toBe("[object Object]");
 	});
 
 	it("bills nothing: every usage and cost field is zero", () => {

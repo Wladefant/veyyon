@@ -341,6 +341,10 @@ export interface CodexLiteShapedBody {
  * normal turns and both remote-compaction paths — codex-rs routes the
  * compaction request through the same builder.
  *
+ * Forced hosted-tool choices cannot reference the removed top-level tools and
+ * fall back to `auto`. The string constraints `none` and `required` stay valid
+ * after relocation and must not be weakened.
+ *
  * `reasoning.context` is forced to `all_turns` here because the lite marker
  * header and that value are one contract: the backend answers a lite request
  * without it `X-OpenAI-Internal-Codex-Responses-Lite requires reasoning.context
@@ -368,7 +372,9 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 		});
 	}
 	body.input = prefix.concat(input);
-	body.tool_choice = "auto";
+	if (body.tool_choice !== "none" && body.tool_choice !== "required") {
+		body.tool_choice = "auto";
+	}
 	delete body.instructions;
 	delete body.tools;
 }
