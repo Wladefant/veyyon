@@ -80,7 +80,10 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// Avoid kicking off real session work during plan mode entry.
 		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);
 
-		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+		const switched: unknown[][] = [];
+		vi.spyOn(session, "setModelTemporary").mockImplementation(async (...args: unknown[]) => {
+			switched.push(args);
+		});
 
 		// Enter plan mode → snapshots default, queues pending switch to plan model.
 		await mode.handlePlanModeCommand();
@@ -97,7 +100,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// Contract: the deferred plan-role switch must be discarded on exit.
 		// Otherwise the next user turn lands on the plan-role model even though
 		// the user is no longer in plan mode.
-		expect(setModelSpy).not.toHaveBeenCalled();
+		expect(switched).toEqual([]);
 	});
 
 	it("discards a deferred plan-role change when the role returns to the active model", async () => {
@@ -121,10 +124,13 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		session.settings.setModelRole("plan", `${activePlanModel.provider}/${activePlanModel.id}`);
 		isStreaming = false;
 
-		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+		const switched: unknown[][] = [];
+		vi.spyOn(session, "setModelTemporary").mockImplementation(async (...args: unknown[]) => {
+			switched.push(args);
+		});
 		await mode.flushPendingModelSwitch();
 
-		expect(setModelSpy).not.toHaveBeenCalled();
+		expect(switched).toEqual([]);
 	});
 
 	it("applies a plan-role reassignment to an active plan session", async () => {
@@ -152,12 +158,15 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 
 	it("does not enter plan mode when plan.enabled is false", async () => {
 		session.settings.set("plan.enabled", false);
-		const warning = vi.spyOn(mode, "showWarning").mockImplementation(() => {});
+		const warnings: string[] = [];
+		vi.spyOn(mode, "showWarning").mockImplementation((message: string) => {
+			warnings.push(message);
+		});
 
 		await mode.handlePlanModeCommand();
 
 		expect(mode.planModeEnabled).toBe(false);
-		expect(warning).toHaveBeenCalledWith("Plan mode is disabled. Enable it in settings (plan.enabled).");
+		expect(warnings).toEqual(["Plan mode is disabled. Enable it in settings (plan.enabled)."]);
 	});
 
 	it("allows /plan to pause an active plan mode after plan.enabled is disabled", async () => {
