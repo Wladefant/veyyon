@@ -111,6 +111,7 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 			model.provider === "meta" ||
 			model.provider === "muse-code" ||
 			model.provider === "stepfun") &&
+		model.thinking !== undefined;
 	const thinking = resolveModelThinking(
 		deploymentAuthored ? model : { ...model, thinking: undefined },
 		buildCompat(model),
