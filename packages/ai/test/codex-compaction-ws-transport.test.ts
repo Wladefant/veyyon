@@ -790,7 +790,7 @@ describe("openCodexCompactionEventStream", () => {
 		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
 	});
 
-	test("early WS abandonment: calling return before next closes socket and rolls back metadata", async () => {
+	test("early WS abandonment: cold return preserves the reusable session socket", async () => {
 		let wsClosed = false;
 		class AbandonWs extends BaseMockWs {
 			close() {
@@ -811,10 +811,79 @@ describe("openCodexCompactionEventStream", () => {
 		expect(wsClosed).toBe(false);
 		await stream.return();
 
-		expect(wsClosed).toBe(true);
+		expect(wsClosed).toBe(false);
 		expect(getSessionTurnState(pState, "s_abandon_ws")).toBe("prior_ts");
 		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
 	});
+
+	for (const completeBeforeReturn of [false, true]) {
+		test(`cold WS return does not disturb another request (${completeBeforeReturn ? "completed" : "active"})`, async () => {
+			const sent = Promise.withResolvers<void>();
+			let socket: SharedWs | undefined;
+			let constructors = 0;
+			let requests = 0;
+			let closes = 0;
+			const fetchSpy = vi.fn(async () => new Response("unexpected SSE", { status: 400 }));
+			class SharedWs extends BaseMockWs {
+				constructor(url?: string, opts?: unknown) {
+					super(url, opts);
+					socket = this;
+					constructors++;
+				}
+				send(data: string) {
+					if (JSON.parse(data).type === "response.create") {
+						requests++;
+						sent.resolve();
+					}
+				}
+				close(code = 1000) {
+					closes++;
+					super.close(code);
+				}
+			}
+			global.WebSocket = SharedWs as unknown as typeof WebSocket;
+			const pState = new Map<string, ProviderSessionState>();
+			const sessionId = `shared_cold_${completeBeforeReturn}`;
+			seedPriorState(pState, sessionId, undefined, "prior_etag");
+			const options = {
+				apiKey: token,
+				sessionId,
+				providerSessionState: pState,
+				responsesLite: false,
+				preferWebsockets: true,
+				fetch: fetchSpy as unknown as FetchImpl,
+			};
+			const active = await openCodexCompactionEventStream(model, body, options);
+			const first = active.next();
+			await sent.promise;
+			const cold = await openCodexCompactionEventStream(model, body, options);
+			const completeActive = async () => {
+				socket!.emit({
+					type: "response.metadata",
+					headers: { "x-codex-turn-state": "active_ts", "x-models-etag": "active_etag" },
+				});
+				socket!.emit({
+					type: "response.output_item.done",
+					item: { type: "compaction", encrypted_content: "active_blob" },
+				});
+				socket!.emit({ type: "response.completed" });
+				expect((await first).value?.type).toBe("response.metadata");
+				const remaining: Array<Record<string, unknown>> = [];
+				for await (const event of active) remaining.push(event);
+				expect(remaining.map(event => event.type)).toEqual(["response.output_item.done", "response.completed"]);
+			};
+			if (completeBeforeReturn) await completeActive();
+			await cold.return();
+			expect(closes).toBe(0);
+			if (!completeBeforeReturn) await completeActive();
+			expect(constructors).toBe(1);
+			expect(requests).toBe(1);
+			expect(fetchSpy).not.toHaveBeenCalled();
+			expect(getSessionTurnState(pState, sessionId)).toBe("active_ts");
+			expect(getSessionModelsEtag(pState)).toBe("active_etag");
+			socket!.close();
+		});
+	}
 
 	test("fake secret echo on WS with sanitize: marker absent, sanitizer called, metadata rolled back", async () => {
 		const SECRET_MARKER = "SECRET_MARKER_WS_987654";

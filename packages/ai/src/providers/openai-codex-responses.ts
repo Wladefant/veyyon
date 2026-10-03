@@ -1684,14 +1684,20 @@ export async function openCodexCompactionEventStream(
 		baselineState,
 	);
 
+	const openedTurnState = requestContext.turnState?.value;
+	const openedModelsEtag = requestContext.websocketState?.modelsEtag;
+	let hasStarted = false;
 	let cleanedUp = false;
 	const runCleanup = async (cleanupReason?: unknown): Promise<void> => {
 		if (cleanedUp) return;
 		cleanedUp = true;
-		if (requestContext?.turnState) {
+		if (requestContext?.turnState && (hasStarted || requestContext.turnState.value === openedTurnState)) {
 			requestContext.turnState.value = baselineState?.turnState;
 		}
-		if (requestContext?.websocketState) {
+		if (
+			requestContext?.websocketState &&
+			(hasStarted || requestContext.websocketState.modelsEtag === openedModelsEtag)
+		) {
 			requestContext.websocketState.modelsEtag = baselineState?.modelsEtag;
 		}
 		try {
@@ -1716,7 +1722,6 @@ export async function openCodexCompactionEventStream(
 		} catch {}
 	};
 
-	let hasStarted = false;
 	let isCompleted = false;
 
 	const wrappedGenerator: AsyncGenerator<Record<string, unknown>> = {
@@ -2105,9 +2110,8 @@ async function openCodexWebSocketTransport(
 		onSseEvent,
 	);
 	const cleanup = async (): Promise<void> => {
-		try {
-			websocketConnection.close("abandoned");
-		} catch {}
+		// The session owns the socket. This request's signal cancels only its
+		// active reader; a cold iterator must not close another request's socket.
 		try {
 			await eventStream.return?.();
 		} catch {}
