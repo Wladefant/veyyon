@@ -13,6 +13,7 @@
 ### Fixed
 
 - A fullscreen overlay rewrites only the rows that changed while its geometry is stable, so keystrokes in a modal rewrite a line or two instead of the whole screen ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added regression coverage that the hardware caret hides and returns without a row repaint when the composer marker toggles under the alternate-screen scroll transport; no user-visible change ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed AltGr characters (such as `[`, `]`, `{`, `}` on Hungarian and other international layouts) being dropped in Windows Terminal with the kitty keyboard protocol, where they instead triggered Alt shortcuts like word movement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a deadlock on Windows when a terminal pane closes by exiting immediately without waiting for stdout to drain when the terminal disconnects ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - A ConPTY host keeps the alternate-screen borrow through a resize instead of repainting a grid it owns itself ([#107](https://github.com/Wladefant/veyyon/issues/107)).
