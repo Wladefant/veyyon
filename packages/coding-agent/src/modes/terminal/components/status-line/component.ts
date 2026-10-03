@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { Component } from "@veyyon/tui/tui";
 import { getProjectDir } from "@veyyon/utils/dirs";
 import { formatClock } from "@veyyon/utils/format";
+import * as logger from "@veyyon/utils/logger";
 import { MOTION, type MotionClock, SettleValue } from "@veyyon/utils/motion";
 import { sanitizeStyledStatusText } from "@veyyon/utils/sanitize-status-text";
 import { scopedTimeoutSignal, withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
@@ -336,11 +337,23 @@ export class StatusLineComponent implements Component {
 			: repository.headPath;
 
 		try {
-			this.#gitWatcher = fs.watch(watchPath, () => {
+			const watcher = fs.watch(watchPath, () => {
 				if (this.#disposed) return;
 				this.#invalidateGitCaches();
 				this.#onGitStateChange?.();
 			});
+			// Windows reports a watched path that is deleted or locked as an async
+			// EPERM 'error' event. Unhandled, it is an uncaught exception that ends the process.
+			watcher.on("error", error => {
+				logger.warn("Git state watcher failed; the status line will not refresh live", {
+					path: watchPath,
+					error: String(error),
+				});
+				watcher.close();
+				if (this.#gitWatcher === watcher) this.#gitWatcher = null;
+				this.#invalidateGitCaches();
+			});
+			this.#gitWatcher = watcher;
 		} catch {
 			this.#invalidateGitCaches();
 		}

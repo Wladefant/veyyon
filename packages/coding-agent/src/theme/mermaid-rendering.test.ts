@@ -4,7 +4,7 @@ import { stripAnsi } from "@veyyon/utils";
 import { Settings } from "../config/settings";
 import { buildSystemPrompt } from "../system-prompt";
 import { getMarkdownTheme, setMarkdownMermaidRendering } from "./markdown-theme";
-import { getThemeByName, setThemeInstance } from "./theme";
+import { createTheme, getBuiltinThemes, getThemeByName, setThemeInstance } from "./theme";
 
 const workspaceTree = {
 	rootPath: "/tmp/project",
@@ -52,5 +52,25 @@ describe("Mermaid rendering setting", () => {
 		expect(lines).toContain("graph TD");
 		expect(lines).toContain("-->");
 		expect(lines).not.toContain("```");
+	});
+
+	it("uses content-visible Titanium colors for Mermaid structure", async () => {
+		const dark = await getThemeByName("dark");
+		if (!dark) throw new Error("fallback theme unavailable");
+		const titaniumJson = getBuiltinThemes().titanium;
+		if (!titaniumJson) throw new Error("Titanium theme unavailable");
+
+		try {
+			setThemeInstance(createTheme(titaniumJson, { mode: "truecolor" }));
+			const renderer = getMarkdownTheme().resolveMermaidAscii;
+			if (!renderer) throw new Error("Mermaid renderer unavailable");
+			const rendered = renderer("flowchart TD\n  A[Capture] --> B[Act]", 80);
+
+			expect(rendered).toContain("\x1b[38;2;139;147;164m");
+			expect(rendered).not.toContain("\x1b[38;2;98;107;121m");
+			expect(rendered).not.toContain("\x1b[38;2;32;35;41m");
+		} finally {
+			setThemeInstance(dark);
+		}
 	});
 });

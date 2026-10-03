@@ -1179,18 +1179,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 		this.#refreshComposerShortcuts();
 
-		// Clock heartbeat: once per second WHILE THE MODEL WORKS, refresh the
-		// working line's per-task elapsed and repaint the quiet chrome so the
-		// location line's run clock ticks between agent events. At rest every
-		// on-screen time readout is frozen by design (run clock shows the
-		// completed "Worked for …", the context bar tip is static), so an idle
-		// tick would repaint a byte-identical frame — it does nothing.
-		this.#clockTimer = setInterval(() => {
-			if (!this.loadingAnimation && !this.session.isStreaming) return;
-			this.#workingLoader.refreshTaskClock();
-			this.ui.requestRender();
-		}, 1000);
-
 		// Route SIGINT/SIGTERM/SIGHUP/uncaughtException through the same teardown
 		// the TUI Ctrl+C keypress path performs: persist the in-progress editor
 		// draft for `--resume`, then dispose the session (which emits the extension
@@ -4433,8 +4421,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	/**
+	 * Clock heartbeat: once per second WHILE THE MODEL WORKS, refresh the working line's per-task
+	 * elapsed and repaint the quiet chrome so the location line's run clock ticks between agent
+	 * events. At rest every on-screen time readout is frozen (the run clock shows the completed
+	 * "Worked for …", the context bar tip is static), so the first tick that finds the session at
+	 * rest disarms the heartbeat, and the next mount of the working loader arms it again. An idle
+	 * session wakes for no clock at all, and a session whose frame production is frozen never
+	 * re-arms it.
+	 */
+	#armClock(): void {
+		if (this.#frameProductionFrozen) return;
+		this.#clockTimer ??= setInterval(() => {
+			if (!this.loadingAnimation && !this.session.isStreaming) {
+				clearInterval(this.#clockTimer);
+				this.#clockTimer = undefined;
+				return;
+			}
+			this.#workingLoader.refreshTaskClock();
+			this.ui.requestRender();
+		}, 1000);
+	}
+
 	ensureLoadingAnimation(): void {
 		this.#workingLoader.ensure();
+		this.#armClock();
 		// The board's motion is owed by the agent moving, and this is the edge
 		// where it starts. Nothing else on this path touches the anchored
 		// regions, so without it a board that was still when the turn began
