@@ -1,6 +1,6 @@
 import * as AIError from "@veyyon/ai/error";
-import { isAbortError, logger, readSseEvents, Snowflake } from "@veyyon/utils";
-import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
+import { isAbortError, logger, readSseEvents, Snowflake, untilAborted } from "@veyyon/utils";
+import { createMCPTimeout, getNeverAbortSignal, type MCPTimeoutOperation, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcError,
 	JsonRpcMessage,
@@ -22,12 +22,6 @@ import {
 	mcpStreamClosedMessage,
 	mcpTimeoutMessage,
 } from "./transport-failure";
-
-interface MCPTimeoutOperation {
-	signal?: AbortSignal;
-	clear: () => void;
-	isTimeoutAbort: (error: unknown) => boolean;
-}
 
 interface PendingLegacySseRequest {
 	resolve: (value: unknown) => void;
@@ -340,10 +334,10 @@ export class LegacySseTransport implements MCPTransport {
 			signal,
 		});
 		const status = AIError.status(response);
-		if (!this.onAuthError || (status !== 401 && status !== 403)) return response;
+		if (!this.onAuthError || (status !== 401 && status !== 403) || signal?.aborted) return response;
 
-		const refreshedHeaders = await this.onAuthError();
-		if (!refreshedHeaders) return response;
+		const refreshedHeaders = await untilAborted(signal, this.onAuthError());
+		if (!refreshedHeaders || signal?.aborted) return response;
 		await response.body?.cancel();
 		this.#config.headers = refreshedHeaders;
 		headers = {

@@ -1,4 +1,5 @@
 import { expect, test, vi } from "bun:test";
+import http from "node:http";
 import type { CustomTool, CustomToolContext } from "../src/extensibility/custom-tools/types";
 import { MCPManager } from "../src/mcp/manager";
 import { MCPTool } from "../src/mcp/tool-bridge";
@@ -146,27 +147,75 @@ test("MCP proxy tool aborts underlying operation on caller abort", async () => {
 	expect(capturedSignal.aborted).toBe(true);
 });
 
+function getPort(server: http.Server): number {
+	const address = server.address();
+	if (!address || typeof address === "string") {
+		throw new Error("Invalid server address");
+	}
+	return address.port;
+}
+
+async function listenServer(server: http.Server): Promise<number> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	server.listen(0, "127.0.0.1", () => resolve());
+	await promise;
+	return getPort(server);
+}
+
+async function closeServer(server: http.Server): Promise<void> {
+	if (!server.listening) return;
+	const { promise, resolve } = Promise.withResolvers<void>();
+	server.closeAllConnections?.();
+	server.close(() => resolve());
+	await promise;
+}
+
+function extractJsonRpcId(bodyText: string): unknown {
+	const parsed: unknown = JSON.parse(bodyText);
+	if (parsed && typeof parsed === "object" && "id" in parsed) {
+		return parsed.id;
+	}
+	return undefined;
+}
+
+function extractToolName(bodyText: string): string | undefined {
+	const parsed: unknown = JSON.parse(bodyText);
+	if (
+		parsed &&
+		typeof parsed === "object" &&
+		"params" in parsed &&
+		parsed.params &&
+		typeof parsed.params === "object" &&
+		"name" in parsed.params &&
+		typeof parsed.params.name === "string"
+	) {
+		return parsed.params.name;
+	}
+	return undefined;
+}
+
 test.each([180_000, 0])("MCP proxy honors a transport deadline of %i beyond 60s", async timeout => {
 	const arrived = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	const server = Bun.serve({
-		hostname: "127.0.0.1",
-		port: 0,
-		idleTimeout: 0,
-		async fetch(request) {
-			const { id } = (await request.json()) as { id: number };
-			arrived.resolve();
-			await release.promise;
-			return Response.json({
+	const server = http.createServer(async (req, res) => {
+		const chunks: Buffer[] = [];
+		for await (const chunk of req) chunks.push(chunk as Buffer);
+		const id = extractJsonRpcId(Buffer.concat(chunks).toString("utf-8"));
+		arrived.resolve();
+		await release.promise;
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(
+			JSON.stringify({
 				jsonrpc: "2.0",
 				id,
 				result: {
 					content: [{ type: "text", text: "Queued report completed" }],
 				},
-			});
-		},
+			}),
+		);
 	});
-	const config = { type: "http" as const, url: `http://127.0.0.1:${server.port}/mcp`, timeout };
+	const port = await listenServer(server);
+	const config = { type: "http" as const, url: `http://127.0.0.1:${port}/mcp`, timeout };
 	const transport = new HttpTransport(config);
 	const manager = new MCPManager(process.cwd());
 	mockSourceTool(manager, {
@@ -194,7 +243,222 @@ test.each([180_000, 0])("MCP proxy honors a transport deadline of %i beyond 60s"
 		vi.useRealTimers();
 		release.resolve();
 		await transport.close();
-		server.stop(true);
+		await closeServer(server);
+		vi.restoreAllMocks();
+	}
+});
+
+test("MCP proxy tool times out when transport authentication hook stalls", async () => {
+	const server = http.createServer((_req, res) => {
+		res.writeHead(401, {
+			"Content-Type": "application/json",
+			"WWW-Authenticate": "Bearer",
+		});
+		res.end(JSON.stringify({ error: "Unauthorized" }));
+	});
+	const port = await listenServer(server);
+	const timeout = 50;
+	const config = { type: "http" as const, url: `http://127.0.0.1:${port}/mcp`, timeout };
+	const transport = new HttpTransport(config);
+	transport.onAuthError = () => Promise.withResolvers<Record<string, string> | null>().promise;
+	const manager = new MCPManager(process.cwd());
+	mockSourceTool(manager, {
+		name: "test-server",
+		config,
+		transport,
+		serverInfo: { name: "test", version: "1" },
+		capabilities: {},
+	});
+	try {
+		await transport.connect();
+		const [proxy] = createMCPProxyTools(manager);
+		if (!proxy?.execute) throw new Error("Tool execute method missing");
+
+		const result = await proxy.execute("call_stall", {}, undefined, {} as CustomToolContext);
+		expect(result.details?.isError).toBe(true);
+		const stallContent = result.content[0];
+		if (stallContent?.type !== "text") {
+			throw new Error("Expected text content in stall result");
+		}
+		expect(stallContent.text).toMatch(/did not complete request "tools\/call" within 50ms/);
+	} finally {
+		await transport.close();
+		await closeServer(server);
+		vi.restoreAllMocks();
+	}
+});
+
+test("MCP proxy tool aborts immediately when caller aborts during stalled authentication", async () => {
+	const server = http.createServer((_req, res) => {
+		res.writeHead(401, {
+			"Content-Type": "application/json",
+			"WWW-Authenticate": "Bearer",
+		});
+		res.end(JSON.stringify({ error: "Unauthorized" }));
+	});
+	const port = await listenServer(server);
+	const config = { type: "http" as const, url: `http://127.0.0.1:${port}/mcp`, timeout: 30_000 };
+	const transport = new HttpTransport(config);
+	const authHookEntered = Promise.withResolvers<void>();
+	transport.onAuthError = () => {
+		authHookEntered.resolve();
+		return Promise.withResolvers<Record<string, string> | null>().promise;
+	};
+	const manager = new MCPManager(process.cwd());
+	mockSourceTool(manager, {
+		name: "test-server",
+		config,
+		transport,
+		serverInfo: { name: "test", version: "1" },
+		capabilities: {},
+	});
+	try {
+		await transport.connect();
+		const [proxy] = createMCPProxyTools(manager);
+		if (!proxy?.execute) throw new Error("Tool execute method missing");
+
+		const ac = new AbortController();
+		const executePromise = proxy.execute("call_abort", {}, undefined, {} as CustomToolContext, ac.signal);
+		await authHookEntered.promise;
+		ac.abort();
+
+		try {
+			await executePromise;
+			expect.unreachable("executePromise should throw ToolAbortError");
+		} catch (e: unknown) {
+			expect(e instanceof ToolAbortError).toBe(true);
+		}
+	} finally {
+		await transport.close();
+		await closeServer(server);
+		vi.restoreAllMocks();
+	}
+});
+
+test("MCP proxy tool ignores late auth hook resolution after deadline expiry", async () => {
+	let requestCount = 0;
+	const server = http.createServer((_req, res) => {
+		requestCount++;
+		res.writeHead(401, {
+			"Content-Type": "application/json",
+			"WWW-Authenticate": "Bearer",
+		});
+		res.end(JSON.stringify({ error: "Unauthorized" }));
+	});
+	const port = await listenServer(server);
+	const timeout = 40;
+	const config = { type: "http" as const, url: `http://127.0.0.1:${port}/mcp`, timeout };
+	const transport = new HttpTransport(config);
+	const authDeferred = Promise.withResolvers<Record<string, string> | null>();
+	transport.onAuthError = () => authDeferred.promise;
+	const manager = new MCPManager(process.cwd());
+	mockSourceTool(manager, {
+		name: "test-server",
+		config,
+		transport,
+		serverInfo: { name: "test", version: "1" },
+		capabilities: {},
+	});
+	try {
+		await transport.connect();
+		const [proxy] = createMCPProxyTools(manager);
+		if (!proxy?.execute) throw new Error("Tool execute method missing");
+
+		const result = await proxy.execute("call_late", {}, undefined, {} as CustomToolContext);
+		expect(result.details?.isError).toBe(true);
+		expect(requestCount).toBe(1);
+
+		// Resolve the auth hook late after the proxy call already timed out
+		authDeferred.resolve({ Authorization: "Bearer late-token" });
+		await Promise.resolve();
+
+		// Must not have initiated any retry request
+		expect(requestCount).toBe(1);
+	} finally {
+		await transport.close();
+		await closeServer(server);
+		vi.restoreAllMocks();
+	}
+});
+
+test("MCP proxy handles concurrent requests where one stalls and times out while another succeeds", async () => {
+	const server = http.createServer(async (req, res) => {
+		const chunks: Buffer[] = [];
+		for await (const chunk of req) chunks.push(chunk as Buffer);
+		const bodyText = Buffer.concat(chunks).toString("utf-8");
+		const id = extractJsonRpcId(bodyText);
+		const toolName = extractToolName(bodyText);
+
+		if (toolName === "stall_tool") {
+			res.writeHead(401, {
+				"Content-Type": "application/json",
+				"WWW-Authenticate": "Bearer",
+			});
+			res.end(JSON.stringify({ error: "Unauthorized" }));
+		} else {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id,
+					result: { content: [{ type: "text", text: "success" }] },
+				}),
+			);
+		}
+	});
+	const port = await listenServer(server);
+	const timeout = 50;
+	const config = { type: "http" as const, url: `http://127.0.0.1:${port}/mcp`, timeout };
+	const transport = new HttpTransport(config);
+	transport.onAuthError = () => Promise.withResolvers<Record<string, string> | null>().promise;
+	const connection: MCPServerConnection = {
+		name: "test-server",
+		config,
+		transport,
+		serverInfo: { name: "test", version: "1" },
+		capabilities: {},
+	};
+	const manager = new MCPManager(process.cwd());
+	const stallDef: MCPToolDefinition = {
+		name: "stall_tool",
+		description: "Stalling tool",
+		inputSchema: { type: "object", properties: {} },
+	};
+	const okDef: MCPToolDefinition = {
+		name: "ok_tool",
+		description: "OK tool",
+		inputSchema: { type: "object", properties: {} },
+	};
+	const tools = MCPTool.fromTools(connection, [stallDef, okDef]);
+	vi.spyOn(manager, "getTools").mockReturnValue(tools);
+	vi.spyOn(manager, "waitForConnection").mockResolvedValue(connection);
+
+	try {
+		await transport.connect();
+		const proxyTools = createMCPProxyTools(manager);
+		const stallProxy = proxyTools.find(t => t.mcpToolName === "stall_tool");
+		const okProxy = proxyTools.find(t => t.mcpToolName === "ok_tool");
+		if (!stallProxy?.execute || !okProxy?.execute) {
+			throw new Error("Missing proxy execute implementation");
+		}
+
+		const [stallResult, okResult] = await Promise.all([
+			stallProxy.execute("call_stall", {}, undefined, {} as CustomToolContext),
+			okProxy.execute("call_ok", {}, undefined, {} as CustomToolContext),
+		]);
+
+		expect(stallResult.details?.isError).toBe(true);
+		const stallContent = stallResult.content[0];
+		if (stallContent?.type !== "text") {
+			throw new Error("Expected text content in stall result");
+		}
+		expect(stallContent.text).toMatch(/did not complete request "tools\/call" within 50ms/);
+
+		expect(okResult.details?.isError).not.toBe(true);
+		expect(okResult.content).toEqual([{ type: "text", text: "success" }]);
+	} finally {
+		await transport.close();
+		await closeServer(server);
 		vi.restoreAllMocks();
 	}
 });

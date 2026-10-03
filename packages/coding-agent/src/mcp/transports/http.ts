@@ -5,9 +5,15 @@
  * Based on MCP spec 2025-03-26.
  */
 import * as AIError from "@veyyon/ai/error";
-import { isAbortError, logger, readSseJson, Snowflake } from "@veyyon/utils";
+import { isAbortError, logger, readSseJson, Snowflake, untilAborted } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
-import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
+import {
+	createMCPTimeout,
+	getNeverAbortSignal,
+	isMCPTimeoutEnabled,
+	type MCPTimeoutOperation,
+	resolveMCPTimeoutMs,
+} from "../timeout";
 import type {
 	JsonRpcError,
 	JsonRpcMessage,
@@ -234,28 +240,44 @@ export class HttpTransport implements MCPTransport {
 		params?: Record<string, unknown>,
 		options?: MCPRequestOptions,
 	): Promise<T> {
+		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const operation = createMCPTimeout(timeout, options?.signal);
 		try {
-			return await this.#executeRequest<T>(method, params, options);
+			return await this.#executeRequest<T>(method, params, options, operation, timeout);
 		} catch (error) {
-			// Retry once on auth failure if onAuthError is wired
+			// Retry once on auth failure if onAuthError is wired and operation has not aborted
 			const status = error instanceof Error ? AIError.status(error) : undefined;
-			if (this.onAuthError && (status === 401 || status === 403)) {
-				const newHeaders = await this.onAuthError();
-				if (newHeaders) {
-					// Persist refreshed headers so subsequent requests use them directly
-					this.config = { ...this.config, headers: newHeaders };
-					const retryParams = await rebuildMCPToolCallParamsForAttempt(params);
-					return this.#executeRequest<T>(method, retryParams, options);
+			if (this.onAuthError && (status === 401 || status === 403) && !operation.signal?.aborted) {
+				try {
+					const newHeaders = await untilAborted(operation.signal, this.onAuthError());
+					if (newHeaders && !operation.signal?.aborted) {
+						// Persist refreshed headers so subsequent requests use them directly
+						this.config = { ...this.config, headers: newHeaders };
+						const retryParams = await rebuildMCPToolCallParamsForAttempt(params);
+						return await this.#executeRequest<T>(method, retryParams, options, operation, timeout);
+					}
+				} catch (authError) {
+					if (operation.isTimeoutAbort(authError)) {
+						throw new Error(mcpTimeoutMessage({ url: this.config.url }, `request "${method}"`, timeout));
+					}
+					throw authError;
 				}
 			}
+			if (operation.isTimeoutAbort(error)) {
+				throw new Error(mcpTimeoutMessage({ url: this.config.url }, `request "${method}"`, timeout));
+			}
 			throw error;
+		} finally {
+			operation.clear();
 		}
 	}
 
 	async #executeRequest<T>(
 		method: string,
 		params: Record<string, unknown> | undefined,
-		options: MCPRequestOptions | undefined,
+		_options: MCPRequestOptions | undefined,
+		operation: MCPTimeoutOperation,
+		timeout: number,
 	): Promise<T> {
 		if (!this.#connected) {
 			throw new Error(mcpNotConnectedMessage({ url: this.config.url }, `request "${method}"`));
@@ -279,68 +301,59 @@ export class HttpTransport implements MCPTransport {
 			headers["Mcp-Session-Id"] = this.#sessionId;
 		}
 
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout, options?.signal);
+		const response = await fetch(this.config.url, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
+			signal: operation.signal,
+		});
 
-		try {
-			const response = await fetch(this.config.url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-				signal: operation.signal,
-			});
-
-			// Check for session ID in response
-			const newSessionId = response.headers.get("Mcp-Session-Id");
-			if (newSessionId) {
-				this.#sessionId = newSessionId;
-			}
-
-			if (!response.ok) {
-				const text = await response.text();
-				const wwwAuthenticate = response.headers.get("WWW-Authenticate");
-				const mcpAuthServer = response.headers.get("Mcp-Auth-Server");
-				const authHints = [
-					wwwAuthenticate ? `WWW-Authenticate: ${wwwAuthenticate}` : null,
-					mcpAuthServer ? `Mcp-Auth-Server: ${mcpAuthServer}` : null,
-				]
-					.filter(Boolean)
-					.join("; ");
-				throw new Error(mcpHttpFailureMessage(this.config.url, response.status, text, authHints || undefined));
-			}
-
-			const contentType = response.headers.get("Content-Type") ?? "";
-
-			// Handle SSE response
-			if (contentType.includes("text/event-stream")) {
-				return this.#parseSSEResponse<T>(response, id, options);
-			}
-
-			// Handle JSON response
-			const result = (await response.json()) as JsonRpcResponse;
-
-			if (result.error) {
-				throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
-			}
-
-			return result.result as T;
-		} catch (error) {
-			if (operation.isTimeoutAbort(error)) {
-				throw new Error(mcpTimeoutMessage({ url: this.config.url }, `request "${method}"`, timeout));
-			}
-			throw error;
-		} finally {
-			operation.clear();
+		// Check for session ID in response
+		const newSessionId = response.headers.get("Mcp-Session-Id");
+		if (newSessionId) {
+			this.#sessionId = newSessionId;
 		}
+
+		if (!response.ok) {
+			const text = await untilAborted(operation.signal, response.text());
+			const wwwAuthenticate = response.headers.get("WWW-Authenticate");
+			const mcpAuthServer = response.headers.get("Mcp-Auth-Server");
+			const authHints = [
+				wwwAuthenticate ? `WWW-Authenticate: ${wwwAuthenticate}` : null,
+				mcpAuthServer ? `Mcp-Auth-Server: ${mcpAuthServer}` : null,
+			]
+				.filter(Boolean)
+				.join("; ");
+			throw new Error(mcpHttpFailureMessage(this.config.url, response.status, text, authHints || undefined));
+		}
+
+		const contentType = response.headers.get("Content-Type") ?? "";
+
+		// Handle SSE response
+		if (contentType.includes("text/event-stream")) {
+			return this.#parseSSEResponse<T>(response, id, operation, timeout);
+		}
+
+		// Handle JSON response
+		const result = (await untilAborted(operation.signal, response.json())) as JsonRpcResponse;
+
+		if (result.error) {
+			throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
+		}
+
+		return result.result as T;
 	}
 
-	#parseSSEResponse<T>(response: Response, expectedId: string | number, options?: MCPRequestOptions): Promise<T> {
+	#parseSSEResponse<T>(
+		response: Response,
+		expectedId: string | number,
+		operation: MCPTimeoutOperation,
+		timeout: number,
+	): Promise<T> {
 		if (!response.body) {
 			throw new Error(mcpEmptyResponseBodyMessage({ url: this.config.url }));
 		}
 
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout, options?.signal);
 		const signal = operation.signal ?? getNeverAbortSignal();
 
 		const { promise, resolve, reject } = Promise.withResolvers<T>();
@@ -390,8 +403,6 @@ export class HttpTransport implements MCPTransport {
 				} else {
 					reject(error as Error);
 				}
-			} finally {
-				operation.clear();
 			}
 		};
 
@@ -450,26 +461,20 @@ export class HttpTransport implements MCPTransport {
 				signal: operation.signal,
 			});
 			// Retry once on auth failure if onAuthError is wired
-			if (this.onAuthError && (resp.status === 401 || resp.status === 403)) {
+			if (this.onAuthError && (resp.status === 401 || resp.status === 403) && !operation.signal?.aborted) {
 				await resp.body?.cancel();
-				const newHeaders = await this.onAuthError();
-				if (newHeaders) {
+				const newHeaders = await untilAborted(operation.signal, this.onAuthError());
+				if (newHeaders && !operation.signal?.aborted) {
 					this.config.headers ??= {};
 					Object.assign(this.config.headers, newHeaders);
 					Object.assign(headers, newHeaders);
-					operation.clear();
-					const retryOperation = createMCPTimeout(timeout);
-					try {
-						const retry = await fetch(this.config.url, {
-							method: "POST",
-							headers,
-							body: JSON.stringify(body),
-							signal: retryOperation.signal,
-						});
-						await retry.body?.cancel();
-					} finally {
-						retryOperation.clear();
-					}
+					const retry = await fetch(this.config.url, {
+						method: "POST",
+						headers,
+						body: JSON.stringify(body),
+						signal: operation.signal,
+					});
+					await retry.body?.cancel();
 					return;
 				}
 			}
