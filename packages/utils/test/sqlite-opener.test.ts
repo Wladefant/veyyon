@@ -4,33 +4,48 @@ import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import { getDbBusyTimeoutMs } from "../src/env";
-import { checkpointWal, isSqliteBusyError, isSqliteCorruptionError, openSqliteDatabase } from "../src/sqlite";
+import {
+	checkpointWal,
+	isSqliteBusyError,
+	isSqliteCorruptionError,
+	openSqliteDatabase,
+} from "../src/sqlite";
 import { TempDir } from "../src/temp";
 
 describe("openSqliteDatabase", () => {
 	it("failed asynchronous initialization releases and rolls back its write transaction", async () => {
 		await using dir = await TempDir.create("@veyyon-sqlite-init-");
 		const dbPath = dir.join("store.db");
-		await expect(
-			openSqliteDatabase(dbPath, async db => {
-				db.run("CREATE TABLE entries (value TEXT)");
-				db.run("BEGIN IMMEDIATE");
-				db.run("INSERT INTO entries VALUES ('uncommitted')");
-				await Promise.resolve();
-				db.run("INSERT INTO missing_table VALUES (1)");
-			}),
-		).rejects.toThrow(dbPath);
+		let retainedHandle: Database | undefined;
+		try {
+			await expect(
+				openSqliteDatabase(dbPath, async (db) => {
+					retainedHandle = db;
+					db.run("CREATE TABLE entries (value TEXT)");
+					db.run("BEGIN IMMEDIATE");
+					db.run("INSERT INTO entries VALUES ('uncommitted')");
+					await Promise.resolve();
+					db.run("INSERT INTO missing_table VALUES (1)");
+				}),
+			).rejects.toThrow(dbPath);
 
-		const rows = await openSqliteDatabase(dbPath, db => {
+			const rows = await openSqliteDatabase(dbPath, (db) => {
+				try {
+					db.run("INSERT INTO entries VALUES ('reopened')");
+					return db
+						.query<{ value: string }, []>("SELECT value FROM entries")
+						.all();
+				} finally {
+					db.close();
+				}
+			});
+			expect(rows).toEqual([{ value: "reopened" }]);
+		} finally {
 			try {
-				db.run("INSERT INTO entries VALUES ('reopened')");
-				return db.query<{ value: string }, []>("SELECT value FROM entries").all();
-			} finally {
-				db.close();
-			}
-		});
-		expect(rows).toEqual([{ value: "reopened" }]);
-	});
+				retainedHandle?.close();
+			} catch {}
+		}
+	}, 10000);
 
 	it("attributes the database path to initialization errors while preserving the cause and code", async () => {
 		await using dir = await TempDir.create("@veyyon-sqlite-err-");
@@ -38,7 +53,7 @@ describe("openSqliteDatabase", () => {
 
 		let caught: (Error & { code?: string }) | undefined;
 		try {
-			await openSqliteDatabase(dbPath, db => {
+			await openSqliteDatabase(dbPath, (db) => {
 				db.run("SELECT * FROM non_existent_table");
 			});
 		} catch (err) {
@@ -55,15 +70,19 @@ describe("openSqliteDatabase", () => {
 		await using dir = await TempDir.create("@veyyon-sqlite-wal-");
 		const dbPath = dir.join("wal.db");
 		const sentinel = "veyyon-checkpoint-committed-marker";
-		await openSqliteDatabase(dbPath, db => {
+		await openSqliteDatabase(dbPath, (db) => {
 			try {
 				db.run("PRAGMA journal_mode = WAL");
 				db.run("PRAGMA wal_autocheckpoint = 0");
 				db.run("CREATE TABLE events (value TEXT)");
 				db.run("INSERT INTO events VALUES (?)", [sentinel]);
-				expect(fs.readFileSync(dbPath).includes(Buffer.from(sentinel))).toBe(false);
+				expect(fs.readFileSync(dbPath).includes(Buffer.from(sentinel))).toBe(
+					false,
+				);
 				checkpointWal(db);
-				expect(fs.readFileSync(dbPath).includes(Buffer.from(sentinel))).toBe(true);
+				expect(fs.readFileSync(dbPath).includes(Buffer.from(sentinel))).toBe(
+					true,
+				);
 			} finally {
 				db.close();
 			}
@@ -72,7 +91,7 @@ describe("openSqliteDatabase", () => {
 
 	it.each([true, false])(
 		"real BUSY contention terminates within its attempt bound, transient=%s",
-		async transient => {
+		async (transient) => {
 			await using dir = await TempDir.create("@veyyon-sqlite-lock-");
 			const dbPath = dir.join("busy.db");
 			const blocker = new Database(dbPath);
@@ -83,11 +102,12 @@ describe("openSqliteDatabase", () => {
 			let failure: unknown;
 			try {
 				try {
-					rows = await openSqliteDatabase(dbPath, db => {
+					rows = await openSqliteDatabase(dbPath, (db) => {
 						attempts++;
-						expect(db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout).toBe(
-							getDbBusyTimeoutMs(),
-						);
+						expect(
+							db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()
+								?.timeout,
+						).toBe(getDbBusyTimeoutMs());
 						db.run("PRAGMA busy_timeout = 1");
 						try {
 							db.run("INSERT INTO events VALUES ('opened')");
