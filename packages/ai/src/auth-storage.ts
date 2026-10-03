@@ -135,6 +135,12 @@ import {
 	orderUsageRankedCandidates,
 } from "./auth-storage/usage-ranking";
 import {
+	redactingUsageLogger,
+	redactUsageText,
+	redactUsageValue,
+	usageCredentialSecrets,
+} from "./auth-storage/usage-redaction";
+import {
 	getScopedUsageLimits,
 	getUsageReportIdentifiers,
 	getUsageReportMetadataValue,
@@ -2645,6 +2651,10 @@ export class AuthStorage {
 					};
 				} catch (error) {
 					const errorMsg = String(error);
+					const safeErrorMsg = redactUsageText(
+						errorMsg,
+						usageCredentialSecrets(request.credential),
+					);
 					// Definitive failure (invalid_grant / 401 not from a network blip) means
 					// the refresh token itself is dead — probing with the original credential
 					// will 401, the catch below will return null, and #fetchUsageCached's
@@ -2667,7 +2677,7 @@ export class AuthStorage {
 									request.provider,
 									index,
 									refreshableCredential,
-									`oauth refresh failed during usage probe: ${errorMsg}`,
+									`oauth refresh failed during usage probe: ${safeErrorMsg}`,
 								);
 								if (disabled) {
 									this.#usageLogger?.warn(
@@ -2675,7 +2685,7 @@ export class AuthStorage {
 										{
 											provider: request.provider,
 											credentialId,
-											error: errorMsg,
+											error: safeErrorMsg,
 										},
 									);
 									// Neutralize last-good for this cache key: write a null
@@ -2695,7 +2705,7 @@ export class AuthStorage {
 						"Usage credential refresh failed, using original credential",
 						{
 							provider: request.provider,
-							error: errorMsg,
+							error: safeErrorMsg,
 						},
 					);
 				}
@@ -2704,10 +2714,16 @@ export class AuthStorage {
 
 		if (providerImpl.supports && !providerImpl.supports(params)) return null;
 
+		const fetchSecrets = [
+			...new Set([
+				...usageCredentialSecrets(request.credential),
+				...usageCredentialSecrets(params.credential),
+			]),
+		];
 		try {
 			const report = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
-				logger: this.#usageLogger,
+				logger: redactingUsageLogger(this.#usageLogger, fetchSecrets),
 			});
 			// Attribute the report to the credential's organization. The orgId and
 			// orgName fallbacks apply independently: Claude's usage endpoint stamps
@@ -2732,7 +2748,7 @@ export class AuthStorage {
 					};
 				}
 			}
-			return report;
+			return redactUsageValue(report, fetchSecrets);
 		} catch (error) {
 			if (
 				error instanceof AIError.ProviderHttpError &&
@@ -2749,7 +2765,7 @@ export class AuthStorage {
 			}
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
-				error: String(error),
+				error: redactUsageText(String(error), fetchSecrets),
 			});
 			return null;
 		}
@@ -3347,7 +3363,7 @@ export class AuthStorage {
 							accountKey: buildUsageCacheIdentity(refreshedCredential),
 						};
 					} catch (error) {
-						refreshError = `oauth refresh failed: ${errorMessage(error)}`;
+						refreshError = `oauth refresh failed: ${redactUsageText(errorMessage(error), usageCredentialSecrets(initialRequest.credential))}`;
 					}
 				}
 			}
@@ -3369,6 +3385,12 @@ export class AuthStorage {
 				continue;
 			}
 
+			const probeSecrets = [
+				...new Set([
+					...usageCredentialSecrets(initialRequest.credential),
+					...usageCredentialSecrets(params.credential),
+				]),
+			];
 			const providerImpl = resolver?.(row.provider as Provider);
 			if (!providerImpl) {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
@@ -3381,7 +3403,10 @@ export class AuthStorage {
 				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
 				try {
-					const report = await providerImpl.fetchUsage(params, ctx);
+					const report = await providerImpl.fetchUsage(params, {
+						...ctx,
+						logger: redactingUsageLogger(ctx.logger, probeSecrets),
+					});
 					if (report === null) {
 						base.reason = "usage probe returned no data for this credential";
 					} else {
@@ -3391,11 +3416,11 @@ export class AuthStorage {
 						if (accountId) base.accountId = accountId;
 						if (email) base.email = email;
 						const { raw: _raw, ...trimmed } = report;
-						base.report = trimmed;
+						base.report = redactUsageValue(trimmed, probeSecrets);
 					}
 				} catch (error) {
 					base.ok = false;
-					base.reason = errorMessage(error);
+					base.reason = redactUsageText(errorMessage(error), probeSecrets);
 				}
 			}
 			probeTimeout.cancel();
@@ -3422,7 +3447,7 @@ export class AuthStorage {
 					} catch (error) {
 						base.completion = {
 							ok: false,
-							reason: errorMessage(error),
+							reason: redactUsageText(errorMessage(error), probeSecrets),
 						};
 					} finally {
 						completionTimeout.cancel();
