@@ -2,7 +2,6 @@ natives/bridge/bindings/test/a-source-tree-never-claims-to-be-compiled.test.ts
 packages/agent/test/agent-loop.test.ts
 packages/agent/test/describing-a-call-is-not-making-one.test.ts
 packages/agent/test/estimating-a-message-is-not-compacting-one.test.ts
-packages/ai/src/providers/openai-compaction.ts
 packages/ai/src/providers/register-builtins.ts
 packages/ai/src/registry/anthropic.ts
 packages/ai/src/registry/cursor.ts
