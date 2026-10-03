@@ -186,6 +186,131 @@ describe("TailBuffer", () => {
 });
 
 describe("OutputSink", () => {
+	// /dev/full exercises the real platform writer's ENOSPC path, including final flush.
+	for (const artifactMaxBytes of [0, 32]) {
+		test.skipIf(process.platform !== "linux")(
+			`refuses a successful spill after storage fails with artifact cap ${artifactMaxBytes}`,
+			async () => {
+				const sink = new OutputSink({
+					artifactPath: "/dev/full",
+					artifactId: "failed-device",
+					spillThreshold: 4,
+					artifactMaxBytes,
+					artifactHeadBytes: 16,
+				});
+				sink.push("x".repeat(100_000));
+				await expect(sink.dump()).rejects.toThrow(/ENOSPC|No space left/);
+			},
+		);
+	}
+
+	// Defect class: dump() itself issues the final tail write, so a rejection that lands after the
+	// pre-flush barrier must still fail the capture before the sink is closed. The fake writer stands
+	// in for a platform writer whose late write fails (Bun.file is the external boundary).
+	test("fails the capture when the final tail write rejects after dump starts", async () => {
+		const artifactPath = path.join(os.tmpdir(), "late-tail-rejection-artifact.bin");
+		const realFile = Bun.file.bind(Bun);
+		const tailWrite = Promise.withResolvers<number>();
+		const tailIssued = Promise.withResolvers<void>();
+		let tailRejected = false;
+		const rejectedWhenClosed: boolean[] = [];
+		const fileSpy = vi.spyOn(Bun, "file").mockImplementation(((target: unknown, ...rest: unknown[]) => {
+			if (target !== artifactPath) return (realFile as (...args: unknown[]) => unknown)(target, ...rest);
+			return {
+				writer: () => ({
+					write: (chunk: string) => {
+						if (!chunk.includes("LATE-TAIL")) return chunk.length;
+						tailIssued.resolve();
+						return tailWrite.promise;
+					},
+					end: async () => {
+						rejectedWhenClosed.push(tailRejected);
+						return 0;
+					},
+				}),
+			};
+		}) as unknown as typeof Bun.file);
+		try {
+			const sink = new OutputSink({
+				artifactPath,
+				artifactId: "late-tail",
+				spillThreshold: 4,
+				artifactMaxBytes: 64,
+				artifactHeadBytes: 16,
+			});
+			sink.push("h".repeat(16));
+			sink.push("x".repeat(500));
+			sink.push("LATE-TAIL");
+			const dumped = sink.dump().then(
+				() => undefined,
+				(error: Error) => error,
+			);
+			await tailIssued.promise;
+			tailRejected = true;
+			tailWrite.reject(new Error("late tail write failed"));
+			expect((await dumped)?.message).toBe("late tail write failed");
+			expect(rejectedWhenClosed).toEqual([true]);
+		} finally {
+			fileSpy.mockRestore();
+		}
+	});
+
+	// Defect: dump() flushed the throttled preview before its cleanup region, so an onChunk that
+	// throws on that final flush skipped the artifact writer's end(), leaking the handle. Class: any
+	// failure on the way into dump()'s cleanup must still end the writer exactly once and surface
+	// the original error. Gap: a throw from the throttle timer callback never reaches dump().
+	// The fake writer stands in for the platform writer (Bun.file is the external boundary).
+	test("ends the artifact writer once and rethrows when the final preview flush throws", async () => {
+		const artifactPath = path.join(os.tmpdir(), "preview-flush-throws-artifact.bin");
+		const realFile = Bun.file.bind(Bun);
+		let ended = 0;
+		const fileSpy = vi.spyOn(Bun, "file").mockImplementation(((target: unknown, ...rest: unknown[]) => {
+			if (target !== artifactPath) return (realFile as (...args: unknown[]) => unknown)(target, ...rest);
+			return {
+				writer: () => ({
+					write: (chunk: string) => chunk.length,
+					end: async () => {
+						ended++;
+						return 0;
+					},
+				}),
+			};
+		}) as unknown as typeof Bun.file);
+		try {
+			let calls = 0;
+			const sink = new OutputSink({
+				artifactPath,
+				artifactId: "preview-flush-throws",
+				spillThreshold: 1,
+				chunkThrottleMs: 60_000,
+				onChunk: () => {
+					calls++;
+					if (calls === 2) throw new Error("preview-failed");
+				},
+			});
+			sink.push("first-chunk-spills-storage\n");
+			sink.push("second-chunk-queued\n");
+			await expect(sink.dump()).rejects.toThrow("preview-failed");
+			expect(ended).toBe(1);
+		} finally {
+			fileSpy.mockRestore();
+		}
+	});
+
+	test("rethrows the final preview flush error when no artifact writer exists", async () => {
+		let calls = 0;
+		const sink = new OutputSink({
+			chunkThrottleMs: 60_000,
+			onChunk: () => {
+				calls++;
+				if (calls === 2) throw new Error("preview-failed");
+			},
+		});
+		sink.push("first\n");
+		sink.push("second\n");
+		await expect(sink.dump()).rejects.toThrow("preview-failed");
+	});
+
 	test("tracks totals and adds notice in dump", async () => {
 		const sink = new OutputSink();
 		await sink.push("hello\nworld");

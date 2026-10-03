@@ -3,6 +3,7 @@ mod coreutils;
 pub mod cpu_budget;
 mod fd;
 pub mod minimizer;
+pub mod output_decode;
 pub mod process;
 pub mod shell;
 mod which;

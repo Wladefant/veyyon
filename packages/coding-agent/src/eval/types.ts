@@ -44,6 +44,8 @@ export interface EvalCellResult {
 export interface EvalToolDetails {
 	cells?: EvalCellResult[];
 	jsonOutputs?: unknown[];
+	/** Persisted structured display representation version. */
+	displayVersion?: number;
 	images?: ImageContent[];
 	statusEvents?: EvalStatusEvent[];
 	isError?: boolean;

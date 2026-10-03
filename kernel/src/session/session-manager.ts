@@ -95,6 +95,7 @@ import {
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 import { assertNotTerminalOwned } from "./terminal-ownership";
+import { migrateToolResultEntries } from "./tool-result-codecs";
 
 const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
@@ -1750,6 +1751,14 @@ export class SessionManager {
 					operatorNotices: this.#operatorNotices,
 				},
 			);
+			const migrationArtifacts = new ArtifactManager(sessionFileStem(resolvedSessionFile));
+			if (
+				await migrateToolResultEntries(fileEntries, {
+					saveArtifact: (content, toolName) => migrationArtifacts.save(content, toolName),
+				})
+			) {
+				migrated = true;
+			}
 			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
@@ -1758,8 +1767,8 @@ export class SessionManager {
 			}
 		}
 
-		// Everything above is read-only preparation. Commit the identity switch
-		// only after the target has loaded and validated successfully, so a failed
+		// Prepare and preserve payloads before committing the identity switch.
+		// The target must load and validate first, so a failed
 		// switch cannot append a terminal lifecycle record to the current file.
 		this.#endLifecycle("session_switched");
 		await this.#drainAndCloseWriter();
@@ -2030,7 +2039,7 @@ export class SessionManager {
 		// A flush is a request to make the file match memory, so a latched fault takes
 		// its attempt here instead of being rethrown at a caller who asked for the
 		// opposite of a refusal.
-		if (this.#retryPersistenceAfterFailure()) await this.#rewriteAtomically();
+		if (this.#retryPersistenceAfterFailure() || this.#rewriteRequired) await this.#rewriteAtomically();
 		await this.#scheduleDiskWork(async () => {
 			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});
