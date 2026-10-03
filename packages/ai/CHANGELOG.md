@@ -47,6 +47,7 @@
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed Codex turn-state lifecycle to isolate compatibility-scoped cells and clear stale tokens on fresh non-compaction turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved Codex WebSocket append state across throttling rejections and gated retry baselines on completed responses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 73b684511bf60018fff14712a0016672419f9389).
 - Distinguished concrete credentials from ambient AWS and Vertex sources during startup model selection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex SSE request retries to re-serialize payloads per attempt, preserving onPayload hooks and zstd compression compatibility ([Refs #343](https://github.com/Wladefant/veyyon/pull/343)).
