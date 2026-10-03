@@ -367,14 +367,19 @@ describe("retained isolation cleanup", () => {
 		expect(await exists(path.join(canonicalDir, RETAINED_BACKEND_FILE))).toBe(true);
 
 		const initialOwner = await readIsolationOwner(canonicalDir);
-
-		// Clear B removes the old retained root cleanly
-		await clearWorktrees({ all: false, dryRun: false, json: true });
-		const clearBResult = JSON.parse(stdout);
-		expect(clearBResult).toMatchObject({ removed: 1, failed: 0 });
-		expect(await exists(canonicalDir)).toBe(false);
-
-		// Task A now claims the same path with real ensureIsolation
+		const readStarted = Promise.withResolvers<void>();
+		const releaseRead = Promise.withResolvers<void>();
+		const originalReadFile = fs.readFile;
+		let heldRead = false;
+		vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+			const contents = await originalReadFile(...args);
+			if (!heldRead && String(args[0]) === path.join(canonicalDir, RETAINED_BACKEND_FILE)) {
+				heldRead = true;
+				readStarted.resolve();
+				await releaseRead.promise;
+			}
+			return contents;
+		});
 		vi.spyOn(natives, "isoResolve").mockReturnValue({
 			kind: natives.IsoBackendKind.Rcopy,
 			candidates: [natives.IsoBackendKind.Rcopy],
@@ -385,29 +390,30 @@ describe("retained isolation cleanup", () => {
 			await fs.mkdir(mergedDir, { recursive: true });
 		});
 
-		const taskAHandle = await ensureIsolation(repo, id);
-		expect(await exists(canonicalDir)).toBe(true);
+		// C already holds the old metadata. B and allocation cannot cross its lease.
+		const clearC = clearWorktrees({ all: false, dryRun: false, json: true });
+		try {
+			await Promise.race([readStarted.promise, clearC]);
+			await clearWorktrees({ all: false, dryRun: false, json: true });
+			expect(JSON.parse(stdout)).toMatchObject({ removed: 0, failed: 1 });
+			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+			expect(await fs.readFile(oldSentinel, "utf8")).toBe("old-sentinel");
+		} finally {
+			releaseRead.resolve();
+			await clearC;
+		}
+		expect(JSON.parse(stdout)).toMatchObject({ removed: 1, failed: 0 });
+		expect(await exists(canonicalDir)).toBe(false);
+
+		// Reuse is allowed after C finishes, never while its authorization is pending.
+		await ensureIsolation(repo, id);
 		const newSentinel = path.join(canonicalDir, "task-a-sentinel.txt");
 		await fs.writeFile(newSentinel, "task-a-data");
-
 		const newOwner = await readIsolationOwner(canonicalDir);
 		expect(newOwner).not.toBeNull();
-		if (initialOwner) {
-			expect(newOwner!.token).not.toBe(initialOwner.token);
-		}
-
-		// Clear C running on the target (with stale target entry) must fail closed because
-		// the new claim is not authorized by retained backend metadata and owner is live!
-		stdout = "";
+		expect(newOwner!.token).not.toBe(initialOwner!.token);
 		await clearWorktrees({ all: false, dryRun: false, json: true });
-		const clearCResult = JSON.parse(stdout);
-		expect(clearCResult).toMatchObject({ removed: 0, failed: 1 });
-		expect(clearCResult.results[0].error).toContain("Missing retained backend metadata");
-		expect(clearCResult.results[0].error).toContain("active live owner");
-
-		// Task A's reservation and sentinel must be intact!
-		expect(await exists(canonicalDir)).toBe(true);
-		expect(await exists(newSentinel)).toBe(true);
+		expect(JSON.parse(stdout)).toMatchObject({ removed: 0, failed: 1 });
 		expect(await fs.readFile(newSentinel, "utf8")).toBe("task-a-data");
 	});
 
