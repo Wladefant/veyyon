@@ -163,27 +163,44 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 }
 
-// Persist nested patches before workspace cleanup; cleans partial files on failure.
+/**
+ * Persist each captured nested patch to `artifactsDir` so later recovery can find it.
+ *
+ * Each destination is reserved exclusively with `fs.open(..., 'wx')` before writing.
+ * Tracking occurs only after exclusive create succeeds, ensuring pre-existing files
+ * (and collision data on EEXIST) are preserved rather than overwritten or mistakenly
+ * unlinked. On mid-write failure (e.g. ENOSPC), the owned handle is closed and only
+ * newly-created files are unlinked best-effort.
+ */
 export async function persistNestedPatches(
 	artifactsDir: string,
 	agentId: string,
 	nestedPatches: readonly NestedRepoPatch[],
 ): Promise<string[]> {
-	const saved: string[] = [];
+	const created: string[] = [];
 	try {
 		for (const [index, nestedPatch] of nestedPatches.entries()) {
 			const destination = path.join(
 				artifactsDir,
 				`${agentId}.nested-${index}-${nestedPatch.relativePath.replace(/[^a-zA-Z0-9._-]/g, "_") || "root"}.patch`,
 			);
-			await Bun.write(destination, nestedPatch.patch);
-			saved.push(destination);
+			// Reserve the destination exclusively: 'wx' fails with EEXIST if destination
+			// already exists, preserving pre-existing collision data without tracking.
+			const handle = await fs.open(destination, "wx");
+			created.push(destination);
+			try {
+				await handle.writeFile(nestedPatch.patch, "utf8");
+			} finally {
+				await handle.close();
+			}
 		}
 	} catch (error) {
-		await Promise.all(saved.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
+		// Clean up only owned newly-created files; pre-existing files that caused EEXIST
+		// were never added to `created` and remain untouched.
+		await Promise.all(created.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
 		throw error;
 	}
-	return saved;
+	return created;
 }
 
 export interface IsolationPatchArtifacts {
