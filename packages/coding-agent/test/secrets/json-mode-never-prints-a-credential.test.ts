@@ -115,6 +115,8 @@ function sessionEmitting(events: readonly AgentSessionEvent[]): PrintModeSession
 			return true;
 		},
 		dispose: async () => {},
+		prepareForHeadlessAdvisorDrain: () => {},
+		waitForAdvisorCatchup: async () => true,
 		displayAssistantContent: content => content,
 		obfuscateProviderText: text => text.split(CREDENTIAL).join(PLACEHOLDER),
 	};

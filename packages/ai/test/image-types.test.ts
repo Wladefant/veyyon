@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import type { GeneratedImage, ImageGenerationRequest, ImageGenerationResult } from "../src/images/types";
+import type {
+	GeneratedImage,
+	ImageGenerationRequest,
+	ImageGenerationResult,
+} from "../src/images/types";
 
 describe("image contracts and data types", () => {
 	it("constructs valid image generation requests and results with hosted metadata", () => {
