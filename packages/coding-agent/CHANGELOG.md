@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Fixed HTML export viewer escaping pre-escaped nested list markup and inline code formatting (oh-my-pi 6b3d0d0afdc580624e80f33ebc4b8c158a3a7bbf, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [18.1.11] - 2026-09-05
 

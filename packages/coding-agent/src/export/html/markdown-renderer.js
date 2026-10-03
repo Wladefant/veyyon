@@ -64,7 +64,11 @@
 					return `<pre><code class="hljs">${highlight(token.text, token.lang)}</code></pre>`;
 				},
 				text(token) {
-					return token.tokens ? this.parser.parseInline(token.tokens) : escapeHtmlTags(escapeHtml(token.text));
+					return token.tokens
+						? this.parser.parseInline(token.tokens)
+						: token.escaped
+							? token.text
+							: escapeHtmlTags(escapeHtml(token.text));
 				},
 				codespan(token) {
 					return `<code>${escapeHtml(token.text)}</code>`;
