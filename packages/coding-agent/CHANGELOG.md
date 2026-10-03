@@ -12,6 +12,7 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Fixed Windows stdio MCP batch command paths containing percent syntax expanding environment variables before launch by escaping the command token for cmd.exe ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e509fc3cbcda5c7579067d7d19e0764f9b33a4b7).
 - Python, Ruby and Julia availability probes ignore stdin, terminate within ten seconds or the shorter eval timeout, and stop on cancellation ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0379198a5edca5eb65221488613afa63c9379a87).
 - Dedicated Codex web searches keep hosted `web_search` tools at the top level for Lite catalog models instead of relocating them into ignored `additional_tools` input ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 22d02031d904bf2e0d5fc5a1b41caf6dc0a76e6b).
 - GitHub tool and internal URL cache compare effective repository hosts including `GH_HOST` defaults, preserve non-default host identity, and route fallback URLs to the effective host ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 92bd2a98827ca7b8b7f4cc38f62d6461c4d62dc6, 33a1f6092dc270a44aeb6221413c6dfa5e2487df, dcceed36822d8c99d8c3f8e25e304fd565039316).
