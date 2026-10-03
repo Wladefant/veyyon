@@ -421,12 +421,12 @@ describe("retained isolation cleanup", () => {
 		const segment = getTaskIsolationSegment(repoRootDir, id);
 		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
 
-		const childScriptPath = path.join(__dirname, `child-crash-${Date.now()}.ts`);
+		const childScriptPath = path.join(root, `child-crash-${Date.now()}.test.ts`);
 		const childScript = `
 import { vi, spyOn } from "bun:test";
-import * as natives from "@veyyon/natives";
-import * as utils from "@veyyon/utils";
-import { ensureIsolation } from "../../src/task/worktree";
+import * as natives from ${JSON.stringify(import.meta.resolve("@veyyon/natives"))};
+import * as utils from ${JSON.stringify(import.meta.resolve("@veyyon/utils"))};
+import { ensureIsolation } from ${JSON.stringify(path.resolve(__dirname, "../../src/task/worktree.ts"))};
 
 const workspacesDir = process.env.TEST_WORKSPACES_DIR!;
 const repo = process.env.TEST_REPO_DIR!;
