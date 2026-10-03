@@ -387,13 +387,15 @@ function remotesIn(cwd: string | undefined, options?: PolysimGuardOptions): Reco
 }
 
 function scopeIsPolysim(scope: CommandScope, options?: PolysimGuardOptions): boolean {
+	if (scope.ghRepo !== undefined) return isPolysimulatorRepo(scope.ghRepo);
 	const remotes = remotesIn(scope.cwd, options);
-	return remotes === undefined || Object.values(remotes).some(isPolysimulatorRemoteUrl);
+	return remotes !== undefined && Object.values(remotes).some(isPolysimulatorRemoteUrl);
 }
 
 function repoIsPolysim(repo: string, scope: CommandScope, options?: PolysimGuardOptions): boolean {
-	if (isUnresolvable(repo)) return true;
-	return isPolysimulatorRepo(repo) || (repo === "." && scopeIsPolysim(scope, options));
+	if (isPolysimulatorRepo(repo)) return true;
+	if (repo === "." || isUnresolvable(repo)) return scopeIsPolysim(scope, options);
+	return false;
 }
 
 function applyScopeVariable(scope: CommandScope, name: string, value: string): void {
@@ -411,6 +413,31 @@ function applyScopeVariable(scope: CommandScope, name: string, value: string): v
 
 const SCOPE_VARIABLE = /^(GIT_DIR|GIT_WORK_TREE|GH_REPO|GIT_CONFIG(?:_[A-Z0-9_]+)?)=(.*)$/;
 const CD_COMMANDS: Record<string, true> = { cd: true, pushd: true, chdir: true, "set-location": true, sl: true };
+const WRAPPER_COMMANDS: Record<string, true> = {
+	sudo: true,
+	do: true,
+	else: true,
+	time: true,
+	timeout: true,
+	xargs: true,
+	nohup: true,
+	builtin: true,
+	command: true,
+	exec: true,
+	env: true,
+};
+
+function isCommandPosition(words: readonly string[], position: number): boolean {
+	if (position === 0) return true;
+	for (let i = 0; i < position; i++) {
+		const w = words[i];
+		if (SCOPE_VARIABLE.test(w) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+		const name = commandName(w).toLowerCase();
+		if (name === "then" || WRAPPER_COMMANDS[name] === true || name.startsWith("-")) continue;
+		return false;
+	}
+	return true;
+}
 
 function applyCd(words: readonly string[], scope: CommandScope): void {
 	let target: string | undefined;
@@ -626,21 +653,21 @@ function checkPushArguments(
 
 	let targetIsPolysim: boolean;
 	if (target === undefined) {
-		targetIsPolysim =
-			remotes === undefined || [...Object.values(remotes), ...Object.values(configured)].some(isPolysim);
-	} else if (isUnresolvable(target) || SHELL_GLOB.test(target) || isPolysim(target)) {
+		targetIsPolysim = [...Object.values(remotes ?? {}), ...Object.values(configured)].some(isPolysim);
+	} else if (isPolysim(target)) {
 		targetIsPolysim = true;
 	} else if (known(target)) {
 		targetIsPolysim = isPolysim(urlsOf(target));
+	} else if (isUnresolvable(target) || SHELL_GLOB.test(target)) {
+		targetIsPolysim = [...Object.values(remotes ?? {}), ...Object.values(configured)].some(isPolysim);
 	} else {
-		// A URL or path that is not polysimulator. A bare name that is no configured
-		// remote is refused by git itself, unless the remotes were unreadable.
-		targetIsPolysim = !/[:/\\]/.test(target) && remotes === undefined;
+		// A URL or path that is not polysimulator.
+		targetIsPolysim = false;
 	}
 	if (context.opaque) {
 		// Unreadable config may rewrite the destination: judge by where the command runs too.
-		const scopeRemotes = remotes === undefined ? undefined : Object.values(remotes);
-		if (targetIsPolysim || scopeRemotes === undefined || scopeRemotes.some(isPolysim)) return DENIAL;
+		const hasPolysimRemote = [...Object.values(remotes ?? {}), ...Object.values(configured)].some(isPolysim);
+		if (targetIsPolysim || hasPolysimRemote) return DENIAL;
 		return undefined;
 	}
 	if (!targetIsPolysim) return undefined;
@@ -851,10 +878,14 @@ function prMergeDenial(
 	scope: CommandScope,
 	options: PolysimGuardOptions | undefined,
 ): PolysimDenialResult | undefined {
-	if ((pr !== undefined && isUnresolvable(pr)) || (repo !== undefined && isUnresolvable(repo))) return DENIAL;
+	if ((pr !== undefined && isUnresolvable(pr)) || (repo !== undefined && isUnresolvable(repo))) {
+		return scopeIsPolysim(scope, options) ? DENIAL : undefined;
+	}
 	const prIsUrl = pr !== undefined && /github\.com[/:]/i.test(pr);
 	// Nowhere to ask `gh` from: the base cannot be learned, so it counts as main.
-	if (!prIsUrl && repo === undefined && scope.cwd === undefined) return DENIAL;
+	if (!prIsUrl && repo === undefined && scope.cwd === undefined) {
+		return scopeIsPolysim(scope, options) ? DENIAL : undefined;
+	}
 	return baseDenialFor((options?.resolvePrBase ?? defaultResolvePrBase)(pr, repo, scope.cwd ?? process.cwd()));
 }
 
@@ -990,9 +1021,9 @@ function checkApiRequest(
 			if (!repoScopeIsPolysim()) return undefined;
 		} else {
 			const polysim =
-				isUnresolvable(owner) ||
-				isUnresolvable(name) ||
-				`${owner}/${name.replace(/\.git$/, "")}` === POLYSIM_REPO_SLUG;
+				isUnresolvable(owner) || isUnresolvable(name)
+					? repoScopeIsPolysim()
+					: `${owner}/${name.replace(/\.git$/, "")}`.toLowerCase() === POLYSIM_REPO_SLUG;
 			if (!polysim) return undefined;
 			resolverRepo = `${owner}/${name}`;
 		}
@@ -1413,7 +1444,7 @@ function checkWords(
 			found = checkGhInvocation(words.slice(position), scope, options);
 		} else if (HTTP_CLIENTS[name] === true) {
 			found = checkHttpClientInvocation(words.slice(position), scope, options);
-		} else if (word.startsWith("$") || word.startsWith("`")) {
+		} else if ((word.startsWith("$") || word.startsWith("`")) && isCommandPosition(words, position)) {
 			// `$g push origin main`: a command named by a variable is read as git and as gh.
 			const rest = words.slice(position + 1);
 			found =
@@ -1441,7 +1472,9 @@ function checkScript(
 ): PolysimDenialResult | undefined {
 	// Past the nesting bound the guard stops reading; text that could still be
 	// a push or a merge is refused rather than waved through.
-	if (depth > MAX_INTERPRETED_SHELL_DEPTH) return /\b(?:git|gh)\b/i.test(command) ? DENIAL : undefined;
+	if (depth > MAX_INTERPRETED_SHELL_DEPTH) {
+		return scopeIsPolysim(scope, options) && /\b(?:git|gh)\b/i.test(command) ? DENIAL : undefined;
+	}
 	for (const body of substitutionBodies(command)) {
 		const found = checkScript(body, { ...scope }, options, depth + 1);
 		if (found) return found;
@@ -1519,7 +1552,7 @@ export function checkPushTargetPolysimMainDenial(
 	remoteUrl: string | undefined,
 	remoteBranch: string,
 ): PolysimDenialResult | undefined {
-	if (remoteUrl !== undefined && !isPolysimulatorRemoteUrl(remoteUrl)) return undefined;
+	if (remoteUrl === undefined || !isPolysimulatorRemoteUrl(remoteUrl)) return undefined;
 	return isMainRefspec(remoteBranch) ? DENIAL : undefined;
 }
 

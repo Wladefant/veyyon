@@ -152,6 +152,36 @@ export function isWorkerIpcDeserializeError(err: unknown): boolean {
 	);
 }
 
+/** Recycle callbacks for the active advanced-serialization worker IPC channels. */
+const workerIpcFaultHandlers = new Set<(err: Error) => void>();
+
+/**
+ * Register a fault/recycle callback for an active advanced-serialization worker
+ * IPC channel.
+ *
+ * Bun surfaces a malformed frame as a process-global `uncaughtException`
+ * ({@link isWorkerIpcDeserializeError}) with no way to attribute it to a
+ * specific channel, so when one fires every registered handler is invoked to
+ * conservatively fault its worker — reject in-flight requests and recycle the
+ * subprocess — instead of leaving pending work to await forever. Returns an
+ * unregister function; callers MUST unregister when the worker exits.
+ */
+export function registerWorkerIpcFaultHandler(handler: (err: Error) => void): () => void {
+	workerIpcFaultHandlers.add(handler);
+	return () => workerIpcFaultHandlers.delete(handler);
+}
+
+/** Invoke every registered worker IPC fault handler, isolating handler throws. */
+function faultWorkerIpcChannels(err: Error): void {
+	for (const handler of workerIpcFaultHandlers) {
+		try {
+			handler(err);
+		} catch (handlerErr) {
+			logger.warn("Worker IPC fault handler threw", { err: handlerErr });
+		}
+	}
+}
+
 // Well-known key marking an error as an *expected* teardown artifact (e.g. a
 // browser run-scope abort at normal run end). `Symbol.for` so the marker
 // survives duplicate module instances across bundles/realms.
@@ -259,13 +289,16 @@ if (isMainThread) {
 			}
 			// A malformed advanced-serialization frame from a worker subprocess
 			// surfaces here as a process-level uncaughtException (oven-sh/bun#37287)
-			// rather than in the channel's ipc() callback. It is a worker-local
-			// fault on the subprocess-isolation boundary, so contain it to that
-			// worker: log and continue, letting the owning client detect the dead
-			// worker via its own onExit/error path instead of exiting the whole
-			// session. Mirrors the ipc-send EPIPE containment below (#9158, #2997).
+			// rather than in the channel's ipc() callback, and Bun gives no way to
+			// tell which channel produced it. Contain it to the worker layer: keep
+			// the session alive and conservatively fault every active advanced-IPC
+			// worker so its owning client rejects in-flight requests and recycles
+			// the subprocess — a worker that sent a bad frame but stays alive would
+			// otherwise never fire onExit and leave callers awaiting forever.
+			// Mirrors the ipc-send EPIPE containment below (#9158, #2997).
 			if (isWorkerIpcDeserializeError(err)) {
-				logger.warn("Ignoring malformed worker IPC frame; optional subsystem will self-recover", { err });
+				logger.warn("Malformed worker IPC frame; faulting active worker subsystems", { err });
+				faultWorkerIpcChannels(err);
 				return;
 			}
 			// fd 2 may be redirected to the log while a TUI owns the terminal

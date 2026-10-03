@@ -11,6 +11,6 @@ export function namespaceSessionId(sessionId: string): string {
 export default createKernelBackend<RubyExecutorOptions>({
 	id: "ruby",
 	sessionPrefix: RUBY_SESSION_PREFIX,
-	checkAvailability: (cwd, interpreter) => checkRubyKernelAvailability(cwd, interpreter),
+	checkAvailability: (cwd, interpreter, probeOptions) => checkRubyKernelAvailability(cwd, interpreter, probeOptions),
 	execute: (code, options) => executeRuby(code, options),
 });
