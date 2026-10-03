@@ -341,7 +341,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		return {
 			exitCode: undefined,
 			cancelled: true,
-			...(await sink.dump("Command cancelled")),
+			...(await sink.dumpWithArtifactStatus("Command cancelled")),
 		};
 	}
 
@@ -471,7 +471,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				exitCode: undefined,
 				cancelled: true,
 				timedOut: winner.kind === "timeout",
-				...(await sink.dump(
+				...(await sink.dumpWithArtifactStatus(
 					winner.kind === "timeout" && deadlineTimeoutMs !== undefined
 						? `Command timed out after ${Math.round(deadlineTimeoutMs / 1000)} seconds`
 						: "Command cancelled",
@@ -496,7 +496,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				exitCode: undefined,
 				cancelled: true,
 				timedOut: true,
-				...(await sink.dump(annotation)),
+				...(await sink.dumpWithArtifactStatus(annotation)),
 			};
 		}
 
@@ -509,7 +509,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump("Command cancelled")),
+				...(await sink.dumpWithArtifactStatus("Command cancelled")),
 			};
 		}
 
@@ -539,7 +539,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			signal: winner.result.signal,
 			cancelled: false,
 			workingDir: winner.result.workingDir,
-			...(await sink.dump()),
+			...(await sink.dumpWithArtifactStatus()),
 		};
 	} catch (err) {
 		resetSession = true;

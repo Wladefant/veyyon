@@ -26,6 +26,7 @@ import type {
 	ViewTone,
 } from "@veyyon/view";
 import { stripTaskResultEnvelope } from "@veyyon/wire/task-result";
+import { formatArtifactErrorNotice } from "../core/output-meta";
 import {
 	Ellipsis,
 	extractResultText,
@@ -38,7 +39,6 @@ import {
 	type ToolViewResult,
 	truncateToWidth,
 } from "../core/render-utils";
-import { formatArtifactErrorNotice } from "../core/output-meta";
 import type { AgentActivitySnapshot, JobSnapshot, JobToolDetails } from "./job";
 import { resolveJobSnapshots } from "./job-result-codec";
 

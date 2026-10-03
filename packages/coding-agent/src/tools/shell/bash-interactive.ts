@@ -356,7 +356,7 @@ export async function runInteractiveBashPty(
 				tui.requestRender();
 				void (async () => {
 					await component.flushOutput();
-					const summary = await sink.dump();
+					const summary = await sink.dumpWithArtifactStatus();
 					done({
 						exitCode: run.exitCode,
 						cancelled: run.cancelled,

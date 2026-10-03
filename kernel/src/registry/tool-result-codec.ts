@@ -18,6 +18,11 @@
  */
 import type { ToolResultMessage } from "@veyyon/ai";
 
+/** Durable storage offered while a domain migrates an older result representation. */
+export interface ToolResultMigrationContext {
+	saveArtifact(content: string, toolName: string): Promise<string>;
+}
+
 export interface ToolResultCodec {
 	/** The tool whose results this codec stores, which is also the key the kernel looks it up under. */
 	readonly toolName: string;
@@ -32,4 +37,9 @@ export interface ToolResultCodec {
 	 * written with. Leaves details that were written whole unchanged.
 	 */
 	restore(details: unknown, content: ToolResultMessage["content"]): void;
+	/**
+	 * Migrate a stale details representation only after preserving any displaced
+	 * payload through durable storage. Return true when persistence must rewrite.
+	 */
+	migrate?(details: unknown, context: ToolResultMigrationContext): Promise<boolean>;
 }

@@ -577,7 +577,7 @@ export async function executeWithKernelBase<
 			const annotation = timedOut
 				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
 				: undefined;
-			const dumped = await sink.dump(annotation);
+			const dumped = await sink.dumpWithArtifactStatus(annotation);
 			return {
 				exitCode: undefined,
 				cancelled: true,
@@ -596,7 +596,9 @@ export async function executeWithKernelBase<
 		}
 
 		if (result.stdinRequested) {
-			const dumped = await sink.dump("Kernel requested stdin; interactive input is not supported.");
+			const dumped = await sink.dumpWithArtifactStatus(
+				"Kernel requested stdin; interactive input is not supported.",
+			);
 			return {
 				exitCode: 1,
 				cancelled: false,
@@ -615,7 +617,7 @@ export async function executeWithKernelBase<
 		}
 
 		const exitCode = result.status === "ok" ? 0 : 1;
-		const dumped = await sink.dump();
+		const dumped = await sink.dumpWithArtifactStatus();
 		return {
 			exitCode,
 			cancelled: false,
@@ -634,7 +636,7 @@ export async function executeWithKernelBase<
 	} catch (err) {
 		if (isCancellationError(err, cancelledErrorClass) || abortShield.abortRequested || abortShield.signal?.aborted) {
 			const timedOut = abortShield.timedOut || isTimedOutCancellation(err, cancelledErrorClass, abortShield.signal);
-			const dumped = await sink.dump(
+			const dumped = await sink.dumpWithArtifactStatus(
 				timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
 			);
 			return {

@@ -98,7 +98,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 	// and never derive a competing fixed timer from it.
 	const acquireBudgetMs = legacyTimeoutMs ?? options.idleTimeoutMs;
 	const finish = async (exitCode: number | undefined, cancelled: boolean): Promise<JsResult> => {
-		const summary = await outputSink.dump();
+		const summary = await outputSink.dumpWithArtifactStatus();
 		return {
 			output: summary.output,
 			exitCode,
