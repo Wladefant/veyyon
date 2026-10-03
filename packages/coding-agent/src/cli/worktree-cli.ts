@@ -165,6 +165,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					if (await isAbandonedEmptyReservation(target.path)) {
 						await fs.rm(target.path, { recursive: true, force: true });
 						return;
+					}
 					const sidecarStat = await statPath(path.join(target.path, RETAINED_BACKEND_FILE));
 					const hasSidecar = sidecarStat?.found?.isFile();
 					const owner = await readIsolationOwner(target.path).catch(() => null);
