@@ -1122,8 +1122,8 @@ describe("openCodexCompactionEventStream", () => {
 		const first = await stream.next();
 		expect(first.done).toBe(false);
 		expect(first.value).toMatchObject({ type: "response.metadata" });
-		expect(getSessionTurnState(pState, "s_replay_abort")).toBe("abort_mid_ts");
-		expect(getSessionModelsEtag(pState)).toBe("abort_mid_etag");
+		expect(getSessionTurnState(pState, "s_replay_abort")).toBeUndefined();
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
 
 		abortController.abort(new Error("caller canceled mid-replay"));
 
@@ -1167,8 +1167,8 @@ describe("openCodexCompactionEventStream", () => {
 		const first = await stream.next();
 		expect(first.done).toBe(false);
 		expect(first.value).toMatchObject({ type: "response.metadata" });
-		expect(getSessionTurnState(pState, "s_replay_abort_post")).toBe("abort_post_ts");
-		expect(getSessionModelsEtag(pState)).toBe("abort_post_etag");
+		expect(getSessionTurnState(pState, "s_replay_abort_post")).toBeUndefined();
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
 
 		const second = await stream.next();
 		expect(second.done).toBe(false);
@@ -1185,6 +1185,77 @@ describe("openCodexCompactionEventStream", () => {
 		expect(getSessionTurnState(pState, "s_replay_abort_post")).toBeUndefined();
 		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
 	});
+
+	for (const exit of ["return", "semantic"] as const) {
+		for (const committedEtag of [undefined, "b_etag", "a_etag"]) {
+			test(`SSE ${exit} preserves ${committedEtag ?? "baseline"} after another request`, async () => {
+				const encoder = new TextEncoder();
+				let controller: ReadableStreamDefaultController<Uint8Array>;
+				let canceled = false;
+				const activeBody = new ReadableStream<Uint8Array>({
+					start(source) {
+						controller = source;
+						source.enqueue(
+							encoder.encode(
+								`data: ${JSON.stringify({
+									type: "response.metadata",
+									headers: { "x-codex-turn-state": "a_ts", "x-models-etag": "a_etag" },
+								})}\n\n`,
+							),
+						);
+					},
+					cancel() {
+						canceled = true;
+					},
+				});
+				const successfulBody = [
+					{ type: "response.metadata", headers: { "x-codex-turn-state": "b_ts" } },
+					{ type: "response.output_item.done", item: { type: "compaction", encrypted_content: "b_blob" } },
+					{ type: "response.completed" },
+				]
+					.map(event => `data: ${JSON.stringify(event)}\n\n`)
+					.join("");
+				let fetches = 0;
+				const fetchMock: FetchImpl = async () => {
+					fetches++;
+					return fetches === 1
+						? new Response(activeBody, { headers: { "x-models-etag": "a_header" } })
+						: new Response(successfulBody, { headers: { "x-models-etag": committedEtag! } });
+				};
+				const pState = new Map<string, ProviderSessionState>();
+				const sessionId = `stage_${exit}_${committedEtag ?? "control"}`;
+				seedPriorState(pState, sessionId, undefined, "prior_etag");
+				const options = {
+					apiKey: token,
+					sessionId,
+					providerSessionState: pState,
+					preferWebsockets: false,
+					fetch: fetchMock,
+				};
+				const active = await openCodexCompactionEventStream(model, body, options);
+				expect((await active.next()).value?.type).toBe("response.metadata");
+				if (committedEtag) {
+					const other = await openCodexCompactionEventStream(model, body, options);
+					const result = await collectCodexCompactionV2Events(other, undefined, text => text);
+					expect(result.compactionItem.encrypted_content).toBe("b_blob");
+				}
+				if (exit === "return") {
+					await active.return();
+					expect(canceled).toBe(true);
+				} else {
+					controller!.enqueue(encoder.encode('data: {"type":"response.completed"}\n\n'));
+					controller!.close();
+					await expect(collectCodexCompactionV2Events(active, undefined, text => text)).rejects.toThrow(
+						"expected exactly one",
+					);
+				}
+				expect(getSessionModelsEtag(pState)).toBe(committedEtag ?? "prior_etag");
+				expect(getSessionTurnState(pState, sessionId)).toBe(committedEtag ? "b_ts" : undefined);
+				expect(fetches).toBe(committedEtag ? 2 : 1);
+				expect(activeBody.locked).toBe(false);
+			});
+		}
+	}
 
 	test("raw API consumer uncanceled control: consumes full replay successfully and commits metadata", async () => {
 		class ReplaySuccessControlWs extends BaseMockWs {
