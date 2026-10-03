@@ -383,3 +383,10 @@ export const streamOllama = createLazyStream(
 export const streamBedrock = createLazyStream("bedrock-converse-stream", () =>
 	import("./amazon-bedrock").then(module => ({ stream: module.streamBedrock })),
 );
+// GitLab Duo Workflow bounds its own first event (`openBoundedFirstEventBudget`) and owns the
+// WebSocket that carries the remote agent's tool actions, so the wrapper adds no watchdog of its own.
+export const streamGitLabDuoWorkflow = createLazyStream(
+	"gitlab-duo-agent",
+	() => import("./gitlab-duo-workflow").then(module => ({ stream: module.streamGitLabDuoWorkflow })),
+	PROVIDER_HANDLED_STREAM_TIMEOUTS,
+);

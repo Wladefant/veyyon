@@ -39,7 +39,7 @@ import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
 import type { DevinOptions } from "./providers/devin";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
-import { type GitLabDuoWorkflowOptions, streamGitLabDuoWorkflow } from "./providers/gitlab-duo-workflow";
+import type { GitLabDuoWorkflowOptions } from "./providers/gitlab-duo-workflow";
 import type { GoogleOptions } from "./providers/google";
 import { getVertexAccessToken } from "./providers/google-auth";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
@@ -55,13 +55,16 @@ import { streamPiNative } from "./providers/pi-native-client";
 // gitlab-duo / kimi / synthetic providers stay eager because their modules
 // export routing predicates (isGitLabDuoModel, isKimiModel, isSyntheticModel)
 // that must be callable synchronously before streaming begins, and their
-// modules are thin wrappers with no heavy SDK dependencies.
+// modules are thin wrappers with no heavy SDK dependencies. GitLab Duo
+// Workflow routes on `model.api` alone, so its 3,000-line protocol client
+// loads on the first `gitlab-duo-agent` turn.
 import {
 	streamAnthropic,
 	streamAzureOpenAIResponses,
 	streamBedrock,
 	streamCursor,
 	streamDevin,
+	streamGitLabDuoWorkflow,
 	streamGoogle,
 	streamGoogleGeminiCli,
 	streamGoogleVertex,
