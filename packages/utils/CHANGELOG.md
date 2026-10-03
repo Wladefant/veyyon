@@ -21,6 +21,10 @@
 - The session heartbeat and the `Previous session died silently` log line now carry `rssBytes`, `freeMemBytes`, `heapTotal`, `heapUsed`, `external`, `smol`, and `forceRAMSize`, so a session the operating system ended for want of memory or a per-process JSC heap ceiling (D04 abort) can be told from a terminal closing under it ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - The session heartbeat and the `Previous session died silently` log line now also carry the resource that runs out before RAM does: on Windows `commitChargeBytes`, `commitLimitBytes` and `processCommitBytes` (system commit against RAM plus pagefile, the "Out of Virtual Memory" limit of D06), and on Linux `cgroupMemoryBytes` and `cgroupMemoryMaxBytes` (the level of the cgroup v2 chain closest to its `memory.max`). Each field is absent where the platform cannot give it ([#73](https://github.com/Wladefant/veyyon/issues/73))
 
+### Fixed
+
+- SQLite recovery rechecks the current store under its recovery lock, leaves healthy main databases intact when a secondary store fails, and reports permission failures. Damaged stores and sidecars are published as one private backup directory. Interrupted removal leaves a durable guard that blocks reopening until repair ([#293](https://github.com/Wladefant/veyyon/pull/293)).
+
 ### Changed
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).

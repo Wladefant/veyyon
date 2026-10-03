@@ -1,7 +1,9 @@
 import { Database } from "bun:sqlite";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
+import { atomicWriteFileSync } from "./atomic-write";
 import { exponentialBackoffDelay } from "./backoff";
 import { getDbBusyTimeoutMs } from "./env";
 import { withFileLockSync } from "./file-lock";
@@ -133,7 +135,7 @@ async function openWithBusyRetries<T>(
 		let db: Database | undefined;
 		const identity = sqliteFileIdentity(dbPath);
 		try {
-			db = new Database(dbPath);
+			db = openStoreUnderRecoveryLock(dbPath);
 			db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 			return await initialize(db);
 		} catch (error) {
@@ -150,7 +152,7 @@ function openOnce<T>(dbPath: string, initialize: (db: Database) => T, options: S
 	let db: Database | undefined;
 	const identity = sqliteFileIdentity(dbPath);
 	try {
-		db = new Database(dbPath);
+		db = openStoreUnderRecoveryLock(dbPath);
 		db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 		return initialize(db);
 	} catch (error) {
@@ -158,47 +160,108 @@ function openOnce<T>(dbPath: string, initialize: (db: Database) => T, options: S
 	}
 }
 
+function openStoreUnderRecoveryLock(dbPath: string): Database {
+	return withFileLockSync(`${dbPath}.recovery`, () => {
+		assertNoPendingQuarantine(dbPath);
+		return new Database(dbPath);
+	});
+}
+
+function assertNoPendingQuarantine(dbPath: string): void {
+	if (fs.existsSync(`${dbPath}.quarantine-pending`)) {
+		throw new Error(
+			`Database ${JSON.stringify(dbPath)}: interrupted quarantine requires repair; see ${dbPath}.quarantine-pending`,
+		);
+	}
+}
+
 function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined): string {
-	const backupPath = `${dbPath}.corrupt-${Date.now()}-${crypto.randomUUID()}`;
+	const backupDirectory = `${dbPath}.corrupt-${Date.now()}-${crypto.randomUUID()}`;
+	const temporaryDirectory = `${backupDirectory}.tmp`;
+	const backupPath = path.join(backupDirectory, path.basename(dbPath));
+	fs.mkdirSync(temporaryDirectory, { mode: 0o700 });
 	const preserved: string[] = [];
 	for (const suffix of SQLITE_STORE_SUFFIXES) {
+		let data: Buffer;
 		try {
-			try {
-				fs.chmodSync(`${dbPath}${suffix}`, 0o600);
-			} catch {}
-			fs.copyFileSync(`${dbPath}${suffix}`, `${backupPath}${suffix}`, fs.constants.COPYFILE_EXCL);
-			preserved.push(suffix);
+			fs.chmodSync(`${dbPath}${suffix}`, 0o600);
+			data = fs.readFileSync(`${dbPath}${suffix}`);
 		} catch (error) {
 			if (isEnoent(error) && suffix !== "") continue;
 			throw error;
 		}
+		const target = path.join(temporaryDirectory, `${path.basename(dbPath)}${suffix}`);
+		atomicWriteFileSync(target, data);
+		fs.chmodSync(target, 0o600);
+		preserved.push(suffix);
 	}
+	// One rename publishes the complete, flushed store and its sidecars.
+	fs.renameSync(temporaryDirectory, backupDirectory);
+	const marker = `${dbPath}.quarantine-pending`;
+	atomicWriteFileSync(marker, JSON.stringify({ backupPath, suffixes: preserved }));
 	db?.close();
-	const removed: string[] = [];
+	// If interrupted, every opener refuses the partial store. The complete
+	// backup and durable marker remain available for explicit repair.
+	for (const suffix of preserved) {
+		try {
+			fs.unlinkSync(`${dbPath}${suffix}`);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+	}
+	// Flush the parent directory after removing every member before clearing
+	// the guard. A power loss may leave the guard, never an unguarded partial set.
+	atomicWriteFileSync(marker, JSON.stringify({ backupPath, complete: true }));
+	fs.unlinkSync(marker);
+	return backupPath;
+}
+
+function mainStoreIsCorrupt(dbPath: string): boolean {
+	// A fresh header read also handles NOTADB stores whose damaged WAL prevents
+	// SQLite from acquiring a second connection. Empty files are valid new stores.
+	const fd = fs.openSync(dbPath, "r");
 	try {
-		for (const s of preserved) {
-			try {
-				fs.unlinkSync(`${dbPath}${s}`);
-				removed.push(s);
-			} catch (err) {
-				if (!isEnoent(err)) throw err;
-			}
-		}
+		const header = Buffer.alloc(16);
+		const length = fs.readSync(fd, header, 0, header.length, 0);
+		if (length > 0 && (length < 16 || header.toString("ascii") !== "SQLite format 3\0")) return true;
+	} finally {
+		fs.closeSync(fd);
+	}
+	let probe: Database | undefined;
+	try {
+		probe = new Database(dbPath);
+		probe.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
+		const rows = probe.query("PRAGMA main.integrity_check").all() as Record<string, unknown>[];
+		return rows.some(row => Object.values(row).some(value => value !== "ok"));
 	} catch (error) {
-		for (const s of removed) {
-			try {
-				fs.copyFileSync(`${backupPath}${s}`, `${dbPath}${s}`, fs.constants.COPYFILE_EXCL);
-			} catch (rb) {
-				logger.error("SQLite quarantine rollback failed; original preserved at backup path", {
-					path: `${dbPath}${s}`,
-					backupPath: `${backupPath}${s}`,
-					error: String(rb),
-				});
-			}
-		}
+		if (isSqliteCorruptionError(error)) return true;
+		throw error;
+	} finally {
+		probe?.close();
+	}
+}
+
+function attachedCorruptionPath(db: Database | undefined): string | undefined {
+	if (!db) return;
+	let stores: { name: string; file: string }[];
+	try {
+		stores = db.query("PRAGMA database_list").all() as { name: string; file: string }[];
+	} catch (error) {
+		// Initializers may close their handle before reporting a stale failure.
+		if (error instanceof Error && error.message === "Cannot use a closed database") return;
 		throw error;
 	}
-	return backupPath;
+	for (const store of stores) {
+		if (store.name === "main" || store.name === "temp" || !store.file) continue;
+		try {
+			const schema = `"${store.name.replaceAll('"', '""')}"`;
+			const rows = db.query(`PRAGMA ${schema}.integrity_check`).all() as Record<string, unknown>[];
+			if (rows.some(row => Object.values(row).some(value => value !== "ok"))) return store.file;
+		} catch (error) {
+			if (isSqliteCorruptionError(error)) return store.file;
+			throw error;
+		}
+	}
 }
 
 function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteOpenOptions): void {
@@ -215,7 +278,13 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 				if (failure.identity === undefined || currentIdentity === undefined) {
 					throw new Error("could not verify the corrupt database file identity");
 				}
-				return currentIdentity === failure.identity ? quarantineCorruptSqliteStore(dbPath, failure.db) : null;
+				if (currentIdentity !== failure.identity || currentIdentity === null) return null;
+				if (!mainStoreIsCorrupt(dbPath)) {
+					const attachedPath = attachedCorruptionPath(failure.db);
+					if (attachedPath) throw annotateSqliteError(failure.original, attachedPath);
+					return null;
+				}
+				return quarantineCorruptSqliteStore(dbPath, failure.db);
 			});
 		} finally {
 			closeFailedDatabase(failure.db, failure.original, failure.identity);
