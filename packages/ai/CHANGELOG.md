@@ -39,7 +39,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
-- Saved /login API key and OAuth credentials take precedence over configured fallback API keys registered by extensions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a15993beff8843c0800f722a44bb089767, 2714c7a1eb1d71071220a672322a3cf20da35706).
+- Saved /login API key and OAuth credentials take precedence over literal, environment, and command-backed fallback API keys registered by extensions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
 - Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 - Preserved pre-stream provider error provenance in `errorMessage` while keeping assistant content empty, preventing pre-stream diagnostic text from blocking safe transient retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9f80d24e20014d98748bdca81356661741e00f94).
 - Deferred projected native thinking end events in the leaked-thinking stream wrapper until their source block ends, preserving signatures on late completion ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 764a1f7e9c06ef40953e9b7a8bbafddc168fcd34).

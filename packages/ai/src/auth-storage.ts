@@ -2220,7 +2220,8 @@ export class AuthStorage {
 	/**
 	 * Classify where a provider's auth comes from, following the same precedence
 	 * as {@link AuthStorage.getApiKey}: runtime override → config override →
-	 * stored OAuth → login-stored api_key → env var → stored api_key →
+	 * stored OAuth → login-stored api_key → extension config fallback →
+	 * env var → stored api_key →
 	 * fallback resolver. Returns undefined when no auth is configured.
 	 *
 	 * Compact, structured counterpart to {@link describeCredentialSource}.
@@ -4694,9 +4695,10 @@ export class AuthStorage {
 	 * 2. Config override (models.yml `providers.<name>.apiKey`)
 	 * 3. OAuth token from storage (auto-refreshed)
 	 * 4. API key persisted by a successful `/login`
-	 * 5. Environment variable
-	 * 6. Stored API key (e.g. a broker-migrated copy) — last resort, so an explicit env var wins
-	 * 7. Fallback resolver (models.yml custom providers, last-resort)
+	 * 5. Extension config fallback (including command-backed keys)
+	 * 6. Environment variable
+	 * 7. Stored API key (e.g. a broker-migrated copy) — last resort, so an explicit env var wins
+	 * 8. Fallback resolver (models.yml custom providers, last-resort)
 	 */
 	async getApiKey(
 		provider: string,
@@ -5933,9 +5935,10 @@ export class AuthStorage {
 	 *   2. Config override (`models.yml` `providers.<name>.apiKey`).
 	 *   3. Stored OAuth credential.
 	 *   4. API key persisted by a successful `/login`.
-	 *   5. Env var — overrides a stored static api_key (e.g. a stale broker copy).
-	 *   6. Stored api_key credential.
-	 *   7. Fallback resolver.
+	 *   5. Extension config fallback (including command-backed keys).
+	 *   6. Env var — overrides a stored static api_key (e.g. a stale broker copy).
+	 *   7. Stored api_key credential.
+	 *   8. Fallback resolver.
 	 *
 	 * The string is purely informational; consumers must not parse it.
 	 */

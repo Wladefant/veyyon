@@ -508,6 +508,7 @@ function resolveCommandConfig(command: string): string | undefined {
 interface CommandApiKeyResolution {
 	configured: boolean;
 	value?: string;
+	fallback?: boolean;
 }
 /**
  * Resolve a models.yml/models.yaml secret/config value to an actual value.
@@ -1156,16 +1157,17 @@ export class ModelRegistry {
 	#resolveCommandBackedApiKey(provider: string): CommandApiKeyResolution {
 		const keyConfig = this.#customProviderApiKeys.get(provider);
 		if (!isConfigValueCommand(keyConfig)) return { configured: false };
+		const fallback = this.#runtimeProviderApiKeys.get(provider)?.fallback ?? false;
 		const value = resolveConfigValue(
 			keyConfig,
 			`API key for provider "${provider}"`,
 		);
 		if (value) {
-			this.authStorage.setConfigApiKey(provider, value);
-			return { configured: true, value };
+			this.authStorage.setConfigApiKey(provider, value, { fallback });
+			return { configured: true, value, fallback };
 		}
 		this.authStorage.removeConfigApiKey(provider);
-		return { configured: true };
+		return { configured: true, fallback };
 	}
 
 	#installProviderApiKey(
@@ -2962,7 +2964,7 @@ export class ModelRegistry {
 		sessionId?: string,
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
-		if (commandKey.configured) return commandKey.value;
+		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		if (
 			this.#keylessProviders.has(model.provider) &&
 			!this.authStorage.hasAuth(model.provider)
@@ -2993,7 +2995,7 @@ export class ModelRegistry {
 		},
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
-		if (commandKey.configured) return commandKey.value;
+		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		if (
 			this.#keylessProviders.has(provider) &&
 			!this.authStorage.hasAuth(provider)
@@ -3037,7 +3039,7 @@ export class ModelRegistry {
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
-		if (commandKey.configured) return commandKey.value;
+		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		if (
 			this.#keylessProviders.has(provider) &&
 			!this.authStorage.hasAuth(provider)

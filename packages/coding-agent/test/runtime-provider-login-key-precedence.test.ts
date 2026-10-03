@@ -1,3 +1,11 @@
+/**
+ * WHY: Extension login credentials must outrank config fallbacks in request and discovery paths.
+ * Literal/env and command-backed values share the same tier. These controls also defend
+ * credential-origin reporting and the deliberate override policy without a login flow.
+ * They do not cover provider wire auth or OAuth refresh scheduling.
+ */
+
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -5,12 +13,12 @@ import * as path from "node:path";
 import { clearCustomApis, type FetchImpl } from "@veyyon/ai";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
 import { unregisterOAuthProviders } from "@veyyon/ai/oauth";
+import { buildModel } from "@veyyon/catalog/build";
 import {
 	ModelRegistry as ModelRegistryImpl,
 	type ProviderConfigInput,
 } from "@veyyon/coding-agent/config/model-registry";
 import { removeSyncWithRetries } from "@veyyon/utils";
-import { Database } from "bun:sqlite";
 
 // Extension providers (e.g. nexos-pi-provider) register `apiKey: "<ENV_NAME>"`
 // alongside a `/login` flow. With the env var unset, the name resolves to its
@@ -28,6 +36,7 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 	let authStorage: AuthStorage;
 	let registry: ModelRegistryImpl;
 	let discoveryKeys: Array<string | undefined>;
+	let originalEnvValue: string | undefined;
 
 	beforeEach(async () => {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-login-key-"));
@@ -38,11 +47,13 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		authStorage = new AuthStorage(store);
 		registry = new ModelRegistryImpl(authStorage, modelsPath, { fetch: offlineFetch });
 		discoveryKeys = [];
+		originalEnvValue = process.env[envName];
 		delete process.env[envName];
 	});
 
 	afterEach(() => {
-		delete process.env[envName];
+		if (originalEnvValue === undefined) delete process.env[envName];
+		else process.env[envName] = originalEnvValue;
 		clearCustomApis();
 		unregisterOAuthProviders(sourceId);
 		authStorage.close();
@@ -50,15 +61,16 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		removeSyncWithRetries(tempDir);
 	});
 
-	function register(options: { oauth: boolean }): void {
+	function register(options: { oauth: boolean; apiKey?: string }): void {
 		const config: ProviderConfigInput = {
-			apiKey: envName,
+			apiKey: options.apiKey ?? envName,
 			baseUrl: "https://login-key-precedence.example.com/v1",
 			api: "openai-completions",
 			...(options.oauth ? { oauth: { name: "Test", login: async () => savedKey } } : {}),
-			fetchDynamicModels: async (apiKey) => {
+			fetchDynamicModels: async apiKey => {
 				discoveryKeys.push(apiKey);
-				if (apiKey !== savedKey && apiKey !== "env-key") throw new Error("401 invalid key");
+				if (apiKey !== savedKey && apiKey !== "env-key" && apiKey !== "command-fallback-key")
+					throw new Error("401 invalid key");
 				return [
 					{
 						id: "listed-model",
@@ -118,5 +130,56 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		await authStorage.set(provider, { type: "api_key", key: "stored-key", source: "login" });
 
 		expect(await registry.getApiKeyForProvider(provider)).toBe("env-key");
+	});
+
+	const commandKey = "!printf command-fallback-key";
+
+	test("a command fallback keeps saved login auth during discovery", async () => {
+		register({ oauth: true, apiKey: commandKey });
+		await login();
+		await registry.refreshProvider(provider, "online");
+		expect(discoveryKeys).toEqual([savedKey]);
+		expect(registry.find(provider, "listed-model")?.id).toBe("listed-model");
+		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+	});
+
+	test("a command fallback keeps saved login auth for provider requests", async () => {
+		register({ oauth: true, apiKey: commandKey });
+		await login();
+		expect(await registry.getApiKeyForProvider(provider)).toBe(savedKey);
+		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+	});
+
+	test("a command fallback keeps saved login auth for model requests", async () => {
+		register({ oauth: true, apiKey: commandKey });
+		await login();
+		const model = buildModel<"openai-completions">({
+			provider,
+			id: "listed-model",
+			name: "Listed",
+			api: "openai-completions",
+			baseUrl: "https://login-key-precedence.example.com/v1",
+			reasoning: false,
+			input: ["text"],
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		});
+		expect(await registry.getApiKey(model)).toBe(savedKey);
+		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+	});
+
+	test("a command fallback is usable without a saved login", async () => {
+		register({ oauth: true, apiKey: commandKey });
+		expect(await registry.getApiKeyForProvider(provider)).toBe("command-fallback-key");
+		await registry.refreshProvider(provider, "online");
+		expect(discoveryKeys).toEqual(["command-fallback-key"]);
+		expect(registry.find(provider, "listed-model")?.id).toBe("listed-model");
+	});
+
+	test("a command without a login flow keeps its override tier", async () => {
+		register({ oauth: false, apiKey: commandKey });
+		await authStorage.set(provider, { type: "api_key", key: savedKey, source: "login" });
+		expect(await registry.getApiKeyForProvider(provider)).toBe("command-fallback-key");
+		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
 	});
 });
