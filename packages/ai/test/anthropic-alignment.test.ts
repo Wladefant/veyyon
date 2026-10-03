@@ -346,21 +346,26 @@ describe("Anthropic request fingerprint alignment", () => {
 
 	it("classifies only genuinely trailing volatile runs in stableSystemSuffixStart", () => {
 		expect(stableSystemSuffixStart([])).toBe(0);
-		expect(stableSystemSuffixStart([{ text: "stable" }])).toBe(1);
-		expect(stableSystemSuffixStart([{ text: "stable" }, { text: "<memories>\nrecall\n</memories>" }])).toBe(1);
+		expect(stableSystemSuffixStart([{ type: "text", text: "stable" }])).toBe(1);
 		expect(
 			stableSystemSuffixStart([
-				{ text: "stable" },
-				{ text: "<memories>\nrecall 1\n</memories>" },
-				{ text: "<memories>\nrecall 2\n</memories>" },
+				{ type: "text", text: "stable" },
+				{ type: "text", text: "<memories>\nrecall\n</memories>" },
+			]),
+		).toBe(1);
+		expect(
+			stableSystemSuffixStart([
+				{ type: "text", text: "stable" },
+				{ type: "text", text: "<memories>\nrecall 1\n</memories>" },
+				{ type: "text", text: "<memories>\nrecall 2\n</memories>" },
 			]),
 		).toBe(1);
 		// Appended stable block after recall must not be classified as part of recall suffix:
 		expect(
 			stableSystemSuffixStart([
-				{ text: "stable" },
-				{ text: "<memories>\nrecall\n</memories>" },
-				{ text: "appended stable policy" },
+				{ type: "text", text: "stable" },
+				{ type: "text", text: "<memories>\nrecall\n</memories>" },
+				{ type: "text", text: "appended stable policy" },
 			]),
 		).toBe(3);
 	});

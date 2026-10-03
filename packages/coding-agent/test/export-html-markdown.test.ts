@@ -180,7 +180,7 @@ describe("HTML export Markdown", () => {
    { "a": 2 }
    \`\`\``);
 		for (const el of rendered.querySelectorAll("*")) {
-			expect(el.getAttributeNames().filter(name => name.startsWith("on"))).toEqual([]);
+			expect(el.getAttributeNames().filter((name: string) => name.startsWith("on"))).toEqual([]);
 		}
 	});
 
