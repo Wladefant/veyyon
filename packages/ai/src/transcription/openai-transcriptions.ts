@@ -1,0 +1,144 @@
+import { calculateCost } from "@veyyon/catalog/models";
+import type { Api, FetchImpl, Model, Usage } from "@veyyon/catalog/types";
+import { type } from "arktype";
+import { type ApiKey, withAuth } from "../auth-retry";
+import * as AIError from "../error";
+import type { TranscriptionRequest, TranscriptionResult, TranscriptionSegment, TranscriptionWord } from "./types";
+
+export interface TranscriptionOptions {
+	apiKey: ApiKey;
+	fetch?: FetchImpl;
+	signal?: AbortSignal;
+}
+
+/** Non-2xx response from an OpenAI-compatible transcription endpoint. */
+export class TranscriptionApiError extends AIError.ProviderHttpError {
+	override readonly name = "TranscriptionApiError";
+}
+
+const transcriptionSegmentSchema = type({
+	start: "number",
+	end: "number",
+	text: "string",
+	"id?": "number | string",
+	"speaker?": "number | string",
+});
+
+const transcriptionWordSchema = type({
+	word: "string",
+	start: "number",
+	end: "number",
+	"speaker?": "number | string",
+	"confidence?": "number",
+});
+
+const upstreamResponseSchema = type({
+	text: "string",
+	"language?": "string",
+	"duration?": "number",
+	"segments?": transcriptionSegmentSchema.array(),
+	"words?": transcriptionWordSchema.array(),
+	"usage?": "object",
+});
+
+function decodeUsage(model: Model<Api>, raw: unknown): { usage: Usage; seconds?: number } {
+	let input = 0;
+	let output = 0;
+	let reportedTotal: number | undefined;
+	let reportedCost: number | undefined;
+	let seconds: number | undefined;
+	const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
+
+	if (raw && typeof raw === "object") {
+		if ("input_tokens" in raw) input = num(raw.input_tokens) ?? 0;
+		if ("output_tokens" in raw) output = num(raw.output_tokens) ?? 0;
+		if ("total_tokens" in raw) reportedTotal = num(raw.total_tokens);
+		if ("cost" in raw) reportedCost = num(raw.cost);
+		if ("seconds" in raw) seconds = num(raw.seconds);
+	}
+
+	const usage: Usage = {
+		input,
+		output,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: reportedTotal ?? input + output,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: reportedCost ?? 0 },
+	};
+	if (reportedCost === undefined) calculateCost(model, usage);
+	return { usage, seconds };
+}
+
+async function responseError(response: Response, model: Model<Api>): Promise<TranscriptionApiError> {
+	const text = await response.text();
+	let detail = text;
+	let code: string | undefined;
+	try {
+		const parsed: unknown = JSON.parse(text);
+		if (parsed && typeof parsed === "object" && "error" in parsed) {
+			const error = parsed.error;
+			if (error && typeof error === "object") {
+				if ("message" in error && typeof error.message === "string") detail = error.message;
+				if ("code" in error && typeof error.code === "string") code = error.code;
+				else if ("type" in error && typeof error.type === "string") code = error.type;
+			}
+		}
+	} catch {}
+	return new TranscriptionApiError(
+		`${model.provider}/${model.id} transcription API error (${response.status}): ${detail || response.statusText}`,
+		response.status,
+		{ headers: response.headers, code },
+	);
+}
+
+/** Call an OpenAI/OpenRouter-compatible multipart transcription endpoint. */
+export async function transcribeOpenAI(
+	model: Model<Api>,
+	request: TranscriptionRequest,
+	options: TranscriptionOptions,
+): Promise<TranscriptionResult> {
+	const form = new FormData();
+	const fileName = request.fileName?.trim() || "audio";
+	form.append("file", new File([request.audio], fileName, { type: request.mimeType }));
+	form.append("model", model.id);
+	form.append("response_format", request.responseFormat);
+	if (request.language !== undefined) form.append("language", request.language);
+	if (request.prompt !== undefined) form.append("prompt", request.prompt);
+	if (request.temperature !== undefined) form.append("temperature", String(request.temperature));
+	for (const g of request.timestampGranularities ?? []) form.append("timestamp_granularities[]", g);
+
+	const fetchImpl = options.fetch ?? fetch;
+	const response = await withAuth(
+		options.apiKey,
+		async key => {
+			const attempt = await fetchImpl(`${model.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`, {
+				method: "POST",
+				headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+				body: form,
+				signal: options.signal,
+			});
+			if (!attempt.ok) throw await responseError(attempt, model);
+			return attempt;
+		},
+		{ signal: options.signal },
+	);
+
+	const body: unknown = await response.json();
+	const parsed = upstreamResponseSchema(body);
+	if (parsed instanceof type.errors) {
+		throw new AIError.ProviderResponseError(
+			`${model.provider}/${model.id} transcription response is malformed: ${parsed.summary}`,
+			{ provider: model.provider, kind: "envelope" },
+		);
+	}
+	const decoded = decodeUsage(model, parsed.usage);
+	return {
+		text: parsed.text,
+		language: parsed.language,
+		duration: parsed.duration,
+		segments: parsed.segments as TranscriptionSegment[] | undefined,
+		words: parsed.words as TranscriptionWord[] | undefined,
+		seconds: decoded.seconds,
+		usage: decoded.usage,
+	};
+}
