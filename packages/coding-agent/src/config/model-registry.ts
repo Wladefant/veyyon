@@ -10,6 +10,7 @@ import type { Api, Context, Model, ModelSpec, SimpleStreamOptions, ThinkingConfi
 import type { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
 import { shareCompat } from "@veyyon/catalog/compat/share";
+import { resolveSessionContextWindow } from "@veyyon/catalog/context-window";
 import { isVertexExpressOpenAIUrl } from "@veyyon/catalog/hosts";
 import { resolveBundledModelReference } from "@veyyon/catalog/identity";
 import { modelCacheStamp, readModelCache } from "@veyyon/catalog/model-cache";
@@ -18,14 +19,17 @@ import { bundledCatalogDigest, getBundledModels, getBundledProviders } from "@ve
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
+	type OpenAICodexAccount,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 } from "@veyyon/catalog/provider-models";
+import { modelKind } from "@veyyon/catalog/types";
 import {
 	collapseBuiltModelVariants,
 	getVariantAliasSources,
 	resolveVariantAlias,
 } from "@veyyon/catalog/variant-collapse";
+import { CODEX_CLIENT_VERSION } from "@veyyon/catalog/wire/codex";
 import {
 	DAY_MS,
 	errorMessage,
@@ -532,20 +536,39 @@ function getOAuthCredentialsForProvider(authStorage: AuthStorage, provider: stri
 	return entries.filter((entry): entry is OAuthCredential => entry.type === "oauth");
 }
 
-function resolveOAuthAccountIdForAccessToken(
+/**
+ * Resolves all Codex OAuth accounts, refreshing each once. Codex discovery
+ * fetches per account and unions results. Returns null on refresh failure
+ * to preserve previous/bundled models.
+ */
+async function resolveCodexDiscoveryAccounts(
 	authStorage: AuthStorage,
-	provider: string,
-	accessToken: string,
-): string | undefined {
-	const oauthCredentials = getOAuthCredentialsForProvider(authStorage, provider);
-	const matchingCredential = oauthCredentials.find(credential => credential.access === accessToken);
-	if (matchingCredential) {
-		return matchingCredential.accountId;
+	resolvedAccessToken: string,
+): Promise<OpenAICodexAccount[] | null> {
+	const accesses = await authStorage.getOAuthAccesses("openai-codex");
+	const accounts: OpenAICodexAccount[] = [];
+	for (const access of accesses) {
+		if (!access.ok) return null;
+		accounts.push({ accessToken: access.accessToken, accountId: access.accountId });
 	}
-	if (oauthCredentials.length === 1) {
-		return oauthCredentials[0].accountId;
+	if (!accounts.some(account => account.accessToken === resolvedAccessToken)) {
+		const matchingCredential = getOAuthCredentialsForProvider(authStorage, "openai-codex").find(
+			credential => credential.access === resolvedAccessToken,
+		);
+		accounts.push({ accessToken: resolvedAccessToken, accountId: matchingCredential?.accountId });
 	}
-	return undefined;
+	return accounts;
+}
+function resolveCodexAccountFingerprint(authStorage: AuthStorage, fallbackKey?: string): string {
+	const accounts = authStorage.listOAuthAccounts("openai-codex");
+	const identifiers = accounts.map(a => a.accountId ?? a.email ?? a.credentialId ?? String(a.position)).sort();
+	if (
+		fallbackKey &&
+		!getOAuthCredentialsForProvider(authStorage, "openai-codex").some(c => c.access === fallbackKey)
+	) {
+		identifiers.push(`bearer:${Bun.hash(fallbackKey).toString(36)}`);
+	}
+	return identifiers.length > 0 ? Bun.hash(identifiers.join("\u0000")).toString(36) : "empty";
 }
 
 function mergeCompat<TBase extends object, TOverride extends object>(
@@ -829,6 +852,14 @@ function getDisabledProviderIdsFromSettings(): Set<string> {
 	}
 }
 
+function isExtendedContextEnabled(): boolean {
+	try {
+		return settings.get("extendedContext");
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Bump when the persisted static stage's contract changes: the resolved record
  * shape, a hardcoded model policy, or the merge semantics feeding `#loadModels`.
@@ -836,7 +867,7 @@ function getDisabledProviderIdsFromSettings(): Set<string> {
  * state produced under retired rules — the same discipline as
  * `CACHE_SCHEMA_VERSION` in `@veyyon/catalog/model-cache`.
  */
-const REGISTRY_SNAPSHOT_VERSION = 10;
+const REGISTRY_SNAPSHOT_VERSION = 11;
 
 /** The resolved layers `#loadModels` hands the writer, before compat is tabled. */
 interface StaticModelLayers {
@@ -1245,6 +1276,7 @@ export class ModelRegistry {
 			bundledCatalogDigest(),
 			modelCacheStamp(dbPath, { ttlMs: DAY_MS }),
 			this.#modelsConfigFile.getMtimeMs() ?? 0,
+			isExtendedContextEnabled() ? "extended" : "standard",
 		];
 		const customConfigDigest = createHash("sha256")
 			.update(
@@ -1366,7 +1398,11 @@ export class ModelRegistry {
 		const combined = mergeCustomModels(withConfigModels, runtimeOverlays);
 
 		const withModelOverrides = applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
-		const finalModels = this.#applyProviderReportedWindows(this.#applyRuntimeProviderOverrides(withModelOverrides));
+		// Runner models (image generation) ride in the catalog for their own tools; a
+		// session picks, resolves and falls back among chat models only.
+		const finalModels = this.#applyProviderReportedWindows(
+			this.#applyRuntimeProviderOverrides(withModelOverrides),
+		).filter(model => modelKind(model) === "chat");
 
 		this.#providerModels.set(provider, finalModels);
 		return finalModels;
@@ -1998,11 +2034,12 @@ export class ModelRegistry {
 				authoritative: true,
 				resolveKey: value => value,
 				createOptions: accessToken => {
-					const accountId = resolveOAuthAccountIdForAccessToken(this.authStorage, "openai-codex", accessToken);
+					const accountFingerprint = resolveCodexAccountFingerprint(this.authStorage, accessToken);
 					return openaiCodexModelManagerOptions({
-						accessToken,
-						accountId,
+						resolveAccounts: () => resolveCodexDiscoveryAccounts(this.authStorage, accessToken),
+						clientVersion: CODEX_CLIENT_VERSION,
 						fetch: this.#fetch,
+						accountFingerprint,
 					});
 				},
 			},
@@ -2033,7 +2070,7 @@ export class ModelRegistry {
 				this.#resolveBuiltInDiscoveryApiKey(
 					descriptor.providerId,
 					strategy,
-					() => descriptor.providerId,
+					() => descriptor.createOptions("").cacheProviderId ?? descriptor.providerId,
 					descriptor.authoritative,
 				),
 			),
@@ -2156,7 +2193,12 @@ export class ModelRegistry {
 	}
 
 	#applyHardcodedModelPolicies(models: Model<Api>[]): Model<Api>[] {
+		const extendedContext = isExtendedContextEnabled();
 		return models.map(model => {
+			const window = resolveSessionContextWindow(model, extendedContext);
+			if (window !== null && window !== model.contextWindow) {
+				model = applyModelOverride(model, { contextWindow: window });
+			}
 			if (model.provider === "ollama-cloud" && model.omitMaxOutputTokens !== true) {
 				model = applyModelOverride(model, { omitMaxOutputTokens: true });
 			}

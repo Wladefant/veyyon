@@ -7,6 +7,12 @@
 ### Added
 
 - Added `image_end` to `AssistantMessageEvent` for streamed image completion events (Refs #107).
+- Added `Model.maxContextWindow` and `Model.serviceTierCost` for Codex subscription models (Refs #107).
+- Added specialist model-kind vocabulary (`MODEL_KINDS`, `ModelKind`, `RUNNER_APIS`, `WebSearchGrounding`, and `modelKind` helper) and `Model.kind`/`Model.webSearch` capability attributes (Refs #107).
+
+### Fixed
+
+- Included native generated images in the assistant content contract used by Responses providers.
 
 ## [1.5.0] - 2026-09-18
 

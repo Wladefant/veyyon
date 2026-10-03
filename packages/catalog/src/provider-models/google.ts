@@ -30,16 +30,6 @@ export interface GoogleGeminiCliModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-function toDiscoveryFetch(fetchImpl: FetchImpl | undefined): typeof fetch | undefined {
-	if (!fetchImpl) {
-		return undefined;
-	}
-	return Object.assign(
-		(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => fetchImpl(input, init),
-		{ preconnect: fetchImpl.preconnect ?? fetch.preconnect },
-	);
-}
-
 export function googleModelManagerOptions(
 	config?: GoogleModelManagerConfig,
 ): ModelManagerOptions<"google-generative-ai"> {
@@ -49,7 +39,7 @@ export function googleModelManagerOptions(
 		...(apiKey
 			? {
 					fetchDynamicModels: hooks =>
-						fetchGeminiModels({ apiKey, fetch: toDiscoveryFetch(config?.fetch), onFailure: hooks?.onFailure }),
+						fetchGeminiModels({ apiKey, fetch: config?.fetch, onFailure: hooks?.onFailure }),
 				}
 			: undefined),
 	};
@@ -71,7 +61,7 @@ export function googleAntigravityModelManagerOptions(
 						fetchAntigravityDiscoveryModels({
 							token,
 							endpoint: config?.endpoint,
-							fetcher: toDiscoveryFetch(config?.fetch),
+							fetcher: config?.fetch,
 							onFailure: hooks?.onFailure,
 						}),
 				}
@@ -92,7 +82,7 @@ export function googleGeminiCliModelManagerOptions(
 						const models = await fetchAntigravityDiscoveryModels({
 							token,
 							endpoint,
-							fetcher: toDiscoveryFetch(config?.fetch),
+							fetcher: config?.fetch,
 							collapseTable: GEMINI_CLI_VARIANT_COLLAPSE_TABLE,
 							onFailure: hooks?.onFailure,
 						});

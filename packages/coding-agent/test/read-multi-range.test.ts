@@ -1,13 +1,17 @@
 // Subject module: tools/fs/read-local-file.ts, driven through the read tool.
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
+import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
+import { writethroughNoop } from "@veyyon/coding-agent/lsp";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
+import { Patch, Patcher } from "@veyyon/hashline";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { removeWithRetries } from "@veyyon/utils";
 
@@ -41,6 +45,9 @@ function makeNumberedContent(lines: number): string {
 
 describe("read tool multi-range selector", () => {
 	let tmpDir: string;
+	beforeAll(async () => {
+		await Settings.init({ inMemory: true });
+	});
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "read-multi-range-test-"));
@@ -285,5 +292,33 @@ describe("read tool multi-range selector", () => {
 		expect(text).toContain("bridge five");
 		expect(text).not.toContain("bridge three");
 		expect(text).not.toContain("disk one");
+	});
+
+	it("keeps ACP multi-range blanks editable without exposing the EOF sentinel", async () => {
+		const filePath = path.join(tmpDir, "bridge.txt");
+		const bridgeText = "first\n\nlast\n";
+		await fs.writeFile(filePath, bridgeText);
+		const bridge: ClientBridge = {
+			capabilities: { readTextFile: true },
+			readTextFile: async () => bridgeText,
+		};
+		const session = createSession(tmpDir, bridge);
+		const text = textOutput(await new ReadTool(session).execute("call-bridge-eof", { path: `${filePath}:1-2,3-3` }));
+		const header = text.split("\n")[0] ?? "";
+		expect(header).toMatch(/^\[bridge\.txt#[0-9A-F]{4}\]$/);
+		expect(text).toContain("1:first\n2:");
+		expect(text).not.toContain("\n4:");
+
+		const patch = Patch.parse(`${header}\nDEL 2`, { cwd: tmpDir });
+		const filesystem = new HashlineFilesystem({
+			session,
+			writethrough: writethroughNoop,
+			beginDeferredDiagnosticsForPath: () => {
+				throw new Error("deferred diagnostics are unused");
+			},
+		});
+		await new Patcher({ fs: filesystem, snapshots: getFileSnapshotStore(session) }).apply(patch);
+
+		expect(await fs.readFile(filePath, "utf8")).toBe("first\nlast\n");
 	});
 });

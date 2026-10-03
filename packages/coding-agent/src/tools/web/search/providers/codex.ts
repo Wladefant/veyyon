@@ -7,14 +7,9 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import type { Api, AuthStorage, FetchImpl, Model } from "@veyyon/ai";
+import type { AuthStorage, FetchImpl, Model } from "@veyyon/ai";
 import { withOAuthAccess } from "@veyyon/ai/auth-retry";
-import {
-	applyCodexResponsesLiteShape,
-	resolveCodexResponsesLite,
-} from "@veyyon/ai/providers/openai-codex/request-transformer";
-import { createOpenAICodexCompatibilityMetadata } from "@veyyon/ai/providers/openai-codex-responses";
-import { getBundledModels } from "@veyyon/catalog/models";
+import { getBundledChatModels } from "@veyyon/catalog/models";
 import {
 	// The host is imported, never respelled. `@veyyon/catalog/wire/codex` owns it and
 	// six other modules already read it from there; this file had its own copy of the
@@ -68,7 +63,7 @@ interface CodexModelCandidate {
 
 function getBundledCodexModels(): CodexSearchModel[] {
 	const models: CodexSearchModel[] = [];
-	for (const model of getBundledModels("openai-codex")) {
+	for (const model of getBundledChatModels("openai-codex")) {
 		if (model.api === "openai-codex-responses") {
 			models.push(model as CodexSearchModel);
 		}
@@ -371,8 +366,7 @@ function extractCodexSseError(rawEvent: Record<string, unknown>): { code: string
 	return { code, message };
 }
 
-function acceptsNamedToolChoice(model: Model<Api> | undefined): boolean {
-	const compat = model?.compat;
+function acceptsNamedToolChoice(compat: CodexSearchModel["compat"] | undefined): boolean {
 	return !(compat && "supportsNamedToolChoice" in compat && compat.supportsNamedToolChoice === false);
 }
 
@@ -390,7 +384,6 @@ async function callCodexSearch(
 		systemPrompt?: string;
 		searchContextSize?: "low" | "medium" | "high";
 		model: CodexModelCandidate;
-		sessionId?: string;
 		fetch?: FetchImpl;
 		resolveProviderTextTransform?: ProviderTextTransformResolver;
 	},
@@ -405,13 +398,9 @@ async function callCodexSearch(
 	const headers = buildCodexHeaders(auth.accessToken, auth.accountId);
 
 	const requestedModel = options.model.modelId;
-	const candidateModel = options.model.catalogModel ?? {
-		id: requestedModel,
-		api: "openai-codex-responses" as const,
-		provider: "openai-codex" as const,
-	};
-	const usesResponsesLite = resolveCodexResponsesLite(candidateModel, undefined);
 
+	// Hosted web_search is a top-level Responses tool, even for Lite catalog
+	// models. Relocating it into additional_tools prevents the backend searching.
 	const body: Record<string, unknown> = {
 		model: requestedModel,
 		stream: true,
@@ -429,21 +418,9 @@ async function callCodexSearch(
 				search_context_size: options.searchContextSize ?? "high",
 			},
 		],
-		tool_choice: acceptsNamedToolChoice(candidateModel) ? { type: "web_search" } : "required",
+		tool_choice: acceptsNamedToolChoice(options.model.catalogModel?.compat) ? { type: "web_search" } : "required",
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
-	if (usesResponsesLite) {
-		const metadata = createOpenAICodexCompatibilityMetadata({
-			sessionId: options.sessionId,
-			requestKind: "turn",
-			startNewTurn: true,
-		});
-		Object.assign(headers, metadata.headers);
-		headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
-		body.client_metadata = metadata.clientMetadata;
-		body.reasoning = { context: "all_turns" };
-		applyCodexResponsesLiteShape(body);
-	}
 
 	const fetchImpl = options.fetch ?? fetch;
 	return withHardTimeout(options.signal, async hardSignal => {
@@ -626,7 +603,6 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 						systemPrompt: params.systemPrompt,
 						searchContextSize: "high",
 						model: candidate,
-						sessionId: params.sessionId,
 						fetch: params.fetch,
 						resolveProviderTextTransform: params.resolveProviderTextTransform,
 					});

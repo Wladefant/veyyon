@@ -18,20 +18,15 @@ declare_backend!(
 mod imp {
 	use std::{
 		ffi::CString,
-		fs::{self, File, OpenOptions},
-		os::{
-			fd::AsRawFd,
-			unix::{
-				ffi::OsStrExt,
-				fs::{MetadataExt, PermissionsExt},
-			},
+		fs,
+		os::unix::{
+			ffi::OsStrExt,
+			fs::{MetadataExt, PermissionsExt},
 		},
 		path::Path,
 	};
 
 	use crate::{IsoError, IsoResult, ProbeResult, canonical_existing_dir};
-
-	const FICLONE: libc::c_ulong = 0x4004_9409;
 
 	pub const fn probe() -> ProbeResult {
 		ProbeResult::available()
@@ -138,22 +133,7 @@ mod imp {
 	fn clone_file(src: &Path, dst: &Path) -> IsoResult<()> {
 		let meta = fs::symlink_metadata(src)
 			.map_err(|err| IsoError::other(format!("symlink_metadata {}: {err}", src.display())))?;
-		let src_file = File::open(src)
-			.map_err(|err| IsoError::other(format!("open {}: {err}", src.display())))?;
-		let dst_file = OpenOptions::new()
-			.write(true)
-			.create_new(true)
-			.open(dst)
-			.map_err(|err| IsoError::other(format!("create {}: {err}", dst.display())))?;
-
-		// SAFETY: both file descriptors are valid for the duration of the call.
-		// FICLONE copies metadata into `dst_file` and does not retain either fd.
-		let rc = unsafe { libc::ioctl(dst_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) };
-		if rc != 0 {
-			let err = std::io::Error::last_os_error();
-			let _ = fs::remove_file(dst);
-			return Err(map_clone_error(src, dst, err));
-		}
+		crate::cow::clone_file(src, dst).map_err(|err| map_clone_error(src, dst, err))?;
 
 		preserve_permissions(dst, &meta)?;
 		let _ = set_times_nofollow(dst, &meta);
@@ -161,11 +141,7 @@ mod imp {
 	}
 
 	fn map_clone_error(src: &Path, dst: &Path, err: std::io::Error) -> IsoError {
-		if let Some(code) = err.raw_os_error()
-			&& matches!(
-				code,
-				libc::EXDEV | libc::EOPNOTSUPP | libc::ENOTTY | libc::EINVAL | libc::ENOSYS
-			) {
+		if crate::cow::is_unsupported(&err) {
 			return IsoError::unavailable(format!(
 				"FICLONE unsupported for {} -> {}: {err}",
 				src.display(),

@@ -8,7 +8,6 @@
  * timeout.
  */
 import { $flag } from "@veyyon/utils";
-import { $ } from "bun";
 import {
 	assembleSpawnEnv,
 	BaseKernel,
@@ -21,6 +20,7 @@ import {
 	kernelIpcTraceEnvVar,
 	launchKernelSubprocess,
 } from "../kernel-base";
+import { runBoundedProbe } from "../probe";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
 import {
@@ -72,8 +72,12 @@ export const checkPythonKernelAvailability = createLanguageAvailabilityChecker<P
 				? [resolveExplicitPythonRuntime(interpreter, cwd, baseEnv)]
 				: enumeratePythonRuntimes(cwd, baseEnv),
 		missingReason: "Python executable not found on PATH",
-		probeRuntime: (runtime, cwd) =>
-			$`${runtime.pythonPath} -c "import sys;sys.exit(0)"`.quiet().nothrow().cwd(cwd).env(runtime.env),
+		probeRuntime: (runtime, cwd, probeOptions) =>
+			runBoundedProbe([runtime.pythonPath, "-c", "import sys;sys.exit(0)"], {
+				cwd,
+				env: runtime.env,
+				...probeOptions,
+			}),
 		getExecutablePath: runtime => runtime.pythonPath,
 		includeFailedExecutablePath: false,
 		formatFailureReason: failures => `No working Python interpreter found. Tried: ${failures.join("; ")}`,

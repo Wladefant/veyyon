@@ -277,6 +277,7 @@ const ASSISTANT_BLOCKS: { [K in AssistantBlock["type"]]: Extract<AssistantBlock,
 	redactedThinking: { type: "redactedThinking", data: "REDACTED" },
 	fallback: { type: "fallback", from: { model: "sonnet" }, to: { model: "haiku" } },
 	toolCall: { type: "toolCall", id: "call-7", name: "write", arguments: { path: "/b" } },
+	image: { type: "image", data: "SU1H", mimeType: "image/png" },
 };
 
 const ASSISTANT_PARTS: { [K in AssistantBlock["type"]]: OtelPartShape[] } = {
@@ -287,6 +288,7 @@ const ASSISTANT_PARTS: { [K in AssistantBlock["type"]]: OtelPartShape[] } = {
 	// reader of the turn can act on, and it carries no text to export.
 	fallback: [],
 	toolCall: [{ type: "tool_call", id: "call-7", name: "write", arguments: { path: "/b" } }],
+	image: [{ type: "blob", modality: "image", mime_type: "image/png", content: "SU1H" }],
 };
 
 interface OtelPartShape {
