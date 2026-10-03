@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- Fixed Shift+Enter and Ctrl+Enter arriving as plain Enter or a bare line feed in Windows Terminal 1.24 and earlier, by requesting win32-input-mode on native Windows consoles and decoding its key records ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed a bracketed paste on the Windows console leaking its marker tails and submitting a partial prompt at each pasted newline, because decoded win32 key records skipped paste handling ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the terminal flickering when leaving a fullscreen overlay (such as settings) on terminals that re-report their size when the alternate screen buffer toggles: the resize fast path now keeps height-only resizes on the normal buffer ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - A fullscreen overlay rewrites only the rows that changed while its geometry is stable, so keystrokes in a modal rewrite a line or two instead of the whole screen ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added regression coverage that the hardware caret hides and returns without a row repaint when the composer marker toggles under the alternate-screen scroll transport; no user-visible change ([#107](https://github.com/Wladefant/veyyon/issues/107)).
