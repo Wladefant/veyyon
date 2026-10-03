@@ -10,6 +10,7 @@
 - Added the `extendedContext` setting: off caps Codex sessions at the 272K standard-pricing window, on allows the model's advertised maximum (up to 922K), and `gpt-image-2` no longer appears in completions, the auth gateway or Codex web search ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Clicking an agent's row in the anchored Agents block focuses that agent while scroll isolation holds the mouse ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 - Dedicated Codex web searches keep hosted `web_search` tools at the top level for Lite catalog models instead of relocating them into ignored `additional_tools` input ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 22d02031d904bf2e0d5fc5a1b41caf6dc0a76e6b).
