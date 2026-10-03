@@ -401,21 +401,47 @@ describe("alt-arrows residency", () => {
 
 	/**
 	 * The marker vanishing leaves the painted rows byte-identical, so only the cursor
-	 * state changes. The paint prologue is what hides the hardware caret.
+	 * state changes. The paint prologue is what hides the hardware caret; a skipped
+	 * paint would leave it blinking on the composer row. Bringing the marker back
+	 * shows the caret on the composer again. Neither change may rewrite a row.
 	 */
 	it("hides the caret when the composer drops its marker and rows are unchanged", async () => {
 		const { term, tui, scheduler, composer } = await rig();
+		const rewritesARow = (bytes: string): boolean => {
+			if (bytes.includes("\x1b[H")) return true;
+			for (let row = 1; row <= term.rows; row++) {
+				if (bytes.includes(`\x1b[${row};1H`)) return true;
+			}
+			return false;
+		};
 		try {
 			tui.setScrollIsolation(true);
 			tui.setScrollTransport("alt-arrows");
 			await scheduler.drain(term);
-			const mark = term.mark();
+			expect(term.getCursor()).toEqual({ row: 7, col: 1 });
+			const viewport = term.getViewport();
 
+			const hideMark = term.mark();
 			composer.caret = false;
 			tui.requestRender();
 			await scheduler.drain(term);
 
-			expect(term.outputSince(mark)).toContain("\x1b[?25l");
+			const hideBytes = term.outputSince(hideMark);
+			expect(hideBytes).toContain("\x1b[?25l");
+			expect(hideBytes).not.toContain("\x1b[?25h");
+			expect(rewritesARow(hideBytes)).toBe(false);
+			expect(term.getViewport()).toEqual(viewport);
+
+			const showMark = term.mark();
+			composer.caret = true;
+			tui.requestRender();
+			await scheduler.drain(term);
+
+			const showBytes = term.outputSince(showMark);
+			expect(showBytes).toContain("\x1b[?25h");
+			expect(rewritesARow(showBytes)).toBe(false);
+			expect(term.getCursor()).toEqual({ row: 7, col: 1 });
+			expect(term.getViewport()).toEqual(viewport);
 		} finally {
 			tui.stop();
 		}
