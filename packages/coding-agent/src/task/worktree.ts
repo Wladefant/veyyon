@@ -6,6 +6,7 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, getWorktreeDir, isEnoent, logger, Snowflake } from "@veyyon/utils";
 import * as git from "../utils/git";
 import * as jj from "../utils/jj";
+import { claimIsolationSlot, releaseIsolationClaim } from "./isolation-ownership";
 import { mapWithConcurrencyLimit } from "./parallel";
 import {
 	isAbandonedEmptyReservation,
@@ -502,6 +503,9 @@ export async function ensureIsolation(
 	const resolution = natives.isoResolve(preferred ?? null);
 	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
 	let fallbackReason = resolution.reason ?? null;
+	// Claim the slot atomically, marker included, so the slot is never visible
+	// unmarked to `veyyon worktree clear`. An existing directory may be a
+	// retained live projection, even when writing its backend metadata failed.
 	await fs.mkdir(path.dirname(baseDir), { recursive: true });
 
 	const lockResult = await tryWithIsolationLifecycleLock(baseDir, async () => {
@@ -523,17 +527,19 @@ export async function ensureIsolation(
 
 		for (const candidate of candidates) {
 			try {
-				await fs.mkdir(baseDir);
+				await claimIsolationSlot(baseDir);
 			} catch (error) {
 				throw new Error(`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement`, {
 					cause: error,
 				});
 			}
-
 			await writeIsolationOwner(baseDir);
 
 			try {
 				await natives.isoStart(candidate, repoRoot, mergedDir);
+				await releaseIsolationClaim(baseDir).catch(error =>
+					logger.warn("isolation claim marker left in place", { baseDir, error: errorMessage(error) }),
+				);
 				const fellBack = candidate !== resolution.kind || resolution.fellBack;
 				return {
 					mergedDir,

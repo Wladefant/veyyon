@@ -22,9 +22,11 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, formatCount, getWorktreesDir, isEnoent, isProcessInstanceAlive } from "@veyyon/utils";
 import chalk from "chalk";
 import {
+	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
 	RETAINED_BACKEND_FILE,
 	isAbandonedEmptyReservation,
+	isolationClaimIsLive,
 	readIsolationOwner,
 	readRetainedMountBackend,
 	tryWithIsolationLifecycleLock,
@@ -334,6 +336,8 @@ async function statPath(target: string): Promise<{ found: Stats | null } | undef
 }
 
 async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
+	// A slot mid-setup holds no mount dir yet; the process that claimed it owns it.
+	if (await isolationClaimIsLive(dir)) return { path: dir, kind: "task-isolation" };
 	const gitEntry = path.join(dir, ".git");
 	const gitStat = await statPath(gitEntry);
 	if (!gitStat) {
@@ -344,7 +348,8 @@ async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
 	}
 	const hasOwnerRecord = (await statPath(path.join(dir, ISOLATION_OWNER_FILE)))?.found?.isFile();
 	const hasRetainedSidecar = (await statPath(path.join(dir, RETAINED_BACKEND_FILE)))?.found?.isFile();
-	if (isTaskIsolationDir(dir) || hasOwnerRecord || hasRetainedSidecar) {
+	const hasClaimFile = (await statPath(path.join(dir, ISOLATION_CLAIM_FILE)))?.found?.isFile();
+	if (isTaskIsolationDir(dir) || hasOwnerRecord || hasRetainedSidecar || hasClaimFile) {
 		for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
 			const mountPath = path.join(dir, mountDir);
 			const mountStat = await statPath(mountPath);

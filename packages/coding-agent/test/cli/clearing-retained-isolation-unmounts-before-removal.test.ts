@@ -6,14 +6,15 @@
  * The native boundary is substituted; actual OS unmounting is not proved here.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as child_process from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@veyyon/natives";
-import * as child_process from "node:child_process";
 import * as utils from "@veyyon/utils";
 import { clearWorktrees } from "../../src/cli/worktree-cli";
 import { retainIsolationWorkspace } from "../../src/task/isolation-runner";
 import {
+	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
 	type IsolationOwnerRecord,
 	readIsolationOwner,
@@ -276,14 +277,14 @@ describe("retained isolation cleanup", () => {
 		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
 
-		// Real ordinary clear: clearWorktrees({ all: false, dryRun: false, json: true })
+		// Real ordinary clear: live claims are omitted from ordinary clear
+		await clearWorktrees({ all: false, dryRun: true, json: true });
+		expect(stdout).not.toContain("would remove");
 		await clearWorktrees({ all: false, dryRun: false, json: true });
 		const ordinaryResult = JSON.parse(stdout);
-		expect(ordinaryResult).toMatchObject({ removed: 0, failed: 1 });
-		expect(ordinaryResult.results[0].error).toContain("Missing retained backend metadata");
+		expect(ordinaryResult).toMatchObject({ removed: 0, kept: 1 });
 		expect(await exists(claimedBaseDir)).toBe(true);
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
-
 		// Real --all clear: clearWorktrees({ all: true, dryRun: false, json: true })
 		await clearWorktrees({ all: true, dryRun: false, json: true });
 		const allResult = JSON.parse(stdout);
@@ -479,7 +480,7 @@ try {
 		expect(await exists(path.join(canonicalDir, "m"))).toBe(false);
 		expect(await exists(path.join(canonicalDir, ISOLATION_OWNER_FILE))).toBe(true);
 		const entries = await fs.readdir(canonicalDir);
-		expect(entries).toEqual([ISOLATION_OWNER_FILE]);
+		expect(entries.sort()).toEqual([ISOLATION_CLAIM_FILE, ISOLATION_OWNER_FILE].sort());
 
 		const deadOwner = await readIsolationOwner(canonicalDir);
 		expect(deadOwner).not.toBeNull();

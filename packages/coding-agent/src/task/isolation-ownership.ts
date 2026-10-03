@@ -94,6 +94,7 @@ export async function readRetainedMountBackend(dir: string): Promise<natives.Iso
 }
 
 /**
+/**
  * Write a process ownership record during atomic slot claim before native
  * backend initialization.
  */
@@ -154,7 +155,6 @@ export async function readIsolationOwner(baseDir: string): Promise<IsolationOwne
 	};
 }
 
-
 /**
  * Determine whether a directory represents an abandoned empty reservation:
  * - Contains a valid owner record whose owner process is proven dead; AND
@@ -165,22 +165,66 @@ export async function readIsolationOwner(baseDir: string): Promise<IsolationOwne
  * Directories with any other contents fail closed (return `false`).
  */
 export async function isAbandonedEmptyReservation(baseDir: string): Promise<boolean> {
-	let owner: IsolationOwnerRecord | null;
+	let pid: number | null = null;
+	let startIdentity: string | null = null;
+
 	try {
-		owner = await readIsolationOwner(baseDir);
-	} catch {
-		return false;
+		const rawClaim = await fs.readFile(path.join(baseDir, ISOLATION_CLAIM_FILE), "utf8");
+		let decoded: unknown;
+		try {
+			decoded = JSON.parse(rawClaim);
+		} catch {
+			return false;
+		}
+		if (decoded && typeof decoded === "object" && "pid" in decoded) {
+			const candidatePid = decoded.pid;
+			if (
+				typeof candidatePid === "number" &&
+				Number.isInteger(candidatePid) &&
+				candidatePid > 0 &&
+				candidatePid <= 0x7fffffff
+			) {
+				pid = candidatePid;
+				if ("startIdentity" in decoded && typeof decoded.startIdentity === "string") {
+					startIdentity = decoded.startIdentity;
+				}
+			} else {
+				return false;
+			}
+		} else {
+			return false;
+		}
+	} catch (err) {
+		if (!isEnoent(err)) return false;
 	}
-	if (!owner) return false;
-	if (isProcessInstanceAlive(owner.pid, owner.startIdentity)) return false;
+
+	if (pid === null) {
+		let owner: IsolationOwnerRecord | null = null;
+		try {
+			owner = await readIsolationOwner(baseDir);
+		} catch {
+			return false;
+		}
+		if (owner) {
+			pid = owner.pid;
+			startIdentity = owner.startIdentity;
+		}
+	}
+
+	if (pid === null) return false;
+	if (isProcessInstanceAlive(pid, startIdentity)) return false;
 
 	try {
 		const entries = await fs.readdir(baseDir);
-		return entries.length === 1 && entries[0] === ISOLATION_OWNER_FILE;
+		return (
+			entries.length > 0 &&
+			entries.every(e => e === ISOLATION_OWNER_FILE || e === ISOLATION_CLAIM_FILE)
+		);
 	} catch {
 		return false;
 	}
 }
+
 /**
  * Path for a base directory's exclusive lifecycle lock outside the scanned
  * `wt` directory (under a sibling `isolation-locks` directory).
@@ -242,4 +286,65 @@ export async function withRetentionLifecycleLock<T>(
 	return await withIsolationLifecycleLock(originalBaseDir, async () => {
 		return await withIsolationLifecycleLock(destinationBaseDir, fn);
 	});
+}
+
+/**
+ * Marker naming the process that is setting up an isolation slot. It exists
+ * only while `ensureIsolation` is between claiming the slot and finishing
+ * `isoStart`, the interval in which the slot holds no mount directory yet and
+ * would otherwise read to `veyyon worktree clear` as an empty orphan.
+ */
+export const ISOLATION_CLAIM_FILE = ".veyyon-isolation-claim.json";
+
+/**
+ * Claim `baseDir` for the calling process. The directory is built under a
+ * private sibling name with its marker already inside, then renamed into place,
+ * so the slot never exists unmarked. Rename onto an occupied slot fails, which
+ * refuses replacement; the private name is removed on any failure.
+ */
+export async function claimIsolationSlot(baseDir: string): Promise<void> {
+	const staging = `${baseDir}.claim-${process.pid}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
+	await fs.mkdir(staging);
+	try {
+		await fs.writeFile(path.join(staging, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: process.pid }), "utf8");
+		await fs.rename(staging, baseDir);
+	} catch (error) {
+		await fs.rm(staging, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+/** Drop the marker once the slot holds its mount, so the workspace is an ordinary leftover again. */
+export async function releaseIsolationClaim(baseDir: string): Promise<void> {
+	await fs.rm(path.join(baseDir, ISOLATION_CLAIM_FILE), { force: true });
+}
+
+/**
+ * Whether `dir` carries a claim whose process is still running. A claim left by
+ * a dead process is stale and reads false, so a crashed setup stays reclaimable.
+ * An unreadable or malformed marker reads true: removal is the unsafe answer.
+ */
+export async function isolationClaimIsLive(dir: string): Promise<boolean> {
+	let raw: string;
+	try {
+		raw = await fs.readFile(path.join(dir, ISOLATION_CLAIM_FILE), "utf8");
+	} catch (error) {
+		return !isEnoent(error);
+	}
+	let pid: unknown;
+	try {
+		const decoded = JSON.parse(raw);
+		if (decoded && typeof decoded === "object" && "pid" in decoded) {
+			pid = decoded.pid;
+		}
+	} catch {
+		return true;
+	}
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return true;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
 }
