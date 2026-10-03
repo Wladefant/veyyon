@@ -110,6 +110,7 @@ import {
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
+	resolveOpenAIResponsesOutputClamp,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";
 
@@ -1038,6 +1039,7 @@ export function buildParams(
 		omitMaxOutputTokens: model.omitMaxOutputTokens ?? false,
 		routedUpstreamSelfCaps: model.compat.routedUpstreamSelfCaps,
 		alwaysSendMaxTokens: model.compat.alwaysSendMaxTokens,
+		providerOutputClamp: resolveOpenAIResponsesOutputClamp(model),
 	});
 
 	applyCommonResponsesSamplingParams(params, { ...options, maxTokens: outputToken?.value }, model);

@@ -245,6 +245,9 @@ export function resolveOpenAIRequestSetup(
 		setHeaderIfAbsent(headers, "http-referer", VERCEL_AI_GATEWAY_REFERER);
 		setHeaderIfAbsent(headers, "x-title", VERCEL_AI_GATEWAY_TITLE);
 	}
+	if (model.provider === "muse-code") {
+		setHeaderIfAbsent(headers, "x-api-version", "1.0.0");
+	}
 	if (model.provider === "coreweave") {
 		applyCoreWeaveProjectHeader(headers);
 	}
@@ -1096,6 +1099,20 @@ export function resolveZaiReasoningOutputClamp(
 }
 
 /**
+ * Provider-specific Responses API output clamp.
+ *
+ * Meta documents a 131,072-token output limit for Muse Spark, so direct Model
+ * API and Muse Code requests may use the model's full advertised cap instead
+ * of the conservative 64k OpenAI-compatible default.
+ */
+export function resolveOpenAIResponsesOutputClamp(model: Pick<Model, "provider" | "maxTokens">): number | undefined {
+	if (model.provider === "meta" || model.provider === "muse-code") {
+		return model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS;
+	}
+	return undefined;
+}
+
+/**
  * Enable `tool_stream` for Z.AI/GLM-5.2 reasoning models when tools are present
  * (GLM-5.2 streams tool-call arguments incrementally and needs the flag to do so).
  */
@@ -1727,16 +1744,24 @@ export function escapeReplayedClientText(items: ResponseInput): ResponseInput {
 		if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
 			return typeof item.output === "string" ? { ...item, output: escapeHarmonyControlTokens(item.output) } : item;
 		}
-		if (item.type === "message" && (item.role === "user" || item.role === "developer" || item.role === "system")) {
-			if (typeof item.content === "string") {
-				return { ...item, content: escapeHarmonyControlTokens(item.content) };
+		// EasyInputMessage may omit `type` (`{ role, content }`); the responses
+		// server persists it verbatim, so treat missing type as a message too.
+		const isTypedMessage = item.type === "message" || item.type === undefined;
+		if (isTypedMessage && "role" in item && "content" in item) {
+			const role = item.role;
+			if (role !== "user" && role !== "developer" && role !== "system") return item;
+			const content = item.content;
+			if (typeof content === "string") {
+				return { ...item, content: escapeHarmonyControlTokens(content) };
 			}
-			return {
-				...item,
-				content: item.content.map(part =>
-					part.type === "input_text" ? { ...part, text: escapeHarmonyControlTokens(part.text) } : part,
-				),
-			};
+			if (Array.isArray(content)) {
+				return {
+					...item,
+					content: content.map(part =>
+						part.type === "input_text" ? { ...part, text: escapeHarmonyControlTokens(part.text) } : part,
+					),
+				};
+			}
 		}
 		return item;
 	});
@@ -3502,7 +3527,7 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 		params.max_output_tokens = Math.min(
 			options.maxTokens,
 			model.maxTokens ?? Number.POSITIVE_INFINITY,
-			OPENAI_MAX_OUTPUT_TOKENS,
+			resolveOpenAIResponsesOutputClamp(model) ?? OPENAI_MAX_OUTPUT_TOKENS,
 		);
 	}
 	if (options?.temperature !== undefined) params.temperature = options.temperature;
