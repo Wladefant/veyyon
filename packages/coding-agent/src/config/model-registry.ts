@@ -1140,7 +1140,8 @@ export class ModelRegistry {
 	// Outrank catalog/discovery values, which are a guess for gateway models the
 	// catalog predates. Survive refresh() for the same reason the overlays do.
 	#providerReportedWindows: Map<string, number> = new Map();
-	#runtimeProviderApiKeys: Map<string, string> = new Map();
+	#runtimeProviderApiKeys: Map<string, { keyConfig: string; fallback: boolean }> =
+		new Map();
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
@@ -1167,14 +1168,18 @@ export class ModelRegistry {
 		return { configured: true };
 	}
 
-	#installProviderApiKey(provider: string, keyConfig: string): void {
+	#installProviderApiKey(
+		provider: string,
+		keyConfig: string,
+		options?: { fallback?: boolean },
+	): void {
 		this.#customProviderApiKeys.set(provider, keyConfig);
 		const resolved = resolveConfigValue(
 			keyConfig,
 			`API key for provider "${provider}"`,
 		);
 		if (resolved) {
-			this.authStorage.setConfigApiKey(provider, resolved);
+			this.authStorage.setConfigApiKey(provider, resolved, options);
 		} else if (
 			isConfigValueCommand(keyConfig) ||
 			describeConfigEnvReference(keyConfig)
@@ -1398,7 +1403,7 @@ export class ModelRegistry {
 		// Restore runtime API keys before #loadModels — survives because
 		// #loadModels only calls .set() on #customProviderApiKeys, never reassigns it.
 		for (const [k, v] of this.#runtimeProviderApiKeys) {
-			this.#installProviderApiKey(k, v);
+			this.#installProviderApiKey(k, v.keyConfig, { fallback: v.fallback });
 		}
 		this.#providerOverrides.clear();
 		this.#modelOverrides.clear();
@@ -3196,9 +3201,13 @@ export class ModelRegistry {
 		}
 
 		if (config.apiKey) {
-			this.#installProviderApiKey(providerName, config.apiKey);
+			const fallback = config.oauth !== undefined;
+			this.#installProviderApiKey(providerName, config.apiKey, { fallback });
 			// Persist runtime API keys so they survive #reloadStaticModels() cycles
-			this.#runtimeProviderApiKeys.set(providerName, config.apiKey);
+			this.#runtimeProviderApiKeys.set(providerName, {
+				keyConfig: config.apiKey,
+				fallback,
+			});
 		}
 
 		if (config.models && config.models.length > 0) {

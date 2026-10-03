@@ -289,6 +289,7 @@ export class AuthStorage {
 	#data: Map<string, StoredCredential[]> = new Map();
 	#runtimeOverrides: Map<string, string> = new Map();
 	#configOverrides: Map<string, string> = new Map();
+	#configFallbacks: Map<string, string> = new Map();
 	/** Tracks next credential index per provider:type key for round-robin distribution (non-session use). */
 	#providerRoundRobinIndex: Map<string, number> = new Map();
 	/** Session stickiness, session pins and the provider-wide account selection. */
@@ -551,8 +552,18 @@ export class AuthStorage {
 	 * Lower priority than {@link setRuntimeApiKey} so a CLI `--api-key`
 	 * still wins for the duration of a single invocation.
 	 */
-	setConfigApiKey(provider: string, apiKey: string): void {
-		this.#configOverrides.set(provider, apiKey);
+	setConfigApiKey(
+		provider: string,
+		apiKey: string,
+		options?: { fallback?: boolean },
+	): void {
+		if (options?.fallback) {
+			this.#configOverrides.delete(provider);
+			this.#configFallbacks.set(provider, apiKey);
+		} else {
+			this.#configFallbacks.delete(provider);
+			this.#configOverrides.set(provider, apiKey);
+		}
 	}
 
 	/**
@@ -560,6 +571,7 @@ export class AuthStorage {
 	 */
 	removeConfigApiKey(provider: string): void {
 		this.#configOverrides.delete(provider);
+		this.#configFallbacks.delete(provider);
 	}
 
 	/**
@@ -568,6 +580,7 @@ export class AuthStorage {
 	 */
 	clearConfigApiKeys(): void {
 		this.#configOverrides.clear();
+		this.#configFallbacks.clear();
 	}
 
 	/**
@@ -2164,6 +2177,7 @@ export class AuthStorage {
 		if (this.#runtimeOverrides.has(provider)) return true;
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#configFallbacks.has(provider)) return true;
 		if (getEnvApiKey(provider)) return true;
 		if (this.#chatgptWebOAuthFallback(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
@@ -2175,6 +2189,7 @@ export class AuthStorage {
 		if (this.#runtimeOverrides.has(provider)) return true;
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#configFallbacks.has(provider)) return true;
 		if (this.#chatgptWebOAuthFallback(provider)) return true;
 		const envKey = getEnvApiKey(provider);
 		if (envKey && envKey !== AUTHENTICATED_API_KEY_SENTINEL) return true;
@@ -2197,6 +2212,7 @@ export class AuthStorage {
 		if (this.#runtimeOverrides.has(provider)) return true;
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
+		if (this.#configFallbacks.has(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
 		return false;
 	}
@@ -2223,6 +2239,7 @@ export class AuthStorage {
 		) {
 			return { kind: "api_key" };
 		}
+		if (this.#configFallbacks.has(provider)) return { kind: "config" };
 		if (getEnvApiKey(provider))
 			return { kind: "env", envVar: getEnvApiKeyName(provider) };
 		if (stored.some((credential) => credential.type === "api_key"))
@@ -4643,6 +4660,10 @@ export class AuthStorage {
 		if (loginApiKeySelection) {
 			return this.#configValueResolver(loginApiKeySelection.credential.key);
 		}
+		const fallbackKey = this.#configFallbacks.get(provider);
+		if (fallbackKey) {
+			return this.#configValueResolver(fallbackKey);
+		}
 
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
@@ -4730,6 +4751,10 @@ export class AuthStorage {
 		if (sessionId)
 			this.#routing.forgetStickySessionCredential(provider, sessionId);
 
+		const fallbackKey = this.#configFallbacks.get(provider);
+		if (fallbackKey) {
+			return this.#configValueResolver(fallbackKey);
+		}
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
 		const apiKeySelection = await this.#selectApiKeyCredential(
@@ -5967,6 +5992,7 @@ export class AuthStorage {
 				credential.type === "api_key" && credential.source === "login",
 		);
 		if (loginApiKeySource) return loginApiKeySource;
+		if (this.#configFallbacks.has(provider)) return "provider config (fallback)";
 		if (getEnvApiKey(provider)) return `env (over ${baseLabel})`;
 		const apiKeySource = describeStored(
 			"api_key",

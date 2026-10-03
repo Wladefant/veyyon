@@ -7,6 +7,7 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Preserved /login API key and OAuth credential precedence over extension-registered fallback API keys during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a15993beff8843c0800f722a44bb089767, 2714c7a1eb1d71071220a672322a3cf20da35706).
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
 
