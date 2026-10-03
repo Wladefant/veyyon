@@ -8,10 +8,15 @@
 
 ### Fixed
 - Preserved /login API key and OAuth credential precedence over extension fallback API keys, including command-backed values, during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
+- Fixed an implicit-any type error in the HTML export markdown test so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Recognized local login placeholders in model selection while preserving resolved credentials and existing request bearer values ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1d78d2b97e3901c8a0d051acb612a783ca14f5c7, 0e483420eeccffba3a48c40ad962ed9fddb87d6a).
 
+- Sessions apply the selected model's effort default and saved model-specific effort after late provider registration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e8560590eae56258759ff99588699686ad158ab2).
 - Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Fixed HTML export viewer escaping pre-escaped nested list markup and inline code formatting (oh-my-pi 6b3d0d0afdc580624e80f33ebc4b8c158a3a7bbf, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Task execution results sanitize artifact paths (shortening home directories to ~ and bounding width) while preserving Patch, Branch, and Nested patch labels in TUI result rows, and include the unmerged branch name in merge-error summaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 24c1257fc9c0db04c9aeb2a1c5bfb4b3549e5a26, 17a2fda053d32c32d19328c6b8a1d7f58369d88d).
 - Keep terminal text readable on painted surfaces by emitting explicit contrasting ANSI foregrounds for empty theme tokens ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 3634ec23229951ed4902dae6ca9a2b021b65392e).
 - Nested patch persistence removes only newly created patch files on write failure and preserves existing destination data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1c01111697356e0c2d7bf41fb93ac97807943604).
 
@@ -199,6 +204,7 @@
 
 ### Changed
 
+- An interactive session at rest arms no working-clock heartbeat, stops its loop watchdog after 10 quiet seconds and its idle trim after the trim, and samples its stack once a second, each until the next keystroke or frame, so the runtime's idle collector drops to its slow rate: the linux-x64 binary idle 90 seconds after launch records 131 thread wakeups in 60 seconds instead of 4,062 and spends 20 ms of CPU instead of 160 ms (median of three).
 - Capability discovery finds the repository root by checking each ancestor of the working directory for `.git` instead of listing and keeping every ancestor directory, and concurrent loads share one lookup; twenty concurrent lookups from a directory under a 1,700-entry directory take 0.31 ms instead of 2.50 ms and leave 32 KiB on the heap instead of 259 KiB, and from a home directory outside any repository take 0.30 ms instead of 1.85 ms and leave 33 KiB instead of 185 KiB (median of 15).
 - A session compares a SHA-256 digest of its tool names, descriptions and MCP server instructions to decide whether a tool change rebuilds the system prompt, instead of keeping the joined text, so each main session and live subagent holds 87,568 fewer bytes of heap once its tool set has been applied twice with the default tools.
 - On Linux the binary's embedded module pages are released on the first 5-second window under 5% CPU after work instead of after 30 quiet seconds, so an idle session 15 seconds after launch holds 190 MiB RSS instead of 270-286 MiB, and a session with turns 12 seconds apart holds 209-216 MiB after its second and third turns instead of 290-295 MiB, at unchanged turn latency.

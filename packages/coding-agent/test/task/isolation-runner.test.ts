@@ -551,6 +551,23 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.hadAnyChanges).toBe(false);
 		expect(outcome.mergedBranchForNestedPatches).toBe(false);
 	});
+
+	it("names preserved branch in merge-error summary when merge phase fails", async () => {
+		vi.spyOn(worktreeModule, "mergeTaskBranches").mockRejectedValue(new Error("fast-forward refused"));
+		const outcome = await mergeIsolatedChanges({
+			repoRoot: "/repo",
+			mergeMode: "branch",
+			result: result({
+				branchName: "omp/task/Throwing",
+				patchPath: "/repo/artifacts/task.patch",
+			}),
+		});
+
+		expect(outcome.changesApplied).toBe(false);
+		expect(outcome.summary).toContain("Merge phase failed: fast-forward refused");
+		expect(outcome.summary).toContain("Unmerged branch preserved as omp/task/Throwing for manual resolution.");
+		expect(outcome.summary).toContain("/repo/artifacts/task.patch");
+	});
 });
 
 describe("applyEligibleNestedPatches", () => {
