@@ -652,8 +652,6 @@ function showStartupNotifications(mode: InteractiveMode, notifs: readonly (Inter
 
 /** Send a startup prompt, showing a failure in the transcript instead of ending the launch. */
 async function promptAtStartup(mode: InteractiveMode, send: () => Promise<boolean>): Promise<void> {
-	// A prompt leaves rest: take the held reading before the prompt appends its message.
-	mode.takeAtRestReading();
 	try {
 		using _keepalive = new EventLoopKeepalive();
 		await send();
@@ -2319,10 +2317,7 @@ async function runSessionLaunch(
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
-	const created = await createSession(
-		{ ...sessionOptions, ...shared, deferAtRestReading: launch.isInteractive },
-		launch.isInteractive,
-	);
+	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
 	const { session } = created;
 	installPersistedAgentReviver(launch, session, eventBus, sessionOptions.enableLsp ?? true);
 	if (launch.parsedArgs.apiKey && !sessionOptions.model && session.model) {

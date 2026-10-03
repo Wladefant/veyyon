@@ -1,7 +1,7 @@
 /**
  * WHY THIS SUITE EXISTS.
  *
- * THE DEFECT IT CLOSES. A launch evaluated three third-party packages it had no use for yet, each through a
+ * THE DEFECT IT CLOSES. A launch evaluated four third-party packages it had no use for yet, three through a
  * static import in a module the launch graph holds:
  *
  * - `yaml` (72 modules): `yaml-sync.ts`, which writes a settings file in place, and the secrets loader, whose
@@ -10,9 +10,13 @@
  * - `diff` (19 modules): the edit tool's diff helpers, the patcher's stale-tag recovery and the transcript's
  *   word diff, none of which runs before something is edited.
  *
- * An RPC launch evaluated 1991 modules before it reported ready, and 1876 without them. Each package now
- * loads through a `require` behind its first use: `loadYaml` in `@veyyon/utils/yaml-sync`,
- * `loadOpenTelemetry` in the agent's telemetry module, and a `lazy()` holder beside each `diff` reader.
+ * and `arktype` with `@ark/schema`, `@ark/util` and `arkregex` (115 modules), because a print or RPC launch
+ * took the session's at-rest reading while it created the session, and that reading builds every tool schema.
+ *
+ * An RPC launch evaluated 1991 modules before it reported ready, and 1876 without the first three. Each of
+ * them now loads through a `require` behind its first use: `loadYaml` in `@veyyon/utils/yaml-sync`,
+ * `loadOpenTelemetry` in the agent's telemetry module, and a `lazy()` holder beside each `diff` reader. Every
+ * top-level session now holds its at-rest reading until its first turn, as the interactive host already did.
  *
  * THE CLASS. A third-party package that a launch evaluates without using. Neither census below names the
  * packages it looks for: each reads every package out of the module cache and pins the set by exact equality,
@@ -38,12 +42,6 @@ import { lazyToolModules, PACKAGES, SRC } from "../helpers/module-reach-gate";
 
 /** Third-party packages an RPC launch evaluates before it reports ready, and why each one is needed then. */
 const EVALUATED_BY_AN_RPC_LAUNCH = [
-	// A print or RPC launch takes its at-rest reading while it creates the session, which builds every tool
-	// schema. An interactive launch holds that reading, and evaluates none of these.
-	"@ark/schema",
-	"@ark/util",
-	"arkregex",
-	"arktype",
 	// Argument parsing and its error output.
 	"chalk",
 	// The system prompt and the tool descriptions are templates; `source-map` is its dependency.

@@ -361,7 +361,7 @@ import {
 	SKILL_PROMPT_MESSAGE_TYPE,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
-import { computeNonMessageBreakdown, computeNonMessageTokens } from "./non-message-tokens";
+import { computeNonMessageBreakdown, computeNonMessageTokens, takeHeldAtRestReading } from "./non-message-tokens";
 import { SESSION_STATE_MESSAGE_TYPE, SESSION_STOP_CONTINUATION_CAP } from "./nudges";
 import { didSessionMessagesChange } from "./provider-replay-projection";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
@@ -5365,6 +5365,9 @@ export class AgentSession {
 		startupMarker("prompt:start");
 		const generation = this.#promptGeneration;
 		try {
+			// The turn leaves rest: take the held at-rest reading before the flush below or the prompt
+			// appends a message, since the reading is at rest only while the session holds none.
+			takeHeldAtRestReading(this);
 			// Flush any pending bash and Python results before the new prompt
 			this.#executions.flush();
 			this.#flushPendingIrcAsides();

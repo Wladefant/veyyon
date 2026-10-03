@@ -7,10 +7,12 @@
  * misfiled, which builds the wire schema of every tool it holds before its first request.
  *
  * THE CLASS: no session the factory treats as spawned reaches the launch-facts record, by any of
- * the option shapes `isSubagentSession` accepts. Each shape is checked alone, where any record at
- * all is the defect, and after a top-level session recorded, where the defect is the record
- * changing. The top-level arm is the positive control: it proves the record is reachable from
- * this harness, so an empty record in the spawned arms is the guard and not a broken fixture.
+ * the option shapes `isSubagentSession` accepts, when it is created or when it leaves rest
+ * (`takeHeldAtRestReading`, which the session calls before its first turn appends a message). Each
+ * shape is checked alone, where any record at all is the defect, and after a top-level session
+ * recorded, where the defect is the record changing. The top-level arm is the positive control: it
+ * proves the record is reachable from this harness, so an empty record in the spawned arms is the
+ * guard and not a broken fixture.
  *
  * WHAT THIS DOES NOT CATCH: a spawned agent recording through the status row. A spawned agent has
  * no row, and the row's own recorder is covered by `the-launch-card-states-what-the-last-launch-knew`.
@@ -30,6 +32,7 @@ import { settings } from "@veyyon/coding-agent/config/settings-instance";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { type CreateAgentSessionOptions, isSubagentSession } from "@veyyon/coding-agent/session/factory-options";
+import { takeHeldAtRestReading } from "@veyyon/coding-agent/session/non-message-tokens";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
@@ -118,7 +121,7 @@ describe("a spawned agent records nothing for the next launch", () => {
 
 	for (const [role, extra] of Object.entries(SPAWNED)) {
 		it(`${role} alone leaves the record empty`, async () => {
-			await create({ ...extra, thinkingLevel: ThinkingLevel.High });
+			takeHeldAtRestReading(await create({ ...extra, thinkingLevel: ThinkingLevel.High }));
 
 			const facts = readLaunchFacts();
 			expect(facts.modelName).toBeNull();
@@ -129,7 +132,7 @@ describe("a spawned agent records nothing for the next launch", () => {
 
 		it(`${role} leaves the top-level session's record as that session filed it`, async () => {
 			const model = bundledModel();
-			await create({ thinkingLevel: ThinkingLevel.Low });
+			takeHeldAtRestReading(await create({ thinkingLevel: ThinkingLevel.Low }));
 			const filed = readLaunchFacts();
 			// The positive control: the top-level session reached the record.
 			expect(filed.modelName).toBe(model.name);
@@ -137,7 +140,7 @@ describe("a spawned agent records nothing for the next launch", () => {
 			expect(filed.thinking).toBe(ThinkingLevel.Low);
 			expect(filed.contextPercent).not.toBeNull();
 
-			await create({ ...extra, thinkingLevel: ThinkingLevel.High });
+			takeHeldAtRestReading(await create({ ...extra, thinkingLevel: ThinkingLevel.High }));
 
 			expect(readLaunchFacts()).toEqual(filed);
 		});

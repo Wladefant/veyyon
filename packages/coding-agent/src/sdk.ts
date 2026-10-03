@@ -1516,10 +1516,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		hasSession = true;
 		secretRuntime.attachSession(session);
 		// The launch card describes the top-level session a launch opens; a spawned agent records nothing.
-		if (agentKind === "main") {
-			if (options.deferAtRestReading) deferAtRestReading(session);
-			else recordAtRestLaunch(session, settings);
-		}
+		// The reading builds every tool's schema, so the session takes it when it leaves rest.
+		if (agentKind === "main") deferAtRestReading(session, () => recordAtRestLaunch(session, settings));
 
 		armLaunchArgot({
 			argot,

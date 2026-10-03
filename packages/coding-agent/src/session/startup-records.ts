@@ -15,7 +15,7 @@ import { recordRestLaunchFacts } from "../config/launch-facts";
 import type { Settings } from "../config/settings";
 import { ARGOT_HANDLES_BANNER } from "../system-prompt-builder/section-registry";
 import type { AgentSession } from "./agent-session";
-import { computeSystemContextTokens, releaseAtRestReading } from "./non-message-tokens";
+import { computeSystemContextTokens } from "./non-message-tokens";
 
 type StartRecorder = Pick<SessionManager, "appendSessionInit" | "appendSettingsSnapshot" | "appendCustomMessageEntry">;
 
@@ -80,24 +80,23 @@ function measureAtRestLaunch(session: AgentSession, settings: Settings): AtRestL
 }
 
 /**
- * Measure the at-rest reading of a top-level session and file it for the next launch's card, as soon
- * as the session exists rather than when the status row first renders. The launch card reads the
- * recorded file on every render and repaints when a record lands, so on a cold launch (no recording
- * from a previous session) the hero's model name and provider and the context gauge arrive with the
- * session, and the next launch states them from the first frame. The row re-records the same decision
- * on its own renders against the same gauge; a record that changes nothing does not write.
+ * Measure the at-rest reading of a top-level session and file it for the next launch's card. The
+ * launch card reads the recorded file on every render and repaints when a record lands, so on a cold
+ * launch (no recording from a previous session) the hero's model name and provider and the context
+ * gauge arrive with the reading, and the next launch states them from the first frame. The status row
+ * re-records the same decision on its own renders against the same gauge; a record that changes
+ * nothing does not write.
  *
- * The interactive host creates its session with the reading held (`deferAtRestReading`) and calls
- * this when the session leaves rest, at the first composer edit or prompt, because the reading builds
- * every tool's schema. This ends the hold, so the status row measures from its next render.
+ * `createAgentSession` holds this reading (`deferAtRestReading`) because it builds every tool's
+ * schema, and `takeHeldAtRestReading` calls it when the session leaves rest: before the session's
+ * first turn appends a message, or earlier when the interactive host draws the composer's first edit.
  *
- * A spawned agent files nothing, so the caller records only a top-level session. The card describes
- * the top-level session a launch opens. A spawned agent can run the default model with its own system
+ * A spawned agent files nothing, so only a top-level session is held. The card describes the
+ * top-level session a launch opens. A spawned agent can run the default model with its own system
  * prompt, tools and effort, and filing its reading would hand the next launch a gauge and a rung
  * measured on a prompt that launch never builds.
  */
 export function recordAtRestLaunch(session: AgentSession, settings: Settings): void {
-	releaseAtRestReading(session);
 	const atRest = measureAtRestLaunch(session, settings);
 	void recordRestLaunchFacts(atRest, atRest.contextPercent, atRest.contextLimit);
 }

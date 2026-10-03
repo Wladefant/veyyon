@@ -490,8 +490,10 @@ export async function runCli(argv: string[]): Promise<void> {
 	// unless it is configured jitless before `arktype` first evaluates. In the compiled binary that
 	// codegen costs about 22 ms and 11 MiB of heap per launch, and interpreted traversal validates a
 	// tool call's arguments in 3.4 µs against 3.1 µs. `arktype` is off this file's static graph, so
-	// this runs before any module builds a schema, and `runSmokeTest` fails when it does not. The auth
-	// gateway's request schemas compile regardless (`@veyyon/ai` `providers/gateway-schema-type.ts`).
+	// this runs before any module builds a schema, and `runSmokeTest` fails when it does not. The
+	// facade holds the setting until the first schema evaluates the package, so a launch that builds
+	// none evaluates no ArkType module. The auth gateway's request schemas compile regardless
+	// (`@veyyon/ai` `providers/gateway-schema-type.ts`).
 	if (isProcessEntry) {
 		const { configureArktype } = await import("@veyyon/ai/utils/schema/arktype");
 		configureArktype({ jitless: true });

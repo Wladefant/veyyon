@@ -8,7 +8,7 @@
 
 ### Added
 
-- `@veyyon/ai/utils/schema/arktype` exports `type`, `scope` and `Type` stand-ins that evaluate the `arktype` package on their first call, construction or property read, plus `loadArktype`, `configureArktype` and `arktypeRelease`, which reads the installed release from package metadata; every arktype value import in the package goes through it, so a process that builds no schema evaluates none of arktype's 115 modules.
+- `@veyyon/ai/utils/schema/arktype` exports `type`, `scope` and `Type` stand-ins that evaluate the `arktype` package on their first call, construction or property read, plus `loadArktype`, `configureArktype`, which holds a configuration until the first `loadArktype` applies it, and `arktypeRelease`, which reads the installed release from package metadata; every arktype value import in the package goes through it, so a process that configures ArkType and builds no schema evaluates none of arktype's 115 modules.
 
 ### Changed
 

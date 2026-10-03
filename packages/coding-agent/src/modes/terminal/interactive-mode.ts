@@ -114,8 +114,7 @@ import {
 	type KeptSession,
 } from "../../session/background-sessions";
 import { setImageDisplayProbe } from "../../session/image-visibility";
-import { isAtRestReadingDeferred } from "../../session/non-message-tokens";
-import { recordAtRestLaunch } from "../../session/startup-records";
+import { isAtRestReadingDeferred, takeHeldAtRestReading } from "../../session/non-message-tokens";
 import { VibeSessionRegistry } from "../../session/vibe-runtime";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../../slash-commands/builtin-declarations";
 import { buildTuiBuiltinSlashCommands } from "../../slash-commands/builtin-registry";
@@ -3959,15 +3958,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * Take the session's held at-rest reading now and redraw the gauge it measures; a no-op once taken
-	 * or when the session was created without the hold. A prompt calls this before it appends its
-	 * message, since the reading is at rest only before the first one.
+	 * Take the session's held at-rest reading now and redraw the gauge it measures; a no-op once taken.
+	 * A submission calls this before the session appends its message, since the reading is at rest only
+	 * before the first one, and redraws the gauge before the turn starts.
 	 */
 	takeAtRestReading(): void {
-		const session = this.session;
-		if (!isAtRestReadingDeferred(session)) return;
-		recordAtRestLaunch(session, session.settings);
-		this.ui.requestRender();
+		if (takeHeldAtRestReading(this.session)) this.ui.requestRender();
 	}
 
 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {

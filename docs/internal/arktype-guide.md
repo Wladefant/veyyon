@@ -120,8 +120,10 @@ The CLI entry configures ArkType jitless in `runCli` (`packages/coding-agent/src
 `configureArktype({ jitless: true })` before any command builds a schema, so a schema built from the
 default `type` validates by interpreted traversal and compiles no validator code. In the compiled binary
 this cuts the evaluation of `arktype` from 47 ms to 25 ms and `createAgentSession` from 125 ms to
-104 ms. `veyyon --smoke-test` fails when `arktype` evaluates before that call, which happens when a
-module that `cli.ts` reaches statically builds a schema while it evaluates.
+104 ms. `configureArktype` evaluates nothing: it holds the configuration until the first `loadArktype`,
+which applies it and then evaluates the package, so a launch that builds no schema evaluates none of
+the 32 modules of `arktype/config`. `veyyon --smoke-test` fails when `arktype` evaluates before that
+call, which happens when a module that `cli.ts` reaches statically builds a schema while it evaluates.
 
 Interpreted traversal costs little on a small value (a tool call's arguments: 3.4 µs against 3.1 µs)
 and a lot on a large one (a 751-message chat-completions request: 2.1 ms against 42 µs). A schema that
@@ -178,4 +180,4 @@ is a candidate to **stay on Zod** (external-boundary exception), note it in your
 - Report: files changed, any `.strict`→`"+"`, `.refine`→`.narrow`, `.catch`→morph, and any file you
   intentionally left on Zod (with the reason).
 
-*Verified against `71619ee74c` on 2026-10-03.*
+*Verified against `eb21778f28` on 2026-10-03.*
