@@ -1109,6 +1109,11 @@ interface RestoredStaticStage {
 	discoveryStates: ProviderDiscoveryState[];
 }
 
+interface ConfiguredProviderApiKey {
+	readonly keyConfig: string;
+	readonly fallback: boolean;
+}
+
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
@@ -1118,9 +1123,7 @@ export class ModelRegistry {
 	#cachedStandardByProvider: Map<string, Model<Api>[]> = new Map();
 	#cachedDiscoveriesByProvider: Map<string, Model<Api>[]> = new Map();
 	#cachedAuthoritativeProviders: Set<string> = new Set();
-	#customProviderApiKeys: Map<string, string> = new Map();
-	/** Providers whose current API key came from static models config, not an extension registration. */
-	#staticKeyProviders: Set<string> = new Set();
+	#customProviderApiKeys: Map<string, ConfiguredProviderApiKey> = new Map();
 	#keylessProviders: Set<string> = new Set();
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
 	#customModelOverlays: CustomModelOverlay[] = [];
@@ -1143,8 +1146,7 @@ export class ModelRegistry {
 	// Outrank catalog/discovery values, which are a guess for gateway models the
 	// catalog predates. Survive refresh() for the same reason the overlays do.
 	#providerReportedWindows: Map<string, number> = new Map();
-	#runtimeProviderApiKeys: Map<string, { keyConfig: string; fallback: boolean }> =
-		new Map();
+	#runtimeProviderApiKeys: Map<string, ConfiguredProviderApiKey> = new Map();
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
@@ -1157,19 +1159,15 @@ export class ModelRegistry {
 	#fetch: FetchImpl;
 
 	#resolveCommandBackedApiKey(provider: string): CommandApiKeyResolution {
-		const keyConfig = this.#customProviderApiKeys.get(provider);
-		if (!isConfigValueCommand(keyConfig)) return { configured: false };
-		// Fallback ownership follows the key source actually installed: a static
-		// models.json key that replaced the extension key is not a fallback.
-		const fallback =
-			this.#staticKeyProviders.has(provider) === false &&
-			(this.#runtimeProviderApiKeys.get(provider)?.fallback ?? false);
+		const config = this.#customProviderApiKeys.get(provider);
+		if (!config || !isConfigValueCommand(config.keyConfig)) return { configured: false };
+		const { keyConfig, fallback } = config;
 		const value = resolveConfigValue(
 			keyConfig,
 			`API key for provider "${provider}"`,
 		);
 		if (value) {
-			this.authStorage.setConfigApiKey(provider, value, { fallback });
+			this.authStorage.setConfigApiKey(provider, value, config);
 			return { configured: true, value, fallback };
 		}
 		this.authStorage.removeConfigApiKey(provider);
@@ -1178,18 +1176,16 @@ export class ModelRegistry {
 
 	#installProviderApiKey(
 		provider: string,
-		keyConfig: string,
-		options?: { fallback?: boolean },
+		config: ConfiguredProviderApiKey,
 	): void {
-		this.#customProviderApiKeys.set(provider, keyConfig);
-		if (options) this.#staticKeyProviders.delete(provider);
-		else this.#staticKeyProviders.add(provider);
+		const { keyConfig } = config;
+		this.#customProviderApiKeys.set(provider, config);
 		const resolved = resolveConfigValue(
 			keyConfig,
 			`API key for provider "${provider}"`,
 		);
 		if (resolved) {
-			this.authStorage.setConfigApiKey(provider, resolved, options);
+			this.authStorage.setConfigApiKey(provider, resolved, config);
 		} else if (
 			isConfigValueCommand(keyConfig) ||
 			describeConfigEnvReference(keyConfig)
@@ -1229,7 +1225,7 @@ export class ModelRegistry {
 			: undefined;
 		// Set up fallback resolver for custom provider API keys
 		this.authStorage.setFallbackResolver((provider) => {
-			const keyConfig = this.#customProviderApiKeys.get(provider);
+			const keyConfig = this.#customProviderApiKeys.get(provider)?.keyConfig;
 			if (!keyConfig) return undefined;
 			return resolveConfigValue(
 				keyConfig,
@@ -1404,7 +1400,6 @@ export class ModelRegistry {
 		}
 		this.#modelsConfigFile.invalidate();
 		this.#customProviderApiKeys.clear();
-		this.#staticKeyProviders.clear();
 		this.#keylessProviders.clear();
 		this.#discoverableProviders = [];
 		// Drop config-sourced apiKeys from AuthStorage before reload; entries
@@ -1414,7 +1409,7 @@ export class ModelRegistry {
 		// Restore runtime API keys before #loadModels — survives because
 		// #loadModels only calls .set() on #customProviderApiKeys, never reassigns it.
 		for (const [k, v] of this.#runtimeProviderApiKeys) {
-			this.#installProviderApiKey(k, v.keyConfig, { fallback: v.fallback });
+			this.#installProviderApiKey(k, v);
 		}
 		this.#providerOverrides.clear();
 		this.#modelOverrides.clear();
@@ -1998,7 +1993,7 @@ export class ModelRegistry {
 			// bearer in models.yml (e.g. for an auth-gateway baseUrl), that bearer
 			// must authenticate the outbound request.
 			if (providerConfig.apiKey) {
-				this.#installProviderApiKey(providerName, providerConfig.apiKey);
+				this.#installProviderApiKey(providerName, { keyConfig: providerConfig.apiKey, fallback: false });
 			}
 
 			// Parse per-model overrides
@@ -2732,7 +2727,7 @@ export class ModelRegistry {
 				providerConfig.headers,
 			);
 			if (providerConfig.apiKey) {
-				this.#installProviderApiKey(providerName, providerConfig.apiKey);
+				this.#installProviderApiKey(providerName, { keyConfig: providerConfig.apiKey, fallback: false });
 			}
 			for (const modelDef of modelDefs) {
 				const providerCompat = providerConfig.disableStrictTools
@@ -2917,7 +2912,7 @@ export class ModelRegistry {
 	}
 
 	hasConfiguredAuth(model: Model<Api>): boolean {
-		const keyConfig = this.#customProviderApiKeys.get(model.provider);
+		const keyConfig = this.#customProviderApiKeys.get(model.provider)?.keyConfig;
 		return (
 			isConfigValueCommand(keyConfig) ||
 			this.#isKeylessProvider(model.provider) ||
@@ -2928,7 +2923,7 @@ export class ModelRegistry {
 	/** Prefer explicit credentials and local endpoints over ambient AWS/Vertex auth at startup. */
 	hasConcreteAuth(provider: string): boolean {
 		return (
-			isConfigValueCommand(this.#customProviderApiKeys.get(provider)) ||
+			isConfigValueCommand(this.#customProviderApiKeys.get(provider)?.keyConfig) ||
 			this.#isKeylessProvider(provider) ||
 			this.authStorage.hasConcreteAuth(provider)
 		);
@@ -3213,13 +3208,10 @@ export class ModelRegistry {
 		}
 
 		if (config.apiKey) {
-			const fallback = config.oauth !== undefined;
-			this.#installProviderApiKey(providerName, config.apiKey, { fallback });
+			const key = { keyConfig: config.apiKey, fallback: config.oauth !== undefined };
+			this.#installProviderApiKey(providerName, key);
 			// Persist runtime API keys so they survive #reloadStaticModels() cycles
-			this.#runtimeProviderApiKeys.set(providerName, {
-				keyConfig: config.apiKey,
-				fallback,
-			});
+			this.#runtimeProviderApiKeys.set(providerName, key);
 		}
 
 		if (config.models && config.models.length > 0) {

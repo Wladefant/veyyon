@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearCustomApis, type FetchImpl } from "@veyyon/ai";
+import { clearCustomApis, type FetchImpl, type Model } from "@veyyon/ai";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
 import { unregisterOAuthProviders } from "@veyyon/ai/oauth";
 import { buildModel } from "@veyyon/catalog/build";
@@ -69,7 +69,12 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 			...(options.oauth ? { oauth: { name: "Test", login: async () => savedKey } } : {}),
 			fetchDynamicModels: async apiKey => {
 				discoveryKeys.push(apiKey);
-				if (apiKey !== savedKey && apiKey !== "env-key" && apiKey !== "command-fallback-key")
+				if (
+					apiKey !== savedKey &&
+					apiKey !== "env-key" &&
+					apiKey !== "command-fallback-key" &&
+					apiKey !== "static-gateway-key"
+				)
 					throw new Error("401 invalid key");
 				return [
 					{
@@ -91,6 +96,20 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		await authStorage.login(provider, {
 			onAuth() {},
 			onPrompt: async () => savedKey,
+		});
+	}
+
+	function requestModel(): Model<"openai-completions"> {
+		return buildModel<"openai-completions">({
+			provider,
+			id: "listed-model",
+			name: "Listed",
+			api: "openai-completions",
+			baseUrl: "https://login-key-precedence.example.com/v1",
+			reasoning: false,
+			input: ["text"],
+			contextWindow: 128_000,
+			maxTokens: 8_192,
 		});
 	}
 
@@ -165,17 +184,7 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 	test("a command fallback keeps saved login auth for model requests", async () => {
 		register({ oauth: true, apiKey: commandKey });
 		await login();
-		const model = buildModel<"openai-completions">({
-			provider,
-			id: "listed-model",
-			name: "Listed",
-			api: "openai-completions",
-			baseUrl: "https://login-key-precedence.example.com/v1",
-			reasoning: false,
-			input: ["text"],
-			contextWindow: 128_000,
-			maxTokens: 8_192,
-		});
+		const model = requestModel();
 		expect(await registry.getApiKey(model)).toBe(savedKey);
 		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
 	});
@@ -195,47 +204,41 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
 	});
 
-	test("a static models.json command replacing an extension fallback is an override, not a fallback", async () => {
-		register({ oauth: true, apiKey: commandKey });
-		await login();
-		fs.writeFileSync(
-			path.join(tempDir, "models.json"),
-			JSON.stringify({
-				providers: {
-					[provider]: {
-						baseUrl: "https://login-key-precedence.example.com/v1",
-						api: "openai-completions",
-						apiKey: "!printf static-command-key",
-						models: [{ id: "static-model", name: "Static" }],
-					},
-				},
-			}),
-			"utf8",
-		);
-		await registry.refresh("offline");
-		expect(await registry.getApiKeyForProvider(provider)).toBe("static-command-key");
-		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
-	});
-
-	test("a static models.json command identical to the extension fallback is still an override", async () => {
-		register({ oauth: true, apiKey: commandKey });
-		await login();
-		fs.writeFileSync(
-			path.join(tempDir, "models.json"),
-			JSON.stringify({
-				providers: {
-					[provider]: {
-						baseUrl: "https://login-key-precedence.example.com/v1",
-						api: "openai-completions",
-						apiKey: commandKey,
-						models: [{ id: "static-model", name: "Static" }],
-					},
-				},
-			}),
-			"utf8",
-		);
-		await registry.refresh("offline");
-		expect(await registry.getApiKeyForProvider(provider)).toBe("command-fallback-key");
-		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
-	});
+	for (const override of [
+		{ label: "different command", command: "!printf static-gateway-key", key: "static-gateway-key" },
+		{ label: "identical command", command: commandKey, key: "command-fallback-key" },
+		{ label: "literal key", command: "static-gateway-key", key: "static-gateway-key" },
+	]) {
+		for (const withModels of [false, true]) {
+			test(`a reloaded static override keeps its explicit tier (${override.label}, models=${withModels})`, async () => {
+				register({ oauth: true, apiKey: commandKey });
+				await login();
+				const providerConfig = withModels
+					? {
+							apiKey: override.command,
+							baseUrl: "https://login-key-precedence.example.com/v1",
+							api: "openai-completions",
+							models: [{ id: "static-model" }],
+						}
+					: { apiKey: override.command };
+				fs.writeFileSync(
+					path.join(tempDir, "models.json"),
+					JSON.stringify({ providers: { [provider]: providerConfig } }),
+					"utf8",
+				);
+				await registry.refresh("offline");
+				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+				expect(await registry.getApiKeyForProvider(provider)).toBe(override.key);
+				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+				const model = withModels ? registry.find(provider, "static-model") : requestModel();
+				if (!model) throw new Error("missing configured static model");
+				expect(await registry.getApiKey(model)).toBe(override.key);
+				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+				discoveryKeys.length = 0;
+				await registry.refreshProvider(provider, "online");
+				expect(discoveryKeys).toEqual([override.key]);
+				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+			});
+		}
+	}
 });
