@@ -11,6 +11,7 @@
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Dedicated Codex web searches keep hosted `web_search` tools at the top level for Lite catalog models instead of relocating them into ignored `additional_tools` input ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 22d02031d904bf2e0d5fc5a1b41caf6dc0a76e6b).
 - GitHub tool and internal URL cache compare effective repository hosts including `GH_HOST` defaults, preserve non-default host identity, and route fallback URLs to the effective host ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 92bd2a98827ca7b8b7f4cc38f62d6461c4d62dc6, 33a1f6092dc270a44aeb6221413c6dfa5e2487df, dcceed36822d8c99d8c3f8e25e304fd565039316).
 - The native ledger bridge locates its Python interpreter instead of assuming a bare `python` exists. `PYTHON_EXECUTABLE`/`PYTHON` still win, and the fallback now walks PATH (`python3` first on Linux and macOS, `python` first on Windows), so a host that ships only `python3` no longer fails every claim with `Executable not found in $PATH: "python"`. The topic-replenishment suite consequently stops planting `PYTHON`/`PYTHON_EXECUTABLE` in the process environment for every suite that follows it ([#25](https://github.com/Wladefant/veyyon/issues/25)).
 - Rejected `.` and `..` as owner or repo in GitHub repository refs so they cannot traverse the `/repos/` API path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
