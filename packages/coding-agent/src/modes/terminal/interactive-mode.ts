@@ -200,13 +200,9 @@ import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { GoalModeController } from "./controllers/goal-mode-controller";
 import { HomeAnchorLayout } from "./controllers/home-anchor-layout";
 import { InputController } from "./controllers/input-controller";
-import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import type { SelectorController } from "./controllers/selector-controller";
 import { SessionFocusController } from "./controllers/session-focus-controller";
-import { SSHCommandController } from "./controllers/ssh-command-controller";
-import { TanCommandController } from "./controllers/tan-command-controller";
-import { TodoCommandController } from "./controllers/todo-command-controller";
 import { TranscriptComposer } from "./controllers/transcript-composer";
 import { VoiceController } from "./controllers/voice-controller";
 import { WelcomeController } from "./controllers/welcome-controller";
@@ -480,10 +476,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #toolNotifierSetter: (notify: HostNotifier) => void;
 
 	readonly #btwController: BtwController;
-	readonly #tanCommandController: TanCommandController;
 	readonly #omfgController: OmfgController;
 	readonly #commandController: CommandController;
-	readonly #todoCommandController: TodoCommandController;
 	readonly #eventController: EventController;
 	get eventController(): EventController {
 		return this.#eventController;
@@ -890,12 +884,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 		});
 		this.#btwController = new BtwController(this);
-		this.#tanCommandController = new TanCommandController(this);
 		this.#omfgController = new OmfgController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
-		this.#todoCommandController = new TodoCommandController(this);
 		this.#inputController = new InputController(this);
 		this.#voiceController = new VoiceController(this);
 		this.#goalMode = new GoalModeController(this, {
@@ -4048,8 +4040,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleShareCommand();
 	}
 
-	handleTodoCommand(args: string): Promise<void> {
-		return this.#todoCommandController.handleTodoCommand(args);
+	async handleTodoCommand(args: string): Promise<void> {
+		const { TodoCommandController } = await import("./controllers/todo-command-controller");
+		await new TodoCommandController(this).handleTodoCommand(args);
 	}
 
 	handleSessionCommand(): Promise<void> {
@@ -4146,13 +4139,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleMCPCommand(text: string): Promise<void> {
-		const controller = new MCPCommandController(this);
-		await controller.handle(text);
+		const { MCPCommandController } = await import("./controllers/mcp-command-controller");
+		await new MCPCommandController(this).handle(text);
 	}
 
 	async handleSSHCommand(text: string): Promise<void> {
-		const controller = new SSHCommandController(this);
-		await controller.handle(text);
+		const { SSHCommandController } = await import("./controllers/ssh-command-controller");
+		await new SSHCommandController(this).handle(text);
 	}
 
 	handleCompactCommand(
@@ -4377,8 +4370,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.onInputCallback(this.startPendingSubmission({ text: requestsPrompts["requests/rephrase"].text.trim() }));
 	}
 
-	handleTanCommand(work: string): Promise<void> {
-		return this.#tanCommandController.start(work);
+	async handleTanCommand(work: string): Promise<void> {
+		const { TanCommandController } = await import("./controllers/tan-command-controller");
+		await new TanCommandController(this).start(work);
 	}
 
 	hasActiveBtw(): boolean {

@@ -8,7 +8,9 @@
  * its heap (1.9 MiB of heap and extra memory at idle) for an `/export` or `/share` nobody typed.
  * `@veyyon/catalog/models` text-imported the 2.2 MB `models.json`, so every process held the whole
  * catalog as one string after the registry had parsed the providers it needed; it now imports the
- * file by path and reads it when a consumer builds the registry.
+ * file by path and reads it when a consumer builds the registry. The composer's emoji table
+ * (`emojis.json`) was a JSON module every interactive session parsed and compiled for a `:name`
+ * completion most sessions never type; it is read by path on the first shortcode lookup.
  *
  * THE CLASS. A first-party file that is not TypeScript and is larger than 16 KiB (an embedded
  * template, a generated bundle, a data table) is in the import graph of an idle interactive session
@@ -34,17 +36,21 @@ const ASSET_LIMIT_BYTES = 16 * 1024;
 
 /**
  * Large non-TypeScript files the first frame reads. `loader-state.js` is the native addon loader;
- * `package.json` supplies the version the banner prints; `emojis.json` is the table the composer's
- * `:` completion reads on the first keystroke.
+ * `package.json` supplies the version the banner prints.
  */
 const LARGE_ASSETS_AT_STARTUP = [
 	"natives/bridge/bindings/native/loader-state.js",
 	"packages/coding-agent/package.json",
-	"packages/coding-agent/src/modes/terminal/data/emojis.json",
 ];
 
-/** Large files the startup graph imports by path and reads on demand: the bundled model catalog. */
-const LARGE_ASSETS_BY_PATH = ["packages/catalog/src/models.json"];
+/**
+ * Large files the startup graph imports by path and reads on demand: the bundled model catalog and
+ * the emoji shortcode table.
+ */
+const LARGE_ASSETS_BY_PATH = [
+	"packages/catalog/src/models.json",
+	"packages/coding-agent/src/modes/terminal/data/emojis.json",
+];
 
 const graphs = ENTRIES.map(entry => buildStartupImportGraph(REPO_ROOT, entry));
 const files = new Set(graphs.flatMap(graph => [...graph.files]));
@@ -63,7 +69,7 @@ describe("startup import graph assets", () => {
 		expect(largeAssets(files)).toEqual(LARGE_ASSETS_AT_STARTUP);
 	});
 
-	test("reaches the model catalog by path, not by its contents", () => {
+	test("reaches the model catalog and the emoji table by path, not by their contents", () => {
 		expect(largeAssets(byPath)).toEqual(LARGE_ASSETS_BY_PATH);
 	});
 

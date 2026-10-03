@@ -9,34 +9,36 @@ import type {
 import type { ToolExample } from "@veyyon/ai";
 import { isEnoent, lazy, prompt } from "@veyyon/utils";
 import { type } from "arktype";
+import type {
+	DapBreakpointRecord,
+	DapCapabilities,
+	DapContinueOutcome,
+	DapDataBreakpointInfoResponse,
+	DapDataBreakpointRecord,
+	DapDisassembledInstruction,
+	DapEvaluateArguments,
+	DapEvaluateResponse,
+	DapFunctionBreakpointRecord,
+	DapInstructionBreakpointRecord,
+	DapModule,
+	DapResolvedAdapter,
+	DapScope,
+	DapSessionManager,
+	DapSessionSummary,
+	DapSource,
+	DapStackFrame,
+	DapThread,
+	DapVariable,
+	LaunchProgramKind,
+} from "../../debug/dap";
 import {
-	type DapBreakpointRecord,
-	type DapCapabilities,
-	type DapContinueOutcome,
-	type DapDataBreakpointInfoResponse,
-	type DapDataBreakpointRecord,
-	type DapDisassembledInstruction,
-	type DapEvaluateArguments,
-	type DapEvaluateResponse,
-	type DapFunctionBreakpointRecord,
-	type DapInstructionBreakpointRecord,
-	type DapModule,
-	type DapResolvedAdapter,
-	type DapScope,
-	type DapSessionSummary,
-	type DapSource,
-	type DapStackFrame,
-	type DapThread,
-	type DapVariable,
-	dapSessionManager,
 	getAdapterConfigs,
 	getAvailableAdapters,
 	hasAvailableAdapter,
-	type LaunchProgramKind,
 	resolveLaunchOverrides,
 	selectAttachAdapter,
 	selectLaunchAdapter,
-} from "../../debug/dap";
+} from "../../debug/dap/config";
 import { formatLocation, formatSessionSnapshot } from "../../debug/session-snapshot";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
@@ -515,27 +517,31 @@ function validateLaunchProgram(
 	);
 }
 
-function getActiveSessionSnapshot(): DapSessionSummary {
-	const snapshot = dapSessionManager.getActiveSession();
+function getActiveSessionSnapshot(dap: DapSessionManager): DapSessionSummary {
+	const snapshot = dap.getActiveSession();
 	if (!snapshot) {
 		throw new ToolError("No active debug session. Launch or attach first.");
 	}
 	return snapshot;
 }
 
-function requireCapability(capability: keyof DapCapabilities, description: string): DapSessionSummary {
-	const snapshot = getActiveSessionSnapshot();
-	if (dapSessionManager.getCapabilities()?.[capability] !== true) {
+function requireCapability(
+	dap: DapSessionManager,
+	capability: keyof DapCapabilities,
+	description: string,
+): DapSessionSummary {
+	const snapshot = getActiveSessionSnapshot(dap);
+	if (dap.getCapabilities()?.[capability] !== true) {
 		throw new ToolError(`Current adapter does not support ${description}`);
 	}
 	return snapshot;
 }
 
-function resolveDisassemblyReference(memoryReference: string | undefined): string {
+function resolveDisassemblyReference(dap: DapSessionManager, memoryReference: string | undefined): string {
 	if (memoryReference) {
 		return memoryReference;
 	}
-	const snapshot = getActiveSessionSnapshot();
+	const snapshot = getActiveSessionSnapshot(dap);
 	if (snapshot.instructionPointerReference) {
 		return snapshot.instructionPointerReference;
 	}
@@ -544,8 +550,12 @@ function resolveDisassemblyReference(memoryReference: string | undefined): strin
 	);
 }
 
-/** One debug call: its parameters, the session's cwd, the signal and budget every DAP request takes, and the details its result reports. */
+/**
+ * One debug call: the DAP session manager, its parameters, the session's cwd, the signal and budget
+ * every DAP request takes, and the details its result reports.
+ */
 interface DebugCall {
+	readonly dap: DapSessionManager;
 	readonly params: DebugParams;
 	readonly cwd: string;
 	readonly signal: AbortSignal;
@@ -557,7 +567,7 @@ interface DebugCall {
 /** Runs one action against the DAP session manager, records what it reports in `details`, and returns the result text. */
 type DebugActionRun = (call: DebugCall) => Promise<string> | string;
 
-async function launchSession({ params, cwd, signal, timeoutMs, details }: DebugCall): Promise<string> {
+async function launchSession({ dap, params, cwd, signal, timeoutMs, details }: DebugCall): Promise<string> {
 	if (!params.program) {
 		// `program` is the thing to RUN; `file` is only a breakpoint's source
 		// location. A caller that supplied `file` (thinking it names the target
@@ -581,7 +591,7 @@ async function launchSession({ params, cwd, signal, timeoutMs, details }: DebugC
 	const { adapter } = selection;
 	validateLaunchProgram(program, commandCwd, programKind, adapter);
 	const extraLaunchArguments = resolveLaunchOverrides(adapter, program, programKind);
-	const snapshot = await dapSessionManager.launch(
+	const snapshot = await dap.launch(
 		{ adapter, program, args: params.args, cwd: commandCwd, extraLaunchArguments },
 		signal,
 		timeoutMs,
@@ -591,7 +601,7 @@ async function launchSession({ params, cwd, signal, timeoutMs, details }: DebugC
 	return formatSessionSnapshot(snapshot).join("\n");
 }
 
-async function attachSession({ params, cwd, signal, timeoutMs, details }: DebugCall): Promise<string> {
+async function attachSession({ dap, params, cwd, signal, timeoutMs, details }: DebugCall): Promise<string> {
 	if (params.pid === undefined && params.port === undefined) {
 		throw new ToolError("attach requires pid or port");
 	}
@@ -604,7 +614,7 @@ async function attachSession({ params, cwd, signal, timeoutMs, details }: DebugC
 		}
 		throw new ToolError(`No debugger adapter available. Installed adapters: ${getConfiguredAdapters(commandCwd)}`);
 	}
-	const snapshot = await dapSessionManager.attach(
+	const snapshot = await dap.attach(
 		{ adapter, cwd: commandCwd, pid: params.pid, port: params.port, host: params.host },
 		signal,
 		timeoutMs,
@@ -617,10 +627,10 @@ async function attachSession({ params, cwd, signal, timeoutMs, details }: DebugC
 /** `continue` and the three steps: resume the program and report where it stopped, ended or kept running. */
 function resumeExecution(
 	verb: string,
-	resume: (signal: AbortSignal, timeoutMs: number) => Promise<DapContinueOutcome>,
+	resume: (dap: DapSessionManager, signal: AbortSignal, timeoutMs: number) => Promise<DapContinueOutcome>,
 ): DebugActionRun {
-	return async ({ signal, timeoutSec, timeoutMs, details }) => {
-		const outcome = await resume(signal, timeoutMs);
+	return async ({ dap, signal, timeoutSec, timeoutMs, details }) => {
+		const outcome = await resume(dap, signal, timeoutMs);
 		details.snapshot = outcome.snapshot;
 		details.state = outcome.state;
 		details.timedOut = outcome.timedOut;
@@ -628,18 +638,24 @@ function resumeExecution(
 	};
 }
 
+let dapSessions: Promise<DapSessionManager> | undefined;
+
+/**
+ * The DAP client and session manager, loaded on the first debug call. Registering the tool reads
+ * only the adapter config, so a session that never debugs never compiles the protocol client.
+ */
+function loadDapSessions(): Promise<DapSessionManager> {
+	dapSessions ??= import("../../debug/dap/session").then(module => module.dapSessionManager);
+	return dapSessions;
+}
+
 /** Every action's run, one per member of `debugActionSchema`: an action without one fails the type check. */
 const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 	launch: launchSession,
 	attach: attachSession,
-	set_breakpoint: async ({ params, cwd, signal, timeoutMs, details }) => {
+	set_breakpoint: async ({ dap, params, cwd, signal, timeoutMs, details }) => {
 		if (params.function) {
-			const response = await dapSessionManager.setFunctionBreakpoint(
-				params.function,
-				params.condition,
-				signal,
-				timeoutMs,
-			);
+			const response = await dap.setFunctionBreakpoint(params.function, params.condition, signal, timeoutMs);
 			details.snapshot = response.snapshot;
 			details.functionBreakpoints = response.breakpoints;
 			return formatFunctionBreakpoints(response.breakpoints);
@@ -648,14 +664,14 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 			throw new ToolError("set_breakpoint requires file+line or function");
 		}
 		const file = resolveToCwd(params.file, cwd);
-		const response = await dapSessionManager.setBreakpoint(file, params.line, params.condition, signal, timeoutMs);
+		const response = await dap.setBreakpoint(file, params.line, params.condition, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.breakpoints = response.breakpoints;
 		return formatBreakpoints(response.sourcePath, response.breakpoints);
 	},
-	remove_breakpoint: async ({ params, cwd, signal, timeoutMs, details }) => {
+	remove_breakpoint: async ({ dap, params, cwd, signal, timeoutMs, details }) => {
 		if (params.function) {
-			const response = await dapSessionManager.removeFunctionBreakpoint(params.function, signal, timeoutMs);
+			const response = await dap.removeFunctionBreakpoint(params.function, signal, timeoutMs);
 			details.snapshot = response.snapshot;
 			details.functionBreakpoints = response.breakpoints;
 			return formatFunctionBreakpoints(response.breakpoints);
@@ -664,17 +680,17 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 			throw new ToolError("remove_breakpoint requires file+line or function");
 		}
 		const file = resolveToCwd(params.file, cwd);
-		const response = await dapSessionManager.removeBreakpoint(file, params.line, signal, timeoutMs);
+		const response = await dap.removeBreakpoint(file, params.line, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.breakpoints = response.breakpoints;
 		return formatBreakpoints(response.sourcePath, response.breakpoints);
 	},
-	set_instruction_breakpoint: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsInstructionBreakpoints", "instruction breakpoints");
+	set_instruction_breakpoint: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsInstructionBreakpoints", "instruction breakpoints");
 		if (!params.instruction_reference) {
 			throw new ToolError("instruction_reference is required for set_instruction_breakpoint");
 		}
-		const response = await dapSessionManager.setInstructionBreakpoint(
+		const response = await dap.setInstructionBreakpoint(
 			params.instruction_reference,
 			params.offset,
 			params.condition,
@@ -686,12 +702,12 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 		details.instructionBreakpoints = response.breakpoints;
 		return formatInstructionBreakpoints(response.breakpoints);
 	},
-	remove_instruction_breakpoint: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsInstructionBreakpoints", "instruction breakpoints");
+	remove_instruction_breakpoint: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsInstructionBreakpoints", "instruction breakpoints");
 		if (!params.instruction_reference) {
 			throw new ToolError("instruction_reference is required for remove_instruction_breakpoint");
 		}
-		const response = await dapSessionManager.removeInstructionBreakpoint(
+		const response = await dap.removeInstructionBreakpoint(
 			params.instruction_reference,
 			params.offset,
 			signal,
@@ -701,12 +717,12 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 		details.instructionBreakpoints = response.breakpoints;
 		return formatInstructionBreakpoints(response.breakpoints);
 	},
-	data_breakpoint_info: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsDataBreakpoints", "data breakpoints");
+	data_breakpoint_info: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsDataBreakpoints", "data breakpoints");
 		if (!params.name) {
 			throw new ToolError("name is required for data_breakpoint_info");
 		}
-		const response = await dapSessionManager.dataBreakpointInfo(
+		const response = await dap.dataBreakpointInfo(
 			params.name,
 			params.variable_ref ?? params.scope_id,
 			params.frame_id,
@@ -717,12 +733,12 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 		details.dataBreakpointInfo = response.info;
 		return formatDataBreakpointInfo(response.info);
 	},
-	set_data_breakpoint: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsDataBreakpoints", "data breakpoints");
+	set_data_breakpoint: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsDataBreakpoints", "data breakpoints");
 		if (!params.data_id) {
 			throw new ToolError("data_id is required for set_data_breakpoint");
 		}
-		const response = await dapSessionManager.setDataBreakpoint(
+		const response = await dap.setDataBreakpoint(
 			params.data_id,
 			params.access_type,
 			params.condition,
@@ -734,76 +750,70 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 		details.dataBreakpoints = response.breakpoints;
 		return formatDataBreakpoints(response.breakpoints);
 	},
-	remove_data_breakpoint: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsDataBreakpoints", "data breakpoints");
+	remove_data_breakpoint: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsDataBreakpoints", "data breakpoints");
 		if (!params.data_id) {
 			throw new ToolError("data_id is required for remove_data_breakpoint");
 		}
-		const response = await dapSessionManager.removeDataBreakpoint(params.data_id, signal, timeoutMs);
+		const response = await dap.removeDataBreakpoint(params.data_id, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.dataBreakpoints = response.breakpoints;
 		return formatDataBreakpoints(response.breakpoints);
 	},
-	continue: resumeExecution("Continue", (signal, timeoutMs) => dapSessionManager.continue(signal, timeoutMs)),
-	step_over: resumeExecution("Step over", (signal, timeoutMs) => dapSessionManager.stepOver(signal, timeoutMs)),
-	step_in: resumeExecution("Step in", (signal, timeoutMs) => dapSessionManager.stepIn(signal, timeoutMs)),
-	step_out: resumeExecution("Step out", (signal, timeoutMs) => dapSessionManager.stepOut(signal, timeoutMs)),
-	pause: async ({ signal, timeoutMs, details }) => {
-		const snapshot = await dapSessionManager.pause(signal, timeoutMs);
+	continue: resumeExecution("Continue", (dap, signal, timeoutMs) => dap.continue(signal, timeoutMs)),
+	step_over: resumeExecution("Step over", (dap, signal, timeoutMs) => dap.stepOver(signal, timeoutMs)),
+	step_in: resumeExecution("Step in", (dap, signal, timeoutMs) => dap.stepIn(signal, timeoutMs)),
+	step_out: resumeExecution("Step out", (dap, signal, timeoutMs) => dap.stepOut(signal, timeoutMs)),
+	pause: async ({ dap, signal, timeoutMs, details }) => {
+		const snapshot = await dap.pause(signal, timeoutMs);
 		details.snapshot = snapshot;
 		return formatSessionSnapshot(snapshot).concat("Program paused.").join("\n");
 	},
-	evaluate: async ({ params, signal, timeoutMs, details }) => {
+	evaluate: async ({ dap, params, signal, timeoutMs, details }) => {
 		if (!params.expression) {
 			throw new ToolError("expression is required for evaluate");
 		}
 		const evaluationContext = (params.context as DapEvaluateArguments["context"] | undefined) ?? "repl";
-		const response = await dapSessionManager.evaluate(
-			params.expression,
-			evaluationContext,
-			params.frame_id,
-			signal,
-			timeoutMs,
-		);
+		const response = await dap.evaluate(params.expression, evaluationContext, params.frame_id, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.evaluation = response.evaluation;
 		return formatEvaluation(response.evaluation);
 	},
-	stack_trace: async ({ params, signal, timeoutMs, details }) => {
-		const response = await dapSessionManager.stackTrace(params.levels, signal, timeoutMs);
+	stack_trace: async ({ dap, params, signal, timeoutMs, details }) => {
+		const response = await dap.stackTrace(params.levels, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.stackFrames = response.stackFrames;
 		return formatStackFrames(response.stackFrames);
 	},
-	threads: async ({ signal, timeoutMs, details }) => {
-		const response = await dapSessionManager.threads(signal, timeoutMs);
+	threads: async ({ dap, signal, timeoutMs, details }) => {
+		const response = await dap.threads(signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.threads = response.threads;
 		return formatThreads(response.threads);
 	},
-	scopes: async ({ params, signal, timeoutMs, details }) => {
-		const response = await dapSessionManager.scopes(params.frame_id, signal, timeoutMs);
+	scopes: async ({ dap, params, signal, timeoutMs, details }) => {
+		const response = await dap.scopes(params.frame_id, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.scopes = response.scopes;
 		return formatScopes(response.scopes);
 	},
-	variables: async ({ params, signal, timeoutMs, details }) => {
+	variables: async ({ dap, params, signal, timeoutMs, details }) => {
 		const variableReference = params.variable_ref ?? params.scope_id;
 		if (variableReference === undefined) {
 			throw new ToolError("variables requires variable_ref or scope_id");
 		}
-		const response = await dapSessionManager.variables(variableReference, signal, timeoutMs);
+		const response = await dap.variables(variableReference, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.variables = response.variables;
 		return formatVariables(response.variables);
 	},
-	disassemble: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsDisassembleRequest", "disassembly");
+	disassemble: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsDisassembleRequest", "disassembly");
 		if (params.instruction_count === undefined) {
 			throw new ToolError("instruction_count is required for disassemble");
 		}
-		const response = await dapSessionManager.disassemble(
-			resolveDisassemblyReference(params.memory_reference),
+		const response = await dap.disassemble(
+			resolveDisassemblyReference(dap, params.memory_reference),
 			params.instruction_count,
 			params.offset,
 			params.instruction_offset,
@@ -815,36 +825,30 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 		details.disassembly = response.instructions;
 		return formatDisassembly(response.instructions);
 	},
-	read_memory: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsReadMemoryRequest", "memory reads");
+	read_memory: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsReadMemoryRequest", "memory reads");
 		if (!params.memory_reference) {
 			throw new ToolError("memory_reference is required for read_memory");
 		}
 		if (params.count === undefined) {
 			throw new ToolError("count is required for read_memory");
 		}
-		const response = await dapSessionManager.readMemory(
-			params.memory_reference,
-			params.count,
-			params.offset,
-			signal,
-			timeoutMs,
-		);
+		const response = await dap.readMemory(params.memory_reference, params.count, params.offset, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.memoryAddress = response.address;
 		details.memoryData = response.data;
 		details.unreadableBytes = response.unreadableBytes;
 		return formatMemoryRead(response.address, response.data, response.unreadableBytes);
 	},
-	write_memory: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsWriteMemoryRequest", "memory writes");
+	write_memory: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsWriteMemoryRequest", "memory writes");
 		if (!params.memory_reference) {
 			throw new ToolError("memory_reference is required for write_memory");
 		}
 		if (!params.data) {
 			throw new ToolError("data is required for write_memory");
 		}
-		const response = await dapSessionManager.writeMemory(
+		const response = await dap.writeMemory(
 			params.memory_reference,
 			params.data,
 			params.offset,
@@ -860,45 +864,45 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 			...(response.offset !== undefined ? [`Offset: ${response.offset}`] : []),
 		].join("\n");
 	},
-	modules: async ({ params, signal, timeoutMs, details }) => {
-		requireCapability("supportsModulesRequest", "module introspection");
-		const response = await dapSessionManager.modules(params.start_module, params.module_count, signal, timeoutMs);
+	modules: async ({ dap, params, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsModulesRequest", "module introspection");
+		const response = await dap.modules(params.start_module, params.module_count, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.modules = response.modules;
 		return formatModules(response.modules);
 	},
-	loaded_sources: async ({ signal, timeoutMs, details }) => {
-		requireCapability("supportsLoadedSourcesRequest", "loaded sources");
-		const response = await dapSessionManager.loadedSources(signal, timeoutMs);
+	loaded_sources: async ({ dap, signal, timeoutMs, details }) => {
+		requireCapability(dap, "supportsLoadedSourcesRequest", "loaded sources");
+		const response = await dap.loadedSources(signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.sources = response.sources;
 		return formatLoadedSources(response.sources);
 	},
-	custom_request: async ({ params, signal, timeoutMs, details }) => {
+	custom_request: async ({ dap, params, signal, timeoutMs, details }) => {
 		if (!params.command) {
 			throw new ToolError("command is required for custom_request");
 		}
-		const response = await dapSessionManager.customRequest(params.command, params.arguments, signal, timeoutMs);
+		const response = await dap.customRequest(params.command, params.arguments, signal, timeoutMs);
 		details.snapshot = response.snapshot;
 		details.customBody = response.body;
 		return formatCustomResponse(params.command, response.body);
 	},
-	output: ({ details }) => {
-		const response = dapSessionManager.getOutput();
+	output: ({ dap, details }) => {
+		const response = dap.getOutput();
 		details.snapshot = response.snapshot;
 		details.output = response.output;
 		return response.output.length > 0 ? response.output : "(no output captured)";
 	},
-	terminate: async ({ signal, timeoutMs, details }) => {
-		const snapshot = await dapSessionManager.terminate(signal, timeoutMs);
+	terminate: async ({ dap, signal, timeoutMs, details }) => {
+		const snapshot = await dap.terminate(signal, timeoutMs);
 		if (!snapshot) {
 			return "No debug session to terminate.";
 		}
 		details.snapshot = snapshot;
 		return formatSessionSnapshot(snapshot).concat("Debug session terminated.").join("\n");
 	},
-	sessions: ({ details }) => {
-		const sessions = dapSessionManager.listSessions();
+	sessions: ({ dap, details }) => {
+		const sessions = dap.listSessions();
 		details.sessions = sessions;
 		return formatSessions(sessions);
 	},
@@ -989,6 +993,7 @@ export class DebugTool implements AgentTool<typeof debugSchema.value, DebugToolD
 		}
 		const details: DebugToolDetails = { action: params.action, success: true };
 		const text = await DEBUG_ACTIONS[params.action]({
+			dap: await loadDapSessions(),
 			params,
 			cwd: this.session.cwd,
 			signal: combinedSignal,
