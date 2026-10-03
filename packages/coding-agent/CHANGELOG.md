@@ -12,6 +12,7 @@
 - Fixed an implicit-any type error in the HTML export markdown test so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recognized local login placeholders in model selection while preserving resolved credentials and existing request bearer values ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1d78d2b97e3901c8a0d051acb612a783ca14f5c7, 0e483420eeccffba3a48c40ad962ed9fddb87d6a).
 
+- Fixed the browser tool's first open timing out after 30 s on a slow or cold host: tab startup now runs under its own budget inside the caller's timeout, falls back to the inline worker in time, and no longer leaves an orphan page behind ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 66476e5270184f43458c3d246f3f8590aaa5e2e6).
 - Sessions apply the selected model's effort default and saved model-specific effort after late provider registration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e8560590eae56258759ff99588699686ad158ab2).
 - Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
