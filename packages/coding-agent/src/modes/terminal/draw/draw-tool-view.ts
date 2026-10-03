@@ -474,7 +474,11 @@ function drawFittedHeader(view: StatusRowView, theme: Theme, width: number, fram
  * alone and takes the rail colour the outcome asks for, and a card that is itself a report keeps the
  * settled muted rail and carries the outcome across the plate.
  */
-export function drawFramedBlock(view: FramedBlockView, theme: Theme, spinnerFrame?: number): Component {
+export function drawFramedBlock(
+	view: FramedBlockView,
+	theme: Theme,
+	spinnerFrame?: number | SpinnerFrameSource,
+): Component {
 	const header = view.header;
 	const frame = view.state === undefined ? undefined : BLOCK_STATES[view.state];
 	const sections = view.sections.map(section => {
@@ -486,17 +490,21 @@ export function drawFramedBlock(view: FramedBlockView, theme: Theme, spinnerFram
 		const tree = section.code === undefined && diff === undefined && !markdown ? section.tree : undefined;
 		const drawnHere =
 			section.list || section.code !== undefined || diff !== undefined || markdown || tree !== undefined;
+		// The frame the spans drawn here are drawn at. Source, a change and a document draw no span
+		// that animates.
+		const spanFrame =
+			section.list || tree !== undefined || !drawnHere ? drawnFrame(section.lines, spinnerFrame) : undefined;
 		return {
 			label: section.label === undefined ? undefined : theme.fg("toolTitle", sanitizeViewText(section.label)),
 			separator: section.separator === true,
 			lines: section.list
-				? drawItemList(section.lines, section.hidden, theme, spinnerFrame)
+				? drawItemList(section.lines, section.hidden, theme, spanFrame)
 				: section.code !== undefined
 					? drawCodeLines(section.lines, section.code, theme)
 					: diff !== undefined
 						? drawDiffLines(section.lines, diff, theme)
 						: tree !== undefined
-							? drawTreeLines(section.lines, tree, theme, spinnerFrame)
+							? drawTreeLines(section.lines, tree, theme, spanFrame)
 							: [],
 			// A change wraps in its own gutter rather than as prose, and the gutter is measured against
 			// the columns the block has, so the rows are re-broken inside the closure below.
@@ -513,7 +521,7 @@ export function drawFramedBlock(view: FramedBlockView, theme: Theme, spinnerFram
 			// to what the tail leaves and the gap between the two is whatever columns are left. That is
 			// the host's width, so those rows are drawn inside the closure below and the rest are not
 			// re-drawn on every frame.
-			rows: drawnHere ? undefined : section.lines.map(line => plainRow(line, theme, spinnerFrame)),
+			rows: drawnHere ? undefined : section.lines.map(line => plainRow(line, theme, spanFrame)),
 			// Held back by the TOOL, so it stands outside the window the host cuts: a section that says
 			// what it dropped must keep saying it however few rows are left. A list states the same count
 			// on its own closing branch, so the note is already among its rows.
@@ -536,19 +544,17 @@ export function drawFramedBlock(view: FramedBlockView, theme: Theme, spinnerFram
 	// One moving mark per card. A header that reports `running` itself is that mark, so the trailing
 	// row is not drawn beside it: a card with two spinners reads as two things in flight where one
 	// call is.
-	const arriving =
-		view.state === "running" && header?.status !== "running"
-			? `${spinnerFrame === undefined ? "" : `${formatStatusIcon("running", theme, spinnerFrame)} `}${theme.fg(
-					"dim",
-					"… (streaming)",
-				)}`
-			: undefined;
+	//
+	// The rows above are drawn once, and read the frame only when one of them animates. The header and
+	// this row read it on every render, so the frame moves without the block being drawn again.
+	const streaming =
+		view.state === "running" && header?.status !== "running" ? theme.fg("dim", "… (streaming)") : undefined;
 	// A body that carries its own gutter sits flush against the rail: the marker column IS the
 	// indent, and a pad in front of it is a second margin the rows were never measured with.
 	const contentPaddingLeft = view.gutter === true ? 0 : undefined;
 	return framedBlock(theme, width => ({
 		...(contentPaddingLeft === undefined ? {} : { contentPaddingLeft }),
-		header: header === undefined ? undefined : drawFittedHeader(header, theme, width, spinnerFrame),
+		header: header === undefined ? undefined : drawFittedHeader(header, theme, width, frameNow(spinnerFrame)),
 		sections: [
 			...sections.map(section => {
 				const contentWidth = outputBlockContentWidth(width, contentPaddingLeft);
@@ -560,7 +566,7 @@ export function drawFramedBlock(view: FramedBlockView, theme: Theme, spinnerFram
 							: section.rows.map(row =>
 									row.tail === undefined
 										? row.drawn
-										: drawRowWithTail(row.lead, row.tail, theme, contentWidth, spinnerFrame),
+										: drawRowWithTail(row.lead, row.tail, theme, contentWidth, frameNow(spinnerFrame)),
 								);
 				// A clipped section is rows rather than prose, so a row that runs out of columns ends
 				// there. Without the cut the block WRAPS it, and one long path becomes two rows of a
@@ -589,7 +595,7 @@ export function drawFramedBlock(view: FramedBlockView, theme: Theme, spinnerFram
 					lines: section.clip ? rows.map(line => truncateToWidth(line, contentWidth, Ellipsis.Omit)) : rows,
 				};
 			}),
-			...(arriving === undefined ? [] : [{ lines: [arriving] }]),
+			...(streaming === undefined ? [] : [{ lines: [arrivingRow(streaming, theme, frameNow(spinnerFrame))] }]),
 		],
 		state: frame?.state,
 		// A listing keeps a quiet edge whatever the write reported: the state belongs to the write and
@@ -608,6 +614,42 @@ export function drawFramedBlock(view: FramedBlockView, theme: Theme, spinnerFram
 		applyBg: view.contents === undefined || view.contents === "report",
 		width,
 	}));
+}
+
+/**
+ * Where a drawn view reads its spinner frame. A framed block reads it on every render, so a card whose
+ * frame moves shows the next glyph without being drawn again: a streaming write moves its frame twelve
+ * times a second, and its body does not change with it.
+ */
+export interface SpinnerFrameSource {
+	readonly spinnerFrame: number | undefined;
+}
+
+/** The frame a drawing is at: read from its source, or the number it was handed. */
+function frameNow(spinnerFrame: number | SpinnerFrameSource | undefined): number | undefined {
+	return typeof spinnerFrame === "object" ? spinnerFrame.spinnerFrame : spinnerFrame;
+}
+
+/**
+ * The frame rows drawn once are drawn at: none unless a row animates, which is a running status or a
+ * live run. No other span reads the frame, so the rows are the same bytes either way.
+ */
+function drawnFrame(
+	lines: readonly ViewLine[],
+	spinnerFrame: number | SpinnerFrameSource | undefined,
+): number | undefined {
+	if (spinnerFrame === undefined) return undefined;
+	for (const line of lines) {
+		for (const span of line) {
+			if (span.status === "running" || span.live === true) return frameNow(spinnerFrame);
+		}
+	}
+	return undefined;
+}
+
+/** The trailing row of a block still arriving: the spinner at `frame`, then what is happening. */
+function arrivingRow(streaming: string, theme: Theme, frame: number | undefined): string {
+	return frame === undefined ? streaming : `${formatStatusIcon("running", theme, frame)} ${streaming}`;
 }
 
 /**
@@ -1195,18 +1237,20 @@ export function drawNotice(view: NoticeView, theme: Theme): Component {
  * A one-line view is `Text` with zero padding, which is what every tool renderer converted to a view
  * returned before, so the surrounding card lays the row out exactly as it did. Either block kind is a
  * container instead, because it owes the card a height at a width.
+ *
+ * A framed block reads a frame source on every render; every other kind reads it once, here.
  */
-export function drawToolView(view: ToolView, theme: Theme, spinnerFrame?: number): Component {
+export function drawToolView(view: ToolView, theme: Theme, spinnerFrame?: number | SpinnerFrameSource): Component {
 	switch (view.kind) {
 		case "framedBlock":
 			return drawFramedBlock(view, theme, spinnerFrame);
 		case "headedBlock":
-			return drawHeadedBlock(view, theme, spinnerFrame);
+			return drawHeadedBlock(view, theme, frameNow(spinnerFrame));
 		case "notice":
 			return drawNotice(view, theme);
 		case "statusRow":
 		case "textBlock":
-			return new Text(drawToolViewText(view, theme, spinnerFrame), 0, 0);
+			return new Text(drawToolViewText(view, theme, frameNow(spinnerFrame)), 0, 0);
 	}
 }
 

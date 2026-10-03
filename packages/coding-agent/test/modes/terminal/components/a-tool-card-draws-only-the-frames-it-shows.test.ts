@@ -133,6 +133,7 @@ const NOT_MUTATIONS = [
 	"railState",
 	"releaseRenderCache",
 	"render",
+	"spinnerFrame",
 	"stopAnimation",
 	"whenPreviewSettled",
 ];
@@ -146,6 +147,7 @@ const QUERIES: Record<string, (card: ToolExecutionComponent) => unknown> = {
 	isTranscriptBlockFinalized: card => card.isTranscriptBlockFinalized(),
 	releaseRenderCache: card => card.releaseRenderCache(),
 	railState: card => card.railState,
+	spinnerFrame: card => card.spinnerFrame,
 	whenPreviewSettled: card => card.whenPreviewSettled(),
 	stopAnimation: card => card.stopAnimation(),
 	dispose: card => card.dispose(),

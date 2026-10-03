@@ -61,7 +61,7 @@ import {
 	truncateToWidth,
 } from "../../../../tools/core/render-utils";
 import { toolViewDefinitions } from "../../../../tools/view-registry";
-import { drawToolView, toolViewHighlightRequests } from "../../draw/draw-tool-view";
+import { drawToolView, type SpinnerFrameSource, toolViewHighlightRequests } from "../../draw/draw-tool-view";
 import {
 	CachedOutputBlock,
 	isFramedBlockComponent,
@@ -270,7 +270,7 @@ class ImageDisplayReport implements ImageDisplayListener {
 
 export class ToolExecutionComponent
 	extends Container
-	implements NativeScrollbackLiveRegion, ToolExecutionHandle, ToolExecutionListener
+	implements NativeScrollbackLiveRegion, ToolExecutionHandle, ToolExecutionListener, SpinnerFrameSource
 {
 	#contentBox: Box;
 	/** The generic fallback row, created by the first display that draws it; a card whose tool draws its
@@ -297,6 +297,14 @@ export class ToolExecutionComponent
 	#convertedImages: Map<number, { data: string; mimeType: string }> | undefined;
 	#imageConversionFailures: Set<number> | undefined;
 	#spinnerFrame?: number;
+	/**
+	 * Whether the drawn display read the spinner frame while it was built, so a new frame draws it
+	 * again. A framed block reads the frame when it renders, and a streaming write's body does not
+	 * change with the glyph in its trailing row: drawing its whole body again for that glyph was most
+	 * of what a spinner frame cost.
+	 */
+	#frameDrawn = true;
+	#drawing = false;
 	#spinnerInterval?: NodeJS.Timeout;
 	#railIdleLive = false;
 	#railIdleInterval?: NodeJS.Timeout;
@@ -551,6 +559,8 @@ export class ToolExecutionComponent
 		this.#inSyncUpdate = true;
 		try {
 			this.#producer?.setArgsComplete(toolCallId);
+			// The producer's block changed, and its change notice is held back by the synchronous update.
+			this.#displayInputVersion++;
 			this.#updateSpinnerAnimation();
 			this.#updateDisplay();
 		} finally {
@@ -940,12 +950,35 @@ export class ToolExecutionComponent
 		const key = this.#displayKey();
 		if (key === this.#lastDisplayKey) return;
 		this.#lastDisplayKey = key;
-		this.#rebuildDisplay();
+		this.#drawing = true;
+		this.#frameDrawn = false;
+		try {
+			this.#rebuildDisplay();
+		} finally {
+			this.#drawing = false;
+		}
+		// The draw settles whether the frame is among the inputs, so the key is taken again after it.
+		this.#lastDisplayKey = this.#displayKey();
 	}
 
-	/** Every input the drawn display depends on: the display is redrawn when this changes. */
+	/**
+	 * The frame the drawn display animates at. A read while the display is drawn makes the frame an
+	 * input of the display; a read while it renders does not, since the rows it reads it for are
+	 * composed on every render.
+	 */
+	get spinnerFrame(): number | undefined {
+		if (this.#drawing) this.#frameDrawn = true;
+		return this.#spinnerFrame;
+	}
+
+	/**
+	 * Every input the drawn display depends on: the display is redrawn when this changes. The frame
+	 * is one only for a display that read it while it was drawn; any other states only whether there
+	 * is a frame.
+	 */
 	#displayKey(): string {
-		return `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${this.#backgroundTaskFrozen}|${this.#sealed}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}`;
+		const frame = this.#spinnerFrame === undefined ? "-" : this.#frameDrawn ? this.#spinnerFrame : "~";
+		return `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${frame}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${this.#backgroundTaskFrozen}|${this.#sealed}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}`;
 	}
 
 	/**
@@ -1028,6 +1061,8 @@ export class ToolExecutionComponent
 	#rebuildDisplay(): void {
 		this.#railRowsPresent = undefined;
 		const display = this.#block.display;
+		// A block whose views change with the frame is drawn again for each one.
+		if (this.#producer?.followsFrame) this.#frameDrawn = true;
 
 		// Clean up previous multi-file boxes
 		this.#removeMultiFileBoxes();
@@ -1043,7 +1078,7 @@ export class ToolExecutionComponent
 			spinnerFrame: this.#spinnerFrame,
 			renderContext: buildToolRenderContext(
 				this.#block.toolName,
-				parseInputArgs(this.#block.input),
+				this.#args(),
 				{
 					content: this.#producer?.result?.content ?? [{ type: "text", text: fallbackText }],
 					details: this.#producer?.result?.details,
@@ -1054,7 +1089,7 @@ export class ToolExecutionComponent
 		};
 
 		const { hasResult, drawsCall } = this.#phases(display);
-		const callArgs = this.#producer ? this.#producer.callPreview.arguments : parseInputArgs(this.#block.input);
+		const callArgs = this.#producer ? this.#producer.callPreview.arguments : this.#args();
 
 		const callRendered = drawsCall ? this.#renderCallPhase(display, hasResult, callArgs, renderState) : false;
 		if (hasResult) {
@@ -1072,6 +1107,18 @@ export class ToolExecutionComponent
 			}
 		}
 		this.#renderedImageCount = this.#imageComponents.length;
+	}
+
+	/**
+	 * The call's arguments: the producer's own, else parsed from the block the card was handed. The
+	 * block states them serialized, and a streaming write's serialized arguments are the whole file.
+	 * Arguments that arrived as a string are parsed as the block's serialized form would be.
+	 */
+	#args(): unknown {
+		const producer = this.#producer;
+		if (!producer) return parseInputArgs(this.#block.input);
+		const args = producer.args;
+		return typeof args === "string" ? parseInputArgs(args) : args;
 	}
 
 	/** The tool's title row: its display label, or its name. */
@@ -1104,6 +1151,8 @@ export class ToolExecutionComponent
 	}
 
 	#addGenericContent(): void {
+		// The generic card's rows are kept at their width, and its status icon is drawn at the frame.
+		this.#frameDrawn = true;
 		this.#contentText ??= new WidthAwareText(contentWidth => this.#formatGenericFallback(contentWidth), 0, 0);
 		const text = this.#contentText;
 		this.#contentBox.addChild(this.#onRail(text));
@@ -1145,7 +1194,7 @@ export class ToolExecutionComponent
 				return true;
 			case "view":
 				try {
-					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this.#spinnerFrame)));
+					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this)));
 				} catch (err) {
 					this.#addCallFailure(display, err);
 				}
@@ -1165,6 +1214,8 @@ export class ToolExecutionComponent
 		const tool = this.#options.tool;
 		const customCall = custom?.renderCall ?? tool?.renderCall;
 		if (!customCall) return false;
+		// A renderer of the tool's own composes its rows now, and may read the frame or the clock.
+		this.#frameDrawn = true;
 		try {
 			const comp = customCall.call(custom?.renderCall ? custom : tool, callArgs, renderState, theme) as
 				| Component
@@ -1210,7 +1261,7 @@ export class ToolExecutionComponent
 				return;
 			case "view":
 				try {
-					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this.#spinnerFrame)));
+					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this)));
 				} catch (err) {
 					this.#addResultFailure(err, this.#block.error ?? this.#block.output);
 				}
@@ -1228,6 +1279,8 @@ export class ToolExecutionComponent
 		const custom = this.#options.customRenderer;
 		const tool = this.#options.tool;
 		const fallbackText = this.#block.error ?? this.#block.output ?? "";
+		// A renderer of the tool's own composes its rows now, and may read the frame or the clock.
+		this.#frameDrawn = true;
 		const rawContent = this.#producer?.result?.content;
 		const content: (TextContent | ImageContent)[] = Array.isArray(rawContent)
 			? (rawContent as (TextContent | ImageContent)[])
@@ -1274,7 +1327,7 @@ export class ToolExecutionComponent
 		const fileBox = new Box(COMPOSER_INSET_COLS, 0);
 		if (item.view) {
 			try {
-				fileBox.addChild(this.#onRail(drawToolView(item.view, theme, this.#spinnerFrame)));
+				fileBox.addChild(this.#onRail(drawToolView(item.view, theme, this)));
 			} catch (err) {
 				fileBox.addChild(
 					reportRendererFailure(
@@ -1298,7 +1351,8 @@ export class ToolExecutionComponent
 
 	#pendingFilesBox(count: number): Box {
 		const pendingBox = new Box(COMPOSER_INSET_COLS, 0);
-		const spinner = this.#spinnerFrame !== undefined ? formatStatusIcon("running", theme, this.#spinnerFrame) : "";
+		const frame = this.spinnerFrame;
+		const spinner = frame !== undefined ? formatStatusIcon("running", theme, frame) : "";
 		const pendingText = renderStatusLine(
 			{
 				iconOverride: spinner,
@@ -1411,7 +1465,7 @@ export class ToolExecutionComponent
 			),
 		);
 
-		const args = parseInputArgs(this.#block.input);
+		const args = this.#args();
 		const argsObject = args && typeof args === "object" ? (args as Record<string, unknown>) : null;
 
 		if (!this.#expanded && argsObject && Object.keys(argsObject).length > 0) {
