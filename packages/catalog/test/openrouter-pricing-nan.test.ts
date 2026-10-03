@@ -91,3 +91,33 @@ describe("OpenRouter pricing never produces a NaN cost", () => {
 		}
 	});
 });
+
+describe("OpenRouter zero limits fallback (#13888)", () => {
+	it("falls back to bundled or default limits when discovery reports zero limits", async () => {
+		const options = openrouterModelManagerOptions({
+			fetch: async () =>
+				new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "vendor/zero-limits",
+								name: "Vendor: Zero Limits",
+								supported_parameters: ["tools"],
+								architecture: { modality: "text" },
+								pricing: { prompt: "0.000001", completion: "0.000002" },
+								context_length: 0,
+								top_provider: { max_completion_tokens: 0 },
+							},
+						],
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const model = models?.[0];
+		expect(model).toBeDefined();
+		// `0` is not a positive limit; mapper must fall back to baseModel limits rather than 0
+		expect(model?.contextWindow).not.toBe(0);
+		expect(model?.maxTokens).not.toBe(0);
+	});
+});

@@ -25,6 +25,7 @@
 - Removed redundant `grok-composer-2.5-fast` OAuth contract test from `xai-oauth-bundle.test.ts` as curated seed parity loops already verify its properties ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Routed OpenCode gateway-only models via discovery overrides and sibling hints, preserved OpenRouter model limits when zero is advertised, and restored unfetched rows across catalog regeneration without resurrecting retired providers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7099457f8424de31675f581b6a296156aa4c24bc, aae14ce4c2a4cb8e0ce9a6b1297e2bfb732506e7, 6ab9aca7acc7a73198da6118405d7949656ddfcf).
 - Typed the Antigravity discovery `fetcher` option as `FetchImpl`, so a caller's fetch override type-checks without a `preconnect` adapter ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Discovered Antigravity image generation models from account capabilities and selected advertised models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Defaulted paid xAI and SuperGrok model selection to Grok 4.6.
