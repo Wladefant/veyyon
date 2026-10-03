@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as julia from "@veyyon/coding-agent/eval/jl/kernel";
 import { runBoundedProbe } from "@veyyon/coding-agent/eval/probe";
+import { disposeKernelSessionsByOwner } from "@veyyon/coding-agent/eval/py/executor";
 import * as python from "@veyyon/coding-agent/eval/py/kernel";
 import * as ruby from "@veyyon/coding-agent/eval/rb/kernel";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
@@ -151,6 +152,40 @@ describe("runtime availability probes", () => {
 		expect(Date.now() - started).toBeLessThan(4000);
 		await expectReaped(fixture.pidFile);
 	}, 6000);
+
+	it("timeout zero lets a slow valid interpreter finish discovery and execute", async () => {
+		const fixture = await interpreter();
+		// Real startup latency must cross the one-second clamp on the old path.
+		await fs.writeFile(
+			fixture.executable,
+			'#!/bin/sh\nif [ "$1" = "-c" ]; then\nexec python3 -c "import time; time.sleep(1.5)"\nfi\nexec python3 "$@"\n',
+			{ mode: 0o755 },
+		);
+		const original = python.checkPythonKernelAvailability;
+		vi.spyOn(python, "checkPythonKernelAvailability").mockImplementation((cwd, executable, options) =>
+			original(cwd, executable, { ...options, forceProbe: true }),
+		);
+		const settings = Settings.isolated({ "eval.py": true, "python.interpreter": fixture.executable });
+		const tool = new EvalTool(
+			makeToolSession({
+				cwd: fixture.root,
+				settings,
+				getEvalKernelOwnerId: () => fixture.root,
+			}),
+		);
+		try {
+			const result = await tool.execute("probe-zero", { language: "py", code: "print(42)", timeout: 0 });
+			expect(result.isError).not.toBe(true);
+			expect(result.content).toContainEqual(
+				expect.objectContaining({
+					type: "text",
+					text: expect.stringContaining("42"),
+				}),
+			);
+		} finally {
+			await disposeKernelSessionsByOwner(fixture.root);
+		}
+	}, 15000);
 
 	it("the eval tool reports discovery cancellation as an abort", async () => {
 		const fixture = await interpreter();

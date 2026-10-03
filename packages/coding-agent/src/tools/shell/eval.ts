@@ -527,11 +527,14 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					: params.language === "jl"
 						? "julia"
 						: "js";
-		const probeTimeout = clampTimeout(
-			"eval",
-			params.timeout ?? TOOL_TIMEOUTS.eval.default,
-			session.settings.get("tools.maxTimeout"),
-		);
+		const probeTimeout =
+			params.timeout === 0
+				? 0
+				: clampTimeout(
+						"eval",
+						params.timeout ?? TOOL_TIMEOUTS.eval.default,
+						session.settings.get("tools.maxTimeout"),
+					);
 		const resolved = await resolveBackend(session, cellLanguage, {
 			signal,
 			timeoutMs: probeTimeout > 0 ? probeTimeout * 1000 : undefined,
