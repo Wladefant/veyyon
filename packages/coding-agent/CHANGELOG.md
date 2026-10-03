@@ -7,16 +7,20 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Daemon startup recovers stale broker leases after PID reuse, including legacy PID-only records whose process started after the record. Lease transitions are serialized, and stale client presence no longer pins brokers or runtime scopes ([#411](https://github.com/Wladefant/veyyon/issues/411)).
 - Preserved /login API key and OAuth credential precedence over extension fallback API keys, including command-backed values, during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
 - Fixed an uncaught `EPERM ... watch` that ended the whole process when the watched git HEAD or custom theme directory was deleted or locked: the watchers now log a warning, close and stop refreshing live ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed an implicit-any type error in the HTML export markdown test so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recognized local login placeholders in model selection while preserving resolved credentials and existing request bearer values ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1d78d2b97e3901c8a0d051acb612a783ca14f5c7, 0e483420eeccffba3a48c40ad962ed9fddb87d6a).
 
+- Fixed the browser tool's first open timing out after 30 s on a slow or cold host: tab startup now runs under its own budget inside the caller's timeout, falls back to the inline worker in time, and no longer leaves an orphan page behind ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 66476e5270184f43458c3d246f3f8590aaa5e2e6).
 - Sessions apply the selected model's effort default and saved model-specific effort after late provider registration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e8560590eae56258759ff99588699686ad158ab2).
 - Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
 - Tool streaming output reports failed artifact captures without false recovery links, caps artifact files at tools.artifactMaxBytes, and preserves capture warnings in follow-up results ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi ac896ded0bd499cbc1c480b500c2a43b3abc2027, 6acbb161c8c8f3da58d987dbc76d833651c6d719, cbf7898ce150c8a903db24fabe8f111567a3dc97).
+- Preserved verbatim and device path prefixes on Windows during path normalization in file searches ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 499778383b6b950580964461e7e5c3ca536480de).
+- Fixed `plan.defaultOnStartup` being ignored by headless print mode sessions so initial prompts run in plan mode ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a5ff9f9a3032ee4789066256e55228f06a9e3dd1).
 - Fixed Mermaid ASCII diagrams rendering on subtle chrome borders by using theme muted foreground for structural strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed HTML export viewer escaping pre-escaped nested list markup and inline code formatting (oh-my-pi 6b3d0d0afdc580624e80f33ebc4b8c158a3a7bbf, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Task execution results sanitize artifact paths (shortening home directories to ~ and bounding width) while preserving Patch, Branch, and Nested patch labels in TUI result rows, and include the unmerged branch name in merge-error summaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 24c1257fc9c0db04c9aeb2a1c5bfb4b3549e5a26, 17a2fda053d32c32d19328c6b8a1d7f58369d88d).
@@ -34,6 +38,7 @@
 - Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Persistent session-local BTW history storage records conversation checkpoints with optimistic concurrency control and atomic file replacement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Ephemeral side-channel agent turns isolate side-conversation prompt cache keys and clone detached history snapshots, and session relocation operations guard directory creation and shell cd transitions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 - Fixed Windows stdio MCP batch command paths containing percent syntax expanding environment variables before launch by escaping the command token for cmd.exe ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e509fc3cbcda5c7579067d7d19e0764f9b33a4b7).

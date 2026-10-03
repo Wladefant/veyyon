@@ -580,9 +580,77 @@ fi
 # The Mermaid scene photographs how a diagram fence is drawn, and both arms must
 # draw the same source, which no model can be asked for. Its own directory rather
 # than seed-sessions/, because the prose scenes copy every file there and a third
-# session would change what they list.
-if [ "${SCENE_NAME}" = "mermaid-state-diagram" ]; then
+# session would change what they list. The settings-exit scene reuses it as a
+# full screen of transcript that a stray alternate-screen frame would hide.
+if [ "${SCENE_NAME}" = "mermaid-state-diagram" ] || [ "${SCENE_NAME}" = "settings-exit-resize" ]; then
 	MERMAID_SESSIONS="${HOME:-/sandbox/home}/.veyyon/profiles/${VEYYON_PROFILE:-default}/agent/sessions/-demo"
 	mkdir -p "${MERMAID_SESSIONS}"
 	cp /repo/proof/docker/seed-mermaid/*.jsonl "${MERMAID_SESSIONS}/"
+fi
+
+# A SKILL WHOSE NAME HAS MORE THAN ONE WORD.
+#
+# The hyphen-prefix scene types the second word of a skill name, so it needs a
+# hyphenated skill, and only that scene gets one: a skill seeded for every scene
+# would add a command to every slash popup the other scenes photograph.
+if [ "${SCENE_NAME}" = "skill-hyphen-prefix" ]; then
+	SKILL_DIR="${HOME:-/sandbox/home}/.veyyon/profiles/${VEYYON_PROFILE:-default}/agent/skills/release-notes"
+	mkdir -p "${SKILL_DIR}"
+	cat >"${SKILL_DIR}/SKILL.md" <<'MD'
+---
+name: release-notes
+description: Draft release notes from the pull requests merged since the last tag.
+---
+
+List the pull requests merged since the last tag and group them by package.
+MD
+fi
+
+# A FINISHED ISOLATED TASK WITH ITS SAVED PATCHES.
+#
+# The artifact-row scene photographs the rows under a task result, and both arms
+# must draw the same result, which no model run repeats. Its own directory so the
+# session pickers in other scenes list nothing new.
+if [ "${SCENE_NAME}" = "task-artifact-rows" ]; then
+	TASK_SESSIONS="${HOME:-/sandbox/home}/.veyyon/profiles/${VEYYON_PROFILE:-default}/agent/sessions/-demo"
+	mkdir -p "${TASK_SESSIONS}"
+	cp /repo/proof/docker/seed-task-artifacts/*.jsonl "${TASK_SESSIONS}/"
+fi
+
+# A MODEL THAT ONLY AN EXTENSION REGISTERS, AND NOTHING ELSE TO FALL BACK TO.
+#
+# The late-fallback scene starts with no model on the command line and none in
+# config, so startup picks its model only after the extensions have registered
+# their providers. The profile saves an effort row for that model (`low`) above
+# the any-model row (`high`), and the status line must show the model's own row.
+# enabledModels keeps the local rows out of the pick, and the machine-wide
+# `model:` line is dropped so no default role resolves first.
+if [ "${SCENE_NAME}" = "late-model-effort" ]; then
+	VEYYON_HOME="${HOME:-/sandbox/home}/.veyyon"
+	AGENT_DIR="${VEYYON_HOME}/profiles/${VEYYON_PROFILE:-default}/agent"
+	sed -i '/^model:/d' "${VEYYON_HOME}/config.yml"
+	printf '\nenabledModels:\n  - runtime-provider/*\ndefaultEffort:\n  "*": high\n  runtime-provider/late-model: low\n' \
+		>>"${AGENT_DIR}/config.yml"
+	mkdir -p "${AGENT_DIR}/extensions"
+	cat >"${AGENT_DIR}/extensions/late-provider.ts" <<'TS'
+export default function lateProvider(pi: { registerProvider: (name: string, config: unknown) => void }) {
+	pi.registerProvider("runtime-provider", {
+		baseUrl: "http://runtime-provider.invalid/v1",
+		apiKey: "literal:RUNTIME_KEY",
+		api: "openai-completions",
+		models: [
+			{
+				id: "late-model",
+				name: "Late Model",
+				reasoning: true,
+				thinking: { mode: "effort", efforts: ["low", "medium"], defaultLevel: "low" },
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128000,
+				maxTokens: 8192,
+			},
+		],
+	});
+}
+TS
 fi

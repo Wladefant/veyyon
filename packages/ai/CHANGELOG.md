@@ -42,6 +42,8 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Prevented malformed function-call errors from bypassing replay-unsafe turn checks after earlier output or tool execution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9733d138).
+- Fixed the type errors in credential redaction of Codex replayed assistant items and outbound messages that turned the root tools type check red (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Saved /login API key and OAuth credentials take precedence over literal, environment, and command-backed fallback API keys registered by extensions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
 - Fixed the provider in-flight wakeup watcher throwing an uncaught `EPERM` when its directory vanished: it now warns, closes and falls back to the timer ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed type errors in the Anthropic alignment and Codex stream test fixtures so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -63,6 +65,8 @@
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Sanitized client-visible assistant native history payloads during Codex replay while keeping opaque signed reasoning intact ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6f0d61f7ca170788f2b97c7ab1a7753e6c2544d9).
+- Dropped stale thinking signatures after credential redaction in outbound messages, instructions, and native history replay to avoid provider rejection on replay ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Validated declared segment and word fields in OpenAI transcription responses while preserving provider-specific extras ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Responses prepared request caching to rebuild wire body on reasoning-effort fallback and retain sent payload in diagnostics ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 21cb04bd3e6b72fcd05bb4e2f02fe441cf2d2a60).
 - Retried one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

@@ -186,6 +186,53 @@ function shellBasename(shell: string): string {
 	return shell.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
 }
 
+const UNSUPPORTED_UNQUOTED_CD_CHARS = "\\$`;&|<>(){}*?[]!#\"'";
+
+function hasUnsupportedUnquotedCdSyntax(value: string): boolean {
+	for (const char of value) {
+		if (/\s/.test(char) || UNSUPPORTED_UNQUOTED_CD_CHARS.includes(char)) return true;
+	}
+	return false;
+}
+
+export function isPersistentShellCdCommand(command: string): boolean {
+	if (/[\r\n]/.test(command)) return false;
+
+	const trimmed = command.trim();
+	if (trimmed === "cd") return true;
+	if (!trimmed.startsWith("cd") || !/[ \t]/.test(trimmed[2] ?? "")) return false;
+
+	let rest = trimmed.slice(2).trim();
+	if (rest === "" || rest === "--") return true;
+
+	let hasOptionTerminator = false;
+	if (/^--[ \t]/.test(rest)) {
+		hasOptionTerminator = true;
+		rest = rest.slice(2).trimStart();
+	}
+	if (rest === "") return true;
+
+	const quote = rest[0];
+	let target: string;
+	let quoted = false;
+	if (quote === `"` || quote === "'") {
+		if (rest.length < 2 || rest[rest.length - 1] !== quote) return false;
+		target = rest.slice(1, -1);
+		if (target.includes(quote)) return false;
+		if (quote === `"` && /[\\$`\r\n]/.test(target)) return false;
+		quoted = true;
+	} else {
+		if (hasUnsupportedUnquotedCdSyntax(rest)) return false;
+		target = rest;
+	}
+
+	if (target === "") return false;
+	if (/^[+-]\d+$/.test(target)) return false;
+	if (!hasOptionTerminator && target.startsWith("-") && target !== "-") return false;
+	if (!quoted && target.startsWith("~") && target !== "~" && !target.startsWith("~/")) return false;
+	return true;
+}
+
 function isBashShell(shell: string): boolean {
 	const basename = shellBasename(shell);
 	return basename.includes("bash");
