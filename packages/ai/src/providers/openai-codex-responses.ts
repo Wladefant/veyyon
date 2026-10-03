@@ -1709,7 +1709,7 @@ export async function openCodexCompactionEventStream(
 					await initial?.cleanup?.();
 				} catch {}
 				try {
-					await initial?.eventStream.return?.();
+					await initial?.eventStream.return?.(undefined);
 				} catch {}
 			};
 			const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
@@ -1753,6 +1753,9 @@ export async function openCodexCompactionEventStream(
 		[Symbol.asyncIterator]() {
 			return this;
 		},
+		async [Symbol.asyncDispose]() {
+			await this.return(undefined);
+		},
 	};
 
 	return wrappedGenerator;
@@ -1795,7 +1798,7 @@ async function* streamCodexCompactionEvents(
 						bufferedEvents.length + 1 > CODEX_COMPACTION_WS_MAX_BUFFERED_EVENTS ||
 						bufferedBytes + eventBytes > CODEX_COMPACTION_WS_MAX_BUFFERED_BYTES
 					) {
-						await initial.eventStream.return?.();
+						await initial.eventStream.return?.(undefined);
 						throw new CodexWebSocketTransportError(
 							`WebSocket compaction attempt exceeded buffer limits (${bufferedEvents.length + 1} frames, ${bufferedBytes + eventBytes} bytes)`,
 						);
@@ -2108,7 +2111,7 @@ async function openCodexWebSocketTransport(
 		// The session owns the socket. This request's signal cancels only its
 		// active reader; a cold iterator must not close another request's socket.
 		try {
-			await eventStream.return?.();
+			await eventStream.return?.(undefined);
 		} catch {}
 	};
 	return {
@@ -2216,7 +2219,7 @@ async function openCodexSseTransport(
 			}
 		} catch {}
 		try {
-			await handle.events.return?.();
+			await handle.events.return?.(undefined);
 		} catch {}
 	};
 	const originalEvents = handle.events;
