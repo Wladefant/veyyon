@@ -12,6 +12,7 @@ import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
 import { commandCodeProvider } from "./command-code";
 import { coreWeaveProvider } from "./coreweave";
 import { cursorProvider } from "./cursor";
+import { deepinfraProvider } from "./deepinfra";
 import { deepseekProvider } from "./deepseek";
 import { devinProvider } from "./devin";
 import { firepassProvider } from "./firepass";
@@ -123,6 +124,7 @@ const ALL = [
 	togetherProvider,
 	nvidiaProvider,
 	novitaProvider,
+	deepinfraProvider,
 	huggingfaceProvider,
 	perplexityProvider,
 	qianfanProvider,
@@ -166,9 +168,13 @@ const ALL = [
 export type RegistryDef = (typeof ALL)[number];
 export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = ALL;
 
-const BY_ID = new Map<string, ProviderDefinition>(ALL.map(p => [p.id, p] as [string, ProviderDefinition]));
+const BY_ID = new Map<string, ProviderDefinition>(
+	ALL.map((p) => [p.id, p] as [string, ProviderDefinition]),
+);
 
-export function getProviderDefinition(id: string): ProviderDefinition | undefined {
+export function getProviderDefinition(
+	id: string,
+): ProviderDefinition | undefined {
 	return BY_ID.get(id);
 }
 

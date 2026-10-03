@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added DeepInfra provider descriptor and keyless authoritative model discovery from tagged public catalog metadata ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
 - Declared GPT-6 Astra reasoning configuration-update support and generated first-party GPT-6 freeform `apply_patch` metadata ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved specialist runner models across authoritative dynamic discovery pruning and collision resolution, and inherited model kinds and web search grounding capabilities ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered local inference and web search synthetic role providers with specialist static model seeds ([#107](https://github.com/Wladefant/veyyon/issues/107)).

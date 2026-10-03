@@ -584,11 +584,14 @@ function mergeDynamicModel<TApi extends Api>(
 	// dynamic discovery also pre-applies the correct image fallback for omitted
 	// `supports.vision`, so its explicit `false` must not be OR-upgraded by the
 	// canonical bundled model.
+	// DeepInfra tags govern modality authoritatively without requiring endpointChanged.
 	const endpointChanged = existingModel.baseUrl !== dynamicModel.baseUrl;
 	const dynamicInputAuthoritative =
 		endpointChanged ||
 		(existingModel.provider === "github-copilot" &&
-			dynamicModel.provider === "github-copilot");
+			dynamicModel.provider === "github-copilot") ||
+		(existingModel.provider === "deepinfra" &&
+			dynamicModel.provider === "deepinfra");
 	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") ||
