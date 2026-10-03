@@ -33,6 +33,7 @@ import { kimiCodeProvider } from "./kimi-code";
 import { litellmProvider } from "./litellm";
 import { llamaCppProvider } from "./llama-cpp";
 import { lmStudioProvider } from "./lm-studio";
+import { localProvider } from "./local";
 import { metaProvider } from "./meta";
 import { minimaxProvider } from "./minimax";
 import { minimaxCodeProvider } from "./minimax-code";
@@ -63,11 +64,13 @@ import { syntheticProvider } from "./synthetic";
 import { tavilyProvider } from "./tavily";
 import { togetherProvider } from "./together";
 import type { ProviderDefinition } from "./types";
+import { typesafeProvider } from "./typesafe";
 import { umansProvider } from "./umans";
 import { veniceProvider } from "./venice";
 import { vercelAiGatewayProvider } from "./vercel-ai-gateway";
 import { vllmProvider } from "./vllm";
 import { waferServerlessProvider } from "./wafer-serverless";
+import { webProvider } from "./web";
 import { xaiProvider } from "./xai";
 import { xaiOauthProvider } from "./xai-oauth";
 import { xiaomiProvider } from "./xiaomi";
@@ -163,18 +166,17 @@ const ALL = [
 	amazonBedrockProvider,
 	gmiCloudProvider,
 	stepfunProvider,
+	localProvider,
+	webProvider,
+	typesafeProvider,
 ];
 
 export type RegistryDef = (typeof ALL)[number];
 export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = ALL;
 
-const BY_ID = new Map<string, ProviderDefinition>(
-	ALL.map((p) => [p.id, p] as [string, ProviderDefinition]),
-);
+const BY_ID = new Map<string, ProviderDefinition>(ALL.map(p => [p.id, p] as [string, ProviderDefinition]));
 
-export function getProviderDefinition(
-	id: string,
-): ProviderDefinition | undefined {
+export function getProviderDefinition(id: string): ProviderDefinition | undefined {
 	return BY_ID.get(id);
 }
 
