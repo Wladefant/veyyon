@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added raw decoded WebSocket event stream for provider-native Codex compaction ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered DeepInfra as a built-in provider with chat-completion API key validation ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added core image generation data types and metadata contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Added image response decoding, data URL formatting, and dimension mapping utilities ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
@@ -39,6 +40,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Unified Codex compaction semantic validation between collector and transport layers with shared O(1) accumulator (`CodexCompactionV2Accumulator`), deferred `turnState` and `modelsEtag` metadata commits until semantic validation succeeds with rollback on rejection, and enforced frame count (1024) and byte budget (16 MiB) bounds on buffered WebSocket compaction streams before falling back to SSE ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Fixed the `ai` test fixtures (codex compaction collector listener types, codex turn-state model, typesafe login callbacks) to match current types so `check:ts` passes in an isolated workspace ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the Codex unexpected-stream-end debug log reading the removed `turnState` field of the WebSocket session state; it now reads the request's turn-state cell ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
