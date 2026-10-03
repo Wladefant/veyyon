@@ -1119,6 +1119,8 @@ export class ModelRegistry {
 	#cachedDiscoveriesByProvider: Map<string, Model<Api>[]> = new Map();
 	#cachedAuthoritativeProviders: Set<string> = new Set();
 	#customProviderApiKeys: Map<string, string> = new Map();
+	/** Providers whose current API key came from static models config, not an extension registration. */
+	#staticKeyProviders: Set<string> = new Set();
 	#keylessProviders: Set<string> = new Set();
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
 	#customModelOverlays: CustomModelOverlay[] = [];
@@ -1157,11 +1159,11 @@ export class ModelRegistry {
 	#resolveCommandBackedApiKey(provider: string): CommandApiKeyResolution {
 		const keyConfig = this.#customProviderApiKeys.get(provider);
 		if (!isConfigValueCommand(keyConfig)) return { configured: false };
-		const runtimeKey = this.#runtimeProviderApiKeys.get(provider);
-		// Fallback ownership follows the key actually installed: a static
-		// models.json command that replaced the extension key is not a fallback.
+		// Fallback ownership follows the key source actually installed: a static
+		// models.json key that replaced the extension key is not a fallback.
 		const fallback =
-			runtimeKey?.keyConfig === keyConfig && runtimeKey.fallback;
+			this.#staticKeyProviders.has(provider) === false &&
+			(this.#runtimeProviderApiKeys.get(provider)?.fallback ?? false);
 		const value = resolveConfigValue(
 			keyConfig,
 			`API key for provider "${provider}"`,
@@ -1180,6 +1182,8 @@ export class ModelRegistry {
 		options?: { fallback?: boolean },
 	): void {
 		this.#customProviderApiKeys.set(provider, keyConfig);
+		if (options) this.#staticKeyProviders.delete(provider);
+		else this.#staticKeyProviders.add(provider);
 		const resolved = resolveConfigValue(
 			keyConfig,
 			`API key for provider "${provider}"`,
@@ -1400,6 +1404,7 @@ export class ModelRegistry {
 		}
 		this.#modelsConfigFile.invalidate();
 		this.#customProviderApiKeys.clear();
+		this.#staticKeyProviders.clear();
 		this.#keylessProviders.clear();
 		this.#discoverableProviders = [];
 		// Drop config-sourced apiKeys from AuthStorage before reload; entries

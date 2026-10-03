@@ -216,4 +216,26 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		expect(await registry.getApiKeyForProvider(provider)).toBe("static-command-key");
 		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
 	});
+
+	test("a static models.json command identical to the extension fallback is still an override", async () => {
+		register({ oauth: true, apiKey: commandKey });
+		await login();
+		fs.writeFileSync(
+			path.join(tempDir, "models.json"),
+			JSON.stringify({
+				providers: {
+					[provider]: {
+						baseUrl: "https://login-key-precedence.example.com/v1",
+						api: "openai-completions",
+						apiKey: commandKey,
+						models: [{ id: "static-model", name: "Static" }],
+					},
+				},
+			}),
+			"utf8",
+		);
+		await registry.refresh("offline");
+		expect(await registry.getApiKeyForProvider(provider)).toBe("command-fallback-key");
+		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+	});
 });
