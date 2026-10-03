@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The output-loop guard compares a streamed tail's candidate repeats char by char in place instead of slicing both sides of every candidate length on each delta, cutting its cost on a 200,000-char non-looping stream from 228 ms to 26 ms at 12-char deltas with identical verdicts across 200,000 generated tails.
 - `stream.ts` reaches the GitLab Duo Workflow provider through the lazy loader in `register-builtins.ts`, so a process loads its 3,000-line protocol client on the first `gitlab-duo-agent` turn instead of at startup.
 - 15 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.

@@ -587,21 +587,25 @@ const VERBATIM_UNIT_CONTENT = /[\p{L}\p{Extended_Pictographic}]/u;
  */
 function detectVerbatimRepetition(text: string): [unit: string, count: number] | null {
 	if (text.length < VERBATIM_MIN_REPEATED_CHARS) return null;
-	const windowSize = Math.min(text.length, VERBATIM_TAIL_WINDOW);
-	const searchSpace = text.slice(-windowSize);
+	// Every index below is into `text`; the search space is its last `VERBATIM_TAIL_WINDOW` chars,
+	// read in place. A delta is pushed many times a second, so no candidate unit is sliced until it
+	// repeats: the comparison walks char codes, and a mismatch on the first char ends a length.
+	const end = text.length;
+	const start = end - Math.min(end, VERBATIM_TAIL_WINDOW);
+	const searchLength = end - start;
 
 	// Distance from the end to the nearest letter/emoji, capped at the longest unit probed. Any unit
 	// shorter than this is punctuation, digits or whitespace and is skipped without a regex call.
 	let contentAt = VERBATIM_MAX_UNIT + 1;
-	const scan = Math.min(searchSpace.length, VERBATIM_MAX_UNIT);
+	const scan = Math.min(searchLength, VERBATIM_MAX_UNIT);
 	for (let back = 1; back <= scan; back++) {
-		const at = searchSpace.length - back;
-		const code = searchSpace.charCodeAt(at);
+		const at = end - back;
+		const code = text.charCodeAt(at);
 		// An emoji is two code units and a lone surrogate carries no Unicode property, so a low
 		// surrogate is tested together with the high half in front of it, and a unit has to reach one
 		// char further back to hold the whole pair.
-		const isLowSurrogate = code >= 0xdc00 && code <= 0xdfff && at > 0;
-		const char = isLowSurrogate ? searchSpace.slice(at - 1, at + 1) : (searchSpace[at] as string);
+		const isLowSurrogate = code >= 0xdc00 && code <= 0xdfff && at > start;
+		const char = isLowSurrogate ? text.slice(at - 1, at + 1) : (text[at] as string);
 		if (VERBATIM_UNIT_CONTENT.test(char)) {
 			contentAt = isLowSurrogate ? back + 1 : back;
 			break;
@@ -610,20 +614,17 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 	if (contentAt > VERBATIM_MAX_UNIT) return null;
 
 	for (let len = Math.max(2, contentAt); len <= VERBATIM_MAX_UNIT; len++) {
-		if (searchSpace.length < len * 4) break;
-		const unit = searchSpace.slice(-len);
-
-		let count = 0;
-		let pos = searchSpace.length;
-		while (pos >= len) {
-			if (searchSpace.slice(pos - len, pos) === unit) {
-				count++;
-				pos -= len;
-			} else {
-				break;
-			}
+		if (searchLength < len * 4) break;
+		const unitAt = end - len;
+		// The last `len` chars are one repeat; count the blocks before them that equal it.
+		let count = 1;
+		let pos = unitAt;
+		while (pos - len >= start && sameChars(text, pos - len, unitAt, len)) {
+			count++;
+			pos -= len;
 		}
 		if (count < 4 || len * count < VERBATIM_MIN_REPEATED_CHARS) continue;
+		const unit = text.slice(unitAt);
 		// A whitespace-free unit can be a slice of ONE long token — a path segment, an
 		// identifier, a hash — that happens to cycle. A directory named
 		// `probe_on_and_on_and_on…` repeats `_on_and` past the character threshold while
@@ -631,10 +632,18 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 		// its footing. A runaway repeats ACROSS token boundaries, so a whitespace-free run
 		// that only continues a longer token is data and is left alone. A run starting at a
 		// token boundary still trips, which keeps a space-free script covered.
-		if (!/\s/.test(unit) && pos > 0 && !/\s/.test(searchSpace[pos - 1] as string)) continue;
+		if (!/\s/.test(unit) && pos > start && !/\s/.test(text[pos - 1] as string)) continue;
 		return [unit, count];
 	}
 	return null;
+}
+
+/** Whether `text` holds the same `length` chars at `a` and at `b`. */
+function sameChars(text: string, a: number, b: number, length: number): boolean {
+	for (let i = 0; i < length; i++) {
+		if (text.charCodeAt(a + i) !== text.charCodeAt(b + i)) return false;
+	}
+	return true;
 }
 
 /** Lowercase and tokenize prose plus code/path payloads, dropping pure numbers. */
