@@ -14,99 +14,52 @@
  * streamed one chunk per frame into a buffer of its own, and the string bytes one instance holds
  * afterwards are bounded against the same text rendered once: while streaming, by a few copies of the
  * text; once sealed, by half a copy. The closing paragraph keeps arriving for several frames after the
- * last block freezes, so the frame that froze last is never the frame that sealed.
+ * last block freezes, so the frame that froze last is never the frame that sealed. The measurement
+ * runs in `fixtures/markdown-stream-retention.ts`, in a process of its own, because the figure is the
+ * process's extra memory and the files a parallel run shares a process with add to it.
  *
  * WHAT IT DOES NOT CATCH. JSC counts only out-of-line string storage as extra memory, so a retained
  * string short enough to live inline passes. A sealed block that keeps less than half a copy of its
  * text passes; the bound sits above the variation of a full collection.
  */
-import { heapStats } from "bun:jsc";
+
 import { describe, expect, it } from "bun:test";
-import { clearRenderCache, Markdown } from "@veyyon/tui/components/markdown";
-import { defaultMarkdownTheme } from "./test-themes.js";
+import { spawnSync } from "node:child_process";
+import * as path from "node:path";
+import { type RetentionReport, SHAPE_NAMES } from "./fixtures/markdown-stream-retention";
 
-const TEXT_CHARS = 32_000;
-const CHUNK = 64;
-const WIDTH = 80;
-const COPIES = 6;
+const FIXTURE = path.join(import.meta.dirname, "fixtures", "markdown-stream-retention.ts");
 
-/** One unit of every block shape the streaming lexer freezes on. Units are joined by a blank line. */
-const SHAPES: ReadonlyArray<readonly [string, (i: number) => string]> = [
-	[
-		"a paragraph",
-		i => `Paragraph ${i} of plain prose that wraps across the terminal width more than once, so it lays out as rows.`,
-	],
-	["a heading", i => `## Heading number ${i} with a few words`],
-	["a fenced code block", i => `\`\`\`ts\nconst value${i} = compute(${i});\nconst other${i} = value${i} * 2;\n\`\`\``],
-	["a table", i => `| Column | Value ${i} |\n| --- | --- |\n| row | ${i} |`],
-	["a blockquote", i => `> Quoted line ${i} that carries a sentence of prose inside the quote.`],
-	["a thematic break", i => `Rule ${i} follows.\n\n---`],
-	["a display math block", i => `$$\nx_${i} = \\frac{a}{b}\n$$`],
-	["a list closed by a paragraph", i => `- item ${i} one\n- item ${i} two\n\nParagraph after list ${i}.`],
-];
+/** Every shape is measured by one fixture run, which takes several seconds. */
+const MEASURE_TIMEOUT_MS = 120_000;
 
-const CLOSING = "A closing paragraph that is still arriving when the stream seals. ".repeat(8);
+let report: RetentionReport | undefined;
 
-function textOf(unit: (i: number) => string): string {
-	let text = "";
-	for (let i = 0; text.length < TEXT_CHARS; i++) text += `${unit(i)}\n\n`;
-	return text + CLOSING;
-}
-
-type Arm = "streaming" | "sealed" | "rendered once";
-
-function build(full: string, arm: Arm): Markdown {
-	clearRenderCache();
-	const md = new Markdown("", 0, 0, defaultMarkdownTheme);
-	md.transientRenderCache = arm !== "rendered once";
-	let text = "";
-	for (let pos = 0; pos < full.length; pos += CHUNK) {
-		// An append and a read: a new flat buffer per frame, as a provider's accumulated text is.
-		text += full.slice(pos, pos + CHUNK);
-		if (arm === "rendered once") {
-			text.charCodeAt(text.length - 1);
-		} else {
-			md.setText(text);
-			md.render(WIDTH);
-		}
+function measured(shape: string): RetentionReport[string] {
+	if (!report) {
+		const run = spawnSync(process.execPath, [FIXTURE], { encoding: "utf8", timeout: MEASURE_TIMEOUT_MS });
+		if (run.status !== 0) throw new Error(`fixture failed (${run.status}): ${run.stderr}`);
+		report = JSON.parse(run.stdout) as RetentionReport;
 	}
-	if (arm === "rendered once") {
-		md.setText(text);
-		md.render(WIDTH);
-	} else if (arm === "sealed") {
-		md.transientRenderCache = false;
-		md.render(WIDTH);
-	}
-	return md;
-}
-
-function stringBytes(): number {
-	Bun.gc(true);
-	Bun.gc(true);
-	return heapStats().extraMemorySize;
-}
-
-/** String bytes one instance built by `arm` holds after a full collection, per character of its text. */
-function heldPerChar(full: string, arm: Arm): number {
-	// Compiles the paths this arm takes before the baseline is read.
-	build(full, arm);
-	const before = stringBytes();
-	const held = Array.from({ length: COPIES }, () => build(full, arm));
-	const after = stringBytes();
-	expect(held).toHaveLength(COPIES);
-	return (after - before) / COPIES / full.length;
+	const arms = report[shape];
+	if (!arms) throw new Error(`fixture measured no ${shape}`);
+	return arms;
 }
 
 describe("a streamed Markdown holds what its text needs", () => {
-	it.each(SHAPES)("%s: while it streams, a few copies of the text", (_name, unit) => {
-		const full = textOf(unit);
-		const once = heldPerChar(full, "rendered once");
-		expect(heldPerChar(full, "streaming") - once).toBeLessThan(6);
-	});
+	it.each(SHAPE_NAMES.map(name => [name] as const))(
+		"%s: while it streams, a few copies of the text",
+		shape => {
+			expect(measured(shape).streaming).toBeLessThan(6);
+		},
+		MEASURE_TIMEOUT_MS,
+	);
 
-	it.each(SHAPES)("%s: once sealed, what one render of the text holds", (_name, unit) => {
-		const full = textOf(unit);
-		const once = heldPerChar(full, "rendered once");
-		expect(heldPerChar(full, "sealed") - once).toBeLessThan(0.5);
-	});
+	it.each(SHAPE_NAMES.map(name => [name] as const))(
+		"%s: once sealed, what one render of the text holds",
+		shape => {
+			expect(measured(shape).sealed).toBeLessThan(0.5);
+		},
+		MEASURE_TIMEOUT_MS,
+	);
 });
