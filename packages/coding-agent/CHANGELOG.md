@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Large eval display values now stay bounded in session history while remaining available through output artifacts, preventing slow resume startup ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 2a0c30faa53ce9374aeb4e0c9917845f7b67609a).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
 
 ## [18.1.11] - 2026-09-05

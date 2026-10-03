@@ -17,7 +17,13 @@ import type {
 } from "../../eval/types";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
-import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../../session/streaming-output";
+import {
+	DEFAULT_MAX_BYTES,
+	OutputSink,
+	type OutputSummary,
+	TailBuffer,
+	truncateHeadBytes,
+} from "../../session/streaming-output";
 import { type EnabledAgentCatalog, resolveEnabledAgents } from "../../task/agent-settings";
 import { discoverAgents } from "../../task/discovery";
 import { resolveSpawnPolicy } from "../../task/spawn-policy";
@@ -153,36 +159,45 @@ export type EvalToolResult = {
 
 export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
 
-/** Cap per `display()` value sent back to the model. */
-const MAX_DISPLAY_TEXT_CHARS = 8000;
+/** Shared cap for each structured `display()` preview returned by eval. */
+const MAX_DISPLAY_TEXT_BYTES = 8000;
+const DISPLAY_ELISION_RESERVE_BYTES = 64;
 
-export function formatDisplayJsonForText(value: unknown): string {
-	let text: string;
-	try {
-		text = JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		text = String(value);
-	}
-	if (text.length <= MAX_DISPLAY_TEXT_CHARS) return text;
-	const chars = [...text];
-	if (chars.length <= MAX_DISPLAY_TEXT_CHARS) return text;
-	return `${truncate(text, MAX_DISPLAY_TEXT_CHARS, "")}\n[…${chars.length - MAX_DISPLAY_TEXT_CHARS}ch elided…]`;
+export interface FormattedDisplayJson {
+	fullText: string;
+	previewText: string;
+	detailsValue: unknown;
+	truncated: boolean;
 }
 
-/**
- * Format display() JSON values into text the model can see. Images are surfaced
- * separately as ImageContent so the model can actually inspect them; this helper
- * intentionally does not touch images.
- */
-function formatDisplayOutputsForText(outputs: EvalDisplayOutput[]): string {
-	const chunks: string[] = [];
-	let displayIndex = 0;
-	for (const output of outputs) {
-		if (output.type !== "json") continue;
-		displayIndex++;
-		chunks.push(`display[${displayIndex}]:\n${formatDisplayJsonForText(output.data)}`);
+export function formatDisplayJson(value: unknown): FormattedDisplayJson {
+	let fullText: string;
+	try {
+		fullText = JSON.stringify(value, null, 2) ?? String(value);
+	} catch {
+		fullText = String(value);
 	}
-	return chunks.join("\n\n");
+	const totalBytes = Buffer.byteLength(fullText, "utf-8");
+	if (totalBytes <= MAX_DISPLAY_TEXT_BYTES) {
+		return { fullText, previewText: fullText, detailsValue: value, truncated: false };
+	}
+
+	const head = truncateHeadBytes(fullText, MAX_DISPLAY_TEXT_BYTES - DISPLAY_ELISION_RESERVE_BYTES);
+	const previewText = `${head.text}\n[…${fullText.length - head.text.length}ch elided…]`;
+	return {
+		fullText,
+		previewText,
+		detailsValue: {
+			preview: previewText,
+			truncated: true,
+			totalBytes,
+		},
+		truncated: true,
+	};
+}
+
+export function formatDisplayJsonForText(value: unknown): string {
+	return formatDisplayJson(value).previewText;
 }
 
 export interface EvalToolDescriptionOptions {
@@ -733,13 +748,21 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				const durationMs = Date.now() - startTime;
 
 				const cellStatusEvents: EvalStatusEvent[] = [];
-				const cellDisplayOutputs: EvalDisplayOutput[] = [];
+				const cellDisplayTexts: string[] = [];
 				const cellImageNotes: string[] = [];
 				let cellHasMarkdown = false;
 				for (const output of result.displayOutputs) {
 					if (output.type === "json") {
-						jsonOutputs.push(output.data);
-						cellDisplayOutputs.push(output);
+						const formatted = formatDisplayJson(output.data);
+						const label = `display[${cellDisplayTexts.length + 1}]:\n`;
+						jsonOutputs.push(formatted.detailsValue);
+						cellDisplayTexts.push(`${label}${formatted.previewText}`);
+						if (formatted.truncated) {
+							outputSink.push(`${label}${formatted.fullText}\n`, {
+								inline: `${label}${formatted.previewText}\n`,
+								emitInline: false,
+							});
+						}
 					}
 					if (output.type === "image") {
 						const resized = await resizeImage(
@@ -756,11 +779,6 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 							mimeType: resized.mimeType,
 						};
 						images.push(image);
-						cellDisplayOutputs.push({
-							type: "image",
-							data: image.data,
-							mimeType: image.mimeType,
-						});
 						const dimensionNote = formatDimensionNote(resized);
 						if (dimensionNote) {
 							cellImageNotes.push(`display image ${cellImageNotes.length + 1}: ${dimensionNote}`);
@@ -777,7 +795,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 
 				const stdoutTrimmed = result.output.trim();
 				const imageText = cellImageNotes.join("\n");
-				const displayText = formatDisplayOutputsForText(cellDisplayOutputs);
+				const displayText = cellDisplayTexts.join("\n\n");
 				const visibleDisplayText =
 					displayText && imageText ? `${displayText}\n\n${imageText}` : displayText || imageText;
 				const cellOutput =
