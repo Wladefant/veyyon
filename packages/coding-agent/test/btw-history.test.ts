@@ -345,6 +345,30 @@ describe("BtwHistoryStore", () => {
 		expect(await fs.readdir(directory)).toEqual([]);
 	});
 
+	it("keeps scoped histories apart from the main store and from sibling scopes", async () => {
+		const main = await BtwHistoryStore.open(artifactsDir);
+		const alpha = await BtwHistoryStore.open(artifactsDir, "agent-alpha");
+		const beta = await BtwHistoryStore.open(artifactsDir, "agent-beta");
+		await main.upsert(record("main-topic"));
+		await alpha.upsert(record("alpha-topic"));
+		expect((await BtwHistoryStore.open(artifactsDir)).getRecords().map(r => r.id)).toEqual(["main-topic"]);
+		expect((await BtwHistoryStore.open(artifactsDir, "agent-alpha")).getRecords().map(r => r.id)).toEqual([
+			"alpha-topic",
+		]);
+		expect(beta.getRecords()).toEqual([]);
+		expect((await BtwHistoryStore.open(artifactsDir, "agent-beta")).getRecords()).toEqual([]);
+	});
+
+	it("confines a hostile scope to the history root", async () => {
+		const hostile = await BtwHistoryStore.open(artifactsDir, "../../escape");
+		await hostile.upsert(record("topic"));
+		const found = await fs.readdir(path.join(artifactsDir, "btw-history", "sessions"));
+		expect(found).toHaveLength(1);
+		expect(found[0]).toMatch(/^[0-9a-f]{64}$/);
+		expect((await fs.readdir(directory)).sort()).toEqual(["session"]);
+		expect((await BtwHistoryStore.open(artifactsDir)).getRecords()).toEqual([]);
+	});
+
 	it("retains write failures through flush and refuses to overwrite later corruption", async () => {
 		const store = await BtwHistoryStore.open(artifactsDir);
 		const saved = record("saved", { status: "running" });
