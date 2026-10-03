@@ -4,10 +4,13 @@
  *
  * WHAT THIS CLOSES. Every streamed event of a turn (each `message_update` delta,
  * each tool start and end) reaches `ensureLoadingAnimation`, which rebuilt the
- * board unconditionally: the tree, the rail sweep and a new mounted `Text`, once
- * per event. A 400,000-character answer under a live board spent about 0.65 s
- * more CPU than the same answer with no board, drawing identical rows thousands
- * of times between two steps of the anchored clock.
+ * board unconditionally: the tree, the rail sweep and a new mounted `Text` the
+ * frame then wrapped again, once per event. A 400,000-character answer under a
+ * live board spent about 0.4 s more CPU than with the rebuild skipped, drawing
+ * identical rows thousands of times between two steps of the anchored clock.
+ *
+ * The observable is the component mounted for the board: a rebuild mounts a new
+ * one, and an event that leaves the same one mounted cost the frame nothing.
  *
  * THE CLASS. The board reads two kinds of input. A todo write, an agent change,
  * the expand toggle and the anchored clock each rebuild the board themselves.
@@ -31,7 +34,6 @@ import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
-import * as todoBoard from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
 import { RAIL_IDLE_STEP_MS } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -82,6 +84,11 @@ function assistant(content: unknown[]) {
 		},
 		timestamp: 0,
 	};
+}
+
+/** The component mounted for the board. A rebuild mounts a new one, which the next frame wraps again. */
+function mountedBoard(mode: InteractiveMode) {
+	return mode.todoContainer.children[0];
 }
 
 /** The session state the board's motion decision reads, driven by the test. */
@@ -193,7 +200,7 @@ describe("a streamed event rebuilds the todo board only when its inputs move", (
 		await controller.handleEvent({ type: "agent_start" } as never);
 		await controller.handleEvent({ type: "message_start", message: assistant([]) } as never);
 
-		const builds = vi.spyOn(todoBoard, "renderTodoBoardLines");
+		const mounted = mountedBoard(mode);
 		let text = "";
 		for (let i = 0; i < 200; i++) {
 			const delta = `word${i} `;
@@ -204,28 +211,30 @@ describe("a streamed event rebuilds the todo board only when its inputs move", (
 				assistantMessageEvent: { type: "text_delta", delta },
 			} as never);
 		}
-		expect(builds).toHaveBeenCalledTimes(0);
-		// Still mounted: zero rebuilds is not a board that went away.
+		expect(mountedBoard(mode)).toBe(mounted);
 		expect(Bun.stripANSI(mode.todoContainer.render(COLUMNS).join("\n"))).toContain("Cache widths");
 
 		vi.advanceTimersByTime(RAIL_IDLE_STEP_MS);
-		expect(builds).toHaveBeenCalledTimes(1);
+		expect(mountedBoard(mode)).not.toBe(mounted);
 	});
 
 	for (const [name, move] of Object.entries(UNEVENTED_INPUTS)) {
 		it(`rebuilds the board once when ${name}, and not again after`, async () => {
 			mode.setTodos(plan);
-			const builds = vi.spyOn(todoBoard, "renderTodoBoardLines");
+			mode.ensureLoadingAnimation();
+			const settled = mountedBoard(mode);
+			expect(settled).toBeDefined();
 
 			mode.ensureLoadingAnimation();
-			expect(builds).toHaveBeenCalledTimes(0);
+			expect(mountedBoard(mode)).toBe(settled);
 
 			await move({ motion, terminal });
 			mode.ensureLoadingAnimation();
-			expect(builds).toHaveBeenCalledTimes(1);
+			const rebuilt = mountedBoard(mode);
+			expect(rebuilt).not.toBe(settled);
 
 			mode.ensureLoadingAnimation();
-			expect(builds).toHaveBeenCalledTimes(1);
+			expect(mountedBoard(mode)).toBe(rebuilt);
 		});
 	}
 });
