@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
-import { errorMessage, formatCount, lazy, logger, prompt, truncate } from "@veyyon/utils";
+import { errorMessage, formatCount, lazy, logger, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../eval/bridge-timeout";
@@ -8,13 +8,7 @@ import { IdleTimeout } from "../../eval/idle-timeout";
 import type { BackendProbeOptions } from "../../eval/probe";
 import { defaultEvalSessionId } from "../../eval/session-id";
 import { upsertStatusEvent } from "../../eval/status-events";
-import type {
-	EvalCellResult,
-	EvalDisplayOutput,
-	EvalLanguage,
-	EvalStatusEvent,
-	EvalToolDetails,
-} from "../../eval/types";
+import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../../eval/types";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import {
@@ -183,7 +177,16 @@ export function formatDisplayJson(value: unknown): FormattedDisplayJson {
 	}
 
 	const head = truncateHeadBytes(fullText, MAX_DISPLAY_TEXT_BYTES - DISPLAY_ELISION_RESERVE_BYTES);
-	const previewText = `${head.text}\n[…${fullText.length - head.text.length}ch elided…]`;
+	// The elision marker counts string length in code units, and a truncated
+	// tail keeps surrogate pairs whole: report code points (what a reader
+	// counts) instead of code units.
+	let elidedCodePoints = 0;
+	for (let index = head.text.length; index < fullText.length; ) {
+		const codePoint = fullText.codePointAt(index) ?? 0;
+		elidedCodePoints += 1;
+		index += codePoint > 0xffff ? 2 : 1;
+	}
+	const previewText = `${head.text}\n[…${elidedCodePoints}ch elided…]`;
 	return {
 		fullText,
 		previewText,
@@ -762,6 +765,19 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 								inline: `${label}${formatted.previewText}\n`,
 								emitInline: false,
 							});
+							// The inline substitution dropped the complete value from
+							// memory, so the artifact mirror is the only copy that
+							// survives the call. If mirroring failed, owning the full
+							// value in details is the last reliable copy surface — say
+							// so instead of persisting the bounded preview as though
+							// nothing was lost.
+							const mirror = await outputSink.ensureArtifactMirrored();
+							if (!mirror.mirrored) {
+								const reason = mirror.error ?? "unknown artifact write failure";
+								jsonOutputs[jsonOutputs.length - 1] = output.data;
+								cellDisplayTexts[cellDisplayTexts.length - 1] +=
+									`\n[artifact retention failed (${reason}); the complete value stays in details.json]\n`;
+							}
 						}
 					}
 					if (output.type === "image") {
@@ -825,6 +841,12 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					isError: boolean,
 				): Promise<AgentToolResult<EvalToolDetails>> => {
 					const summaryForMeta = await summarizeFinal(foldedOutput, finalizeOutput);
+					// The artifact is the only complete copy of the output when the
+					// inline window dropped bytes; if the sink could not write it,
+					// the failure has to reach the model text, not just the metadata.
+					if (summaryForMeta.artifactError) {
+						outputText += `\n[output artifact write failed: ${summaryForMeta.artifactError}]`;
+					}
 					const details: EvalToolDetails = {
 						language: languages[0],
 						languages,
@@ -954,5 +976,6 @@ async function summarizeFinal(
 		outputLines,
 		outputBytes,
 		artifactId: rawSummary.artifactId,
+		artifactError: rawSummary.artifactError,
 	};
 }

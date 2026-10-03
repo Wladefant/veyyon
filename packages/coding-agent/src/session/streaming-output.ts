@@ -3,6 +3,7 @@ import type { AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { capTextBytes, truncateHeadBytes, truncateTailBytes } from "@veyyon/utils/byte-truncate";
 import { clampLow } from "@veyyon/utils/math";
 import { sanitizeText, splitTrailingPartialEscape } from "@veyyon/utils/sanitize-text";
+import { errorMessage } from "@veyyon/utils/type-guards";
 
 export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from "@veyyon/utils/byte-truncate";
 
@@ -61,6 +62,8 @@ export interface OutputSummary {
 	columnTruncatedLines?: number;
 	/** Configured per-line column cap in effect (UTF-8 bytes), when > 0. */
 	columnMax?: number;
+	/** Artifact sink failure recorded by pushes (creation or write error), or undefined. */
+	artifactError?: string;
 	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
 	artifactId?: string;
 }
@@ -798,6 +801,14 @@ export class OutputSink {
 		sink: Bun.FileSink;
 	};
 
+	// A sink creation or write failure, kept so push()/dump() can surface artifact
+	// loss instead of silently returning inline-only output.
+	#artifactFailure?: string;
+	// Bytes queued for the sink when its creation failed and were discarded.
+	#artifactRejectBytes = 0;
+	// Creation in flight, awaited by `ensureArtifactMirrored()`.
+	#fileSinkPromise?: Promise<void>;
+
 	// Queue of chunks waiting for the file sink to be created.
 	#pendingFileWrites?: string[];
 	#fileReady = false;
@@ -1037,7 +1048,16 @@ export class OutputSink {
 	 */
 	#writeToFile(chunk: string): void {
 		if (this.#fileReady && this.#file) {
-			this.#emitToSink(chunk);
+			// A rejected sink write is an artifact loss, not a stream problem: the
+			// inline buffer keeps flowing, so record the failure for dump() reads.
+			try {
+				this.#emitToSink(chunk);
+			} catch (error) {
+				this.#artifactFailure = errorMessage(error);
+				this.#fileReady = false;
+				this.#file = undefined;
+				this.#artifactRejectBytes += Buffer.byteLength(chunk, "utf-8");
+			}
 			return;
 		}
 		// File sink not yet created — queue this chunk and kick off creation.
@@ -1045,7 +1065,10 @@ export class OutputSink {
 		// resolves (typically <2). The cap is enforced on drain.
 		if (!this.#pendingFileWrites) {
 			this.#pendingFileWrites = [chunk];
-			void this.#createFileSink();
+			const pending = this.#createFileSink().finally(() => {
+				if (this.#fileSinkPromise === pending) this.#fileSinkPromise = undefined;
+			});
+			this.#fileSinkPromise = pending;
 		} else {
 			this.#pendingFileWrites.push(chunk);
 		}
@@ -1136,7 +1159,6 @@ export class OutputSink {
 			if (this.#buffer.length > 0) {
 				this.#emitToSink(this.#buffer);
 			}
-
 			// Drain any chunks that arrived while the sink was being created.
 			if (this.#pendingFileWrites) {
 				for (const pending of this.#pendingFileWrites) {
@@ -1144,16 +1166,51 @@ export class OutputSink {
 				}
 				this.#pendingFileWrites = undefined;
 			}
-		} catch {
+		} catch (error) {
 			try {
 				await this.#file?.sink?.end();
 			} catch {
 				/* ignore */
 			}
+			this.#artifactFailure = errorMessage(error);
+			const dropped = this.#pendingFileWrites;
+			if (dropped !== undefined) {
+				this.#artifactRejectBytes += dropped.reduce((total, chunk) => total + Buffer.byteLength(chunk, "utf-8"), 0);
+			}
 			this.#file = undefined;
 			this.#pendingFileWrites = undefined;
 			this.#fileReady = false;
 		}
+	}
+
+	/**
+	 * Resolve once the artifact mirror is usable, or fail with the recorded
+	 * sink error. Callers that push `inline`-substituted text dropped the raw
+	 * bytes from RAM in favor of the file: the mirror is then the only
+	 * complete copy, so a failed mirror must surface as loss, never as a
+	 * silent success.
+	 */
+	async ensureArtifactMirrored(): Promise<{
+		mirrored: boolean;
+		error?: string;
+		rejectedBytes?: number;
+	}> {
+		if (this.#artifactPath === undefined) {
+			return { mirrored: false, error: "no output artifact was allocated for this session" };
+		}
+		if (this.#fileSinkPromise !== undefined) {
+			await this.#fileSinkPromise;
+		}
+		if (this.#artifactFailure !== undefined) {
+			return { mirrored: false, error: this.#artifactFailure, rejectedBytes: this.#artifactRejectBytes };
+		}
+		// No creation ever started (the last push predates the field): one attempt.
+		await this.#createFileSink();
+		if (this.#artifactFailure !== undefined) {
+			return { mirrored: false, error: this.#artifactFailure, rejectedBytes: this.#artifactRejectBytes };
+		}
+		if (this.#file !== undefined) return { mirrored: true };
+		return { mirrored: this.#file !== undefined };
 	}
 
 	createInput(): WritableStream<Uint8Array | string> {
@@ -1345,10 +1402,10 @@ export class OutputSink {
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
 			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,
 			artifactId: this.#file?.artifactId,
+			artifactError: this.#artifactFailure,
 		};
 	}
 }
-
 // =============================================================================
 // Truncation notice formatting
 // =============================================================================
