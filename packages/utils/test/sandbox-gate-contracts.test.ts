@@ -23,7 +23,11 @@ import { CONFIG_DIR_NAME } from "@veyyon/utils/dirs";
 import { SANDBOX_MARKER_ENV_KEY } from "../src/dir-env-keys";
 import {
 	type Breach,
+	HOST_BROWSER_ENV,
+	HOST_BROWSER_HOME_PREFIX,
+	HOST_BROWSER_SUITES,
 	HOST_HOME_ENV,
+	hostBrowserBreaches,
 	isolationBreaches,
 	refusalMessage,
 	SANDBOX_ENTRYPOINT,
@@ -528,5 +532,69 @@ describe("the real-data tripwire", () => {
 			fs.rmSync(forbidden, { recursive: true, force: true });
 			fs.rmSync(scratch, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("the host-browser opt-in", () => {
+	const executable = process.execPath;
+	const home = path.join(os.tmpdir(), `${HOST_BROWSER_HOME_PREFIX}abc123`);
+	const suite = `packages/coding-agent/test/tools/${HOST_BROWSER_SUITES[0]}`;
+
+	/**
+	 * LOCKS OUT: the opt-in admitting anything beyond the browser suites in a disposable home.
+	 *
+	 * Each case removes exactly one condition from an admitted run and requires the refusal to
+	 * name it, so a condition deleted from the gate turns a case red rather than leaving the others
+	 * to cover for it. Without these the flag would be a general "skip the sandbox" switch.
+	 */
+	it("admits only the named browser suites, in a disposable home, with an absolute browser path", () => {
+		const env = { PUPPETEER_EXECUTABLE_PATH: executable };
+		expect(hostBrowserBreaches([suite], env, home)).toEqual([]);
+		expect(hostBrowserBreaches([], env, home).join("\n")).toContain("no test path was named");
+		expect(hostBrowserBreaches(["packages/utils/test/profiles.test.ts"], env, home).join("\n")).toContain(
+			"is not a browser suite",
+		);
+		expect(hostBrowserBreaches([suite], env, path.join(os.tmpdir(), "somebody")).join("\n")).toContain(
+			"not a disposable home",
+		);
+		expect(hostBrowserBreaches([suite], {}, home).join("\n")).toContain("PUPPETEER_EXECUTABLE_PATH");
+		expect(
+			hostBrowserBreaches(
+				[suite],
+				{ PUPPETEER_EXECUTABLE_PATH: path.join(os.tmpdir(), "no-such-browser") },
+				home,
+			).join("\n"),
+		).toContain("is not an existing file");
+		expect(
+			hostBrowserBreaches([suite], { ...env, VEYYON_CONFIG_DIR: path.join(os.tmpdir(), "elsewhere") }, home).join(
+				"\n",
+			),
+		).toContain("resolves outside the disposable home");
+	});
+
+	/**
+	 * LOCKS OUT: the flag alone being enough. A child that sets only the flag, names no browser suite
+	 * and sits in an ordinary home must still be refused, and the refusal must come from the
+	 * host-browser branch rather than the marker pre-check.
+	 */
+	it("still refuses a process that sets the flag but meets none of the conditions", () => {
+		const { code, output } = runChild(`import "${REPO_ROOT}/packages/utils/test/helpers/sandbox-gate";`, {
+			[HOST_BROWSER_ENV]: "1",
+			[SANDBOX_MARKER_ENV_KEY]: undefined,
+			PUPPETEER_EXECUTABLE_PATH: undefined,
+		});
+		expect(code).toBe(1);
+		expect(output).toContain("(host-browser)");
+		expect(output).not.toContain(`${SANDBOX_MARKER_ENV} is unset`);
+	});
+
+	/** LOCKS OUT: any spelling of the flag other than the literal `1` enabling the mode. */
+	it("ignores the flag unless it is exactly 1", () => {
+		const { output } = runChild(`import "${REPO_ROOT}/packages/utils/test/helpers/sandbox-gate";`, {
+			[HOST_BROWSER_ENV]: "true",
+			[SANDBOX_MARKER_ENV_KEY]: undefined,
+		});
+		expect(output).toContain(`${SANDBOX_MARKER_ENV} is unset`);
+		expect(output).not.toContain("(host-browser)");
 	});
 });

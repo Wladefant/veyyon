@@ -1298,6 +1298,71 @@ describe("runEvalAgent isolation", () => {
 		expect(result.text).toContain("Applied patches: yes");
 	});
 
+	it("names the nested patches, not an empty root patch, when apply=false captured only nested work", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const nestedPath = "/artifacts/a.nested-0-inner.patch";
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "isolated-run",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				hasRootChanges: false,
+				nestedPatches: [{ relativePath: "inner", patch: "diff --git a/f b/f\n" }],
+				nestedPatchPaths: [nestedPath],
+			}),
+		);
+
+		const result = await runEvalAgent(
+			{ prompt: "nested only", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
+
+		expect(result.text).toContain(nestedPath);
+		expect(result.text).not.toMatch(/changes captured at `[^`]*\/[^`]*\.patch` \(apply=false\)/);
+		expect(result.details.patchPath).toBeUndefined();
+		expect(result.details.nestedPatchPaths).toEqual([nestedPath]);
+	});
+
+	it("reports no changes when apply=false captured an empty root patch and nothing nested", async () => {
+		mockAgents();
+		mockIsolationContext();
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "isolated-run",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				hasRootChanges: false,
+			}),
+		);
+
+		const result = await runEvalAgent(
+			{ prompt: "nothing", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
+
+		expect(result.text).toContain("Isolation: no changes captured.");
+		expect(result.details.patchPath).toBeUndefined();
+	});
+
+	it("still names the root patch when apply=false captured root changes", async () => {
+		mockAgents();
+		mockIsolationContext();
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "isolated-run",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				hasRootChanges: true,
+			}),
+		);
+
+		const result = await runEvalAgent(
+			{ prompt: "root", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
+
+		expect(result.text).toMatch(/changes captured at `[^`]*\.patch` \(apply=false\)/);
+		expect(result.details.patchPath).toMatch(/\.patch$/);
+	});
+
 	it("keeps the timeout paused through isolation merge/apply so the cell can't abort mid-cherry-pick", async () => {
 		mockAgents();
 		mockIsolationContext();

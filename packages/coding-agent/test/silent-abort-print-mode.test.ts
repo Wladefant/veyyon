@@ -56,6 +56,8 @@ function createMockSession(messages: AssistantMessage[]): PrintModeSession {
 		// goes unnoticed.
 		prompt: async () => true,
 		dispose: async () => {},
+		prepareForHeadlessAdvisorDrain: () => {},
+		waitForAdvisorCatchup: async () => true,
 		// Print mode routes stored content through the session's display seam to
 		// expand secret placeholders and argot handles. The real expansion is
 		// covered by print-mode-argot-display.test.ts; here it is identity so the

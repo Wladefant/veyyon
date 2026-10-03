@@ -36,10 +36,13 @@ import {
 	formatShortSha,
 	type GhLabel,
 	type GhUser,
+	ghApiHostArgs,
 	normalizeOptionalString,
 	normalizeText,
 	parsePositiveDecimalInt,
+	parseRepoRef,
 	pushLine,
+	repoFromUrl,
 	requireNonEmpty,
 } from "./gh-format";
 import { parseIssueUrl } from "./gh-url";
@@ -310,17 +313,13 @@ export async function resolveDefaultRepoMemoized(cwd: string, signal?: AbortSign
 		pending = (async () => {
 			// No caller signal: this lookup is shared across every concurrent
 			// waiter on the same cwd.
-			const resolved = await git.github.text(cwd, [
-				"repo",
-				"view",
-				"--json",
-				"nameWithOwner",
-				"-q",
-				".nameWithOwner",
-			]);
-			const value = requireNonEmpty(resolved, "repo");
-			DEFAULT_REPO_RESOLVED.set(key, value);
-			return value;
+			const url = await git.github.text(cwd, ["repo", "view", "--json", "url", "-q", ".url"]);
+			const resolved = repoFromUrl(url);
+			if (!resolved) {
+				throw new ToolError("Could not resolve repository from current directory.");
+			}
+			DEFAULT_REPO_RESOLVED.set(key, resolved);
+			return resolved;
 		})();
 		// Drop the in-flight slot on settle so failures don't poison the cache
 		// and so a successful resolution survives only in `DEFAULT_REPO_RESOLVED`.
@@ -339,6 +338,7 @@ async function fetchPrReviewComments(
 	prNumber: number,
 	signal?: AbortSignal,
 ): Promise<GhPrReviewComment[]> {
+	const ref = parseRepoRef(repo);
 	const reviewComments: GhPrReviewComment[] = [];
 	let page = 1;
 
@@ -347,9 +347,10 @@ async function fetchPrReviewComments(
 			cwd,
 			[
 				"api",
+				...ghApiHostArgs(ref),
 				"--method",
 				"GET",
-				`/repos/${repo}/pulls/${prNumber}/comments`,
+				`/repos/${ref.slug}/pulls/${prNumber}/comments`,
 				"-F",
 				`per_page=${REVIEW_COMMENTS_PAGE_SIZE}`,
 				"-F",
