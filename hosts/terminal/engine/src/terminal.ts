@@ -711,6 +711,7 @@ export class ProcessTerminal implements Terminal {
 		this.#markTerminalDisconnected("stdin failed", err);
 	};
 	#stdoutErrorCleanup?: () => void;
+	#stdioDisconnectCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
 		this.#markTerminalWriteFailed(err);
 	};
@@ -833,6 +834,7 @@ export class ProcessTerminal implements Terminal {
 		this.#headless = isTerminalHeadless();
 		if (this.#headless) return;
 		registerPostmortemTerminalRestore();
+		this.#stdioDisconnectCleanup ??= postmortem.registerStdioDisconnectHandling();
 
 		// Register for emergency cleanup
 		activeTerminal = this;
@@ -1735,15 +1737,20 @@ export class ProcessTerminal implements Terminal {
 		// a live terminal the failure surfaces, after the rest of the teardown,
 		// because swallowing it would silently leave stdin in raw mode.
 		let restoreError: unknown;
-		if (process.stdin.setRawMode) {
-			try {
-				process.stdin.setRawMode(this.#wasRaw);
-			} catch (err) {
-				if (!this.#dead) restoreError = err;
+		try {
+			if (process.stdin.setRawMode) {
+				try {
+					process.stdin.setRawMode(this.#wasRaw);
+				} catch (err) {
+					if (!this.#dead) restoreError = err;
+				}
 			}
+		} finally {
+			this.#stdoutErrorCleanup?.();
+			this.#stdoutErrorCleanup = undefined;
+			this.#stdioDisconnectCleanup?.();
+			this.#stdioDisconnectCleanup = undefined;
 		}
-		this.#stdoutErrorCleanup?.();
-		this.#stdoutErrorCleanup = undefined;
 		if (restoreError !== undefined) throw restoreError;
 	}
 

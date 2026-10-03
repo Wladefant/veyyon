@@ -98,6 +98,26 @@ export function isIpcSendEpipe(err: Error): boolean {
 }
 
 const stdioErrors = new WeakSet<object>();
+let stdioDisconnectRegistrations = 0;
+
+/**
+ * Treat EPIPE from a registered stdio owner as a graceful peer disconnect,
+ * regardless of which process error event Bun uses for the failed write.
+ *
+ * Stdio protocol servers and interactive terminals register for their active
+ * lifetime so a closed peer runs cleanup without entering the fatal path.
+ * The returned callback removes the registration.
+ */
+export function registerStdioDisconnectHandling(): () => void {
+	stdioDisconnectRegistrations++;
+	let unregistered = false;
+	return () => {
+		if (!unregistered && stdioDisconnectRegistrations > 0) {
+			unregistered = true;
+			stdioDisconnectRegistrations--;
+		}
+	};
+}
 
 function isWriteEpipe(err: unknown): boolean {
 	if (err === null || typeof err !== "object") return false;
@@ -105,9 +125,9 @@ function isWriteEpipe(err: unknown): boolean {
 	return code === "EPIPE" && syscall === "write";
 }
 
-/** Only errors observed on our output streams prove a consumer closed them. */
+/** Only errors observed on our output streams or registered stdio owners prove a consumer closed them. */
 export function isStdioWriteEpipe(err: Error): boolean {
-	return isWriteEpipe(err) && stdioErrors.has(err);
+	return isWriteEpipe(err) && (stdioErrors.has(err) || stdioDisconnectRegistrations > 0);
 }
 
 /**

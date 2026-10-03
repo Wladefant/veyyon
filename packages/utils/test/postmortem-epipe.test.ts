@@ -4,6 +4,15 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as postmortem from "../src/postmortem";
 
+const uncaughtStdioChildFlag = "--uncaught-stdio-epipe-child";
+if (process.argv.includes(uncaughtStdioChildFlag)) {
+	postmortem.registerStdioDisconnectHandling();
+	setImmediate(() => {
+		throw Object.assign(new Error("broken pipe"), { code: "EPIPE", syscall: "write", errno: -32 });
+	});
+	await new Promise<void>(() => {});
+}
+
 /**
  * IPC send failures and child-stdin write failures must not terminate the host.
  * Only errors observed on process.stdout/stderr qualify for quiet teardown.
@@ -171,4 +180,27 @@ describe("global EPIPE routing", () => {
 			expect(evidence).toContain("CLEANUP:exit");
 		});
 	}
+
+	it("exits successfully when Bun surfaces a registered stdio EPIPE as an uncaught exception", async () => {
+		const child = spawn(process.execPath, [fileURLToPath(import.meta.url), uncaughtStdioChildFlag], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			new Promise<number | null>(resolve => child.on("close", resolve)),
+			new Promise<string>(resolve => {
+				let data = "";
+				child.stdout.on("data", c => (data += c));
+				child.stdout.on("end", () => resolve(data));
+			}),
+			new Promise<string>(resolve => {
+				let data = "";
+				child.stderr.on("data", c => (data += c));
+				child.stderr.on("end", () => resolve(data));
+			}),
+		]);
+
+		expect(exitCode).toBe(0);
+		expect(stdout).toBe("");
+		expect(stderr).toBe("");
+	});
 });

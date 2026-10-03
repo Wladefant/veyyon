@@ -3,6 +3,21 @@ import { ProcessTerminal } from "@veyyon/tui/terminal";
 import { setTerminalHeadless } from "@veyyon/utils";
 import * as postmortem from "@veyyon/utils/postmortem";
 
+const uncaughtWriteChildFlag = "--uncaught-write-epipe-child";
+if (process.argv.includes(uncaughtWriteChildFlag)) {
+	setTerminalHeadless(false);
+	Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+	const terminal = new ProcessTerminal();
+	terminal.start(
+		() => {},
+		() => {},
+	);
+	setImmediate(() => {
+		throw Object.assign(new Error("broken pipe"), { code: "EPIPE", syscall: "write", errno: -32 });
+	});
+	await new Promise<void>(() => {});
+}
+
 /**
  * WHY: `stop()` restores stdin's raw mode inside a catch so a revoked pty (pane
  * recycled, ssh dropped), where Bun's node:tty shim throws, cannot abort the
@@ -98,5 +113,17 @@ describe("ProcessTerminal raw-mode restore on stop()", () => {
 		process.stdin.emit("end");
 
 		expect(teardown).toEqual({ error: undefined });
+	});
+
+	it("exits successfully when an active interactive terminal receives an uncaught write EPIPE", async () => {
+		const child = Bun.spawn([process.execPath, "run", import.meta.path, uncaughtWriteChildFlag], {
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+
+		expect(exitCode, stderr).toBe(0);
+		expect(stderr).not.toContain("[Uncaught Exception]");
 	});
 });
