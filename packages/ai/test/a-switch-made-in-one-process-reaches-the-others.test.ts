@@ -90,4 +90,51 @@ describe("an account switch made in another process", () => {
 			storage.close();
 		}
 	});
+
+	it("keeps a local choice when selection persistence is absent", async () => {
+		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		store.saveOAuth(PROVIDER, oauthCredential("first"));
+		store.saveOAuth(PROVIDER, oauthCredential("second"));
+		const storage = new AuthStorage(store, { loadBalancing: true });
+		await storage.reload();
+		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
+		Object.defineProperties(store, {
+			getProviderSelection: { value: undefined },
+			setProviderSelection: { value: undefined },
+		});
+		try {
+			expect(storage.selectProviderCredential(PROVIDER, second!)).toBe(true);
+			const realNow = Date.now();
+			vi.spyOn(Date, "now").mockReturnValue(realNow + 700);
+			expect(storage.selectedProviderCredentialId(PROVIDER)).toBe(second);
+			expect(await storage.getApiKey(PROVIDER, "s")).toBe("access-second");
+		} finally {
+			vi.restoreAllMocks();
+			storage.close();
+		}
+	});
+
+	it("does not restore the persisted choice after a failed clear", async () => {
+		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		store.saveOAuth(PROVIDER, oauthCredential("first"));
+		store.saveOAuth(PROVIDER, oauthCredential("second"));
+		const storage = new AuthStorage(store, { loadBalancing: true });
+		await storage.reload();
+		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
+		try {
+			expect(storage.selectProviderCredential(PROVIDER, second!)).toBe(true);
+			store.clearProviderSelection = () => {
+				throw new Error("disk full");
+			};
+			storage.clearProviderSelection(PROVIDER);
+			expect(storage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+			const realNow = Date.now();
+			vi.spyOn(Date, "now").mockReturnValue(realNow + 700);
+			expect(storage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+			expect(store.getProviderSelection(PROVIDER)).toBeDefined();
+		} finally {
+			vi.restoreAllMocks();
+			storage.close();
+		}
+	});
 });

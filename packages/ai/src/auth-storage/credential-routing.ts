@@ -383,7 +383,7 @@ export class CredentialRouting {
 		if (write) {
 			try {
 				write.call(this.#store, provider, identity);
-				persisted = true;
+				persisted = this.#store.getProviderSelection !== undefined;
 			} catch (err) {
 				// The in-process choice still holds, so the switch the user just made does take
 				// effect; it simply will not survive a restart. Loud, because a choice that quietly
@@ -406,7 +406,7 @@ export class CredentialRouting {
 		if (clear) {
 			try {
 				clear.call(this.#store, provider);
-				persisted = true;
+				persisted = this.#store.getProviderSelection !== undefined;
 			} catch (err) {
 				this.reportStickyCacheFailure("selection-clear", provider, err);
 			}
