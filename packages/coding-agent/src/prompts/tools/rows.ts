@@ -36,8 +36,8 @@ import toolsImageAttachmentDescribeSystem from "./image-attachment-describe-syst
 import toolsImageGen from "./image-gen.md" with { type: "text" };
 import toolsInspectImage from "./inspect-image.md" with { type: "text" };
 import toolsInspectImageSystem from "./inspect-image-system.md" with { type: "text" };
-import toolsIsolationError from "./isolation-error.md" with { type: "text" };
 import toolsIrc from "./irc.md" with { type: "text" };
+import toolsIsolationError from "./isolation-error.md" with { type: "text" };
 import toolsJob from "./job.md" with { type: "text" };
 import toolsLaunch from "./launch.md" with { type: "text" };
 import toolsLearn from "./learn.md" with { type: "text" };
