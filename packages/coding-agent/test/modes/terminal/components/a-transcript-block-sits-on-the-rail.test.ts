@@ -103,6 +103,11 @@ const BTW_STATES: Record<BtwPanelState, (panel: BtwPanelComponent) => void> = {
 		panel.setAnswer("A **focus string** names the tests a run executes.");
 		panel.markComplete();
 	},
+	branching: panel => {
+		panel.setAnswer("A **focus string** names the tests a run executes.");
+		panel.markComplete();
+		panel.markBranching();
+	},
 	aborted: panel => panel.markAborted(),
 	error: panel => panel.markError("provider refused the request"),
 };

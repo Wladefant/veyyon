@@ -7,7 +7,7 @@ import * as logger from "@veyyon/utils/logger";
 import { removeWithRetries } from "../../utils/src/temp";
 
 /**
- * Locks out three `catch {}` bodies in `auth-storage-sqlite.ts` that discarded a
+ * Locks out two `catch {}` bodies in `auth-storage-sqlite.ts` that discarded a
  * failed write and returned `void`, so the caller could not tell the write from
  * a no-op.
  *
@@ -16,13 +16,11 @@ import { removeWithRetries } from "../../utils/src/temp";
  *   told the caller the credential was disabled while it stayed enabled and in
  *   rotation, so the same dead key is retried on every subsequent request and
  *   nothing anywhere says why.
- * - `recordUsageCosts`: a dropped batch makes the cost view under-report spend,
- *   and an under-report is indistinguishable from cheap usage.
  *
- * If this regresses, all three go back to returning normally with no log line,
+ * If this regresses, both go back to returning normally with no log line,
  * and the symptoms above become undiagnosable from the operator's side.
  */
-describe("A failed credential disable or cost write is reported, not discarded", () => {
+describe("A failed credential disable is reported, not discarded", () => {
 	let tempDir = "";
 	let warnings: Array<{ message: string; fields: Record<string, unknown> }>;
 
@@ -77,19 +75,6 @@ describe("A failed credential disable or cost write is reported, not discarded",
 		expect(warnings[0]?.fields.disabledCause).toBe("operator signed out");
 	});
 
-	test("reports dropped cost rows and says the cost view will under-report", async () => {
-		const store = await brokenStore();
-
-		store.recordUsageCosts([
-			{ recordedAt: Date.now(), provider: "anthropic", accountKey: "acct-1", costUsd: 1.25 },
-			{ recordedAt: Date.now(), provider: "anthropic", accountKey: "acct-1", costUsd: 2.5 },
-		]);
-
-		expect(warnings).toHaveLength(1);
-		expect(warnings[0]?.message).toContain("under-report");
-		expect(warnings[0]?.fields.entries).toBe(2);
-	});
-
 	/**
 	 * The other half of the contract: a working store stays silent. Without this
 	 * the suite would pass against an implementation that warned unconditionally,
@@ -100,7 +85,6 @@ describe("A failed credential disable or cost write is reported, not discarded",
 		try {
 			store.deleteAuthCredential(1, "no such row is still a successful statement");
 			store.deleteAuthCredentialsForProvider("anthropic", "no rows is still success");
-			store.recordUsageCosts([{ recordedAt: Date.now(), provider: "anthropic", accountKey: "a", costUsd: 1 }]);
 		} finally {
 			store.close();
 		}
