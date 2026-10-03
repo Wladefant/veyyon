@@ -751,7 +751,7 @@ test.skipIf(process.platform !== "win32")(
 		const damagedAds = Buffer.from("damaged ads sqlite header bytes 1234567890");
 		nodeFs.writeFileSync(adsPath, damagedAds);
 
-		const expectedHash = crypto.createHash("sha256").update(path.resolve(adsPath)).digest("hex");
+		const expectedHash = crypto.createHash("sha256").update(path.resolve(adsPath).toLowerCase()).digest("hex");
 		const expectedStem = path.join(path.dirname(adsPath), `.sqlite-${expectedHash}`);
 		const hashedMarker = path.resolve(`${expectedStem}.quarantine-pending`);
 
@@ -903,6 +903,181 @@ test.skipIf(process.platform !== "win32")(
 	45000,
 );
 
+test.skipIf(process.platform !== "win32")(
+	"regression: windows NTFS ADS case aliases share physical store and hashed quarantine guard",
+	async () => {
+		await using dir = await TempDir.create("@omp-corrupt-ads-aliases-");
+		const baseDb = dir.join("base.db");
+		nodeFs.writeFileSync(baseDb, "base-content");
+		const adsPath = `${baseDb}:stream.db`;
+
+		// 1. Create sentinel store with Bun directly
+		const initDb = new Database(adsPath);
+		try {
+			initDb.run("CREATE TABLE sentinel (v TEXT); INSERT INTO sentinel VALUES ('initial-value');");
+		} finally {
+			initDb.close();
+		}
+
+		// Build aliases covering drive letter case, basename case, stream case, directory case, and mixed variants
+		const resolved = path.resolve(adsPath);
+		const drive = resolved.slice(0, 1);
+		const altDrive = (drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()) + resolved.slice(1);
+
+		const baseDir = path.dirname(adsPath);
+		const upperDir = baseDir.toUpperCase();
+
+		const aliases = [
+			altDrive,
+			path.join(baseDir, "BASE.DB:stream.db"),
+			path.join(baseDir, "base.db:STREAM.DB"),
+			path.join(baseDir, "BASE.DB:STREAM.DB"),
+			path.join(baseDir, "Base.Db:Stream.Db"),
+			path.join(upperDir, "base.db:stream.db"),
+			path.join(upperDir, "BASE.DB:STREAM.DB"),
+			altDrive.slice(0, 2) + path.join(baseDir.slice(2), "BASE.DB:STREAM.DB"),
+			altDrive.slice(0, 2) + path.join(baseDir.slice(2), "base.db:STREAM.DB"),
+		];
+
+		// 2. Verify all aliases read the SAME store directly with Bun
+		for (const alias of aliases) {
+			const db = new Database(alias);
+			try {
+				const row = db.query<{ v: string }, []>("SELECT v FROM sentinel").get();
+				expect(row).toEqual({ v: "initial-value" });
+			} finally {
+				db.close();
+			}
+		}
+
+		// Mutate store via an alias directly with Bun
+		const mutDb = new Database(aliases[1]);
+		try {
+			mutDb.run("UPDATE sentinel SET v = 'mutated-via-alias';");
+		} finally {
+			mutDb.close();
+		}
+
+		// Verify canonical sees mutation directly with Bun
+		const checkDb = new Database(adsPath);
+		try {
+			const row = checkDb.query<{ v: string }, []>("SELECT v FROM sentinel").get();
+			expect(row).toEqual({ v: "mutated-via-alias" });
+		} finally {
+			checkDb.close();
+		}
+
+		// 4. Trigger production corrupt quarantine interrupted unlink
+		const healthyBytes = nodeFs.readFileSync(adsPath);
+		const damagedAds = Buffer.from("damaged ads sqlite header bytes 1234567890");
+		nodeFs.writeFileSync(adsPath, damagedAds);
+
+		const originalUnlinkSync = nodeFs.unlinkSync.bind(nodeFs);
+		const unlinkSpy = spyOn(nodeFs, "unlinkSync").mockImplementation((targetPath: nodeFs.PathLike) => {
+			if (typeof targetPath === "string" && targetPath.toLowerCase().includes("base.db")) {
+				const err = new Error("EPERM: operation not permitted, unlink");
+				(err as NodeJS.ErrnoException).code = "EPERM";
+				throw err;
+			}
+			return originalUnlinkSync(targetPath);
+		});
+
+		try {
+			await expect(
+				openSqliteDatabase(
+					adsPath,
+					async db => {
+						try {
+							return db.query("SELECT 1").all();
+						} finally {
+							db.close();
+						}
+					},
+					{ recoverCorruption: true },
+				),
+			).rejects.toThrow();
+		} finally {
+			unlinkSpy.mockRestore();
+		}
+
+		const markers = nodeFs.readdirSync(dir.path()).filter(name => name.endsWith(".quarantine-pending"));
+		expect(markers).toHaveLength(1);
+		const hashedMarker = dir.join(markers[0]!);
+		nodeFs.writeFileSync(adsPath, healthyBytes);
+		expect(nodeFs.existsSync(`${adsPath}.quarantine-pending`)).toBe(false);
+
+		// 5. Assert BOTH sync and async default/opt-in helpers refuse aliases while hashed marker exists
+		try {
+			for (const alias of aliases) {
+				expect(nodeFs.existsSync(`${alias}.quarantine-pending`)).toBe(false);
+
+				let syncDefRan = false;
+				expect(() =>
+					openSqliteDatabaseSync(alias, db => {
+						syncDefRan = true;
+						try {
+							return db.query("SELECT 1").all();
+						} finally {
+							db.close();
+						}
+					}),
+				).toThrow(/quarantine.*pending|pending.*quarantine/i);
+				expect(syncDefRan).toBe(false);
+
+				let syncOptRan = false;
+				expect(() =>
+					openSqliteDatabaseSync(
+						alias,
+						db => {
+							syncOptRan = true;
+							try {
+								return db.query("SELECT 1").all();
+							} finally {
+								db.close();
+							}
+						},
+						{ recoverCorruption: true },
+					),
+				).toThrow(/quarantine.*pending|pending.*quarantine/i);
+				expect(syncOptRan).toBe(false);
+
+				let asyncDefRan = false;
+				await expect(
+					openSqliteDatabase(alias, async db => {
+						asyncDefRan = true;
+						try {
+							return db.query("SELECT 1").all();
+						} finally {
+							db.close();
+						}
+					}),
+				).rejects.toThrow(/quarantine.*pending|pending.*quarantine/i);
+				expect(asyncDefRan).toBe(false);
+
+				let asyncOptRan = false;
+				await expect(
+					openSqliteDatabase(
+						alias,
+						async db => {
+							asyncOptRan = true;
+							try {
+								return db.query("SELECT 1").all();
+							} finally {
+								db.close();
+							}
+						},
+						{ recoverCorruption: true },
+					),
+				).rejects.toThrow(/quarantine.*pending|pending.*quarantine/i);
+				expect(asyncOptRan).toBe(false);
+			}
+		} finally {
+			nodeFs.unlinkSync(hashedMarker);
+		}
+	},
+	45000,
+);
+
 test("regression: physical URI corrupt-header recovery preserves backup bytes and recreates fresh usable store", async () => {
 	await using dir = await TempDir.create("@omp-corrupt-uri-recovery-");
 	const uri = dir.join("file:corrupt-uri.db?mode=memory&cache=shared");
@@ -930,7 +1105,7 @@ test("regression: physical URI corrupt-header recovery preserves backup bytes an
 	expect(syncRows).toEqual([{ v: "uri-sync-recovered" }]);
 	expect(syncBackupPath).toBeDefined();
 	if (process.platform === "win32") {
-		const expectedHash = crypto.createHash("sha256").update(path.resolve(uri)).digest("hex");
+		const expectedHash = crypto.createHash("sha256").update(path.resolve(uri).toLowerCase()).digest("hex");
 		expect(syncBackupPath).toContain(expectedHash);
 	}
 	expect(nodeFs.readFileSync(syncBackupPath!)).toEqual(damagedUri);
@@ -967,7 +1142,7 @@ test("regression: physical URI corrupt-header recovery preserves backup bytes an
 	expect(asyncRows).toEqual([{ v: "uri-async-recovered" }]);
 	expect(asyncBackupPath).toBeDefined();
 	if (process.platform === "win32") {
-		const expectedHash = crypto.createHash("sha256").update(path.resolve(uri)).digest("hex");
+		const expectedHash = crypto.createHash("sha256").update(path.resolve(uri).toLowerCase()).digest("hex");
 		expect(asyncBackupPath).toContain(expectedHash);
 	}
 	expect(nodeFs.readFileSync(asyncBackupPath!)).toEqual(damagedUri);

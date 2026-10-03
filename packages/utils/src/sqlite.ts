@@ -102,7 +102,7 @@ function recoveryFileStem(dbPath: string): string {
 	if (process.platform === "win32" && path.basename(dbPath).includes(":")) {
 		return path.join(
 			path.dirname(dbPath),
-			`.sqlite-${crypto.createHash("sha256").update(path.resolve(dbPath)).digest("hex")}`,
+			`.sqlite-${crypto.createHash("sha256").update(path.resolve(dbPath).toLowerCase()).digest("hex")}`,
 		);
 	}
 	return dbPath;
