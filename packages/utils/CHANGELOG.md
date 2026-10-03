@@ -9,6 +9,7 @@
 - `once` is removed; `lazy(build)` returns a `Lazy<T>` whose `value` getter calls `build` on the first read and returns that result afterwards, and `typeof held.value` states the built type without building it.
 
 ### Added
+- Added opt-in corruption recovery to `openSqliteDatabase` and `openSqliteDatabaseSync`, preserving damaged stores and sidecars before recreating usable replacements ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 042028fd018b1282fbe660ab7255ebad18dd4db5).
 - Added `openSqliteDatabase` to `@veyyon/utils/sqlite` for store initialization with bounded busy retries, connection cleanup, and path-attributed errors ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 - SQLite store initialization uses bounded busy retries, closes failed connections, and attributes failures to the database path ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added `getDbBusyTimeoutMs()`, `isInteractiveHost()`, and `setInteractiveHost()` to `@veyyon/utils/env`, bounding SQLite busy waits to 1s in headless hosts while preserving 5s for interactive hosts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -19,6 +20,12 @@
 - On Windows, Ctrl+Break (`CTRL_BREAK_EVENT`) now runs postmortem cleanup as `Reason.SIGBREAK` and exits 149; without a listener Windows ended the process with `0xC000013A` and no exit record ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - The session heartbeat and the `Previous session died silently` log line now carry `rssBytes`, `freeMemBytes`, `heapTotal`, `heapUsed`, `external`, `smol`, and `forceRAMSize`, so a session the operating system ended for want of memory or a per-process JSC heap ceiling (D04 abort) can be told from a terminal closing under it ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - The session heartbeat and the `Previous session died silently` log line now also carry the resource that runs out before RAM does: on Windows `commitChargeBytes`, `commitLimitBytes` and `processCommitBytes` (system commit against RAM plus pagefile, the "Out of Virtual Memory" limit of D06), and on Linux `cgroupMemoryBytes` and `cgroupMemoryMaxBytes` (the level of the cgroup v2 chain closest to its `memory.max`). Each field is absent where the platform cannot give it ([#73](https://github.com/Wladefant/veyyon/issues/73))
+
+### Fixed
+
+- SQLite recovery rechecks the current store under its recovery lock, leaves healthy main databases intact when a secondary store fails, and reports permission failures. Damaged stores and sidecars are published as one private backup directory. Interrupted removal leaves a durable guard that blocks reopening until repair ([#293](https://github.com/Wladefant/veyyon/pull/293)).
+- SQLite openers treat URI-looking filenames as physical stores under Bun's default flags. NTFS stream stores use safe lock and backup names while honoring exact-path pending markers. A real file-create probe preserves readable-store access under denied-create directory ACLs.
+- Windows recovery locks and pending markers share a canonical file identity across case, namespace, short-name, junction, and supported local-share aliases. Missing stores retain the guard through canonical parent resolution.
 
 ### Changed
 
