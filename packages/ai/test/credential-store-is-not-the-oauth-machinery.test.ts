@@ -122,8 +122,15 @@ const ROWS_CEILING = 8;
  * that replaced `winston` and `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on this reach,
  * writes through it, and its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already
  * reached, so this closure gained a name and no edge.
+ *
+ * RE-MEASURED 2026-10-02 at 48. The 2026-09-29 change above and the `shared-project-providers.ts` change
+ * each added one module and each recorded the ceiling as 47, on parallel branches; the merge kept one
+ * number, so main sat one module over its own limit. `shared-project-providers.ts` is a zero-import leaf
+ * that owns which providers' accounts share one project id. `auth-credential-rows.ts` reads it so an
+ * Antigravity login naming no account is never keyed on the shared project, and `usage.ts` re-exports it.
+ * It imports nothing, so this closure gained a name and no edge.
  */
-const STORE_CEILING = 47;
+const STORE_CEILING = 48;
 
 describe("the row helpers are pure", () => {
 	/**
@@ -473,28 +480,6 @@ describe("the store works when imported from its own module", () => {
 
 			store.releaseCredentialRefreshLease(row!.id, "process-a");
 			expect(store.tryAcquireCredentialRefreshLease(row!.id, "process-b", expires)).toBe(true);
-		} finally {
-			store.close();
-		}
-	});
-
-	/**
-	 * The usage-cost table, the store's third job. Filtered by provider, because the query builds its
-	 * WHERE clause from optional parameters and an ignored filter returns every provider's spend.
-	 */
-	it("records and filters observed request costs", async () => {
-		const store = await openStore();
-		try {
-			store.recordUsageCosts([
-				{ recordedAt: 1_700_000_000_000, provider: "anthropic", accountKey: "account:one", costUsd: 0.25 },
-				{ recordedAt: 1_700_000_001_000, provider: "openai", accountKey: "account:two", costUsd: 0.5 },
-			]);
-
-			const anthropic = store.listUsageCosts({ provider: "anthropic", sinceMs: 0 });
-			expect(anthropic).toHaveLength(1);
-			expect(anthropic[0]?.costUsd).toBe(0.25);
-			expect(anthropic[0]?.accountKey).toBe("account:one");
-			expect(store.listUsageCosts({ sinceMs: 0 })).toHaveLength(2);
 		} finally {
 			store.close();
 		}

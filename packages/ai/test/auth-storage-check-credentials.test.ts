@@ -34,7 +34,7 @@ import {
 } from "@veyyon/ai/auth-storage";
 import type { UsageProvider } from "@veyyon/ai/usage";
 import * as claudeUsage from "@veyyon/ai/usage/claude";
-import { opencodeGoUsageProvider } from "@veyyon/ai/usage/opencode-go";
+import { ollamaCloudUsageProvider } from "@veyyon/ai/usage/ollama";
 
 function oauthRow(id: number, email: string, opts?: { expired?: boolean }): StoredAuthCredential {
 	const credential: AuthCredential = {
@@ -476,13 +476,13 @@ describe("AuthStorage.checkCredentials", () => {
 	it("does not mark local-only usage providers healthy without upstream validation", async () => {
 		const apiKeyRow: StoredAuthCredential = {
 			id: 12,
-			provider: "opencode-go",
-			credential: { type: "api_key", key: "sk-opencode-go" },
+			provider: "ollama-cloud",
+			credential: { type: "api_key", key: "sk-ollama-cloud" },
 			disabledCause: null,
 		};
 		const store = makeStore([apiKeyRow]);
 		const storage = new AuthStorage(store, {
-			usageProviderResolver: provider => (provider === "opencode-go" ? opencodeGoUsageProvider : undefined),
+			usageProviderResolver: provider => (provider === "ollama-cloud" ? ollamaCloudUsageProvider : undefined),
 		});
 		await storage.reload();
 
