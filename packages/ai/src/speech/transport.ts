@@ -1,6 +1,8 @@
-import { calculateCost } from "@veyyon/catalog/models";
+import { calculateCost, emptyUsage } from "@veyyon/catalog/models";
 import type { Api, Model, Usage } from "@veyyon/catalog/types";
 import { VERSION } from "@veyyon/utils/dirs";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
 import {
@@ -24,10 +26,8 @@ export async function postSpeechRequest(
 	format: SpeechFormat,
 	options: SpeechOptions,
 ): Promise<SpeechResult> {
-	const timeoutSignal = AbortSignal.timeout(SPEECH_TIMEOUT_MS);
-	const signal = options.signal
-		? AbortSignal.any([options.signal, timeoutSignal])
-		: timeoutSignal;
+	const { signal, cancel } = scopedTimeoutSignal(SPEECH_TIMEOUT_MS, options.signal);
+	try {
 	const fetchImpl = options.fetch ?? fetch;
 	const label = `${model.provider}/${model.id}`;
 	const seenKeys = new Set<string>();
@@ -61,7 +61,7 @@ export async function postSpeechRequest(
 			headers.set("User-Agent", USER_AGENT);
 
 			const response = await fetchImpl(
-				`${model.baseUrl.replace(/\/+$/, "")}${path}`,
+				`${trimTrailingSlashes(model.baseUrl)}${path}`,
 				{
 					method: "POST",
 					headers,
@@ -85,14 +85,9 @@ export async function postSpeechRequest(
 	);
 	// Speech endpoints return only audio bytes. OpenRouter exposes a generation id,
 	// but neither it nor the OpenAI/xAI wires report token or billable-unit usage.
-	const usage: Usage = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-	calculateCost(model, usage);
-	return { audio, mimeType: SPEECH_FORMAT_MIME_TYPES[format], usage };
-}
+		const usage: Usage = emptyUsage();
+		calculateCost(model, usage);
+		return { audio, mimeType: SPEECH_FORMAT_MIME_TYPES[format], usage };
+	} finally {
+		cancel();
+	}

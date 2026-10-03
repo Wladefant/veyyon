@@ -43,8 +43,15 @@ const LARGE_ASSETS_AT_STARTUP = [
 	"packages/coding-agent/src/modes/terminal/data/emojis.json",
 ];
 
-/** Large files the startup graph imports by path and reads on demand: the bundled model catalog. */
-const LARGE_ASSETS_BY_PATH = ["packages/catalog/src/models.json"];
+/**
+ * Large files the startup graph imports by path (`with { type: "file" }`) and reads on demand: the
+ * bundled model catalog, and the Python ledger bridge `task/topic-replenishment.ts` copies out to a
+ * cache directory only when a replenishment lock is taken (its contents never sit on the heap).
+ */
+const LARGE_ASSETS_BY_PATH = [
+	"packages/catalog/src/models.json",
+	"packages/coding-agent/src/task/native-ledger-bridge.py",
+];
 
 const graphs = ENTRIES.map(entry => buildStartupImportGraph(REPO_ROOT, entry));
 const files = new Set(graphs.flatMap(graph => [...graph.files]));

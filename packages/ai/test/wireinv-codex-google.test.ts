@@ -94,7 +94,16 @@ async function captureBody(
 	let fetchCalls = 0;
 	const fetchMock: FetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
 		fetchCalls += 1;
-		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+		// The codex transport zstd-compresses its body for the official endpoint (PI_CODEX_ZSTD, default on),
+		// so the recorded body is binary there; the plain string stays for every other transport.
+		const raw = init?.body;
+		const text =
+			typeof raw === "string"
+				? raw
+				: ArrayBuffer.isView(raw)
+					? new TextDecoder().decode(Bun.zstdDecompressSync(raw as Uint8Array))
+					: "{}";
+		body = JSON.parse(text) as Record<string, unknown>;
 		return model.api === "google-generative-ai" ? googleSse() : codexSse();
 	}) as FetchImpl;
 	const isCodex = model.api === "openai-codex-responses";

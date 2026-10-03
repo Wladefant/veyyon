@@ -74,13 +74,15 @@ Five kinds of process stay outside the budget. Each is outside for a reason rath
 oversight:
 
 - **Anything that starts before a session exists.** Host capability probes, the shell environment
-  snapshot, model provider probes, and the ssh bootstrap for a remote auth broker all run when
-  there is no budget to join.
+  snapshot, model provider probes, the eval interpreter availability probe (capped at 10 seconds),
+  the process the silent-death supervisor launches, and the ssh bootstrap for a remote auth broker
+  all run when there is no budget to join.
 - **The harness itself.** Agent turns, the TUI, the relaunch that replaces the veyyon process, the
   task ledger's lock and bookkeeping helpers, whose lock a budget kill would drop mid-claim, and the
   `gh pr view` lookup the `github` tool's push and merge guard runs before it lets a call through.
 - **Programs that are yours rather than the agent's.** The editor veyyon opens a file in, the
-  clipboard helper, the desktop notifier, `veyyon shell`, and the self-updater. Capping the
+  clipboard helper, the desktop notifier, the herdr status reporter, the `veyyon supervisor dumps`
+  registry edit, `veyyon shell`, and the self-updater. Capping the
   updater could leave a half-written install, and killing your editor on a budget breach would
   discard unsaved text.
 - **Threads rather than processes.** The browser tab supervisor and the JavaScript eval context

@@ -6009,6 +6009,25 @@ function createCopilotLongContextVariant(
 	};
 }
 
+export function resolveGithubCopilotCacheProviderId(
+	config?: GithubCopilotModelManagerConfig,
+): string {
+	const rawApiKey = config?.apiKey;
+	const configuredBaseUrl = config?.baseUrl ?? "https://api.githubcopilot.com";
+	const parsedApiKey = rawApiKey
+		? parseGitHubCopilotApiKey(rawApiKey)
+		: undefined;
+	const apiKey = parsedApiKey?.accessToken;
+	const baseUrl =
+		parsedApiKey?.apiEndpoint && configuredBaseUrl.includes("githubcopilot.com")
+			? parsedApiKey.apiEndpoint
+			: parsedApiKey?.enterpriseUrl &&
+					configuredBaseUrl.includes("githubcopilot.com")
+				? getGitHubCopilotBaseUrl(parsedApiKey.enterpriseUrl)
+				: configuredBaseUrl;
+	return `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`;
+}
+
 export function githubCopilotModelManagerOptions(
 	config?: GithubCopilotModelManagerConfig,
 ): ModelManagerOptions<Api> {
@@ -6030,7 +6049,7 @@ export function githubCopilotModelManagerOptions(
 	return {
 		providerId: "github-copilot",
 		// Version the credential/endpoint-scoped namespace so stale cross-provider routing rows are never restored.
-		cacheProviderId: `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`,
+		cacheProviderId: resolveGithubCopilotCacheProviderId(config),
 		...(apiKey && {
 			fetchDynamicModels: async (hooks) => {
 				const longContextVariants: ModelSpec<Api>[] = [];

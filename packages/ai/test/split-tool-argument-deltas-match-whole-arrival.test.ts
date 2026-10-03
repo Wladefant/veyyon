@@ -382,6 +382,8 @@ describe("OpenAI Responses function argument streaming accumulator", () => {
 				"azure",
 				"github-copilot",
 				"gitlab-duo",
+				"meta",
+				"muse-code",
 				"openai",
 				"openai-codex",
 				"opencode",
@@ -389,6 +391,7 @@ describe("OpenAI Responses function argument streaming accumulator", () => {
 				"opencode-zen",
 				"openrouter",
 				"sakana",
+				"xai",
 				"xai-oauth",
 			]);
 		});
@@ -431,12 +434,15 @@ describe("OpenAI Responses function argument streaming accumulator", () => {
 				"azure",
 				"github-copilot",
 				"gitlab-duo",
+				"meta",
+				"muse-code",
 				"ollama",
 				"opencode",
 				"opencode-go",
 				"opencode-zen",
 				"openrouter",
 				"sakana",
+				"xai",
 				"xai-oauth",
 			];
 

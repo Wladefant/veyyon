@@ -91,6 +91,8 @@ function createHarness(): PrintHarness {
 		// refused before it is ever stored, so nothing in them has a placeholder to
 		// redact back and an identity keeps the refusal the only thing under test.
 		obfuscateProviderText: (text: string) => text,
+		prepareForHeadlessAdvisorDrain: () => {},
+		waitForAdvisorCatchup: async () => true,
 		state: { messages: [] },
 		sessionManager,
 		settings,

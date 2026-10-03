@@ -211,7 +211,8 @@ describe("SessionManager temp cwd session dirs", () => {
 		if (!sessionFile) throw new Error("Expected session file path");
 
 		const expectedDir = path.join(getSessionsDir(), expectedTempSessionDirName(tempCwd));
-		expect(fs.existsSync(legacyDir)).toBe(false);
+		// 9e5395512d: migration publishes a copy and retains the source as an independent copy.
+		expect(fs.existsSync(legacyDir)).toBe(true);
 		expect(path.dirname(sessionFile)).toBe(expectedDir);
 		expect(fs.existsSync(path.join(expectedDir, "carried.jsonl"))).toBe(true);
 	});
@@ -252,7 +253,7 @@ describe("SessionManager legacy session migration persistence", () => {
 		removeSyncWithRetries(tempDir);
 	});
 
-	it("keeps legacy migration in memory until later persisted activity rewrites the file", async () => {
+	it("keeps legacy migration in memory until a flush persists it with later activity", async () => {
 		const sessionFile = path.join(tempDir, "legacy.jsonl");
 		fs.writeFileSync(
 			sessionFile,
@@ -283,8 +284,9 @@ describe("SessionManager legacy session migration persistence", () => {
 		expect(migratedEntries[1]?.parentId).toBe(migratedEntries[0]?.id);
 
 		await new Promise(resolve => setTimeout(resolve, 20));
+		// 2b1ee91a4d: flush rewrites a migrated file so migrated payload artifacts are never orphaned.
 		await session.flush();
-		expect(fs.statSync(sessionFile).mtimeMs).toBe(initialMtimeMs);
+		expect(fs.statSync(sessionFile).mtimeMs).toBeGreaterThan(initialMtimeMs);
 
 		await new Promise(resolve => setTimeout(resolve, 20));
 		session.appendMessage({ role: "user", content: "follow up", timestamp: Date.now() });

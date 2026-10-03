@@ -260,8 +260,15 @@ const LAUNCH_REACH_CEILING = 1641;
  * 520 to 521: `catalog/catalog-spans.ts`, the zero-import leaf that indexes each provider's and each
  * model's byte span of `models.json`. `catalog/models.ts`, already here, reads one span through it
  * instead of parsing the whole catalog.
+ *
+ * 524 to 536, re-measured 2026-10-04 in the sandbox (a host walk of the same graph counted 530). The
+ * catalog modules the assembler reaches through `catalog/models.ts` grew with the ports of
+ * `5fcd8e4a24` (TypeSafe discovery: `discovery/typesafe.ts`), `d789b0c361` (Codex subscription
+ * fields: `provider-models/codex-subscription.ts`) and the models.dev policy split
+ * (`provider-models/models-dev-policies.ts`), plus `catalog/types.ts`, `contracts/model/src/model.ts`
+ * and `utils/terminal-emulator.ts`. Each is a leaf over modules already on this graph.
  */
-const ASSEMBLER_REACH_CEILING = 524;
+const ASSEMBLER_REACH_CEILING = 536;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

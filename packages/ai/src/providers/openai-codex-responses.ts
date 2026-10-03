@@ -161,12 +161,8 @@ import {
 	type SequentialCutoffSummaryState,
 	type ToolCallArgumentsDeltaShape,
 } from "./openai-shared";
-import {
-	redactJsonFunctionCallArguments,
-	redactSensitiveCredentials,
-	redactSensitiveInObject,
-	transformMessages,
-} from "./transform-messages";
+import { redactJsonFunctionCallArguments, redactSensitiveCredentials, redactSensitiveInObject } from "../utils/credential-redaction";
+import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";

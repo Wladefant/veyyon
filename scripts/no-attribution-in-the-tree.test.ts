@@ -26,7 +26,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { existingOnly } from "./workspace-layout";
+import { existingOnly, walkDirectory } from "./workspace-layout";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
@@ -37,11 +37,32 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "..");
  * gate with an ENOENT naming the deleted path; see its doc in check-doc-links.ts.
  */
 async function trackedFiles(): Promise<string[]> {
-	const { stdout } = await execFileAsync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, maxBuffer: 64 * 1024 * 1024 });
-	return existingOnly(
-		REPO_ROOT,
-		stdout.split("\0").filter(entry => entry.length > 0),
-	);
+	try {
+		const { stdout } = await execFileAsync("git", ["-c", "safe.directory=*", "ls-files", "-z"], {
+			cwd: REPO_ROOT,
+			maxBuffer: 64 * 1024 * 1024,
+		});
+		return existingOnly(
+			REPO_ROOT,
+			stdout.split("\0").filter(entry => entry.length > 0),
+		);
+	} catch {
+		try {
+			const { stdout } = await execFileAsync("git", ["ls-files", "-z"], {
+				cwd: REPO_ROOT,
+				maxBuffer: 64 * 1024 * 1024,
+			});
+			return existingOnly(
+				REPO_ROOT,
+				stdout.split("\0").filter(entry => entry.length > 0),
+			);
+		} catch {
+			return existingOnly(
+				REPO_ROOT,
+				walkDirectory(REPO_ROOT).map(file => path.relative(REPO_ROOT, file).split(path.sep).join("/")),
+			);
+		}
+	}
 }
 
 /**
@@ -107,6 +128,7 @@ const EXTENSION_POLICY: Readonly<Record<string, ExtensionDecision>> = {
 	".example": "scan",
 	".json": NO_COMMENT_SYNTAX,
 	".webmanifest": NO_COMMENT_SYNTAX,
+	".tsv": NO_COMMENT_SYNTAX,
 	".lock": GENERATED_DATA,
 	".dict": GENERATED_DATA,
 	".hex": GENERATED_DATA,

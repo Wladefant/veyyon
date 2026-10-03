@@ -268,6 +268,26 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: false,
 		reason: "Bun Worker threads are in-process; the subprocess fallback goes through worker-client (wired)",
 	},
+	"packages/coding-agent/src/eval/probe.ts": {
+		wired: false,
+		reason:
+			"interpreter availability probe, hard-capped at 10 s and killed on timeout or abort; it runs before the kernel exists, and the kernel it gates is wired in kernel-base",
+	},
+	"packages/coding-agent/src/cli/supervisor/process.ts": {
+		wired: false,
+		reason:
+			"the silent-death supervisor starts the one supervised CLI process before any session exists; that child creates its own session budget and the supervisor holds no work of its own",
+	},
+	"packages/coding-agent/src/cli/supervisor/dumps.ts": {
+		wired: false,
+		reason:
+			"`reg.exe` query, add and delete of the Windows crash-dump settings, run by the `supervisor dumps` command on request; a one-shot registry edit, not agent work",
+	},
+	"packages/coding-agent/src/modes/terminal/herdr-reporter.ts": {
+		wired: false,
+		reason:
+			"reports the foreground session to the operator's herdr multiplexer through its CLI, with a 2 s timeout; it talks to the operator's workspace, not to the agent",
+	},
 	"packages/coding-agent/src/utils/clipboard.ts": {
 		wired: false,
 		reason: "clipboard helper; talks to the operator's desktop session, not the agent's",

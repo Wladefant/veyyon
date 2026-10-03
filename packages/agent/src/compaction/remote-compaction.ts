@@ -40,6 +40,7 @@ import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/
 import { resolveServerCompactionTransport, type ServerCompactionRequest } from "@veyyon/ai/providers/openai-compaction";
 import { logger } from "@veyyon/utils";
 import { isUnexpectedSocketCloseMessage } from "@veyyon/utils/fetch-retry";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import type { CompactionPreparation, CompactionResult, SummaryOptions } from "./compaction";
 import { defaultConvertToLlm } from "./messages";
 import {
@@ -174,7 +175,7 @@ export async function compactWithProvider(
 						!signal?.aborted &&
 						isUnexpectedSocketCloseError(err)
 					) {
-						const backoffMs = 100 * 2 ** attempt;
+						const backoffMs = exponentialBackoffDelay(attempt, { baseMs: 100, jitter: 0 });
 						logger.warn(
 							`Codex compaction attempt ${attempt + 1} failed (socket closed), retrying in ${backoffMs}ms`,
 							{ model: model.id, attempt: attempt + 1 },
