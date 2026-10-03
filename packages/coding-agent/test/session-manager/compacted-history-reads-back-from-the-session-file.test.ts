@@ -28,35 +28,54 @@
  * The dropped-manager case runs in a fresh process (`fixtures/dropped-session-manager-descriptors.ts`):
  * after the files before this one tier up the cooling code, the runner's heap holds a conservative
  * root to a dropped manager's first cold stub, and no number of collections releases its handle.
+ * The heap bound runs in a fresh process too (`fixtures/cold-history-heap.ts`): writing the fixture
+ * reads the whole session file back, and a promise rooted outside the heap holds that text across
+ * full collections, in this process, for a time that varies from run to run.
  *
- * NOT CAUGHT: the heap bound is measured in this process with a 4x margin, so a regression that
- * keeps a quarter of the cold payloads resident passes. Windows holds no pinned reader, so there
- * every entry stays in memory and the fd assertions are skipped.
+ * A resume and every turn after it scan the whole branch for entries picked by a message's small
+ * fields: the checkpoint rehydrate, the latest todo snapshot, the pending tool call warning. A cold
+ * message entry keeps those fields in memory, so such a scan reads nothing back. The role sweep
+ * places a message of every role the `AgentMessage` union declares in the compacted history (the
+ * table is typed against the union, so a new role fails the type check until it has a row), reads
+ * every small field the fresh load holds, runs those scans, and pins the reads at zero.
+ *
+ * NOT CAUGHT: the heap bound has a 4x margin, so a regression that keeps a quarter of the cold
+ * payloads resident passes. Windows holds no pinned reader, so there every entry stays in memory
+ * and the fd assertions are skipped. A branch scan this suite does not run that reads a large field
+ * of every compacted message still reads the history back.
  */
 
-import { heapStats } from "bun:jsc";
 import { afterEach, describe, expect, it } from "bun:test";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { isSuccessfulCheckpointEntry } from "@veyyon/coding-agent/session/rewind-checkpoint";
+import { getLatestTodoPhasesSnapshotFromEntries } from "@veyyon/coding-agent/tools/agent/todo";
 import { BlobStore, blobsDirForSessionDir } from "@veyyon/kernel/session/blob-store";
-import { RECORD_ONLY_ENTRY_TYPES } from "@veyyon/kernel/session/session-cold-payloads";
+import { collectPendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
+import { MIN_COLD_STRING_LENGTH, RECORD_ONLY_ENTRY_TYPES } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionEntryBase } from "@veyyon/kernel/session/session-entries";
 import { loadSessionFile, resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage, type PinnedSessionReader } from "@veyyon/kernel/session/session-storage";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
+import type { ColdHistoryHeap } from "../fixtures/cold-history-heap";
 import type { DroppedDescriptors } from "../fixtures/dropped-session-manager-descriptors";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const run = promisify(execFile);
 const DROPPED_FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "dropped-session-manager-descriptors.ts");
+const COLD_HEAP_FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "cold-history-heap.ts");
 
-/** A fresh process loads the session modules, opens one session and runs up to fifty full collections. */
-const DROPPED_TIMEOUT_MS = 30_000;
+/**
+ * A fresh process loads the session modules, opens one session and runs up to fifty full
+ * collections, or reads 160 tool results of 128 KiB back.
+ */
+const SUBPROCESS_TIMEOUT_MS = 30_000;
 
 const PROBE_TOOL = "cold_readback_probe";
 
@@ -288,6 +307,102 @@ const EVERY_ENTRY_KIND = {
 	session_lifecycle: base => ({ ...base, type: "session_lifecycle", state: "running", reason: "created" }),
 	session_checkpoint: base => ({ ...base, type: "session_checkpoint", prefixSequence: 0 }),
 } satisfies Fixture;
+
+type MessageOf<R extends AgentMessage["role"]> = Extract<AgentMessage, { role: R }>;
+
+/**
+ * One message of every role the union declares, each with a payload large enough to be moved out
+ * of memory. Typed against the union: a new role is a missing key.
+ */
+const EVERY_MESSAGE_ROLE = {
+	user: () => ({ role: "user", content: [{ type: "text", text: big("role-user") }], timestamp: 1 }),
+	developer: () => ({ role: "developer", content: [{ type: "text", text: big("role-developer") }], timestamp: 1 }),
+	assistant: () => ({
+		...assistantTurn(big("role-assistant"), 1),
+		content: [
+			{ type: "text", text: big("role-assistant") },
+			{ type: "toolCall", id: "call-role", name: "bash", arguments: { command: "ls" } },
+		],
+		stopReason: "toolUse",
+	}),
+	toolResult: () => ({
+		role: "toolResult",
+		toolCallId: "call-role",
+		toolName: "bash",
+		content: [{ type: "text", text: big("role-tool-result") }],
+		details: { note: big("role-tool-details") },
+		isError: false,
+		timestamp: 1,
+	}),
+	custom: () => ({
+		role: "custom",
+		customType: "probe",
+		content: big("role-custom"),
+		display: true,
+		details: { note: big("role-custom-details") },
+		timestamp: 1,
+	}),
+	hookMessage: () => ({
+		role: "hookMessage",
+		customType: "probe",
+		content: big("role-hook"),
+		display: true,
+		timestamp: 1,
+	}),
+	branchSummary: () => ({
+		role: "branchSummary",
+		summary: big("role-branch-summary"),
+		fromId: "m00001",
+		timestamp: 1,
+	}),
+	compactionSummary: () => ({
+		role: "compactionSummary",
+		summary: big("role-compaction-summary"),
+		tokensBefore: 1,
+		timestamp: 1,
+	}),
+	fileMention: () => ({
+		role: "fileMention",
+		files: [{ path: "src/app.ts", content: big("role-file-mention") }],
+		timestamp: 1,
+	}),
+	bashExecution: () => ({
+		role: "bashExecution",
+		command: "ls",
+		output: big("role-bash-output"),
+		exitCode: 0,
+		cancelled: false,
+		truncated: false,
+		timestamp: 1,
+	}),
+	pythonExecution: () => ({
+		role: "pythonExecution",
+		code: "print(1)",
+		output: big("role-python-output"),
+		exitCode: 0,
+		cancelled: false,
+		truncated: false,
+		timestamp: 1,
+	}),
+} satisfies { [R in AgentMessage["role"]]: () => MessageOf<R> };
+
+/** One message entry of every role, chained in table order. */
+function everyRoleHistory(): SessionEntry[] {
+	const entries: SessionEntry[] = [];
+	let parent: string | null = null;
+	for (const [index, make] of Object.values(EVERY_MESSAGE_ROLE).entries()) {
+		const id = `m${String(index + 1).padStart(5, "0")}`;
+		entries.push({
+			type: "message",
+			id,
+			parentId: parent,
+			timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, index)).toISOString(),
+			message: make(),
+		});
+		parent = id;
+	}
+	return entries;
+}
 
 /** The text persistence externalizes: one line past its 500,000-character cap. */
 const OVERSIZED_TEXT = big("oversized", 520_000);
@@ -554,7 +669,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			try {
 				const { stdout, stderr } = await run(process.execPath, [DROPPED_FIXTURE, fixture.file, fixture.dir], {
 					env,
-					timeout: DROPPED_TIMEOUT_MS - 5_000,
+					timeout: SUBPROCESS_TIMEOUT_MS - 5_000,
 					killSignal: "SIGKILL",
 				});
 				expect(stderr).toBe("");
@@ -566,57 +681,124 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(dropped.whileOpen).toBe(1);
 			expect(dropped.afterDrop).toBe(0);
 		},
-		DROPPED_TIMEOUT_MS,
+		SUBPROCESS_TIMEOUT_MS,
 	);
 
-	it("holds a compacted history's payloads out of the heap until they are read", async () => {
-		const RESULTS = 160;
-		const RESULT_CHARS = 128 * 1024;
-		const payloadBytes = RESULTS * RESULT_CHARS;
-		const history: SessionEntry[] = [];
-		for (let i = 0; i < RESULTS; i++) {
-			history.push({
-				type: "message",
-				id: `r${String(i).padStart(5, "0")}`,
-				parentId: i === 0 ? null : `r${String(i - 1).padStart(5, "0")}`,
-				timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, i)).toISOString(),
-				message: {
-					role: "toolResult",
-					toolCallId: `call-${i}`,
-					toolName: "bash",
-					content: [{ type: "text", text: big(`result-${i}`, RESULT_CHARS) }],
-					isError: false,
-					timestamp: i,
-				},
-			});
-		}
-		const fixture = await writeSession(history);
-		history.length = 0;
+	it(
+		"holds a compacted history's payloads out of the heap until they are read",
+		async () => {
+			const RESULTS = 160;
+			const RESULT_CHARS = 128 * 1024;
+			const payloadBytes = RESULTS * RESULT_CHARS;
+			const history: SessionEntry[] = [];
+			for (let i = 0; i < RESULTS; i++) {
+				history.push({
+					type: "message",
+					id: `r${String(i).padStart(5, "0")}`,
+					parentId: i === 0 ? null : `r${String(i - 1).padStart(5, "0")}`,
+					timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, i)).toISOString(),
+					message: {
+						role: "toolResult",
+						toolCallId: `call-${i}`,
+						toolName: "bash",
+						content: [{ type: "text", text: big(`result-${i}`, RESULT_CHARS) }],
+						isError: false,
+						timestamp: i,
+					},
+				});
+			}
+			const fixture = await writeSession(history);
+			history.length = 0;
 
-		const retained = (): number => {
-			Bun.gc(true);
-			const stats = heapStats();
-			return stats.heapSize + stats.extraMemorySize;
-		};
-		const before = retained();
+			const { env, cleanup } = hermeticSpawnEnv();
+			let heap: ColdHistoryHeap;
+			try {
+				const { stdout, stderr } = await run(process.execPath, [COLD_HEAP_FIXTURE, fixture.file, fixture.dir], {
+					env,
+					timeout: SUBPROCESS_TIMEOUT_MS - 5_000,
+					killSignal: "SIGKILL",
+				});
+				expect(stderr).toBe("");
+				heap = JSON.parse(stdout) as ColdHistoryHeap;
+			} finally {
+				cleanup();
+			}
+			// No `model_change` on this branch: the settings walk names the default model from the newest
+			// assistant turn, which the live tail holds.
+			expect(heap.context).toContain(fixture.summary);
+			expect(heap.readsAfterContext).toBe(0);
+			// Reading the payloads back brings them into the heap, which proves the measurement sees them.
+			// A role is a small field and stays in memory; the walk reads each result's content back.
+			expect(heap.results).toBe(RESULTS);
+			expect(heap.cold).toBeLessThan(payloadBytes / 4);
+			expect(heap.warm).toBeGreaterThan(payloadBytes);
+		},
+		SUBPROCESS_TIMEOUT_MS,
+	);
+
+	it("picks compacted message entries by their small fields without reading the session file back", async () => {
+		const fixture = await writeSession(everyRoleHistory());
+		const expected = await freshLoad(fixture);
 		const storage = new ObservedStorage();
 		const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
-		const cold = retained() - before;
-		// No `model_change` on this branch: the settings walk names the default model from the newest
-		// assistant turn, which the live tail holds.
-		expect(JSON.stringify(manager.buildSessionContext().messages)).toContain(fixture.summary);
+		const compacted = fixture.compacted.map(id => {
+			const entry = manager.getEntry(id);
+			if (entry?.type !== "message") throw new Error(`fixture lost message entry ${id}`);
+			return entry;
+		});
+
+		// Every small field a fresh load holds, read off every role.
+		const roles: string[] = [];
+		for (const entry of compacted) {
+			const loaded = (JSON.parse(expected.get(entry.id)!) as { message: Record<string, unknown> }).message;
+			const message = entry.message as unknown as Record<string, unknown>;
+			for (const [key, value] of Object.entries(loaded)) {
+				if (typeof value === "object" && value !== null) continue;
+				if (typeof value === "string" && value.length >= MIN_COLD_STRING_LENGTH) continue;
+				expect([entry.message.role, key, message[key]]).toEqual([entry.message.role, key, value]);
+			}
+			roles.push(entry.message.role);
+		}
+		expect(roles.sort()).toEqual(Object.keys(EVERY_MESSAGE_ROLE).sort());
+
+		// The scans a resume runs over the whole branch.
+		const branch = manager.getBranch();
+		expect(collectPendingToolCalls(branch)).toEqual([]);
+		expect(branch.filter(isSuccessfulCheckpointEntry)).toEqual([]);
+		expect(getLatestTodoPhasesSnapshotFromEntries(manager.getEntries())).toEqual({ found: false, phases: [] });
 		expect(storage.reads).toBe(0);
 
-		// Reading the payloads back brings them into the heap, which proves the measurement sees them.
-		let results = 0;
-		for (const entry of manager.getEntries()) {
-			if (entry.type === "message" && entry.message.role === "toolResult") results += 1;
+		// A large field reads its entry's line back once, into the message object the entry already held.
+		for (const entry of compacted) {
+			const message = entry.message;
+			const before = storage.reads;
+			JSON.stringify(message);
+			expect([entry.message.role, storage.reads - before]).toEqual([entry.message.role, 1]);
+			expect(entry.message).toBe(message);
 		}
-		const warm = retained() - before;
-		expect(results).toBe(RESULTS);
+		expect(serialized(manager)).toEqual(expected);
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
 
-		expect(cold).toBeLessThan(payloadBytes / 4);
-		expect(warm).toBeGreaterThan(payloadBytes);
+	it("reads a cold message entry back before its message is replaced", async () => {
+		const fixture = await writeSession(everyRoleHistory());
+		const storage = new ObservedStorage();
+		const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+		const [replaced, ...rest] = fixture.compacted.map(id => manager.getEntry(id));
+		if (replaced?.type !== "message") throw new Error("fixture lost its first message entry");
+
+		const replacement: AgentMessage = { role: "user", content: "replaced", timestamp: 2 };
+		replaced.message = replacement;
+		expect(storage.reads).toBe(1);
+		expect(replaced.message).toBe(replacement);
+		expect(JSON.stringify(replaced)).toContain('"content":"replaced"');
+		expect(storage.reads).toBe(1);
+
+		// The handle closes with the last cold entry, which it would not if the replaced one kept its stub.
+		for (const entry of rest) JSON.stringify(entry);
+		expect(storage.reads).toBe(fixture.compacted.length);
+		expect(storage.open.size).toBe(0);
 		await manager.close();
 	});
 

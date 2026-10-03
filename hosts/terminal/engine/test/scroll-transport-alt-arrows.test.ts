@@ -32,9 +32,26 @@ import { VirtualTerminal } from "./virtual-terminal";
 /** Records every byte the engine writes, then feeds the real VT engine. */
 class RecordingTerminal extends VirtualTerminal {
 	written: string[] = [];
+	/**
+	 * Whether the hardware caret is showing. The engine toggles it both inside a
+	 * paint (`write`) and through `showCursor`/`hideCursor`, which bypass `write`,
+	 * so both routes feed this.
+	 */
+	caretVisible = true;
 	override write(data: string): void {
 		this.written.push(data);
+		const hidden = data.lastIndexOf("\x1b[?25l");
+		const shown = data.lastIndexOf("\x1b[?25h");
+		if (hidden !== shown) this.caretVisible = shown > hidden;
 		super.write(data);
+	}
+	override showCursor(): void {
+		this.caretVisible = true;
+		super.showCursor();
+	}
+	override hideCursor(): void {
+		this.caretVisible = false;
+		super.hideCursor();
 	}
 	/** Everything the engine has emitted this run, as one string. */
 	output(): string {
@@ -59,11 +76,12 @@ class Body implements Component {
 
 class Composer implements Component, Focusable {
 	focused = false;
+	caret = true;
 	invalidate(): void {}
 	setUseTerminalCursor(): void {}
 	handleInput(): void {}
 	render(): readonly string[] {
-		return [`>${CURSOR_MARKER}`];
+		return [this.caret ? `>${CURSOR_MARKER}` : ">"];
 	}
 }
 
@@ -71,11 +89,11 @@ class Composer implements Component, Focusable {
 const TRACKING_ENABLE_BUTTONS = "\x1b[?1000h";
 const ALT_SCROLL_ON = "\x1b[?1007h";
 const ALT_SCROLL_OFF = "\x1b[?1007l";
-
 interface Rig {
 	term: RecordingTerminal;
 	tui: TUI;
 	scheduler: StressRenderScheduler;
+	composer: Composer;
 }
 
 /**
@@ -100,7 +118,7 @@ async function rig(): Promise<Rig> {
 	tui.setScrollTransport("mouse");
 	tui.start();
 	await scheduler.drain(term);
-	return { term, tui, scheduler };
+	return { term, tui, scheduler, composer };
 }
 
 describe("alt-arrows scroll transport", () => {
@@ -393,6 +411,55 @@ describe("alt-arrows residency", () => {
 
 			// Last viewport row, just past the ">" the composer renders.
 			expect(term.getCursor()).toEqual({ row: 7, col: 1 });
+		} finally {
+			tui.stop();
+		}
+	});
+
+	/**
+	 * The marker vanishing leaves the painted rows byte-identical, so only the cursor
+	 * state changes. The paint prologue is what hides the hardware caret; a skipped
+	 * paint would leave it blinking on the composer row. Bringing the marker back
+	 * shows the caret on the composer again. Neither change may rewrite a row.
+	 */
+	it("hides the caret when the composer drops its marker and rows are unchanged", async () => {
+		const { term, tui, scheduler, composer } = await rig();
+		const rewritesARow = (bytes: string): boolean => {
+			if (bytes.includes("\x1b[H")) return true;
+			for (let row = 1; row <= term.rows; row++) {
+				if (bytes.includes(`\x1b[${row};1H`)) return true;
+			}
+			return false;
+		};
+		try {
+			tui.setScrollIsolation(true);
+			tui.setScrollTransport("alt-arrows");
+			await scheduler.drain(term);
+			expect(term.getCursor()).toEqual({ row: 7, col: 1 });
+			expect(term.caretVisible).toBe(true);
+			const viewport = term.getViewport();
+
+			const hideMark = term.mark();
+			composer.caret = false;
+			tui.requestRender();
+			await scheduler.drain(term);
+
+			const hideBytes = term.outputSince(hideMark);
+			expect(hideBytes).toContain("\x1b[?25l");
+			expect(term.caretVisible).toBe(false);
+			expect(rewritesARow(hideBytes)).toBe(false);
+			expect(term.getViewport()).toEqual(viewport);
+
+			const showMark = term.mark();
+			composer.caret = true;
+			tui.requestRender();
+			await scheduler.drain(term);
+
+			const showBytes = term.outputSince(showMark);
+			expect(term.caretVisible).toBe(true);
+			expect(rewritesARow(showBytes)).toBe(false);
+			expect(term.getCursor()).toEqual({ row: 7, col: 1 });
+			expect(term.getViewport()).toEqual(viewport);
 		} finally {
 			tui.stop();
 		}
