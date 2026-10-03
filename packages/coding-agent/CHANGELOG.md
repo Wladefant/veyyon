@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Templated task isolation summaries and recovery hints, naming unmerged branches and nested patches on root merge failures ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [18.1.11] - 2026-09-05
 
