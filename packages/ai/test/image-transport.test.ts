@@ -41,8 +41,11 @@ describe("image HTTP transport and bearer confinement", () => {
 		};
 
 		const result = await postJson({
-			model, url: "https://image.example/v1/images/generations",
-			body: { prompt: "paint a landscape" }, apiKey: "secret-bearer-key", fetch: fetchStub,
+			model,
+			url: "https://image.example/v1/images/generations",
+			body: { prompt: "paint a landscape" },
+			apiKey: "secret-bearer-key",
+			fetch: fetchStub,
 		});
 		expect(requestUrl).toBe("https://image.example/v1/images/generations");
 		expect(requestUrl).not.toContain("secret-bearer-key");
@@ -69,8 +72,11 @@ describe("image HTTP transport and bearer confinement", () => {
 		const form = new FormData();
 		form.set("prompt", "edit this image");
 		await postMultipart({
-			model, url: "https://image.example/v1/images/edits",
-			body: form, apiKey: "multipart-key", fetch: fetchStub,
+			model,
+			url: "https://image.example/v1/images/edits",
+			body: form,
+			apiKey: "multipart-key",
+			fetch: fetchStub,
 		});
 		expect(authHeader).toEqual("Bearer multipart-key");
 		expect(postedForm?.get("prompt")).toBe("edit this image");
@@ -88,10 +94,18 @@ describe("image HTTP transport and bearer confinement", () => {
 		let observedHeaders: Record<string, string> = {};
 		const fetchEcho: FetchImpl = async (_url, init) => {
 			const headers = init?.headers;
-			if (headers && typeof headers === "object" && !(headers instanceof Headers) && !Array.isArray(headers)) {
+			if (
+				headers &&
+				typeof headers === "object" &&
+				!(headers instanceof Headers) &&
+				!Array.isArray(headers)
+			) {
 				observedHeaders = Object.assign({}, headers as Record<string, string>);
 			}
-			return new Response("Incorrect API key provided: secret-bearer-review-key", { status: 401 });
+			return new Response(
+				"Incorrect API key provided: secret-bearer-review-key",
+				{ status: 401 },
+			);
 		};
 
 		let caughtError: unknown;
@@ -112,23 +126,41 @@ describe("image HTTP transport and bearer confinement", () => {
 			expect(caughtError.message).not.toContain("secret-bearer-review-key");
 			expect(caughtError.message).toContain("[REDACTED]");
 		}
-		expect(observedHeaders["Authorization"]).toBe("Bearer secret-bearer-review-key");
+		expect(observedHeaders.Authorization).toBe(
+			"Bearer secret-bearer-review-key",
+		);
 		expect(observedHeaders["Content-Type"]).toBe("application/json");
 		expect(observedHeaders["content-type"]).toBeUndefined();
-		expect(observedHeaders["AUTHORIZATION"]).toBeUndefined();
+		expect(observedHeaders.AUTHORIZATION).toBeUndefined();
 	});
 
 	it("negative control: throws ImageApiError on upstream HTTP failure and ProviderResponseError on bad JSON", async () => {
 		const model = testImageModel();
 		const fetchError: FetchImpl = async () =>
-			new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), { status: 429 });
+			new Response(
+				JSON.stringify({ error: { message: "rate limit exceeded" } }),
+				{ status: 429 },
+			);
 		await expect(
-			postJson({ model, url: "https://image.example/v1/fail", body: {}, apiKey: "k", fetch: fetchError }),
+			postJson({
+				model,
+				url: "https://image.example/v1/fail",
+				body: {},
+				apiKey: "k",
+				fetch: fetchError,
+			}),
 		).rejects.toThrow(ImageApiError);
 
-		const fetchMalformed: FetchImpl = async () => new Response("not-valid-json", { status: 200 });
+		const fetchMalformed: FetchImpl = async () =>
+			new Response("not-valid-json", { status: 200 });
 		await expect(
-			postJson({ model, url: "https://image.example/v1/bad-json", body: {}, apiKey: "k", fetch: fetchMalformed }),
+			postJson({
+				model,
+				url: "https://image.example/v1/bad-json",
+				body: {},
+				apiKey: "k",
+				fetch: fetchMalformed,
+			}),
 		).rejects.toThrow(AIError.ProviderResponseError);
 	});
 });

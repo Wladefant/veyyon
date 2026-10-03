@@ -4,10 +4,15 @@ import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
 import { errorMessage, ImageApiError, USER_AGENT } from "./format";
 
-export async function modelHeaders(model: Model, signal?: AbortSignal): Promise<Record<string, string>> {
+export async function modelHeaders(
+	model: Model,
+	signal?: AbortSignal,
+): Promise<Record<string, string>> {
 	const resolve = Reflect.get(model, "resolveHeaders");
 	if (typeof resolve === "function") {
-		const dynamic = (await resolve(signal)) as Record<string, string> | undefined;
+		const dynamic = (await resolve(signal)) as
+			| Record<string, string>
+			| undefined;
 		return { ...model.headers, ...dynamic };
 	}
 	return { ...model.headers };
@@ -22,12 +27,21 @@ function sanitizeHeaders(raw: Record<string, string>): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const [k, v] of Object.entries(raw)) {
 		const lower = k.toLowerCase();
-		if (lower !== "authorization" && lower !== "content-type" && lower !== "user-agent") out[k] = v;
+		if (
+			lower !== "authorization" &&
+			lower !== "content-type" &&
+			lower !== "user-agent"
+		)
+			out[k] = v;
 	}
 	return out;
 }
 
-async function parseImageApiResponse(model: Model, response: Response, key?: string): Promise<unknown> {
+async function parseImageApiResponse(
+	model: Model,
+	response: Response,
+	key?: string,
+): Promise<unknown> {
 	const text = await response.text();
 	if (!response.ok) {
 		const sanitized = redactKey(errorMessage(text), key);
@@ -40,11 +54,14 @@ async function parseImageApiResponse(model: Model, response: Response, key?: str
 	try {
 		return JSON.parse(text) as unknown;
 	} catch (cause) {
-		throw new AIError.ProviderResponseError("Image API returned malformed JSON", {
-			provider: model.provider,
-			kind: "envelope",
-			cause,
-		});
+		throw new AIError.ProviderResponseError(
+			"Image API returned malformed JSON",
+			{
+				provider: model.provider,
+				kind: "envelope",
+				cause,
+			},
+		);
 	}
 }
 
@@ -58,9 +75,11 @@ export async function postJson(options: {
 }): Promise<unknown> {
 	return withAuth(
 		options.apiKey,
-		async key => {
-			const headers = sanitizeHeaders(await modelHeaders(options.model, options.signal));
-			headers["Authorization"] = `Bearer ${key}`;
+		async (key) => {
+			const headers = sanitizeHeaders(
+				await modelHeaders(options.model, options.signal),
+			);
+			headers.Authorization = `Bearer ${key}`;
 			headers["Content-Type"] = "application/json";
 			headers["User-Agent"] = USER_AGENT;
 			const response = await options.fetch(options.url, {
@@ -85,9 +104,11 @@ export async function postMultipart(options: {
 }): Promise<unknown> {
 	return withAuth(
 		options.apiKey,
-		async key => {
-			const headers = sanitizeHeaders(await modelHeaders(options.model, options.signal));
-			headers["Authorization"] = `Bearer ${key}`;
+		async (key) => {
+			const headers = sanitizeHeaders(
+				await modelHeaders(options.model, options.signal),
+			);
+			headers.Authorization = `Bearer ${key}`;
 			headers["User-Agent"] = USER_AGENT;
 			const response = await options.fetch(options.url, {
 				method: "POST",
