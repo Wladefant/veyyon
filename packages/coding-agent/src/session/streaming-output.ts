@@ -1301,8 +1301,16 @@ export class OutputSink {
 		const noticeLine = notice ? `[${notice}]\n` : "";
 
 		// Flush any chunk still held back by the throttle so the live preview
-		// ends with the complete stream.
-		this.#flushPendingChunk();
+		// ends with the complete stream. A throwing onChunk must not skip the
+		// artifact writer cleanup below, so hold its error and rethrow after.
+		let previewFlushFailed = false;
+		let previewFlushError: unknown;
+		try {
+			this.#flushPendingChunk();
+		} catch (error) {
+			previewFlushFailed = true;
+			previewFlushError = error;
+		}
 		// A sequence the stream ended inside never completed, so it is not text:
 		// drop it rather than emitting the fragment the reader happened to see.
 		this.#partialEscape = "";
@@ -1330,6 +1338,10 @@ export class OutputSink {
 					this.#artifactError ??= error instanceof Error ? error : new Error(String(error));
 				}
 			}
+		}
+
+		if (previewFlushFailed) {
+			throw previewFlushError;
 		}
 
 		if (this.#artifactError) {
