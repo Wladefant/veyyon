@@ -2895,9 +2895,7 @@ export class ModelRegistry {
 		return (
 			stored.length > 0 &&
 			stored.every(
-				(entry) =>
-					entry.credential.type === "api_key" &&
-					LOCAL_PROVIDER_PLACEHOLDERS.has(entry.credential.key),
+				entry => entry.credential.type === "api_key" && LOCAL_PROVIDER_PLACEHOLDERS.has(entry.credential.key),
 			)
 		);
 	}
