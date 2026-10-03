@@ -250,11 +250,21 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * second only the `handlebars/runtime` package entry, so a binary launch evaluates no Handlebars
  * compiler module.
  *
+ * 1623 to 1624: `catalog/catalog-spans.ts`, the zero-import leaf `catalog/models.ts` reads one
+ * provider's span of `models.json` through. Nine modules arrived after it and nine left, so the count
+ * held. Arrived: `config/launch-facts.ts` (moved from `modes/`), `secrets/expiry.ts`, the four
+ * `session/runtime/` collaborators split out of `agent-session.ts`, `kernel/src/session/session-load-cooling.ts`,
+ * and `@veyyon/utils` `activity-signal.ts` and `rearming-timeout.ts`. Left: `modes/launch-facts.ts`,
+ * `secrets/secret-command.ts` and `secrets/scope-move.ts` (now behind the `/secret` handler),
+ * `tools/core/tool-result.ts`, `tools/core/aborted-partway.ts`, `tools/web/gh.ts`, and the
+ * `@veyyon/ai` `providers/gitlab-duo-workflow.ts`, `providers/google-gemini-cli.ts` and
+ * `utils/google-validation.ts` provider modules, now registered lazily.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1623;
+const LAUNCH_REACH_CEILING = 1624;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

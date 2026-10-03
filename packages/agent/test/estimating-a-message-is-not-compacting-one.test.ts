@@ -120,9 +120,14 @@ const PRUNING_CEILING = 195;
  * compiler through the second only for a template with no precompiled form. The first imports one type
  * from `./prompt-variables` and the second only `handlebars/runtime`, so the growth is those two files
  * and no subtree.
+ *
+ * RE-MEASURED 2026-10-01: engine 322, remote summarizer 225. The one new module is
+ * `catalog/catalog-spans.ts`, the zero-import leaf `catalog/models.ts` indexes each provider's span of
+ * `models.json` through. The engine also lost `ai/providers/gitlab-duo-workflow.ts`, which `ai/stream.ts`
+ * now registers lazily, so its count is unchanged; the remote summarizer never reached `ai/stream.ts`.
  */
 const COMPACTION_ENGINE_CEILING = 322;
-const REMOTE_SUMMARIZER_CEILING = 224;
+const REMOTE_SUMMARIZER_CEILING = 225;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {
