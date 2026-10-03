@@ -11,6 +11,7 @@ import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { mcpManagerInstance } from "../mcp/manager-instance";
 import { agentPrompts } from "../prompts/agent/rows";
+import { toolsPrompts } from "../prompts/tools/rows";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
 	agentModelSourceLabel,
@@ -280,17 +281,35 @@ async function persistNestedPatches(
  * `artifactsDir` when present so their paths can be surfaced. Returns an
  * empty string when the result carries no salvageable artifacts.
  */
-async function buildIsolationRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
-	const parts: string[] = [];
-	if (result.patchPath) parts.push(`Captured patch preserved at ${result.patchPath}.`);
-	if (result.branchName) parts.push(`Captured branch preserved as ${result.branchName}.`);
-	if (result.nestedPatches?.length) {
-		const nestedPaths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
-		parts.push(
-			`Captured nested repository patches (${result.nestedPatches.length}) preserved at: ${nestedPaths.join(", ")}.`,
-		);
+async function resolveNestedPatchPaths(
+	result: SingleResult,
+	artifactsDir: string,
+): Promise<{ paths: string[]; failure?: string }> {
+	if (result.nestedPatchPaths?.length) return { paths: result.nestedPatchPaths };
+	if (!result.nestedPatches?.length) return { paths: [] };
+	try {
+		const paths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
+		return { paths };
+	} catch (error) {
+		return { paths: [], failure: errorMessage(error) };
 	}
-	return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+/**
+ * Assemble the "captured X preserved at Y" recovery hint appended to
+ * isolated-run failure messages. Persists nested-repo patches to
+ * `artifactsDir` when present so their paths can be surfaced. Returns an
+ * empty string when the result carries no salvageable artifacts.
+ */
+export async function buildIsolationRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
+	const nested = await resolveNestedPatchPaths(result, artifactsDir);
+	const hint = prompt.render(toolsPrompts["tools/isolation-recovery-hint"].text, {
+		patchPath: result.patchPath,
+		nestedPatchPaths: nested.paths,
+		nestedFailure: nested.failure,
+		branchName: result.branchName,
+	});
+	return hint ? ` ${hint}` : "";
 }
 
 function plainIsolationSummary(summary: string): string {
@@ -501,6 +520,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			mergeIsolatedChanges,
 			prepareIsolationContext,
 			runIsolatedSubprocess,
+			renderIsolationSummary,
 		},
 	] = await Promise.all([import("../task/executor"), import("../task/isolation-runner")]);
 
@@ -677,19 +697,15 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 							`agent() isolated nested patch apply failed for ${result.id}: ${plainIsolationSummary(nestedSummary)}${recoveryHint}`,
 						);
 					}
-				} else if (result.branchName) {
-					mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
-				} else if (result.patchPath && result.hasRootChanges !== false) {
-					mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
 				} else {
-					const nestedPatches = result.nestedPatches ?? [];
-					if (nestedPatches.length > 0) {
-						const nestedPaths = result.nestedPatchPaths ?? [];
-						const where = nestedPaths.length > 0 ? ` at ${nestedPaths.map(p => `\`${p}\``).join(", ")}` : "";
-						mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"}${where} (apply=false). Not applied.`;
-					} else {
-						mergeSummary = "\n\nIsolation: no changes captured.";
-					}
+					const nestedPatchPaths = result.nestedPatchPaths ?? [];
+					mergeSummary = renderIsolationSummary({
+						kind: "captured",
+						branchName: result.branchName,
+						rootPatchPath: result.hasRootChanges === false ? undefined : result.patchPath,
+						nestedCount: nestedPatchPaths.length || (result.nestedPatches?.length ?? 0),
+						nestedPatchPaths,
+					});
 				}
 			}
 

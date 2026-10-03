@@ -30,14 +30,13 @@ export const DEFAULT_MAX_COLUMN = 512; // Max UTF-8 bytes per grep match line
 /**
  * Default artifact-on-disk cap for {@link OutputSink}.
  *
- * `0` means unbounded: by default, `artifact://<id>` references preserve the
- * complete raw stream instead of a capped head/tail sample.
+ * When non-zero, captures that exceed this size keep a head sample and a
+ * rolling tail buffer, dropping the middle behind an in-file truncation notice.
+ * `0` means unbounded.
  */
 export const ARTIFACT_DEFAULT_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
 /** Default head budget; the remainder becomes the rolling tail window. */
 export const ARTIFACT_DEFAULT_HEAD_BYTES = 3 * 1024 * 1024; // 3 MiB
-/** Upper bound on how far the rolling artifact tail may outgrow its budget between trims. */
-const ARTIFACT_TAIL_MAX_SLACK_BYTES = 4 * 1024 * 1024;
 
 const NL = "\n";
 const ELLIPSIS = "…";
@@ -46,7 +45,6 @@ const ELLIPSIS = "…";
 // Interfaces
 // =============================================================================
 
-/** First failed artifact I/O operation; safe to persist without exposing filesystem errors. */
 export type OutputArtifactError = "open" | "write" | "flush" | "end";
 
 export interface OutputSummary {
@@ -69,11 +67,15 @@ export interface OutputSummary {
 	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
 	artifactId?: string;
 	/**
-	 * Bytes the artifact cap dropped from the middle of the saved file. When
-	 * set, `artifact://<id>` holds a head/tail sample, not the full output.
+	 * Bytes elided from the middle of the on-disk artifact when the artifact
+	 * cap was exceeded. Present only when artifact truncation occurred.
 	 */
 	artifactElidedBytes?: number;
-	/** Full raw output was not completely saved; artifactId is unavailable. */
+	/**
+	 * First failure encountered while creating or writing the artifact file.
+	 * When present, artifactId is omitted because the on-disk copy is incomplete
+	 * or was never written.
+	 */
 	artifactError?: OutputArtifactError;
 }
 
@@ -813,10 +815,12 @@ export class OutputSink {
 	// Queue of chunks waiting for the file sink to be created.
 	#pendingFileWrites?: string[];
 	#fileReady = false;
-	#fileCreation?: Promise<void>;
-	#fileFinalization?: Promise<void>;
 	#artifactError?: OutputArtifactError;
-	#pendingArtifactWrites?: Set<Promise<void>>;
+	#artifactRawError?: Error;
+	#createFileSinkPromise?: Promise<void>;
+	#pendingArtifactWrites = 0;
+	#artifactWritesSettled?: PromiseWithResolvers<void>;
+	#closeFilePromise?: Promise<void>;
 
 	readonly #artifactPath?: string;
 	readonly #artifactId?: string;
@@ -830,17 +834,21 @@ export class OutputSink {
 	// owns a head budget + a rolling tail buffer; once the head is closed,
 	// subsequent chunks are diverted into `#artifactTailRing` (bounded by
 	// `#artifactTailBudget`). On `dump()` the tail is flushed back to the sink
-	// behind a `[ARTIFACT TRUNCATED: …]` notice.
+	// behind a `[ARTIFACT TRUNCATED: …]` notice. The default cap is disabled so
+	// advertised `artifact://<id>` captures are lossless.
 	readonly #artifactMaxBytes: number;
 	readonly #artifactHeadBudget: number;
 	readonly #artifactTailBudget: number;
-	readonly #artifactTailSlackBytes: number;
 	#artifactHeadBytesWritten = 0;
 	#artifactHeadClosed = false;
 	#artifactTailRing = "";
 	#artifactTailRingBytes = 0;
 	#artifactTailIncomingBytes = 0;
 
+	#failArtifact(operation: OutputArtifactError, error: unknown): void {
+		this.#artifactError ??= operation;
+		this.#artifactRawError ??= error instanceof Error ? error : new Error(String(error));
+	}
 	constructor(options?: OutputSinkOptions) {
 		const {
 			artifactPath,
@@ -867,33 +875,36 @@ export class OutputSink {
 				: Math.min(artifactHeadBytes, Math.floor(this.#artifactMaxBytes / 2));
 		this.#artifactHeadBudget = clampLow(maxHead, 0, this.#artifactMaxBytes);
 		this.#artifactTailBudget = Math.max(0, this.#artifactMaxBytes - this.#artifactHeadBudget);
-		this.#artifactTailSlackBytes = Math.min(
-			ARTIFACT_TAIL_MAX_SLACK_BYTES,
-			Math.max(1, Math.floor(this.#artifactTailBudget / 2)),
-		);
 	}
 
 	/**
 	 * Push a chunk of output. The buffer management and onChunk callback run
 	 * synchronously. File sink writes are deferred and serialized internally.
+	 *
+	 * `inline` substitutes a bounded representation for the in-memory buffer and
+	 * live preview while the complete chunk is mirrored to the artifact.
+	 * `emitInline: false` keeps that representation out of the live callback.
 	 */
-	push(chunk: string): void {
+	push(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
 		const { head, partial } = splitTrailingPartialEscape(this.#partialEscape + chunk);
 		this.#partialEscape = partial;
 		if (head.length === 0) return;
 		chunk = sanitizeWithOptionalSixelPassthrough(head, sanitizeText);
+		const inline = options?.inline;
+		const substituted = inline !== undefined;
+		const inlineChunk = inline === undefined ? chunk : sanitizeText(inline);
 
 		// Throttled onChunk: coalesce chunks arriving inside the throttle window.
 		// A timer flushes quiet tails at the throttle boundary; dump() catches a
 		// final pending chunk when the process exits before that timer fires.
-		// Live preview gets the raw (pre-cap) chunk so the TUI never lags behind
-		// what reached the sink — the column cap is for the persisted LLM view.
-		if (this.#onChunk) {
+		// Live preview gets the inline (pre-cap) chunk so the TUI never lags behind
+		// what reached the in-memory sink — the column cap is for the persisted LLM view.
+		if (this.#onChunk && options?.emitInline !== false && inlineChunk.length > 0) {
 			const now = Date.now();
 			if (now - this.#lastChunkTime >= this.#chunkThrottleMs) {
-				this.#emitPendingChunkWith(chunk, now);
+				this.#emitPendingChunkWith(inlineChunk, now);
 			} else {
-				this.#pendingChunk += chunk;
+				this.#pendingChunk += inlineChunk;
 				this.#schedulePendingChunkFlush();
 			}
 		}
@@ -906,17 +917,22 @@ export class OutputSink {
 			this.#totalLines += countNewlines(chunk);
 		}
 
+		const inlineBytes = substituted ? Buffer.byteLength(inlineChunk, "utf-8") : rawBytes;
 		// Per-line column cap. State persists across chunks so a mid-line split
-		// still respects the budget. Operates on the sanitized chunk; the cap is
-		// applied before head/tail accounting but after artifact mirroring decides.
-		const capped = this.#maxColumns > 0 ? this.#applyColumnCap(chunk) : chunk;
-		const cappedBytes = capped === chunk ? rawBytes : Buffer.byteLength(capped, "utf-8");
-		const cappedThisChunk = cappedBytes < rawBytes;
+		// still respects the budget. Operates on the inline chunk; the complete
+		// chunk is mirrored to the artifact before any cap is applied.
+		const capped = this.#maxColumns > 0 ? this.#applyColumnCap(inlineChunk) : inlineChunk;
+		const cappedBytes = capped === inlineChunk ? inlineBytes : Buffer.byteLength(capped, "utf-8");
+		const cappedThisChunk = cappedBytes < inlineBytes;
+		if (substituted) this.#truncated = true;
 
-		// Mirror RAW chunk to the artifact file so the on-disk record is the full
-		// uncapped stream. Mirror triggers on: in-memory overflow OR this chunk's
-		// column cap dropped bytes (otherwise we'd lose data) OR file already open.
-		if (this.#artifactPath && (this.#file != null || cappedThisChunk || this.#willOverflow(cappedBytes))) {
+		// Mirror the complete chunk to the artifact file whenever the inline
+		// representation differs, overflows memory, hits the column cap, or a
+		// prior chunk already opened the artifact.
+		if (
+			this.#artifactPath &&
+			(this.#file != null || substituted || cappedThisChunk || this.#willOverflow(cappedBytes))
+		) {
 			this.#writeToFile(chunk);
 		}
 
@@ -1047,40 +1063,7 @@ export class OutputSink {
 	 * owns the head + tail cap so artifacts cannot grow beyond
 	 * `#artifactMaxBytes` on disk.
 	 */
-	#recordArtifactError(operation: OutputArtifactError): void {
-		this.#artifactError ??= operation;
-		this.#pendingFileWrites = undefined;
-		this.#artifactTailRing = "";
-		this.#artifactTailRingBytes = 0;
-	}
-
-	#writeArtifact(chunk: string, operation: OutputArtifactError = "write"): void {
-		if (!this.#file || this.#artifactError) return;
-		try {
-			const written = this.#file.sink.write(chunk);
-			if (typeof written !== "number") {
-				if (!this.#pendingArtifactWrites) {
-					this.#pendingArtifactWrites = new Set();
-				}
-				const writes = this.#pendingArtifactWrites;
-				const pending = written.then(
-					() => {
-						writes.delete(pending);
-					},
-					() => {
-						writes.delete(pending);
-						this.#recordArtifactError(operation);
-					},
-				);
-				writes.add(pending);
-			}
-		} catch {
-			this.#recordArtifactError(operation);
-		}
-	}
-
 	#writeToFile(chunk: string): void {
-		if (this.#artifactError) return;
 		if (this.#fileReady && this.#file) {
 			this.#emitToSink(chunk);
 			return;
@@ -1090,7 +1073,7 @@ export class OutputSink {
 		// resolves (typically <2). The cap is enforced on drain.
 		if (!this.#pendingFileWrites) {
 			this.#pendingFileWrites = [chunk];
-			this.#fileCreation = this.#createFileSink();
+			this.#createFileSinkPromise = this.#createFileSink();
 		} else {
 			this.#pendingFileWrites.push(chunk);
 		}
@@ -1107,48 +1090,73 @@ export class OutputSink {
 	 * straight pass-through, preserving the historical "stream everything"
 	 * contract.
 	 */
+	#writeArtifactChunk(chunk: string, operation: OutputArtifactError = "write"): void {
+		if (this.#artifactRawError || !this.#file) return;
+		try {
+			const written = this.#file.sink.write(chunk);
+			if (typeof written === "number") return;
+			if (this.#pendingArtifactWrites === 0) {
+				this.#artifactWritesSettled = Promise.withResolvers<void>();
+			}
+			this.#pendingArtifactWrites++;
+			void written
+				.catch(error => {
+					this.#failArtifact(operation, error);
+				})
+				.finally(() => {
+					this.#pendingArtifactWrites--;
+					if (this.#pendingArtifactWrites === 0) this.#artifactWritesSettled?.resolve();
+				});
+		} catch (error) {
+			this.#failArtifact(operation, error);
+		}
+	}
+
 	#emitToSink(chunk: string): void {
-		if (!this.#file || this.#artifactError || chunk.length === 0) return;
-		if (this.#artifactMaxBytes === 0) {
-			this.#writeArtifact(chunk);
-			return;
-		}
-		const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-		const room = this.#artifactHeadClosed ? 0 : this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
-		if (room >= chunkBytes) {
-			this.#writeArtifact(chunk);
-			this.#artifactHeadBytesWritten += chunkBytes;
-			return;
-		}
-		let overflow = chunk;
-		if (room > 0) {
-			const headSlice = truncateHeadBytes(chunk, room);
-			if (headSlice.bytes > 0) {
-				this.#writeArtifact(headSlice.text);
-				this.#artifactHeadBytesWritten += headSlice.bytes;
+		if (this.#artifactRawError || !this.#file || chunk.length === 0) return;
+		try {
+			if (this.#artifactMaxBytes === 0) {
+				this.#writeArtifactChunk(chunk, "write");
+				return;
 			}
-			// Even when UTF-8 boundary safety leaves a few bytes of nominal room,
-			// this chunk has already overflowed the head window. Close it now so a
-			// later small ASCII chunk cannot be written before this overflow tail.
-			this.#artifactHeadClosed = true;
-			overflow = chunk.substring(headSlice.text.length);
-		}
-		if (overflow.length === 0 || this.#artifactTailBudget === 0) {
-			// No tail budget: count the dropped bytes so the notice reflects them.
-			if (overflow.length > 0) {
-				this.#artifactTailIncomingBytes += Buffer.byteLength(overflow, "utf-8");
+			const chunkBytes = Buffer.byteLength(chunk, "utf-8");
+			const room = this.#artifactHeadClosed ? 0 : this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
+			if (room >= chunkBytes) {
+				this.#writeArtifactChunk(chunk, "write");
+				this.#artifactHeadBytesWritten += chunkBytes;
+				return;
 			}
-			return;
+			let overflow = chunk;
+			if (room > 0) {
+				const headSlice = truncateHeadBytes(chunk, room);
+				if (headSlice.bytes > 0) {
+					this.#writeArtifactChunk(headSlice.text, "write");
+					this.#artifactHeadBytesWritten += headSlice.bytes;
+				}
+				// Even when UTF-8 boundary safety leaves a few bytes of nominal room,
+				// this chunk has already overflowed the head window. Close it now so a
+				// later small ASCII chunk cannot be written before this overflow tail.
+				this.#artifactHeadClosed = true;
+				overflow = chunk.substring(headSlice.text.length);
+			}
+			if (overflow.length === 0 || this.#artifactTailBudget === 0) {
+				// No tail budget: count the dropped bytes so the notice reflects them.
+				if (overflow.length > 0) {
+					this.#artifactTailIncomingBytes += Buffer.byteLength(overflow, "utf-8");
+				}
+				return;
+			}
+			this.#pushArtifactTail(overflow);
+		} catch (error) {
+			this.#failArtifact("write", error);
 		}
-		this.#pushArtifactTail(overflow);
 	}
 
 	#pushArtifactTail(chunk: string): void {
-		if (this.#artifactError) return;
 		const chunkBytes = Buffer.byteLength(chunk, "utf-8");
 		this.#artifactTailIncomingBytes += chunkBytes;
 		const budget = this.#artifactTailBudget;
-		if (chunkBytes >= budget + this.#artifactTailSlackBytes) {
+		if (chunkBytes >= budget) {
 			// Chunk alone dominates — keep only its tail slice.
 			const { text, bytes } = truncateTailBytes(chunk, budget);
 			this.#artifactTailRing = text;
@@ -1157,7 +1165,7 @@ export class OutputSink {
 		}
 		this.#artifactTailRing += chunk;
 		this.#artifactTailRingBytes += chunkBytes;
-		if (this.#artifactTailRingBytes > budget + this.#artifactTailSlackBytes) {
+		if (this.#artifactTailRingBytes > budget) {
 			const { text, bytes } = truncateTailBytes(this.#artifactTailRing, budget);
 			this.#artifactTailRing = text;
 			this.#artifactTailRingBytes = bytes;
@@ -1165,7 +1173,7 @@ export class OutputSink {
 	}
 
 	async #createFileSink(): Promise<void> {
-		if (!this.#artifactPath || this.#fileReady || this.#artifactError) return;
+		if (!this.#artifactPath || this.#fileReady) return;
 		try {
 			const sink = Bun.file(this.#artifactPath).writer();
 			this.#file = { path: this.#artifactPath, artifactId: this.#artifactId, sink };
@@ -1190,8 +1198,16 @@ export class OutputSink {
 				}
 				this.#pendingFileWrites = undefined;
 			}
-		} catch {
-			this.#recordArtifactError("open");
+		} catch (error) {
+			try {
+				await this.#file?.sink?.end();
+			} catch {
+				/* ignore */
+			}
+			this.#file = undefined;
+			this.#pendingFileWrites = undefined;
+			this.#fileReady = false;
+			this.#failArtifact("open", error);
 		}
 	}
 
@@ -1288,14 +1304,8 @@ export class OutputSink {
 	 * tail ring empty).
 	 */
 	#flushArtifactTailIfCapped(): void {
-		if (!this.#file || this.#artifactError) return;
+		if (!this.#file) return;
 		if (this.#artifactMaxBytes === 0) return;
-		const budget = this.#artifactTailBudget;
-		if (this.#artifactTailRingBytes > budget) {
-			const { text, bytes } = truncateTailBytes(this.#artifactTailRing, budget);
-			this.#artifactTailRing = text;
-			this.#artifactTailRingBytes = bytes;
-		}
 		const tailBytes = this.#artifactTailRingBytes;
 		const droppedBytes = Math.max(0, this.#artifactTailIncomingBytes - tailBytes);
 		if (tailBytes === 0 && droppedBytes === 0) return;
@@ -1308,60 +1318,93 @@ export class OutputSink {
 			const notice =
 				`${headSep}[ARTIFACT TRUNCATED: kept first ${formatBytes(headWritten)} + last ${formatBytes(tailBytes)} ` +
 				`of ${formatBytes(totalCapped)}; ${formatBytes(droppedBytes)} elided from the middle]${tailSep}`;
-			this.#writeArtifact(notice, "flush");
+			this.#writeArtifactChunk(notice, "flush");
 		}
 		if (tailBytes > 0) {
-			this.#writeArtifact(this.#artifactTailRing, "flush");
+			this.#writeArtifactChunk(this.#artifactTailRing, "flush");
 		}
 	}
 
 	#finalizeFile(): Promise<void> {
-		if (this.#fileFinalization) return this.#fileFinalization;
-		this.#fileFinalization = this.#closeFile();
-		return this.#fileFinalization;
+		if (this.#closeFilePromise) return this.#closeFilePromise;
+		this.#closeFilePromise = this.#closeFile();
+		return this.#closeFilePromise;
 	}
 
 	async #closeFile(): Promise<void> {
-		if (this.#fileCreation) {
-			await this.#fileCreation.catch(() => undefined);
+		if (this.#createFileSinkPromise) {
+			try {
+				await this.#createFileSinkPromise;
+			} catch (error) {
+				this.#failArtifact("open", error);
+			}
 		}
-		if (this.#pendingArtifactWrites?.size) {
-			await Promise.all(this.#pendingArtifactWrites);
+
+		if (this.#pendingArtifactWrites > 0) {
+			await this.#artifactWritesSettled?.promise;
 		}
+
 		const file = this.#file;
 		if (!file) return;
+
 		try {
-			this.#flushArtifactTailIfCapped();
-			if (this.#pendingArtifactWrites?.size) {
-				await Promise.all(this.#pendingArtifactWrites);
+			if (!this.#artifactRawError) {
+				this.#flushArtifactTailIfCapped();
 			}
-			if (!this.#artifactError) {
+			if (this.#pendingArtifactWrites > 0) {
+				await this.#artifactWritesSettled?.promise;
+			}
+			if (!this.#artifactRawError && typeof file.sink.flush === "function") {
 				await file.sink.flush();
 			}
-		} catch {
-			this.#recordArtifactError("flush");
+		} catch (error) {
+			this.#failArtifact("flush", error);
 		} finally {
 			try {
-				await file.sink.end();
-			} catch {
-				this.#recordArtifactError("end");
+				if (typeof file.sink.end === "function") {
+					await file.sink.end();
+				}
+			} catch (error) {
+				this.#failArtifact("end", error);
 			}
 		}
 	}
 
 	async dump(notice?: string): Promise<OutputSummary> {
+		return this.#dumpInternal(notice, true);
+	}
+
+	async dumpWithArtifactStatus(notice?: string): Promise<OutputSummary> {
+		return this.#dumpInternal(notice, false);
+	}
+
+	async #dumpInternal(notice: string | undefined, strict: boolean): Promise<OutputSummary> {
 		const noticeLine = notice ? `[${notice}]\n` : "";
 
 		// Flush any chunk still held back by the throttle so the live preview
-		// ends with the complete stream.
-		this.#flushPendingChunk();
+		// ends with the complete stream. A throwing onChunk must not skip the
+		// artifact writer cleanup below, so hold its error and rethrow after.
+		let previewFlushFailed = false;
+		let previewFlushError: unknown;
+		try {
+			this.#flushPendingChunk();
+		} catch (error) {
+			previewFlushFailed = true;
+			previewFlushError = error;
+		}
 		// A sequence the stream ended inside never completed, so it is not text:
 		// drop it rather than emitting the fragment the reader happened to see.
 		this.#partialEscape = "";
 		const totalLines = this.#sawData ? this.#totalLines + 1 : 0;
 
-		if (this.#file) {
-			await this.#finalizeFile();
+		await this.#finalizeFile();
+
+		if (previewFlushFailed) {
+			throw previewFlushError;
+		}
+
+		if (strict && this.#artifactRawError) {
+			throw this.#artifactRawError;
 		}
 
 		// Compose the visible output. With head retention, splice head + marker
@@ -1410,8 +1453,9 @@ export class OutputSink {
 			outputLines = tailLines;
 		}
 
+		const hasArtifactError = this.#artifactError !== undefined || this.#artifactRawError !== undefined;
 		const artifactElidedBytes =
-			this.#artifactMaxBytes > 0 && this.#file && !this.#artifactError
+			this.#artifactMaxBytes > 0 && this.#file && !hasArtifactError
 				? Math.max(0, this.#artifactTailIncomingBytes - this.#artifactTailRingBytes)
 				: undefined;
 
@@ -1427,16 +1471,15 @@ export class OutputSink {
 			columnDroppedBytes: this.#columnDroppedBytes > 0 ? this.#columnDroppedBytes : undefined,
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
 			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,
-			artifactId: this.#artifactError ? undefined : this.#file?.artifactId,
+			artifactId: hasArtifactError ? undefined : this.#file?.artifactId,
 			artifactElidedBytes: artifactElidedBytes && artifactElidedBytes > 0 ? artifactElidedBytes : undefined,
 			artifactError: this.#artifactError,
 		};
 	}
 
 	async dispose(): Promise<void> {
-		if (this.#file) {
-			await this.#finalizeFile();
-		}
+		this.#clearPendingChunkTimer();
+		await this.#finalizeFile();
 	}
 }
 
