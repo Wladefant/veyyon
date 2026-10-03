@@ -2219,7 +2219,7 @@ export class AuthStorage {
 
 	/**
 	 * Classify where a provider's auth comes from, following the same precedence
-	 * as {@link AuthStorage.getApiKey}: runtime override → config override →
+	 * as {@link AuthStorage.getApiKey}: runtime override → nonfallback config override →
 	 * stored OAuth → login-stored api_key → extension config fallback →
 	 * env var → stored api_key →
 	 * fallback resolver. Returns undefined when no auth is configured.
@@ -4692,7 +4692,7 @@ export class AuthStorage {
 	 * Get API key for a provider.
 	 * Priority (first match wins):
 	 * 1. Runtime override (CLI --api-key)
-	 * 2. Config override (models.yml `providers.<name>.apiKey`)
+	 * 2. Nonfallback config override (models.yml `providers.<name>.apiKey`)
 	 * 3. OAuth token from storage (auto-refreshed)
 	 * 4. API key persisted by a successful `/login`
 	 * 5. Extension config fallback (including command-backed keys)
@@ -5932,7 +5932,7 @@ export class AuthStorage {
 	 *
 	 * Mirrors {@link AuthStorage.getApiKey} precedence, highest first:
 	 *   1. Runtime override (`--api-key`).
-	 *   2. Config override (`models.yml` `providers.<name>.apiKey`).
+	 *   2. Nonfallback config override (`models.yml` `providers.<name>.apiKey`).
 	 *   3. Stored OAuth credential.
 	 *   4. API key persisted by a successful `/login`.
 	 *   5. Extension config fallback (including command-backed keys).
