@@ -1668,7 +1668,8 @@ async function* streamCodexCompactionEvents(
 ): AsyncGenerator<Record<string, unknown>> {
 	let completed = false;
 	const websocketState = requestContext.websocketState;
-	const previousTurnState = requestContext.turnState.value;
+	const turnState = requestContext.turnState;
+	const previousTurnState = turnState?.value;
 	const previousModelsEtag = websocketState?.modelsEtag;
 	try {
 		if (initial.transport === "websocket") {
@@ -1735,7 +1736,9 @@ async function* streamCodexCompactionEvents(
 	} finally {
 		if (!completed) {
 			requestSetup.requestAbortController.abort();
-			requestContext.turnState.value = previousTurnState;
+			if (requestContext.turnState) {
+				requestContext.turnState.value = previousTurnState;
+			}
 			if (websocketState) {
 				websocketState.modelsEtag = previousModelsEtag;
 			}
@@ -1753,7 +1756,7 @@ function applyCodexCompactionResponseMetadata(
 	state: CodexWebSocketSessionState | undefined,
 	event: Record<string, unknown>,
 ): void {
-	if (event.type !== "response.metadata") return;
+	if ((!turnState && !state) || event.type !== "response.metadata") return;
 	updateCodexSessionMetadataFromHeaders(turnState, state, toCodexHeaders(event.headers));
 }
 
