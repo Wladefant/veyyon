@@ -25,6 +25,39 @@ describe("stable Responses reasoning effort", () => {
 		expect(planStableOpenAIEffort(state, third, "high")).toBe("low");
 		expect(third).toEqual([user("first"), assistant, update("high"), user("second"), assistant, user("third")]);
 	});
+	it("replays distinct transitions at their original positions and changes back after an earlier transition", () => {
+		const state = createOpenAIEffortControlState<string>();
+		planStableOpenAIEffort(state, [user("first")], "low");
+		planStableOpenAIEffort(state, [user("first"), assistant, user("second")], "high");
+		const third = [user("first"), assistant, user("second"), assistant, user("third")];
+		expect(planStableOpenAIEffort(state, third, "medium")).toBe("low");
+		expect(third).toEqual([
+			user("first"),
+			assistant,
+			update("high"),
+			user("second"),
+			assistant,
+			update("medium"),
+			user("third"),
+		]);
+		const replay = [user("first"), assistant, user("second"), assistant, user("third")];
+		expect(planStableOpenAIEffort(state, replay, "medium")).toBe("low");
+		expect(replay).toEqual(third);
+		const changeBack = [user("first"), assistant, user("second"), assistant, user("third")];
+		expect(planStableOpenAIEffort(state, changeBack, "low")).toBe("low");
+		expect(changeBack).toEqual([
+			user("first"),
+			assistant,
+			update("high"),
+			user("second"),
+			assistant,
+			update("low"),
+			user("third"),
+		]);
+		const fourth = [user("first"), assistant, user("second"), assistant, user("third"), assistant, user("fourth")];
+		expect(planStableOpenAIEffort(state, fourth, "low")).toBe("low");
+		expect(fourth).toEqual([...changeBack, assistant, user("fourth")]);
+	});
 	it("places an in-loop change after tool output and coalesces changes at the same position", () => {
 		const state = createOpenAIEffortControlState<string>();
 		planStableOpenAIEffort(state, [user("first")], "low");

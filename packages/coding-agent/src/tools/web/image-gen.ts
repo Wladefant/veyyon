@@ -5,6 +5,7 @@ import type { ApiKey, FetchImpl, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { fetchAntigravityImageModel } from "@veyyon/catalog/discovery/antigravity";
 import {
 	ANTIGRAVITY_ENDPOINTS,
 	ANTIGRAVITY_PRIMARY_ENDPOINT,
@@ -515,9 +516,7 @@ async function findAntigravityCredentials(
 	modelRegistry: ModelRegistry,
 	sessionId?: string,
 ): Promise<ImageApiKey | null> {
-	const apiKey = await modelRegistry.getApiKeyForProvider("google-antigravity", sessionId, {
-		modelId: DEFAULT_ANTIGRAVITY_MODEL,
-	});
+	const apiKey = await modelRegistry.getApiKeyForProvider("google-antigravity", sessionId);
 	if (!apiKey) return null;
 
 	const parsed = parseAntigravityCredentials(apiKey);
@@ -528,6 +527,63 @@ async function findAntigravityCredentials(
 		apiKey: parsed.accessToken,
 		projectId: parsed.projectId,
 	};
+}
+
+function resolveAntigravityEndpoints(): string[] {
+	try {
+		const mode = settings.get("providers.antigravityEndpoint");
+		if (mode === "production") {
+			return [ANTIGRAVITY_PRIMARY_ENDPOINT];
+		}
+		if (mode === "sandbox") {
+			return [ANTIGRAVITY_SANDBOX_ENDPOINT];
+		}
+	} catch {
+		// Ignored
+	}
+	return ANTIGRAVITY_ENDPOINTS.slice();
+}
+
+/** Advertised Antigravity image model plus the endpoints to reach it, per account. */
+interface AntigravityImageTarget {
+	model: string;
+	endpoints: string[];
+}
+
+async function resolveAntigravityImageTarget(
+	bearer: string,
+	cache: Map<string, AntigravityImageTarget>,
+	fetchImpl: FetchImpl,
+	signal?: AbortSignal,
+): Promise<AntigravityImageTarget> {
+	const cached = cache.get(bearer);
+	if (cached) return cached;
+
+	const configuredEndpoints = resolveAntigravityEndpoints();
+	let model = DEFAULT_ANTIGRAVITY_MODEL;
+	let endpoints = configuredEndpoints;
+
+	try {
+		const advertised = await fetchAntigravityImageModel({
+			token: bearer,
+			endpoint: configuredEndpoints.length === 1 ? configuredEndpoints[0] : undefined,
+			userAgent: getAntigravityUserAgent(),
+			fetcher: fetchImpl,
+			signal,
+		});
+		if (advertised?.id) {
+			model = advertised.id;
+			// Keep the discovered endpoint first but retain the other configured
+			// fallbacks so generation retries (429/5xx/network) still fail over.
+			endpoints = [advertised.endpoint, ...endpoints.filter(endpoint => endpoint !== advertised.endpoint)];
+		}
+	} catch {
+		// Keep fallback model and endpoints.
+	}
+
+	const target: AntigravityImageTarget = { model, endpoints };
+	cache.set(bearer, target);
+	return target;
 }
 
 async function findXAIImageCredentials(modelRegistry?: ModelRegistry): Promise<ImageApiKey | null> {
@@ -1140,11 +1196,19 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
 		return untilAborted(signal, async () => {
 			const sessionId = ctx.sessionManager.getSessionId();
-			const apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
+			let apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
 			if (!apiKey) {
 				throw new Error(
 					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity or xAI Grok OAuth, or set XAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
 				);
+			}
+
+			if (
+				params.aspect_ratio &&
+				apiKey.provider !== "xai" &&
+				!COMMON_IMAGE_ASPECT_RATIO_SET.has(params.aspect_ratio)
+			) {
+				apiKey = (await findXAIImageCredentials(ctx.modelRegistry)) ?? apiKey;
 			}
 
 			const provider = apiKey.provider;
@@ -1244,8 +1308,14 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 
 					const antigravityKey: ApiKey = ctx.modelRegistry.resolver("google-antigravity", {
 						sessionId,
-						modelId: DEFAULT_ANTIGRAVITY_MODEL,
+						modelId: model,
 					});
+
+					// withAuth may rotate to a sibling account after a 401/403/quota
+					// failure; resolve each account's advertised image target once and
+					// reuse it across that credential's endpoint retries.
+					const imageTargetCache = new Map<string, AntigravityImageTarget>();
+					let usedModel = model;
 
 					const response = await withAuth(
 						antigravityKey,
@@ -1257,17 +1327,14 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 							const bearer = rotated?.accessToken ?? key;
 							const projectId = rotated?.projectId ?? apiKey.projectId!;
 
-							let endpoints: string[] = ANTIGRAVITY_ENDPOINTS.slice();
-							try {
-								const mode = settings.get("providers.antigravityEndpoint");
-								if (mode === "production") {
-									endpoints = [ANTIGRAVITY_PRIMARY_ENDPOINT];
-								} else if (mode === "sandbox") {
-									endpoints = [ANTIGRAVITY_SANDBOX_ENDPOINT];
-								}
-							} catch {
-								// Ignored
-							}
+							const target = await resolveAntigravityImageTarget(
+								bearer,
+								imageTargetCache,
+								fetchImpl,
+								requestSignal,
+							);
+							usedModel = target.model;
+							const endpoints = target.endpoints;
 
 							let resp: Response | undefined;
 							let lastError: Error | undefined;
@@ -1280,7 +1347,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 									// live sanitizer again instead of replaying a stale prompt.
 									const requestBody = buildAntigravityRequest(
 										assembleProviderPrompt(),
-										model,
+										target.model,
 										projectId,
 										params.aspect_ratio,
 										params.image_size,
@@ -1344,16 +1411,23 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 					const responseText = parsed.text.length > 0 ? parsed.text.join(" ") : undefined;
 
 					if (parsed.images.length === 0) {
-						return buildNoImageResult({ provider, model, responseText, details: { usage: parsed.usage } });
+						return buildNoImageResult({
+							provider,
+							model: usedModel,
+							responseText,
+							details: { usage: parsed.usage },
+						});
 					}
 
 					const imagePaths = await saveImagesToTemp(parsed.images);
 
 					return {
-						content: [{ type: "text", text: buildResponseSummary(provider, model, imagePaths, responseText) }],
+						content: [
+							{ type: "text", text: buildResponseSummary(provider, usedModel, imagePaths, responseText) },
+						],
 						details: {
 							provider,
-							model,
+							model: usedModel,
 							imageCount: parsed.images.length,
 							imagePaths,
 							images: parsed.images,

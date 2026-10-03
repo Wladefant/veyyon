@@ -221,23 +221,30 @@ describe("provider prompt-cache key across session transitions", () => {
 		await session.prompt("first turn");
 		await session.waitForIdle();
 
-		const btw = await session.branchFromBtw("aside question", {
-			role: "assistant",
-			content: [{ type: "text", text: "aside answer" }],
-			api: "mock",
-			provider: "mock",
-			model: "mock-model",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		const leafId = sessionManager.getLeafId();
+		if (!leafId) throw new Error("Expected a session leaf after the first turn");
+		const btw = await session.branchFromBtw(
+			"aside question",
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "aside answer" }],
+				api: "mock",
+				provider: "mock",
+				model: "mock-model",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
 			},
-			stopReason: "stop",
-			timestamp: Date.now(),
-		});
+			leafId,
+			originalSessionId,
+		);
 		expect(btw.cancelled).toBe(false);
 		expect(sessionManager.getSessionId()).not.toBe(originalSessionId);
 

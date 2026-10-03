@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { SUPPORTED_IMAGE_MIME_TYPES } from "@veyyon/utils/mime";
 import type { SessionData } from "../src/export/session-data";
 import {
 	buildShareSnapshot,
@@ -127,6 +128,54 @@ describe("buildShareSnapshot", () => {
 		const plain = buildShareSnapshot(sm, {});
 		expect(JSON.stringify(plain)).toContain("hunter2-XYZZY");
 	});
+	// Sharing redacts text, not opaque image bytes, and must not mutate the active session.
+	test.each([...SUPPORTED_IMAGE_MIME_TYPES])(
+		"preserves generated %s assistant images while redacting adjacent secrets",
+		mimeType => {
+			const secret = "share-image-secret";
+			const image = { type: "image" as const, mimeType, data: Buffer.from(secret).toString("base64") };
+			const entry: SessionEntry = {
+				type: "message",
+				id: "image-turn",
+				parentId: null,
+				timestamp: "2026-06-12T00:00:00.000Z",
+				message: {
+					role: "assistant",
+					api: "openai-codex-responses",
+					provider: "openai-codex",
+					model: "image-model",
+					content: [{ type: "text", text: secret }, image],
+					stopReason: "stop",
+					timestamp: 0,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				},
+			};
+			const sm = {
+				getHeader: () => sessionData([], "x").header,
+				getEntries: () => [entry],
+				getLeafId: () => entry.id,
+			} as unknown as SessionManager;
+			const snapshot = buildShareSnapshot(sm, {
+				obfuscator: new SecretObfuscator([{ type: "plain", origin: "config", content: secret }]),
+			});
+			const shared = snapshot.entries[0];
+			if (shared?.type !== "message" || shared.message.role !== "assistant")
+				throw new Error("missing assistant image turn");
+			expect(shared.message.content).toHaveLength(2);
+			expect(shared.message.content[1]).toEqual(image);
+			expect(shared.message.content[1]).not.toBe(image);
+			expect(JSON.stringify(shared.message.content[0])).not.toContain(secret);
+			if (entry.message.role !== "assistant") throw new Error("expected original assistant turn");
+			expect(entry.message.content).toEqual([{ type: "text", text: secret }, image]);
+		},
+	);
 
 	test("redacts header cwd, bookmark labels, and file-mention paths", () => {
 		const secret = "shareleak-ABCDE";
