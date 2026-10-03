@@ -9,6 +9,8 @@ import {
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,
 } from "@veyyon/catalog/provider-models/openai-compat";
+import { mergePreviousSnapshotModels } from "../scripts/generate-models";
+import type { ModelSpec } from "../src/types";
 
 const LIVE_FREE_MODEL_IDS = [
 	"deepseek-v4-flash-free",
@@ -84,6 +86,55 @@ describe("OpenCode provider discovery", () => {
 				baseUrl: "https://opencode.ai/zen/go/v1",
 			});
 		}
+	});
+	test("pins gateway-only muse-spark ids to responses in live discovery (#8957)", async () => {
+		// models.dev omits muse-spark-1.2[-contributor] under opencode-go, so
+		// there is no bundled reference row. Without the discovery-side pin the
+		// mapper defaults them to openai-completions and every tool-call turn
+		// fails with "stream closed before a finish_reason was received".
+		const options = opencodeGoModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () => modelListResponse(["muse-spark-1.2", "muse-spark-1.2-contributor", "kimi-k3"]),
+		});
+		const models = await options.fetchDynamicModels?.();
+		expect(models).not.toBeNull();
+		const byId = new Map((models ?? []).map(model => [model.id, model]));
+		for (const id of ["muse-spark-1.2", "muse-spark-1.2-contributor"]) {
+			expect(byId.get(id)).toMatchObject({
+				api: "openai-responses",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+			});
+		}
+		// Contrast: an unpinned id with a bundled reference keeps its route.
+		expect(byId.get("kimi-k3")).toMatchObject({ api: "openai-completions" });
+		// Upgrade path: pinned ids invalidate caches written before the pin,
+		// otherwise 17.3.7-era rows keep the completions route until TTL.
+		expect(options.dropCachedModelIdsOnStaticMismatch).toContain("muse-spark-1.2-contributor");
+	});
+
+	test("routes gateway-first ids via sibling catalog and variant-base hints", async () => {
+		// The Go gateway ships models before models.dev lists them under
+		// opencode-go (muse-spark-1.2[-contributor] did exactly this, #8957).
+		// With no same-provider metadata, the mapper borrows the
+		// openai-responses route from the sibling Zen catalog or the
+		// billing-variant base id — responses only, never anthropic-messages
+		// (cross-gateway transports genuinely diverge there).
+		const options = opencodeGoModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () =>
+				modelListResponse([
+					"gpt-5.5", // zen bundles it as openai-responses; absent from the go bundle
+					"deepseek-v4-flash-free", // base id is pinned to responses on go
+					"minimax-m2.5-free", // anthropic hints only -> must keep the completions default
+					"brand-new-model", // no hint anywhere -> completions default
+				]),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const apiById = new Map((models ?? []).map(model => [model.id, model.api]));
+		expect(apiById.get("gpt-5.5")).toBe("openai-responses");
+		expect(apiById.get("deepseek-v4-flash-free")).toBe("openai-responses");
+		expect(apiById.get("minimax-m2.5-free")).toBe("openai-completions");
+		expect(apiById.get("brand-new-model")).toBe("openai-completions");
 	});
 
 	test("replaces stale bundled Zen models with each credential's live endpoint list", async () => {
@@ -183,5 +234,54 @@ describe("OpenCode provider discovery", () => {
 				}
 			});
 		}
+	});
+});
+
+describe("issue #10416 — retired provider snapshot pruning", () => {
+	test("prunes retired provider rows while restoring live previous-snapshot providers", () => {
+		const staleModel: ModelSpec = {
+			id: "legacy-wafer-model",
+			name: "Legacy Wafer Model",
+			api: "openai-completions",
+			provider: "wafer-pass",
+			baseUrl: "https://legacy.invalid/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+		};
+		const liveModel: ModelSpec = {
+			id: "live-fallback-model",
+			name: "Live Fallback Model",
+			api: "openai-completions",
+			provider: "fixture-provider",
+			baseUrl: "https://fixture.invalid/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+		};
+
+		const merged = mergePreviousSnapshotModels(
+			[],
+			{
+				"wafer-pass": { [staleModel.id]: staleModel },
+				"fixture-provider": { [liveModel.id]: liveModel },
+			},
+			new Set(),
+		);
+
+		expect(merged.map(model => `${model.provider}/${model.id}`)).toEqual(["fixture-provider/live-fallback-model"]);
+
+		const fetchedModel: ModelSpec = { ...liveModel, contextWindow: 256_000 };
+		const previous = { "fixture-provider": { [liveModel.id]: liveModel } };
+		expect(mergePreviousSnapshotModels([fetchedModel], previous, new Set())).toEqual([fetchedModel]);
+		expect(mergePreviousSnapshotModels([], previous, new Set(["fixture-provider"]))).toEqual([]);
+		// Exclusion limits snapshot restoration, not authoritative fetched rows.
+		expect(mergePreviousSnapshotModels([fetchedModel], previous, new Set(["fixture-provider"]))).toEqual([
+			fetchedModel,
+		]);
 	});
 });
