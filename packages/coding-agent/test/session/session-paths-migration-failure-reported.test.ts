@@ -103,6 +103,7 @@ describe("A failed session directory migration is reported", () => {
 	});
 
 	/** A migration that works must stay silent, copy files and retain the source directory. */
+	test("says nothing when the migration succeeds", () => {
 		const cwd = path.join(home, "proj");
 		fs.mkdirSync(cwd, { recursive: true });
 		const legacy = path.join(sessionsRoot, legacyName("proj"));

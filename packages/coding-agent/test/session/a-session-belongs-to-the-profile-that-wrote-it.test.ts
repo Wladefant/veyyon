@@ -54,6 +54,7 @@ import {
 	restoreDirOverrides,
 	setProfile,
 	setProjectDir,
+} from "@veyyon/utils/dirs";
 import { getTerminalId } from "@veyyon/utils/ttyid";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { makeAssistantMessage } from "../session-manager/helpers";
