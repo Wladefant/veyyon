@@ -9,6 +9,7 @@
  */
 import { isFireworksFastModelId } from "../fireworks-model-id";
 import { hasLocalLoopbackBaseUrl, hostMatchesUrl, modelMatchesHost } from "../hosts";
+import { bareModelId } from "../identity/classify";
 import {
 	isAnthropicNamespacedModelId,
 	isClaudeModelId,
@@ -724,6 +725,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// store and replay. A compatible gateway opts in with a
 		// `supportsServerCompaction` override.
 		supportsServerCompaction: isOfficialOpenAIEndpoint(spec.provider, baseUrl) || isAzure || isCodexBackend,
+		supportsConfigurationUpdate: bareModelId(id ?? "").toLowerCase() === "gpt-6-astra",
 		stripDeepseekSpecialTokens:
 			Boolean(id) && isDeepseekModelIdOrName(id) && (spec.provider === "nvidia" || spec.provider === "deepseek"),
 		streamMarkupHealingPattern: id ? detectStreamMarkupHealingPattern(spec.provider, id, baseUrl) : undefined,
@@ -749,6 +751,7 @@ function pickResponsesOnly(compat: ResolvedOpenAIResponsesCompat): ResponsesOnly
 		supportsImageDetailOriginal: compat.supportsImageDetailOriginal,
 		supportsObfuscationOptOut: compat.supportsObfuscationOptOut,
 		supportsServerCompaction: compat.supportsServerCompaction,
+		supportsConfigurationUpdate: compat.supportsConfigurationUpdate,
 	} satisfies ResponsesOnlyCompat;
 }
 

@@ -38,6 +38,7 @@ const HOLD_MS = 30_000;
 
 /** Exports that read the parsed catalog. The fixture runs each one inside the first window. */
 const READERS = [
+	"getBundledChatModels",
 	"getBundledModel",
 	"getBundledModelReferenceIndex",
 	"getBundledModels",

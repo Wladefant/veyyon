@@ -159,22 +159,23 @@ function getNestedPayloadString(payload: Record<string, unknown>, key: string, n
 	return isRecord(nested) ? getPayloadString(nested, nestedKey) : undefined;
 }
 
-function extractUsageIdentity(payload: ClaudeUsageResponse, orgId?: string): { accountId?: string; email?: string } {
-	if (!isRecord(payload)) return { accountId: orgId };
+/**
+ * The account identity a usage payload names. Organization ids are never account ids: a report's
+ * `accountId` is compared with a credential's, and the stored credential holds the account uuid,
+ * so an org id written here made every sibling account of a provider reject its own report. The
+ * org id travels separately as `metadata.orgId`.
+ */
+function extractUsageIdentity(payload: ClaudeUsageResponse): { accountId?: string; email?: string } {
+	if (!isRecord(payload)) return {};
 	const accountId =
 		getPayloadString(payload, "account_id") ??
 		getPayloadString(payload, "accountId") ??
 		getPayloadString(payload, "user_id") ??
 		getPayloadString(payload, "userId") ??
-		getPayloadString(payload, "org_id") ??
-		getPayloadString(payload, "orgId") ??
 		getNestedPayloadString(payload, "account", "uuid") ??
 		getNestedPayloadString(payload, "account", "id") ??
-		getNestedPayloadString(payload, "organization", "uuid") ??
-		getNestedPayloadString(payload, "organization", "id") ??
 		getNestedPayloadString(payload, "user", "uuid") ??
-		getNestedPayloadString(payload, "user", "id") ??
-		orgId;
+		getNestedPayloadString(payload, "user", "id");
 	const email =
 		getPayloadString(payload, "email") ??
 		getPayloadString(payload, "user_email") ??
@@ -542,7 +543,7 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 	].filter((limit): limit is UsageLimit => limit !== null);
 
 	if (limits.length === 0) return null;
-	const identity = extractUsageIdentity(payload, orgId);
+	const identity = extractUsageIdentity(payload);
 	let accountId = identity.accountId ?? credential.accountId;
 	let email = identity.email ?? credential.email;
 	if ((!accountId || !email) && !params.signal?.aborted) {

@@ -7,9 +7,14 @@
 ### Breaking Changes
 
 - `once` is removed; `lazy(build)` returns a `Lazy<T>` whose `value` getter calls `build` on the first read and returns that result afterwards, and `typeof held.value` states the built type without building it.
+- `StallStackSource` requires `park()`, which `LoopWatchdog` calls when it parks.
 
 ### Added
+- Added opt-in corruption recovery to `openSqliteDatabase` and `openSqliteDatabaseSync`, preserving damaged stores and sidecars before recreating usable replacements ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 042028fd018b1282fbe660ab7255ebad18dd4db5).
+- Added `openSqliteDatabase` to `@veyyon/utils/sqlite` for store initialization with bounded busy retries, connection cleanup, and path-attributed errors ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
+- SQLite store initialization uses bounded busy retries, closes failed connections, and attributes failures to the database path ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added `getDbBusyTimeoutMs()`, `isInteractiveHost()`, and `setInteractiveHost()` to `@veyyon/utils/env`, bounding SQLite busy waits to 1s in headless hosts while preserving 5s for interactive hosts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added `acquireFileLock` and `FileLockHandle` to `@veyyon/utils/file-lock`, providing an exclusive cross-process lease handle with idempotent release ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - `@veyyon/utils/inflight-marker` atomically records each concurrent tool call independently and durably reports abandoned calls in the normal dated log before removing their markers, including Linux zombies ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - `@veyyon/utils/session-heartbeat` keeps a per-process heartbeat naming the session phase (`provider`, `tool`, `compaction`, `idle`) and busy lanes, rewritten asynchronously on every phase change and every 5 s; the next launch logs `Previous session died silently` for a heartbeat whose process is gone ([#73](https://github.com/Wladefant/veyyon/issues/73)).
@@ -17,10 +22,23 @@
 - The session heartbeat and the `Previous session died silently` log line now carry `rssBytes`, `freeMemBytes`, `heapTotal`, `heapUsed`, `external`, `smol`, and `forceRAMSize`, so a session the operating system ended for want of memory or a per-process JSC heap ceiling (D04 abort) can be told from a terminal closing under it ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - The session heartbeat and the `Previous session died silently` log line now also carry the resource that runs out before RAM does: on Windows `commitChargeBytes`, `commitLimitBytes` and `processCommitBytes` (system commit against RAM plus pagefile, the "Out of Virtual Memory" limit of D06), and on Linux `cgroupMemoryBytes` and `cgroupMemoryMaxBytes` (the level of the cgroup v2 chain closest to its `memory.max`). Each field is absent where the platform cannot give it ([#73](https://github.com/Wladefant/veyyon/issues/73))
 
+### Fixed
+
+- Fixed Mermaid ASCII state diagram pseudostate markers and preserved transition labels above connector strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Mermaid `direction BT` diagrams draw rounded state boxes and the start pseudostate with their rounded corners the right way up ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed the SQLite corruption test fixtures (`Buffer` comparison, `openSync` mock signature) to type-check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- SQLite recovery rechecks the current store under its recovery lock, leaves healthy main databases intact when a secondary store fails, and reports permission failures. Damaged stores and sidecars are published as one private backup directory. Interrupted removal leaves a durable guard that blocks reopening until repair ([#293](https://github.com/Wladefant/veyyon/pull/293)).
+- SQLite openers treat URI-looking filenames as physical stores under Bun's default flags. NTFS stream stores use safe lock and backup names while honoring exact-path pending markers. A real file-create probe preserves readable-store access under denied-create directory ACLs.
+- Windows recovery locks and pending markers share a canonical file identity across case, namespace, short-name, junction, and supported local-share aliases. Missing stores retain the guard through canonical parent resolution.
+
 ### Changed
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
+- `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.
+- `@veyyon/utils/rearming-timeout` exports `rearmingTimeout`, a schedule for a callback that arms its own next run, which re-arms one `setTimeout` with `refresh()` instead of creating a timeout per call.
+- `@veyyon/utils/activity-signal` exports `ActivitySignal` and the process-wide `processActivity`: a host attaches with `attachHost()` and calls `report()` on its work, and a sampler that found the process quiet calls `park(wake)` to arm no timer until the next report.
+- `LoopWatchdog` accepts `parkAfterMs` (default 10,000) and `activity`, and `IdleTrim` accepts `activity`.
 - `IdleTrim` accepts `release`, which runs on the first quiet sampling window after a busy one and again after each trim; a `release` that throws is not called again and the trim continues.
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
@@ -29,7 +47,7 @@
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
 - `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
-- `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
+- `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running, at a 10 ms interval while the loop watchdog reports busy ticks and at 100 ms after 10 seconds without one, and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
@@ -60,9 +78,13 @@
 - `stallSampler` checks inspector profile payloads with the shared `isRecord`; no user-visible change.
 - `@veyyon/utils/prompt` loads the Handlebars parser and compiler through `@veyyon/utils/prompt-handlebars` on the first template no build precompiled, so a process that renders only precompiled templates evaluates the Handlebars runtime alone.
 - `prompt.format` returns text it rewrites no line of as a cut of its input, without the blank lines at its end, instead of a joined copy; creating an idle main session copies 188,952 fewer characters (347,436 bytes over 65 calls), and a prompt with no mustache holds one buffer for its template and its render.
+- `LoopWatchdog` and `IdleTrim` re-arm one timeout per `start()` through `rearmingTimeout` instead of creating a timeout, a handle object and two closures on every tick.
+- While a host is attached to its activity signal, `LoopWatchdog` arms no tick after 10 seconds of ticks without a block or busy CPU, `IdleTrim` arms no window after the window that follows a trim, and `stallSampler` samples once a second, until the host reports work.
+- The `rearmingTimeout` documentation records its measured effect on an idle interactive session of the linux-x64 binary; no user-visible change.
 
 ### Fixed
 
+- Autocomplete matches skill names at hyphen-delimited boundaries in both leading and mid-prompt completions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 ### Fixed
 - Prioritize exact slash-command aliases over earlier same-prefix commands in sync autocomplete so `/q` resolves to `quit` rather than `queue` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).

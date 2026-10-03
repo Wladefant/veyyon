@@ -4,7 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { AUTHENTICATED_API_KEY_SENTINEL } from "@veyyon/ai/provider-env-keys";
 import { buildModel } from "@veyyon/catalog/build";
+import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@veyyon/catalog/provider-models";
@@ -342,6 +344,50 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		// ladder ceiling on models without a max tier").
 	});
 
+	// Late provider registration must reveal the chosen model's effort default and
+	// saved model row. Explicit patterns and later auto classification are covered
+	// elsewhere; this drives the SDK's no-pattern startup fallback.
+	test.each([
+		{
+			name: "model default",
+			defaultEffort: {},
+		},
+		{
+			name: "saved model row above the any-model default",
+			defaultEffort: { "*": Effort.High, "runtime-provider/late-model": Effort.Low },
+		},
+	] as const)("late fallback starts with the $name effort", async ({ defaultEffort }) => {
+		const extension: ExtensionFactory = pi => {
+			pi.registerProvider("runtime-provider", {
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "literal:RUNTIME_KEY",
+				api: "openai-completions",
+				models: [
+					{
+						id: "late-model",
+						name: "Late Model",
+						reasoning: true,
+						thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium], defaultLevel: Effort.Low },
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 128000,
+						maxTokens: 8192,
+					},
+				],
+			});
+		};
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions("")),
+			settings: Settings.isolated({ defaultEffort }),
+			extensions: [extension],
+			skipPythonPreflight: true,
+		});
+		sessionsToDispose.push(session);
+		expect(session.model?.provider).toBe("runtime-provider");
+		expect(session.model?.id).toBe("late-model");
+		expect(session.thinkingLevel).toBe(Effort.Low);
+	});
+
 	test("selects the settings default model without synchronously validating auth", async () => {
 		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!defaultModel) {
@@ -411,7 +457,9 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:8080/models") {
 				return new Response(
-					JSON.stringify({ data: [{ id: "vision-model", object: "model", meta: { n_ctx: 239104 } }] }),
+					JSON.stringify({
+						data: [{ id: "vision-model", object: "model", meta: { n_ctx: 239104 } }],
+					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
 				);
 			}
@@ -429,7 +477,9 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const modelRegistry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
+		const modelRegistry = new ModelRegistry(authStorage, modelsPath, {
+			fetch: fetchMock,
+		});
 		const settings = Settings.isolated();
 		settings.setModelRole("default", "llama.cpp/vision-model");
 
@@ -481,7 +531,13 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		await Bun.write(
 			targetSessionFile,
 			`${[
-				{ type: "session", version: 3, id: "resume-saved", timestamp, cwd: tempDir },
+				{
+					type: "session",
+					version: 3,
+					id: "resume-saved",
+					timestamp,
+					cwd: tempDir,
+				},
 				{
 					type: "model_change",
 					id: "default-model",
@@ -576,6 +632,48 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	// An ambient credential source must not displace an explicit login, but remains usable alone or explicitly selected.
+	for (const scenario of ["concrete", "ambient-only", "explicit"] as const) {
+		test(`startup preserves ${scenario} credential selection`, async () => {
+			const ambient = getBundledModel("amazon-bedrock", DEFAULT_MODEL_PER_PROVIDER["amazon-bedrock"]);
+			const concrete = getBundledModel("anthropic", DEFAULT_MODEL_PER_PROVIDER.anthropic);
+			if (!ambient || !concrete) throw new Error("Expected bundled provider defaults");
+			const authStorage = await AuthStorage.create(path.join(tempDir, "ambient-auth.db"));
+			authStoragesToClose.push(authStorage);
+			const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			authStorage.setFallbackResolver(provider =>
+				provider === "amazon-bedrock" ? AUTHENTICATED_API_KEY_SENTINEL : undefined,
+			);
+			if (scenario !== "ambient-only") authStorage.setRuntimeApiKey("anthropic", "test-token");
+			vi.spyOn(registry, "getAvailable").mockReturnValue(
+				scenario === "ambient-only" ? [ambient] : [ambient, concrete],
+			);
+			const { session } = await createAgentSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				authStorage,
+				modelRegistry: registry,
+				settings: Settings.isolated({
+					enabledModels: ["amazon-bedrock/*", "anthropic/*"],
+				}),
+				sessionManager: SessionManager.inMemory(),
+				...(scenario === "explicit" ? { model: ambient } : {}),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+			});
+			sessionsToDispose.push(session);
+			expect(authStorage.hasAuth("amazon-bedrock")).toBe(true);
+			expect(authStorage.hasConcreteAuth("amazon-bedrock")).toBe(false);
+			expect(session.model?.provider).toBe(scenario === "concrete" ? "anthropic" : "amazon-bedrock");
+		});
+	}
+
 	test("prefers Codex OAuth over plain OpenAI for the shared startup default", async () => {
 		const openaiDefault = getBundledModel("openai", "gpt-5.5");
 		const codexDefault = getBundledModel("openai-codex", "gpt-5.5");
@@ -594,7 +692,9 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			agentDir: tempDir,
 			authStorage,
 			modelRegistry,
-			settings: Settings.isolated({ enabledModels: ["openai/gpt-5.5", "openai-codex/gpt-5.5"] }),
+			settings: Settings.isolated({
+				enabledModels: ["openai/gpt-5.5", "openai-codex/gpt-5.5"],
+			}),
 			sessionManager: SessionManager.inMemory(),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -630,7 +730,13 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		await Bun.write(
 			targetSessionFile,
 			`${[
-				{ type: "session", version: 3, id: "resume-ext", timestamp, cwd: tempDir },
+				{
+					type: "session",
+					version: 3,
+					id: "resume-ext",
+					timestamp,
+					cwd: tempDir,
+				},
 				{
 					type: "model_change",
 					id: "default-model",
@@ -702,7 +808,13 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		await Bun.write(
 			targetSessionFile,
 			`${[
-				{ type: "session", version: 3, id: "resume-ext-no-default", timestamp, cwd: tempDir },
+				{
+					type: "session",
+					version: 3,
+					id: "resume-ext-no-default",
+					timestamp,
+					cwd: tempDir,
+				},
 				{
 					type: "model_change",
 					id: "default-model",

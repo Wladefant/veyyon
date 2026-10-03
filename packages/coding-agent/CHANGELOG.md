@@ -2,14 +2,60 @@
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Preserved /login API key and OAuth credential precedence over extension fallback API keys, including command-backed values, during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
+- Fixed an uncaught `EPERM ... watch` that ended the whole process when the watched git HEAD or custom theme directory was deleted or locked: the watchers now log a warning, close and stop refreshing live ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).
+- Fixed an implicit-any type error in the HTML export markdown test so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Recognized local login placeholders in model selection while preserving resolved credentials and existing request bearer values ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1d78d2b97e3901c8a0d051acb612a783ca14f5c7, 0e483420eeccffba3a48c40ad962ed9fddb87d6a).
 
 - Fixed the browser tool's first open timing out after 30 s on a slow or cold host: tab startup now runs under its own budget inside the caller's timeout, falls back to the inline worker in time, and no longer leaves an orphan page behind ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 66476e5270184f43458c3d246f3f8590aaa5e2e6).
+- Sessions apply the selected model's effort default and saved model-specific effort after late provider registration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e8560590eae56258759ff99588699686ad158ab2).
+- Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Fixed Mermaid ASCII diagrams rendering on subtle chrome borders by using theme muted foreground for structural strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed HTML export viewer escaping pre-escaped nested list markup and inline code formatting (oh-my-pi 6b3d0d0afdc580624e80f33ebc4b8c158a3a7bbf, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Task execution results sanitize artifact paths (shortening home directories to ~ and bounding width) while preserving Patch, Branch, and Nested patch labels in TUI result rows, and include the unmerged branch name in merge-error summaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 24c1257fc9c0db04c9aeb2a1c5bfb4b3549e5a26, 17a2fda053d32c32d19328c6b8a1d7f58369d88d).
+- Keep terminal text readable on painted surfaces by emitting explicit contrasting ANSI foregrounds for empty theme tokens ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 3634ec23229951ed4902dae6ca9a2b021b65392e).
+- Nested patch persistence removes only newly created patch files on write failure and preserves existing destination data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1c01111697356e0c2d7bf41fb93ac97807943604).
+
+## [18.1.11] - 2026-09-05
+
+### Added
+
+- Added `STEPFUN_API_KEY` to the additional LLM provider help output ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Documented ABLITERATION_API_KEY and MODEL_API_KEY environment variables in help text ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Hid non-chat runner models such as `gpt-image-2` from the session model picker and resolution ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the `extendedContext` setting: off caps Codex sessions at the 272K standard-pricing window, on allows the model's advertised maximum (up to 922K), and `gpt-image-2` no longer appears in completions, the auth gateway or Codex web search ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Isolation tree backends share cross-platform copy-on-write cloning with atomic replacement of existing files and cleanup after failed swaps ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Persistent session-local BTW history storage records conversation checkpoints with optimistic concurrency control and atomic file replacement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- GitHub tool supports image and binary repository file reads with format detection and model image content ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Ephemeral side-channel agent turns isolate side-conversation prompt cache keys and clone detached history snapshots, and session relocation operations guard directory creation and shell cd transitions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
+### Fixed
+- Fixed Windows stdio MCP batch command paths containing percent syntax expanding environment variables before launch by escaping the command token for cmd.exe ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e509fc3cbcda5c7579067d7d19e0764f9b33a4b7).
+- Python, Ruby and Julia availability probes ignore stdin, terminate within ten seconds or the shorter eval timeout, and stop on cancellation ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0379198a5edca5eb65221488613afa63c9379a87).
+- Dedicated Codex web searches keep hosted `web_search` tools at the top level for Lite catalog models instead of relocating them into ignored `additional_tools` input ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 22d02031d904bf2e0d5fc5a1b41caf6dc0a76e6b).
+- GitHub tool and internal URL cache compare effective repository hosts including `GH_HOST` defaults, preserve non-default host identity, and route fallback URLs to the effective host ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 92bd2a98827ca7b8b7f4cc38f62d6461c4d62dc6, 33a1f6092dc270a44aeb6221413c6dfa5e2487df, dcceed36822d8c99d8c3f8e25e304fd565039316).
+- The native ledger bridge locates its Python interpreter instead of assuming a bare `python` exists. `PYTHON_EXECUTABLE`/`PYTHON` still win, and the fallback now walks PATH (`python3` first on Linux and macOS, `python` first on Windows), so a host that ships only `python3` no longer fails every claim with `Executable not found in $PATH: "python"`. The topic-replenishment suite consequently stops planting `PYTHON`/`PYTHON_EXECUTABLE` in the process environment for every suite that follows it ([#25](https://github.com/Wladefant/veyyon/issues/25)).
+- Rejected `.` and `..` as owner or repo in GitHub repository refs so they cannot traverse the `/repos/` API path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Rejected GitHub hosts outside `github.com`, `GH_HOST` and the checkout host on every repo, PR, issue and run input, kept enterprise hosts out of API paths and cache keys, and pinned fork lookup to the PR host (Refs #107)
+- Fixed an eval cell whose idle timeout fired during kernel startup killing the whole host with an unhandled `TimeoutError` rejection, and the Python runner stderr drain splitting multi-byte characters across chunks ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- Fixed image generation selecting the advertised Antigravity image model per credential and re-discovering the target on credential rotation, while preserving configured endpoint failovers ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
+- Preferred concretely authenticated providers over ambient credential sources for automatic startup defaults while preserving explicit selections ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed superseded deferred plan-role model switches lingering across role resets and restored plan mode transitions deterministically ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1713364b2555e7f2cccf05c734e9cc88c75e44e1, oh-my-pi 85b9c01f1c6e306f0e3510d2a26cbe3d2e256af9).
+- In-memory file read results now constrain context expansion to content lines so the empty trailing newline anchor line is not exposed as context ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e49f8f4fb27c9fb73dc5e1e2d019388513672101).
+- Persist nested-repo patches before task isolation teardown, retain workspace on write failure, and stop advertising isolated agents as resumable ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi bdf400b69fc448dbead1c1d6bcfa216cb7697ae6, 207b925541814d4d6132a2525921fd33056fc19c, 1a65c7a99757f19f87498751816b232cfc3de962).
+- `/btw` branch promotion is refused while the main turn is running or once the session or its leaf moved since the question was asked; the panel hides the branch hint while it is unavailable, a refused `b` reports why instead of typing into the composer, and a `b` typed before the answer completes still reaches the composer ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a1183da91225eec2dd4e46dfa037e66567d8980, 98f484bd2f9a11571f807b8b0b1441cc7a7a6671, a54a2f79cbfd9b3a3e7b136cea83533064ca9d0a).
+- Fixed the embedded shell's `command -v`/`-V` honoring only the first operand: it now iterates every name like bash/zsh, printing one line per resolved name and skipping misses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 4397d12100f63bc3085b573b983c120524ea58ed).
+- Wait for pending advisor reviews to drain in headless print mode before disposing the session ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed unreadable theme colours in macOS Terminal.app: the theme now takes its colour depth from the terminal capability model and sends 256-colour SGR to terminals that do not advertise truecolor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed HTML session exports overflowing the browser call stack when rendering a valid, deeply nested conversation tree ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scoped memory recall preserves completed primary-query results when the same bank's broadened fallback fails ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved generated assistant images in transcript projections and shared exports, and corrected Codex search compatibility typing.
 - Image generation selects credentialed xAI when the preferred provider cannot support the requested aspect ratio ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -19,15 +65,23 @@
 - Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
 - Hard-refusal fail-closed guard preventing any agent from merging a PR or pushing to `main` on `Bavariance/polysimulator` across `git push`, `gh pr merge`, `gh api` and the `github` tool ([#174](https://github.com/Wladefant/veyyon/pull/174)).
+- The polysimulator main guard fires only when the target repo (`-R`/`--repo`, a URL or the working directory's git remote) is `Bavariance/polysimulator`; merges and pushes to `main` in other repositories and in an unidentifiable repository are no longer refused ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Terminate the mnemopi embedding worker subprocess after a configurable idle period (`mnemopi.embedIdleUnloadMs`, default 5 minutes, clamped to the 2147483647 ms a `setTimeout` delay can hold) and lazily relaunch it on the next embed request, releasing the loaded ONNX model's ~1.25 GB commit charge during idle periods ([#54](https://github.com/Wladefant/veyyon/issues/54)).
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - Sessions preserve concurrent in-flight tool calls independently and commit abandoned-call reports to the normal dated log before removing crash evidence ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Interactive launches now run under a direct parent supervisor that records retained heartbeat context and the real child exit status immediately after a silent death; `veyyon supervisor dumps` provides reversible, opt-in Windows LocalDumps configuration for `veyyon.exe` and `bun.exe` ([#100](https://github.com/Wladefant/veyyon/issues/100)).
+- The `browser` tool's `open` takes `context`, an isolated cookie jar that every headless tab naming it shares and no other tab sees, closed with its last tab ([#947](https://github.com/santhreal/veyyon/issues/947)).
+- The `browser` tool's `save_state` action and `tab.storageState()` write every cookie of a tab's context and the localStorage of its open origins to a Playwright-compatible state file with mode `0600`, written to a sibling file and renamed over the target so a failed write keeps the previous state, and `open`'s `storage_state` and `tab.loadStorageState()` load one before the first request, writing localStorage once so a key the site later clears stays cleared ([#947](https://github.com/santhreal/veyyon/issues/947)).
+- The `browser` tool's `tab.fill` replaces a value in one trusted text insertion, so a React or Vue field's state follows it, the empty value included, and a long value costs one protocol call instead of three per character; it fills contenteditable elements, sets date, time, colour and range inputs with `input` and `change`, refuses checkboxes, radios, file inputs, `<select>` and read-only fields with the call that handles them, and refuses an element that cannot take focus instead of typing into the field that has it.
 
 ### Changed
 
+- Support simple single-replacement parameters in replace edit mode while preserving internal batch parameters for multi-edit bridges ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi cc2265f681ee26e0e7e3a57d84626059d4eba2ff).
+- Removed unused asynchronous file loading methods from ConfigFile; no user-visible effect ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16608553c9ce132fe4ce43084c0f0caa9dcc1022).
+- Parameterized MCP tool name sanitization and unified current and legacy name minting under one shared pipeline (oh-my-pi 24aa8aa6279e815e338623e9d9be3f7792f6c193, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Extracted shared foreground-wait and auto-background helper primitives (`formatBackgroundNotice`, `resolveAutoBackgroundWaitMs`, `raceJobSettlement`) into `async/auto-background.ts` with cancellable threshold timers (oh-my-pi aeed1e6195abfa971b15e291c6c598bc9c1065b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Git history utilities can read newest-first commits for one literal path with a caller-specified bound; existing command behavior is unchanged.
 - Resolves portable `sleep` executable via `$which` in bash-executor background tests rather than relying on a hardcoded `/bin/sleep` path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supervisor implementation lives under `cli/` rather than adding a top-level source directory; behavior is unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -43,6 +97,12 @@
 - Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
+- Turn recovery now classifies a failed turn that already streamed visible (non-whitespace) assistant text as replay-unsafe, so credential rotation and model fallback do not duplicate partial output to the user (oh-my-pi b5602ddfc1db15c16c499c20559176a69615ed4f, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Kept the mnemopi embedding subprocess referenced while requests are in flight so headless print mode cannot exit prematurely ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Recomputed model scope after a cross-project resume switch so the destination project's `enabledModels` settings take effect ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed loop mode continuing when Esc is pressed mid-iteration by pausing the loop and cancelling pending submissions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed `veyyon usage` capacity stats to report Codex chat and Spark meters separately when they share a window duration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Nerd Font symbols drawing the D3.js icon for C# files and the Microsoft logo for the context meter; they now use the C# and generic window icons ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Hard `session_stop` blocks survive the advisory continuation limit, reasonless blocks retain a fallback instruction, and aborted turns cannot schedule stale stop feedback ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved bearer token fallback when discovering OpenAI Codex models without stored OAuth accounts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed timed-out or interrupted glob searches keeping native filesystem workers alive and blocking subsequent agent turns (oh-my-pi 510f9e05c7397c69f373f01d4d4f098e917aa2e3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -149,6 +209,7 @@
 
 ### Changed
 
+- An interactive session at rest arms no working-clock heartbeat, stops its loop watchdog after 10 quiet seconds and its idle trim after the trim, and samples its stack once a second, each until the next keystroke or frame, so the runtime's idle collector drops to its slow rate: the linux-x64 binary idle 90 seconds after launch records 131 thread wakeups in 60 seconds instead of 4,062 and spends 20 ms of CPU instead of 160 ms (median of three).
 - Capability discovery finds the repository root by checking each ancestor of the working directory for `.git` instead of listing and keeping every ancestor directory, and concurrent loads share one lookup; twenty concurrent lookups from a directory under a 1,700-entry directory take 0.31 ms instead of 2.50 ms and leave 32 KiB on the heap instead of 259 KiB, and from a home directory outside any repository take 0.30 ms instead of 1.85 ms and leave 33 KiB instead of 185 KiB (median of 15).
 - A session compares a SHA-256 digest of its tool names, descriptions and MCP server instructions to decide whether a tool change rebuilds the system prompt, instead of keeping the joined text, so each main session and live subagent holds 87,568 fewer bytes of heap once its tool set has been applied twice with the default tools.
 - On Linux the binary's embedded module pages are released on the first 5-second window under 5% CPU after work instead of after 30 quiet seconds, so an idle session 15 seconds after launch holds 190 MiB RSS instead of 270-286 MiB, and a session with turns 12 seconds apart holds 209-216 MiB after its second and third turns instead of 290-295 MiB, at unchanged turn latency.

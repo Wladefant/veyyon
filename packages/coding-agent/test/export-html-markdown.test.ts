@@ -1,40 +1,40 @@
 import { describe, expect, test } from "bun:test";
 import * as vm from "node:vm";
 import { parseHTML } from "linkedom";
-import { Marked } from "marked";
 
-const [templateHtml, markdownRendererJs, templateJs] = await Promise.all([
+const [templateHtml, markdownRendererJs, templateJs, markedJs] = await Promise.all([
 	Bun.file(new URL("../src/export/html/template.html", import.meta.url)).text(),
 	Bun.file(new URL("../src/export/html/markdown-renderer.js", import.meta.url)).text(),
 	Bun.file(new URL("../src/export/html/template.js", import.meta.url)).text(),
+	Bun.file(new URL("../src/export/html/vendor/marked.min.js", import.meta.url)).text(),
 ]);
 
-function renderMarkdown(source: string): Element {
-	const { document, window } = parseHTML(templateHtml);
-	const session = {
-		header: {
-			type: "session",
-			version: 3,
-			id: "markdown-test",
-			timestamp: "2026-01-01T00:00:00.000Z",
-			cwd: "/tmp",
-		},
-		entries: [
-			{
-				type: "message",
-				id: "message-1",
-				parentId: null,
-				timestamp: "2026-01-01T00:00:00.000Z",
-				message: {
-					role: "user",
-					content: source,
-					timestamp: 0,
-				},
-			},
-		],
-		leafId: "message-1",
+interface MinimalMessageEntry {
+	type: "message";
+	id: string;
+	parentId: string | null;
+	timestamp: string;
+	message: {
+		role: "user" | "assistant";
+		content: string | unknown[];
+		timestamp: number;
 	};
+}
 
+interface MinimalSession {
+	header: {
+		type: "session";
+		version: number;
+		id: string;
+		timestamp: string;
+		cwd: string;
+	};
+	entries: MinimalMessageEntry[];
+	leafId: string;
+}
+
+function renderSession(session: MinimalSession) {
+	const { document, window } = parseHTML(templateHtml);
 	const sessionData = document.getElementById("session-data");
 	if (!sessionData) throw new Error("Export template is missing session data");
 	sessionData.textContent = Buffer.from(JSON.stringify(session)).toString("base64");
@@ -50,7 +50,7 @@ function renderMarkdown(source: string): Element {
 	const context = vm.createContext({
 		window,
 		document,
-		marked: new Marked(),
+		marked: null,
 		hljs: {
 			getLanguage: () => false,
 			highlight: () => ({ value: "" }),
@@ -66,8 +66,77 @@ function renderMarkdown(source: string): Element {
 		setTimeout: () => 0,
 		clearTimeout() {},
 	});
+	vm.runInContext(markedJs, context);
+	vm.runInContext("marked = new marked.Marked();", context);
 	vm.runInContext(markdownRendererJs, context);
 	vm.runInContext(templateJs, context);
+	return document;
+}
+
+function createSession(entries: MinimalMessageEntry[], leafId: string, id: string): MinimalSession {
+	return {
+		header: {
+			type: "session",
+			version: 3,
+			id,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			cwd: "/tmp",
+		},
+		entries,
+		leafId,
+	};
+}
+
+function createDeepChainSession(depth: number): MinimalSession {
+	const entries: MinimalMessageEntry[] = [
+		{
+			type: "message",
+			id: "message-0",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: {
+				role: "user",
+				content: "root",
+				timestamp: 0,
+			},
+		},
+	];
+	for (let i = 1; i < depth; i++) {
+		entries.push({
+			type: "message",
+			id: `message-${i}`,
+			parentId: `message-${i - 1}`,
+			timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
+			message: {
+				role: "assistant",
+				content: [],
+				timestamp: i,
+			},
+		});
+	}
+	return createSession(entries, "message-0", "deep-chain-test");
+}
+
+function renderMarkdown(source: string): Element {
+	const document = renderSession(
+		createSession(
+			[
+				{
+					type: "message",
+					id: "message-1",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:00.000Z",
+					message: {
+						role: "user",
+						content: source,
+						timestamp: 0,
+					},
+				},
+			],
+			"message-1",
+			"markdown-test",
+		),
+	);
 
 	const rendered = document.querySelector(".markdown-content");
 	if (!rendered) throw new Error("Export viewer did not render Markdown content");
@@ -83,5 +152,43 @@ describe("HTML export Markdown", () => {
 		expect(rendered.querySelector("ul > li > em")?.textContent).toBe("italic");
 		expect(rendered.querySelector("ul > li > code")?.textContent).toBe("code");
 		expect(rendered.querySelector("ol > li > strong")?.textContent).toBe("nested");
+	});
+
+	test("renders bold inline code before indented code blocks in ordered lists", () => {
+		const rendered = renderMarkdown(`1. **\`Crew Ship\`** — description
+   \`\`\`json
+   { "crew": "..." }
+   \`\`\`
+
+2. **\`Hover Ship\`** — description
+   \`\`\`json
+   { "crew": "..." }
+   \`\`\``);
+
+		const names = [...rendered.querySelectorAll("ol > li > p > strong > code")].map(element => element.textContent);
+		expect(names).toEqual(["Crew Ship", "Hover Ship"]);
+	});
+
+	test("does not emit attacker-controlled attributes from image alt text in loose ordered lists", () => {
+		const rendered = renderMarkdown(`1. ![" onerror=alert(1) x](missing.png)
+   \`\`\`json
+   { "a": 1 }
+   \`\`\`
+
+2. second
+   \`\`\`json
+   { "a": 2 }
+   \`\`\``);
+		for (const el of rendered.querySelectorAll("*")) {
+			expect(el.getAttributeNames().filter((name: string) => name.startsWith("on"))).toEqual([]);
+		}
+	});
+
+	test("renders a deep valid conversation tree without overflowing the call stack", () => {
+		const document = renderSession(createDeepChainSession(30_000));
+
+		expect(document.querySelectorAll(".tree-node").length).toBe(1);
+		expect(document.querySelector(".tree-node.active")?.getAttribute("data-id")).toBe("message-0");
+		expect(document.querySelector("#messages")?.textContent).toContain("root");
 	});
 });

@@ -7,6 +7,7 @@
 ### Added
 
 - `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
+- Exported SessionManagerStateSnapshot in SessionManager for atomic session migration and state restoration ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 
@@ -14,6 +15,7 @@
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
 
 ### Fixed
+- Fence fresh terminal breadcrumbs to an explicit session directory and require positive directory inode evidence before re-rooting moved projects (oh-my-pi 13fc0b6c33c536481221a1b23d16ef993f01d7b0, oh-my-pi cd46dd0ca51641560e53d3cd14e164cd4f241e9d, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Session discovery recovers hashed-layout transcripts without changing active directory names or deleting conflicting stale copies ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed terminal breadcrumbs being rewritten when unchanged, skipping redundant disk writes when re-recording identical session pointers (oh-my-pi aa4136eb4a9e8cbe99e9f17435e7fd2b207ba655, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Validate `Type.Unsafe` against the draft-2020-12 upgraded schema so raw JSON Schema draft-07 documents validate consistently with wire validation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -61,6 +63,8 @@
 - A listed session copies its bounded texts through `detachedString` from `@veyyon/utils`; no user-visible change.
 - `getEffectiveSnapshot` resolves every declared setting without memoizing it, so a store keeps cached values only for paths its session reads, which cut the heap a live spawned session retains from 315.4 KiB to 277.0 KiB (median of 3 runs over 20 sessions).
 - `SessionManager.getCwd` returns the absolute cwd the session holds instead of resolving a new copy on every read, so the transcript rows of a resumed 600-turn session share one path string instead of holding 1,599 copies, which cut its heap and extra memory from 123,876 KiB to 123,672 KiB and its live strings from 135,858 to 134,281 (median of five); every returned value is unchanged.
+- The resume warning for tool calls left without a result scans the branch from the keep boundary of its newest compaction, so it no longer lists a call before that boundary or reads a compacted entry back from the session file to check it.
+- A cold message entry keeps a message object holding the message's `role`, `toolName`, `toolCallId`, `isError`, `stopReason`, `provider` and `model` and reads only its large fields back on access, so the checkpoint and todo scans of a resume read no entry back; with the bounded resume warning this cut the entries a resumed 390 MiB, 44,454-cold-entry session reads back from 43,027 to 0, its heap from 529.7 MiB plus 418.8 MiB external to 109.9 MiB plus 40.8 MiB, its peak RSS from 2,231 MiB to 1,204 MiB and its time to the startup banner from 2.27 s to 1.46 s (median of 3 alternating runs).
 
 ### Fixed
 
