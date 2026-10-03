@@ -536,6 +536,10 @@ class OpenAIResponsesStreamRun {
 	#sentPreviousResponseId: string | undefined;
 	/** Set once a rejection dropped strict tools; every later rebuild of this call keeps them off. */
 	#strictToolsDisabled = false;
+	readonly #preparedRequests = new WeakMap<
+		OpenAIResponsesSamplingParams,
+		{ wireParams: OpenAIResponsesSamplingParams; wireBodyJson?: string }
+	>();
 
 	constructor(
 		readonly model: Model<"openai-responses">,
@@ -813,20 +817,27 @@ class OpenAIResponsesStreamRun {
 		plan: OpenAIResponsesRequestPlan,
 		requestParams: OpenAIResponsesSamplingParams,
 	): Promise<RequestInit> {
-		const bodyJson = JSON.stringify(requestParams);
-		let wireParams = requestParams;
-		const onPayload = this.options?.onPayload;
-		if (onPayload) {
-			const hookView = JSON.parse(bodyJson) as OpenAIResponsesSamplingParams;
-			const replacementPayload = await onPayload(hookView, this.model);
-			wireParams =
-				replacementPayload !== undefined && replacementPayload !== hookView
-					? (replacementPayload as OpenAIResponsesSamplingParams)
-					: hookView;
+		let cached = this.#preparedRequests.get(requestParams);
+		if (!cached) {
+			const bodyJson = JSON.stringify(requestParams);
+			let wireParams = requestParams;
+			const onPayload = this.options?.onPayload;
+			if (onPayload) {
+				const hookView = JSON.parse(bodyJson) as OpenAIResponsesSamplingParams;
+				const replacementPayload = await onPayload(hookView, this.model);
+				wireParams =
+					replacementPayload !== undefined && replacementPayload !== hookView
+						? (replacementPayload as OpenAIResponsesSamplingParams)
+						: hookView;
+			}
+			cached = { wireParams };
+			this.#preparedRequests.set(requestParams, cached);
 		}
-		const fallbackApplied = plan.effortFallbacks.apply(wireParams);
-		const wireBodyJson = fallbackApplied || wireParams !== requestParams ? JSON.stringify(wireParams) : bodyJson;
-		plan.effortFallbacks.sent(wireParams);
+		const fallbackApplied = plan.effortFallbacks.apply(cached.wireParams);
+		const wireBodyJson =
+			fallbackApplied || cached.wireBodyJson === undefined ? JSON.stringify(cached.wireParams) : cached.wireBodyJson;
+		cached.wireBodyJson = wireBodyJson;
+		plan.effortFallbacks.sent(cached.wireParams);
 		this.#wireBodyJson = wireBodyJson;
 		return { body: wireBodyJson };
 	}
