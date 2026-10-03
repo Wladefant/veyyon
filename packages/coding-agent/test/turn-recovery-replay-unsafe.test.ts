@@ -4,6 +4,7 @@ import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Model, Provider, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { streamOpenAIAnthropicShim } from "@veyyon/ai/providers/openai-anthropic-shim";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -511,6 +512,93 @@ describe("AgentSession transient-error recovery replay safety", () => {
 		expect(retryStartEvents).toHaveLength(1);
 		expect(retryEndEvents).toEqual([expect.objectContaining({ success: true, attempt: 1 })]);
 		await session.dispose();
+	});
+
+	it("retries and recovers when pre-stream provider error occurs before stream starts", async () => {
+		const requestedModels: string[] = [];
+		const mock = createMockModel({
+			responses: [
+				{
+					content: ["recovered answer after pre-stream retry"],
+					stopReason: "stop",
+				},
+			],
+		});
+		let attempt = 0;
+		const agent = new Agent({
+			getApiKey: m => `${m.provider}-test-key`,
+			initialState: {
+				model: gptModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (reqModel, ctx, opts) => {
+				requestedModels.push(`${reqModel.provider}/${reqModel.id}`);
+				attempt++;
+				if (attempt === 1) {
+					return streamOpenAIAnthropicShim(
+						reqModel as Model<"openai-completions">,
+						ctx,
+						opts,
+						{
+							anthropicBaseUrl: "https://unused.local",
+							defaultFormat: "openai",
+							extraHeaders: () => {
+								throw new Error("fetch failed");
+							},
+						},
+					);
+				}
+				return mock.stream(reqModel, ctx, opts);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": true,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 2,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${gptModel.provider}/${gptModel.id}`);
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackSessionEvents(session);
+
+		try {
+			await session.prompt("test prompt");
+			await session.waitForIdle();
+
+			expect(requestedModels).toHaveLength(2);
+			expect(mock.calls).toHaveLength(1);
+			expect(retryStartEvents).toHaveLength(1);
+			expect(retryEndEvents).toEqual([expect.objectContaining({ success: true, attempt: 1 })]);
+			expect(session.isRetrying).toBe(false);
+
+			const lastMsg = session.messages.at(-1);
+			expect(lastMsg?.role).toBe("assistant");
+			if (lastMsg?.role === "assistant") {
+				expect(lastMsg.stopReason).toBe("stop");
+				expect(lastMsg.content).toEqual([{ type: "text", text: "recovered answer after pre-stream retry" }]);
+			}
+
+			const assistantMessages = session.messages.filter(m => m.role === "assistant");
+			for (const msg of assistantMessages) {
+				if (msg.role === "assistant") {
+					for (const part of msg.content) {
+						if (part.type === "text") {
+							expect(part.text).not.toContain("fetch failed");
+						}
+					}
+				}
+			}
+		} finally {
+			await session.dispose();
+		}
 	});
 });
 
