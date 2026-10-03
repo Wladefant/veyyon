@@ -140,13 +140,70 @@ describe("Herdr restores the foreground Veyyon conversation", () => {
 		await settle();
 		expect(calls).toHaveLength(2);
 		expect(calls[0]).not.toContain("--");
-		expect(herdrResumeArgv("/a\n.jsonl", "default", [])).toBeUndefined();
+		expect(herdrResumeArgv("/a\n.jsonl", "default", [], "/launch")).toBeUndefined();
 		expect(
 			herdrResumeArgv(
 				"/a.jsonl",
 				"default",
 				Array.from({ length: 70 }, () => "--extension=x"),
+				"/launch",
 			),
 		).toBeUndefined();
+	});
+
+	it("re-reports after an in-place session switch while idle, and only then", async () => {
+		const calls: string[][] = [];
+		const current = { id: "a", file: "/sessions/a.jsonl" };
+		const value = {
+			isStreaming: false,
+			sessionManager: { getSessionId: () => current.id, getSessionFile: () => current.file },
+			subscribe: () => () => {},
+		} as unknown as AgentSession;
+		const reporter = new HerdrReporter(
+			env,
+			async (_binary, args) => {
+				calls.push(args);
+			},
+			"work",
+			[],
+			"/launch",
+			5,
+		);
+		reporter.attach(value);
+		await Bun.sleep(30);
+		expect(calls).toHaveLength(1);
+		current.id = "b";
+		current.file = "/sessions/b.jsonl";
+		await Bun.sleep(40);
+		expect(calls).toHaveLength(2);
+		expect(calls[1]).toContain("b");
+		expect(calls[1]!.slice(calls[1]!.indexOf("--") + 1)).toContain("/sessions/b.jsonl");
+		reporter.release();
+		const sent = calls.length;
+		current.id = "c";
+		await Bun.sleep(30);
+		expect(calls).toHaveLength(sent);
+	});
+
+	it("pins relative extension paths to the launch directory", () => {
+		const argv = herdrResumeArgv(
+			"/s/a.jsonl",
+			"work",
+			["-e", "./tools/ext.ts", "--hook=h/x.ts", "--extension", "~/e.ts"],
+			"/launch",
+		);
+		expect(argv).toEqual([
+			"veyyon",
+			"--profile",
+			"work",
+			"--resume",
+			"/s/a.jsonl",
+			"-e",
+			"/launch/tools/ext.ts",
+			"--hook",
+			"/launch/h/x.ts",
+			"--extension",
+			"~/e.ts",
+		]);
 	});
 });
