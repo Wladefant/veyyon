@@ -6,14 +6,14 @@
  * The native boundary is substituted; actual OS unmounting is not proved here.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as child_process from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@veyyon/natives";
-import * as child_process from "node:child_process";
 import * as utils from "@veyyon/utils";
 import { clearWorktrees } from "../../src/cli/worktree-cli";
-import { retainIsolationWorkspace } from "../../src/task/isolation-runner";
 import { RETAINED_BACKEND_FILE, writeRetainedBackend } from "../../src/task/isolation-ownership";
+import { retainIsolationWorkspace } from "../../src/task/isolation-runner";
 import { ensureIsolation } from "../../src/task/worktree";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
 

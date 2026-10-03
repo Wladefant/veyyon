@@ -192,14 +192,24 @@ describe("worktree isolation helpers", () => {
 				await fs.mkdir(mergedDir, { recursive: true });
 				await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
 			});
-			vi.spyOn(console, "log").mockImplementation(() => {});
+			const log = vi.spyOn(console, "log").mockImplementation(() => {});
 			const id = "claim-during-setup";
 			const first = ensureIsolation(repo, id);
 			// Racing `first` fails fast when the claim itself throws, instead of waiting out the test timeout.
 			await Promise.race([started.promise, first]);
 
 			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+			// A dry run reports what the scan classifies as orphaned, independent of the removal guards.
+			log.mockClear();
+			await clearWorktrees({ all: false, dryRun: true, json: true });
+			expect(log.mock.calls.map(call => String(call[0])).join("\n")).not.toContain("wouldRemove");
 			await clearWorktrees({ all: false, dryRun: false, json: true });
+			const claimed: string[] = [];
+			for (const entry of await fs.readdir(getWorktreesDir())) {
+				if (await Bun.file(path.join(getWorktreesDir(), entry, ISOLATION_CLAIM_FILE)).exists()) claimed.push(entry);
+			}
+			// The clear must leave the in-flight slot, with its owner marker, on disk.
+			expect(claimed).toHaveLength(1);
 			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
 
 			proceed.resolve();
