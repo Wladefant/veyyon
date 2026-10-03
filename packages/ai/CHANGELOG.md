@@ -44,6 +44,7 @@
 - Fixed Codex compaction WebSocket cleanup types: `return()` calls pass their argument and the wrapped generator implements `Symbol.asyncDispose` by delegating to `return()` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Unified Codex compaction semantic validation between collector and transport layers with shared O(1) accumulator (`CodexCompactionV2Accumulator`), deferred `turnState` and `modelsEtag` metadata commits until semantic validation succeeds with rollback on rejection, and enforced frame count (1024) and byte budget (16 MiB) bounds on buffered WebSocket compaction streams before falling back to SSE ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed Codex WebSocket abort cause preservation and bounded error-body reads with pre-response deadlines ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the `ai` test fixtures (codex compaction collector listener types, codex turn-state model, typesafe login callbacks) to match current types so `check:ts` passes in an isolated workspace ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the Codex unexpected-stream-end debug log reading the removed `turnState` field of the WebSocket session state; it now reads the request's turn-state cell ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered the `local`, `web` and `typesafe` catalog providers in the provider registry, restoring its compile-time completeness check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
