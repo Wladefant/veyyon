@@ -560,7 +560,9 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		return { summary, changesApplied, failure, hadAnyChanges, mergedBranchForNestedPatches: false };
 	} catch (mergeErr) {
 		const msg = errorMessage(mergeErr);
-		const branchInfo = result.branchName ? `\nUnmerged branch preserved as ${result.branchName} for manual resolution.` : "";
+		const branchInfo = result.branchName
+			? `\nUnmerged branch preserved as ${result.branchName} for manual resolution.`
+			: "";
 		return {
 			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${branchInfo}${patchArtifactsList(result)}</system-notification>`,
 			changesApplied: false,

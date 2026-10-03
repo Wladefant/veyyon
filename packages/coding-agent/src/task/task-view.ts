@@ -966,10 +966,7 @@ function resultRows(
 		rows.push(
 			detailRow(place, [
 				span(
-					truncateToWidth(
-						`Patch: ${replaceTabs(shortenPath(result.patchPath))}`,
-						TRUNCATE_LENGTHS.CONTENT,
-					),
+					truncateToWidth(`Patch: ${replaceTabs(shortenPath(result.patchPath))}`, TRUNCATE_LENGTHS.CONTENT),
 					"dim",
 				),
 			]),
@@ -978,10 +975,7 @@ function resultRows(
 		rows.push(
 			detailRow(place, [
 				span(
-					truncateToWidth(
-						`Branch: ${replaceTabs(sanitizeText(result.branchName))}`,
-						TRUNCATE_LENGTHS.CONTENT,
-					),
+					truncateToWidth(`Branch: ${replaceTabs(sanitizeText(result.branchName))}`, TRUNCATE_LENGTHS.CONTENT),
 					"dim",
 				),
 			]),
@@ -992,10 +986,7 @@ function resultRows(
 			rows.push(
 				detailRow(place, [
 					span(
-						truncateToWidth(
-							`Nested patch: ${replaceTabs(shortenPath(nestedPath))}`,
-							TRUNCATE_LENGTHS.CONTENT,
-						),
+						truncateToWidth(`Nested patch: ${replaceTabs(shortenPath(nestedPath))}`, TRUNCATE_LENGTHS.CONTENT),
 						"dim",
 					),
 				]),
