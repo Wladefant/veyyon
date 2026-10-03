@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Sessions apply the selected model's effort default and saved model-specific effort after late provider registration ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi e8560590eae56258759ff99588699686ad158ab2).
 - Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
