@@ -1281,9 +1281,13 @@ function redactSensitiveCredentialsInMessages(messages: Message[]): Message[] {
 			const r = redactSensitiveCredentials(msg.content);
 			return r === msg.content ? msg : ({ ...msg, content: r } as Message);
 		}
+		if (msg.role === "assistant") {
+			const { blocks, changed } = redactBlocks(msg.content, true);
+			return changed ? { ...msg, content: blocks } : msg;
+		}
 		if (Array.isArray(msg.content)) {
-			const { blocks, changed } = redactBlocks(msg.content, msg.role === "assistant");
-			return (changed ? { ...msg, content: blocks } : msg) as Message;
+			const { blocks, changed } = redactBlocks(msg.content);
+			return changed ? { ...msg, content: blocks } : msg;
 		}
 		return msg;
 	});
