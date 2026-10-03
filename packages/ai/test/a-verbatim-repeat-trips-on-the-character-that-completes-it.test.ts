@@ -20,7 +20,8 @@
  * items differ in one char that every streamed offset rotates through each block position. Each
  * repeat sweep runs twice: opening the stream, where the window start is the run start, and behind
  * a lead-in line, where the window already holds four blocks when the run holds three, so a copy
- * count read one short has room to trip.
+ * count read one short has room to trip. Every ASCII char, and a sample beyond it, is swept as a
+ * unit's lone leading char, so the char-code shortcut for ASCII agrees with the Unicode properties.
  *
  * WHAT THIS SUITE DOES NOT CATCH. A tail that ends between the two halves of a surrogate pair can
  * report a unit that starts mid-pair; no sweep here splits a pair. A unit longer than 200 chars is
@@ -109,6 +110,35 @@ describe("a verbatim repeat trips on the character that completes it", () => {
 			});
 		}
 	}
+
+	test("a unit's lone leading char is content exactly when it is a letter or a pictograph, for every ASCII char", () => {
+		// The letter scan answers ASCII from the char code and everything else from the Unicode
+		// properties, so every ASCII char is swept and the definition is the expectation.
+		const content = /[\p{L}\p{Extended_Pictographic}]/u;
+		const len = 50;
+		const copies = copiesToTrip(len);
+		const chars = [
+			...Array.from({ length: 0x80 }, (_, code) => String.fromCharCode(code)),
+			"é",
+			"ж",
+			"中",
+			"ª",
+			"€",
+			"·",
+			"\u00a0",
+		];
+		const expected = chars.map(char => {
+			const unit = `${char}${".".repeat(len - 1)}`;
+			return {
+				char,
+				trip: content.test(char)
+					? { at: copies * len - 1, reason: `repeated "${unit.trim()}" ${copies}× back-to-back` }
+					: null,
+			};
+		});
+		const actual = chars.map(char => ({ char, trip: tripPoint(`${char}${".".repeat(len - 1)}`.repeat(copies + 2)) }));
+		expect(actual).toEqual(expected);
+	});
 });
 
 describe("text that is not a verbatim loop streams through untouched", () => {

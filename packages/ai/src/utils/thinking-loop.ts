@@ -230,12 +230,17 @@ export class ThinkingLoopDetector {
 	/** Unigram word sets of the most recent segments (≤ LEX_NOVELTY_WINDOW); the
 	 *  novelty baseline for progress-lexicon stall detection. */
 	#wordWindow: Set<string>[] = [];
+	/** How many sets in {@link #wordWindow} hold each word: the window's pooled vocabulary, kept as
+	 *  segments enter and leave rather than re-pooled for every segment. */
+	#vocabulary = new Map<string, number>();
 	/** Consecutive low-information (low-novelty, anchor-free) segments seen. */
 	#lexStallRun = 0;
 	/** Concrete anchors seen per recent segment (≤ LEX_NOVELTY_WINDOW). A stall is
 	 *  only broken by a *new* reference, so filler repeating one fixed
-	 *  path/identifier every paragraph is still caught. */
-	#anchorWindow: Set<string>[] = [];
+	 *  path/identifier every paragraph is still caught. Only a low-novelty segment
+	 *  compares anchors, so an entry holds its segment's text until one does and
+	 *  the anchor set replaces it then. */
+	#anchorWindow: (Set<string> | string)[] = [];
 
 	push(delta: string): string | null {
 		if (!delta) return null;
@@ -293,15 +298,15 @@ export class ThinkingLoopDetector {
 		// wording would otherwise mask a loop by inflating novelty. Strip them
 		// before analysis (a title-only segment then falls below the length gate).
 		const segment = raw.replace(/^[ \t]*#{1,6}[ \t].*$/gm, "").replace(/^[ \t]*\*{2,3}.+?\*{2,3}[ \t]*$/gm, "");
-		const normalized = normalizeSegment(segment);
-		if (normalized.length < SEGMENT_MIN_NORM_CHARS) return null;
+		const tokens = segmentTokens(segment);
+		if (joinedLength(tokens) < SEGMENT_MIN_NORM_CHARS) return null;
 
 		// (a) Near-duplicate trigram cluster: the same paragraph reused with
 		// cosmetic wording drift (high word-trigram overlap).
-		const fingerprint = trigramShingles(normalized);
+		const fingerprint = trigramShingles(tokens);
 		let cluster = 1;
 		for (const prev of this.#window) {
-			if (jaccard(fingerprint, prev) >= SEGMENT_SIMILARITY) cluster++;
+			if (nearDuplicate(fingerprint, prev)) cluster++;
 		}
 
 		// (b) Progress-lexicon stall: paragraphs that recycle the recent
@@ -312,27 +317,20 @@ export class ThinkingLoopDetector {
 		// (not merely any anchor) still catches filler that name-drops one fixed
 		// path/identifier every paragraph, while sparing genuine per-target work
 		// that names a fresh file/symbol each time.
-		const words = new Set<string>(normalized.split(" ").filter(Boolean));
-		const priorVocab = new Set<string>();
-		for (const set of this.#wordWindow) for (const w of set) priorVocab.add(w);
+		const words = new Set<string>(tokens);
+		const vocabulary = this.#vocabulary;
 		let unseen = 0;
-		for (const w of words) if (!priorVocab.has(w)) unseen++;
-		const novelty = priorVocab.size === 0 ? 1 : unseen / words.size;
+		for (const w of words) if (!vocabulary.has(w)) unseen++;
+		const novelty = vocabulary.size === 0 ? 1 : unseen / words.size;
 
-		const anchors = new Set<string>();
-		// Canonicalize so the same reference written as `Foo`, Foo, or FOO is one
-		// anchor and cannot masquerade as "new" to keep a fixed-reference stall alive.
-		for (const match of segment.matchAll(CONCRETE_ANCHOR)) anchors.add(match[0].replace(/`/g, "").toLowerCase());
-		let newAnchor = false;
-		for (const anchor of anchors) {
-			if (this.#anchorWindow.every(seen => !seen.has(anchor))) {
-				newAnchor = true;
-				break;
-			}
-		}
-
-		if (novelty <= LEX_STALL_NOVELTY_FLOOR && !newAnchor) {
-			this.#lexStallRun++;
+		// A segment that adds enough new words resets the run whatever it names, so its anchors are
+		// matched only when it falls under the novelty floor.
+		let anchorsHeld: Set<string> | string = segment;
+		if (novelty <= LEX_STALL_NOVELTY_FLOOR) {
+			const anchors = concreteAnchors(segment);
+			anchorsHeld = anchors;
+			if (this.#namesNewAnchor(anchors)) this.#lexStallRun = 0;
+			else this.#lexStallRun++;
 		} else {
 			this.#lexStallRun = 0;
 		}
@@ -340,8 +338,15 @@ export class ThinkingLoopDetector {
 		this.#window.push(fingerprint);
 		if (this.#window.length > SEGMENT_WINDOW) this.#window.shift();
 		this.#wordWindow.push(words);
-		if (this.#wordWindow.length > LEX_NOVELTY_WINDOW) this.#wordWindow.shift();
-		this.#anchorWindow.push(anchors);
+		for (const w of words) vocabulary.set(w, (vocabulary.get(w) ?? 0) + 1);
+		if (this.#wordWindow.length > LEX_NOVELTY_WINDOW) {
+			for (const w of this.#wordWindow.shift() as Set<string>) {
+				const held = (vocabulary.get(w) as number) - 1;
+				if (held === 0) vocabulary.delete(w);
+				else vocabulary.set(w, held);
+			}
+		}
+		this.#anchorWindow.push(anchorsHeld);
 		if (this.#anchorWindow.length > LEX_NOVELTY_WINDOW) this.#anchorWindow.shift();
 		this.#count++;
 
@@ -354,6 +359,24 @@ export class ThinkingLoopDetector {
 			}
 		}
 		return null;
+	}
+
+	/** Whether `anchors` holds a reference no segment in the anchor window named. */
+	#namesNewAnchor(anchors: Set<string>): boolean {
+		const window = this.#anchorWindow;
+		for (const anchor of anchors) {
+			let seen = false;
+			for (let i = 0; i < window.length && !seen; i++) {
+				let held = window[i] as Set<string> | string;
+				if (typeof held === "string") {
+					held = concreteAnchors(held);
+					window[i] = held;
+				}
+				seen = held.has(anchor);
+			}
+			if (!seen) return true;
+		}
+		return false;
 	}
 }
 
@@ -579,11 +602,12 @@ const VERBATIM_UNIT_CONTENT = /[\p{L}\p{Extended_Pictographic}]/u;
  * Detect a unit repeated back-to-back at the tail (verbatim loop). Only a unit carrying a letter or
  * pictographic emoji counts.
  *
- * The ladder walks every unit length rather than guessing one, so it costs a comparison per length
- * per delta. Two things keep that cheap at a 200-char cap: the character test is answered once for
- * the whole window by measuring how far the nearest letter sits from the end (a unit of length `len`
- * carries content exactly when it reaches that far back), rather than re-scanning each candidate;
- * and the repeat walk stops at the first mismatch, which is the common case on the first comparison.
+ * The ladder probes unit lengths in ascending order, and two things keep it cheap at a 200-char cap.
+ * The character test is answered once for the whole window by measuring how far the nearest letter
+ * sits from the end (a unit of length `len` carries content exactly when it reaches that far back),
+ * rather than re-scanning each candidate. And a unit of length `len` can only repeat when the char
+ * `len` back from the end equals the last char, so the ladder jumps between occurrences of the last
+ * char instead of comparing at every length.
  */
 function detectVerbatimRepetition(text: string): [unit: string, count: number] | null {
 	if (text.length < VERBATIM_MIN_REPEATED_CHARS) return null;
@@ -595,12 +619,20 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 	const searchLength = end - start;
 
 	// Distance from the end to the nearest letter/emoji, capped at the longest unit probed. Any unit
-	// shorter than this is punctuation, digits or whitespace and is skipped without a regex call.
+	// shorter than this is punctuation, digits or whitespace and is never probed.
 	let contentAt = VERBATIM_MAX_UNIT + 1;
 	const scan = Math.min(searchLength, VERBATIM_MAX_UNIT);
 	for (let back = 1; back <= scan; back++) {
 		const at = end - back;
 		const code = text.charCodeAt(at);
+		// An ASCII char carries content exactly when it is a letter: no ASCII char is a pictograph.
+		if (code < 0x80) {
+			if (((code | 0x20) - 0x61) >>> 0 < 26) {
+				contentAt = back;
+				break;
+			}
+			continue;
+		}
 		// An emoji is two code units and a lone surrogate carries no Unicode property, so a low
 		// surrogate is tested together with the high half in front of it, and a unit has to reach one
 		// char further back to hold the whole pair.
@@ -613,8 +645,17 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 	}
 	if (contentAt > VERBATIM_MAX_UNIT) return null;
 
-	for (let len = Math.max(2, contentAt); len <= VERBATIM_MAX_UNIT; len++) {
-		if (searchLength < len * 4) break;
+	const minLen = Math.max(2, contentAt);
+	const maxLen = Math.min(VERBATIM_MAX_UNIT, Math.floor(searchLength / 4));
+	const last = text[end - 1] as string;
+	// `at` is the char `len` back from the end, and every `at` found holds the last char. `at` stays
+	// above `start` because `len` is at most a quarter of the window, so `at - 1` never goes negative.
+	for (
+		let at = text.lastIndexOf(last, end - 1 - minLen);
+		at >= end - 1 - maxLen;
+		at = text.lastIndexOf(last, at - 1)
+	) {
+		const len = end - 1 - at;
 		const unitAt = end - len;
 		// The last `len` chars are one repeat; count the blocks before them that equal it.
 		let count = 1;
@@ -646,21 +687,25 @@ function sameChars(text: string, a: number, b: number, length: number): boolean 
 	return true;
 }
 
-/** Lowercase and tokenize prose plus code/path payloads, dropping pure numbers. */
-function normalizeSegment(segment: string): string {
+/** Lowercased word tokens of prose plus code/path payloads, dropping pure numbers. */
+function segmentTokens(segment: string): string[] {
 	return segment
 		.toLowerCase()
 		.replace(/`([^`]*)`/g, " $1 ")
 		.replace(/[^a-z0-9]+/g, " ")
-		.split(/\s+/)
-		.filter(token => /[a-z]/.test(token))
-		.join(" ")
-		.trim();
+		.split(" ")
+		.filter(token => /[a-z]/.test(token));
 }
 
-/** Word-trigram shingle set of a normalized segment. */
-function trigramShingles(normalized: string): Set<string> {
-	const words = normalized.split(" ").filter(Boolean);
+/** Length of `tokens` joined by single spaces. */
+function joinedLength(tokens: readonly string[]): number {
+	let length = tokens.length > 0 ? tokens.length - 1 : 0;
+	for (const token of tokens) length += token.length;
+	return length;
+}
+
+/** Word-trigram shingle set of a segment's tokens. */
+function trigramShingles(words: readonly string[]): Set<string> {
 	if (words.length < 3) return new Set(words.length > 0 ? [words.join(" ")] : []);
 	const shingles = new Set<string>();
 	for (let i = 0; i + 3 <= words.length; i++) {
@@ -669,13 +714,35 @@ function trigramShingles(normalized: string): Set<string> {
 	return shingles;
 }
 
-function jaccard(a: Set<string>, b: Set<string>): number {
-	if (a.size === 0 || b.size === 0) return 0;
-	const [small, large] = a.size < b.size ? [a, b] : [b, a];
+/**
+ * Whether the Jaccard similarity of `a` and `b` reaches {@link SEGMENT_SIMILARITY}. The similarity
+ * only rises with the intersection, so the walk stops at the first miss after which even an
+ * intersection holding every unchecked shingle stays below it; two unrelated segments stop within
+ * the first few shingles.
+ */
+function nearDuplicate(a: Set<string>, b: Set<string>): boolean {
+	if (a.size === 0 || b.size === 0) return false;
+	const small = a.size < b.size ? a : b;
+	const large = small === a ? b : a;
+	const total = a.size + b.size;
 	let intersection = 0;
+	let unchecked = small.size;
 	for (const x of small) {
-		if (large.has(x)) intersection++;
+		unchecked--;
+		if (large.has(x)) {
+			intersection++;
+		} else {
+			const best = intersection + unchecked;
+			if (best / (total - best) < SEGMENT_SIMILARITY) return false;
+		}
 	}
-	const union = a.size + b.size - intersection;
-	return union === 0 ? 0 : intersection / union;
+	return intersection / (total - intersection) >= SEGMENT_SIMILARITY;
+}
+
+/** Concrete anchors in a segment, canonicalized so the same reference written as `Foo`, Foo, or FOO
+ *  is one anchor and cannot masquerade as "new" to keep a fixed-reference stall alive. */
+function concreteAnchors(segment: string): Set<string> {
+	const anchors = new Set<string>();
+	for (const match of segment.matchAll(CONCRETE_ANCHOR)) anchors.add(match[0].replace(/`/g, "").toLowerCase());
+	return anchors;
 }
