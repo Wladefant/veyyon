@@ -1,10 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { buildModel } from "@veyyon/catalog/build";
 import { streamOpenAICodexResponses } from "../src/providers/openai-codex-responses";
-import type { Context, FetchImpl, Model, ProviderSessionState } from "../src/types";
+import type {
+	Context,
+	FetchImpl,
+	Model,
+	ProviderSessionState,
+} from "../src/types";
 
 function createCodexTestToken(accountId = "acc_test"): string {
-	const payload = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } })).toBase64();
+	const payload = Buffer.from(
+		JSON.stringify({
+			"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+		}),
+	).toBase64();
 	return `aaa.${payload}.bbb`;
 }
 
@@ -52,11 +61,35 @@ class MockWebSocket {
 	}
 
 	emitCodexResponse(opts: { responseId: string; text: string }): void {
-		this.sendJson({ type: "response.created", response: { id: opts.responseId } });
-		this.sendJson({ type: "response.output_item.added", item: { type: "message", id: `msg_${opts.responseId}`, role: "assistant", status: "in_progress", content: [] } });
+		this.sendJson({
+			type: "response.created",
+			response: { id: opts.responseId },
+		});
+		this.sendJson({
+			type: "response.output_item.added",
+			item: {
+				type: "message",
+				id: `msg_${opts.responseId}`,
+				role: "assistant",
+				status: "in_progress",
+				content: [],
+			},
+		});
 		this.sendJson({ type: "response.output_text.delta", delta: opts.text });
-		this.sendJson({ type: "response.output_item.done", item: { type: "message", id: `msg_${opts.responseId}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: opts.text }] } });
-		this.sendJson({ type: "response.completed", response: { id: opts.responseId, status: "completed" } });
+		this.sendJson({
+			type: "response.output_item.done",
+			item: {
+				type: "message",
+				id: `msg_${opts.responseId}`,
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text: opts.text }],
+			},
+		});
+		this.sendJson({
+			type: "response.completed",
+			response: { id: opts.responseId, status: "completed" },
+		});
 	}
 }
 
@@ -69,49 +102,76 @@ describe("codex websocket append state preservation on throttling", () => {
 	it.each([
 		["rate_limit_exceeded", false],
 		["slow_down", true],
-	] as const)("preserves append continuation when rejected with %s", async (code, emitPartialResponse) => {
-		const sentRequests: Array<Record<string, unknown>> = [];
-		const fetchMock = vi.fn(async () => {
-			throw new Error("SSE fallback should not be called");
-		});
+	] as const)(
+		"preserves append continuation when rejected with %s",
+		async (code, emitPartialResponse) => {
+			const sentRequests: Array<Record<string, unknown>> = [];
+			const fetchMock = vi.fn(async () => {
+				throw new Error("SSE fallback should not be called");
+			});
 
-		class ThrottledWebSocket extends MockWebSocket {
-			override send(data: string): void {
-				const request = JSON.parse(data) as Record<string, unknown>;
-				sentRequests.push(request);
-				if (sentRequests.length === 1) {
-					this.emitCodexResponse({ responseId: "resp_1", text: "Answer 1" });
-				} else if (sentRequests.length === 2) {
-					expect(request.previous_response_id).toBe("resp_1");
-					if (emitPartialResponse) this.sendJson({ type: "response.created", response: { id: "resp_rejected" } });
-					this.sendJson({ type: "error", code, message: "Throttled" });
-				} else if (sentRequests.length === 3) {
-					this.emitCodexResponse({ responseId: "resp_3", text: "Answer 3" });
+			class ThrottledWebSocket extends MockWebSocket {
+				override send(data: string): void {
+					const request = JSON.parse(data) as Record<string, unknown>;
+					sentRequests.push(request);
+					if (sentRequests.length === 1) {
+						this.emitCodexResponse({ responseId: "resp_1", text: "Answer 1" });
+					} else if (sentRequests.length === 2) {
+						expect(request.previous_response_id).toBe("resp_1");
+						if (emitPartialResponse)
+							this.sendJson({
+								type: "response.created",
+								response: { id: "resp_rejected" },
+							});
+						this.sendJson({ type: "error", code, message: "Throttled" });
+					} else if (sentRequests.length === 3) {
+						this.emitCodexResponse({ responseId: "resp_3", text: "Answer 3" });
+					}
 				}
 			}
-		}
 
-		global.WebSocket = ThrottledWebSocket as unknown as typeof WebSocket;
-		const options = {
-			fetch: fetchMock as FetchImpl,
-			apiKey: createCodexTestToken(),
-			sessionId: `ws-${code}-session`,
-			providerSessionState: new Map<string, ProviderSessionState>(),
-		};
-		const context: Context = { messages: [{ role: "user", content: "Q1", timestamp: 1 }] };
-		const first = await streamOpenAICodexResponses(createCodexTestModel(), context, options).result();
-		expect(first.stopReason).toBe("stop");
+			global.WebSocket = ThrottledWebSocket as unknown as typeof WebSocket;
+			const options = {
+				fetch: fetchMock as FetchImpl,
+				apiKey: createCodexTestToken(),
+				sessionId: `ws-${code}-session`,
+				providerSessionState: new Map<string, ProviderSessionState>(),
+			};
+			const context: Context = {
+				messages: [{ role: "user", content: "Q1", timestamp: 1 }],
+			};
+			const first = await streamOpenAICodexResponses(
+				createCodexTestModel(),
+				context,
+				options,
+			).result();
+			expect(first.stopReason).toBe("stop");
 
-		const nextContext: Context = { messages: [...context.messages, first, { role: "user", content: "Q2", timestamp: 2 }] };
-		const rejected = await streamOpenAICodexResponses(createCodexTestModel(), nextContext, options).result();
-		expect(rejected.stopReason).toBe("error");
+			const nextContext: Context = {
+				messages: [
+					...context.messages,
+					first,
+					{ role: "user", content: "Q2", timestamp: 2 },
+				],
+			};
+			const rejected = await streamOpenAICodexResponses(
+				createCodexTestModel(),
+				nextContext,
+				options,
+			).result();
+			expect(rejected.stopReason).toBe("error");
 
-		const retried = await streamOpenAICodexResponses(createCodexTestModel(), nextContext, options).result();
-		expect(retried.stopReason).toBe("stop");
-		expect(fetchMock).not.toHaveBeenCalled();
-		expect(sentRequests).toHaveLength(3);
-		expect(sentRequests[2]?.previous_response_id).toBe("resp_1");
-	});
+			const retried = await streamOpenAICodexResponses(
+				createCodexTestModel(),
+				nextContext,
+				options,
+			).result();
+			expect(retried.stopReason).toBe("stop");
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(sentRequests).toHaveLength(3);
+			expect(sentRequests[2]?.previous_response_id).toBe("resp_1");
+		},
+	);
 
 	it("resets append continuation on generic failure", async () => {
 		const sentRequests: Array<Record<string, unknown>> = [];
@@ -122,7 +182,11 @@ describe("codex websocket append state preservation on throttling", () => {
 				if (sentRequests.length === 1) {
 					this.emitCodexResponse({ responseId: "resp_1", text: "Answer 1" });
 				} else if (sentRequests.length === 2) {
-					this.sendJson({ type: "error", code: "invalid_request_error", message: "Bad request" });
+					this.sendJson({
+						type: "error",
+						code: "invalid_request_error",
+						message: "Bad request",
+					});
 				} else if (sentRequests.length === 3) {
 					this.emitCodexResponse({ responseId: "resp_3", text: "Answer 3" });
 				}
@@ -136,15 +200,35 @@ describe("codex websocket append state preservation on throttling", () => {
 			sessionId: "ws-generic-fail-session",
 			providerSessionState: new Map<string, ProviderSessionState>(),
 		};
-		const context: Context = { messages: [{ role: "user", content: "Q1", timestamp: 1 }] };
-		const first = await streamOpenAICodexResponses(createCodexTestModel(), context, options).result();
+		const context: Context = {
+			messages: [{ role: "user", content: "Q1", timestamp: 1 }],
+		};
+		const first = await streamOpenAICodexResponses(
+			createCodexTestModel(),
+			context,
+			options,
+		).result();
 		expect(first.stopReason).toBe("stop");
 
-		const nextContext: Context = { messages: [...context.messages, first, { role: "user", content: "Q2", timestamp: 2 }] };
-		const rejected = await streamOpenAICodexResponses(createCodexTestModel(), nextContext, options).result();
+		const nextContext: Context = {
+			messages: [
+				...context.messages,
+				first,
+				{ role: "user", content: "Q2", timestamp: 2 },
+			],
+		};
+		const rejected = await streamOpenAICodexResponses(
+			createCodexTestModel(),
+			nextContext,
+			options,
+		).result();
 		expect(rejected.stopReason).toBe("error");
 
-		const third = await streamOpenAICodexResponses(createCodexTestModel(), nextContext, options).result();
+		const third = await streamOpenAICodexResponses(
+			createCodexTestModel(),
+			nextContext,
+			options,
+		).result();
 		expect(third.stopReason).toBe("stop");
 		expect(sentRequests).toHaveLength(3);
 		expect(sentRequests[2]?.previous_response_id).toBeUndefined();
