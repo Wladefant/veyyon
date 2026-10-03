@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Fixed Mermaid ASCII diagrams rendering on subtle chrome borders by using theme muted foreground for structural strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [18.1.11] - 2026-09-05
 

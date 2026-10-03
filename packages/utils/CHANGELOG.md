@@ -20,6 +20,10 @@
 - The session heartbeat and the `Previous session died silently` log line now carry `rssBytes`, `freeMemBytes`, `heapTotal`, `heapUsed`, `external`, `smol`, and `forceRAMSize`, so a session the operating system ended for want of memory or a per-process JSC heap ceiling (D04 abort) can be told from a terminal closing under it ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - The session heartbeat and the `Previous session died silently` log line now also carry the resource that runs out before RAM does: on Windows `commitChargeBytes`, `commitLimitBytes` and `processCommitBytes` (system commit against RAM plus pagefile, the "Out of Virtual Memory" limit of D06), and on Linux `cgroupMemoryBytes` and `cgroupMemoryMaxBytes` (the level of the cgroup v2 chain closest to its `memory.max`). Each field is absent where the platform cannot give it ([#73](https://github.com/Wladefant/veyyon/issues/73))
 
+### Fixed
+
+- Fixed Mermaid ASCII state diagram pseudostate markers and preserved transition labels above connector strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Changed
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).

@@ -13,6 +13,31 @@ describe("renderMermaidAscii", () => {
 		expect(rendered).not.toContain("──A─");
 	});
 
+	it("renders state pseudostates with their UML markers", () => {
+		const rendered = renderMermaidAscii(["stateDiagram-v2", "  [*] --> Created", "  Created --> [*]"].join("\n"), {
+			colorMode: "none",
+		});
+
+		expect(rendered).toMatch(/│\s+●\s+│/);
+		expect(rendered).toMatch(/║\s+◎\s+║/);
+	});
+
+	it("keeps dense transition labels intact above connector lines", () => {
+		const rendered = renderMermaidAscii(
+			[
+				"stateDiagram-v2",
+				"  Working --> Working: sessions die and respawn freely",
+				"  Working --> Archived: cheap exit, branches kept",
+				"  Archived --> Working: resume rebuilds substrate",
+			].join("\n"),
+			{ colorMode: "none" },
+		);
+
+		expect(rendered).toContain("sessions die and respawn freely");
+		expect(rendered).toContain("cheap exit, branches kept");
+		expect(rendered).toContain("resume rebuilds substrate");
+	});
+
 	it("returns a bounded fallback for declaration orders that make a clean route unreachable", () => {
 		const rendered = renderMermaidAsciiSafe(
 			[
