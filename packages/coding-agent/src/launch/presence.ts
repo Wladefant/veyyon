@@ -1,7 +1,9 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, isProcessAlive, logger, postmortem } from "@veyyon/utils";
+import { atomicWriteFile, isEnoent, logger, postmortem } from "@veyyon/utils";
+import { getProcessStartIdentity } from "@veyyon/utils/process-liveness";
+import { daemonOwnerIsAlive } from "./broker-lease";
 import {
 	canonicalProjectDir,
 	daemonBrokerLeasePath,
@@ -46,7 +48,15 @@ export async function registerDaemonProjectPresence(
 	await fs.mkdir(clientsDir, { recursive: true, mode: 0o700 });
 	const id = `${process.pid}-${crypto.randomUUID()}`;
 	const presencePath = daemonPresenceEntryPath(clientsDir, id);
-	await Bun.write(presencePath, JSON.stringify({ pid: process.pid, id, projectDir: canonical }));
+	await atomicWriteFile(
+		presencePath,
+		JSON.stringify({
+			pid: process.pid,
+			processIdentity: getProcessStartIdentity(process.pid),
+			id,
+			projectDir: canonical,
+		}),
+	);
 	await fs.chmod(presencePath, 0o600);
 	let closed = false;
 	const close = async (): Promise<void> => {
@@ -71,6 +81,7 @@ export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<
 	}
 	let live = false;
 	for (const entry of entries) {
+		if (!entry.endsWith(".json")) continue;
 		const presencePath = path.join(clientsDir, entry);
 		try {
 			const decoded: unknown = JSON.parse(await fs.readFile(presencePath, "utf8"));
@@ -83,7 +94,7 @@ export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<
 				await fs.rm(presencePath, { force: true });
 				continue;
 			}
-			if (isProcessAlive(decoded.pid)) live = true;
+			if (daemonOwnerIsAlive(decoded, (await fs.stat(presencePath)).mtimeMs)) live = true;
 			else await fs.rm(presencePath, { force: true });
 		} catch (error) {
 			if (!isEnoent(error)) await fs.rm(presencePath, { force: true });
@@ -103,7 +114,7 @@ async function hasLiveDaemonBroker(runtimeDir: string): Promise<boolean> {
 	if (typeof raw !== "object" || raw === null || !("pid" in raw) || typeof raw.pid !== "number") {
 		return false;
 	}
-	return isProcessAlive(raw.pid);
+	return daemonOwnerIsAlive(raw, (await fs.stat(daemonBrokerLeasePath(runtimeDir))).mtimeMs);
 }
 
 /**

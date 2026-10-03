@@ -10,6 +10,7 @@
 - `StallStackSource` requires `park()`, which `LoopWatchdog` calls when it parks.
 
 ### Added
+- Added OS-verifiable process creation timestamps for safe migration of legacy PID records; unsupported or inconsistent observations remain unknown ([#411](https://github.com/Wladefant/veyyon/issues/411)).
 - Added opt-in corruption recovery to `openSqliteDatabase` and `openSqliteDatabaseSync`, preserving damaged stores and sidecars before recreating usable replacements ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 042028fd018b1282fbe660ab7255ebad18dd4db5).
 - Added `openSqliteDatabase` to `@veyyon/utils/sqlite` for store initialization with bounded busy retries, connection cleanup, and path-attributed errors ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 - SQLite store initialization uses bounded busy retries, closes failed connections, and attributes failures to the database path ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
