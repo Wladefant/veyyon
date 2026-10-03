@@ -587,7 +587,7 @@ describe("artifact error capture mechanics", () => {
 
 	test("runInteractiveBashPty enforces small nondefault artifactMaxBytes cap", async () => {
 		const settings = await Settings.init();
-		settings.set("tools.artifactMaxBytes", 1); // 1 MB cap
+		const previousArtifactMaxBytes = settings.get("tools.artifactMaxBytes");
 
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-cap-"));
 		const artifactPath = path.join(tmpDir, "sample.artifact");
@@ -608,6 +608,7 @@ describe("artifact error capture mechanics", () => {
 		});
 
 		try {
+			settings.set("tools.artifactMaxBytes", 1);
 			const res = await runInteractiveBashPty(mockTerminal, {
 				command: "echo test",
 				cwd: tmpDir,
@@ -621,14 +622,16 @@ describe("artifact error capture mechanics", () => {
 			expect(content).toContain("[ARTIFACT TRUNCATED");
 			expect(fs.statSync(artifactPath).size).toBeLessThan(1_200_000);
 		} finally {
+			settings.set("tools.artifactMaxBytes", previousArtifactMaxBytes);
 			ptySpy.mockRestore();
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
+		expect(settings.get("tools.artifactMaxBytes")).toBe(previousArtifactMaxBytes);
 	});
 
 	test("runInteractiveBashPty respects 0 artifactMaxBytes as unlimited", async () => {
 		const settings = await Settings.init();
-		settings.set("tools.artifactMaxBytes", 0); // 0 = unlimited
+		const previousArtifactMaxBytes = settings.get("tools.artifactMaxBytes");
 
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-unlimited-"));
 		const artifactPath = path.join(tmpDir, "unlimited.artifact");
@@ -649,6 +652,7 @@ describe("artifact error capture mechanics", () => {
 		});
 
 		try {
+			settings.set("tools.artifactMaxBytes", 0);
 			const res = await runInteractiveBashPty(mockTerminal, {
 				command: "echo test",
 				cwd: tmpDir,
@@ -662,8 +666,10 @@ describe("artifact error capture mechanics", () => {
 			expect(content).not.toContain("[ARTIFACT TRUNCATED");
 			expect(fs.statSync(artifactPath).size).toBeGreaterThanOrEqual(1_200_000);
 		} finally {
+			settings.set("tools.artifactMaxBytes", previousArtifactMaxBytes);
 			ptySpy.mockRestore();
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
+		expect(settings.get("tools.artifactMaxBytes")).toBe(previousArtifactMaxBytes);
 	});
 });

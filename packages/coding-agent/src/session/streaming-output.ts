@@ -834,8 +834,8 @@ export class OutputSink {
 	// owns a head budget + a rolling tail buffer; once the head is closed,
 	// subsequent chunks are diverted into `#artifactTailRing` (bounded by
 	// `#artifactTailBudget`). On `dump()` the tail is flushed back to the sink
-	// behind a `[ARTIFACT TRUNCATED: …]` notice. The default cap is disabled so
-	// advertised `artifact://<id>` captures are lossless.
+	// behind a `[ARTIFACT TRUNCATED: …]` notice. The default cap is 16 MiB;
+	// set `artifactMaxBytes` to zero for a lossless artifact capture.
 	readonly #artifactMaxBytes: number;
 	readonly #artifactHeadBudget: number;
 	readonly #artifactTailBudget: number;
