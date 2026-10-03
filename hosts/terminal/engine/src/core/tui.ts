@@ -3572,13 +3572,7 @@ export class TUI extends Container {
 		const { window, contentRows } = this.#composeResizeViewport(width, height);
 		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
 		const altEnter = widthChanged ? this.#enterResizeAltSequence() : "";
-		let buffer = homeRewriteSequence(
-			this.#paintBeginSequence + altEnter,
-			window,
-			width,
-			height,
-			this.#imageBudget,
-		);
+		let buffer = homeRewriteSequence(this.#paintBeginSequence + altEnter, window, width, height, this.#imageBudget);
 		// Park the hardware cursor at the real content bottom, not the padded
 		// viewport bottom: a later height shrink would otherwise scroll the live
 		// rows below the cursor into native scrollback and duplicate them until
