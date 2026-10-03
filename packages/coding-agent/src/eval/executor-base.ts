@@ -215,6 +215,11 @@ export async function waitForPromiseWithCancellation<T>(
 	options: { signal?: AbortSignal; deadlineMs?: number },
 	cancelledErrorClass: CancelledErrorClass,
 ): Promise<T> {
+	// Every exit below, including the early throws, abandons `promise` before the `.then` at the end can
+	// observe it. The caller built it a moment ago (a kernel start that rejects with the aborted signal's
+	// reason), so an abandoned rejection would surface as a process-fatal unhandled rejection. The cell
+	// reports the cancellation; the outcome of the abandoned work has nowhere left to go.
+	promise.catch(() => {});
 	if (options.signal?.aborted) {
 		throw new cancelledErrorClass(isTimedOutCancellation(options.signal.reason, cancelledErrorClass, options.signal));
 	}

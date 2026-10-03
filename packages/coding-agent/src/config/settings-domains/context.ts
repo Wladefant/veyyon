@@ -30,6 +30,19 @@ export const CONTEXT_SETTINGS = {
 		},
 	},
 
+	// Opt in to advertised maximum context windows and premium long-context tiers.
+	extendedContext: {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "General",
+			label: "Extended Context",
+			description:
+				"Use larger context windows where supported (up to the model's advertised maximum); may incur premium pricing. Off caps premium-tier models at their standard-pricing window. Applies after a model refresh or restart",
+		},
+	},
+
 	// Compaction
 	"compaction.enabled": {
 		type: "boolean",
