@@ -295,7 +295,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/coding-agent/src/cli/init-xdg.ts",
 	"packages/coding-agent/src/cli/read-cli.ts",
 	"packages/coding-agent/src/cli/rollback-picker-host.ts",
-	"packages/coding-agent/src/cli/session-picker.ts",
 	"packages/coding-agent/src/cli/session-stats-cli.ts",
 	"packages/coding-agent/src/cli/stats-cli.ts",
 	"packages/coding-agent/src/cli/worktree-cli.ts",
