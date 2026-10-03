@@ -3071,8 +3071,13 @@ export type ResponseInputItem =
 	| ResponseCustomToolCallOutput
 	| ResponseCustomToolCall
 	| ResponseInputItem.CompactionTrigger
+	| ResponseInputItem.ConfigurationUpdate
 	| ResponseInputItem.ItemReference;
 export declare namespace ResponseInputItem {
+	interface ConfigurationUpdate {
+		type: "configuration_update";
+		reasoning: { effort: string };
+	}
 	/**
 	 * A message input to the model with a role indicating instruction following
 	 * hierarchy. Instructions given with the `developer` or `system` role take

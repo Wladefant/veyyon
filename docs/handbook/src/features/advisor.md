@@ -61,6 +61,17 @@ A bare `/advisor` opens a picker listing those subcommands.
 
 If `modelRoles.advisor` is set but does not resolve to an available model, the advisor stays inactive; it does not fall back to the main model. Correct or clear the assignment to start it.
 
+### Headless runs
+
+Use `--advisor` to enable the advisor for one print-mode process without
+persisting `advisor.enabled`:
+
+```sh
+veyyon -p --advisor "Review this task."
+```
+
+While a primary prompt is running, advisor concerns and blockers continue to steer that live turn. After the final prompt settles, print mode preserves late advisor notes without starting hidden primary turns, then waits up to ten minutes for final reviews before disposing the session. Error exits use a 30-second drain budget so failed automation can terminate. If either deadline expires, Veyyon logs the reviews that disposal will abandon; completed reviews retain their transcript and token/cost usage.
+
 ## What the advisor receives
 
 At each primary turn end, `AdvisorRuntime` receives only the new transcript delta since the last advisor update. Deltas are rendered with `formatSessionHistoryMarkdown(..., { includeThinking: true, includeToolIntent: true, watchedRoles: true, expandPrimaryContext: true })`, so the advisor can review assistant reasoning as well as user-visible text, tool calls, and tool results.

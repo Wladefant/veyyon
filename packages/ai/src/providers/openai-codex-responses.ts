@@ -444,6 +444,7 @@ export interface OpenAICodexWebSocketDebugStats {
 export type CodexWebSocketSessionState = {
 	disableWebsocket: boolean;
 	lastRequest?: RequestBody;
+	/** Last completed response; an in-progress response cannot replace the retry baseline. */
 	lastResponseId?: string;
 	lastResponseItems?: InputItem[];
 	canAppend: boolean;
@@ -1103,13 +1104,7 @@ class CodexStreamRuntime {
 		const input = (rawEvent as { input?: string }).input;
 		if (typeof input === "string") finalizeCustomToolCallInputDone(entry.block, input);
 	}
-	handleResponseCreated(rawEvent: Record<string, unknown>): void {
-		const response = (rawEvent as { response?: { id?: string } }).response;
-		const state = this.websocketState;
-		if (state && this.transport === "websocket" && typeof response?.id === "string" && response.id.length > 0) {
-			state.lastResponseId = response.id;
-		}
-	}
+
 }
 
 interface CodexWhitespaceToolCallArgumentsDeltaState {
@@ -1130,6 +1125,7 @@ interface CodexStreamFailureContext {
 	output: AssistantMessage;
 	options: OpenAICodexResponsesOptions | undefined;
 	requestContext: CodexRequestContext;
+	runtime?: CodexStreamRuntime;
 	startTime: number;
 	firstTokenTime?: number;
 }
@@ -1354,15 +1350,20 @@ export function normalizeCodexToolChoice(
 	return undefined;
 }
 
-function getCodexServiceTierCostMultiplier(
-	model: Pick<Model<"openai-codex-responses">, "id">,
+/**
+ * Bill multiplier for a service tier. The model's own `serviceTierCost` wins;
+ * a model without one keeps the historical rates (flex halves, priority doubles,
+ * gpt-5.5 priority is 2.5x).
+ */
+export function getCodexServiceTierCostMultiplier(
+	model: Pick<Model<"openai-codex-responses">, "id" | "serviceTierCost">,
 	serviceTier: ServiceTier | "default" | undefined,
 ): number {
 	switch (serviceTier) {
 		case "flex":
-			return 0.5;
+			return model.serviceTierCost?.flex ?? 0.5;
 		case "priority":
-			return model.id === "gpt-5.5" ? 2.5 : 2;
+			return model.serviceTierCost?.priority ?? (model.id === "gpt-5.5" ? 2.5 : 2);
 		default:
 			return 1;
 	}
@@ -1383,7 +1384,7 @@ function resolveCodexCostServiceTier(res: unknown, req?: unknown): ServiceTier |
 }
 
 function applyCodexServiceTierPricing(
-	model: Pick<Model<"openai-codex-responses">, "id">,
+	model: Pick<Model<"openai-codex-responses">, "id" | "serviceTierCost">,
 	usage: AssistantMessage["usage"],
 	resTier: unknown,
 	reqTier: unknown,
@@ -1947,10 +1948,32 @@ function isCodexStalePreviousResponseError(error: unknown): boolean {
 		/not[ _]?found|invalid|expired|stale|unsupported/i.test(error.message)
 	);
 }
+
+const CODEX_APPEND_PRESERVING_REJECTION_CODES: Record<string, true> = {
+	rate_limit_exceeded: true,
+	slow_down: true,
+};
+
+function shouldPreserveCodexWebSocketAppendState(context: CodexStreamFailureContext, error: unknown): boolean {
+	if (!(error instanceof CodexProviderStreamError) || !error.code) return false;
+	const state = context.requestContext.websocketState;
+	return (
+		Object.hasOwn(CODEX_APPEND_PRESERVING_REJECTION_CODES, error.code.toLowerCase()) &&
+		context.runtime?.transport === "websocket" &&
+		state?.canAppend === true &&
+		state.lastRequest !== undefined &&
+		state.lastResponseId !== undefined &&
+		state.lastResponseItems !== undefined
+	);
+}
 async function handleCodexStreamFailure(context: CodexStreamFailureContext, error: unknown): Promise<AssistantMessage> {
 	const { output } = context;
 	if (context.requestContext.websocketState) {
-		resetCodexWebSocketChain(context.requestContext.websocketState);
+		if (shouldPreserveCodexWebSocketAppendState(context, error)) {
+			context.requestContext.websocketState.connection = undefined;
+		} else {
+			resetCodexWebSocketChain(context.requestContext.websocketState);
+		}
 	}
 	const result = await AIError.finalize(error, {
 		api: context.model.api,
@@ -2117,7 +2140,6 @@ class CodexStreamProcessor {
 				this.#handleOutputItemDone(rawEvent);
 				return;
 			case "response.created":
-				runtime.handleResponseCreated(rawEvent);
 				return;
 			case "response.completed":
 			case "response.done":
@@ -3609,14 +3631,19 @@ class CodexWebSocketConnection {
 	}
 
 	close(reason = "done"): void {
-		if (
-			this.#socket &&
-			(this.#socket.readyState === WebSocket.OPEN || this.#socket.readyState === WebSocket.CONNECTING)
-		) {
-			this.#socket.close(1000, reason);
-		}
+		const socket = this.#socket;
 		this.#socket = null;
 		this.#stopHeartbeat();
+		if (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING)) return;
+		try {
+			socket.close(1000, reason);
+		} catch (error) {
+			CODEX_DEBUG &&
+				logger.debug("[codex] codex websocket close failed", {
+					error: error instanceof Error ? error.message : String(error),
+					reason,
+				});
+		}
 	}
 
 	async connect(signal?: AbortSignal): Promise<void> {
@@ -3644,7 +3671,7 @@ class CodexWebSocketConnection {
 			if (signal) signal.removeEventListener("abort", onAbort);
 		};
 		const onAbort = () => {
-			socket.close(1000, "aborted");
+			this.close("aborted");
 			if (!settled) {
 				settled = true;
 				clearPending();
@@ -3660,7 +3687,7 @@ class CodexWebSocketConnection {
 		}
 		if (!settled) {
 			timeout = setTimeout(() => {
-				socket.close(1000, "connect-timeout");
+				this.close("connect-timeout");
 				if (!settled) {
 					settled = true;
 					clearPending();
@@ -4213,11 +4240,6 @@ async function openCodexSseEventStream(
 		responsesLite,
 		requestMetadata,
 	);
-	const bodyJson = await serializeBody();
-	const compressedBody = compressCodexRequestBody(bodyJson, url);
-	if (compressedBody !== undefined) {
-		headers.set("content-encoding", "zstd");
-	}
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex request", {
 			url,
@@ -4245,16 +4267,24 @@ async function openCodexSseEventStream(
 			clearPreResponseTimeout = undefined;
 		}
 	};
-	let response: Response;
-	const send = (requestBody: string | Uint8Array): Promise<Response> =>
+	let lastSentBody: string | Uint8Array | undefined;
+	const send = (allowCompression: boolean): Promise<Response> =>
 		fetchProviderWithRetry(url, {
 			method: "POST",
 			headers,
 			signal,
-			prepareInit: () => {
+			prepareInit: async () => {
+				const bodyJson = await serializeBody();
+				const compressedBody = allowCompression ? compressCodexRequestBody(bodyJson, url) : undefined;
+				if (compressedBody !== undefined) {
+					headers.set("content-encoding", "zstd");
+				} else {
+					headers.delete("content-encoding");
+				}
+				lastSentBody = compressedBody ?? bodyJson;
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
-				return { body: requestBody, signal: watchdog.signal };
+				return { body: lastSentBody, signal: watchdog.signal };
 			},
 			maxAttempts: CODEX_MAX_RETRIES + 1,
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
@@ -4263,9 +4293,10 @@ async function openCodexSseEventStream(
 			fetch: fetchAttempt,
 			timeout: false,
 		});
+	let response: Response;
 	try {
-		response = await send(compressedBody ?? bodyJson);
-		if (compressedBody !== undefined && (response.status === 400 || response.status === 415)) {
+		response = await send(true);
+		if (lastSentBody instanceof Uint8Array && (response.status === 400 || response.status === 415)) {
 			const rejectedStatus = response.status;
 			await response.body?.cancel();
 			headers.delete("content-encoding");
@@ -4274,7 +4305,7 @@ async function openCodexSseEventStream(
 					url,
 					status: rejectedStatus,
 				});
-			response = await send(bodyJson);
+			response = await send(false);
 		}
 	} finally {
 		clearPreResponseTimeout?.();
