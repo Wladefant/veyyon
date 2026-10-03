@@ -9,7 +9,9 @@ describe("SqliteAuthCredentialStore opener", () => {
 	let tempDir: string;
 
 	beforeEach(async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-auth-store-opener-"));
+		tempDir = await fs.mkdtemp(
+			path.join(os.tmpdir(), "veyyon-auth-store-opener-"),
+		);
 	});
 
 	afterEach(async () => {
@@ -35,7 +37,9 @@ describe("SqliteAuthCredentialStore opener", () => {
 		const dbPath = path.join(tempDir, "corrupt-init.db");
 		// Write a table with an incompatible schema that causes index creation or schema initialization to fail
 		const rawDb = new Database(dbPath);
-		rawDb.run("CREATE TABLE auth_credentials (id TEXT PRIMARY KEY, not_the_right_columns INT)");
+		rawDb.run(
+			"CREATE TABLE auth_credentials (id TEXT PRIMARY KEY, not_the_right_columns INT)",
+		);
 		rawDb.run("CREATE TABLE auth_schema_version (version INT)");
 		rawDb.run("INSERT INTO auth_schema_version VALUES (99999)"); // unsupported future schema version
 		rawDb.close();
