@@ -169,6 +169,21 @@ describe("HTML export Markdown", () => {
 		expect(names).toEqual(["Crew Ship", "Hover Ship"]);
 	});
 
+	test("does not emit attacker-controlled attributes from image alt text in loose ordered lists", () => {
+		const rendered = renderMarkdown(`1. ![" onerror=alert(1) x](missing.png)
+   \`\`\`json
+   { "a": 1 }
+   \`\`\`
+
+2. second
+   \`\`\`json
+   { "a": 2 }
+   \`\`\``);
+		for (const el of rendered.querySelectorAll("*")) {
+			expect(el.getAttributeNames().filter(name => name.startsWith("on"))).toEqual([]);
+		}
+	});
+
 	test("renders a deep valid conversation tree without overflowing the call stack", () => {
 		const document = renderSession(createDeepChainSession(30_000));
 
