@@ -6,8 +6,11 @@
  * sends again and no default view draws. A cold entry keeps the fields the index and the path walk
  * read (`type`, `id`, `parentId`, `timestamp`, and every small value); each large field is replaced
  * by an accessor that reads the entry's line back from the session file on first use and restores
- * it through the same pipeline a load runs. A read-back entry stays in memory until the next pass
- * cools it again.
+ * it through the same pipeline a load runs. A cold message entry keeps a message object holding the
+ * message's small values (`role`, `toolName`, `toolCallId`, `isError`, `stopReason`, `provider`,
+ * `model`), so a scan that picks entries by them reads none of them back; the message's large
+ * fields are accessors on that object. A read-back entry stays in memory until the next pass cools
+ * it again.
  *
  * The line is read through a {@link PinnedSessionReader}, a handle on the file object the offsets
  * were recorded against. A republish by this process or another one, a relocation, or an unlink
@@ -21,7 +24,7 @@
  * or externalizes comes back truncated or restored from the blob store, and a replayed reasoning
  * signature persistence drops does not come back.
  */
-import { errorMessage } from "@veyyon/utils";
+import { errorMessage, isRecord } from "@veyyon/utils";
 import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
 
@@ -32,10 +35,17 @@ import type { PinnedSessionReader } from "./session-storage";
 export const MIN_COLD_LINE_BYTES = 1024;
 
 /** A string field shorter than this stays in memory beside the entry's structural fields. */
-const MIN_COLD_STRING_LENGTH = 256;
+export const MIN_COLD_STRING_LENGTH = 256;
 
 /** Fields every entry keeps: what the id index, the tree and the branch walk read. */
 const RESIDENT_KEYS: ReadonlySet<string> = new Set(["type", "id", "parentId", "timestamp"]);
+
+/** A message entry's resident fields: its message is replaced by a stand-in rather than an accessor. */
+const MESSAGE_ENTRY_RESIDENT_KEYS: ReadonlySet<string> = new Set([...RESIDENT_KEYS, "message"]);
+
+const NO_KEYS: ReadonlySet<string> = new Set();
+
+const NO_FIELDS: readonly string[] = [];
 
 /**
  * Entry kinds a session writes for replay and study and never reads while it runs: the prompt and
@@ -62,21 +72,55 @@ interface ColdStub {
 	file: ColdFile;
 	readonly offset: number;
 	readonly length: number;
+	readonly entry: SessionEntry;
+	/** The entry's fields replaced by accessors. */
 	readonly keys: readonly string[];
+	/**
+	 * A message entry's stand-in for its message: the message's small values, and an accessor for
+	 * each field in `messageKeys`. `entry.message` returns it without reading the line back.
+	 */
+	readonly message: Record<string, unknown> | undefined;
+	readonly messageKeys: readonly string[];
 }
 
 /** Parse one session line and restore what persistence moved out of it. */
 export type ColdLineRestore = (line: string) => SessionEntry;
 
+/** The fields of `record` outside `resident` whose values are objects or long strings. */
+function largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>): string[] {
+	const keys: string[] = [];
+	for (const key of Object.keys(record)) {
+		if (resident.has(key)) continue;
+		const value = record[key];
+		if (
+			typeof value === "string"
+				? value.length >= MIN_COLD_STRING_LENGTH
+				: typeof value === "object" && value !== null
+		) {
+			keys.push(key);
+		}
+	}
+	return keys;
+}
+
+function defineValue(target: Record<string, unknown>, key: string, value: unknown): void {
+	Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
 export class ColdEntryPayloads {
-	/** Weak, so an entry the session no longer holds takes its stub, and in time its handle, with it. */
-	readonly #stubs = new WeakMap<SessionEntry, ColdStub>();
+	/**
+	 * Keyed by the cold entry and by its message stand-in. Weak, so an entry the session no longer
+	 * holds takes its stub, and in time its handle, with it.
+	 */
+	readonly #stubs = new WeakMap<object, ColdStub>();
 	/** One accessor pair per field name, shared by every entry cooled on that field. */
 	readonly #accessors = new Map<string, PropertyDescriptor>();
 	/** Key lists shared by every entry with the same cooled fields. */
 	readonly #keySets = new Map<string, readonly string[]>();
 	/** The file object new cold entries are recorded against. */
 	#current: ColdFile | undefined;
+	/** The accessor pair every cold message entry's `message` is replaced by, built on first use. */
+	#messageDescriptor: PropertyDescriptor | undefined;
 
 	/** Identity of the file object new cold entries are recorded against, if one is open. */
 	get pinnedIdentity(): string | undefined {
@@ -130,29 +174,37 @@ export class ColdEntryPayloads {
 
 	/**
 	 * Move `entry`'s large fields out of memory, to be read back from `length` bytes at `offset` of
-	 * the pinned object. Returns false when nothing is pinned, the entry is already cold, or no
-	 * field is large enough to move.
+	 * the pinned object. A message entry's message is replaced by a stand-in holding its small values
+	 * and an accessor for each large field. Returns false when nothing is pinned, the entry is already
+	 * cold, or no field is large enough to move.
 	 */
 	cool(entry: SessionEntry, offset: number, length: number): boolean {
 		const file = this.#current;
 		if (file === undefined || length < MIN_COLD_LINE_BYTES || this.#stubs.has(entry)) return false;
 		const record = entry as unknown as Record<string, unknown>;
-		const keys: string[] = [];
-		for (const key of Object.keys(record)) {
-			if (RESIDENT_KEYS.has(key)) continue;
-			const value = record[key];
-			if (
-				typeof value === "string"
-					? value.length >= MIN_COLD_STRING_LENGTH
-					: typeof value === "object" && value !== null
-			) {
-				keys.push(key);
+		const original = entry.type === "message" ? record.message : undefined;
+		const nested = isRecord(original) ? original : undefined;
+		const keys = largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
+		const movedFromMessage = nested === undefined ? NO_FIELDS : largeKeys(nested, NO_KEYS);
+		if (keys.length === 0 && movedFromMessage.length === 0) return false;
+		let message: Record<string, unknown> | undefined;
+		if (nested !== undefined && movedFromMessage.length > 0) {
+			// Built in the original's key order, so the entry serializes as it did.
+			message = {};
+			for (const key of Object.keys(nested)) {
+				if (movedFromMessage.includes(key)) Object.defineProperty(message, key, this.#accessor(key));
+				else message[key] = nested[key];
 			}
 		}
-		if (keys.length === 0) return false;
-		const shared = this.#sharedKeys(keys);
+		const shared = keys.length === 0 ? NO_FIELDS : this.#sharedKeys(keys);
+		const messageKeys = message === undefined ? NO_FIELDS : this.#sharedKeys(movedFromMessage);
 		for (const key of shared) Object.defineProperty(record, key, this.#accessor(key));
-		this.#stubs.set(entry, { file, offset, length, keys: shared });
+		const stub: ColdStub = { file, offset, length, entry, keys: shared, message, messageKeys };
+		this.#stubs.set(entry, stub);
+		if (message !== undefined) {
+			Object.defineProperty(record, "message", this.#messageAccessor());
+			this.#stubs.set(message, stub);
+		}
 		file.cold += 1;
 		return true;
 	}
@@ -180,10 +232,14 @@ export class ColdEntryPayloads {
 		return false;
 	}
 
-	/** Read `entry`'s large fields back into memory. A warm entry is left as it is. */
-	warm(entry: SessionEntry): void {
-		const stub = this.#stubs.get(entry);
+	/**
+	 * Read the large fields of the cold entry `receiver` is, or is the message stand-in of, back
+	 * into memory. A warm entry is left as it is.
+	 */
+	warm(receiver: object): void {
+		const stub = this.#stubs.get(receiver);
 		if (stub === undefined) return;
+		const { entry, message } = stub;
 		const line = stub.file.reader.read(stub.offset, stub.length);
 		let restored: Record<string, unknown>;
 		try {
@@ -193,7 +249,12 @@ export class ColdEntryPayloads {
 				`Session entry ${entry.id} could not be read back from bytes ${stub.offset}-${stub.offset + stub.length} of session object ${stub.file.reader.identity}: ${errorMessage(err)}`,
 			);
 		}
-		if (restored.id !== entry.id || restored.type !== entry.type) {
+		const restoredMessage = restored.message;
+		if (
+			restored.id !== entry.id ||
+			restored.type !== entry.type ||
+			(message !== undefined && !isRecord(restoredMessage))
+		) {
 			throw new Error(
 				`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${stub.offset}-${stub.offset + stub.length} of session object ${stub.file.reader.identity}`,
 			);
@@ -201,13 +262,12 @@ export class ColdEntryPayloads {
 		// Deleted first, so a throw above leaves the entry cold and readable again.
 		this.#stubs.delete(entry);
 		const record = entry as unknown as Record<string, unknown>;
-		for (const key of stub.keys) {
-			Object.defineProperty(record, key, {
-				value: restored[key],
-				writable: true,
-				enumerable: true,
-				configurable: true,
-			});
+		for (const key of stub.keys) defineValue(record, key, restored[key]);
+		if (message !== undefined) {
+			this.#stubs.delete(message);
+			const from = restoredMessage as Record<string, unknown>;
+			for (const key of stub.messageKeys) defineValue(message, key, from[key]);
+			defineValue(record, "message", message);
 		}
 		this.#release(stub.file);
 	}
@@ -225,7 +285,7 @@ export class ColdEntryPayloads {
 		file.reader.close();
 	}
 
-	#sharedKeys(keys: string[]): readonly string[] {
+	#sharedKeys(keys: readonly string[]): readonly string[] {
 		const name = keys.join("\0");
 		const known = this.#keySets.get(name);
 		if (known !== undefined) return known;
@@ -255,5 +315,30 @@ export class ColdEntryPayloads {
 		};
 		this.#accessors.set(key, descriptor);
 		return descriptor;
+	}
+
+	/**
+	 * The accessor pair a cold message entry's `message` is replaced by: the getter returns the
+	 * stand-in without reading the line back, and the setter reads it back first, so an assignment
+	 * leaves no stub behind it.
+	 */
+	#messageAccessor(): PropertyDescriptor {
+		if (this.#messageDescriptor !== undefined) return this.#messageDescriptor;
+		const stubs = this.#stubs;
+		const payloads = this;
+		this.#messageDescriptor = {
+			configurable: true,
+			enumerable: true,
+			get(this: SessionEntry): unknown {
+				const message = stubs.get(this)?.message;
+				if (message === undefined) throw new Error(`Cold session entry ${this.id} lost its message stand-in`);
+				return message;
+			},
+			set(this: SessionEntry, value: unknown): void {
+				payloads.warm(this);
+				(this as unknown as Record<string, unknown>).message = value;
+			},
+		};
+		return this.#messageDescriptor;
 	}
 }

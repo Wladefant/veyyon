@@ -113,7 +113,7 @@ describe("a stalled loop names the function that held it", () => {
 			},
 			// The loop was never given the CPU: the block is recorded at debug, not warned about.
 			cpuUsage: () => ({ user: 0, system: 0 }),
-			stacks: { quiet: () => {}, stacksBetween: async () => stacks },
+			stacks: { quiet: () => {}, stacksBetween: async () => stacks, park: () => {} },
 		});
 		watchdog.start();
 		nowValue = 900;
@@ -141,6 +141,7 @@ describe("a stalled loop names the function that held it", () => {
 			cpuUsage: () => ({ user: nowValue * 1000, system: 0 }),
 			stacks: {
 				quiet: nowMs => void quietAt.push(nowMs),
+				park: () => {},
 				stacksBetween: async (fromMs, toMs) => {
 					windows.push([fromMs, toMs]);
 					return undefined;
@@ -162,7 +163,7 @@ describe("a stalled loop names the function that held it", () => {
 
 	test("samples outside the window are not blamed for the block", async () => {
 		const sampler = newSampler();
-		sampler.quiet(performance.now());
+		sampler.quiet(performance.now(), true);
 		await sampler.stacksBetween(0, 0);
 
 		holdTheLoopElsewhereForMs(250);
@@ -178,27 +179,27 @@ describe("a stalled loop names the function that held it", () => {
 
 	test("a quiet tick keeps a profile younger than the rotation and discards an older one", async () => {
 		const sampler = newSampler();
-		sampler.quiet(performance.now());
+		sampler.quiet(performance.now(), true);
 		await sampler.stacksBetween(0, 0);
 
 		holdTheLoopForMs(200);
-		sampler.quiet(performance.now() + 1_000);
+		sampler.quiet(performance.now() + 1_000, true);
 		const kept = await sampler.stacksBetween(0, performance.now());
 		expect(framesOf(kept)[0]!.startsWith("holdTheLoopForMs")).toBe(true);
 
 		holdTheLoopForMs(200);
-		sampler.quiet(performance.now() + 60_000);
+		sampler.quiet(performance.now() + 60_000, true);
 		const rotated = await sampler.stacksBetween(0, performance.now());
 		expect(rotated?.samples).toBe(0);
 	});
 
 	test("a lent sampler neither samples nor rotates until it is given back", async () => {
 		const sampler = newSampler();
-		sampler.quiet(performance.now());
+		sampler.quiet(performance.now(), true);
 		await sampler.stacksBetween(0, 0);
 
 		const giveBack = await sampler.borrow();
-		sampler.quiet(performance.now() + 60_000);
+		sampler.quiet(performance.now() + 60_000, true);
 		expect(await sampler.stacksBetween(0, performance.now())).toBeUndefined();
 
 		giveBack();
