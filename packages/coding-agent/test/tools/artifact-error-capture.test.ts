@@ -31,14 +31,14 @@ import { PtySession } from "@veyyon/natives";
 import { makeToolSession } from "../helpers/tool-session";
 
 const mockTerminal: ExtensionTerminalCapability = {
-	custom: async factory => {
+	custom: async <T>(factory: Parameters<ExtensionTerminalCapability["custom"]>[0]) => {
 		const tui = {
 			terminal: { rows: 24, columns: 80 },
 			pinnedFooterRows: 0,
 			requestRender: () => {},
 		};
-		const { promise, resolve } = Promise.withResolvers<never>();
-		factory(tui as never, {} as never, {} as never, resolve);
+		const { promise, resolve } = Promise.withResolvers<T>();
+		factory(tui as never, {} as never, {} as never, resolve as never);
 		return promise;
 	},
 	setEditorComponent: () => () => {},
@@ -192,8 +192,8 @@ describe("artifact error capture mechanics", () => {
 		]);
 
 		expect(msg).not.toBeNull();
-		expect(msg!.details.jobs[0].meta?.artifactError).toBe("open");
-		expect(msg!.details.meta?.source).toEqual({
+		expect(msg?.details?.jobs[0]?.meta?.artifactError).toBe("open");
+		expect(msg?.details?.meta?.source).toEqual({
 			type: "report",
 			value: "background job delivery",
 		});

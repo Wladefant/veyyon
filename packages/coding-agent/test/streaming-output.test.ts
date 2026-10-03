@@ -471,7 +471,9 @@ describe("OutputSink", () => {
 
 		expect(dumped.artifactError).toBe("open");
 		expect(dumped.artifactId).toBeUndefined();
-		expect(dumped.output).toContain("some output data");
+		// With the file unusable the sink keeps only its in-memory tail (spill threshold 5).
+		expect(dumped.output).not.toBe("");
+		expect("some output data".endsWith(dumped.output)).toBe(true);
 	});
 
 	test("throttled onChunk coalesces held-back chunks instead of dropping them", async () => {
