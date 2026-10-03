@@ -574,3 +574,15 @@ if [ "${SCENE_NAME}" = "desktop-transcript-prose" ] || [ "${SCENE_NAME}" = "desk
 	mkdir -p "${PROSE_SESSIONS}"
 	cp /repo/proof/docker/seed-sessions/*.jsonl "${PROSE_SESSIONS}/"
 fi
+
+# A REPLY THAT ALREADY HOLDS A MERMAID DIAGRAM.
+#
+# The Mermaid scene photographs how a diagram fence is drawn, and both arms must
+# draw the same source, which no model can be asked for. Its own directory rather
+# than seed-sessions/, because the prose scenes copy every file there and a third
+# session would change what they list.
+if [ "${SCENE_NAME}" = "mermaid-state-diagram" ]; then
+	MERMAID_SESSIONS="${HOME:-/sandbox/home}/.veyyon/profiles/${VEYYON_PROFILE:-default}/agent/sessions/-demo"
+	mkdir -p "${MERMAID_SESSIONS}"
+	cp /repo/proof/docker/seed-mermaid/*.jsonl "${MERMAID_SESSIONS}/"
+fi
