@@ -280,6 +280,7 @@ import {
 } from "./draw/rail-motion";
 import { TerminalPresentationDriver } from "./driver";
 import { type FirstFrame, takeFirstFrame } from "./first-frame";
+import { HerdrReporter } from "./herdr-reporter";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import {
 	countRunningAgentBadgeAgents,
@@ -550,6 +551,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Extension-registered provider factories, applied in registration order (#4919). */
 	#autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	#cleanupUnsubscribe?: () => void;
+	readonly #herdrReporter = new HerdrReporter();
 	#closeTerminalControl?: () => void;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
@@ -1475,6 +1477,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Subscribe to agent events
 		this.#subscribeToAgent();
+		this.#herdrReporter.attach(this.session);
 
 		this.#goalMode.subscribeToSession();
 
@@ -4109,6 +4112,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async shutdown(): Promise<void> {
 		if (this.#isShuttingDown) return;
 		this.#isShuttingDown = true;
+		this.#herdrReporter.release();
 
 		// From this moment the session is leaving, so its editor must not take
 		// another keystroke. Teardown below can hold the terminal for seconds
@@ -5338,6 +5342,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventController.resetTranscriptAnchors();
 		this.#subscribeToAgent();
 		this.#goalMode.subscribeToSession();
+		this.#herdrReporter.attach(next);
 		this.statusProducer.setSession(next);
 		this.statusLine.setSource(this.statusProducer);
 		if (next.isStreaming)
