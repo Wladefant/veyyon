@@ -3,13 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
+import { RETAINED_BACKEND_FILE, readRetainedMountBackend } from "@veyyon/coding-agent/task/isolation-ownership";
 import {
 	applyEligibleNestedPatches,
 	mergeIsolatedChanges,
 	retainIsolationWorkspace,
 	runIsolatedSubprocess,
 } from "@veyyon/coding-agent/task/isolation-runner";
-import { RETAINED_BACKEND_FILE } from "@veyyon/coding-agent/task/isolation-ownership";
 import type { SingleResult } from "@veyyon/coding-agent/task/types";
 import * as worktreeModule from "@veyyon/coding-agent/task/worktree";
 import * as gitModule from "@veyyon/coding-agent/utils/git";
@@ -447,12 +447,12 @@ describe("runIsolatedSubprocess", () => {
 		vi.spyOn(worktreeModule, "captureDeltaPatch").mockRejectedValue(new Error("disk full"));
 		vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
 
-		const originalWrite = Bun.write.bind(Bun);
-		vi.spyOn(Bun, "write").mockImplementation(async (destination: unknown, content: unknown) => {
-			if (typeof destination === "string" && destination.endsWith(RETAINED_BACKEND_FILE)) {
+		const originalWriteFile = fs.writeFile.bind(fs);
+		vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+			if (typeof file === "string" && file.endsWith(RETAINED_BACKEND_FILE)) {
 				throw new Error("ENOSPC");
 			}
-			return originalWrite(destination as string, content as string | Blob);
+			return originalWriteFile(file, data, options);
 		});
 
 		const outcome = await runIsolatedSubprocess({
@@ -496,6 +496,21 @@ describe("retainIsolationWorkspace", () => {
 		tempRoots.push(path.dirname(retained.dir));
 	});
 
+	it("preserves the original projected root and records its backend for safe cleanup refusal", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-projfs-"));
+		tempRoots.push(parent);
+		const baseDir = path.join(parent, "projection");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+		await fs.writeFile(path.join(isolationDir, "work.txt"), "unrecovered projected changes");
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Projfs);
+
+		expect(retained).toEqual({ dir: isolationDir, sidecarOk: true });
+		expect(await fs.readFile(path.join(isolationDir, "work.txt"), "utf8")).toBe("unrecovered projected changes");
+		expect(await readRetainedMountBackend(baseDir)).toBe(natives.IsoBackendKind.Projfs);
+	});
+
 	it("records no sidecar for copy backends that need no unmount", async () => {
 		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-rcopy-"));
 		tempRoots.push(parent);
@@ -526,12 +541,12 @@ describe("retainIsolationWorkspace", () => {
 		const isolationDir = path.join(parent, "wt_abc123", "m");
 		await fs.mkdir(isolationDir, { recursive: true });
 		await Bun.write(path.join(isolationDir, "work.txt"), "unrecovered");
-		const originalWrite = Bun.write.bind(Bun);
-		vi.spyOn(Bun, "write").mockImplementation(async (destination: unknown, content: unknown) => {
-			if (typeof destination === "string" && destination.endsWith(RETAINED_BACKEND_FILE)) {
+		const originalWriteFile = fs.writeFile.bind(fs);
+		vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+			if (typeof file === "string" && file.endsWith(RETAINED_BACKEND_FILE)) {
 				throw new Error("EACCES: permission denied");
 			}
-			return originalWrite(destination as string, content as string | Blob);
+			return originalWriteFile(file, data, options);
 		});
 
 		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Overlayfs);

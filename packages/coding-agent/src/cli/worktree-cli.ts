@@ -18,8 +18,10 @@
 import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as natives from "@veyyon/natives";
 import { errorMessage, formatCount, getWorktreesDir, isEnoent } from "@veyyon/utils";
 import chalk from "chalk";
+import { readRetainedMountBackend } from "../task/isolation-ownership";
 import * as git from "../utils/git";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
@@ -57,6 +59,29 @@ export interface ClearWorktreesOptions {
 	/** Print what would be removed without touching the filesystem. */
 	dryRun: boolean;
 	json: boolean;
+}
+
+async function stopRetainedMount(dir: string): Promise<void> {
+	const backend = await readRetainedMountBackend(dir);
+	if (backend === undefined) return;
+	if (backend === natives.IsoBackendKind.Projfs) {
+		// Projfs stop owns process-local handles; a fresh CLI cannot stop a live projection.
+		throw new Error("Cannot stop retained Projfs from this process; workspace left intact.");
+	}
+	let found = false;
+	for (const name of TASK_ISOLATION_MOUNT_DIRS) {
+		const candidate = path.join(dir, name);
+		const stat = await fs.stat(candidate).catch(error => {
+			if (isEnoent(error)) return undefined;
+			throw error;
+		});
+		if (!stat?.isDirectory()) continue;
+		await natives.isoStop(backend, candidate);
+		found = true;
+	}
+	if (!found) {
+		throw new Error("Retained isolation mount directory is missing; workspace left intact.");
+	}
 }
 
 export async function listWorktrees(options: ListWorktreesOptions): Promise<void> {
@@ -125,6 +150,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					parentsToPrune.add(target.parentRepo);
 				}
 			} else {
+				if (target.kind === "task-isolation") await stopRetainedMount(target.path);
 				await fs.rm(target.path, { recursive: true, force: true });
 				if (target.parentRepo) parentsToPrune.add(target.parentRepo);
 			}

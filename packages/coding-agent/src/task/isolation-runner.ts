@@ -21,14 +21,15 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type * as natives from "@veyyon/natives";
+import { setTimeout } from "node:timers/promises";
+import * as natives from "@veyyon/natives";
 import { errorMessage, logger, prompt } from "@veyyon/utils";
 import { toolsPrompts } from "../prompts/tools/rows";
-import { isMountingIsolationBackend, writeRetainedBackend } from "./isolation-ownership";
 import type { ToolSession } from "../tools";
 import * as git from "../utils/git";
 import type { ExecutorOptions } from "./executor";
 import { runSubprocess } from "./executor";
+import { isMountingIsolationBackend, writeRetainedBackend } from "./isolation-ownership";
 import type { SingleResult } from "./types";
 import {
 	applyNestedPatches,
@@ -259,17 +260,24 @@ export async function retainIsolationWorkspace(
 	backend?: natives.IsoBackendKind,
 ): Promise<RetainedWorkspace> {
 	const baseDir = path.dirname(isolationDir);
-	const retainedBase = `${baseDir}.retained-${Date.now().toString(36)}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
+	let retainedBase = baseDir;
 	const needsSidecar = backend !== undefined && isMountingIsolationBackend(backend);
-	// A valid move can still fail transiently (Windows AV/indexer locks);
-	// retry briefly before conceding the deterministic slot.
-	for (let attempt = 0; attempt < 3; attempt++) {
-		try {
-			await fs.rename(baseDir, retainedBase);
-			break;
-		} catch {
-			if (attempt === 2) return { dir: isolationDir, sidecarOk: !needsSidecar };
-			await Bun.sleep(25);
+	// Projfs owns process-local handles keyed by the original root. Moving that
+	// live root would detach it from the only process that can stop it.
+	if (backend !== natives.IsoBackendKind.Projfs) {
+		retainedBase = `${baseDir}.retained-${Date.now().toString(36)}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
+		// Retry transient Windows AV/indexer locks before conceding the slot.
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				await fs.rename(baseDir, retainedBase);
+				break;
+			} catch {
+				if (attempt === 2) {
+					retainedBase = baseDir;
+					break;
+				}
+				await setTimeout(25);
+			}
 		}
 	}
 	if (needsSidecar && backend !== undefined) {
@@ -283,7 +291,7 @@ export async function retainIsolationWorkspace(
 }
 
 /** Context for `isolation-error.md`: the `result.error` text for a run whose changes could not be captured or landed. */
-interface IsolationErrorContext {
+type IsolationErrorContext = {
 	kind: "merge-failed" | "patch-capture-failed" | "nested-capture-failed";
 	message: string;
 	captureError?: string;
@@ -296,7 +304,7 @@ interface IsolationErrorContext {
 	 * unmount instead of advertising plain `worktree clear`.
 	 */
 	sidecarMissing?: boolean;
-}
+};
 
 function renderIsolationError(context: IsolationErrorContext): string {
 	return prompt.render(toolsPrompts["tools/isolation-error"].text, context);
@@ -366,9 +374,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const baseSha = taskBaseline.root.headCommit;
 				const branchName = `${TASK_BRANCH_PREFIX}${opts.agentId}`;
 				const rescueBranch = await rescueTaskBranch(opts.context.repoRoot, branchName, baseSha);
-				const rescueNote = rescueBranch
-					? `. The agent's commits are preserved on branch ${rescueBranch} — merge or cherry-pick it manually.`
-					: "";
 				const msg = errorMessage(mergeErr);
 				try {
 					const patchResult = await writeIsolationPatch(

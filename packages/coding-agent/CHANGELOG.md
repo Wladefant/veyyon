@@ -11,7 +11,8 @@
 - Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
-- Retained isolation workspaces move to unique sibling paths and report missing mount metadata on retention errors ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 28459665c328fc5d4e965e1a398c253b7c8e9c3e, 3d2776d1d492999211341ee3270517d16142ed70).
+- Retained isolation workspaces move to unique sibling paths where the backend permits relocation and report missing mount metadata on retention errors ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 28459665c328fc5d4e965e1a398c253b7c8e9c3e, 3d2776d1d492999211341ee3270517d16142ed70).
+- Worktree cleanup unmounts retained Overlayfs workspaces before deletion and refuses Projfs cleanup when its process-local owner cannot be verified ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 8d80286ce71d63307afdf2f318d70ee84259f745).
 - Nested patch persistence removes only newly created patch files on write failure and preserves existing destination data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1c01111697356e0c2d7bf41fb93ac97807943604).
 
 ## [18.1.11] - 2026-09-05

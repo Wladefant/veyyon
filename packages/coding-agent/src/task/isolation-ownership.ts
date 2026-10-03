@@ -1,8 +1,10 @@
 /**
- * Ownership marker and sidecar helpers for task isolation workspaces.
+ * Sidecar helpers for retained mounting-backend isolation workspaces.
  */
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@veyyon/natives";
+import { errorMessage, isEnoent } from "@veyyon/utils";
 
 const { IsoBackendKind } = natives;
 
@@ -26,30 +28,47 @@ export function isMountingIsolationBackend(backend: unknown): backend is natives
  * workspace merely falls back to plain recursive removal).
  */
 export async function writeRetainedBackend(baseDir: string, backend: natives.IsoBackendKind): Promise<void> {
-	await Bun.write(
+	await fs.writeFile(
 		path.join(baseDir, RETAINED_BACKEND_FILE),
 		JSON.stringify({ backend, retainedAt: new Date().toISOString() }),
+		"utf8",
 	);
 }
 
 /**
  * Backend recorded for a retained workspace when it needs unmount-before-
- * remove. `undefined` for ordinary sandboxes, foreign files, and malformed
- * or non-mounting records — all of which keep the standard removal behavior.
+ * remove. `undefined` for ordinary sandboxes without a sidecar. When the sidecar
+ * is present, any failure to read, parse, or validate the mounting backend throws
+ * so cleanup fails closed rather than performing destructive recursive removal.
  */
 export async function readRetainedMountBackend(dir: string): Promise<natives.IsoBackendKind | undefined> {
+	const sidecarPath = path.join(dir, RETAINED_BACKEND_FILE);
+	let raw: string;
+	try {
+		raw = await fs.readFile(sidecarPath, "utf8");
+	} catch (error) {
+		if (isEnoent(error)) return undefined;
+		throw error;
+	}
 	let decoded: unknown;
 	try {
-		decoded = await Bun.file(path.join(dir, RETAINED_BACKEND_FILE)).json();
-	} catch {
-		return undefined;
+		decoded = JSON.parse(raw);
+	} catch (error) {
+		throw new Error(`Failed to parse retained mount metadata in ${dir}: ${errorMessage(error)}`);
 	}
 	if (typeof decoded !== "object" || decoded === null || !("backend" in decoded)) {
-		return undefined;
+		throw new Error(`Invalid retained mount metadata in ${dir}: missing backend field`);
 	}
 	const backend = decoded.backend;
-	if (typeof backend !== "number" || !Number.isInteger(backend) || !isMountingIsolationBackend(backend)) {
+	if (typeof backend !== "number" || !Number.isInteger(backend)) {
+		throw new Error(`Invalid retained mount metadata in ${dir}: backend must be an integer`);
+	}
+	if (isMountingIsolationBackend(backend)) {
+		return backend;
+	}
+	const knownBackends = Object.values(natives.IsoBackendKind);
+	if (knownBackends.includes(backend as natives.IsoBackendKind)) {
 		return undefined;
 	}
-	return backend;
+	throw new Error(`Invalid retained mount metadata in ${dir}: unknown backend ${backend}`);
 }
