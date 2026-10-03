@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Fixed `plan.defaultOnStartup` being ignored by headless print mode sessions so initial prompts run in plan mode ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a5ff9f9a3032ee4789066256e55228f06a9e3dd1).
 
 ## [18.1.11] - 2026-09-05
 
