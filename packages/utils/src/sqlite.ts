@@ -91,7 +91,15 @@ class SqliteAttemptFailure extends Error {
 	}
 }
 
+function isTransientSqliteStore(dbPath: string): boolean {
+	if (dbPath === ":memory:" || dbPath === "") return true;
+	if (!dbPath.startsWith("file:")) return false;
+	const query = dbPath.indexOf("?");
+	return new URLSearchParams(query < 0 ? "" : dbPath.slice(query + 1)).get("mode") === "memory";
+}
+
 function sqliteFileIdentity(dbPath: string): SqliteFileIdentity {
+	if (isTransientSqliteStore(dbPath)) return null;
 	try {
 		const s = fs.statSync(dbPath);
 		return `${s.dev}:${s.ino}:${s.birthtimeMs}`;
@@ -161,6 +169,18 @@ function openOnce<T>(dbPath: string, initialize: (db: Database) => T, options: S
 }
 
 function openStoreUnderRecoveryLock(dbPath: string): Database {
+	if (isTransientSqliteStore(dbPath)) return new Database(dbPath);
+	try {
+		fs.accessSync(path.dirname(dbPath), fs.constants.W_OK);
+	} catch (error) {
+		if (error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM")) {
+			// A read-only parent cannot publish a quarantine. Preserve SQLite's
+			// ability to read it, but still refuse a previously interrupted one.
+			assertNoPendingQuarantine(dbPath);
+			return new Database(dbPath);
+		}
+		throw error;
+	}
 	return withFileLockSync(`${dbPath}.recovery`, () => {
 		assertNoPendingQuarantine(dbPath);
 		return new Database(dbPath);
@@ -267,6 +287,10 @@ function attachedCorruptionPath(db: Database | undefined): string | undefined {
 function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteOpenOptions): void {
 	if (!(error instanceof SqliteAttemptFailure)) throw annotateSqliteError(error, dbPath);
 	const failure = error;
+	if (isTransientSqliteStore(dbPath)) {
+		closeFailedDatabase(failure.db, failure.original, failure.identity);
+		throw annotateSqliteError(failure.original, dbPath);
+	}
 	if (!options.recoverCorruption || !failure.canRecover || !isSqliteCorruptionError(failure.original)) {
 		throw annotateSqliteError(failure.original, dbPath);
 	}
