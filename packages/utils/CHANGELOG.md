@@ -28,8 +28,8 @@
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
 - `detachedString` returns a string's characters in a buffer of their own, so a slice, split piece or regex capture stored past the text it was cut from no longer keeps that text alive.
-- `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
-- `@veyyon/utils/idle-trim` exports `trimEngine`, the `Bun.shrink()` call `IdleTrim` runs when no `trim` is given.
+- `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `trimEngine()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
+- `@veyyon/utils/idle-trim` exports `trimEngine`, the trim `IdleTrim` runs when no `trim` is given, which calls `Bun.shrink()` and then returns the free pages of the C allocator's arenas with `releaseFreeHeapPages()`, so a session that read four 8 MiB web pages settles at 216 MiB RSS instead of 504 MiB.
 - `@veyyon/utils/log-file` exports `RotatingLogFile`, which appends each line to the profile's day file in one `write(2)`, moves a full file to the next free numbered generation, gzips a generation no writer has appended to for 3 seconds and keeps the newest five files, and `logFileName`, the day file's name for a local date.
 
 ### Changed

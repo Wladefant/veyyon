@@ -1462,6 +1462,13 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
 export declare function releaseEmbeddedModulePages(): number
 
 /**
+ * Returns the free pages of every C allocator arena to the kernel. Returns
+ * true when any memory was released, and false when none was or the platform
+ * allocator has no such call.
+ */
+export declare function releaseFreeHeapPages(): boolean
+
+/**
  * Search content for a pattern (one-shot, compiles pattern each time).
  * For repeated searches with the same pattern, use [`grep`] with file filters.
  *

@@ -1,3 +1,4 @@
+import { dlopen, FFIType } from "bun:ffi";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { logger } from "@veyyon/utils";
@@ -16,9 +17,11 @@ import { IdleTrim } from "@veyyon/utils/idle-trim";
  * through the real class with an injected clock, CPU counter and timer, so every window is chosen,
  * not slept.
  *
- * The engine end is checked in a child process: the default trim must discard compiled code, and
- * a started trim must never keep a process alive. Those fail if Bun turns `shrink()` into a no-op
- * or a regression drops the `unref`.
+ * The engine end is checked in a child process: the default trim must discard compiled code, must
+ * return the pages freed in the C allocator's heap, which `Bun.shrink()` leaves resident, and a
+ * started trim must never keep a process alive. Those fail if Bun turns `shrink()` into a no-op, the
+ * trim stops releasing the C heap, or a regression drops the `unref`. The C heap is read on glibc
+ * only; the release in its worker-thread arenas is checked by the addon's own test.
  *
  * Not caught: whether 30 s and 5 % are the right numbers for a given host. They are measured
  * defaults, recorded on the class.
@@ -295,6 +298,18 @@ describe("against the engine", () => {
 		return { status: result.status, stdout: result.stdout, stderr: result.stderr, ms: performance.now() - started };
 	}
 
+	/** The C heap test reads glibc's arenas; musl, macOS and Windows have none to retain pages in. */
+	function hasGlibc(): boolean {
+		if (process.platform !== "linux") return false;
+		try {
+			// bun:ffi is the only way to load the C library in-process; node:* has no dlopen.
+			dlopen("libc.so.6", { malloc_trim: { args: [FFIType.u64], returns: FFIType.i32 } }).close();
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	test("the default trim discards compiled code", () => {
 		const { status, stdout, stderr } = run(`
 			import { heapStats } from "bun:jsc";
@@ -334,5 +349,73 @@ describe("against the engine", () => {
 		expect(status).toBe(0);
 		// The first window is 5 s out; a held loop would sit through it and every one after.
 		expect(ms).toBeLessThan(4_000);
+	});
+
+	/**
+	 * glibc keeps a freed chunk's pages mapped until the top of its heap is free, and `Bun.shrink()`
+	 * releases only the engine's heaps: 512 blocks freed under a live one stay resident through it.
+	 * The child allocates them with the C allocator, frees all but the pin, and reads their whole
+	 * pages with `mincore` around one sample that runs the default trim.
+	 */
+	test.skipIf(!hasGlibc())("the default trim returns the pages freed in the C heap", () => {
+		const { status, stdout, stderr } = run(`
+			import { dlopen, FFIType, toArrayBuffer } from "bun:ffi";
+			const { IdleTrim } = await import(${JSON.stringify(moduleUrl)});
+			const libc = dlopen("libc.so.6", {
+				malloc: { args: [FFIType.u64], returns: FFIType.ptr },
+				free: { args: [FFIType.ptr], returns: FFIType.void },
+				mincore: { args: [FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+			}).symbols;
+			const PAGE = 4096;
+			const BLOCK = 64 * 1024;
+			const filled = () => {
+				const p = libc.malloc(BLOCK);
+				new Uint8Array(toArrayBuffer(p, 0, BLOCK)).fill(1);
+				return p;
+			};
+			const blocks = Array.from({ length: 512 }, filled);
+			const pin = filled();
+			for (const p of blocks) libc.free(p);
+			const resident = () => {
+				let count = 0;
+				let total = 0;
+				for (const start of blocks) {
+					// The page holding the free chunk's header is written by free(); measure the rest.
+					const first = Math.ceil((start + 1) / PAGE) * PAGE;
+					const last = Math.floor((start + BLOCK) / PAGE) * PAGE;
+					const vec = new Uint8Array((last - first) / PAGE);
+					if (libc.mincore(first, last - first, vec) !== 0) throw new Error("mincore failed");
+					for (const flags of vec) count += flags & 1;
+					total += vec.length;
+				}
+				return { count, total };
+			};
+			const before = resident();
+			let now = 0;
+			let sample;
+			const idle = new IdleTrim({
+				quietMs: 1,
+				sampleMs: 1,
+				now: () => now,
+				cpuUsage: () => ({ user: 0, system: 0 }),
+				schedule: cb => {
+					sample = cb;
+					return {};
+				},
+			});
+			idle.start();
+			now = 10;
+			sample();
+			idle.stop();
+			const after = resident();
+			libc.free(pin);
+			console.log(JSON.stringify({ before, after }));
+		`);
+		expect(stderr).toBe("");
+		expect(status).toBe(0);
+		const { before, after } = JSON.parse(stdout) as Record<"before" | "after", { count: number; total: number }>;
+		expect(before.total).toBeGreaterThan(512 * 8);
+		expect(before.count).toBeGreaterThanOrEqual(before.total * 0.9);
+		expect(after.count).toBeLessThanOrEqual(after.total * 0.1);
 	});
 });
