@@ -5,12 +5,13 @@
  * These integration bounds use the platform clock because fake timers cannot
  * prove that the OS killed and reaped a real interpreter subprocess.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as julia from "@veyyon/coding-agent/eval/jl/kernel";
+import { disposeKernelToolBridge } from "@veyyon/coding-agent/eval/kernel-tool-bridge";
 import { runBoundedProbe } from "@veyyon/coding-agent/eval/probe";
 import { disposeKernelSessionsByOwner } from "@veyyon/coding-agent/eval/py/executor";
 import * as python from "@veyyon/coding-agent/eval/py/kernel";
@@ -23,6 +24,7 @@ import { makeToolSession } from "../helpers/tool-session";
 
 // Lazy module loading is separate from the interpreter discovery deadline.
 beforeAll(() => evalBackendLoaders.python());
+afterAll(disposeKernelToolBridge);
 
 useIsolatedAgentDir({ globalSettings: true });
 const roots: string[] = [];
