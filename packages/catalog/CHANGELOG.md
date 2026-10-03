@@ -4,6 +4,7 @@
 
 ### Added
 
+- Preserved specialist runner models across authoritative dynamic discovery pruning and collision resolution, and inherited model kinds and web search grounding capabilities ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the StepFun provider (`stepfun`) with live model discovery, reasoning-effort controls, and bundled default models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added catalog descriptors and static model definitions for Abliteration, Meta Model API, and Muse Code ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the GMI Cloud provider (`gmi-cloud`) with dynamic model discovery and bundled default model seed ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
