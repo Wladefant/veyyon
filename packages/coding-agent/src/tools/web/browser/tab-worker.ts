@@ -859,7 +859,6 @@ export class WorkerCore {
 				await applyStealthPatches(this.#browser, this.#page, { browserSession: null, override: null });
 				await applyViewport(this.#page, payload.viewport);
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
-
 			} else {
 				const target = await this.#findAttachedTarget(payload.targetId);
 				// Post-timeout recycle: unblock the target BEFORE adopting the page — an open
