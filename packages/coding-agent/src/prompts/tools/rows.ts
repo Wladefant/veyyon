@@ -36,6 +36,7 @@ import toolsImageAttachmentDescribeSystem from "./image-attachment-describe-syst
 import toolsImageGen from "./image-gen.md" with { type: "text" };
 import toolsInspectImage from "./inspect-image.md" with { type: "text" };
 import toolsInspectImageSystem from "./inspect-image-system.md" with { type: "text" };
+import toolsIsolationError from "./isolation-error.md" with { type: "text" };
 import toolsIrc from "./irc.md" with { type: "text" };
 import toolsJob from "./job.md" with { type: "text" };
 import toolsLaunch from "./launch.md" with { type: "text" };
@@ -98,6 +99,10 @@ export const toolsPrompts = definePromptRows({
 	"tools/inspect-image-system": {
 		text: toolsInspectImageSystem,
 		purpose: "answers a question about an image for the inspect_image tool",
+	},
+	"tools/isolation-error": {
+		text: toolsIsolationError,
+		purpose: "formats error message when task isolation fails to capture or land changes",
 	},
 	"tools/irc": { text: toolsIrc, purpose: "the irc tool description" },
 	"tools/job": { text: toolsJob, purpose: "the job tool description" },

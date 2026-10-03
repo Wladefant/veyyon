@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Retained isolation workspaces move to unique sibling paths and report missing mount metadata on retention errors ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 28459665c328fc5d4e965e1a398c253b7c8e9c3e, 3d2776d1d492999211341ee3270517d16142ed70).
 
 ## [18.1.11] - 2026-09-05
 

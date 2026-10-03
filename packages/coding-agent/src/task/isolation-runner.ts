@@ -22,7 +22,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type * as natives from "@veyyon/natives";
-import { errorMessage, logger } from "@veyyon/utils";
+import { errorMessage, logger, prompt } from "@veyyon/utils";
+import { toolsPrompts } from "../prompts/tools/rows";
+import { isMountingIsolationBackend, writeRetainedBackend } from "./isolation-ownership";
 import type { ToolSession } from "../tools";
 import * as git from "../utils/git";
 import type { ExecutorOptions } from "./executor";
@@ -212,8 +214,75 @@ async function writeIsolationPatch(
 	};
 }
 
-function retainedWorkspaceNote(isolationDir: string): string {
-	return ` Isolation workspace retained at ${isolationDir} — recover the changes from it; \`veyyon worktree clear\` reclaims it once this session has exited.`;
+/**
+ * Move a retained isolation workspace out of its deterministic
+ * (`repoRoot` + agent id) slot into a globally unique sibling, so a later
+ * isolated run with the same id cannot wipe it: `ensureIsolation`
+ * unconditionally removes the deterministic base dir before writing its
+ * owner marker. The owner marker and `m` mount move along, so
+ * `veyyon worktree clear` still classifies and reclaims it. Mounting backends
+ * record a sidecar so cleanup unmounts before recursive removal instead of
+ * traversing — and failing on — the live mount.
+ */
+export interface RetainedWorkspace {
+	/** Workspace path to report (unique sibling on success, original dir when the move fails). */
+	dir: string;
+	/**
+	 * False when cleanup metadata is missing that `clear` would need: the
+	 * move failed, or a mounting backend's sidecar could not be written
+	 * (plausible under the same disk pressure that forced retention). The
+	 * error must then say the mount needs a manual unmount instead of
+	 * advertising plain `worktree clear`.
+	 */
+	sidecarOk: boolean;
+}
+
+export async function retainIsolationWorkspace(
+	isolationDir: string,
+	backend?: natives.IsoBackendKind,
+): Promise<RetainedWorkspace> {
+	const baseDir = path.dirname(isolationDir);
+	const retainedBase = `${baseDir}.retained-${Date.now().toString(36)}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
+	const needsSidecar = backend !== undefined && isMountingIsolationBackend(backend);
+	// A valid move can still fail transiently (Windows AV/indexer locks);
+	// retry briefly before conceding the deterministic slot.
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			await fs.rename(baseDir, retainedBase);
+			break;
+		} catch {
+			if (attempt === 2) return { dir: isolationDir, sidecarOk: !needsSidecar };
+			await Bun.sleep(25);
+		}
+	}
+	if (needsSidecar && backend !== undefined) {
+		try {
+			await writeRetainedBackend(retainedBase, backend);
+		} catch {
+			return { dir: path.join(retainedBase, path.basename(isolationDir)), sidecarOk: false };
+		}
+	}
+	return { dir: path.join(retainedBase, path.basename(isolationDir)), sidecarOk: true };
+}
+
+/** Context for `isolation-error.md`: the `result.error` text for a run whose changes could not be captured or landed. */
+interface IsolationErrorContext {
+	kind: "merge-failed" | "patch-capture-failed" | "nested-capture-failed";
+	message: string;
+	captureError?: string;
+	rescueBranch?: string;
+	/** Set when the workspace was kept because its changes could not be written out. */
+	retainedDir?: string;
+	/**
+	 * Set when the retained mount's unmount metadata is missing: cleanup
+	 * cannot unmount before removal, so the message must direct a manual
+	 * unmount instead of advertising plain `worktree clear`.
+	 */
+	sidecarMissing?: boolean;
+}
+
+function renderIsolationError(context: IsolationErrorContext): string {
+	return prompt.render(toolsPrompts["tools/isolation-error"].text, context);
 }
 
 /**
@@ -294,15 +363,27 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					return {
 						...result,
 						...patchResult,
-						error: `Merge failed: ${msg}${rescueNote}`,
+						error: renderIsolationError({
+							kind: "merge-failed",
+							message: msg,
+							rescueBranch,
+						}),
 						isolated: true,
 					};
 				} catch (patchErr) {
 					retainWorkspace = true;
 					const patchMsg = errorMessage(patchErr);
+					const retained = await retainIsolationWorkspace(isolationDir, handle.backend);
 					return {
 						...result,
-						error: `Merge failed: ${msg}; patch capture failed: ${patchMsg}${rescueNote}${retainedWorkspaceNote(isolationDir)}`,
+						error: renderIsolationError({
+							kind: "merge-failed",
+							message: msg,
+							captureError: patchMsg,
+							rescueBranch,
+							retainedDir: retained.dir,
+							sidecarMissing: !retained.sidecarOk,
+						}),
 						isolated: true,
 					};
 				}
@@ -324,12 +405,18 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			} catch (persistErr) {
 				retainWorkspace = true;
 				const persistMsg = errorMessage(persistErr);
+				const retained = await retainIsolationWorkspace(isolationDir, handle.backend);
 				return {
 					...result,
 					branchName: commitResult?.branchName,
 					branchBaseSha: commitResult?.baseSha,
 					nestedPatches: commitResult?.nestedPatches,
-					error: `Nested patch capture failed: ${persistMsg}.${retainedWorkspaceNote(isolationDir)}`,
+					error: renderIsolationError({
+						kind: "nested-capture-failed",
+						message: persistMsg,
+						retainedDir: retained.dir,
+						sidecarMissing: !retained.sidecarOk,
+					}),
 					isolated: true,
 				};
 			}
@@ -345,9 +432,15 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			} catch (patchErr) {
 				retainWorkspace = true;
 				const msg = errorMessage(patchErr);
+				const retained = await retainIsolationWorkspace(isolationDir, handle.backend);
 				return {
 					...result,
-					error: `Patch capture failed: ${msg}.${retainedWorkspaceNote(isolationDir)}`,
+					error: renderIsolationError({
+						kind: "patch-capture-failed",
+						message: msg,
+						retainedDir: retained.dir,
+						sidecarMissing: !retained.sidecarOk,
+					}),
 					isolated: true,
 				};
 			}

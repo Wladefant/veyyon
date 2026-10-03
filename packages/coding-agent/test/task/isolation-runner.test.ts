@@ -6,8 +6,10 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import {
 	applyEligibleNestedPatches,
 	mergeIsolatedChanges,
+	retainIsolationWorkspace,
 	runIsolatedSubprocess,
 } from "@veyyon/coding-agent/task/isolation-runner";
+import { RETAINED_BACKEND_FILE } from "@veyyon/coding-agent/task/isolation-ownership";
 import type { SingleResult } from "@veyyon/coding-agent/task/types";
 import * as worktreeModule from "@veyyon/coding-agent/task/worktree";
 import * as gitModule from "@veyyon/coding-agent/utils/git";
@@ -331,6 +333,117 @@ describe("runIsolatedSubprocess", () => {
 		expect(outcome.error).toContain("Isolation workspace retained at /repo/isolated");
 		expect(outcome.nestedPatchPaths).toBeUndefined();
 		expect(await Bun.file(path.join(tmp, `${id}.nested-0-first.patch`)).exists()).toBe(false);
+	});
+
+	it("reports missing mount metadata in error when sidecar cannot be written", async () => {
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-iso-sidecar-"));
+		tempRoots.push(tmp);
+		const baseDir = path.join(tmp, "wt_fail");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+
+		vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
+			mergedDir: isolationDir,
+			backend: natives.IsoBackendKind.Overlayfs,
+			fellBack: false,
+			fallbackReason: null,
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result({ id: "SidecarFail" }));
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockRejectedValue(new Error("disk full"));
+		vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+
+		const originalWrite = Bun.write.bind(Bun);
+		vi.spyOn(Bun, "write").mockImplementation(async (destination: unknown, content: unknown) => {
+			if (typeof destination === "string" && destination.endsWith(RETAINED_BACKEND_FILE)) {
+				throw new Error("ENOSPC");
+			}
+			return originalWrite(destination as string, content as string | Blob);
+		});
+
+		const outcome = await runIsolatedSubprocess({
+			baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id: "SidecarFail" },
+			context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
+			preferredBackend: undefined,
+			agentId: "SidecarFail",
+			mergeMode: "patch",
+			artifactsDir: tmp,
+			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+		});
+
+		expect(outcome.error).toContain("Its mount metadata is missing, so unmount");
+		expect(outcome.error).toContain("manually before clearing.");
+	});
+});
+
+describe("retainIsolationWorkspace", () => {
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await Promise.all(tempRoots.splice(0).map(tempRoot => fs.rm(tempRoot, { force: true, recursive: true })));
+	});
+
+	it("moves the workspace to a unique sibling out of the deterministic slot", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-"));
+		tempRoots.push(parent);
+		const baseDir = path.join(parent, "wt_abc123");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+		await Bun.write(path.join(isolationDir, "work.txt"), "unrecovered");
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Overlayfs);
+
+		expect(retained).toEqual({ dir: expect.any(String), sidecarOk: true });
+		expect(retained.dir).not.toBe(isolationDir);
+		expect(path.dirname(retained.dir)).toContain(".retained-");
+		expect(await Bun.file(path.join(retained.dir, "work.txt")).text()).toBe("unrecovered");
+		expect(await Bun.file(baseDir).exists()).toBe(false);
+		const sidecar = await Bun.file(path.join(path.dirname(retained.dir), RETAINED_BACKEND_FILE)).json();
+		expect(sidecar.backend).toBe(natives.IsoBackendKind.Overlayfs);
+		tempRoots.push(path.dirname(retained.dir));
+	});
+
+	it("records no sidecar for copy backends that need no unmount", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-rcopy-"));
+		tempRoots.push(parent);
+		const isolationDir = path.join(parent, "wt_abc123", "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Rcopy);
+
+		expect(retained.sidecarOk).toBe(true);
+		expect(await Bun.file(path.join(path.dirname(retained.dir), RETAINED_BACKEND_FILE)).exists()).toBe(false);
+		tempRoots.push(path.dirname(retained.dir));
+	});
+
+	it("reports the original dir when the move fails", async () => {
+		const missingParent = path.join(os.tmpdir(), `veyyon-isolation-retain-missing-${Date.now()}`);
+		const isolationDir = path.join(missingParent, "wt_abc123", "m");
+
+		await expect(retainIsolationWorkspace(isolationDir)).resolves.toEqual({
+			dir: isolationDir,
+			sidecarOk: true,
+		});
+		await expect(fs.stat(missingParent)).rejects.toThrow();
+	});
+
+	it("reports missing metadata when the sidecar cannot be written", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-sidecar-"));
+		tempRoots.push(parent);
+		const isolationDir = path.join(parent, "wt_abc123", "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+		await Bun.write(path.join(isolationDir, "work.txt"), "unrecovered");
+		const originalWrite = Bun.write.bind(Bun);
+		vi.spyOn(Bun, "write").mockImplementation(async (destination: unknown, content: unknown) => {
+			if (typeof destination === "string" && destination.endsWith(RETAINED_BACKEND_FILE)) {
+				throw new Error("EACCES: permission denied");
+			}
+			return originalWrite(destination as string, content as string | Blob);
+		});
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Overlayfs);
+
+		expect(retained.sidecarOk).toBe(false);
+		expect(retained.dir).not.toBe(isolationDir);
+		tempRoots.push(path.dirname(retained.dir));
 	});
 });
 
