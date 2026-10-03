@@ -420,13 +420,12 @@ describe("retained isolation cleanup", () => {
 		const segment = getTaskIsolationSegment(repoRootDir, id);
 		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
 
-		const childScriptPath = path.join(root, "child-crash.ts");
-		const worktreeModule = path.join(process.cwd(), "packages/coding-agent/src/task/worktree").replace(/\\/g, "/");
+		const childScriptPath = path.join(__dirname, `child-crash-${Date.now()}.ts`);
 		const childScript = `
 import { vi, spyOn } from "bun:test";
 import * as natives from "@veyyon/natives";
 import * as utils from "@veyyon/utils";
-import { ensureIsolation } from "${worktreeModule}";
+import { ensureIsolation } from "../../src/task/worktree";
 
 const workspacesDir = process.env.TEST_WORKSPACES_DIR!;
 const repo = process.env.TEST_REPO_DIR!;
@@ -456,22 +455,25 @@ try {
 `;
 		await fs.writeFile(childScriptPath, childScript, "utf8");
 
-		const childRes = child_process.spawnSync("bun", ["test", childScriptPath], {
-			cwd: process.cwd(),
-			env: {
-				...process.env,
-				NODE_PATH: path.join(process.cwd(), "node_modules").replace(/\\/g, "/"),
-				TEST_WORKSPACES_DIR: path.join(root, "workspaces"),
-				TEST_REPO_DIR: repo,
-				TEST_TASK_ID: id,
-			},
-			encoding: "utf8",
-		});
-		if (childRes.status !== 42) {
-			console.error("CHILD STDERR:", childRes.stderr);
-			console.error("CHILD STDOUT:", childRes.stdout);
+		try {
+			const childRes = child_process.spawnSync("bun", ["test", childScriptPath], {
+				cwd: process.cwd(),
+				env: {
+					...process.env,
+					TEST_WORKSPACES_DIR: path.join(root, "workspaces"),
+					TEST_REPO_DIR: repo,
+					TEST_TASK_ID: id,
+				},
+				encoding: "utf8",
+			});
+			if (childRes.status !== 42) {
+				console.error("CHILD STDERR:", childRes.stderr);
+				console.error("CHILD STDOUT:", childRes.stdout);
+			}
+			expect(childRes.status).toBe(42);
+		} finally {
+			await fs.rm(childScriptPath, { force: true });
 		}
-		expect(childRes.status).toBe(42);
 		// Verify on-disk state: canonicalDir exists, has ONLY owner record, NO "m"
 		expect(await exists(canonicalDir)).toBe(true);
 		expect(await exists(path.join(canonicalDir, "m"))).toBe(false);
@@ -557,6 +559,13 @@ try {
 		expect(result.results[0].error).toContain("Missing retained backend metadata");
 		expect(await exists(canonicalDir)).toBe(true);
 		expect(await exists(path.join(canonicalDir, "mystery.txt"))).toBe(true);
+
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
 
 		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
 		expect(await exists(path.join(canonicalDir, "mystery.txt"))).toBe(true);

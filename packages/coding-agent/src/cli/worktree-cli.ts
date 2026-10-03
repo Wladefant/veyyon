@@ -165,15 +165,18 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					if (await isAbandonedEmptyReservation(target.path)) {
 						await fs.rm(target.path, { recursive: true, force: true });
 						return;
-					}
-
+					const sidecarStat = await statPath(path.join(target.path, RETAINED_BACKEND_FILE));
+					const hasSidecar = sidecarStat?.found?.isFile();
 					const owner = await readIsolationOwner(target.path).catch(() => null);
-					if (owner && isProcessInstanceAlive(owner.pid, owner.startIdentity)) {
-						throw new Error(
-							`Missing retained backend metadata in ${target.path}; refusing removal (active live owner PID ${owner.pid})`,
-						);
-					}
 
+					if (!hasSidecar) {
+						if (owner && isProcessInstanceAlive(owner.pid, owner.startIdentity)) {
+							throw new Error(
+								`Missing retained backend metadata in ${target.path}; refusing removal (active live owner PID ${owner.pid})`,
+							);
+						}
+						throw new Error(`Missing retained backend metadata in ${target.path}; refusing removal`);
+					}
 					const initialStat = stat.found;
 					const initialToken = owner?.token;
 
