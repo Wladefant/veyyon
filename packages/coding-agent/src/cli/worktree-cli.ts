@@ -22,6 +22,7 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, formatCount, getWorktreesDir, isEnoent } from "@veyyon/utils";
 import chalk from "chalk";
 import { readRetainedMountBackend } from "../task/isolation-ownership";
+import { isTaskIsolationDir } from "../task/worktree";
 import * as git from "../utils/git";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
@@ -284,6 +285,20 @@ async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
 	}
 	if (gitStat.found?.isFile()) {
 		return classifyPrCheckout(dir, gitEntry);
+	}
+	if (isTaskIsolationDir(dir)) {
+		for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
+			const mountPath = path.join(dir, mountDir);
+			const mountStat = await statPath(mountPath);
+			if (!mountStat) {
+				return { path: dir, kind: "task-isolation", undeterminedReason: `cannot stat ${mountPath}` };
+			}
+		}
+		return {
+			path: dir,
+			kind: "task-isolation",
+			orphanReason: "task-isolation leftover (no live task owns it)",
+		};
 	}
 	for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
 		const mountPath = path.join(dir, mountDir);

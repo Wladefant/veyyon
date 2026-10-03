@@ -265,10 +265,11 @@ async function writeIsolationPatch(
 /**
  * Move a retained isolation workspace out of its deterministic
  * (`repoRoot` + agent id) slot into a globally unique sibling, so a later
- * isolated run with the same id cannot wipe it: `ensureIsolation`
- * unconditionally removes the deterministic base dir before writing its
- * owner marker. The owner marker and `m` mount move along, so
- * `veyyon worktree clear` still classifies and reclaims it. Mounting backends
+ * isolated run with the same id cannot be blocked by the retained slot:
+ * `ensureIsolation` claims the deterministic base dir atomically and refuses
+ * replacement if it already exists. The `m` mount moves along, and retained
+ * sibling names remain recognizable so `veyyon worktree clear` still
+ * classifies and reclaims them once metadata permits. Mounting backends
  * record a sidecar so cleanup unmounts before recursive removal instead of
  * traversing — and failing on — the live mount.
  */

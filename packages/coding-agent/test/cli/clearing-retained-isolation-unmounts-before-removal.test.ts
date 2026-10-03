@@ -9,9 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@veyyon/natives";
+import * as child_process from "node:child_process";
 import * as utils from "@veyyon/utils";
 import { clearWorktrees } from "../../src/cli/worktree-cli";
+import { retainIsolationWorkspace } from "../../src/task/isolation-runner";
 import { RETAINED_BACKEND_FILE, writeRetainedBackend } from "../../src/task/isolation-ownership";
+import { ensureIsolation } from "../../src/task/worktree";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirs("retained-isolation-clear-");
@@ -221,5 +224,89 @@ describe("retained isolation cleanup", () => {
 		expect(result.results[0].error).toContain("Invalid retained mount metadata");
 		expect(await fs.readFile(path.join(workspace, "m", "changes.txt"), "utf8")).toBe("unrecovered changes");
 		expect(process.exitCode).toBe(1);
+	});
+
+	it("preserves an in-flight isolation claim and sentinel across ordinary clear and clear --all", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo, { recursive: true });
+		child_process.execFileSync("git", ["init", "-q", repo]);
+
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+
+		const id = "in-flight-task-claim";
+		const inIsoStart = Promise.withResolvers<void>();
+		const releaseIsoStart = Promise.withResolvers<void>();
+		let isoStartCalled = false;
+		let claimedBaseDir = "";
+
+		vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+			isoStartCalled = true;
+			claimedBaseDir = path.dirname(mergedDir);
+			inIsoStart.resolve();
+			await releaseIsoStart.promise;
+			await fs.mkdir(mergedDir, { recursive: true });
+		});
+
+		// Task A calls real ensureIsolation and pauses inside substituted native isoStart before m exists
+		const taskAPromise = ensureIsolation(repo, id);
+		await inIsoStart.promise;
+		expect(isoStartCalled).toBe(true);
+		expect(await exists(claimedBaseDir)).toBe(true);
+
+		// Verify m does not exist yet
+		const mountDir = path.join(claimedBaseDir, "m");
+		expect(await exists(mountDir)).toBe(false);
+
+		// Place sentinel file at the claim root
+		const sentinel = path.join(claimedBaseDir, "sentinel.txt");
+		await fs.writeFile(sentinel, "in-flight-claim-sentinel");
+
+		// Task B: same-id second call must be rejected
+		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
+
+		// Real ordinary clear: clearWorktrees({ all: false, dryRun: false, json: true })
+		await clearWorktrees({ all: false, dryRun: false, json: true });
+		const ordinaryResult = JSON.parse(stdout);
+		expect(ordinaryResult).toMatchObject({ removed: 0, failed: 1 });
+		expect(ordinaryResult.results[0].error).toContain("Missing retained backend metadata");
+		expect(await exists(claimedBaseDir)).toBe(true);
+		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
+
+		// Real --all clear: clearWorktrees({ all: true, dryRun: false, json: true })
+		await clearWorktrees({ all: true, dryRun: false, json: true });
+		const allResult = JSON.parse(stdout);
+		expect(allResult).toMatchObject({ removed: 0, failed: 1 });
+		expect(allResult.results[0].error).toContain("Missing retained backend metadata");
+		expect(await exists(claimedBaseDir)).toBe(true);
+		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
+
+		// Task C: third same-id allocation must still be rejected
+		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+		expect(await exists(claimedBaseDir)).toBe(true);
+		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
+
+		// Release native boundary
+		releaseIsoStart.resolve();
+		const handle = await taskAPromise;
+		expect(handle.mergedDir).toBe(mountDir);
+		expect(await exists(mountDir)).toBe(true);
+		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
+
+		// Allowed retained copy cleanup assertion:
+		const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
+		expect(retained.sidecarOk).toBe(true);
+		expect(await exists(retained.dir)).toBe(true);
+
+		// Clearing worktrees now cleanly removes the retained copy workspace
+		await clearWorktrees({ all: false, dryRun: false, json: true });
+		const retainedClearResult = JSON.parse(stdout);
+		expect(retainedClearResult).toMatchObject({ removed: 1, failed: 0 });
+		expect(await exists(retained.dir)).toBe(false);
 	});
 });
