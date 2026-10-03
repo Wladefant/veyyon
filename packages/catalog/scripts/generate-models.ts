@@ -118,7 +118,6 @@ export function mergePreviousSnapshotModels(
 	return merged;
 }
 
-
 /**
  * `--providers=a,b` regenerates only the named providers and carries every
  * other provider's rows over from the committed snapshot. It exists for a
@@ -836,11 +835,7 @@ async function generateModels() {
 		...modelsDevSnapshotExcludedProviders,
 	]);
 
-	allModels = mergePreviousSnapshotModels(
-		allModels,
-		previousSnapshot,
-		previousSnapshotExcludedProviders,
-	);
+	allModels = mergePreviousSnapshotModels(allModels, previousSnapshot, previousSnapshotExcludedProviders);
 
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);

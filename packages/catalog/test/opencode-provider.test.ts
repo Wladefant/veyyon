@@ -9,8 +9,8 @@ import {
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,
 } from "@veyyon/catalog/provider-models/openai-compat";
-import type { ModelSpec } from "../src/types";
 import { mergePreviousSnapshotModels } from "../scripts/generate-models";
+import type { ModelSpec } from "../src/types";
 
 const LIVE_FREE_MODEL_IDS = [
 	"deepseek-v4-flash-free",
