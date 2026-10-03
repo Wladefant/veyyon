@@ -851,18 +851,35 @@ export class FileSessionStorage implements SessionStorage {
 	}
 }
 
+const MAX_CROSS_DEVICE_MOVE_ATTEMPTS = 5;
+
 /**
  * Move a live file across devices without exposing a partial destination.
  * The source remains authoritative while the copy is staged. Publication and
  * source removal are synchronous so in-process writers cannot land between them.
  */
-export async function moveFileAcrossDevices(source: string, destination: string): Promise<void> {
+async function moveFileAcrossDevices(source: string, destination: string): Promise<void> {
+	const destStat = await fs.promises.lstat(destination).catch(err => {
+		if (isEnoent(err)) return null;
+		throw err;
+	});
+	if (destStat !== null) {
+		const error = new Error(`Destination '${destination}' already exists`);
+		Object.assign(error, { code: "EEXIST" });
+		throw error;
+	}
+
 	const staging = `${destination}.${process.pid}.${crypto.randomUUID()}.move`;
 	try {
-		for (;;) {
-			const before = fs.statSync(source, { bigint: true });
+		for (let attempt = 0; attempt < MAX_CROSS_DEVICE_MOVE_ATTEMPTS; attempt++) {
+			const before = fs.lstatSync(source, { bigint: true });
+			if (before.isSymbolicLink()) {
+				const error = new Error(`Cannot move symlink across devices: '${source}'`);
+				Object.assign(error, { code: "EXDEV" });
+				throw error;
+			}
 			await fs.promises.copyFile(source, staging);
-			const after = fs.statSync(source, { bigint: true });
+			const after = fs.lstatSync(source, { bigint: true });
 			if (before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs) continue;
 			// Flush the completed copy before making it discoverable. Neither the
 			// temporary copy nor an existing destination is ever a live write target.
@@ -881,6 +898,9 @@ export async function moveFileAcrossDevices(source: string, destination: string)
 			}
 			return;
 		}
+		throw new Error(
+			`Failed to move file across devices from '${source}' to '${destination}' after ${MAX_CROSS_DEVICE_MOVE_ATTEMPTS} attempts: source changed continuously`,
+		);
 	} finally {
 		await fs.promises.unlink(staging).catch(error => {
 			if (!isEnoent(error))
@@ -892,14 +912,45 @@ export async function moveFileAcrossDevices(source: string, destination: string)
 /**
  * Move a directory tree across devices by recursively copying entries and removing sources.
  */
-export async function moveDirectoryAcrossDevices(source: string, destination: string): Promise<void> {
-	await fs.promises.mkdir(destination, { recursive: true });
+async function moveDirectoryAcrossDevices(source: string, destination: string): Promise<void> {
+	let destinationExisted = false;
+	const destStat = await fs.promises.lstat(destination).catch(err => {
+		if (isEnoent(err)) return null;
+		throw err;
+	});
+	if (destStat !== null) {
+		destinationExisted = true;
+		if (destStat.isSymbolicLink()) {
+			const error = new Error(`Destination directory '${destination}' is a symlink`);
+			Object.assign(error, { code: "EEXIST" });
+			throw error;
+		}
+		if (!destStat.isDirectory()) {
+			const error = new Error(`Destination '${destination}' exists and is not a directory`);
+			Object.assign(error, { code: "EEXIST" });
+			throw error;
+		}
+		const destEntries = await fs.promises.readdir(destination);
+		if (destEntries.length > 0) {
+			const error = new Error(`Destination directory '${destination}' already exists and is occupied`);
+			Object.assign(error, { code: "EEXIST" });
+			throw error;
+		}
+	} else {
+		await fs.promises.mkdir(destination, { recursive: true });
+	}
+
 	const entries = await fs.promises.readdir(source, { withFileTypes: true });
 	const movedEntries: Array<{ src: string; dst: string; isDir: boolean }> = [];
 	try {
 		for (const entry of entries) {
 			const src = path.join(source, entry.name);
 			const dst = path.join(destination, entry.name);
+			if (entry.isSymbolicLink()) {
+				const error = new Error(`Cannot move symlink across devices: '${src}'`);
+				Object.assign(error, { code: "EXDEV" });
+				throw error;
+			}
 			if (entry.isDirectory()) {
 				await moveDirectoryAcrossDevices(src, dst);
 				movedEntries.push({ src, dst, isDir: true });
@@ -921,10 +972,12 @@ export async function moveDirectoryAcrossDevices(source: string, destination: st
 				// Best-effort rollback
 			}
 		}
-		try {
-			await fs.promises.rmdir(destination);
-		} catch {
-			// Destination may not be empty if rollback was partial
+		if (!destinationExisted) {
+			try {
+				await fs.promises.rmdir(destination);
+			} catch {
+				// Destination may not be empty if rollback was partial
+			}
 		}
 		throw err;
 	}
@@ -937,7 +990,12 @@ async function movePath(source: string, destination: string): Promise<void> {
 	} catch (err) {
 		if (!hasFsCode(err, "EXDEV")) throw toError(err);
 	}
-	const stat = await fs.promises.stat(source);
+	const stat = await fs.promises.lstat(source);
+	if (stat.isSymbolicLink()) {
+		const error = new Error(`Cannot move symlink across devices: '${source}'`);
+		Object.assign(error, { code: "EXDEV" });
+		throw error;
+	}
 	if (stat.isDirectory()) {
 		await moveDirectoryAcrossDevices(source, destination);
 	} else {
