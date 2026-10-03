@@ -3,8 +3,9 @@
  * process exits. This releases owned resources and lets an interrupted agent
  * finalize its partial assistant message into the session journal.
  */
-import * as path from "node:path";
+
 import { describe, expect, it, spyOn } from "bun:test";
+import * as path from "node:path";
 import type { AssistantMessage } from "@veyyon/ai";
 import { TempDir } from "@veyyon/utils";
 import { type PrintModeSession, runPrintMode } from "../src/modes/print-mode";
@@ -83,23 +84,20 @@ describe("print mode disposes the session before exit", () => {
 		expect(order).toEqual(["catchup", "flush", "dispose", "exit"]);
 	});
 
-	it(
-		"disposes an active print session before SIGTERM exits",
-		async () => {
-			using tempDir = TempDir.createSync("@omp-print-signal-");
-			const marker = tempDir.join("disposed");
-			const fixture = path.join(import.meta.dir, "fixtures", "print-mode-signal.js");
-			const child = Bun.spawn([process.execPath, fixture, marker], {
-				stdio: ["ignore", "ignore", "ignore"],
-			});
-			const exitCode = await child.exited;
-			const markerFile = Bun.file(marker);
+	it("disposes an active print session before SIGTERM exits", async () => {
+		using tempDir = TempDir.createSync("@omp-print-signal-");
+		const marker = tempDir.join("disposed");
+		const fixture = path.join(import.meta.dir, "fixtures", "print-mode-signal.js");
+		const child = Bun.spawn([process.execPath, fixture, marker], {
+			env: { ...process.env, HOME: tempDir.path() },
+			stdio: ["ignore", "ignore", "ignore"],
+		});
+		const exitCode = await child.exited;
+		const markerFile = Bun.file(marker);
 
-			if (!(await markerFile.exists())) {
-				throw new Error(`Print session was not disposed before signal exit ${exitCode}`);
-			}
-			expect(await markerFile.text()).toBe("sigterm");
-		},
-		15_000,
-	);
+		if (!(await markerFile.exists())) {
+			throw new Error(`Print session was not disposed before signal exit ${exitCode}`);
+		}
+		expect(await markerFile.text()).toBe("sigterm");
+	}, 15_000);
 });
