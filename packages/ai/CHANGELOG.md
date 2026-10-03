@@ -28,6 +28,7 @@
 
 ### Changed
 
+- Refactored Codex request context construction and exposed native event collector for remote compaction ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Shared the gateway retry resolver used by translated and native requests; retry behavior is unchanged.
 - Reused TextDecoder instances and indexed streaming content blocks by index in Bedrock Converse and AWS EventStream for O(1) per-delta routing ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Moved the `reasoning-budget` re-export below its import block in `stream.ts` and dropped a stray blank line before `applyCacheControlToLastTextBlock` so both files match the formatter and import-order rules; no behavior change.
@@ -47,6 +48,7 @@
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed OpenAI Responses prepared request caching to rebuild wire body on reasoning-effort fallback and retain sent payload in diagnostics ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 21cb04bd3e6b72fcd05bb4e2f02fe441cf2d2a60).
 - Retried one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex turn-state lifecycle to isolate compatibility-scoped cells and clear stale tokens on fresh non-compaction turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved Codex WebSocket append state across throttling rejections and gated retry baselines on completed responses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 73b684511bf60018fff14712a0016672419f9389).
