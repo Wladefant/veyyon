@@ -387,11 +387,21 @@ export class TtsrManager {
 	 *
 	 * Only edit/write tool streams reach here (AST conditions need a language, which
 	 * we infer from the file extension on the tool's path argument). The snapshot is
-	 * matched in memory by the native engine (`astMatch`), so this is async and
-	 * intentionally throttled: identical consecutive snapshots (the common case when
-	 * only non-source arguments change between deltas) are skipped.
+	 * matched in memory by the native engine (`astMatch`), so this is async. A snapshot
+	 * identical to the last one matched on its stream is skipped.
+	 *
+	 * `partial` marks a snapshot of a call still streaming. Parsing is linear in the
+	 * snapshot and the snapshot grows one delta at a time, so matching every delta parses
+	 * the file once per delta. A partial snapshot is matched only once it has grown past
+	 * the last matched one by a quarter, and by at least {@link AST_PARTIAL_MIN_GROWTH}
+	 * characters, which keeps the characters parsed per stream linear in its length. The
+	 * caller matches the completed call without `partial`.
 	 */
-	async checkAstSnapshot(snapshot: string, context: TtsrMatchContext): Promise<Rule[]> {
+	async checkAstSnapshot(
+		snapshot: string,
+		context: TtsrMatchContext,
+		options?: { partial?: boolean },
+	): Promise<Rule[]> {
 		if (!this.#settings.enabled || context.source !== "tool") {
 			return [];
 		}
@@ -419,9 +429,9 @@ export class TtsrManager {
 			return [];
 		}
 
-		// Throttle: skip re-running the matcher when the source content is unchanged.
 		const bufferKey = this.#bufferKey(context);
-		if (this.#lastAstSnapshots.get(bufferKey) === snapshot) {
+		const last = this.#lastAstSnapshots.get(bufferKey);
+		if (last === snapshot || (options?.partial === true && !partialSnapshotDue(snapshot, last))) {
 			return [];
 		}
 		this.#lastAstSnapshots.set(bufferKey, snapshot);
@@ -908,6 +918,21 @@ function matchedText(entry: TtsrEntry, streamBuffer: string): string | undefined
 		}
 	}
 	return undefined;
+}
+
+/** The fewest characters a partial AST snapshot grows by before it is matched again. */
+export const AST_PARTIAL_MIN_GROWTH = 1024;
+
+/**
+ * Whether a partial snapshot has grown past the last one matched on its stream by a quarter of
+ * that one and by at least {@link AST_PARTIAL_MIN_GROWTH} characters.
+ *
+ * Each match parses the whole snapshot, so geometric spacing bounds the characters parsed for a
+ * stream's partial snapshots to five times its final length.
+ */
+function partialSnapshotDue(snapshot: string, last: string | undefined): boolean {
+	const lastLength = last?.length ?? 0;
+	return snapshot.length - lastLength >= Math.max(AST_PARTIAL_MIN_GROWTH, lastLength >>> 2);
 }
 
 async function astConditionsMatch(patterns: string[], source: string, lang: string): Promise<boolean> {

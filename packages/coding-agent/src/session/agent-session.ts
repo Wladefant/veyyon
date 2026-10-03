@@ -3370,7 +3370,9 @@ export class AgentSession {
 		}
 	}
 
-	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+	#afterToolCall(
+		ctx: AfterToolCallContext,
+	): Promise<AfterToolCallResult | undefined> | AfterToolCallResult | undefined {
 		if (
 			this.#yields.noteAfterToolCall(ctx.toolCall.id, {
 				toolName: ctx.toolCall.name,

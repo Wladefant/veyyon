@@ -26,7 +26,7 @@
  */
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AfterToolCallContext, AfterToolCallResult, AgentMessage, AnyAgentTool } from "@veyyon/agent-core";
+import type { AfterToolCallContext, AgentMessage, AnyAgentTool } from "@veyyon/agent-core";
 import { createToolScopedAbortReason } from "@veyyon/agent-core";
 import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@veyyon/ai";
 import { isRecord, logger, prompt, relativePathWithinRoot } from "@veyyon/utils";
@@ -94,6 +94,30 @@ export interface TtsrRuntimeHost {
 	schedulePostPromptTask(task: (signal: AbortSignal) => Promise<void>, options?: { delayMs?: number }): void;
 }
 
+/** One file's normalized source in a streamed tool call, with the context it is matched under. */
+interface MatcherSnapshot {
+	readonly digest: string;
+	readonly context: TtsrMatchContext;
+}
+
+/** A tool call's state handed to its AST pass by one stream event. */
+interface AstOffer {
+	/** The call's context, which a match is delivered under. */
+	readonly matchContext: TtsrMatchContext;
+	readonly snapshots: MatcherSnapshot[];
+	readonly targetMessageTimestamp: number | undefined;
+	/** True for the completed call, false for a partial one still streaming. */
+	readonly final: boolean;
+}
+
+/** The AST matching running on one tool call. */
+interface AstPass {
+	/** The newest offer that arrived while a match parsed. */
+	queued: AstOffer | undefined;
+	/** Settles once no offer is left, to true when a match aborted the stream. */
+	done: Promise<boolean>;
+}
+
 export class TtsrRuntime {
 	readonly #host: TtsrRuntimeHost;
 	#manager: TtsrManager | undefined;
@@ -110,6 +134,14 @@ export class TtsrRuntime {
 	#retryToken = 0;
 	#resumePromise: Promise<void> | undefined = undefined;
 	#resumeResolve: (() => void) | undefined = undefined;
+	/**
+	 * The AST pass running on each streaming tool call, keyed by its stream key.
+	 *
+	 * A tool call runs one pass at a time. Deltas that arrive while it parses replace one
+	 * queued offer, so only the newest snapshot is matched next and the native pool never
+	 * holds more than one parse per call.
+	 */
+	readonly #astPasses = new Map<string, AstPass>();
 
 	constructor(host: TtsrRuntimeHost, manager: TtsrManager | undefined) {
 		this.#host = host;
@@ -134,6 +166,8 @@ export class TtsrRuntime {
 	/** Reset the match buffer at the start of a turn. */
 	onTurnStart(): void {
 		this.#manager?.resetBuffer();
+		// A pass still parsing belongs to a call of the turn that ended; its matches are dropped.
+		this.#astPasses.clear();
 	}
 
 	/** Advance the repeat-after-gap counter at the end of a turn. */
@@ -154,6 +188,14 @@ export class TtsrRuntime {
 	 */
 	async observeStreamDelta(message: AgentMessage, assistantEvent: AssistantMessageEvent): Promise<boolean> {
 		if (!this.#manager?.hasRules()) return false;
+		const targetMessageTimestamp = message.role === "assistant" ? message.timestamp : undefined;
+		if (assistantEvent.type === "toolcall_end") {
+			// The completed call gets its final AST match whatever cadence its partial snapshots ran at.
+			const toolCall = assistantEvent.toolCall;
+			const matchContext = this.#getToolMatchContext(toolCall, assistantEvent.contentIndex);
+			const snapshots = this.#matcherSnapshots(matchContext, toolCall);
+			return snapshots !== undefined && this.#offerAstPass(matchContext, snapshots, targetMessageTimestamp, true);
+		}
 		let matchContext: TtsrMatchContext | undefined;
 		let streamingToolCall: ToolCall | undefined;
 
@@ -167,17 +209,14 @@ export class TtsrRuntime {
 		}
 		if (!matchContext || !("delta" in assistantEvent)) return false;
 
-		const targetMessageTimestamp = message.role === "assistant" ? message.timestamp : undefined;
-		const matches = this.#checkStream(assistantEvent.delta, matchContext, streamingToolCall);
+		const snapshots = streamingToolCall ? this.#matcherSnapshots(matchContext, streamingToolCall) : undefined;
+		const matches = this.#checkStream(assistantEvent.delta, matchContext, snapshots);
 		if (matches.length > 0 && this.#handleMatches(matches, matchContext, targetMessageTimestamp)) {
 			return true;
 		}
 		// ast-grep `astCondition` rules match against the reconstructed edit/write
-		// snapshot, which only exists for tool argument streams. The native worker
-		// call is async, so this path is awaited and self-throttled by the manager.
-		if (matchContext.source !== "tool" || this.#manager?.hasAstRules() !== true) return false;
-		const astMatches = await this.#checkAstStream(matchContext, streamingToolCall);
-		return astMatches.length > 0 && this.#handleMatches(astMatches, matchContext, targetMessageTimestamp);
+		// snapshot, which only exists for tool argument streams.
+		return snapshots !== undefined && this.#offerAstPass(matchContext, snapshots, targetMessageTimestamp, false);
 	}
 
 	/** Record delivery of a persisted `ttsr-injection` custom message. */
@@ -226,8 +265,19 @@ export class TtsrRuntime {
 	 * Persistence moves with the delivery. `message_end` marks and records any
 	 * `ttsr-injection` custom message, so recording here as well would double-count, and
 	 * recording here at all would claim a delivery that a dying turn never makes.
+	 *
+	 * A tool call whose AST pass is still parsing waits for it: the final match of the
+	 * completed call can land after a fast tool returns, and its reminder belongs to this
+	 * result.
 	 */
-	afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+	afterToolCall(ctx: AfterToolCallContext): Promise<undefined> | undefined {
+		const pass = this.#astPasses.get(toolCallStreamKey(ctx.toolCall.id));
+		if (pass === undefined) return this.#queueToolReminder(ctx);
+		const queue = (): undefined => this.#queueToolReminder(ctx);
+		return pass.done.then(queue, queue);
+	}
+
+	#queueToolReminder(ctx: AfterToolCallContext): undefined {
 		const rules = this.#perToolInjections.get(ctx.toolCall.id);
 		if (!rules || rules.length === 0) return undefined;
 		this.#perToolInjections.delete(ctx.toolCall.id);
@@ -534,7 +584,7 @@ export class TtsrRuntime {
 		}
 
 		context.toolName = toolCall.name;
-		context.streamKey = toolCall.id ? `toolcall:${toolCall.id}` : `tool:${toolCall.name}:${contentIndex}`;
+		context.streamKey = toolCall.id ? toolCallStreamKey(toolCall.id) : `tool:${toolCall.name}:${contentIndex}`;
 		context.filePaths = this.#extractToolFilePaths(toolCall);
 		return context;
 	}
@@ -567,41 +617,42 @@ export class TtsrRuntime {
 	 * conditions written against source text keep working regardless of the
 	 * tool's wire format (hashline patches, JSON-escaped strings, ...).
 	 */
-	#checkStream(delta: string, matchContext: TtsrMatchContext, toolCall: ToolCall | undefined): Rule[] {
+	#checkStream(delta: string, matchContext: TtsrMatchContext, snapshots: MatcherSnapshot[] | undefined): Rule[] {
 		const manager = this.#manager;
 		if (!manager) {
 			return [];
 		}
-		const entries = this.#resolveMatcherEntries(toolCall);
-		if (entries) {
-			const matches: Rule[] = [];
-			for (const entry of entries) {
-				matches.push(...manager.checkSnapshot(entry.digest, this.#perFileContext(matchContext, entry.path)));
-			}
-			return matches;
+		if (snapshots === undefined) {
+			return manager.checkDelta(delta, matchContext);
 		}
-		const digest = this.#resolveMatcherDigest(toolCall);
-		if (digest !== undefined) {
-			return manager.checkSnapshot(digest, matchContext);
+		const matches: Rule[] = [];
+		for (const snapshot of snapshots) {
+			matches.push(...manager.checkSnapshot(snapshot.digest, snapshot.context));
 		}
-		return manager.checkDelta(delta, matchContext);
-	}
-
-	/** Reconstruct the tool's normalized source snapshot via its `matcherDigest`, if any. */
-	#resolveMatcherDigest(toolCall: ToolCall | undefined): string | undefined {
-		return this.#resolveTool(toolCall)?.matcherDigest?.(toolCall?.arguments ?? {});
+		return matches;
 	}
 
 	/**
-	 * Per-file split of a streamed call (one entry per touched file paired with
-	 * the digest of only that file's added lines). Lets {@link #checkStream}
-	 * and {@link #checkAstStream} evaluate each file in isolation so a
-	 * path-scoped rule like `tool:edit(*.ts)` never fires on text that belongs
-	 * to a sibling Markdown hunk in a multi-file payload.
+	 * The normalized source a tool call introduces, one snapshot per file.
+	 *
+	 * A tool's `matcherEntries` split a multi-file call into one entry per touched
+	 * file, paired with the digest of only that file's added lines, so a path-scoped
+	 * rule like `tool:edit(*.ts)` never fires on text that belongs to a sibling
+	 * Markdown hunk. Without it, the tool's `matcherDigest` is the one snapshot.
+	 * Undefined when the tool exposes neither, and the raw argument delta is matched.
 	 */
-	#resolveMatcherEntries(toolCall: ToolCall | undefined): readonly { path: string; digest: string }[] | undefined {
-		const entries = this.#resolveTool(toolCall)?.matcherEntries?.(toolCall?.arguments ?? {});
-		return entries && entries.length > 0 ? entries : undefined;
+	#matcherSnapshots(matchContext: TtsrMatchContext, toolCall: ToolCall): MatcherSnapshot[] | undefined {
+		const tool = this.#resolveTool(toolCall);
+		const args = toolCall.arguments ?? {};
+		const entries = tool?.matcherEntries?.(args);
+		if (entries && entries.length > 0) {
+			return entries.map(entry => ({
+				digest: entry.digest,
+				context: this.#perFileContext(matchContext, entry.path),
+			}));
+		}
+		const digest = tool?.matcherDigest?.(args);
+		return digest === undefined ? undefined : [{ digest, context: matchContext }];
 	}
 
 	#resolveTool(toolCall: ToolCall | undefined): AnyAgentTool | undefined {
@@ -628,32 +679,72 @@ export class TtsrRuntime {
 	}
 
 	/**
-	 * Match ast-grep `astCondition` rules against the reconstructed tool snapshot.
+	 * Offer a tool call's snapshots to its AST pass, starting the pass when none runs.
+	 *
+	 * Resolves once the pass has matched every offer queued behind this one, to true
+	 * when one of its matches aborted the stream. A `final` offer is the completed call
+	 * and is matched whatever its growth. Stream events are handled without awaiting
+	 * each other, so a delta can reach here after its call's `toolcall_end`; it never
+	 * replaces a queued final offer.
+	 */
+	#offerAstPass(
+		matchContext: TtsrMatchContext,
+		snapshots: MatcherSnapshot[],
+		targetMessageTimestamp: number | undefined,
+		final: boolean,
+	): Promise<boolean> | false {
+		const key = matchContext.streamKey;
+		if (key === undefined || this.#manager?.hasAstRules() !== true) return false;
+		const offer: AstOffer = { matchContext, snapshots, targetMessageTimestamp, final };
+		const running = this.#astPasses.get(key);
+		if (running !== undefined) {
+			if (running.queued?.final !== true) running.queued = offer;
+			return running.done;
+		}
+		const pass: AstPass = { queued: undefined, done: Promise.resolve(false) };
+		this.#astPasses.set(key, pass);
+		pass.done = this.#runAstPass(key, pass, offer);
+		return pass.done;
+	}
+
+	/** Match `first`, then whichever offer queued while it parsed, until none is left. */
+	async #runAstPass(key: string, pass: AstPass, first: AstOffer): Promise<boolean> {
+		let aborted = false;
+		let offer: AstOffer | undefined = first;
+		try {
+			while (offer !== undefined) {
+				const matches = await this.#checkAstStream(offer.snapshots, !offer.final);
+				if (this.#astPasses.get(key) !== pass) return aborted;
+				if (matches.length > 0 && this.#handleMatches(matches, offer.matchContext, offer.targetMessageTimestamp)) {
+					aborted = true;
+				}
+				offer = pass.queued;
+				pass.queued = undefined;
+			}
+			return aborted;
+		} finally {
+			if (this.#astPasses.get(key) === pass) this.#astPasses.delete(key);
+		}
+	}
+
+	/**
+	 * Match ast-grep `astCondition` rules against a tool call's snapshots.
 	 *
 	 * Only edit/write tool streams expose a `matcherDigest`, which is the real source
 	 * the call introduces; AST matching needs that (and a language inferred from the
-	 * path argument), so non-digest streams never produce AST matches.
+	 * path argument), so non-digest streams never produce AST matches. `partial`
+	 * snapshots are matched at the manager's growth cadence.
 	 */
-	async #checkAstStream(matchContext: TtsrMatchContext, toolCall: ToolCall | undefined): Promise<Rule[]> {
+	async #checkAstStream(snapshots: MatcherSnapshot[], partial: boolean): Promise<Rule[]> {
 		const manager = this.#manager;
 		if (!manager) {
 			return [];
 		}
-		const entries = this.#resolveMatcherEntries(toolCall);
-		if (entries) {
-			const matches: Rule[] = [];
-			for (const entry of entries) {
-				matches.push(
-					...(await manager.checkAstSnapshot(entry.digest, this.#perFileContext(matchContext, entry.path))),
-				);
-			}
-			return matches;
+		const matches: Rule[] = [];
+		for (const snapshot of snapshots) {
+			matches.push(...(await manager.checkAstSnapshot(snapshot.digest, snapshot.context, { partial })));
 		}
-		const digest = this.#resolveMatcherDigest(toolCall);
-		if (digest === undefined) {
-			return [];
-		}
-		return manager.checkAstSnapshot(digest, matchContext);
+		return matches;
 	}
 
 	/**
@@ -830,12 +921,20 @@ function displayPathWithinRoot(root: string, candidate: string): string | null {
 	return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : null;
 }
 
+/** Prefix of the stream key a tool call with an id is matched under. */
+const TOOL_CALL_STREAM_KEY_PREFIX = "toolcall:";
+
+/** The stream key of the tool call with `id`. */
+function toolCallStreamKey(id: string): string {
+	return `${TOOL_CALL_STREAM_KEY_PREFIX}${id}`;
+}
+
 /** Tool-call id whose argument deltas triggered a TTSR match, when known. */
 function extractToolCallId(matchContext: TtsrMatchContext): string | undefined {
 	if (matchContext.source !== "tool") return undefined;
 	const key = matchContext.streamKey;
-	if (typeof key !== "string" || !key.startsWith("toolcall:")) return undefined;
-	const id = key.slice("toolcall:".length);
+	if (typeof key !== "string" || !key.startsWith(TOOL_CALL_STREAM_KEY_PREFIX)) return undefined;
+	const id = key.slice(TOOL_CALL_STREAM_KEY_PREFIX.length);
 	return id.length > 0 ? id : undefined;
 }
 
