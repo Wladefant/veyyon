@@ -46,7 +46,9 @@ import { readSseJson } from "@veyyon/utils/stream";
 import { isRecord } from "@veyyon/utils/type-guards";
 
 /** The input item that turns a normal responses request into a compaction. */
-export const CODEX_COMPACTION_TRIGGER_ITEM: Readonly<Record<string, string>> = { type: "compaction_trigger" };
+export const CODEX_COMPACTION_TRIGGER_ITEM: Readonly<Record<string, string>> = {
+	type: "compaction_trigger",
+};
 
 /** Retained-message budget codex-rs applies to the replacement history. */
 export const CODEX_COMPACTION_V2_RETAINED_TOKEN_BUDGET = 64_000;
@@ -87,7 +89,10 @@ export interface CodexCompactionV2StreamResult {
 	usage?: CodexCompactionV2Usage;
 }
 
-function stringField(record: Record<string, unknown>, field: string): string | undefined {
+function stringField(
+	record: Record<string, unknown>,
+	field: string,
+): string | undefined {
 	const value = record[field];
 	return typeof value === "string" ? value : undefined;
 }
@@ -106,17 +111,28 @@ function readUsage(response: unknown): CodexCompactionV2Usage | undefined {
 	if (!isRecord(usage)) return undefined;
 	const input = usage.input_tokens;
 	const output = usage.output_tokens;
-	const inputTokens = typeof input === "number" && Number.isFinite(input) ? input : undefined;
-	const outputTokens = typeof output === "number" && Number.isFinite(output) ? output : undefined;
+	const inputTokens =
+		typeof input === "number" && Number.isFinite(input) ? input : undefined;
+	const outputTokens =
+		typeof output === "number" && Number.isFinite(output) ? output : undefined;
 	if (inputTokens === undefined && outputTokens === undefined) return undefined;
 	return { inputTokens, outputTokens };
 }
 
-function describeFailure(event: CodexCompactionV2Event, type: string, sanitize: (text: string) => string): string {
-	const fromResponse = isRecord(event.response) && isRecord(event.response.error) ? event.response.error : undefined;
+function describeFailure(
+	event: CodexCompactionV2Event,
+	type: string,
+	sanitize: (text: string) => string,
+): string {
+	const fromResponse =
+		isRecord(event.response) && isRecord(event.response.error)
+			? event.response.error
+			: undefined;
 	const error = isRecord(event.error) ? event.error : fromResponse;
 	const message = error ? stringField(error, "message") : undefined;
-	const code = error ? (stringField(error, "code") ?? stringField(error, "type")) : undefined;
+	const code = error
+		? (stringField(error, "code") ?? stringField(error, "type"))
+		: undefined;
 	return `Codex compaction stream ${type}${code ? ` (${sanitize(code)})` : ""}${message ? `: ${sanitize(message)}` : ""}`;
 }
 
@@ -136,7 +152,11 @@ export async function collectCodexCompactionV2Stream(
 	signal: AbortSignal | undefined,
 	sanitize: (text: string) => string,
 ): Promise<CodexCompactionV2StreamResult> {
-	return collectCodexCompactionV2Events(readSseJson<CodexCompactionV2Event>(body, signal), signal, sanitize);
+	return collectCodexCompactionV2Events(
+		readSseJson<CodexCompactionV2Event>(body, signal),
+		signal,
+		sanitize,
+	);
 }
 
 /** Collect decoded native events under the same window contract as the SSE transport. */
@@ -145,52 +165,108 @@ export async function collectCodexCompactionV2Events(
 	signal: AbortSignal | undefined,
 	sanitize: (text: string) => string,
 ): Promise<CodexCompactionV2StreamResult> {
+	const iterator = events[Symbol.asyncIterator]();
+
+	if (signal?.aborted) {
+		try {
+			void Promise.resolve(iterator.return?.()).catch(() => {});
+		} catch {}
+		if (isTimeoutError(signal.reason)) {
+			throw new Error(
+				"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+			);
+		}
+		throw cancellationError(
+			"Codex compaction was aborted before response.completed",
+		);
+	}
+
+	let onAbort: (() => void) | undefined;
+	const abortResolver = signal ? Promise.withResolvers<never>() : undefined;
+
+	if (signal && abortResolver) {
+		onAbort = () => {
+			try {
+				void Promise.resolve(iterator.return?.()).catch(() => {});
+			} catch {}
+			if (isTimeoutError(signal.reason)) {
+				abortResolver.reject(
+					new Error(
+						"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+					),
+				);
+			} else {
+				abortResolver.reject(
+					cancellationError(
+						"Codex compaction was aborted before response.completed",
+					),
+				);
+			}
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+	}
+
 	const compactionItems: Array<Record<string, unknown>> = [];
 	let malformedCompactionItems = 0;
 	let outputItemCount = 0;
 	let sawCompleted = false;
 	let usage: CodexCompactionV2Usage | undefined;
 
-	for await (const event of events) {
-		if (!isRecord(event)) continue;
-		const type = typeof event.type === "string" ? event.type : undefined;
-		if (type === "response.output_item.done") {
-			outputItemCount++;
-			if (isRecord(event.item) && event.item.type === "compaction") {
-				// The blob IS the compacted history. An item without one carries no
-				// window, so counting it as the compaction item stores an entry that
-				// every later turn discards.
-				if (typeof event.item.encrypted_content === "string") compactionItems.push(event.item);
-				else malformedCompactionItems++;
+	try {
+		for (;;) {
+			const nextPromise = iterator.next();
+			const result = abortResolver
+				? await Promise.race([nextPromise, abortResolver.promise])
+				: await nextPromise;
+			if (result.done) break;
+
+			const event = result.value;
+			if (!isRecord(event)) continue;
+			const type = typeof event.type === "string" ? event.type : undefined;
+			if (type === "response.output_item.done") {
+				outputItemCount++;
+				if (isRecord(event.item) && event.item.type === "compaction") {
+					// The blob IS the compacted history. An item without one carries no
+					// window, so counting it as the compaction item stores an entry that
+					// every later turn discards.
+					if (typeof event.item.encrypted_content === "string")
+						compactionItems.push(event.item);
+					else malformedCompactionItems++;
+				}
+				continue;
 			}
-			continue;
+			if (type === "response.completed") {
+				sawCompleted = true;
+				usage = readUsage(event.response);
+				continue;
+			}
+			if (
+				type === "response.failed" ||
+				type === "response.incomplete" ||
+				type === "error"
+			) {
+				throw new Error(
+					`${describeFailure(event, type, sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
+				);
+			}
 		}
-		if (type === "response.completed") {
-			sawCompleted = true;
-			usage = readUsage(event.response);
-			continue;
-		}
-		if (type === "response.failed" || type === "response.incomplete" || type === "error") {
-			throw new Error(
-				`${describeFailure(event, type, sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
-			);
+	} finally {
+		if (signal && onAbort) {
+			signal.removeEventListener("abort", onAbort);
 		}
 	}
 
-	if (!sawCompleted) {
-		// `readSseEvents` ends the stream on an aborted signal instead of throwing,
-		// so the reason is read here. A deadline is a timeout the caller's retry
-		// ladder classifies as one; a cancellation propagates as itself. Reporting
-		// either as "closed before response.completed" made a 180 s deadline on a
-		// 234k-token span look like a backend fault on every codex compaction.
-		if (signal?.aborted) {
-			if (isTimeoutError(signal.reason)) {
-				throw new Error(
-					"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
-				);
-			}
-			throw cancellationError("Codex compaction was aborted before response.completed");
+	if (signal?.aborted) {
+		if (isTimeoutError(signal.reason)) {
+			throw new Error(
+				"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+			);
 		}
+		throw cancellationError(
+			"Codex compaction was aborted before response.completed",
+		);
+	}
+	if (!sawCompleted) {
 		throw new Error(
 			"Codex compaction stream closed before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
 		);
@@ -206,7 +282,10 @@ export async function collectCodexCompactionV2Events(
 			`Codex compaction returned ${compactionItems.length} compaction items among ${outputItemCount} output items, expected exactly one. The history was NOT compacted; the caller falls back to local compaction.`,
 		);
 	}
-	logger.debug("Codex compaction stream produced its window", { outputItemCount, ...usage });
+	logger.debug("Codex compaction stream produced its window", {
+		outputItemCount,
+		...usage,
+	});
 	return { compactionItem, usage };
 }
 
@@ -228,10 +307,13 @@ function contentParts(item: Record<string, unknown>): unknown[] {
 function isRetainedUserMessage(item: unknown): item is Record<string, unknown> {
 	if (!isRecord(item) || stringField(item, "role") !== "user") return false;
 	if (item.type !== undefined && item.type !== "message") return false;
-	return !contentParts(item).some(part => {
+	return !contentParts(item).some((part) => {
 		if (!isRecord(part) || part.type !== "input_text") return false;
 		const text = stringField(part, "text")?.trimStart().toLowerCase();
-		return text !== undefined && CONTEXTUAL_USER_PREFIXES.some(prefix => text.startsWith(prefix));
+		return (
+			text !== undefined &&
+			CONTEXTUAL_USER_PREFIXES.some((prefix) => text.startsWith(prefix))
+		);
 	});
 }
 
@@ -261,7 +343,10 @@ function truncateText(text: string, maxTokens: number): string {
 	return `${text.slice(0, sideChars)}${marker}${text.slice(-sideChars)}`;
 }
 
-function truncateMessage(item: Record<string, unknown>, maxTokens: number): Record<string, unknown> | undefined {
+function truncateMessage(
+	item: Record<string, unknown>,
+	maxTokens: number,
+): Record<string, unknown> | undefined {
 	let remaining = maxTokens;
 	const kept: unknown[] = [];
 	for (const part of contentParts(item)) {
@@ -300,7 +385,11 @@ export function buildCodexCompactionV2Window(
 	budgetTokens = CODEX_COMPACTION_V2_RETAINED_TOKEN_BUDGET,
 ): Array<Record<string, unknown>> {
 	const retained = input.filter(isRetainedUserMessage);
-	let remaining = clampLow(Math.floor(budgetTokens), 1, CODEX_COMPACTION_V2_RETAINED_TOKEN_BUDGET);
+	let remaining = clampLow(
+		Math.floor(budgetTokens),
+		1,
+		CODEX_COMPACTION_V2_RETAINED_TOKEN_BUDGET,
+	);
 	const window: Array<Record<string, unknown>> = [];
 	for (let index = retained.length - 1; index >= 0 && remaining > 0; index--) {
 		const item = retained[index];
