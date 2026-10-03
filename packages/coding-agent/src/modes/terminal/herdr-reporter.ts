@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import * as path from "node:path";
+import { logger } from "@veyyon/utils";
 import { getActiveProfileOrDefault } from "@veyyon/utils/dirs";
 import type { AgentSession } from "../../session/agent-session";
 
@@ -94,16 +95,24 @@ export class HerdrReporter {
 		this.#released = false;
 		this.#report(session.isStreaming ? "working" : "idle");
 		this.#unsubscribe = session.subscribe(event => {
-			if (event.type === "agent_start") this.#report("working");
-			else if (event.type === "agent_end") this.#report("idle");
+			try {
+				if (event.type === "agent_start") this.#report("working");
+				else if (event.type === "agent_end") this.#report("idle");
+			} catch (error) {
+				logger.warn("herdr state report failed", { error: String(error) });
+			}
 		});
 		// `switchSession`, `newSession`, `fork` and `branch` replace the session in place and raise no
 		// event this reporter can see. Herdr would keep restoring the previous conversation until the
 		// next turn, so compare identity on a short timer. A report only spawns when it changed.
 		this.#timer = setInterval(() => {
-			const current = this.#session;
-			if (!current || this.#released || identityOf(current) === this.#reported) return;
-			this.#report(current.isStreaming ? "working" : "idle");
+			try {
+				const current = this.#session;
+				if (!current || this.#released || identityOf(current) === this.#reported) return;
+				this.#report(current.isStreaming ? "working" : "idle");
+			} catch (error) {
+				logger.warn("herdr identity report failed", { error: String(error) });
+			}
 		}, this.identityPollMs);
 		this.#timer.unref?.();
 	}
