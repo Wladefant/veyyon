@@ -145,8 +145,14 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+/**
+ * The provider module a lazy stream factory imports. A factory either calls `import("./x")` itself or
+ * calls a loader function declared in register-builtins.ts that does (`loadOpenAICodexResponses`, which
+ * the session's websocket prewarm shares), so a call to a file-local function is followed into it.
+ */
 function extractImportPathFromFactory(node: t.Node): string {
 	const importPaths: string[] = [];
+	const loaders: t.FunctionDeclaration[] = [];
 
 	t.traverseFast(node, n => {
 		if (t.isCallExpression(n) && t.isImport(n.callee)) {
@@ -156,13 +162,19 @@ function extractImportPathFromFactory(node: t.Node): string {
 			} else {
 				throw new Error("Dynamic import argument must be a string literal");
 			}
+		} else if (t.isCallExpression(n) && t.isIdentifier(n.callee)) {
+			const loader = localFunctions.get(n.callee.name);
+			if (loader) loaders.push(loader);
 		}
 	});
+	if (importPaths.length === 0 && loaders.length === 1) {
+		return extractImportPathFromFactory(loaders[0]);
+	}
 	if (importPaths.length === 0) {
 		throw new Error("Could not find dynamic import('./...') in factory function");
 	}
-	if (importPaths.length > 1) {
-		throw new Error(`Expected exactly one dynamic import, found ${importPaths.length}`);
+	if (importPaths.length > 1 || loaders.length > 0) {
+		throw new Error(`Expected exactly one dynamic import, found ${importPaths.length + loaders.length}`);
 	}
 	return importPaths[0].replace(/^\.\//, "");
 }
@@ -172,6 +184,12 @@ const ast = parse(source, {
 	sourceType: "module",
 	plugins: ["typescript"],
 });
+
+const localFunctions = new Map<string, t.FunctionDeclaration>();
+for (const stmt of ast.program.body) {
+	const decl = t.isExportNamedDeclaration(stmt) ? stmt.declaration : stmt;
+	if (t.isFunctionDeclaration(decl) && decl.id) localFunctions.set(decl.id.name, decl);
+}
 
 const limitsByName = new Map<string, LazyStreamLimits>();
 const registrations: Registration[] = [];
