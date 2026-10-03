@@ -11,6 +11,7 @@
 
 ### Changed
 
+- The presentation summary resolves the server-side compaction transport through `@veyyon/agent-core/compaction/remote-compaction` instead of `@veyyon/ai/providers/openai-compaction`, so loading it no longer evaluates the Codex client; no user-visible change.
 - A print, RPC or ACP launch evaluates no terminal renderer: `main.ts` loads the session picker only when `--resume` opens it, the launch command loads the launch card only when it paints, and the `ask` tool reads its card width from `chrome/modal-geometry.ts` instead of the modal shell, so `main.ts` reaches 1,467 modules instead of 1,582 and an RPC launch of the compiled binary reports ready in 221 ms instead of 228 ms with 190.6 MiB RSS instead of 196.7 MiB and a 205.3 MiB peak instead of 212.2 MiB (median of 20).
 - A streaming assistant message finds a Mermaid fence by jumping between runs of three backticks or tildes instead of splitting its whole text into lines on every delta, so a 108 KiB reply streamed in 24-character deltas spends 26 ms in message updates instead of 152 ms, and 735 ms instead of 892 ms with a 120-column render after each delta (median of three).
 - With smooth streaming on, an assistant message counts, slices and renders a provider delta on the next reveal frame instead of on every delta, and a delta reads only the blocks not yet visible to decide a layout repaint, so a 200,000-character reply streamed in 24-character deltas costs 780 ms of process CPU per turn instead of 940 ms (median of 15 turns).
