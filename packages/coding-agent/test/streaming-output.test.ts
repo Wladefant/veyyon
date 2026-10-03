@@ -255,6 +255,62 @@ describe("OutputSink", () => {
 		}
 	});
 
+	// Defect: dump() flushed the throttled preview before its cleanup region, so an onChunk that
+	// throws on that final flush skipped the artifact writer's end(), leaking the handle. Class: any
+	// failure on the way into dump()'s cleanup must still end the writer exactly once and surface
+	// the original error. Gap: a throw from the throttle timer callback never reaches dump().
+	// The fake writer stands in for the platform writer (Bun.file is the external boundary).
+	test("ends the artifact writer once and rethrows when the final preview flush throws", async () => {
+		const artifactPath = path.join(os.tmpdir(), "preview-flush-throws-artifact.bin");
+		const realFile = Bun.file.bind(Bun);
+		let ended = 0;
+		const fileSpy = vi.spyOn(Bun, "file").mockImplementation(((target: unknown, ...rest: unknown[]) => {
+			if (target !== artifactPath) return (realFile as (...args: unknown[]) => unknown)(target, ...rest);
+			return {
+				writer: () => ({
+					write: (chunk: string) => chunk.length,
+					end: async () => {
+						ended++;
+						return 0;
+					},
+				}),
+			};
+		}) as unknown as typeof Bun.file);
+		try {
+			let calls = 0;
+			const sink = new OutputSink({
+				artifactPath,
+				artifactId: "preview-flush-throws",
+				spillThreshold: 1,
+				chunkThrottleMs: 60_000,
+				onChunk: () => {
+					calls++;
+					if (calls === 2) throw new Error("preview-failed");
+				},
+			});
+			sink.push("first-chunk-spills-storage\n");
+			sink.push("second-chunk-queued\n");
+			await expect(sink.dump()).rejects.toThrow("preview-failed");
+			expect(ended).toBe(1);
+		} finally {
+			fileSpy.mockRestore();
+		}
+	});
+
+	test("rethrows the final preview flush error when no artifact writer exists", async () => {
+		let calls = 0;
+		const sink = new OutputSink({
+			chunkThrottleMs: 60_000,
+			onChunk: () => {
+				calls++;
+				if (calls === 2) throw new Error("preview-failed");
+			},
+		});
+		sink.push("first\n");
+		sink.push("second\n");
+		await expect(sink.dump()).rejects.toThrow("preview-failed");
+	});
+
 	test("tracks totals and adds notice in dump", async () => {
 		const sink = new OutputSink();
 		await sink.push("hello\nworld");
