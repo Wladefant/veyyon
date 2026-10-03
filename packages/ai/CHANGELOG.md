@@ -40,6 +40,7 @@
 
 ### Fixed
 
+- Fixed the `ai` test fixtures (codex compaction collector listener types, codex turn-state model, typesafe login callbacks) to match current types so `check:ts` passes in an isolated workspace ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the Codex unexpected-stream-end debug log reading the removed `turnState` field of the WebSocket session state; it now reads the request's turn-state cell ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered the `local`, `web` and `typesafe` catalog providers in the provider registry, restoring its compile-time completeness check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Corrected the `typesafe` login to the values from its catalog auth rule: console URL `https://console.typesafe.ai/`, and a models-endpoint check that honours `TYPESAFE_BASE_URL` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
