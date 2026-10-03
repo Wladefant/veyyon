@@ -31,6 +31,7 @@ import type { ExecutorOptions } from "./executor";
 import { runSubprocess } from "./executor";
 import { isMountingIsolationBackend, writeRetainedBackend } from "./isolation-ownership";
 import type { SingleResult } from "./types";
+import * as worktree from "./worktree";
 import {
 	applyNestedPatches,
 	type CommitToBranchResult,
@@ -43,7 +44,6 @@ import {
 	getRepoRoot,
 	type IsolationHandle,
 	isolationModeName,
-	mergeTaskBranches,
 	type NestedRepoPatch,
 	TASK_BRANCH_PREFIX,
 	type WorktreeBaseline,
@@ -564,7 +564,7 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 					mergedBranchForNestedPatches: canApplyNestedOnly,
 				};
 			}
-			const mergeResult = await mergeTaskBranches(repoRoot, [
+			const mergeResult = await worktree.mergeTaskBranches(repoRoot, [
 				{
 					branchName: result.branchName,
 					taskId: result.id,
@@ -658,8 +658,11 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 		return { summary, changesApplied, failure, hadAnyChanges, mergedBranchForNestedPatches: false };
 	} catch (mergeErr) {
 		const msg = errorMessage(mergeErr);
+		const branchInfo = result.branchName
+			? `\nUnmerged branch preserved as ${result.branchName} for manual resolution.`
+			: "";
 		return {
-			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${patchArtifactsList(result)}</system-notification>`,
+			summary: `\n\n<system-notification>Merge phase failed: ${msg}\nTask outputs are preserved but changes were not applied.${branchInfo}${patchArtifactsList(result)}</system-notification>`,
 			changesApplied: false,
 			failure: `Merge failed: ${msg}`,
 			hadAnyChanges: false,
