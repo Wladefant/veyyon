@@ -70158,8 +70158,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 256000,
+			"maxTokens": 256000
 		},
 		"stepfun-ai/step-3.6": {
 			"id": "stepfun-ai/step-3.6",
@@ -106503,6 +106503,134 @@
 			"compat": {
 				"includeEncryptedReasoning": false,
 				"streamIdleTimeoutMs": 0
+			}
+		}
+	},
+	"stepfun": {
+		"step-3.5-flash": {
+			"id": "step-3.5-flash",
+			"name": "Step 3.5 Flash",
+			"api": "openai-completions",
+			"provider": "stepfun",
+			"baseUrl": "https://api.stepfun.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.3,
+				"cacheRead": 0.02,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 256000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			},
+			"compat": {
+				"maxTokensField": "max_tokens",
+				"supportsReasoningEffort": true
+			}
+		},
+		"step-3.5-flash-2603": {
+			"id": "step-3.5-flash-2603",
+			"name": "Step 3.5 Flash 2603",
+			"api": "openai-completions",
+			"provider": "stepfun",
+			"baseUrl": "https://api.stepfun.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0.3,
+				"cacheRead": 0.02,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 256000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			},
+			"compat": {
+				"maxTokensField": "max_tokens",
+				"supportsReasoningEffort": true
+			}
+		},
+		"step-3.7-flash": {
+			"id": "step-3.7-flash",
+			"name": "Step 3.7 Flash",
+			"api": "openai-completions",
+			"provider": "stepfun",
+			"baseUrl": "https://api.stepfun.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.2,
+				"output": 1.15,
+				"cacheRead": 0.04,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 256000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			},
+			"compat": {
+				"maxTokensField": "max_tokens",
+				"supportsReasoningEffort": true
+			}
+		},
+		"step-5-preview": {
+			"id": "step-5-preview",
+			"name": "Step 5 Preview",
+			"api": "openai-completions",
+			"provider": "stepfun",
+			"baseUrl": "https://api.stepfun.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1,
+				"output": 2.7,
+				"cacheRead": 0.05,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 1000000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			},
+			"compat": {
+				"maxTokensField": "max_tokens",
+				"supportsReasoningEffort": true
 			}
 		}
 	},

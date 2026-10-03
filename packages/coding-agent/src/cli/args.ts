@@ -483,6 +483,7 @@ export function getExtraHelpText(): string {
 			["OPENCODE_API_KEY", "OpenCode Zen/OpenCode Go models"],
 			["CURSOR_ACCESS_TOKEN", "Cursor AI models"],
 			["AI_GATEWAY_API_KEY", "Vercel AI Gateway"],
+			["STEPFUN_API_KEY", "StepFun Step models"],
 			["WAFER_SERVERLESS_API_KEY", "Wafer Serverless (pay-as-you-go)"],
 			["ABLITERATION_API_KEY", "Abliteration uncensored GLM models"],
 			["MODEL_API_KEY", "Meta Model API models"],

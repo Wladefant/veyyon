@@ -96,7 +96,6 @@ const OMP_PROVIDER_OPT_OUTS: Readonly<Record<string, string>> = {
 	deepinfra: "open port, PR 354",
 	helmcode: "port pending (Refs #107)",
 	local: "open port, PR 351 (synthetic role provider)",
-	stepfun: "port pending (Refs #107)",
 	typesafe: "open port, PR 345",
 	web: "open port, PR 351 (synthetic role provider)",
 	"yolo-auto": "port pending (Refs #107)",

@@ -109,7 +109,8 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 		(model.provider === "command-code" ||
 			model.provider === "abliteration" ||
 			model.provider === "meta" ||
-			model.provider === "muse-code") &&
+			model.provider === "muse-code" ||
+			model.provider === "stepfun") &&
 		model.thinking !== undefined;
 	const thinking = resolveModelThinking(
 		deploymentAuthored ? model : { ...model, thinking: undefined },
