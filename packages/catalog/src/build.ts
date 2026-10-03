@@ -13,20 +13,26 @@
 import { buildAnthropicCompat } from "./compat/anthropic";
 import { buildCursorCompat } from "./compat/cursor";
 import { buildDevinCompat } from "./compat/devin";
-import { buildOpenAICompat, buildOpenAIResponsesCompat, buildOpenRouterCompat } from "./compat/openai";
+import {
+	buildOpenAICompat,
+	buildOpenAIResponsesCompat,
+	buildOpenRouterCompat,
+} from "./compat/openai";
 import { shareCompat } from "./compat/share";
 import { resolveModelThinking } from "./model-thinking";
 import {
 	type Api,
 	type CompatOf,
-	type Model,
 	MODEL_KINDS,
+	type Model,
 	type ModelSpec,
 	type WebSearchGrounding,
 } from "./types";
 import { cleanModelName, normalizeModelCost } from "./utils";
 
-function resolveProviderWebSearch(provider: string): WebSearchGrounding | undefined {
+function resolveProviderWebSearch(
+	provider: string,
+): WebSearchGrounding | undefined {
 	switch (provider) {
 		case "google":
 		case "google-antigravity":
@@ -45,15 +51,22 @@ function resolveProviderWebSearch(provider: string): WebSearchGrounding | undefi
 	}
 }
 
-export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi> {
+export function buildModel<TApi extends Api>(
+	spec: ModelSpec<TApi>,
+): Model<TApi> {
 	const compat = shareCompat(buildCompat(spec)) as CompatOf<TApi>;
 	const rawKind =
 		spec.kind ??
-		(spec.provider === "typesafe" ? "judge" : spec.provider === "web" ? "search" : undefined);
-	const resolvedKind = MODEL_KINDS.find(k => k === rawKind);
+		(spec.provider === "typesafe"
+			? "judge"
+			: spec.provider === "web"
+				? "search"
+				: undefined);
+	const resolvedKind = MODEL_KINDS.find((k) => k === rawKind);
 	const kind = resolvedKind !== "chat" ? resolvedKind : undefined;
 
-	const rawWebSearch = spec.webSearch ?? resolveProviderWebSearch(spec.provider);
+	const rawWebSearch =
+		spec.webSearch ?? resolveProviderWebSearch(spec.provider);
 	const webSearch =
 		rawWebSearch === "gemini" ||
 		rawWebSearch === "anthropic" ||
@@ -62,7 +75,11 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 		rawWebSearch === "openrouter"
 			? rawWebSearch
 			: undefined;
-	const { kind: _omittedKind, webSearch: _omittedWebSearch, ...restSpec } = spec;
+	const {
+		kind: _omittedKind,
+		webSearch: _omittedWebSearch,
+		...restSpec
+	} = spec;
 	return {
 		...restSpec,
 		name: cleanModelName(spec.name),
