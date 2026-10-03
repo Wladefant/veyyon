@@ -21,7 +21,7 @@ import { antigravityRankingStrategy, antigravityUsageProvider } from "./google-a
 import { kimiUsageProvider } from "./kimi";
 import { ollamaCloudUsageProvider, ollamaUsageProvider } from "./ollama";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./openai-codex";
-import { opencodeGoUsageProvider } from "./opencode-go";
+import { opencodeGoRankingStrategy, opencodeGoUsageProvider } from "./opencode-go";
 import { registerUsageProviders } from "./registry";
 import { zaiRankingStrategy, zaiUsageProvider } from "./zai";
 
@@ -40,12 +40,13 @@ export const DEFAULT_USAGE_PROVIDERS: readonly UsageProvider[] = [
 	cursorUsageProvider,
 ];
 
-/** The four providers whose credentials rank by their own rules rather than the default ones. */
+/** The five providers whose credentials rank by their own rules rather than the default ones. */
 export const DEFAULT_RANKING_STRATEGIES: readonly (readonly [Provider, CredentialRankingStrategy])[] = [
 	["openai-codex", codexRankingStrategy],
 	["anthropic", claudeRankingStrategy],
 	["google-antigravity", antigravityRankingStrategy],
 	["zai", zaiRankingStrategy],
+	["opencode-go", opencodeGoRankingStrategy],
 ];
 
 registerUsageProviders({ providers: DEFAULT_USAGE_PROVIDERS, rankingStrategies: DEFAULT_RANKING_STRATEGIES });
