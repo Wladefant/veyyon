@@ -425,8 +425,8 @@ describe("InputController escape behavior", () => {
 		controller.setupKeyHandlers();
 		editor.onEscape?.();
 
-		expect(pauseLoop).toHaveBeenCalledTimes(1);
-		expect(spies.cancelPendingSubmission).toHaveBeenCalledTimes(1);
+		expect(pauseLoop.mock.calls).toHaveLength(1);
+		expect(spies.cancelPendingSubmission.mock.calls).toHaveLength(1);
 	});
 
 	it("aborts active handoff generation before default Esc handling", () => {
