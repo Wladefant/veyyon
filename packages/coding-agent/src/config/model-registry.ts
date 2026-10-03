@@ -2971,13 +2971,11 @@ export class ModelRegistry {
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
 		if (commandKey.configured) return commandKey.value;
-		if (this.#isKeylessProvider(model.provider)) {
-			return kNoAuth;
-		}
-		return this.authStorage.getApiKey(model.provider, sessionId, {
+		const apiKey = await this.authStorage.getApiKey(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
 		});
+		return apiKey === undefined && this.#isKeylessProvider(model.provider) ? kNoAuth : apiKey;
 	}
 
 	/**
@@ -2999,15 +2997,13 @@ export class ModelRegistry {
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
 		if (commandKey.configured) return commandKey.value;
-		if (this.#isKeylessProvider(provider)) {
-			return kNoAuth;
-		}
-		return this.authStorage.getApiKey(provider, sessionId, {
+		const apiKey = await this.authStorage.getApiKey(provider, sessionId, {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
 			forceRefresh: options?.forceRefresh,
 			signal: options?.signal,
 		});
+		return apiKey === undefined && this.#isKeylessProvider(provider) ? kNoAuth : apiKey;
 	}
 
 	/**

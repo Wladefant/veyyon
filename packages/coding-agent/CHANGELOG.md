@@ -7,7 +7,7 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
-- Restored keyless request auth and model selection checks for local providers using login placeholders ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1d78d2b97e3901c8a0d051acb612a783ca14f5c7, 0e483420eeccffba3a48c40ad962ed9fddb87d6a).
+- Recognized local login placeholders in model selection while preserving resolved credentials and existing request bearer values ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1d78d2b97e3901c8a0d051acb612a783ca14f5c7, 0e483420eeccffba3a48c40ad962ed9fddb87d6a).
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
 
