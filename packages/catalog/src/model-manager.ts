@@ -588,8 +588,10 @@ function mergeDynamicModel<TApi extends Api>(
 	const endpointChanged = existingModel.baseUrl !== dynamicModel.baseUrl;
 	const dynamicInputAuthoritative =
 		endpointChanged ||
-		(existingModel.provider === "github-copilot" && dynamicModel.provider === "github-copilot") ||
-		(existingModel.provider === "deepinfra" && dynamicModel.provider === "deepinfra");
+		(existingModel.provider === "github-copilot" &&
+			dynamicModel.provider === "github-copilot") ||
+		(existingModel.provider === "deepinfra" &&
+			dynamicModel.provider === "deepinfra");
 	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") ||
