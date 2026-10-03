@@ -1,15 +1,13 @@
+import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, spyOn, test } from "bun:test";
-import { PtySession } from "@veyyon/natives";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ExtensionTerminalCapability } from "@veyyon/coding-agent/extensibility/terminal-capability";
-import { runInteractiveBashPty } from "@veyyon/coding-agent/tools/shell/bash-interactive";
 import { formatAsyncResultForFollowUp } from "@veyyon/coding-agent/async/async-delivery";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import { describeSettingTypeMismatch } from "@veyyon/coding-agent/config/settings-schema";
 import { toExecutorBackendResult } from "@veyyon/coding-agent/eval/backend-helpers";
+import type { ExtensionTerminalCapability } from "@veyyon/coding-agent/extensibility/terminal-capability";
 import { buildAsyncResultBatchMessage } from "@veyyon/coding-agent/session/factory-notices";
 import type { OutputSummary } from "@veyyon/coding-agent/session/streaming-output";
 import type { Theme } from "@veyyon/coding-agent/theme/theme";
@@ -26,20 +24,21 @@ import {
 	stripOutputNotice,
 	type TruncationMeta,
 } from "@veyyon/coding-agent/tools/core/output-meta";
+import { runInteractiveBashPty } from "@veyyon/coding-agent/tools/shell/bash-interactive";
 import { JobTool } from "@veyyon/coding-agent/tools/shell/job";
 import { jobToolView } from "@veyyon/coding-agent/tools/shell/job-view";
+import { PtySession } from "@veyyon/natives";
 import { makeToolSession } from "../helpers/tool-session";
 
-
 const mockTerminal: ExtensionTerminalCapability = {
-	custom: async (factory) => {
+	custom: async <T>(factory: Parameters<ExtensionTerminalCapability["custom"]>[0]) => {
 		const tui = {
 			terminal: { rows: 24, columns: 80 },
 			pinnedFooterRows: 0,
 			requestRender: () => {},
 		};
-		const { promise, resolve } = Promise.withResolvers<never>();
-		factory(tui as never, {} as never, {} as never, resolve);
+		const { promise, resolve } = Promise.withResolvers<T>();
+		factory(tui as never, {} as never, {} as never, resolve as never);
 		return promise;
 	},
 	setEditorComponent: () => () => {},
@@ -193,8 +192,8 @@ describe("artifact error capture mechanics", () => {
 		]);
 
 		expect(msg).not.toBeNull();
-		expect(msg!.details.jobs[0].meta?.artifactError).toBe("open");
-		expect(msg!.details.meta?.source).toEqual({
+		expect(msg?.details?.jobs[0]?.meta?.artifactError).toBe("open");
+		expect(msg?.details?.meta?.source).toEqual({
 			type: "report",
 			value: "background job delivery",
 		});
@@ -361,11 +360,142 @@ describe("artifact error capture mechanics", () => {
 
 		expect(view.kind).toBe("headedBlock");
 		if (view.kind === "headedBlock") {
-			const warningRow = view.lines.find(row =>
-				row.some(span => span.text.includes("artifact flush failed")),
-			);
+			const warningRow = view.lines.find(row => row.some(span => span.text.includes("artifact flush failed")));
 			expect(warningRow).toBeDefined();
 			expect(warningRow?.some(span => span.tone === "warning")).toBe(true);
+		}
+	});
+
+	test("jobToolView renders warning line when artifact error is embedded beyond collapsed and expanded preview lines", () => {
+		const tenLines = Array.from({ length: 10 }, (_, i) => `output line ${i + 1}`).join("\n");
+		const notice = formatArtifactErrorNotice("write");
+		const textWithLateWarning = `${tenLines}\n[${notice}]`;
+
+		// Collapsed view: only 1 preview line visible, late warning is hidden, so dedicated warning row must be shown
+		const viewCollapsed = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-late-col",
+							type: "bash",
+							status: "completed",
+							label: "late warning collapsed",
+							durationMs: 1000,
+							resultText: textWithLateWarning,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: false },
+		);
+
+		expect(viewCollapsed.kind).toBe("headedBlock");
+		if (viewCollapsed.kind === "headedBlock") {
+			const warningRow = viewCollapsed.lines.find(row =>
+				row.some(span => span.text.includes("artifact write failed") && span.tone === "warning"),
+			);
+			expect(warningRow).toBeDefined();
+		}
+
+		// Expanded view: only 4 preview lines visible, late warning is still hidden, so dedicated warning row must be shown
+		const viewExpanded = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-late-exp",
+							type: "bash",
+							status: "completed",
+							label: "late warning expanded",
+							durationMs: 1000,
+							resultText: textWithLateWarning,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: true },
+		);
+
+		expect(viewExpanded.kind).toBe("headedBlock");
+		if (viewExpanded.kind === "headedBlock") {
+			const warningRow = viewExpanded.lines.find(row =>
+				row.some(span => span.text.includes("artifact write failed") && span.tone === "warning"),
+			);
+			expect(warningRow).toBeDefined();
+		}
+	});
+
+	test("jobToolView renders short visible warning once only without duplicate warning row", () => {
+		const notice = formatArtifactErrorNotice("write");
+		const shortText = `[${notice}]`;
+
+		const viewCollapsed = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-short-col",
+							type: "bash",
+							status: "completed",
+							label: "short warning collapsed",
+							durationMs: 1000,
+							resultText: shortText,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: false },
+		);
+
+		expect(viewCollapsed.kind).toBe("headedBlock");
+		if (viewCollapsed.kind === "headedBlock") {
+			const matchingRows = viewCollapsed.lines.filter(row =>
+				row.some(span => span.text.includes("artifact write failed")),
+			);
+			expect(matchingRows.length).toBe(1);
+			const standaloneWarningRows = viewCollapsed.lines.filter(row =>
+				row.some(span => span.tone === "warning" && span.text.includes("artifact write failed")),
+			);
+			expect(standaloneWarningRows.length).toBe(0);
+		}
+
+		const viewExpanded = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-short-exp",
+							type: "bash",
+							status: "completed",
+							label: "short warning expanded",
+							durationMs: 1000,
+							resultText: `output line 1\n[${notice}]`,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: true },
+		);
+
+		expect(viewExpanded.kind).toBe("headedBlock");
+		if (viewExpanded.kind === "headedBlock") {
+			const matchingRows = viewExpanded.lines.filter(row =>
+				row.some(span => span.text.includes("artifact write failed")),
+			);
+			expect(matchingRows.length).toBe(1);
+			const standaloneWarningRows = viewExpanded.lines.filter(row =>
+				row.some(span => span.tone === "warning" && span.text.includes("artifact write failed")),
+			);
+			expect(standaloneWarningRows.length).toBe(0);
 		}
 	});
 
@@ -382,12 +512,7 @@ describe("artifact error capture mechanics", () => {
 		const tool = new JobTool(session);
 
 		const { promise: neverResolves } = Promise.withResolvers<string>();
-		manager.register(
-			"bash",
-			"artifact error bash job",
-			() => neverResolves,
-			{ id: "job-art-err" },
-		);
+		manager.register("bash", "artifact error bash job", () => neverResolves, { id: "job-art-err" });
 		const job = manager.getJob("job-art-err")!;
 		job.status = "completed";
 		job.resultText = "finished work";
@@ -416,12 +541,7 @@ describe("artifact error capture mechanics", () => {
 
 		const alreadyNoticed = "finished work\n\n[Full output was not saved completely (artifact open failed)]";
 		const { promise: neverResolves } = Promise.withResolvers<string>();
-		manager.register(
-			"bash",
-			"dedup bash job",
-			() => neverResolves,
-			{ id: "job-art-dedup" },
-		);
+		manager.register("bash", "dedup bash job", () => neverResolves, { id: "job-art-dedup" });
 		const job = manager.getJob("job-art-dedup")!;
 		job.status = "completed";
 		job.resultText = alreadyNoticed;
@@ -450,12 +570,7 @@ describe("artifact error capture mechanics", () => {
 		const tool = new JobTool(session);
 
 		const { promise: neverResolves } = Promise.withResolvers<string>();
-		manager.register(
-			"bash",
-			"poll artifact error job",
-			() => neverResolves,
-			{ id: "job-poll-art-err" },
-		);
+		manager.register("bash", "poll artifact error job", () => neverResolves, { id: "job-poll-art-err" });
 		const job = manager.getJob("job-poll-art-err")!;
 		job.status = "completed";
 		job.resultText = "poll finished work";
@@ -478,21 +593,19 @@ describe("artifact error capture mechanics", () => {
 		const artifactPath = path.join(tmpDir, "sample.artifact");
 
 		// Emit 1.2 MB (20 chunks of 60 KB)
-		const chunk = "B".repeat(60_000) + "\n";
-		const ptySpy = spyOn(PtySession.prototype, "start").mockImplementation(
-			async (_opts, onChunk) => {
-				if (onChunk) {
-					for (let i = 0; i < 20; i++) {
-						onChunk(null, chunk);
-					}
+		const chunk = `${"B".repeat(60_000)}\n`;
+		const ptySpy = spyOn(PtySession.prototype, "start").mockImplementation(async (_opts, onChunk) => {
+			if (onChunk) {
+				for (let i = 0; i < 20; i++) {
+					onChunk(null, chunk);
 				}
-				return {
-					exitCode: 0,
-					cancelled: false,
-					timedOut: false,
-				};
-			},
-		);
+			}
+			return {
+				exitCode: 0,
+				cancelled: false,
+				timedOut: false,
+			};
+		});
 
 		try {
 			const res = await runInteractiveBashPty(mockTerminal, {
@@ -521,21 +634,19 @@ describe("artifact error capture mechanics", () => {
 		const artifactPath = path.join(tmpDir, "unlimited.artifact");
 
 		// Emit 1.2 MB
-		const chunk = "C".repeat(60_000) + "\n";
-		const ptySpy = spyOn(PtySession.prototype, "start").mockImplementation(
-			async (_opts, onChunk) => {
-				if (onChunk) {
-					for (let i = 0; i < 20; i++) {
-						onChunk(null, chunk);
-					}
+		const chunk = `${"C".repeat(60_000)}\n`;
+		const ptySpy = spyOn(PtySession.prototype, "start").mockImplementation(async (_opts, onChunk) => {
+			if (onChunk) {
+				for (let i = 0; i < 20; i++) {
+					onChunk(null, chunk);
 				}
-				return {
-					exitCode: 0,
-					cancelled: false,
-					timedOut: false,
-				};
-			},
-		);
+			}
+			return {
+				exitCode: 0,
+				cancelled: false,
+				timedOut: false,
+			};
+		});
 
 		try {
 			const res = await runInteractiveBashPty(mockTerminal, {

@@ -8,6 +8,7 @@
 
 - `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
 - Exported SessionManagerStateSnapshot in SessionManager for atomic session migration and state restoration ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the `tools.artifactMaxBytes` setting (default 16 MiB, `0` unbounded, negative rejected) capping saved tool-output artifacts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi ac896ded0bd499cbc1c480b500c2a43b3abc2027).
 
 ### Changed
 

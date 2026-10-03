@@ -526,7 +526,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 		let outputDumped = false;
 		const finalizeOutput = async (): Promise<OutputSummary | undefined> => {
 			if (outputDumped || !outputSink) return outputSummary;
-			outputSummary = await outputSink.dump();
+			outputSummary = await outputSink.dumpWithArtifactStatus();
 			outputDumped = true;
 			return outputSummary;
 		};

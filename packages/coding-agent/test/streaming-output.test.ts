@@ -450,26 +450,30 @@ describe("OutputSink", () => {
 		expect(dumped.artifactElidedBytes).toBeGreaterThan(0);
 
 		const written = await fs.readFile(artifactPath, "utf-8");
-		expect(written).toContain("[ARTIFACT TRUNCATED:");
+		expect(written).toContain("[ARTIFACT TRUNCATED: kept first 50B + last 50B of 330B");
 		expect(written.length).toBeLessThanOrEqual(250);
 	});
 
-	test("records artifactError 'open' and omits artifactId when artifact file cannot be opened", async () => {
-		const artifactPath = path.join(
-			process.platform === "win32" ? "Z:\\nonexistent-drive-for-test" : "/dev/null/impossible",
-			"bad.log",
-		);
-		const sink = new OutputSink({
-			artifactPath,
-			artifactId: "artifact-fail-open",
-			spillThreshold: 5,
-		});
+	test("rejects dump and reports artifactError 'open' on the status-aware dump when the artifact file cannot be opened", async () => {
+		const dir = await createTempDir();
+		const parentIsAFile = path.join(dir, "not-a-directory");
+		await fs.writeFile(parentIsAFile, "x");
+		const artifactPath = path.join(parentIsAFile, "bad.log");
+		const options = { artifactPath, artifactId: "artifact-fail-open", spillThreshold: 5 };
 
-		sink.push("some output data");
-		const dumped = await sink.dumpWithArtifactStatus();
+		const strict = new OutputSink(options);
+		strict.push("some output data");
+		await expect(strict.dump()).rejects.toThrow();
+
+		const tolerant = new OutputSink(options);
+		tolerant.push("some output data");
+		const dumped = await tolerant.dumpWithArtifactStatus();
 
 		expect(dumped.artifactError).toBe("open");
 		expect(dumped.artifactId).toBeUndefined();
+		// With the file unusable the sink keeps only its in-memory tail (spill threshold 5).
+		expect(dumped.output).not.toBe("");
+		expect("some output data".endsWith(dumped.output)).toBe(true);
 	});
 
 	test("dump() strictly rejects when artifact file cannot be opened", async () => {
