@@ -161,7 +161,12 @@ import {
 	type SequentialCutoffSummaryState,
 	type ToolCallArgumentsDeltaShape,
 } from "./openai-shared";
-import { transformMessages } from "./transform-messages";
+import {
+	redactJsonFunctionCallArguments,
+	redactSensitiveCredentials,
+	redactSensitiveInObject,
+	transformMessages,
+} from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -4842,6 +4847,45 @@ function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }
+function sanitizeReplayedAssistantNativeItem(item: ResponseInput[number]): ResponseInput[number] {
+	if (item.type === "reasoning") return item;
+	if (item.type === "function_call" && "arguments" in item && typeof item.arguments === "string") {
+		const { result, changed } = redactJsonFunctionCallArguments(item.arguments);
+		return changed ? { ...item, arguments: result } : item;
+	}
+	if (item.type === "custom_tool_call" && "input" in item && typeof item.input === "string") {
+		const { result, changed } = redactJsonFunctionCallArguments(item.input);
+		return changed ? { ...item, input: result } : item;
+	}
+	if (item.type === "message" && item.role === "assistant") {
+		if (typeof item.content === "string") {
+			const redacted = redactSensitiveCredentials(item.content);
+			return redacted !== item.content ? { ...item, content: redacted } : item;
+		}
+		if (Array.isArray(item.content)) {
+			let changed = false;
+			const content = item.content.map(part => {
+				if (part.type === "output_text" && typeof part.text === "string") {
+					const redacted = redactSensitiveCredentials(part.text);
+					if (redacted !== part.text) {
+						changed = true;
+						return { ...part, text: redacted };
+					}
+				}
+				if (part.type === "refusal" && typeof part.refusal === "string") {
+					const redacted = redactSensitiveCredentials(part.refusal);
+					if (redacted !== part.refusal) {
+						changed = true;
+						return { ...part, refusal: redacted };
+					}
+				}
+				return part;
+			});
+			return changed ? { ...item, content } : item;
+		}
+	}
+	return item;
+}
 
 function convertMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {
 	const messages: ResponseInput = [];
@@ -4876,13 +4920,17 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				| Array<ResponseInput[number]>
 				| undefined;
 			if (historyItems) {
-				for (const item of historyItems) {
+				const redactedHistoryItems = redactSensitiveInObject(historyItems.map(sanitizeReplayedAssistantNativeItem))
+					.result as Array<ResponseInput[number]>;
+				for (const item of redactedHistoryItems) {
 					const maybe = item as { type?: string; call_id?: string };
 					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
 						customCallIds.add(maybe.call_id);
 					}
 				}
-				const replayItems = isHarmonyDialectModel(model) ? escapeReplayedClientText(historyItems) : historyItems;
+				const replayItems = isHarmonyDialectModel(model)
+					? escapeReplayedClientText(redactedHistoryItems)
+					: redactedHistoryItems;
 				for (let hi = 0; hi < replayItems.length; hi++) messages.push(replayItems[hi]!);
 				msgIndex += 1;
 				continue;
@@ -4925,7 +4973,9 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 			const historyItems = providerPayload?.items as Array<Record<string, unknown>> | undefined;
 			let suppressHiddenEmptyFallback = false;
 			if (historyItems) {
-				const sanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(historyItems);
+				const sanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(historyItems)?.map(
+					sanitizeReplayedAssistantNativeItem,
+				);
 				if (sanitizedHistoryItems) {
 					for (const item of sanitizedHistoryItems) {
 						const maybe = item as { type?: string; call_id?: string };

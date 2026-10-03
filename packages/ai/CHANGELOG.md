@@ -63,6 +63,8 @@
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Sanitized client-visible assistant native history payloads during Codex replay while keeping opaque signed reasoning intact ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6f0d61f7ca170788f2b97c7ab1a7753e6c2544d9).
+- Dropped stale thinking signatures after credential redaction in outbound messages, instructions, and native history replay to avoid provider rejection on replay ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Validated declared segment and word fields in OpenAI transcription responses while preserving provider-specific extras ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Responses prepared request caching to rebuild wire body on reasoning-effort fallback and retain sent payload in diagnostics ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 21cb04bd3e6b72fcd05bb4e2f02fe441cf2d2a60).
 - Retried one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
