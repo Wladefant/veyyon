@@ -2648,7 +2648,10 @@ mod tests {
 		assert_eq!(exit_code(&exec), 0, "rg recursive search should match");
 		let out = read("rg.txt");
 		assert!(out.contains("data.txt:needle"), "rg missed visible file: {out:?}");
-		assert!(out.contains("sub/nested.txt:needle"), "rg missed nested file: {out:?}");
+		assert!(
+			out.contains("sub/nested.txt:needle") || out.contains("sub\\nested.txt:needle"),
+			"rg missed nested file: {out:?}"
+		);
 		assert!(!out.contains(".hidden.txt"), "rg searched hidden file by default: {out:?}");
 		assert!(!out.contains("ignored.log"), "rg ignored .gitignore by default: {out:?}");
 		assert!(!out.contains("binary.bin"), "rg printed binary file by default: {out:?}");
@@ -3080,6 +3083,82 @@ mod tests {
 		assert_eq!(read("conf.txt.bak"), "x=1\n", "backup must keep the original");
 	}
 
+	/// MSYS and WSL drive aliases must address real files in embedded utilities,
+	/// including sed's script, read, write and in-place operands.
+	#[cfg(windows)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn windows_utility_operands_accept_msys_and_wsl_drive_aliases() {
+		let scratch = veyyon_test_scratch::scratch_dir("shell-msys-operands");
+		let tmp = scratch.join("café");
+		std::fs::create_dir(&tmp).expect("unicode directory");
+		std::fs::create_dir(tmp.join("listed")).expect("listed dir");
+		std::fs::write(tmp.join("listed/visible.txt"), "value\n").expect("visible");
+		std::fs::write(tmp.join("script.sed"), "s/value/changed/\n").expect("script");
+		let native = tmp.to_string_lossy().replace('\\', "/");
+		let drive = native.chars().next().expect("drive").to_ascii_lowercase();
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session
+			.shell
+			.set_working_dir(tmp.to_str().expect("utf8"))
+			.expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("veyyon-natives:test");
+		let mut failures = Vec::new();
+		for prefix in [format!("/{drive}"), format!("/mnt/{drive}")] {
+			let root = format!("{prefix}{}", &native[2..]);
+			let cases = [
+				(format!("cat '{root}/listed/visible.txt'"), "value\n"),
+				(format!("ls '{root}/listed'"), "visible.txt\n"),
+				(format!("sed -f '{root}/script.sed' '{root}/listed/visible.txt'"), "changed\n"),
+				(format!("printf 'prefix\\n' | sed 'r {root}/listed/visible.txt'"), "prefix\nvalue\n"),
+				(format!("printf 'written\\n' | sed -n 'w {root}/write.txt'"), ""),
+				(
+					format!("printf 'value\\n' | sed 's/value/changed/w {root}/sub-write.txt'"),
+					"changed\n",
+				),
+			];
+			for (command, expected) in cases {
+				let result = session
+					.shell
+					.run_string(format!("{command} > output.txt"), &si, &params)
+					.await
+					.expect("utility command");
+				let output = std::fs::read_to_string(tmp.join("output.txt")).unwrap_or_default();
+				if exit_code(&result) != 0 || output != expected {
+					failures.push(format!("{command}: exit {}, output {output:?}", exit_code(&result)));
+				}
+			}
+			for (file, expected) in [("write.txt", "written\n"), ("sub-write.txt", "changed\n")] {
+				let output = std::fs::read_to_string(tmp.join(file)).unwrap_or_default();
+				if output != expected {
+					failures.push(format!("{prefix} {file}: {output:?}"));
+				}
+			}
+			std::fs::write(tmp.join("in-place.txt"), "value\n").expect("in-place input");
+			let result = session
+				.shell
+				.run_string(
+					format!("sed -i.bak 's/value/changed/' '{root}/in-place.txt'"),
+					&si,
+					&params,
+				)
+				.await
+				.expect("in-place command");
+			if exit_code(&result) != 0
+				|| std::fs::read_to_string(tmp.join("in-place.txt")).unwrap_or_default() != "changed\n"
+				|| std::fs::read_to_string(tmp.join("in-place.txt.bak")).unwrap_or_default()
+					!= "value\n"
+			{
+				failures.push(format!("{prefix} in-place edit or backup failed"));
+			}
+		}
+		assert!(failures.is_empty(), "{}", failures.join("\n"));
+	}
+
 	/// The `xargs` builtin spawns real child processes, but their stdout must
 	/// flow back into the shell pipeline (ctx streams, not the host fds), items
 	/// must batch per `-n`, and a failing invocation must surface GNU's 123.
@@ -3166,6 +3245,52 @@ mod tests {
 			.await
 			.expect("jq -e");
 		assert_eq!(read("code.txt"), "1");
+	}
+
+	/// `command -v`/`-V` must iterate over every operand like bash/zsh, printing
+	/// one line per name that resolves and skipping the misses, rather than
+	/// honoring only the first operand. Regression test for silently dropped
+	/// operands in `command -v a b c` (issue #10544).
+	#[tokio::test(flavor = "multi_thread")]
+	async fn command_v_iterates_all_operands() {
+		let tmp = veyyon_test_scratch::scratch_dir("shell-command-v");
+		let tmp_str = tmp.to_str().expect("utf8 temp path");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("set cwd");
+
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+
+		let source_info = SourceInfo::from("veyyon-natives:test");
+
+		// Three always-registered builtins plus a name that never resolves. bash
+		// prints one line per resolved builtin and skips the miss, exiting 0.
+		let exec = session
+			.shell
+			.run_string("command -v true false pwd nope-xyz-10544 > out.txt", &source_info, &params)
+			.await
+			.expect("run_string");
+		assert_eq!(exit_code(&exec), 0, "command -v exit code with a resolvable name");
+
+		let out = std::fs::read_to_string(tmp.join("out.txt")).expect("out.txt");
+		let lines: Vec<&str> = out.lines().collect();
+		assert_eq!(
+			lines,
+			vec!["true", "false", "pwd"],
+			"command -v must print one line per resolved operand and skip misses: {out:?}"
+		);
+
+		// When no operand resolves, the exit status is a general error.
+		let exec = session
+			.shell
+			.run_string("command -v nope-a-10544 nope-b-10544", &source_info, &params)
+			.await
+			.expect("run_string");
+		assert_eq!(exit_code(&exec), 1, "command -v exit code when nothing resolves");
 	}
 
 	/// A stdin-reading builtin blocked on an open pipe must honor abort/timeout:

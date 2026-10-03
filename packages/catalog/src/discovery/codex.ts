@@ -2,7 +2,14 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
 import { canonicalizeEfforts, type Effort, isEffort } from "../effort";
 import { parseKnownModel, semverEqual } from "../identity/classify";
-import type { ModelReasoningOptions, ModelSpec } from "../types";
+import {
+	codexContextWindowFloor,
+	codexCostPatch,
+	codexLongContextCost,
+	codexServiceTierCost,
+	resolveCodexMaxContextWindow,
+} from "../provider-models/codex-subscription";
+import type { FetchImpl, ModelReasoningOptions, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toNonEmptyString } from "../utils";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
@@ -38,6 +45,7 @@ interface CodexModelEntry {
 	id?: unknown;
 	display_name?: unknown;
 	context_window?: unknown;
+	max_context_window?: unknown;
 	default_reasoning_level?: unknown;
 	supported_reasoning_levels?: unknown;
 	input_modalities?: unknown;
@@ -72,7 +80,7 @@ export interface CodexModelDiscoveryOptions {
 	/** Abort signal for network request cancellation. */
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
-	fetchFn?: typeof fetch;
+	fetchFn?: FetchImpl;
 	/**
 	 * Called with the reason each route attempt produced nothing.
 	 *
@@ -241,9 +249,15 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 	const parsed = parseKnownModel(slug);
 	const isGpt56 = parsed.family === "openai" && semverEqual(parsed.version, "5.6");
 	const reportedContextWindow = toPositiveInt(payload.context_window);
-	const contextWindow = isGpt56
+	// luna/sol/terra additionally floor at the 1M window OpenAI enabled for
+	// subscription Codex (2026-08-16) while the registry still reports 272000.
+	const familyWindow = isGpt56
 		? Math.max(GPT_5_6_CONTEXT_WINDOW, reportedContextWindow ?? 0)
 		: (reportedContextWindow ?? CODEX_DEFAULT_CONTEXT_WINDOW);
+	const contextWindow = Math.max(familyWindow, codexContextWindowFloor(slug) ?? 0);
+	const maxContextWindow = resolveCodexMaxContextWindow(slug, toPositiveInt(payload.max_context_window) ?? undefined);
+	const longContextCost = codexLongContextCost(slug);
+	const costPatch = codexCostPatch(slug);
 	const maxTokens = Math.min(CODEX_DEFAULT_MAX_TOKENS, contextWindow);
 	const reasoning = supportsReasoning(payload.default_reasoning_level, payload.supported_reasoning_levels);
 	const reasoningOptions = reasoning ? declaredReasoningOptions(payload.supported_reasoning_levels) : undefined;
@@ -265,9 +279,12 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 			reasoning,
 			input,
 			// This endpoint publishes no pricing, so the zeros mean "not told", not "free".
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			pricing: "unknown",
+			cost: costPatch ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			...(costPatch === undefined ? { pricing: "unknown" as const } : {}),
 			contextWindow,
+			...(maxContextWindow !== undefined ? { maxContextWindow } : {}),
+			serviceTierCost: codexServiceTierCost(slug),
+			...(longContextCost !== undefined ? { longContextCost } : {}),
 			maxTokens,
 			...(preferWebsockets ? { preferWebsockets: true } : {}),
 			...(useResponsesLite ? { useResponsesLite: true } : {}),

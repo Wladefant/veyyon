@@ -4,7 +4,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __internalsForTesting, tryWithFileLock, withFileLock, withFileLockSync } from "../src/file-lock";
+import { __internalsForTesting, acquireFileLock, tryWithFileLock, withFileLock, withFileLockSync } from "../src/file-lock";
 import { getProcessStartIdentity } from "../src/process-liveness";
 import { removeWithRetries } from "../src/temp";
 
@@ -537,5 +537,37 @@ describe("tryWithFileLock", () => {
 				}),
 			).toBe(`${name}-recovered`);
 		}
+	});
+});
+
+describe("acquireFileLock lease handle (F5)", () => {
+	test("acquires an exclusive lease and releases it cleanly", async () => {
+		const root = await mkRoot();
+		const target = path.join(root, "lease-target.json");
+		const handle = await acquireFileLock(target);
+		await expect(acquireFileLock(target, { retries: 1, retryDelayMs: 0 })).rejects.toThrow("Failed to acquire lock");
+		await handle.release();
+		const secondHandle = await acquireFileLock(target, { retries: 1, retryDelayMs: 0 });
+		await secondHandle.release();
+	});
+
+	test("release is idempotent across sequential and concurrent calls", async () => {
+		const root = await mkRoot();
+		const target = path.join(root, "lease-idempotent.json");
+		const handle = await acquireFileLock(target);
+		await Promise.all([handle.release(), handle.release(), handle.release()]);
+		await handle.release();
+		const secondHandle = await acquireFileLock(target, { retries: 1, retryDelayMs: 0 });
+		await secondHandle.release();
+	});
+
+	test("acquisition fails when max retries are exhausted", async () => {
+		const root = await mkRoot();
+		const target = path.join(root, "lease-exhausted.json");
+		const handle = await acquireFileLock(target);
+		await expect(acquireFileLock(target, { retries: 2, retryDelayMs: 0 })).rejects.toThrow(
+			"Failed to acquire lock for",
+		);
+		await handle.release();
 	});
 });

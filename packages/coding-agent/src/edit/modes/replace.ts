@@ -33,17 +33,47 @@ export const replaceEditEntrySchema = lazy(() =>
 export const replaceEditSchema = lazy(() =>
 	type({
 		path: "string",
-		edits: replaceEditEntrySchema.value.array(),
+		old_string: "string",
+		new_string: "string",
+		"replace_all?": "boolean",
 	}),
 );
 
 export type ReplaceEditEntry = typeof replaceEditEntrySchema.value.infer;
 export type ReplaceParams = typeof replaceEditSchema.value.infer;
 
+export interface ReplaceBatchParams {
+	path: string;
+	edits: Array<
+		| ReplaceEditEntry
+		| {
+				old_string: string;
+				new_string: string;
+				replace_all?: boolean;
+		  }
+	>;
+}
+
+/**
+ * One replace request as the executor reads it: the batch entry spelling
+ * (`old_text`/`new_text`/`all`), the single-call spelling
+ * (`old_string`/`new_string`/`replace_all`), or a mix. Every field is optional so a
+ * read of either spelling type-checks on any member; `executeReplaceSingle`
+ * rejects an entry that supplies neither text.
+ */
+export interface ReplaceExecutionEntry {
+	old_text?: string;
+	new_text?: string;
+	all?: boolean;
+	old_string?: string;
+	new_string?: string;
+	replace_all?: boolean;
+}
+
 export interface ExecuteReplaceSingleOptions {
 	session: ToolSession;
 	path: string;
-	params: ReplaceEditEntry;
+	params: ReplaceExecutionEntry;
 	signal?: AbortSignal;
 	batchRequest?: LspBatchRequest;
 	allowFuzzy: boolean;
@@ -54,7 +84,7 @@ export interface ExecuteReplaceSingleOptions {
 
 export async function executeReplaceSingle(
 	options: ExecuteReplaceSingleOptions,
-): Promise<AgentToolResult<EditToolDetails, ReplaceEditEntry>> {
+): Promise<AgentToolResult<EditToolDetails, ReplaceExecutionEntry>> {
 	const {
 		session,
 		path,
@@ -66,12 +96,19 @@ export async function executeReplaceSingle(
 		writethrough,
 		beginDeferredDiagnosticsForPath,
 	} = options;
-	const { old_text, new_text, all } = params;
+	const old_text = params.old_string ?? params.old_text;
+	const new_text = params.new_string ?? params.new_text;
+	const all = params.replace_all ?? params.all;
 
 	enforcePlanModeWrite(session, path);
 
-	if (old_text.length === 0) {
-		throw new Error("old_text must not be empty.");
+	if (old_text === undefined || old_text.length === 0) {
+		throw new Error(
+			params.old_string !== undefined ? "old_string must not be empty." : "old_text must not be empty.",
+		);
+	}
+	if (new_text === undefined) {
+		throw new Error(params.new_string !== undefined ? "new_string must be provided." : "new_text must be provided.");
 	}
 
 	const absolutePath = resolvePlanPath(session, path);

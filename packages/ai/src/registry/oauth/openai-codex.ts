@@ -127,7 +127,7 @@ class OpenAICodexOAuthFlow extends OAuthCallbackFlow {
 	}
 }
 
-async function exchangeCodeForToken(
+export async function exchangeCodeForToken(
 	code: string,
 	verifier: string,
 	redirectUri: string,
@@ -169,16 +169,16 @@ async function exchangeCodeForToken(
 	}
 
 	const { accountId, email } = getTokenProfile(tokenData.access_token);
-	if (!accountId) {
-		throw new AIError.OAuthError("Failed to extract accountId from token", { kind: "validation" });
+	if (!accountId && !email) {
+		throw new AIError.OAuthError("Failed to extract account identity from token", { kind: "validation" });
 	}
 
 	return {
 		access: tokenData.access_token,
 		refresh: tokenData.refresh_token,
 		expires: Date.now() + tokenData.expires_in * 1000,
-		accountId,
-		email,
+		...(accountId ? { accountId, orgId: accountId } : {}),
+		...(email ? { email } : {}),
 	};
 }
 

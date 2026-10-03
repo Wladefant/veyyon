@@ -17,16 +17,17 @@ import {
 	isClaudeCloakingUserId,
 	mapStainlessArch,
 	mapStainlessOs,
+	stableSystemSuffixStart,
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@veyyon/ai/providers/anthropic";
 import { getEnvApiKey, streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
-import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type as arkType } from "arktype";
+import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
 import { withEnv } from "./helpers";
 
 const ANTHROPIC_MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
@@ -283,6 +284,92 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(runA?.[2].text).toBe(runB?.[2].text);
 	});
 
+	it("caches before the project footer when active-repo context follows it (#7324)", () => {
+		const staticInstructions = "STATIC INSTRUCTIONS BLOCK";
+		const projectFooter = "PROJECT\nToday is 2026-08-01, cwd '/tmp'.";
+		const activeRepoContext = "The active repository is './repo'.";
+		const blocks = buildAnthropicSystemBlocks([staticInstructions, projectFooter, activeRepoContext], {
+			includeClaudeCodeInstruction: true,
+			cacheControl: { type: "ephemeral" },
+		});
+		expect(blocks).toBeDefined();
+		// [billing, CC identity, staticInstructions, projectFooter, activeRepoContext]
+		// Caching covers the last three blocks so the stable prefix before the footer
+		// is cached regardless of whether activeRepoContext is present.
+		expect(blocks![2].text).toBe(staticInstructions);
+		expect(blocks![2].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![3].text).toBe(projectFooter);
+		expect(blocks![3].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![4].text).toBe(activeRepoContext);
+		expect(blocks![4].cache_control).toEqual({ type: "ephemeral" });
+	});
+
+	it("caches before volatile memory recall blocks (#12447)", () => {
+		const staticInstructions = "STATIC INSTRUCTIONS BLOCK";
+		const projectFooter = "PROJECT\nToday is 2026-08-01, cwd '/tmp'.";
+		const recallBlock = "<memories>\n- User prefers TypeScript\n</memories>";
+		const blocks = buildAnthropicSystemBlocks([staticInstructions, projectFooter, recallBlock], {
+			includeClaudeCodeInstruction: true,
+			cacheControl: { type: "ephemeral" },
+		});
+		expect(blocks).toBeDefined();
+		// [billing, CC identity, staticInstructions, projectFooter, recallBlock]
+		// The volatile memory block must NOT receive cache_control; breakpoints
+		// anchor on the stable prefix ending at projectFooter.
+		expect(blocks![2].text).toBe(staticInstructions);
+		expect(blocks![2].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![3].text).toBe(projectFooter);
+		expect(blocks![3].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![4].text).toBe(recallBlock);
+		expect(blocks![4].cache_control).toBeUndefined();
+	});
+
+	it("classifies only trailing volatile runs as recall suffix and caches trailing stable policy blocks", () => {
+		const staticInstructions = "STATIC INSTRUCTIONS BLOCK";
+		const recallBlock = "<memories>\n- User prefers TypeScript\n</memories>";
+		const appendedPolicy = "STABLE EXTENSION POLICY\nAlways run tests before commit.";
+		const blocks = buildAnthropicSystemBlocks([staticInstructions, recallBlock, appendedPolicy], {
+			includeClaudeCodeInstruction: true,
+			cacheControl: { type: "ephemeral" },
+		});
+		expect(blocks).toBeDefined();
+		// [billing, CC identity, staticInstructions, recallBlock, appendedPolicy]
+		// Because appendedPolicy follows recallBlock, the volatile block is not a trailing run.
+		// stableSystemSuffixStart identifies no trailing suffix (start = blocks.length),
+		// so cache breakpoints anchor at the first cacheable block and at the tail (appendedPolicy).
+		expect(blocks![2].text).toBe(staticInstructions);
+		expect(blocks![2].cache_control).toEqual({ type: "ephemeral" });
+		expect(blocks![3].text).toBe(recallBlock);
+		expect(blocks![4].text).toBe(appendedPolicy);
+		expect(blocks![4].cache_control).toEqual({ type: "ephemeral" });
+	});
+
+	it("classifies only genuinely trailing volatile runs in stableSystemSuffixStart", () => {
+		expect(stableSystemSuffixStart([])).toBe(0);
+		expect(stableSystemSuffixStart([{ type: "text", text: "stable" }])).toBe(1);
+		expect(
+			stableSystemSuffixStart([
+				{ type: "text", text: "stable" },
+				{ type: "text", text: "<memories>\nrecall\n</memories>" },
+			]),
+		).toBe(1);
+		expect(
+			stableSystemSuffixStart([
+				{ type: "text", text: "stable" },
+				{ type: "text", text: "<memories>\nrecall 1\n</memories>" },
+				{ type: "text", text: "<memories>\nrecall 2\n</memories>" },
+			]),
+		).toBe(1);
+		// Appended stable block after recall must not be classified as part of recall suffix:
+		expect(
+			stableSystemSuffixStart([
+				{ type: "text", text: "stable" },
+				{ type: "text", text: "<memories>\nrecall\n</memories>" },
+				{ type: "text", text: "appended stable policy" },
+			]),
+		).toBe(3);
+	});
+
 	it("caches Claude Code context and the last user block in OAuth request payloads", async () => {
 		const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
 			systemPrompt: ["Stay concise."],
@@ -303,6 +390,67 @@ describe("Anthropic request fingerprint alignment", () => {
 			type: "ephemeral",
 			ttl: "1h",
 		});
+	});
+
+	// The runtime splits the shared harness from PROJECT, SHORTHAND and HANDLES.
+	// Exercise wire placement, not the builder's optional cacheControl path.
+	it("preserves the shared harness cache across runtime sections and recall", async () => {
+		for (const suffix of [[], ["<memories>\nNeutral recall\n</memories>"]]) {
+			const payload = (await captureAnthropicPayload(ANTHROPIC_MODEL, {
+				systemPrompt: ["Shared harness", "PROJECT\ncwd '/repo'", "SHORTHAND", "SHORTHAND HANDLES", ...suffix],
+				messages: [{ role: "user", content: "Hi", timestamp: 0 }],
+			})) as {
+				system: Array<{ text: string; cache_control?: unknown }>;
+				messages: Array<{ content: Array<{ cache_control?: unknown }> }>;
+			};
+			expect(payload.system.map(block => block.cache_control != null)).toEqual([
+				false,
+				false,
+				true,
+				false,
+				true,
+				true,
+				...suffix.map(() => false),
+			]);
+			expect(payload.system[2].text).toBe("Shared harness");
+			expect(payload.messages[0].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+		}
+	});
+
+	it("spends the remaining API-key cache marker on the newest message", async () => {
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Shared harness", "PROJECT", "SHORTHAND", "SHORTHAND HANDLES"],
+				messages: [
+					{ role: "user", content: "Earlier", timestamp: 0 },
+					{
+						role: "assistant",
+						content: [{ type: "text", text: "Reply" }],
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: ANTHROPIC_MODEL.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: 0,
+					},
+					{ role: "user", content: "Newest", timestamp: 0 },
+				],
+			},
+			{ isOAuth: false },
+		)) as { messages: Array<{ content: Array<{ cache_control?: unknown }> | string }> };
+		expect(
+			payload.messages.map(
+				message => Array.isArray(message.content) && message.content.some(block => block.cache_control != null),
+			),
+		).toEqual([false, false, true]);
 	});
 
 	it("caches tool-result-only user messages in OAuth request payloads", async () => {
@@ -503,12 +651,18 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		const fakeClient = {
 			messages: {
-				create: (params: { output_config?: { effort?: string } }, options?: { headers?: Record<string, string> }) => {
+				create: (
+					params: { output_config?: { effort?: string } },
+					options?: { headers?: Record<string, string> },
+				) => {
 					capturedEffort = params?.output_config?.effort;
 					capturedBetaHeader = options?.headers?.["anthropic-beta"];
 					const response = new Response(null, { status: 200, headers: { "request-id": "req_mock" } });
 					const stream = (async function* () {
-						yield { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 1 } } };
+						yield {
+							type: "message_start",
+							message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 1 } },
+						};
 						yield { type: "content_block_start", index: 0, content_block: { type: "text", text: "done" } };
 						yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } };
 						yield { type: "content_block_stop", index: 0 };
@@ -2422,39 +2576,60 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 	});
 
-	it("disables adaptive-only thinking when the caller sets disableReasoning via the public stream() path", async () => {
-		// #6589: disableReasoning is a SimpleStreamOptions flag that never reaches
-		// AnthropicOptions directly; mapOptionsForApi must fold it into
-		// thinkingEnabled:false so adaptive-only Opus 4.7 omits thinking + pins low
-		// effort instead of defaulting to adaptive-ON at the requested effort.
-		const { promise, resolve } = Promise.withResolvers<unknown>();
-		streamSimple(
-			buildModel({
-				...ANTHROPIC_MODEL_SPEC,
-				id: "claude-opus-4-7",
-				name: "Claude Opus 4.7",
-				thinking: {
-					mode: "anthropic-adaptive",
-					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+	for (const flag of ["disableReasoning", "forceReasoningOff"] as const) {
+		it(`disables Fable adaptive thinking when the public stream sets ${flag}`, async () => {
+			const { promise, resolve } = Promise.withResolvers<unknown>();
+			streamSimple(
+				buildModel({
+					...ANTHROPIC_MODEL_SPEC,
+					id: "claude-fable-5",
+					name: "Claude Fable 5",
+					thinking: {
+						mode: "anthropic-adaptive",
+						efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+					},
+				}),
+				{
+					systemPrompt: ["Stay concise."],
+					messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+					tools: [
+						{
+							name: "think",
+							description: "Private scratchpad; not shown to user.",
+							strict: true,
+							parameters: {
+								type: "object",
+								properties: { thoughts: { type: "string" } },
+								required: ["thoughts"],
+								additionalProperties: false,
+							} as TJsonSchema,
+						},
+					],
 				},
-			}),
-			{
-				systemPrompt: ["Stay concise."],
-				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-			},
-			{
-				apiKey: "sk-ant-oat-test",
-				signal: createAbortedSignal(),
-				reasoning: Effort.High,
-				disableReasoning: true,
-				onPayload: payload => resolve(payload),
-			},
-		);
-		const payload = (await promise) as { thinking?: unknown; output_config?: { effort?: string } };
+				{
+					apiKey: "sk-ant-oat-test",
+					signal: createAbortedSignal(),
+					reasoning: Effort.High,
+					[flag]: true,
+					onPayload: payload => resolve(payload),
+				},
+			);
+			const payload = (await promise) as {
+				thinking?: unknown;
+				output_config?: { effort?: string };
+				tools?: Array<{
+					eager_input_streaming?: boolean;
+					input_schema?: { properties?: Record<string, unknown>; required?: string[] };
+				}>;
+			};
 
-		expect(payload.thinking).toBeUndefined();
-		expect(payload.output_config).toEqual({ effort: "low" });
-	});
+			expect(payload.thinking).toBeUndefined();
+			expect(payload.output_config).toEqual({ effort: "low" });
+			expect(payload.tools?.[0]?.eager_input_streaming).toBe(true);
+			expect(payload.tools?.[0]?.input_schema?.properties).toHaveProperty("thoughts");
+			expect(payload.tools?.[0]?.input_schema?.required).toEqual(["thoughts"]);
+		});
+	}
 
 	it("deletes thinking without an effort pin for non-adaptive reasoning models on forced tool choice", async () => {
 		// Budget-thinking models (Sonnet 4.5) turn thinking off by simple omission,

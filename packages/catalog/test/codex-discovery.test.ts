@@ -8,6 +8,7 @@ import { fetchCodexModels } from "@veyyon/catalog/discovery/codex";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
+import { openaiCodexModelManagerOptions } from "@veyyon/catalog/provider-models/special";
 import type { ModelSpec } from "@veyyon/catalog/types";
 
 describe("Codex model discovery", () => {
@@ -95,6 +96,41 @@ describe("Codex model discovery", () => {
 		const legacy = result?.models.find(model => model.id === "gpt-5.5");
 		expect(legacy?.useResponsesLite).toBeUndefined();
 	});
+	it("uses the discovered account catalog as authoritative", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-codex-authoritative-"));
+		const staticOnlyModel: ModelSpec<"openai-codex-responses"> = {
+			id: "unsupported-static",
+			name: "Unsupported static model",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 272_000,
+			maxTokens: 128_000,
+		};
+		const discoveredModel: ModelSpec<"openai-codex-responses"> = {
+			...staticOnlyModel,
+			id: "account-supported",
+			name: "Account-supported model",
+		};
+		try {
+			const result = await resolveProviderModels(
+				{
+					...openaiCodexModelManagerOptions(),
+					staticModels: [staticOnlyModel],
+					cacheDbPath: path.join(tempDir, "models.db"),
+					fetchDynamicModels: async () => [discoveredModel],
+				},
+				"online",
+			);
+
+			expect(result.models.map(model => model.id)).toEqual(["account-supported"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 
 	// WHY: GPT-6 Astra and GPT-Reserve reached the picker with no effort control
 	// because discovery read `supported_reasoning_levels` only as a boolean and
@@ -179,7 +215,7 @@ describe("Codex model discovery", () => {
 		expect(future?.applyPatchToolType).toBeUndefined();
 	});
 
-	it("floors GPT-5.6 SKUs to 372K when upstream actively reports 272000 (#6259)", async () => {
+	it("floors GPT-5.6 SKUs to 1M when upstream actively reports 272000 (#6259)", async () => {
 		const fetchFn: typeof fetch = Object.assign(
 			async () =>
 				new Response(
@@ -216,7 +252,7 @@ describe("Codex model discovery", () => {
 		});
 
 		const sol = result?.models.find(model => model.id === "gpt-5.6-sol");
-		expect(sol?.contextWindow).toBe(372_000);
+		expect(sol?.contextWindow).toBe(1_000_000);
 		// Non-5.6 SKUs still honor the reported value verbatim.
 		const legacy = result?.models.find(model => model.id === "gpt-5.5");
 		expect(legacy?.contextWindow).toBe(272_000);
@@ -375,5 +411,45 @@ describe("Codex model discovery", () => {
 			contextWindow: 128_000,
 			maxTokens: 128_000,
 		});
+	});
+	it("normalizes Codex Daybreak aliases to the GPT-5.6 window and effort ladder", async () => {
+		const level = (effort: string) => ({ effort, description: `${effort} reasoning` });
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-daybreak-blue-latest",
+								display_name: "GPT-Daybreak Blue Latest",
+								context_window: 272_000,
+								default_reasoning_level: "medium",
+								supported_reasoning_levels: [level("low"), level("medium"), level("high"), level("xhigh")],
+								input_modalities: ["text", "image"],
+								visibility: "show",
+							},
+							{
+								slug: "gpt-daybreak-red-latest",
+								display_name: "GPT-Daybreak Red Latest",
+								context_window: 272_000,
+								default_reasoning_level: "high",
+								supported_reasoning_levels: [level("low"), level("medium"), level("high"), level("xhigh")],
+								input_modalities: ["text", "image"],
+								visibility: "show",
+							},
+						],
+					}),
+				),
+			{ preconnect() {} },
+		);
+
+		const result = await fetchCodexModels({
+			accessToken: "test-token",
+			fetchFn,
+		});
+
+		expect(result?.models).toHaveLength(2);
+		expect(result?.models[0]?.contextWindow).toBe(372_000);
+		expect(result?.models[1]?.contextWindow).toBe(372_000);
 	});
 });

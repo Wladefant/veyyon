@@ -70,13 +70,11 @@ import {
 	OverlayStack,
 } from "./overlay";
 import {
-	altScreenSequence,
 	chunkStillPainted,
 	firstChangedRow,
 	fullPaintReplay,
 	homeRewriteSequence,
 	lastChangedRow,
-	sameAltPaint,
 	scrollAppendSequence,
 	seamRewriteSequence,
 	windowDiffSequence,
@@ -551,6 +549,8 @@ export class TUI extends Container {
 	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
 	#altActive = false;
 	#altPreviousLines: string[] = [];
+	#altPreviousWidth = 0;
+	#altPreviousHeight = 0;
 	// Caret placed by the last alt-buffer paint, or undefined when that paint
 	// left it hidden. Part of the repaint-skip test: identical rows with a moved
 	// caret still needs a paint, or the composer's cursor lags the text.
@@ -3713,16 +3713,62 @@ export class TUI extends Container {
 			for (const seq of imageTransmits) transmitBuffer += seq;
 			this.terminal.write(transmitBuffer);
 		}
-		// Skip an identical repaint (the modal is mostly static between
-		// keystrokes) — unless a forced repaint (resetDisplay,
-		// requestRender(true)) is pending: the redraw gesture must repair a
-		// corrupted modal even when our cached frame is byte-identical.
+		// A forced repaint (resetDisplay, requestRender(true)) rewrites every row
+		// even when the cached frame is byte-identical: the redraw gesture must
+		// repair a corrupted modal. Otherwise rewrite only the rows that changed
+		// (a keystroke in a modal touches a row or two), and skip an identical
+		// frame entirely.
 		const force = this.#forceViewportRepaintOnNextRender;
 		this.#forceViewportRepaintOnNextRender = false;
-		if (!force && sameAltPaint(this.#altPreviousLines, this.#altPreviousCursor, fitted, cursor)) return;
+		const geometryStable =
+			this.#altPreviousLines.length === height &&
+			this.#altPreviousWidth === width &&
+			this.#altPreviousHeight === height;
+		const full = force || !geometryStable;
+		let rowsBuffer = "";
+		for (let r = 0; r < height; r++) {
+			if (full) {
+				if (r > 0) rowsBuffer += "\n";
+			} else if (this.#altPreviousLines[r] !== fitted[r]) {
+				rowsBuffer += `\x1b[${r + 1};1H`;
+			} else {
+				continue;
+			}
+			rowsBuffer += lineRewriteSequence(fitted[r] ?? "", width, r, this.#imageBudget);
+		}
+		this.#altPreviousLines = fitted;
+		this.#altPreviousWidth = width;
+		this.#altPreviousHeight = height;
+		if (rowsBuffer === "") {
+			if (cursor !== undefined) {
+				if (
+					this.#altPreviousCursor === undefined ||
+					this.#altPreviousCursor.row !== cursor.row ||
+					this.#altPreviousCursor.col !== cursor.col
+				) {
+					const row = clampLow(cursor.row + 1, 1, Math.max(1, height));
+					const col = clampLow(cursor.col + 1, 1, Math.max(1, width));
+					this.terminal.write(`${this.#paintBeginSequence}\x1b[${row};${col}H${this.#paintEndSequence}`);
+				}
+				this.terminal.showCursor();
+				this.#cursor.recordRowOnly(cursor.row, true);
+				this.#altPreviousCursor = cursor;
+			} else if (this.#altPreviousCursor !== undefined) {
+				// Rows are unchanged but the caret marker is gone: the paint prologue hides the
+				// hardware cursor, which a skipped paint would leave on screen.
+				this.terminal.write(`${this.#paintBeginSequence}${this.#paintEndSequence}`);
+				this.#altPreviousCursor = undefined;
+			}
+			return;
+		}
+		let cursorSuffix = "";
+		if (cursor !== undefined) {
+			const row = clampLow(cursor.row + 1, 1, Math.max(1, height));
+			const col = clampLow(cursor.col + 1, 1, Math.max(1, width));
+			cursorSuffix = `\x1b[${row};${col}H`;
+		}
 		this.terminal.write(
-			altScreenSequence(this.#paintBeginSequence, fitted, width, height, cursor, this.#imageBudget) +
-				this.#paintEndSequence,
+			`${this.#paintBeginSequence}${full ? "\x1b[H" : ""}${rowsBuffer}${cursorSuffix}${this.#paintEndSequence}`,
 		);
 		if (cursor !== undefined) {
 			this.terminal.showCursor();
@@ -3731,8 +3777,7 @@ export class TUI extends Container {
 			this.#cursor.recordRowOnly(cursor.row, true);
 		}
 		this.#altPreviousCursor = cursor;
-		this.#altPreviousLines = fitted;
-		this.#fullRedrawCount += 1;
+		if (full) this.#fullRedrawCount += 1;
 	}
 
 	/**
