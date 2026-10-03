@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { collectCodexCompactionV2Events } from "../src/providers/openai-codex/compaction-v2";
+import type { CodexWebSocketSessionState } from "../src/providers/openai-codex-responses";
 import {
 	CODEX_COMPACTION_WS_MAX_BUFFERED_BYTES,
 	CODEX_COMPACTION_WS_MAX_BUFFERED_EVENTS,
 	openCodexCompactionEventStream,
 } from "../src/providers/openai-codex-responses";
-import type { CodexWebSocketSessionState, FetchImpl, Model, ProviderSessionState } from "../src/types";
+import type { FetchImpl, Model, ProviderSessionState } from "../src/types";
 
 const origWs = global.WebSocket;
 afterEach(() => {
@@ -756,7 +757,7 @@ describe("openCodexCompactionEventStream", () => {
 		});
 
 		const fetchMock: FetchImpl = async (_input, init) => {
-			observedSignal = init?.signal;
+			observedSignal = init?.signal ?? undefined;
 			return new Response(streamBody, {
 				status: 200,
 				headers: {
@@ -781,7 +782,7 @@ describe("openCodexCompactionEventStream", () => {
 		expect(observedSignal).toBeDefined();
 		expect(observedSignal!.aborted).toBe(false);
 
-		await stream.return();
+		await stream.return(undefined);
 
 		expect(cancelCalled).toBe(true);
 		expect(streamBody.locked).toBe(false);
@@ -809,7 +810,7 @@ describe("openCodexCompactionEventStream", () => {
 		});
 
 		expect(wsClosed).toBe(false);
-		await stream.return();
+		await stream.return(undefined);
 
 		expect(wsClosed).toBe(false);
 		expect(getSessionTurnState(pState, "s_abandon_ws")).toBe("prior_ts");
@@ -873,7 +874,7 @@ describe("openCodexCompactionEventStream", () => {
 				expect(remaining.map(event => event.type)).toEqual(["response.output_item.done", "response.completed"]);
 			};
 			if (completeBeforeReturn) await completeActive();
-			await cold.return();
+			await cold.return(undefined);
 			expect(closes).toBe(0);
 			if (!completeBeforeReturn) await completeActive();
 			expect(constructors).toBe(1);
@@ -1240,7 +1241,7 @@ describe("openCodexCompactionEventStream", () => {
 					expect(result.compactionItem.encrypted_content).toBe("b_blob");
 				}
 				if (exit === "return") {
-					await active.return();
+					await active.return(undefined);
 					expect(canceled).toBe(true);
 				} else {
 					controller!.enqueue(encoder.encode('data: {"type":"response.completed"}\n\n'));
