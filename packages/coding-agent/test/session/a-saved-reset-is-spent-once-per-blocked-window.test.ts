@@ -20,14 +20,13 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type {
-	AssistantMessage,
 	Model,
 	OAuthAccountIdentity,
 	ResetCreditRedeemCode,
 	ResetCreditRedeemOutcome,
 	UsageReport,
 } from "@veyyon/ai";
-import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { type GeneratedProvider, getBundledModels } from "@veyyon/catalog/models";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { CodexAutoRedeemCoordinator } from "@veyyon/coding-agent/session/codex-auto-reset";
@@ -89,7 +88,6 @@ interface Harness {
 	readonly redeems: { signal: AbortSignal | undefined }[];
 	readonly listed: (string | undefined)[];
 	readonly ingested: { provider: string; headers: Record<string, string>; sessionId?: string; baseUrl?: string }[];
-	readonly costs: { provider: string; cost: number; sessionId?: string; recordedAt?: number; baseUrl?: string }[];
 	readonly prompts: string[];
 	model: Model | undefined;
 	identity: OAuthAccountIdentity | undefined;
@@ -119,7 +117,6 @@ function harness(
 		redeems: [],
 		listed: [],
 		ingested: [],
-		costs: [],
 		prompts: [],
 		model: CODEX,
 		identity: IDENTITY,
@@ -130,16 +127,6 @@ function harness(
 	const auth: ProviderUsageAuth = {
 		ingestUsageHeaders(provider, headers, options) {
 			h.ingested.push({ provider, headers, sessionId: options?.sessionId, baseUrl: options?.baseUrl });
-			return true;
-		},
-		recordUsageCost(provider, cost, options) {
-			h.costs.push({
-				provider,
-				cost,
-				sessionId: options?.sessionId,
-				recordedAt: options?.recordedAt,
-				baseUrl: options?.baseUrl,
-			});
 			return true;
 		},
 		async fetchUsageReports(options) {
@@ -403,47 +390,6 @@ describe("a saved reset is spent only when the policy permits it", () => {
 });
 
 describe("usage is recorded against the credential the session routes under", () => {
-	function turn(provider: string, cost: number): AssistantMessage {
-		return {
-			role: "assistant",
-			content: [{ type: "text", text: "done" }],
-			api: "openai-completions",
-			provider: provider as AssistantMessage["provider"],
-			model: "m",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-			},
-			stopReason: "stop",
-			timestamp: 42,
-		};
-	}
-
-	it("records a turn's cost only for OpenCode Go, under the provider session id", () => {
-		const recorded: string[] = [];
-		for (const provider of getBundledProviders()) {
-			const h = harness();
-			h.usage.recordTurnCost(turn(provider, 0.25));
-			if (h.costs.length > 0) {
-				recorded.push(provider);
-				expect(h.costs).toEqual([
-					{
-						provider,
-						cost: 0.25,
-						sessionId: PROVIDER_SESSION,
-						recordedAt: 42,
-						baseUrl: `https://${provider}.example`,
-					},
-				]);
-			}
-		}
-		expect(recorded).toEqual(["opencode-go"]);
-	});
-
 	it("records response headers under the agent's session id, and none without a model", () => {
 		const h = harness();
 		h.usage.ingestHeaders({ status: 200, headers: { "x-ratelimit-remaining": "3" } }, undefined);
