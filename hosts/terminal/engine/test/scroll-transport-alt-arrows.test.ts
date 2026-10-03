@@ -32,9 +32,26 @@ import { VirtualTerminal } from "./virtual-terminal";
 /** Records every byte the engine writes, then feeds the real VT engine. */
 class RecordingTerminal extends VirtualTerminal {
 	written: string[] = [];
+	/**
+	 * Whether the hardware caret is showing. The engine toggles it both inside a
+	 * paint (`write`) and through `showCursor`/`hideCursor`, which bypass `write`,
+	 * so both routes feed this.
+	 */
+	caretVisible = true;
 	override write(data: string): void {
 		this.written.push(data);
+		const hidden = data.lastIndexOf("\x1b[?25l");
+		const shown = data.lastIndexOf("\x1b[?25h");
+		if (hidden !== shown) this.caretVisible = shown > hidden;
 		super.write(data);
+	}
+	override showCursor(): void {
+		this.caretVisible = true;
+		super.showCursor();
+	}
+	override hideCursor(): void {
+		this.caretVisible = false;
+		super.hideCursor();
 	}
 	/** Everything the engine has emitted this run, as one string. */
 	output(): string {
@@ -419,6 +436,7 @@ describe("alt-arrows residency", () => {
 			tui.setScrollTransport("alt-arrows");
 			await scheduler.drain(term);
 			expect(term.getCursor()).toEqual({ row: 7, col: 1 });
+			expect(term.caretVisible).toBe(true);
 			const viewport = term.getViewport();
 
 			const hideMark = term.mark();
@@ -428,7 +446,7 @@ describe("alt-arrows residency", () => {
 
 			const hideBytes = term.outputSince(hideMark);
 			expect(hideBytes).toContain("\x1b[?25l");
-			expect(hideBytes).not.toContain("\x1b[?25h");
+			expect(term.caretVisible).toBe(false);
 			expect(rewritesARow(hideBytes)).toBe(false);
 			expect(term.getViewport()).toEqual(viewport);
 
@@ -438,7 +456,7 @@ describe("alt-arrows residency", () => {
 			await scheduler.drain(term);
 
 			const showBytes = term.outputSince(showMark);
-			expect(showBytes).toContain("\x1b[?25h");
+			expect(term.caretVisible).toBe(true);
 			expect(rewritesARow(showBytes)).toBe(false);
 			expect(term.getCursor()).toEqual({ row: 7, col: 1 });
 			expect(term.getViewport()).toEqual(viewport);
