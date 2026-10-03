@@ -476,6 +476,21 @@ describe("OutputSink", () => {
 		expect("some output data".endsWith(dumped.output)).toBe(true);
 	});
 
+	test("dump() strictly rejects when artifact file cannot be opened", async () => {
+		const artifactPath = path.join(
+			process.platform === "win32" ? "Z:\\nonexistent-drive-for-test" : "/dev/null/impossible",
+			"bad.log",
+		);
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "artifact-fail-open",
+			spillThreshold: 5,
+		});
+
+		sink.push("some output data");
+		await expect(sink.dump()).rejects.toThrow();
+	});
+
 	test("throttled onChunk coalesces held-back chunks instead of dropping them", async () => {
 		const chunks: string[] = [];
 		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 60_000 });
@@ -977,6 +992,88 @@ describe("OutputSink maxColumns (per-line cap)", () => {
 		expect(dropped).toBeGreaterThan(0);
 		// elided + dropped + kept ≤ totalBytes (with a small slack for the marker/newlines).
 		expect(elided + dropped).toBeLessThan(dumped.totalBytes);
+	});
+
+	test("records artifactError 'write' and preserves output on /dev/full write failure", async () => {
+		if (process.platform === "win32") return;
+		const sink = new OutputSink({
+			artifactPath: "/dev/full",
+			artifactId: "art-full",
+			spillThreshold: 10,
+		});
+
+		sink.push("hello world to full device\n");
+		const status = await sink.dumpWithArtifactStatus();
+		expect(["write", "flush"]).toContain(status.artifactError);
+		expect(status.artifactId).toBeUndefined();
+		expect(status.output).toBe("ll device\n");
+	});
+
+	test("dump() strictly rejects on /dev/full write failure", async () => {
+		if (process.platform === "win32") return;
+		const sink = new OutputSink({
+			artifactPath: "/dev/full",
+			artifactId: "art-full-strict",
+			spillThreshold: 10,
+		});
+
+		sink.push("hello world to full device\n");
+		await expect(sink.dump()).rejects.toThrow();
+	});
+
+	test("preview flush thrown errors propagate only after file finalization", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "preview-error.log");
+		let callCount = 0;
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-preview-err",
+			spillThreshold: 5,
+			chunkThrottleMs: 60_000,
+			onChunk: () => {
+				callCount++;
+				if (callCount > 1) {
+					throw new Error("preview callback failed");
+				}
+			},
+		});
+
+		sink.push("chunk 1\n");
+		sink.push("chunk 2\n");
+		await expect(sink.dump()).rejects.toThrow("preview callback failed");
+		const content = await fs.readFile(artifactPath, "utf-8");
+		expect(content).toContain("chunk 1");
+	});
+
+	test("dispose() clears timers and awaits finalization without crashing session", async () => {
+		const dir = await createTempDir();
+		const artifactPath = path.join(dir, "dispose-test.log");
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-dispose",
+			spillThreshold: 5,
+			chunkThrottleMs: 60_000,
+		});
+
+		sink.push("pending write before dispose\n");
+		await sink.dispose();
+		await sink.dispose();
+		const content = await fs.readFile(artifactPath, "utf-8");
+		expect(content).toContain("pending write before dispose");
+	});
+
+	test("dispose() with storage failure does not throw", async () => {
+		const artifactPath = path.join(
+			process.platform === "win32" ? "Z:\\nonexistent-drive-for-test" : "/dev/null/impossible",
+			"bad.log",
+		);
+		const sink = new OutputSink({
+			artifactPath,
+			artifactId: "art-dispose-fail",
+		});
+
+		sink.push("data for failing sink\n");
+		await sink.dispose();
 	});
 });
 

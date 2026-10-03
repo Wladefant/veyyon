@@ -59,7 +59,6 @@ export {
 import type { ColumnUnit, OutputMeta, TruncationMeta } from "./output-notice";
 import {
 	formatArtifactErrorNotice,
-	formatArtifactReference,
 	formatFullOutputReference,
 	formatOutputNotice,
 	formatTruncationMetaNotice,
@@ -130,17 +129,6 @@ export function resolveOutputSinkArtifactMaxBytes(settings: Settings | undefined
 
 export class OutputMetaBuilder {
 	#meta: OutputMeta = {};
-
-	/** Bytes elided from the artifact file when capped (holds a sample, not full output). */
-	artifactElidedBytes(bytes: number | undefined): this {
-		if (bytes != null && bytes > 0) {
-			this.#meta.artifactElidedBytes = bytes;
-			if (this.#meta.truncation) {
-				this.#meta.truncation.artifactElidedBytes = bytes;
-			}
-		}
-		return this;
-	}
 
 	/** Add truncation info from TruncationResult. No-op if not truncated. */
 	truncation(result: TruncationResult, options: TruncationOptions): this {

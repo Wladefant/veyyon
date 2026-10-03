@@ -152,7 +152,7 @@ export async function executeSSH(
 		return {
 			exitCode: event.exitCode,
 			cancelled: false,
-			...(await sink.dump()),
+			...(await sink.dumpWithArtifactStatus()),
 		};
 	} catch (err) {
 		if (!streamAbort.signal.aborted) {
@@ -164,20 +164,20 @@ export async function executeSSH(
 				return {
 					exitCode: undefined,
 					cancelled: true,
-					...(await sink.dump(`SSH: ${err.message}`)),
+					...(await sink.dumpWithArtifactStatus(`SSH: ${err.message}`)),
 				};
 			}
 			if (err.aborted) {
 				return {
 					exitCode: undefined,
 					cancelled: true,
-					...(await sink.dump(`Command aborted: ${err.message}`)),
+					...(await sink.dumpWithArtifactStatus(`Command aborted: ${err.message}`)),
 				};
 			}
 			return {
 				exitCode: err.exitCode,
 				cancelled: false,
-				...(await sink.dump(`Unexpected error: ${err.message}`)),
+				...(await sink.dumpWithArtifactStatus(`Unexpected error: ${err.message}`)),
 			};
 		}
 		throw err;

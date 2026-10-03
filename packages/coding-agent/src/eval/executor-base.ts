@@ -596,9 +596,7 @@ export async function executeWithKernelBase<
 		}
 
 		if (result.stdinRequested) {
-			const dumped = await sink.dumpWithArtifactStatus(
-				"Kernel requested stdin; interactive input is not supported.",
-			);
+			const dumped = await sink.dumpWithArtifactStatus("Kernel requested stdin; interactive input is not supported.");
 			return {
 				exitCode: 1,
 				cancelled: false,

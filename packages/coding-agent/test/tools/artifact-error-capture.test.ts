@@ -366,6 +366,139 @@ describe("artifact error capture mechanics", () => {
 		}
 	});
 
+	test("jobToolView renders warning line when artifact error is embedded beyond collapsed and expanded preview lines", () => {
+		const tenLines = Array.from({ length: 10 }, (_, i) => `output line ${i + 1}`).join("\n");
+		const notice = formatArtifactErrorNotice("write");
+		const textWithLateWarning = `${tenLines}\n[${notice}]`;
+
+		// Collapsed view: only 1 preview line visible, late warning is hidden, so dedicated warning row must be shown
+		const viewCollapsed = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-late-col",
+							type: "bash",
+							status: "completed",
+							label: "late warning collapsed",
+							durationMs: 1000,
+							resultText: textWithLateWarning,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: false },
+		);
+
+		expect(viewCollapsed.kind).toBe("headedBlock");
+		if (viewCollapsed.kind === "headedBlock") {
+			const warningRow = viewCollapsed.lines.find(row =>
+				row.some(span => span.text.includes("artifact write failed") && span.tone === "warning"),
+			);
+			expect(warningRow).toBeDefined();
+		}
+
+		// Expanded view: only 4 preview lines visible, late warning is still hidden, so dedicated warning row must be shown
+		const viewExpanded = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-late-exp",
+							type: "bash",
+							status: "completed",
+							label: "late warning expanded",
+							durationMs: 1000,
+							resultText: textWithLateWarning,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: true },
+		);
+
+		expect(viewExpanded.kind).toBe("headedBlock");
+		if (viewExpanded.kind === "headedBlock") {
+			const warningRow = viewExpanded.lines.find(row =>
+				row.some(span => span.text.includes("artifact write failed") && span.tone === "warning"),
+			);
+			expect(warningRow).toBeDefined();
+		}
+	});
+
+	test("jobToolView renders short visible warning once only without duplicate warning row", () => {
+		const notice = formatArtifactErrorNotice("write");
+		const shortText = `[${notice}]`;
+
+		const viewCollapsed = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-short-col",
+							type: "bash",
+							status: "completed",
+							label: "short warning collapsed",
+							durationMs: 1000,
+							resultText: shortText,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: false },
+		);
+
+		expect(viewCollapsed.kind).toBe("headedBlock");
+		if (viewCollapsed.kind === "headedBlock") {
+			const matchingRows = viewCollapsed.lines.filter(row =>
+				row.some(span => span.text.includes("artifact write failed")),
+			);
+			expect(matchingRows.length).toBe(1);
+			const standaloneWarningRows = viewCollapsed.lines.filter(row =>
+				row.some(span => span.tone === "warning" && span.text.includes("artifact write failed")),
+			);
+			expect(standaloneWarningRows.length).toBe(0);
+		}
+
+		const viewExpanded = jobToolView.renderResult(
+			{
+				content: [{ type: "text", text: "## Completed (1)\n" }],
+				details: {
+					jobs: [
+						{
+							id: "j-short-exp",
+							type: "bash",
+							status: "completed",
+							label: "short warning expanded",
+							durationMs: 1000,
+							resultText: `output line 1\n[${notice}]`,
+							meta: { artifactError: "write" },
+						},
+					],
+				},
+			},
+			{ expanded: true },
+		);
+
+		expect(viewExpanded.kind).toBe("headedBlock");
+		if (viewExpanded.kind === "headedBlock") {
+			const matchingRows = viewExpanded.lines.filter(row =>
+				row.some(span => span.text.includes("artifact write failed")),
+			);
+			expect(matchingRows.length).toBe(1);
+			const standaloneWarningRows = viewExpanded.lines.filter(row =>
+				row.some(span => span.tone === "warning" && span.text.includes("artifact write failed")),
+			);
+			expect(standaloneWarningRows.length).toBe(0);
+		}
+	});
+
 	test("JobTool list renders artifact error notice for completed jobs with artifactError", async () => {
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
 		const session = makeToolSession({
