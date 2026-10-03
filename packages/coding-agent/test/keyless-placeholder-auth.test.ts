@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
 import * as envApiKeys from "@veyyon/ai/env-api-key";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
+import type { FetchImpl } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { kNoAuth } from "@veyyon/coding-agent/config/auth-state";
 import { ModelRegistry as ModelRegistryImpl } from "@veyyon/coding-agent/config/model-registry";
@@ -45,7 +46,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 		const registry = new ModelRegistryImpl(authStorage, modelsPath);
 		const model = localModel("vllm");
 		const authorizations: Array<string | null> = [];
-		const fetchProbe = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+		const fetchProbe: FetchImpl = async (input, init) => {
 			authorizations.push(
 				new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("authorization"),
 			);
@@ -59,19 +60,15 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 				].join("\n\n"),
 				{ headers: { "Content-Type": "text/event-stream" } },
 			);
-		});
-		try {
-			const message = await streamOpenAICompletions(
-				model,
-				{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-				{ apiKey: await registry.getApiKey(model) },
-			).result();
-			expect(message.stopReason).toBe("stop");
-			expect(message.content).toEqual([{ type: "text", text: "ok" }]);
-			expect(authorizations).toEqual(["Bearer vllm-local"]);
-		} finally {
-			fetchProbe.mockRestore();
-		}
+		};
+		const message = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+			{ apiKey: await registry.getApiKey(model), fetch: fetchProbe },
+		).result();
+		expect(message.stopReason).toBe("stop");
+		expect(message.content).toEqual([{ type: "text", text: "ok" }]);
+		expect(authorizations).toEqual(["Bearer vllm-local"]);
 	});
 
 	test("a placeholder-only vllm login preserves request auth and satisfies selection checks", async () => {
@@ -83,7 +80,9 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 			api: "openai-completions",
 			baseUrl: "http://127.0.0.1:8000/v1",
 			contextWindow: 32768,
-			maxOutputTokens: 4096,
+			maxTokens: 4096,
+			reasoning: false,
+			input: ["text"],
 		});
 
 		// Before login: unconfigured, no placeholder stored
@@ -118,7 +117,9 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 			api: "openai-completions",
 			baseUrl: "http://127.0.0.1:1234/v1",
 			contextWindow: 32768,
-			maxOutputTokens: 4096,
+			maxTokens: 4096,
+			reasoning: false,
+			input: ["text"],
 		});
 		await authStorage.set(provider, { type: "api_key", key: placeholder });
 		expect(registry.isKeylessProvider(provider)).toBe(true);
@@ -137,7 +138,9 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 			api: "openai-completions",
 			baseUrl: "http://127.0.0.1:8000/v1",
 			contextWindow: 32768,
-			maxOutputTokens: 4096,
+			maxTokens: 4096,
+			reasoning: false,
+			input: ["text"],
 		});
 
 		// Storing a concrete token instead of a local placeholder
@@ -151,14 +154,16 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 	});
 
 	function localModel(provider: string) {
-		return buildModel({
+		return buildModel<"openai-completions">({
 			provider,
 			id: "local-model",
 			name: "Local Model",
 			api: "openai-completions",
 			baseUrl: "http://127.0.0.1:1234/v1",
 			contextWindow: 32768,
-			maxOutputTokens: 4096,
+			maxTokens: 4096,
+			reasoning: false,
+			input: ["text"],
 		});
 	}
 
