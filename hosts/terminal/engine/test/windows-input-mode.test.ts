@@ -115,6 +115,16 @@ describe("Win32InputModeDecoder", () => {
 	});
 });
 
+// A character record as conhost emits it for typed or pasted text (VK 0, Uc = the code unit).
+function textRecords(text: string): string[] {
+	return Array.from(text, ch => {
+		if (ch === "\r" || ch === "\n") return ENTER;
+		const uc = ch.charCodeAt(0);
+		return `\x1b[0;0;${uc};1;0;1_`;
+	});
+}
+const ESC_RECORD = "\x1b[27;1;27;1;0;1_";
+
 class InputRecorder implements Component {
 	received: string[] = [];
 	invalidate(): void {}
@@ -155,6 +165,28 @@ describe("ProcessTerminal win32-input-mode fallback", () => {
 		harness.writes.length = 0;
 		harness.tui.stop();
 		expect(harness.writes.join("")).toContain("\x1b[?9001l");
+	});
+
+	// WHY: decoded key records used to bypass StdinBuffer, so a bracketed paste on conhost leaked
+	// the `[200~` / `[201~` marker tails and each pasted newline arrived as a bare Enter that
+	// submitted a partial prompt. Closes the class "decoded win32 keys skip paste handling".
+	// Gap: only native win32 conhost reaches this path, so record.sh cannot capture it; the
+	// byte-exact assertions below are the proof.
+	it("turns a bracketed paste of key records into one paste event with newlines kept as text", async () => {
+		harness = createProcessTerminalRenderHarness(100, 30, { conpty: true, nativeWindowsConsole: true });
+		const recorder = new InputRecorder();
+		harness.tui.addChild(recorder);
+		harness.tui.setFocus(recorder);
+		await harness.settle();
+		await harness.feed("\x1b[?61;4;6;7;14;21;22;23;24;28;32;42;52c");
+
+		const open = [ESC_RECORD, ...textRecords("[200~")];
+		const close = [ESC_RECORD, ...textRecords("[201~")];
+		// CRLF pasted as two Enter records, as conhost reports it.
+		await harness.feed(...open, ...textRecords("one\r\ntwo"), ...close);
+		await harness.feed(ENTER);
+
+		expect(recorder.received).toEqual(["\x1b[200~one\r\rtwo\x1b[201~", "\r"]);
 	});
 
 	it("prefers a late kitty reply and turns win32-input-mode back off", async () => {

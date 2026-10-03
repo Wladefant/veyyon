@@ -694,6 +694,9 @@ export class ProcessTerminal implements Terminal {
 	// Windows console fallback when kitty is unavailable: key records arrive as
 	// win32-input-mode sequences and are decoded before reaching the handler.
 	#win32InputDecoder?: Win32InputModeDecoder;
+	// Decoded key records re-enter a paste-aware buffer: a bracketed paste arrives as
+	// per-character records, so its markers and newlines must be consumed here.
+	#win32KeyBuffer?: StdinBuffer;
 	#stdinBuffer?: StdinBuffer;
 	#stdinDataHandler?: (data: string) => void;
 	#dead = false;
@@ -1072,7 +1075,7 @@ export class ProcessTerminal implements Terminal {
 		if (!this.#inputHandler) return;
 		const win32Keys = this.#win32InputDecoder?.decode(input);
 		if (win32Keys !== undefined) {
-			for (const key of win32Keys) this.#inputHandler(key);
+			for (const key of win32Keys) this.#win32KeyBuffer?.process(key);
 			return;
 		}
 		// Windows console hosts drop AltGr text under kitty (AltGr+F → `CSI 102;3u`);
@@ -1413,6 +1416,7 @@ export class ProcessTerminal implements Terminal {
 			// serving this process, so it works under every ConPTY terminal.
 			this.#safeWrite("\x1b[?9001h");
 			this.#win32InputDecoder = new Win32InputModeDecoder();
+			this.#win32KeyBuffer = this.#createWin32KeyBuffer();
 			return;
 		}
 		if (!shouldEnableModifyOtherKeysFallback()) return;
@@ -1424,6 +1428,16 @@ export class ProcessTerminal implements Terminal {
 		if (!this.#win32InputDecoder) return;
 		this.#safeWrite("\x1b[?9001l");
 		this.#win32InputDecoder = undefined;
+		this.#win32KeyBuffer?.destroy();
+		this.#win32KeyBuffer = undefined;
+	}
+
+	/** Paste-aware buffer for decoded win32 key records; mirrors the stdin buffer's data/paste routing. */
+	#createWin32KeyBuffer(): StdinBuffer {
+		const buffer = new StdinBuffer({ timeout: 50 });
+		buffer.on("data", (sequence: string) => this.#inputHandler?.(sequence));
+		buffer.on("paste", (content: string) => this.#inputHandler?.(`\x1b[200~${content}\x1b[201~`));
+		return buffer;
 	}
 
 	/**
