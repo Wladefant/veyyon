@@ -293,6 +293,19 @@ export const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
  */
 export const ANCHORED_BLOCK_PADDING_X = COMPOSER_INSET_COLS;
 
+/**
+ * What a todo board build reads that no board event delivers. A todo write, an
+ * agent change, the expand toggle and the anchored clock each rebuild the board
+ * themselves; the motion decision, the mount size and the theme change under it
+ * with no event of their own.
+ */
+interface TodoBoardBuildInputs {
+	motion: TodoBoardMotion;
+	columns: number;
+	maxRows: number;
+	theme: Theme;
+}
+
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -367,6 +380,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#todoSettlePhases: TodoPhase[] | undefined;
 	/** What the last board render measured: whether anything on it is in flight. */
 	#todoBoardLive = false;
+	/** The inputs the last board build read, so a streamed event rebuilds the board only when one moved. */
+	#todoBoardBuiltFor: TodoBoardBuildInputs | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
@@ -2056,10 +2071,35 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#renderTodoList(): void {
 		this.#buildTodoBoard();
+		this.#todoBoardBuiltFor = {
+			motion: this.#todoMotion(),
+			columns: this.#anchoredColumns(),
+			maxRows: this.#anchoredRowBudget(),
+			theme,
+		};
 		// The board can be the only reason a frame is owed — a task in progress with
 		// no agent running at all — so every path that redraws it re-decides
 		// whether the clock should be ticking.
 		this.#syncAnchoredMotionTimer();
+	}
+
+	/**
+	 * Whether an input the last board build read has moved with no board event to
+	 * report it: the agent starting or stopping, the mount resized, the theme
+	 * swapped. Every motion field is compared, so a field added to
+	 * `TodoBoardMotion` takes part without an edit here.
+	 */
+	#todoBoardInputsMoved(): boolean {
+		const built = this.#todoBoardBuiltFor;
+		if (built === undefined) return true;
+		if (built.theme !== theme) return true;
+		if (built.columns !== this.#anchoredColumns() || built.maxRows !== this.#anchoredRowBudget()) return true;
+		const motion = this.#todoMotion();
+		for (const field in motion) {
+			const key = field as keyof TodoBoardMotion;
+			if (motion[key] !== built.motion[key]) return true;
+		}
+		return false;
 	}
 
 	#buildTodoBoard(): void {
@@ -3825,8 +3865,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// The board's motion is owed by the agent moving, and this is the edge
 		// where it starts. Nothing else on this path touches the anchored
 		// regions, so without it a board that was still when the turn began
-		// stays still until some unrelated event redraws it.
-		this.#renderTodoList();
+		// stays still until some unrelated event redraws it. Every streamed event
+		// lands here as well, and a board none of whose inputs moved would draw
+		// the same rows again once per delta.
+		if (this.#todoBoardInputsMoved()) this.#renderTodoList();
 	}
 
 	/**
