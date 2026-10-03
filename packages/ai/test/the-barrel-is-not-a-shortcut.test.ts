@@ -253,11 +253,19 @@ describe("the modules that were repointed stay cut", () => {
 	 * `./prompt-variables` and the second imports only `handlebars/runtime`, so no consumer gained an
 	 * edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-10-03: `agent/src/proxy.ts` 147 -> 148, `parser.ts` 124 -> 125, `db.ts`
+	 * 126 -> 127 and `sync-worker.ts` 125 -> 126, each by the one module `catalog/catalog-spans.ts`, a
+	 * zero-import leaf that finds a provider's and a model's byte range in `models.json` without parsing
+	 * the document. `catalog/models.ts`, already on every one of these reaches, reads one provider's
+	 * span through it. The leaf imports nothing, so no consumer gained an edge to a subsystem it did not
+	 * already reach.
+	 */
 	it.each([
-		["agent/src/proxy.ts", 147],
-		["apps/stats/src/parser.ts", 124],
-		["apps/stats/src/db.ts", 126],
-		["apps/stats/src/sync-worker.ts", 125],
+		["agent/src/proxy.ts", 148],
+		["apps/stats/src/parser.ts", 125],
+		["apps/stats/src/db.ts", 127],
+		["apps/stats/src/sync-worker.ts", 126],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
