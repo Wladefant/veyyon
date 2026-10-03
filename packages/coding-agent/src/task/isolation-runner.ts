@@ -29,7 +29,7 @@ import type { ToolSession } from "../tools";
 import * as git from "../utils/git";
 import type { ExecutorOptions } from "./executor";
 import { runSubprocess } from "./executor";
-import { writeRetainedBackend } from "./isolation-ownership";
+import { withRetentionLifecycleLock, writeRetainedBackend } from "./isolation-ownership";
 import type { SingleResult } from "./types";
 import * as worktree from "./worktree";
 import {
@@ -297,28 +297,33 @@ export async function retainIsolationWorkspace(
 	// live root would detach it from the only process that can stop it.
 	if (backend !== natives.IsoBackendKind.Projfs) {
 		retainedBase = `${baseDir}.retained-${Date.now().toString(36)}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
-		// Retry transient Windows AV/indexer locks before conceding the slot.
-		for (let attempt = 0; attempt < 3; attempt++) {
-			try {
-				await fs.rename(baseDir, retainedBase);
-				break;
-			} catch {
-				if (attempt === 2) {
-					retainedBase = baseDir;
+	}
+
+	return await withRetentionLifecycleLock(baseDir, retainedBase, async () => {
+		if (backend !== natives.IsoBackendKind.Projfs) {
+			// Retry transient Windows AV/indexer locks before conceding the slot.
+			for (let attempt = 0; attempt < 3; attempt++) {
+				try {
+					await fs.rename(baseDir, retainedBase);
 					break;
+				} catch {
+					if (attempt === 2) {
+						retainedBase = baseDir;
+						break;
+					}
+					await setTimeout(25);
 				}
-				await setTimeout(25);
 			}
 		}
-	}
-	if (needsSidecar && backend !== undefined) {
-		try {
-			await writeRetainedBackend(retainedBase, backend);
-		} catch {
-			return { dir: path.join(retainedBase, path.basename(isolationDir)), sidecarOk: false };
+		if (needsSidecar && backend !== undefined) {
+			try {
+				await writeRetainedBackend(retainedBase, backend);
+			} catch {
+				return { dir: path.join(retainedBase, path.basename(isolationDir)), sidecarOk: false };
+			}
 		}
-	}
-	return { dir: path.join(retainedBase, path.basename(isolationDir)), sidecarOk: true };
+		return { dir: path.join(retainedBase, path.basename(isolationDir)), sidecarOk: true };
+	});
 }
 
 /** Context for `isolation-error.md`: the `result.error` text for a run whose changes could not be captured or landed. */
