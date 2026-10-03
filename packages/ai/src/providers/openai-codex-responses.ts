@@ -106,6 +106,7 @@ import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { applyChatGptWebTurnContract } from "./openai-codex/chatgpt-web-trusted-context";
+import { CodexCompactionV2Accumulator } from "./openai-codex/compaction-v2";
 import {
 	type CodexLiteShapedBody,
 	type CodexReasoningContext,
@@ -1581,6 +1582,25 @@ async function buildCodexRequestContext(
 	});
 }
 
+/** Maximum number of raw frames buffered during a WebSocket compaction attempt. */
+export const CODEX_COMPACTION_WS_MAX_BUFFERED_EVENTS = 1024;
+
+/**
+ * Maximum cumulative payload bytes buffered during a WebSocket compaction attempt.
+ * Retained JSON strings in V8 use up to 2 bytes per code unit (UTF-16), so this
+ * conservative limit caps heap consumption at ~32 MiB under pathological framing.
+ */
+export const CODEX_COMPACTION_WS_MAX_BUFFERED_BYTES = 16 * 1024 * 1024; // 16 MiB
+
+function estimateEventJsonBytes(event: Record<string, unknown>): number {
+	try {
+		const json = JSON.stringify(event);
+		return typeof Buffer !== "undefined" ? Buffer.byteLength(json, "utf8") : json.length * 2;
+	} catch {
+		return 64;
+	}
+}
+
 /** Raw V2 compaction body accepted by the Codex transport selector. */
 export interface OpenAICodexCompactionBody extends CodexLiteShapedBody {
 	model: string;
@@ -1648,46 +1668,75 @@ async function* streamCodexCompactionEvents(
 ): AsyncGenerator<Record<string, unknown>> {
 	let completed = false;
 	const websocketState = requestContext.websocketState;
-	const previousTurnState = websocketState?.turnState;
+	const previousTurnState = requestContext.turnState.value;
 	const previousModelsEtag = websocketState?.modelsEtag;
 	try {
 		if (initial.transport === "websocket") {
 			// Do not expose a WebSocket attempt until it finishes: an SSE replay
 			// must replace, not extend, any partial compaction output.
 			const bufferedEvents: Array<Record<string, unknown>> = [];
+			let bufferedBytes = 0;
 			try {
 				for await (const event of initial.eventStream) {
-					if (options.signal?.aborted) throw options.signal.reason ?? new Error("Aborted");
+					if (options.signal?.aborted || requestSetup.requestSignal?.aborted) {
+						throw options.signal?.reason ?? requestSetup.requestSignal?.reason ?? new Error("Aborted");
+					}
+					const eventBytes = estimateEventJsonBytes(event);
+					if (
+						bufferedEvents.length + 1 > CODEX_COMPACTION_WS_MAX_BUFFERED_EVENTS ||
+						bufferedBytes + eventBytes > CODEX_COMPACTION_WS_MAX_BUFFERED_BYTES
+					) {
+						await initial.eventStream.return?.();
+						throw new CodexWebSocketTransportError(
+							`WebSocket compaction attempt exceeded buffer limits (${bufferedEvents.length + 1} frames, ${bufferedBytes + eventBytes} bytes)`,
+						);
+					}
 					bufferedEvents.push(event);
+					bufferedBytes += eventBytes;
 				}
 			} catch (error) {
-				if (options.signal?.aborted || !(error instanceof CodexWebSocketTransportError)) {
+				if (
+					options.signal?.aborted ||
+					requestSetup.requestSignal?.aborted ||
+					(error instanceof Error && error.message.includes("aborted")) ||
+					!(error instanceof CodexWebSocketTransportError)
+				) {
 					throw error;
 				}
 				const state = requestContext.websocketState;
 				if (state) recordCodexWebSocketFailure(state, true);
 				const fallback = await openCodexSseTransport(model, requestContext, requestSetup, options, state);
 				if (state) state.lastTransport = fallback.transport;
-				yield* drainCodexCompactionEvents(fallback.eventStream, requestContext.websocketState);
+				yield* drainCodexCompactionEvents(fallback.eventStream, requestContext);
 				completed = true;
 				return;
 			}
-			if (options.signal?.aborted) throw options.signal.reason ?? new Error("Aborted");
-			// Apply metadata only once the WebSocket attempt succeeded: a discarded
-			// attempt must not leak its `x-codex-turn-state` into the session.
+			if (options.signal?.aborted || requestSetup.requestSignal?.aborted) {
+				throw options.signal?.reason ?? requestSetup.requestSignal?.reason ?? new Error("Aborted");
+			}
+
+			// Semantic validation of the full WebSocket attempt before state commit or yielding.
+			const validator = new CodexCompactionV2Accumulator();
 			for (const event of bufferedEvents) {
-				applyCodexCompactionResponseMetadata(requestContext.websocketState, event);
+				validator.observe(event);
+			}
+			validator.finish();
+
+			// Apply metadata only once the WebSocket attempt succeeded and validated:
+			// a discarded or rejected attempt must not leak its `x-codex-turn-state` into the session.
+			for (const event of bufferedEvents) {
+				applyCodexCompactionResponseMetadata(requestContext.turnState, websocketState, event);
 				yield event;
 			}
 		} else {
-			yield* drainCodexCompactionEvents(initial.eventStream, requestContext.websocketState);
+			yield* drainCodexCompactionEvents(initial.eventStream, requestContext);
 		}
 		completed = true;
 	} finally {
 		if (!completed) {
 			requestSetup.requestAbortController.abort();
+			requestContext.turnState.value = previousTurnState;
 			if (websocketState) {
-				websocketState.turnState = previousTurnState;
 				websocketState.modelsEtag = previousModelsEtag;
 			}
 		}
@@ -1700,21 +1749,25 @@ async function* streamCodexCompactionEvents(
  * the latest turn state, matching the normal Codex stream processor.
  */
 function applyCodexCompactionResponseMetadata(
+	turnState: CodexTurnStateCell | undefined,
 	state: CodexWebSocketSessionState | undefined,
 	event: Record<string, unknown>,
 ): void {
-	if (!state || event.type !== "response.metadata") return;
-	updateCodexSessionMetadataFromHeaders(state, toCodexHeaders(event.headers));
+	if (event.type !== "response.metadata") return;
+	updateCodexSessionMetadataFromHeaders(turnState, state, toCodexHeaders(event.headers));
 }
 
 async function* drainCodexCompactionEvents(
 	events: AsyncGenerator<Record<string, unknown>>,
-	state: CodexWebSocketSessionState | undefined,
+	requestContext: CodexRequestContext,
 ): AsyncGenerator<Record<string, unknown>> {
+	const validator = new CodexCompactionV2Accumulator();
 	for await (const event of events) {
-		applyCodexCompactionResponseMetadata(state, event);
+		validator.observe(event);
+		applyCodexCompactionResponseMetadata(requestContext.turnState, requestContext.websocketState, event);
 		yield event;
 	}
+	validator.finish();
 }
 
 /** @internal Exported for tests. */
