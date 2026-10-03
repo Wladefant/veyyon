@@ -10,6 +10,7 @@ import type { Api, Context, Model, ModelSpec, SimpleStreamOptions, ThinkingConfi
 import type { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
 import { shareCompat } from "@veyyon/catalog/compat/share";
+import { resolveSessionContextWindow } from "@veyyon/catalog/context-window";
 import { isVertexExpressOpenAIUrl } from "@veyyon/catalog/hosts";
 import { resolveBundledModelReference } from "@veyyon/catalog/identity";
 import { modelCacheStamp, readModelCache } from "@veyyon/catalog/model-cache";
@@ -22,6 +23,7 @@ import {
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 } from "@veyyon/catalog/provider-models";
+import { modelKind } from "@veyyon/catalog/types";
 import {
 	collapseBuiltModelVariants,
 	getVariantAliasSources,
@@ -850,6 +852,14 @@ function getDisabledProviderIdsFromSettings(): Set<string> {
 	}
 }
 
+function isExtendedContextEnabled(): boolean {
+	try {
+		return settings.get("extendedContext");
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Bump when the persisted static stage's contract changes: the resolved record
  * shape, a hardcoded model policy, or the merge semantics feeding `#loadModels`.
@@ -857,7 +867,7 @@ function getDisabledProviderIdsFromSettings(): Set<string> {
  * state produced under retired rules — the same discipline as
  * `CACHE_SCHEMA_VERSION` in `@veyyon/catalog/model-cache`.
  */
-const REGISTRY_SNAPSHOT_VERSION = 10;
+const REGISTRY_SNAPSHOT_VERSION = 11;
 
 /** The resolved layers `#loadModels` hands the writer, before compat is tabled. */
 interface StaticModelLayers {
@@ -1266,6 +1276,7 @@ export class ModelRegistry {
 			bundledCatalogDigest(),
 			modelCacheStamp(dbPath, { ttlMs: DAY_MS }),
 			this.#modelsConfigFile.getMtimeMs() ?? 0,
+			isExtendedContextEnabled() ? "extended" : "standard",
 		];
 		const customConfigDigest = createHash("sha256")
 			.update(
@@ -1387,7 +1398,11 @@ export class ModelRegistry {
 		const combined = mergeCustomModels(withConfigModels, runtimeOverlays);
 
 		const withModelOverrides = applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
-		const finalModels = this.#applyProviderReportedWindows(this.#applyRuntimeProviderOverrides(withModelOverrides));
+		// Runner models (image generation) ride in the catalog for their own tools; a
+		// session picks, resolves and falls back among chat models only.
+		const finalModels = this.#applyProviderReportedWindows(
+			this.#applyRuntimeProviderOverrides(withModelOverrides),
+		).filter(model => modelKind(model) === "chat");
 
 		this.#providerModels.set(provider, finalModels);
 		return finalModels;
@@ -2178,7 +2193,12 @@ export class ModelRegistry {
 	}
 
 	#applyHardcodedModelPolicies(models: Model<Api>[]): Model<Api>[] {
+		const extendedContext = isExtendedContextEnabled();
 		return models.map(model => {
+			const window = resolveSessionContextWindow(model, extendedContext);
+			if (window !== null && window !== model.contextWindow) {
+				model = applyModelOverride(model, { contextWindow: window });
+			}
 			if (model.provider === "ollama-cloud" && model.omitMaxOutputTokens !== true) {
 				model = applyModelOverride(model, { omitMaxOutputTokens: true });
 			}
