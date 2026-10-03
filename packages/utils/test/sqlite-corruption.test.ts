@@ -281,7 +281,11 @@ test("regression: interrupted sidecar removal writes quarantine-pending marker a
 	const originalUnlinkSync = nodeFs.unlinkSync.bind(nodeFs);
 	let unlinks = 0;
 	const unlinkSpy = spyOn(nodeFs, "unlinkSync").mockImplementation(targetPath => {
-		if (targetPath === dbPath || targetPath === `${dbPath}-wal` || targetPath === `${dbPath}-shm`) {
+		if (
+			[dbPath, `${dbPath}-wal`, `${dbPath}-shm`].some(
+				file => String(targetPath).toLowerCase() === file.toLowerCase(),
+			)
+		) {
 			unlinks++;
 			if (unlinks > 1) {
 				const error = new Error("EPERM: operation not permitted, unlink");
@@ -758,7 +762,7 @@ test.skipIf(process.platform !== "win32")(
 		// 1. Interrupted unlink injection leaves hashed marker
 		const originalUnlinkSync = nodeFs.unlinkSync.bind(nodeFs);
 		const unlinkSpy = spyOn(nodeFs, "unlinkSync").mockImplementation((targetPath: nodeFs.PathLike) => {
-			if (typeof targetPath === "string" && targetPath.includes(adsPath)) {
+			if (typeof targetPath === "string" && targetPath.toLowerCase().includes(adsPath.toLowerCase())) {
 				const err = new Error("EPERM: operation not permitted, unlink");
 				(err as NodeJS.ErrnoException).code = "EPERM";
 				throw err;
@@ -941,10 +945,22 @@ test.skipIf(process.platform !== "win32")(
 			{ kind: "forward slashes", file: resolved.replaceAll("\\", "/") },
 			{ kind: "8.3 parent", file: path.join(shortDir, "base.db:stream.db") },
 			{ kind: "junction", file: path.join(junction, "base.db:stream.db") },
+			{ kind: "dotted parent", file: `${baseDir}.\\base.db:stream.db` },
+			{ kind: "extended dotted parent", file: path.toNamespacedPath(`${baseDir}.\\base.db:stream.db`) },
 			{ kind: "trailing dot", file: path.join(baseDir, "base.db.:stream.db"), optional: true },
 			{ kind: "trailing space", file: path.join(baseDir, "base.db :stream.db"), optional: true },
 			{ kind: "UNC admin share", file: `\\\\localhost\\${resolved[0]}$${resolved.slice(2)}`, optional: true },
 		];
+		for (const candidate of [...candidates]) {
+			if (candidate.kind === "trailing dot" || candidate.kind === "trailing space") continue;
+			for (const suffix of [".", " "]) {
+				candidates.push({
+					...candidate,
+					kind: `${candidate.kind} stream suffix ${JSON.stringify(suffix)}`,
+					file: candidate.file + suffix,
+				});
+			}
+		}
 		const aliases: string[] = [];
 
 		// 2. Verify all aliases read the SAME store directly with Bun
@@ -963,6 +979,17 @@ test.skipIf(process.platform !== "win32")(
 			} finally {
 				db?.close();
 			}
+		}
+		for (const alias of aliases) {
+			const initialize = (db: Database) => {
+				try {
+					return db.query<{ v: string }, []>("SELECT v FROM sentinel").get();
+				} finally {
+					db.close();
+				}
+			};
+			expect(openSqliteDatabaseSync(alias, initialize)).toEqual({ v: "initial-value" });
+			expect(await openSqliteDatabase(alias, initialize)).toEqual({ v: "initial-value" });
 		}
 
 		// Mutate store via an alias directly with Bun

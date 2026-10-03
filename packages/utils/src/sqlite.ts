@@ -97,18 +97,34 @@ function isTransientSqliteStore(dbPath: string): boolean {
 	return dbPath === ":memory:" || dbPath === "";
 }
 
-function recoveryFileStem(dbPath: string): string {
+function canonicalSqlitePath(dbPath: string): string {
 	if (process.platform !== "win32") return dbPath;
-	const resolved = path.resolve(dbPath);
+	// SQLite's Windows VFS strips namespace spelling and final filename dots/
+	// spaces even when the input uses an extended prefix. Node's fs does not.
+	const resolved = path
+		.resolve(dbPath)
+		.replace(/^\\\\[?.]\\UNC\\/i, "\\\\")
+		.replace(/^\\\\[?.]\\/, "");
 	const basename = path.basename(resolved);
 	const streamAt = basename.indexOf(":");
-	const baseName = streamAt < 0 ? basename : basename.slice(0, streamAt);
-	const stream = streamAt < 0 ? "" : basename.slice(streamAt).toLowerCase();
-	const basePath = path.join(path.dirname(resolved), baseName);
+	const baseName = streamAt < 0 ? basename.replace(/[. ]+$/, "") : basename.slice(0, streamAt);
+	const stream =
+		streamAt < 0
+			? ""
+			: basename
+					.slice(streamAt)
+					.replace(/[. ]+$/, "")
+					.toLowerCase();
+	const parentPath = path
+		.dirname(resolved)
+		.split("\\")
+		.map(part => part.replace(/\.+$/, ""))
+		.join("\\");
+	const basePath = path.join(parentPath, baseName);
 	let canonicalBase: string;
 	let baseExists = true;
 	try {
-		canonicalBase = fs.realpathSync.native(basePath);
+		canonicalBase = fs.realpathSync.native(path.toNamespacedPath(basePath));
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
 		baseExists = false;
@@ -119,12 +135,10 @@ function recoveryFileStem(dbPath: string): string {
 			if (!isEnoent(linkError) && (linkError as NodeJS.ErrnoException).code !== "EINVAL") throw linkError;
 		}
 		if (link) {
-			canonicalBase = recoveryFileStem(path.resolve(path.dirname(basePath), link));
+			canonicalBase = canonicalSqlitePath(path.resolve(path.dirname(basePath), link));
 		} else {
 			const parent = fs.realpathSync.native(path.dirname(basePath));
-			// Ordinary Win32 names ignore trailing dots/spaces; extended names do not.
-			const name = resolved.startsWith("\\\\?\\") ? baseName : baseName.replace(/[. ]+$/, "");
-			canonicalBase = path.join(parent, name);
+			canonicalBase = path.join(parent, baseName);
 		}
 	}
 	canonicalBase = canonicalBase
@@ -144,22 +158,21 @@ function recoveryFileStem(dbPath: string): string {
 			if (!isEnoent(error)) throw error;
 		}
 	}
-	if (!stream) return canonicalBase;
-	// Resolve the base file, not its ADS: aliases share a key even after the
-	// stream is removed. NTFS streams cannot themselves name lock directories.
-	return path.join(
-		path.dirname(canonicalBase),
-		`.sqlite-${crypto
-			.createHash("sha256")
-			.update(canonicalBase + stream)
-			.digest("hex")}`,
-	);
+	return canonicalBase + stream;
+}
+
+function recoveryFileStem(dbPath: string): string {
+	const canonical = canonicalSqlitePath(dbPath);
+	if (process.platform !== "win32" || !path.basename(canonical).includes(":")) return canonical;
+	// NTFS streams cannot name lock directories. The base identity remains
+	// stable when quarantine removes the stream.
+	return path.join(path.dirname(canonical), `.sqlite-${crypto.createHash("sha256").update(canonical).digest("hex")}`);
 }
 
 function sqliteFileIdentity(dbPath: string): SqliteFileIdentity {
 	if (isTransientSqliteStore(dbPath)) return null;
 	try {
-		const s = fs.statSync(dbPath);
+		const s = fs.statSync(canonicalSqlitePath(dbPath));
 		return `${s.dev}:${s.ino}:${s.birthtimeMs}`;
 	} catch (e) {
 		return isEnoent(e) ? null : undefined;
@@ -228,7 +241,8 @@ function openOnce<T>(dbPath: string, initialize: (db: Database) => T, options: S
 
 function openStoreUnderRecoveryLock(dbPath: string): Database {
 	if (isTransientSqliteStore(dbPath)) return new Database(dbPath);
-	const probe = path.join(path.dirname(dbPath), `.sqlite-write-probe-${crypto.randomUUID()}`);
+	const stem = recoveryFileStem(dbPath);
+	const probe = path.join(path.dirname(stem), `.sqlite-write-probe-${crypto.randomUUID()}`);
 	try {
 		const fd = fs.openSync(probe, "wx", 0o600);
 		fs.closeSync(fd);
@@ -242,7 +256,7 @@ function openStoreUnderRecoveryLock(dbPath: string): Database {
 		throw error;
 	}
 	fs.unlinkSync(probe);
-	return withFileLockSync(`${recoveryFileStem(dbPath)}.recovery`, () => {
+	return withFileLockSync(`${stem}.recovery`, () => {
 		assertNoPendingQuarantine(dbPath);
 		return new Database(dbPath);
 	});
@@ -258,6 +272,7 @@ function assertNoPendingQuarantine(dbPath: string): void {
 
 function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined): string {
 	const stem = recoveryFileStem(dbPath);
+	const sourcePath = canonicalSqlitePath(dbPath);
 	const backupDirectory = `${stem}.corrupt-${Date.now()}-${crypto.randomUUID()}`;
 	const temporaryDirectory = `${backupDirectory}.tmp`;
 	const backupName = path.basename(stem);
@@ -267,8 +282,8 @@ function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined):
 	for (const suffix of SQLITE_STORE_SUFFIXES) {
 		let data: Buffer;
 		try {
-			fs.chmodSync(`${dbPath}${suffix}`, 0o600);
-			data = fs.readFileSync(`${dbPath}${suffix}`);
+			fs.chmodSync(`${sourcePath}${suffix}`, 0o600);
+			data = fs.readFileSync(`${sourcePath}${suffix}`);
 		} catch (error) {
 			if (isEnoent(error) && suffix !== "") continue;
 			throw error;
@@ -289,7 +304,7 @@ function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined):
 	// backup and durable marker remain available for explicit repair.
 	for (const suffix of preserved) {
 		try {
-			fs.unlinkSync(`${dbPath}${suffix}`);
+			fs.unlinkSync(`${sourcePath}${suffix}`);
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
 		}
@@ -302,6 +317,7 @@ function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined):
 }
 
 function mainStoreIsCorrupt(dbPath: string): boolean {
+	dbPath = canonicalSqlitePath(dbPath);
 	// A fresh header read also handles NOTADB stores whose damaged WAL prevents
 	// SQLite from acquiring a second connection. Empty files are valid new stores.
 	const fd = fs.openSync(dbPath, "r");
