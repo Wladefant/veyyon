@@ -5,6 +5,7 @@
 ### Added
 
 - Added core image generation data types and metadata contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
+- Added image response decoding, data URL formatting, and dimension mapping utilities ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Added OpenAI and xAI speech adapters and synthesizeSpeech entrypoint ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Added speech synthesis types and transport with bearer confinement and authentication retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c, cfa658186db0af5f91055d953431b64e5e25eff1).
 - Added the StepFun provider (`stepfun`) registry definition with an API-key login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
