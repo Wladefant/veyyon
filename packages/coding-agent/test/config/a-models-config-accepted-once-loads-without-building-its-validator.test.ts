@@ -18,7 +18,9 @@
  * - a changed byte, the same bytes at another path, another validator fingerprint, and a damaged
  *   snapshot, each of which validates again;
  * - the file's own checks after the schema (a retired key), which still run on a served value;
- * - a rejected file, which is reported on every load.
+ * - a rejected file, which is reported on every load;
+ * - a validator fingerprint that depends on whether the process evaluated ArkType before the
+ *   first read, which the deferred ArkType facade makes possible.
  * Serving is observed by making the validator's builder throw: a load that builds it fails. The
  * production path is measured in fresh processes through ArkType's node registry and the heap.
  *
@@ -320,7 +322,7 @@ describe("what the schema does not decide is decided on every load", () => {
 });
 
 describe("a later launch builds no validator for an unchanged models config", () => {
-	it("registers no schema node and retains a fraction of the first launch", () => {
+	it("evaluates no ArkType module, registers no schema node and retains a fraction of the first launch", () => {
 		const spawn = hermeticSpawnEnv();
 		try {
 			const file = path.join(spawn.home, "models.yml");
@@ -335,12 +337,32 @@ describe("a later launch builds no validator for an unchanged models config", ()
 			const later = run();
 
 			expect(first.status).toBe("ok");
+			expect(first.arktypeEvaluated).toBe(true);
 			expect(first.registeredNodes).toBeGreaterThan(100);
 			expect(first.retained).toBeGreaterThan(2 * 1024 * 1024);
-			expect(later).toEqual({ ...first, registeredNodes: 0, retained: later.retained });
+			expect(later).toEqual({ ...first, arktypeEvaluated: false, registeredNodes: 0, retained: later.retained });
 			expect(later.retained).toBeLessThan(256 * 1024);
 		} finally {
 			spawn.cleanup();
 		}
+	});
+});
+
+describe("the validator fingerprint", () => {
+	it("is the same whether or not the process has evaluated arktype", () => {
+		const fingerprint = (prelude: string): string => {
+			const code = `${prelude}
+const { modelsConfigSchemaFingerprint } = await import("./packages/coding-agent/src/config/models-config-schema.ts");
+process.stdout.write(modelsConfigSchemaFingerprint());`;
+			const result = spawnSync(process.execPath, ["-e", code], { cwd: REPO_ROOT, encoding: "utf8" });
+			if (result.status !== 0) throw new Error(`fingerprint probe failed: ${result.stderr}`);
+			return result.stdout;
+		};
+
+		const deferred = fingerprint("");
+		const evaluated = fingerprint('(await import("arktype")).type("string");');
+
+		expect(deferred).toMatch(/^[0-9a-f]{64}$/);
+		expect(evaluated).toBe(deferred);
 	});
 });

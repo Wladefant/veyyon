@@ -7,8 +7,8 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { isEnoent, lazy, prompt } from "@veyyon/utils";
-import { type } from "arktype";
 import type {
 	DapBreakpointRecord,
 	DapCapabilities,

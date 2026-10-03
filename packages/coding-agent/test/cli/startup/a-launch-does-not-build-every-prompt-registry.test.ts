@@ -287,11 +287,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * interactive mode imports the same stack behind its own `await import`.
  * `test/architecture/a-launch-outside-the-terminal-loads-no-terminal-engine.test.ts` pins the cut.
  *
+ * 1467 to 1468: `ai/src/utils/schema/arktype.ts`, the module shipped source imports arktype's `type`,
+ * `scope` and `Type` from. It imports `arktype` through `require` on the first schema built, so the
+ * count sees one workspace module more while a launch evaluates the 115 modules of `arktype` fewer,
+ * which this walk never counted. Its only static imports are type-only.
+ * `test/architecture/a-launch-evaluates-arktype-only-when-a-schema-is-built.test.ts` pins the cut.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1467;
+const LAUNCH_REACH_CEILING = 1468;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -301,8 +307,10 @@ const LAUNCH_REACH_CEILING = 1467;
  * 520 to 521: `catalog/catalog-spans.ts`, the zero-import leaf that indexes each provider's and each
  * model's byte span of `models.json`. `catalog/models.ts`, already here, reads one span through it
  * instead of parsing the whole catalog.
+ *
+ * 521 to 522: `ai/src/utils/schema/arktype.ts`, for the reason the launch ceiling above records.
  */
-const ASSEMBLER_REACH_CEILING = 521;
+const ASSEMBLER_REACH_CEILING = 522;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

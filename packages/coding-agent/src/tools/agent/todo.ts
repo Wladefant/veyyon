@@ -1,13 +1,13 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type SessionTelemetryDetail, sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { lazy, NON_ALNUM_RUN_RE, prompt } from "@veyyon/utils";
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { isTerminalTodoStatus, type TodoStatus } from "@veyyon/wire";
-import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "../../sdk";
 import { normalizePathLikeInput, resolveToCwd } from "../core/path-utils";

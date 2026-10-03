@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { arktypeRelease, scope } from "@veyyon/ai/utils/schema/arktype";
 import { THINKING_EFFORTS } from "@veyyon/catalog/effort";
 import type { AnthropicCompat, CursorCompat, DevinCompat, OpenAICompat } from "@veyyon/catalog/types";
 import { VERSION } from "@veyyon/utils/dirs";
-import { scope, type Traversal, type Type } from "arktype";
+import type { Traversal, Type } from "arktype";
 
 // Schema construction is deferred behind modelsConfigSchemas(): even with the
 // jitless scope below (~65% cheaper than default ArkType codegen), building
@@ -463,15 +464,14 @@ let schemaFingerprint: string | undefined;
 
 /**
  * Identity of the models-config validator without building it: a digest of the product version,
- * the ArkType release in the `$ark` registry the `arktype` import installs, the effort ladder the
- * thinking pipe orders by, and the builder's source text.
+ * the ArkType release (read from its package metadata, evaluating no ArkType module), the effort
+ * ladder the thinking pipe orders by, and the builder's source text.
  */
 export function modelsConfigSchemaFingerprint(): string {
-	const arkVersion = (globalThis as { $ark?: { version?: unknown } }).$ark?.version;
 	schemaFingerprint ??= createHash("sha256")
 		.update(VERSION)
 		.update("\0")
-		.update(typeof arkVersion === "string" ? arkVersion : "")
+		.update(arktypeRelease())
 		.update("\0")
 		.update(THINKING_EFFORTS.join(","))
 		.update("\0")

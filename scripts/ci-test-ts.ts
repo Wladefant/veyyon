@@ -319,6 +319,7 @@ export const repoScriptTests = [
 	"scripts/a-package-exports-its-public-surface.test.ts",
 	"scripts/an-export-floor-only-grows.test.ts",
 	"scripts/a-package-module-loads-through-one-build.test.ts",
+	"scripts/arktype-values-load-through-the-deferred-module.test.ts",
 	"scripts/a-package-is-added-only-when-an-existing-one-cannot-serve.test.ts",
 	"scripts/a-shipped-module-arrives-with-a-test-that-names-it.test.ts",
 	"scripts/a-suite-is-named-for-the-behavior-it-defends.test.ts",

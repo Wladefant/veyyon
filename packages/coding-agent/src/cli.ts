@@ -131,7 +131,7 @@ async function runSmokeTest(): Promise<void> {
 	// `runCli` configures ArkType jitless before any command loads a schema. A static import that
 	// reaches `arktype` from this file's graph evaluates it first, and a bundled binary then compiles
 	// every validator again at launch; `ark.config` holds the configuration at `arktype`'s evaluation.
-	const { ark } = await import("arktype");
+	const { ark } = (await import("@veyyon/ai/utils/schema/arktype")).loadArktype();
 	if (ark.config.jitless !== true) {
 		throw new Error(
 			"arktype smoke failed: ArkType is not jitless — runCli did not configure it before arktype " +
@@ -493,8 +493,8 @@ export async function runCli(argv: string[]): Promise<void> {
 	// this runs before any module builds a schema, and `runSmokeTest` fails when it does not. The auth
 	// gateway's request schemas compile regardless (`@veyyon/ai` `providers/gateway-schema-type.ts`).
 	if (isProcessEntry) {
-		const { configure } = await import("arktype/config");
-		configure({ jitless: true });
+		const { configureArktype } = await import("@veyyon/ai/utils/schema/arktype");
+		configureArktype({ jitless: true });
 	}
 
 	// Declare this module as the worker-host entry now that the active profile

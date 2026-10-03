@@ -1,8 +1,9 @@
 import type { Usage } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { $envpos } from "@veyyon/utils/env";
-import { type BaseType, type } from "arktype";
+import type { BaseType } from "arktype";
 import type { RetryRecoveryMode } from "../modes/retry-display";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import type { ConfiguredThinkingLevel } from "../thinking";

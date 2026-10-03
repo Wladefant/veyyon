@@ -15,6 +15,7 @@
 import { Database } from "bun:sqlite";
 import type { AgentTool } from "@veyyon/agent-core";
 import type { FetchImpl } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import {
 	$env,
 	$flag,
@@ -26,7 +27,7 @@ import {
 	VERSION,
 } from "@veyyon/utils";
 import { sqlPlaceholders } from "@veyyon/utils/sqlite";
-import { type Type, type } from "arktype";
+import type { Type } from "arktype";
 import type { Settings } from "../..";
 import type { ToolSession } from "../index";
 

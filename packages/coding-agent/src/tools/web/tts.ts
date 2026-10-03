@@ -7,8 +7,8 @@ import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ApiKey } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
-import { type } from "arktype";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../config/settings-instance";
 import type { CustomTool, CustomToolContext } from "../../extensibility/custom-tools/types";

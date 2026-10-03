@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy, prompt } from "@veyyon/utils";
-import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import type { OutputMeta } from "../core/output-meta";

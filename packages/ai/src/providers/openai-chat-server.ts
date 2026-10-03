@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { isEffort } from "@veyyon/catalog/effort";
 import { emptyUsage } from "@veyyon/catalog/models";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
-import { type } from "arktype";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 /**
  * Parsed inbound OpenAI chat-completions request, ready to feed into pi-ai
@@ -24,6 +23,7 @@ import type {
 	TSchema,
 } from "../types";
 import { isServiceTier } from "../types";
+import { type } from "../utils/schema/arktype";
 import {
 	type OpenAIChatContentPart,
 	type OpenAIChatMessage,

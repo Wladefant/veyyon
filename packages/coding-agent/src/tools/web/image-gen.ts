@@ -5,6 +5,7 @@ import type { ApiKey, FetchImpl, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import {
 	ANTIGRAVITY_ENDPOINTS,
 	ANTIGRAVITY_PRIMARY_ENDPOINT,
@@ -29,7 +30,6 @@ import {
 	trimTrailingSlashes,
 	untilAborted,
 } from "@veyyon/utils";
-import { type } from "arktype";
 import packageJson from "../../../package.json" with { type: "json" };
 import { isAuthenticated } from "../../config/auth-state";
 import type { ModelRegistry } from "../../config/model-registry";

@@ -9,7 +9,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
-
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import {
 	clamp,
 	DAY_MS,
@@ -26,7 +26,6 @@ import {
 	untilAborted,
 	WEEK_MS,
 } from "@veyyon/utils";
-import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import * as git from "../../utils/git";
 import type { ToolSession } from "..";

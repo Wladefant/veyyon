@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy, logger, pluralize, untilAborted } from "@veyyon/utils";
-import { type } from "arktype";
 import { formatCurrentTime, formatMemories } from "../../memory/hindsight/content";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";

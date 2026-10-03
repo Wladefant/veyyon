@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, lazy, logger, prompt } from "@veyyon/utils";
-import { type } from "arktype";
 import { resolveEffectiveToolDiscoveryMode } from "../../discovery/mode";
 import {
 	buildDiscoverableToolSearchIndex,

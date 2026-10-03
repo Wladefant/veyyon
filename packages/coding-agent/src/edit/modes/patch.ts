@@ -7,8 +7,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { atomicWriteFilePreservingMode, clampLow, errorMessage, isEnoent, lazy } from "@veyyon/utils";
-import { type } from "arktype";
 import { resolveToCwd } from "../../tools/core/path-utils";
 import {
 	ApplyPatchError,

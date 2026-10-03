@@ -6,8 +6,8 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { clampLow, lazy, prompt, sanitizeText } from "@veyyon/utils";
-import { type } from "arktype";
 import { daemonClientForProject } from "../../launch/client";
 import { DAEMON_COMPLETIONS_LIMIT } from "../../launch/completions";
 import type {

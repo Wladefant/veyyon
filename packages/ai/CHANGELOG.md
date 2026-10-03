@@ -6,6 +6,10 @@
 
 - `clearAnthropicFastModeFallback` moved from `@veyyon/ai/providers/anthropic` to `@veyyon/ai/providers/anthropic-session-state`, `deriveClaudeDeviceId` to `providers/claude-device-id`, `createOpenAICodexCompactionRequestContext`, `resetOpenAICodexHistoryAfterCompaction`, `getOpenAICodexTransportDetails`, `getOpenAICodexWebSocketDebugStats` and their option and result types from `providers/openai-codex-responses` to `providers/openai-codex/session-state`, `normalizeOpenAIPromptCacheKey` and `normalizeOpenRouterResponsesSessionId` from `providers/openai-shared` to `providers/openai-stable-ids`, and `signaturePolicy`, `sendsSignature`, `elidedSignatureBytes`, `firstRetainedAssistantIndex` and `SignaturePolicy` from `providers/google-shared` to `providers/google-thought-signatures`; the `@veyyon/ai` barrel keeps every name it exported.
 
+### Added
+
+- `@veyyon/ai/utils/schema/arktype` exports `type`, `scope` and `Type` stand-ins that evaluate the `arktype` package on their first call, construction or property read, plus `loadArktype`, `configureArktype` and `arktypeRelease`, which reads the installed release from package metadata; every arktype value import in the package goes through it, so a process that builds no schema evaluates none of arktype's 115 modules.
+
 ### Changed
 
 - The in-band tag scanners find a held-back partial tag by comparing in place at the positions holding the tag's first character instead of slicing every candidate prefix on each delta, cutting the leaked-thinking scan of a 60,000-char answer at 24-char deltas from 2.6 ms to 0.4 ms with identical holds across every text and tag over a three-symbol alphabet.

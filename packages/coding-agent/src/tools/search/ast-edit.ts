@@ -1,10 +1,10 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { formatHashlineHeader } from "@veyyon/hashline";
 import { type AstReplaceChange, type AstReplaceFileChange, astEdit } from "@veyyon/natives";
 import { $envpos, lazy, prompt, truncate, untilAborted } from "@veyyon/utils";
-import { type } from "arktype";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { normalizeToLF } from "../../edit/normalize";
 import { toolsPrompts } from "../../prompts/tools/rows";

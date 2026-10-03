@@ -237,7 +237,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/ai/src/cache/tracker.ts",
 	"packages/ai/src/dialect/fenced-thinking.ts",
 	"packages/ai/src/error/connect.ts",
-	"packages/ai/src/providers/grammar.ts",
 	"packages/ai/src/registry/api-key-login.ts",
 	"packages/ai/src/registry/baseten.ts",
 	"packages/ai/src/registry/llama-cpp.ts",

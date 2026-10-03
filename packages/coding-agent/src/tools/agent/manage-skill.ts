@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
-import { type } from "arktype";
 import {
 	deleteManagedSkill,
 	getManagedSkillsDir,

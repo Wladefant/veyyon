@@ -20,9 +20,9 @@
  */
 
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
 import { ARGOT_LOAD_TOOL, ARGOT_UNLOAD_TOOL, type ArgotSession } from "argot";
-import { type } from "arktype";
 import { type ArgotLoadResult, loadArgotFolder, unloadArgotFolder } from "../../argot-cache";
 import type { ToolSession } from "..";
 import { resolveToCwd } from "../core/path-utils";

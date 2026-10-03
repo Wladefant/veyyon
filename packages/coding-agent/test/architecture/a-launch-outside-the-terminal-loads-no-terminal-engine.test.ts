@@ -37,9 +37,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
-import { dynamicImportSpecifiersIn, moduleReach, resolveModuleSpecifier } from "@veyyon/utils/module-reach";
+import { moduleReach } from "@veyyon/utils/module-reach";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
-import { CACHE, PACKAGES, RESOLUTION, SRC } from "../helpers/module-reach-gate";
+import { CACHE, lazyToolModules, PACKAGES, RESOLUTION, SRC } from "../helpers/module-reach-gate";
 
 const ENGINE = path.join(PACKAGES, "..", "hosts", "terminal", "engine", "src");
 const MERMAID = path.join(PACKAGES, "utils", "src", "vendor", "mermaid-ascii");
@@ -79,30 +79,6 @@ const HEADLESS_ENTRIES = [
 	"modes/rpc/rpc-mode.ts",
 	"modes/acp/acp-mode.ts",
 ];
-
-/** The tool dispatch table and every per-domain manifest beside it. */
-function toolTables(): string[] {
-	const manifests = fs
-		.readdirSync(TOOLS, { withFileTypes: true })
-		.filter(entry => entry.isDirectory())
-		.map(entry => path.join(TOOLS, entry.name, "manifest.ts"))
-		.filter(file => fs.existsSync(file));
-	return [path.join(TOOLS, "index.ts"), ...manifests];
-}
-
-/** Every module a tool table loads through `await import(...)`, resolved, and the specifiers that resolve to nothing. */
-function lazyToolModules(): { modules: string[]; unresolved: string[] } {
-	const modules = new Set<string>();
-	const unresolved: string[] = [];
-	for (const table of toolTables()) {
-		for (const specifier of dynamicImportSpecifiersIn(fs.readFileSync(table, "utf8"))) {
-			const resolved = resolveModuleSpecifier(table, specifier, RESOLUTION);
-			if (resolved === undefined) unresolved.push(`${path.relative(SRC, table)}: ${specifier}`);
-			else modules.add(resolved);
-		}
-	}
-	return { modules: [...modules].sort(), unresolved };
-}
 
 describe("a launch outside the terminal loads no terminal engine", () => {
 	it("reads engine and renderer directories worth judging", () => {

@@ -7,7 +7,7 @@ import "./usage/defaults";
 // schema that has no `toJSONSchema` method of its own (`zod/mini`).
 import "./utils/schema/zod-core";
 
-export { type Type, type } from "arktype";
+export type { Type } from "arktype";
 export { type ZodType, z } from "zod/v4";
 export * from "./api-registry";
 export type * from "./auth-broker";
@@ -62,6 +62,7 @@ export * from "./utils/opencode-headers";
 export * from "./utils/openrouter-headers";
 export * from "./utils/retry";
 export * from "./utils/schema";
+export { type } from "./utils/schema/arktype";
 export * from "./utils/thinking-loop";
 export * from "./utils/tool-call-loop-guard";
 export * from "./utils/validation";

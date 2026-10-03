@@ -1,7 +1,7 @@
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import { armIndex, enterArm } from "../arm-model";
 import { resolveActiveBranchSession } from "../helpers";
