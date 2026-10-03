@@ -280,11 +280,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * modules, and the stream utilities only they import; the six leaves arrived.
  * `test/architecture/a-launch-loads-no-provider-client.test.ts` pins the provider modules a launch reaches.
  *
+ * 1582 to 1467: `main.ts` loads `cli/session-picker.ts` when `--resume` opens the picker instead of at
+ * the top of the file. The picker imported the terminal engine root and the session selector, so every
+ * launch evaluated the renderer, the editor, the markdown, mermaid and LaTeX renderers, the status line
+ * and the loop watchdog: 115 modules (1695 KiB), none of which a print, RPC or ACP launch draws with. The
+ * interactive mode imports the same stack behind its own `await import`.
+ * `test/architecture/a-launch-outside-the-terminal-loads-no-terminal-engine.test.ts` pins the cut.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1582;
+const LAUNCH_REACH_CEILING = 1467;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

@@ -14,14 +14,12 @@ import { withIcon } from "../../../../theme/icon-label";
 import { theme } from "../../../../theme/theme";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
+import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
-	computeModalDims,
-	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	pointerMotionEnabled,
 	renderModalShell,
-	sizingForArea,
 } from "../chrome/modal-shell";
 import { HookSelectorComponent } from "./hook-selector";
 import { routeModalChrome } from "./select-list-mouse-routing";

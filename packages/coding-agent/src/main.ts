@@ -51,7 +51,7 @@ import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-fla
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage, type InitialMessageResult } from "./cli/initial-message";
 import { type StartupPrologue, takeStartupPrologue } from "./cli/prologue-handoff";
-import { selectSession } from "./cli/session-picker";
+import type { selectSession } from "./cli/session-picker";
 import { applySessionWorkdir, applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease, type ReleaseInfo, runAutoUpdate } from "./cli/update-cli";
 import { missingCredentialsMessage } from "./config/missing-credentials";
@@ -1849,8 +1849,9 @@ async function pickResumedSession(launch: RootLaunch, cwd: string): Promise<Sess
 			process.exit(EXIT_OK);
 		}
 	}
+	const pick = launch.deps.selectSession ?? (await import("./cli/session-picker")).selectSession;
 	pauseStartupWatchdog();
-	const selected = await logger.time("selectSession", launch.deps.selectSession ?? selectSession, folderSessions, {
+	const selected = await logger.time("selectSession", pick, folderSessions, {
 		allSessions: preloadedAllSessions,
 	});
 	resumeStartupWatchdog();

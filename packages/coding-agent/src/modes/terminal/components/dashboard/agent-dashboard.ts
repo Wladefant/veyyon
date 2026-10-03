@@ -89,16 +89,13 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
+import { computeModalDims, MODAL_SIZING_LARGE, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
-	computeModalDims,
-	MODAL_SIZING_LARGE,
-	MODAL_SIZING_MEDIUM,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	planModalChrome,
 	renderModalShell,
-	sizingForArea,
 } from "../chrome/modal-shell";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 import { clampSelection, handleTabSwitchKey, selectionBand } from "../selectors/selector-helpers";
