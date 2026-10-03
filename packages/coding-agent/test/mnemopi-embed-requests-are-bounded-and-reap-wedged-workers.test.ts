@@ -32,6 +32,8 @@ function silentEmbedWorker(state: { spawns: number; terminated: number }): () =>
 				};
 			},
 			onError: () => () => {},
+			ref() {},
+			unref() {},
 			async terminate() {
 				state.terminated += 1;
 				handler = undefined;
@@ -111,6 +113,8 @@ describe("mnemopi embed requests are bounded and reap wedged workers", () => {
 						};
 					},
 					onError: () => () => {},
+					ref() {},
+					unref() {},
 					async terminate() {
 						state.terminated += 1;
 						handler = undefined;

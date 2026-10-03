@@ -410,7 +410,7 @@ describe("generated model policies", () => {
 		expect(models[4]?.applyPatchToolType).toBe("freeform");
 		expect(models[5]?.applyPatchToolType).toBeUndefined();
 	});
-	it("corrects GPT-5.6 luna/sol/terra Codex context windows without overwriting Daybreak aliases", () => {
+	it("floors GPT-5.6 luna/sol/terra Codex context windows to 1M without overwriting Daybreak aliases", () => {
 		const models: ModelSpec<Api>[] = [
 			createSpec({
 				id: "gpt-5.6-luna",
@@ -444,9 +444,9 @@ describe("generated model policies", () => {
 
 		applyGeneratedModelPolicies(models);
 
-		expect(models[0]?.contextWindow).toBe(372000);
-		expect(models[1]?.contextWindow).toBe(372000);
-		expect(models[2]?.contextWindow).toBe(372000);
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[1]?.contextWindow).toBe(1_000_000);
+		expect(models[2]?.contextWindow).toBe(1_000_000);
 		expect(models[3]?.contextWindow).toBe(1050000);
 		expect(models[4]?.contextWindow).toBe(272000);
 	});

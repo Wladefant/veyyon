@@ -186,6 +186,28 @@ describe("replace mode", () => {
 		).rejects.toThrow();
 		expect(await read(file)).toBe('print("x")\nprint("x")\n');
 	});
+
+	it("applies a single-replacement update with old_string and new_string", async () => {
+		const file = await seed();
+		await editTool("replace").execute("r-single", {
+			path: file,
+			old_string: '    print("Hi")',
+			new_string: '    print("Hello")',
+		});
+		expect(await read(file)).toBe(GREETED);
+	});
+
+	it("replaces all occurrences when replace_all is true", async () => {
+		const file = path.join(tmpDir, "dup-all.py");
+		await fs.writeFile(file, 'print("x")\nprint("x")\n');
+		await editTool("replace").execute("r-all", {
+			path: file,
+			old_string: 'print("x")',
+			new_string: 'print("y")',
+			replace_all: true,
+		});
+		expect(await read(file)).toBe('print("y")\nprint("y")\n');
+	});
 });
 
 describe("patch mode", () => {
