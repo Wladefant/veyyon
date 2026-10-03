@@ -4,9 +4,12 @@
  * THE DEFECT IT CLOSES. `interactive-mode.ts` built the `/mcp`, `/ssh`, `/tan` and `/todo` command
  * controllers in its constructor, `voice-controller.ts` imported the speech-to-text recorder, model
  * downloader and recogniser with the composer, and `tools/shell/debug.ts` imported the DAP protocol
- * client and session manager with the check that registers the tool. Every interactive session parsed
- * and compiled all of it before a command was typed, the push-to-talk key was pressed or a debugger
- * was launched.
+ * client and session manager with the check that registers the tool. The slash-command registry
+ * imported the `/secret`, `/mcp` and `/ssh` handlers and the plugin manager, the command controller
+ * imported the Hindsight mental-model helpers for `/memory mm`, the extension UI controller imported
+ * the autoresearch run screen and launcher, and the bundled `/review` command imported the GitHub
+ * client. Every interactive session parsed and compiled all of it before a command was typed, the
+ * push-to-talk key was pressed or a debugger was launched.
  *
  * THE CLASS. Machinery that only a command, a key binding or a tool action reaches is not in the
  * static import graph of the module that dispatches to it. Each member set is read from its directory
@@ -19,8 +22,10 @@
  * first load is asserted where it lives: `todo-command-controller.test.ts`,
  * `tan-command-controller.test.ts` and the `mcp-command-*` suites drive the controllers,
  * `a-recording-owns-the-cursor-and-gives-it-back.test.ts` drives push-to-talk through the lazily
- * loaded `STTController`, and `debug/dap-launch-failures.test.ts` drives `DebugTool.execute` through
- * the lazily loaded session manager.
+ * loaded `STTController`, `debug/dap-launch-failures.test.ts` drives `DebugTool.execute` through
+ * the lazily loaded session manager, `print-mode-secret-command.test.ts` drives `/secret` through
+ * the registry, and `extensibility/custom-commands/review.test.ts` drives
+ * `/review <pr>` through the lazily loaded GitHub client.
  */
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -76,6 +81,86 @@ describe("an interactive session's static import graph", () => {
 		// `models.ts` and `submit-trigger.ts` are the option tables the settings domain declares
 		// `stt.model` and `stt.submitTrigger` from.
 		expect(reachedIn(interactiveSession, "speech/stt")).toEqual(["models.ts", "submit-trigger.ts"]);
+	});
+
+	test("holds the slash-command helpers the session renders before any command", () => {
+		// `secret.ts`, `mcp.ts` and `ssh.ts` load on the first `/secret`, `/mcp` or `/ssh`.
+		expect(reachedIn(interactiveSession, "slash-commands/helpers")).toEqual([
+			"account-status.ts",
+			"active-oauth-account.ts",
+			"collab-qrcode.ts",
+			"context-report.ts",
+			"cpu-limit.ts",
+			"format.ts",
+			"parse.ts",
+			"reset-usage.ts",
+			"stats-dashboard.ts",
+			"todo.ts",
+			"usage-report.ts",
+		]);
+	});
+
+	test("holds the session's secret runtime and not the `/secret` command parser", () => {
+		// `secret-verbs.ts` is the completion menu; `expiry.ts` is the startup expiry warnings.
+		expect(reachedIn(interactiveSession, "secrets")).toEqual([
+			"atomic-path.ts",
+			"audit.ts",
+			"env-keywords.ts",
+			"env-keywords.yml",
+			"expiry.ts",
+			"index.ts",
+			"notices.ts",
+			"obfuscator.ts",
+			"placeholder.ts",
+			"policy.ts",
+			"regex.ts",
+			"request-leases.ts",
+			"secret-verbs.ts",
+			"session-runtime.ts",
+			"spend-marker.ts",
+			"vault-crypto.ts",
+			"vault.ts",
+		]);
+	});
+
+	test("holds the plugin loader and not the `/plugins` manager", () => {
+		expect(reachedIn(interactiveSession, "extensibility/plugins")).toEqual(["legacy-pi-compat.ts", "loader.ts"]);
+	});
+
+	test("holds the transcript readers memory recall shares and not the `/memory mm` helpers", () => {
+		expect(reachedIn(interactiveSession, "memory/hindsight")).toEqual(["content.ts", "transcript.ts"]);
+	});
+
+	test("holds the GitHub card renderers and not the `/review <pr>` client", () => {
+		expect(reachedIn(interactiveSession, "tools/web")).toEqual([
+			"fetch-view.ts",
+			"gh-fetch.ts",
+			"gh-format.ts",
+			"gh-url.ts",
+			"gh-view.ts",
+			"github-cache.ts",
+			"image-gen.ts",
+			"manifest.ts",
+			"read-url-target.ts",
+			"tts.ts",
+			"xai-http.ts",
+		]);
+	});
+
+	test("holds the dialogs a session opens unprompted and not the autoresearch screens", () => {
+		expect(reachedIn(interactiveSession, "modes/terminal/components/dialogs")).toEqual([
+			"ask-dialog.ts",
+			"btw-panel.ts",
+			"dialog-factory.ts",
+			"hook-editor.ts",
+			"hook-input.ts",
+			"launch-tip.ts",
+			"omfg-panel.ts",
+			"pause-screen.ts",
+			"plan-review-overlay.ts",
+			"plan-toc.ts",
+			"welcome.ts",
+		]);
 	});
 });
 

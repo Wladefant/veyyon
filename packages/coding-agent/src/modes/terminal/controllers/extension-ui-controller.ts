@@ -46,8 +46,6 @@ import {
 } from "../../../tools/agent/ask-option-labels";
 import { setTerminalTitle } from "../../../utils/title-generator";
 import { AskDialogComponent, boundPromptTitle } from "../components/dialogs/ask-dialog";
-import { LAUNCHER_OVERLAY, LauncherComponent } from "../components/dialogs/autoresearch-launcher";
-import { AutoresearchScreenComponent } from "../components/dialogs/autoresearch-screen";
 import { HookEditorComponent } from "../components/dialogs/hook-editor";
 import { HookInputComponent } from "../components/dialogs/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../components/selectors/hook-selector";
@@ -1264,6 +1262,8 @@ export const terminalAutoresearchUi: AutoresearchUiDelegate = {
 			ctx.ui.notify("Autoresearch screen requires an interactive terminal", "warning");
 			return;
 		}
+		// The run screen and its console load when a run is first shown, not with the controller.
+		const { AutoresearchScreenComponent } = await import("../components/dialogs/autoresearch-screen");
 		await terminal.custom<void>(
 			(tui, _theme, _keybindings, done) => {
 				options.onMount({ requestRender: () => tui.requestRender() });
@@ -1292,6 +1292,7 @@ export const terminalAutoresearchUi: AutoresearchUiDelegate = {
 			ctx.ui.notify("Autoswarm launcher requires an interactive terminal", "warning");
 			return;
 		}
+		const { LAUNCHER_OVERLAY, LauncherComponent } = await import("../components/dialogs/autoresearch-launcher");
 		await terminal.custom<void>(
 			(tui, _theme, _keybindings, done) => {
 				const component = new LauncherComponent({

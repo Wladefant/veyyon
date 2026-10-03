@@ -32,16 +32,8 @@ import { type LoadedCustomShare, loadCustomShare } from "../../../export/custom-
 import { shareSession } from "../../../export/share";
 import type { CompactOptions } from "../../../extensibility/extensions/types";
 import { buildMemoryPayloadForDisplay, resolveMemoryBackend } from "../../../memory/backend";
-import {
-	diffMentalModelContent,
-	type HindsightApi,
-	type HindsightSessionState,
-	loadHindsightConfig,
-	reloadMentalModelsForSession,
-	resolveSeedsForScope,
-	seedAlreadyExists,
-	summarizeMentalModel,
-} from "../../../memory/hindsight";
+import type * as hindsightModule from "../../../memory/hindsight";
+import type { HindsightApi, HindsightSessionState } from "../../../memory/hindsight";
 import { compactionActionLabel, resolveCompactionKind } from "../../../presentation/summary-builder";
 import { formatProviderName } from "../../../session/account-format";
 import type { AgentSession } from "../../../session/agent-session";
@@ -49,7 +41,6 @@ import type { AsyncJobSnapshotItem } from "../../../session/agent-session-types"
 import { computeContextBreakdown } from "../../../session/context-usage";
 import type { OutputSummary } from "../../../session/streaming-output";
 import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
-import { interactiveSecretPort, runSecretCommandForSurface } from "../../../slash-commands/helpers/secret";
 import { getMarkdownTheme } from "../../../theme/markdown-theme";
 import { getSymbolTheme, theme } from "../../../theme/theme";
 import { outputMeta } from "../../../tools/core/output-meta";
@@ -115,6 +106,13 @@ export type CommandControllerContext = Pick<
 	| "ui"
 	| "updateEditorBorderColor"
 >;
+
+let hindsight: Promise<typeof hindsightModule> | undefined;
+/** The Hindsight mental-model helpers load on the first `/memory mm` call, not with the controller. */
+function loadHindsight(): Promise<typeof hindsightModule> {
+	hindsight ??= import("../../../memory/hindsight");
+	return hindsight;
+}
 
 export class CommandController {
 	constructor(private readonly ctx: CommandControllerContext) {}
@@ -542,7 +540,10 @@ export class CommandController {
 	 * what is stored, and a chip exists to be trusted at a glance or not at all.
 	 */
 	showSecretList(): void {
-		void runSecretCommandForSurface("list", interactiveSecretPort(this.ctx))
+		void import("../../../slash-commands/helpers/secret")
+			.then(({ interactiveSecretPort, runSecretCommandForSurface }) =>
+				runSecretCommandForSurface("list", interactiveSecretPort(this.ctx)),
+			)
 			.then(outcome => this.ctx.showStatus(outcome.message))
 			.catch(error => this.ctx.showWarning(errorMessage(error)));
 	}
@@ -663,6 +664,7 @@ export class CommandController {
 	async #mmList(state: HindsightSessionState): Promise<void> {
 		const client: HindsightApi = state.client;
 		try {
+			const { summarizeMentalModel } = await loadHindsight();
 			const response = await client.listMentalModels(state.bankId, { detail: "metadata" });
 			const items = response.items ?? [];
 			if (items.length === 0) {
@@ -702,6 +704,7 @@ export class CommandController {
 
 	async #mmRefresh(state: HindsightSessionState, id: string | undefined): Promise<void> {
 		try {
+			const { reloadMentalModelsForSession } = await loadHindsight();
 			if (id) {
 				// Single-model refresh is explicit operator intent: bypass the
 				// auto-refresh filter so curated/manual models can still be
@@ -754,6 +757,7 @@ export class CommandController {
 
 	async #mmHistory(state: HindsightSessionState, id: string): Promise<void> {
 		try {
+			const { diffMentalModelContent } = await loadHindsight();
 			const [model, history] = await Promise.all([
 				state.client.getMentalModel(state.bankId, id, { detail: "content" }),
 				state.client.getMentalModelHistory(state.bankId, id),
@@ -787,6 +791,7 @@ export class CommandController {
 
 	async #mmSeed(state: HindsightSessionState): Promise<void> {
 		try {
+			const { loadHindsightConfig, resolveSeedsForScope, seedAlreadyExists } = await loadHindsight();
 			const config = loadHindsightConfig(this.ctx.settings);
 			const seeds = resolveSeedsForScope(
 				{
@@ -829,6 +834,7 @@ export class CommandController {
 	}
 
 	async #mmReload(state: HindsightSessionState): Promise<void> {
+		const { reloadMentalModelsForSession } = await loadHindsight();
 		const ok = await reloadMentalModelsForSession(state.session);
 		if (ok) {
 			this.ctx.showStatus("Mental-model cache reloaded.");
@@ -839,6 +845,7 @@ export class CommandController {
 
 	async #mmDelete(state: HindsightSessionState, id: string): Promise<void> {
 		try {
+			const { reloadMentalModelsForSession } = await loadHindsight();
 			const removed = await state.client.deleteMentalModel(state.bankId, id);
 			if (!removed) {
 				this.ctx.showError(`Mental model not found: ${id}`);

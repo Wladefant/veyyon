@@ -50,6 +50,7 @@ packages/coding-agent/src/eval/js/tool-bridge.ts
 packages/coding-agent/src/export/custom-share.ts
 packages/coding-agent/src/export/markit/converters/pdf/extract.ts
 packages/coding-agent/src/extensibility/coding-agent-api.ts
+packages/coding-agent/src/extensibility/custom-commands/bundled/review.ts
 packages/coding-agent/src/extensibility/custom-commands/loader.ts
 packages/coding-agent/src/extensibility/custom-tools/loader.ts
 packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts
@@ -60,6 +61,8 @@ packages/coding-agent/src/memory/mnemopi/backend.ts
 packages/coding-agent/src/memory/mnemopi/state.ts
 packages/coding-agent/src/memory/resolve.ts
 packages/coding-agent/src/modes/terminal/components/dialogs/plugin-settings.ts
+packages/coding-agent/src/modes/terminal/controllers/command-controller.ts
+packages/coding-agent/src/modes/terminal/controllers/extension-ui-controller.ts
 packages/coding-agent/src/modes/terminal/controllers/selector-controller.ts
 packages/coding-agent/src/modes/terminal/controllers/voice-controller.ts
 packages/coding-agent/src/modes/terminal/interactive-mode.ts
