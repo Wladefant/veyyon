@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Task execution results sanitize artifact paths (shortening home directories to ~ and bounding width) while preserving Patch, Branch, and Nested patch labels in TUI result rows, and include the unmerged branch name in merge-error summaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 24c1257fc9c0db04c9aeb2a1c5bfb4b3549e5a26, 17a2fda053d32c32d19328c6b8a1d7f58369d88d).
 
 ## [18.1.11] - 2026-09-05
 

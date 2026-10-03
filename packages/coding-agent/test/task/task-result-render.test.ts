@@ -339,4 +339,28 @@ describe("task live progress rendering", () => {
 		expect(first.at(-1)).toContain("… (streaming)");
 		expect(second.at(-1)).not.toBe(first.at(-1));
 	});
+
+	it("renders artifact rows with Patch, Branch, and Nested patch labels", () => {
+		const patchResult = makeSingleResult(0, {
+			patchPath: "/home/user/.veyyon/artifacts/iso.patch",
+			nestedPatchPaths: ["/home/user/.veyyon/artifacts/nested.patch"],
+		});
+		const patchText = renderResultText(
+			{ projectAgentsDir: null, results: [patchResult], totalDurationMs: 1 },
+			true,
+			uiTheme,
+		);
+		expect(patchText).toContain("Patch: ");
+		expect(patchText).toContain("Nested patch: ");
+
+		const branchResult = makeSingleResult(1, {
+			branchName: "task/feature-branch",
+		});
+		const branchText = renderResultText(
+			{ projectAgentsDir: null, results: [branchResult], totalDurationMs: 1 },
+			true,
+			uiTheme,
+		);
+		expect(branchText).toContain("Branch: task/feature-branch");
+	});
 });

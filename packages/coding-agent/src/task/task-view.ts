@@ -44,6 +44,7 @@ import {
 	type SubmitReviewDetails,
 } from "../tools/agent/review";
 import { jsonTreeViewLines } from "../tools/core/json-tree-view";
+import { TRUNCATE_LENGTHS } from "../tools/core/render-limits";
 import {
 	extractResultText,
 	formatDuration,
@@ -51,6 +52,7 @@ import {
 	previewLine,
 	replaceTabs,
 	shortenEmbeddedPaths,
+	shortenPath,
 	type ToolViewResult,
 	truncateToWidth,
 } from "../tools/core/render-utils";
@@ -958,10 +960,47 @@ function resultRows(
 
 	rows.push(...nestedRows);
 
+	// Artifact rows: paths shortened (home → `~`) and width-bounded like every
+	// other rendered line; the full paths live in the model-facing summary.
 	if (result.patchPath && !aborted && result.exitCode === 0) {
-		rows.push(detailRow(place, [span(`Patch: ${result.patchPath}`, "dim")]));
+		rows.push(
+			detailRow(place, [
+				span(
+					truncateToWidth(
+						`Patch: ${replaceTabs(shortenPath(result.patchPath))}`,
+						TRUNCATE_LENGTHS.CONTENT,
+					),
+					"dim",
+				),
+			]),
+		);
 	} else if (result.branchName && !aborted && result.exitCode === 0) {
-		rows.push(detailRow(place, [span(`Branch: ${result.branchName}`, "dim")]));
+		rows.push(
+			detailRow(place, [
+				span(
+					truncateToWidth(
+						`Branch: ${replaceTabs(sanitizeText(result.branchName))}`,
+						TRUNCATE_LENGTHS.CONTENT,
+					),
+					"dim",
+				),
+			]),
+		);
+	}
+	if (!aborted && result.exitCode === 0) {
+		for (const nestedPath of result.nestedPatchPaths ?? []) {
+			rows.push(
+				detailRow(place, [
+					span(
+						truncateToWidth(
+							`Nested patch: ${replaceTabs(shortenPath(nestedPath))}`,
+							TRUNCATE_LENGTHS.CONTENT,
+						),
+						"dim",
+					),
+				]),
+			);
+		}
 	}
 
 	if (result.error && (!success || mergeFailed) && (!aborted || result.error !== result.abortReason)) {
