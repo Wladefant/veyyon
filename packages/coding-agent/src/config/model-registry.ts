@@ -3215,6 +3215,10 @@ export class ModelRegistry {
 				...config.usage,
 				id: providerName as Provider,
 			});
+		} else {
+			// A re-registration is the provider's whole new declaration: an omitted `usage`
+			// retires the backend an earlier registration of the same name installed.
+			this.authStorage.removeUsageProvider(providerName as Provider);
 		}
 
 		if (config.apiKey) {

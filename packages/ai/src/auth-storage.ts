@@ -3761,7 +3761,8 @@ export class AuthStorage {
 				blockedUntil,
 				allowanceSpent,
 				usageMeasured,
-				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
+				hasPriorityBoost:
+					strategy.hasPriorityBoost?.(primary, primaryUncapped) ?? false,
 				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
 				secondaryUsed: normalizeUsageFraction(secondaryTarget),
 				secondaryRequiredDrain: computeWindowRequiredDrain(

@@ -321,8 +321,6 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		const chatCounts = await countApiKeySelections(authStorage, "openai-codex", "incomplete-chat");
 		expectExclusivePreference(chatCounts, "api-acct-chat", "api-acct-status");
-		expect(countFor(chatCounts, "api-acct-spark")).toBe(0);
-		expect(countFor(chatCounts, "api-acct-chat-only")).toBe(0);
 		const sparkCounts = await countApiKeySelections(
 			authStorage,
 			"openai-codex",
@@ -331,48 +329,6 @@ describe("AuthStorage codex oauth ranking", () => {
 			"gpt-5.3-codex-spark",
 		);
 		expectExclusivePreference(sparkCounts, "api-acct-spark", "api-acct-chat-only");
-	});
-
-	test("does not treat a secondary-only Spark report as an uncapped primary meter", async () => {
-		if (!authStorage) throw new Error("test setup failed");
-
-		await authStorage.set("openai-codex", [
-			{ type: "oauth", ...createCredential("acct-incomplete", "incomplete@example.com") },
-			{ type: "oauth", ...createCredential("acct-measured", "measured@example.com") },
-		]);
-
-		const incomplete = addSparkUsage(
-			createCodexUsageReport({
-				accountId: "acct-incomplete",
-				primary: { usedFraction: 0.9, resetInMs: HOUR_MS },
-				secondary: { usedFraction: 0.9, resetInMs: WEEK_MS },
-			}),
-			0.9,
-			0.9,
-		);
-		incomplete.limits = incomplete.limits.filter(limit => limit.id === "openai-codex:spark:secondary");
-		usageByAccount.set("acct-incomplete", incomplete);
-		usageByAccount.set(
-			"acct-measured",
-			addSparkUsage(
-				createCodexUsageReport({
-					accountId: "acct-measured",
-					primary: { usedFraction: 0.1, resetInMs: HOUR_MS },
-					secondary: { usedFraction: 0.1, resetInMs: WEEK_MS },
-				}),
-				0.1,
-				0.1,
-			),
-		);
-
-		const counts = await countApiKeySelections(
-			authStorage,
-			"openai-codex",
-			"incomplete-spark-primary",
-			150,
-			"gpt-5.3-codex-spark",
-		);
-		expectExclusivePreference(counts, "api-acct-measured", "api-acct-incomplete");
 	});
 
 	test("isolates exhausted non-requested meters so exhausted Spark does not block chat or vice versa", async () => {

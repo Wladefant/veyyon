@@ -44,6 +44,7 @@
 
 ### Fixed
 - Keyed usage report cache by effective usage provider and supported `cacheVersion` overrides ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 5cefe326dfa10b85a29a98575b3afb72a34381f5).
+- Encoded usage report cache keys as JSON arrays so a provider id or `cacheVersion` containing `:` cannot share a row with another provider; rows written under the old layout are no longer read ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Merged local and extension usage reports with broker usage when the broker lacks those providers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi f81261100acb73725cbb2e92f9641682d59fa8c8).
 - Prevented malformed function-call errors from bypassing replay-unsafe turn checks after earlier output or tool execution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9733d138).
 - Fixed the type errors in credential redaction of Codex replayed assistant items and outbound messages that turned the root tools type check red (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

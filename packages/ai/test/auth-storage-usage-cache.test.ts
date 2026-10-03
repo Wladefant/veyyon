@@ -23,8 +23,14 @@ import {
 	type StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
 import { AUTH_HTTP_CONCURRENCY_LIMIT } from "@veyyon/ai/auth-storage/http-concurrency";
+import { buildUsageReportCacheKey } from "@veyyon/ai/auth-storage/usage-requests";
 import type { UsageLimit, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import * as claudeUsage from "@veyyon/ai/usage/claude";
+
+/** The row AuthStorage persists for an anthropic OAuth credential, derived from the production key builder. */
+function usageReportRowKey(accountId: string, email: string): string {
+	return `usage_cache:${buildUsageReportCacheKey({ provider: "anthropic", credential: { type: "oauth", accountId, email } })}`;
+}
 
 function anthropicReports(reports: UsageReport[] | null): UsageReport[] {
 	return (reports ?? []).filter(r => r.provider === "anthropic");
@@ -667,7 +673,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		// is in the past (so `get()` misses) but the entry is still reachable via
 		// `getStale()`. Mirrors what the prior poll would have written.
 		const lastGood = makeReport("a@example.com");
-		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-1|email:a@example.com";
+		const cacheKey = usageReportRowKey("account-1", "a@example.com");
 		cache.set(cacheKey, {
 			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -745,7 +751,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		};
 
 		const lastGood = makeReport("b@example.com");
-		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-2|email:b@example.com";
+		const cacheKey = usageReportRowKey("account-2", "b@example.com");
 		cache.set(cacheKey, {
 			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
