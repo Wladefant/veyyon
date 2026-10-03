@@ -444,6 +444,7 @@ export interface OpenAICodexWebSocketDebugStats {
 export type CodexWebSocketSessionState = {
 	disableWebsocket: boolean;
 	lastRequest?: RequestBody;
+	/** Last completed response; an in-progress response cannot replace the retry baseline. */
 	lastResponseId?: string;
 	lastResponseItems?: InputItem[];
 	canAppend: boolean;
@@ -1067,13 +1068,6 @@ class CodexStreamRuntime {
 		if (typeof input === "string") finalizeCustomToolCallInputDone(entry.block, input);
 	}
 
-	handleResponseCreated(rawEvent: Record<string, unknown>): void {
-		const response = (rawEvent as { response?: { id?: string } }).response;
-		const state = this.websocketState;
-		if (state && this.transport === "websocket" && typeof response?.id === "string" && response.id.length > 0) {
-			state.lastResponseId = response.id;
-		}
-	}
 }
 
 interface CodexWhitespaceToolCallArgumentsDeltaState {
@@ -1094,6 +1088,7 @@ interface CodexStreamFailureContext {
 	output: AssistantMessage;
 	options: OpenAICodexResponsesOptions | undefined;
 	requestContext: CodexRequestContext;
+	runtime?: CodexStreamRuntime;
 	startTime: number;
 	firstTokenTime?: number;
 }
@@ -1913,10 +1908,32 @@ function isCodexStalePreviousResponseError(error: unknown): boolean {
 	);
 }
 
+const CODEX_APPEND_PRESERVING_REJECTION_CODES: Record<string, true> = {
+	rate_limit_exceeded: true,
+	slow_down: true,
+};
+
+function shouldPreserveCodexWebSocketAppendState(context: CodexStreamFailureContext, error: unknown): boolean {
+	if (!(error instanceof CodexProviderStreamError) || !error.code) return false;
+	const state = context.requestContext.websocketState;
+	return (
+		Object.hasOwn(CODEX_APPEND_PRESERVING_REJECTION_CODES, error.code.toLowerCase()) &&
+		context.runtime?.transport === "websocket" &&
+		state?.canAppend === true &&
+		state.lastRequest !== undefined &&
+		state.lastResponseId !== undefined &&
+		state.lastResponseItems !== undefined
+	);
+}
+
 async function handleCodexStreamFailure(context: CodexStreamFailureContext, error: unknown): Promise<AssistantMessage> {
 	const { output } = context;
 	if (context.requestContext.websocketState) {
-		resetCodexWebSocketChain(context.requestContext.websocketState);
+		if (shouldPreserveCodexWebSocketAppendState(context, error)) {
+			context.requestContext.websocketState.connection = undefined;
+		} else {
+			resetCodexWebSocketChain(context.requestContext.websocketState);
+		}
 	}
 	const result = await AIError.finalize(error, {
 		api: context.model.api,
@@ -2083,7 +2100,6 @@ class CodexStreamProcessor {
 				this.#handleOutputItemDone(rawEvent);
 				return;
 			case "response.created":
-				runtime.handleResponseCreated(rawEvent);
 				return;
 			case "response.completed":
 			case "response.done":
