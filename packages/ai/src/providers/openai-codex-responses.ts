@@ -1434,7 +1434,9 @@ function createCodexRequestContext(
 
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
 	const isolatedTransportState =
-		contextOptions.isolateCompactionTransport && options?.codexCompaction ? createCodexProviderSessionState() : undefined;
+		contextOptions.isolateCompactionTransport && options?.codexCompaction
+			? createCodexProviderSessionState()
+			: undefined;
 	const transportProviderSessionState = isolatedTransportState ?? providerSessionState;
 	const responsesLite = resolveCodexResponsesLite(model, options?.responsesLite);
 	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, apiKey, baseUrl, responsesLite);
@@ -1461,12 +1463,7 @@ function createCodexRequestContext(
 	const metadataSession = getOrCreateCodexMetadataSessionState(metadataSessionId, providerSessionState);
 	const compaction = options?.codexCompaction;
 	const requestKind: OpenAICodexRequestKind = compaction ? "compaction" : "turn";
-	const startNewTurn = resolveCodexStartNewTurn(
-		metadataSession,
-		requestKind,
-		compaction,
-		contextOptions.startNewTurn,
-	);
+	const startNewTurn = resolveCodexStartNewTurn(metadataSession, requestKind, compaction, contextOptions.startNewTurn);
 	if (websocketState && startNewTurn) {
 		// Codex scopes turn-state to one turn. Mid-turn compaction and tool-loop
 		// follow-ups preserve it; new user or compaction turns start without it.
@@ -1538,7 +1535,12 @@ async function buildCodexRequestContext(
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
 ): Promise<CodexRequestContext> {
-	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, getOpenAIPromptCacheKey(options));
+	const transformedBody = await buildTransformedCodexRequestBody(
+		model,
+		context,
+		options,
+		getOpenAIPromptCacheKey(options),
+	);
 	return createCodexRequestContext(model, transformedBody, options, {
 		isolateCompactionTransport: true,
 		startNewTurn: options?.codexCompaction ? undefined : !isCodexWithinTurnContinuation(context),

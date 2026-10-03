@@ -110,8 +110,8 @@ describe("collectCodexCompactionV2Events", () => {
 			},
 		];
 
-		await expect(collectCodexCompactionV2Events(createEventStream(events), controller.signal, sanitize)).rejects.toThrow(
-			/aborted before response\.completed/,
-		);
+		await expect(
+			collectCodexCompactionV2Events(createEventStream(events), controller.signal, sanitize),
+		).rejects.toThrow(/aborted before response\.completed/);
 	});
 });
