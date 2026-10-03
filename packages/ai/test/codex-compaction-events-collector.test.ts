@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { collectCodexCompactionV2Events } from "../src/providers/openai-codex/compaction-v2";
+import {
+	collectCodexCompactionV2Events,
+	collectCodexCompactionV2Stream,
+} from "../src/providers/openai-codex/compaction-v2";
 
 describe("collectCodexCompactionV2Events", () => {
 	const sanitize = (text: string) => text;
 
-	async function* createEventStream(
-		events: unknown[],
-	): AsyncGenerator<unknown> {
+	async function* createEventStream(events: unknown[]): AsyncGenerator<unknown> {
 		for (const event of events) {
 			yield event;
 		}
@@ -33,11 +34,7 @@ describe("collectCodexCompactionV2Events", () => {
 			},
 		];
 
-		const result = await collectCodexCompactionV2Events(
-			createEventStream(events),
-			undefined,
-			sanitize,
-		);
+		const result = await collectCodexCompactionV2Events(createEventStream(events), undefined, sanitize);
 		expect(result.compactionItem).toEqual({
 			type: "compaction",
 			encrypted_content: "enc_blob_12345",
@@ -64,13 +61,9 @@ describe("collectCodexCompactionV2Events", () => {
 			},
 		];
 
-		await expect(
-			collectCodexCompactionV2Events(
-				createEventStream(events),
-				undefined,
-				sanitize,
-			),
-		).rejects.toThrow(/expected exactly one/);
+		await expect(collectCodexCompactionV2Events(createEventStream(events), undefined, sanitize)).rejects.toThrow(
+			/expected exactly one/,
+		);
 	});
 
 	test("negative control: fails when compaction item has malformed encrypted_content", async () => {
@@ -88,13 +81,9 @@ describe("collectCodexCompactionV2Events", () => {
 			},
 		];
 
-		await expect(
-			collectCodexCompactionV2Events(
-				createEventStream(events),
-				undefined,
-				sanitize,
-			),
-		).rejects.toThrow(/with no encrypted_content/);
+		await expect(collectCodexCompactionV2Events(createEventStream(events), undefined, sanitize)).rejects.toThrow(
+			/with no encrypted_content/,
+		);
 	});
 
 	test("negative control: fails when stream ends without response.completed", async () => {
@@ -108,13 +97,9 @@ describe("collectCodexCompactionV2Events", () => {
 			},
 		];
 
-		await expect(
-			collectCodexCompactionV2Events(
-				createEventStream(events),
-				undefined,
-				sanitize,
-			),
-		).rejects.toThrow(/closed before response\.completed/);
+		await expect(collectCodexCompactionV2Events(createEventStream(events), undefined, sanitize)).rejects.toThrow(
+			/closed before response\.completed/,
+		);
 	});
 
 	test("aborts before response.completed when signal is aborted", async () => {
@@ -129,11 +114,7 @@ describe("collectCodexCompactionV2Events", () => {
 		];
 
 		await expect(
-			collectCodexCompactionV2Events(
-				createEventStream(events),
-				controller.signal,
-				sanitize,
-			),
+			collectCodexCompactionV2Events(createEventStream(events), controller.signal, sanitize),
 		).rejects.toThrow(/aborted before response\.completed/);
 	});
 
@@ -153,11 +134,7 @@ describe("collectCodexCompactionV2Events", () => {
 		];
 
 		await expect(
-			collectCodexCompactionV2Events(
-				createEventStream(events),
-				controller.signal,
-				sanitize,
-			),
+			collectCodexCompactionV2Events(createEventStream(events), controller.signal, sanitize),
 		).rejects.toThrow();
 	});
 
@@ -182,11 +159,7 @@ describe("collectCodexCompactionV2Events", () => {
 			},
 		};
 
-		const collectPromise = collectCodexCompactionV2Events(
-			blockedIterable,
-			controller.signal,
-			sanitize,
-		);
+		const collectPromise = collectCodexCompactionV2Events(blockedIterable, controller.signal, sanitize);
 
 		// Wait until next() has definitely been entered by the collector
 		await nextEntered.promise;
@@ -200,5 +173,200 @@ describe("collectCodexCompactionV2Events", () => {
 		} finally {
 			nextBlocked.resolve({ done: true, value: undefined });
 		}
+	});
+
+	test("pre-aborted completed input does not pull events from source", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		let nextCalled = false;
+		const iterable: AsyncIterable<unknown> = {
+			[Symbol.asyncIterator]() {
+				return {
+					async next() {
+						nextCalled = true;
+						return {
+							done: false,
+							value: {
+								type: "response.completed",
+								response: { usage: { input_tokens: 10, output_tokens: 20 } },
+							},
+						};
+					},
+					async return() {
+						return { done: true, value: undefined };
+					},
+				};
+			},
+		};
+
+		await expect(collectCodexCompactionV2Events(iterable, controller.signal, sanitize)).rejects.toThrow();
+		expect(nextCalled).toBe(false);
+	});
+
+	test("async generator provider-failure cleanup: cleans up source on response.failed", async () => {
+		let cleanupRan = false;
+		async function* failingStream(): AsyncGenerator<unknown> {
+			try {
+				yield {
+					type: "response.failed",
+					response: {
+						error: { message: "model overloaded", code: "rate_limit" },
+					},
+				};
+			} finally {
+				cleanupRan = true;
+			}
+		}
+
+		await expect(collectCodexCompactionV2Events(failingStream(), undefined, sanitize)).rejects.toThrow(
+			/model overloaded/,
+		);
+		expect(cleanupRan).toBe(true);
+	});
+
+	test("async generator provider-failure cleanup: cleans up source on response.incomplete and error", async () => {
+		let incompleteCleaned = false;
+		async function* incompleteStream(): AsyncGenerator<unknown> {
+			try {
+				yield {
+					type: "response.incomplete",
+					response: { error: { message: "token cutoff" } },
+				};
+			} finally {
+				incompleteCleaned = true;
+			}
+		}
+
+		await expect(collectCodexCompactionV2Events(incompleteStream(), undefined, sanitize)).rejects.toThrow(
+			/token cutoff/,
+		);
+		expect(incompleteCleaned).toBe(true);
+
+		let errorCleaned = false;
+		async function* errorStream(): AsyncGenerator<unknown> {
+			try {
+				yield {
+					type: "error",
+					error: { message: "socket reset" },
+				};
+			} finally {
+				errorCleaned = true;
+			}
+		}
+
+		await expect(collectCodexCompactionV2Events(errorStream(), undefined, sanitize)).rejects.toThrow(/socket reset/);
+		expect(errorCleaned).toBe(true);
+	});
+
+	function createFailingSseStream(eventPayload: string, onCancel?: () => void): ReadableStream<Uint8Array> {
+		const encoder = new TextEncoder();
+		return new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode(`data: ${eventPayload}\n\n`));
+			},
+			cancel() {
+				onCancel?.();
+			},
+		});
+	}
+
+	test("SSE stream cancels and unlocks reader on response.failed", async () => {
+		let cancelCalled = false;
+		const stream = createFailingSseStream(
+			JSON.stringify({
+				type: "response.failed",
+				response: { error: { message: "backend failure" } },
+			}),
+			() => {
+				cancelCalled = true;
+			},
+		);
+
+		await expect(collectCodexCompactionV2Stream(stream, undefined, sanitize)).rejects.toThrow(/backend failure/);
+		expect(stream.locked).toBe(false);
+		expect(cancelCalled).toBe(true);
+	});
+
+	test("SSE stream cancels and unlocks reader on response.incomplete", async () => {
+		let cancelCalled = false;
+		const stream = createFailingSseStream(
+			JSON.stringify({
+				type: "response.incomplete",
+				response: { error: { message: "truncated response" } },
+			}),
+			() => {
+				cancelCalled = true;
+			},
+		);
+
+		await expect(collectCodexCompactionV2Stream(stream, undefined, sanitize)).rejects.toThrow(/truncated response/);
+		expect(stream.locked).toBe(false);
+		expect(cancelCalled).toBe(true);
+	});
+
+	test("SSE stream cancels and unlocks reader on error event", async () => {
+		let cancelCalled = false;
+		const stream = createFailingSseStream(
+			JSON.stringify({
+				type: "error",
+				error: { message: "stream broke" },
+			}),
+			() => {
+				cancelCalled = true;
+			},
+		);
+
+		await expect(collectCodexCompactionV2Stream(stream, undefined, sanitize)).rejects.toThrow(/stream broke/);
+		expect(stream.locked).toBe(false);
+		expect(cancelCalled).toBe(true);
+	});
+
+	test("preserves primary provider failure error when iterator return() rejects", async () => {
+		let returnCalled = false;
+		const iterable: AsyncIterable<unknown> = {
+			[Symbol.asyncIterator]() {
+				return {
+					async next() {
+						return {
+							done: false,
+							value: {
+								type: "response.failed",
+								response: { error: { message: "primary backend failure" } },
+							},
+						};
+					},
+					async return() {
+						returnCalled = true;
+						throw new Error("secondary cleanup failure");
+					},
+				};
+			},
+		};
+
+		await expect(collectCodexCompactionV2Events(iterable, undefined, sanitize)).rejects.toThrow(
+			/primary backend failure/,
+		);
+		expect(returnCalled).toBe(true);
+	});
+	test("preserves primary transport error when iterator return() rejects", async () => {
+		let returnCalled = false;
+		const iterable: AsyncIterable<unknown> = {
+			[Symbol.asyncIterator]() {
+				return {
+					async next() {
+						throw new Error("primary transport network fault");
+					},
+					async return() {
+						returnCalled = true;
+						throw new Error("secondary cleanup failure");
+					},
+				};
+			},
+		};
+
+		await expect(collectCodexCompactionV2Events(iterable, undefined, sanitize)).rejects.toThrow(
+			/primary transport network fault/,
+		);
+		expect(returnCalled).toBe(true);
 	});
 });
