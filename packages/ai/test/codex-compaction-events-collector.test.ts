@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	collectCodexCompactionV2Events,
 	collectCodexCompactionV2Stream,
+	iterateWithAbort,
 } from "../src/providers/openai-codex/compaction-v2";
 
 describe("collectCodexCompactionV2Events", () => {
@@ -368,5 +369,245 @@ describe("collectCodexCompactionV2Events", () => {
 			/primary transport network fault/,
 		);
 		expect(returnCalled).toBe(true);
+	});
+	function createTrackedSignal(): {
+		signal: AbortSignal;
+		abort: (reason?: unknown) => void;
+		activeCount: () => number;
+		addCalls: () => number;
+		removeCalls: () => number;
+	} {
+		const controller = new AbortController();
+		let addCalls = 0;
+		let removeCalls = 0;
+		const active = new Set<EventListenerOrEventListenerObject>();
+		const origAdd = controller.signal.addEventListener.bind(controller.signal);
+		const origRemove = controller.signal.removeEventListener.bind(controller.signal);
+
+		controller.signal.addEventListener = (
+			type: string,
+			listener: EventListenerOrEventListenerObject,
+			options?: boolean | AddEventListenerOptions,
+		) => {
+			if (type === "abort") {
+				addCalls++;
+				active.add(listener);
+			}
+			return origAdd(type, listener, options);
+		};
+
+		controller.signal.removeEventListener = (
+			type: string,
+			listener: EventListenerOrEventListenerObject,
+			options?: boolean | EventListenerOptions,
+		) => {
+			if (type === "abort") {
+				removeCalls++;
+				active.delete(listener);
+			}
+			return origRemove(type, listener, options);
+		};
+
+		return {
+			signal: controller.signal,
+			abort: (reason?: unknown) => controller.abort(reason),
+			activeCount: () => active.size,
+			addCalls: () => addCalls,
+			removeCalls: () => removeCalls,
+		};
+	}
+
+	test("observable repeated ignored events: detaches abort listener after each successful read and after EOF", async () => {
+		const tracked = createTrackedSignal();
+		const ignoredCount = 20;
+
+		async function* generateEvents() {
+			for (let i = 0; i < ignoredCount; i++) {
+				yield { type: "response.content_part.added", part: { type: "text", text: `ignored_${i}` } };
+			}
+			yield {
+				type: "response.output_item.done",
+				item: { type: "compaction", encrypted_content: "enc_blob" },
+			};
+			yield {
+				type: "response.completed",
+				response: { usage: { input_tokens: 10, output_tokens: 20 } },
+			};
+		}
+
+		const iterator = iterateWithAbort(generateEvents(), tracked.signal)[Symbol.asyncIterator]();
+		expect(tracked.activeCount()).toBe(0);
+
+		const totalEvents = ignoredCount + 2;
+		for (let i = 0; i < totalEvents; i++) {
+			const nextResult = await iterator.next();
+			expect(nextResult.done).toBe(false);
+			// After each successful read, the abort listener must be detached
+			expect(tracked.activeCount()).toBe(0);
+			expect(tracked.addCalls()).toBe(i + 1);
+			expect(tracked.removeCalls()).toBe(i + 1);
+		}
+
+		const eofResult = await iterator.next();
+		expect(eofResult.done).toBe(true);
+		expect(tracked.activeCount()).toBe(0);
+		expect(tracked.addCalls()).toBe(totalEvents + 1);
+		expect(tracked.removeCalls()).toBe(totalEvents + 1);
+	});
+
+	test("collector detaches abort listener after each read during ignored events and at completion", async () => {
+		const tracked = createTrackedSignal();
+		const activeDuringEventProcessing: number[] = [];
+
+		async function* generateEvents() {
+			for (let i = 0; i < 15; i++) {
+				yield {
+					get type() {
+						activeDuringEventProcessing.push(tracked.activeCount());
+						return "response.content_part.added";
+					},
+				};
+			}
+			yield {
+				get type() {
+					activeDuringEventProcessing.push(tracked.activeCount());
+					return "response.output_item.done";
+				},
+				item: { type: "compaction", encrypted_content: "enc_blob" },
+			};
+			yield {
+				get type() {
+					activeDuringEventProcessing.push(tracked.activeCount());
+					return "response.completed";
+				},
+				response: { usage: { input_tokens: 10, output_tokens: 20 } },
+			};
+		}
+
+		const result = await collectCodexCompactionV2Events(generateEvents(), tracked.signal, sanitize);
+		expect(result.compactionItem.encrypted_content).toBe("enc_blob");
+		expect(activeDuringEventProcessing.length).toBeGreaterThanOrEqual(17);
+		for (const count of activeDuringEventProcessing) {
+			expect(count).toBe(0);
+		}
+		expect(tracked.activeCount()).toBe(0);
+		expect(tracked.addCalls()).toBe(tracked.removeCalls());
+	});
+
+	test("detaches abort listener after stream error and provider failures", async () => {
+		// Stream closed before response.completed
+		{
+			const tracked = createTrackedSignal();
+			async function* incompleteStream() {
+				for (let i = 0; i < 5; i++) {
+					yield { type: "response.content_part.added" };
+				}
+			}
+			await expect(collectCodexCompactionV2Events(incompleteStream(), tracked.signal, sanitize)).rejects.toThrow();
+			expect(tracked.activeCount()).toBe(0);
+			expect(tracked.addCalls()).toBe(tracked.removeCalls());
+		}
+
+		// Provider failure event (response.failed)
+		{
+			const tracked = createTrackedSignal();
+			async function* failedStream() {
+				yield { type: "response.content_part.added" };
+				yield {
+					type: "response.failed",
+					response: { error: { message: "backend fault" } },
+				};
+			}
+			await expect(collectCodexCompactionV2Events(failedStream(), tracked.signal, sanitize)).rejects.toThrow();
+			expect(tracked.activeCount()).toBe(0);
+			expect(tracked.addCalls()).toBe(tracked.removeCalls());
+		}
+
+		// Source iterator throws error
+		{
+			const tracked = createTrackedSignal();
+			async function* throwingStream() {
+				yield { type: "response.content_part.added" };
+				throw new Error("transport failure");
+			}
+			await expect(collectCodexCompactionV2Events(throwingStream(), tracked.signal, sanitize)).rejects.toThrow();
+			expect(tracked.activeCount()).toBe(0);
+			expect(tracked.addCalls()).toBe(tracked.removeCalls());
+		}
+	});
+
+	test("detaches abort listener after pending-read abort", async () => {
+		const tracked = createTrackedSignal();
+		let returnCalled = false;
+		const nextEntered = Promise.withResolvers<void>();
+		const nextBlocked = Promise.withResolvers<IteratorResult<unknown>>();
+
+		const blockedIterable: AsyncIterable<unknown> = {
+			[Symbol.asyncIterator]() {
+				return {
+					async next() {
+						nextEntered.resolve();
+						return nextBlocked.promise;
+					},
+					async return() {
+						returnCalled = true;
+						return { done: true, value: undefined };
+					},
+				};
+			},
+		};
+
+		const collectPromise = collectCodexCompactionV2Events(blockedIterable, tracked.signal, sanitize);
+		await nextEntered.promise;
+
+		// While read is blocked, exactly one listener is active
+		expect(tracked.activeCount()).toBe(1);
+
+		tracked.abort();
+		expect(returnCalled).toBe(true);
+		await expect(collectPromise).rejects.toThrow();
+
+		// After abort settlement, listener is detached
+		expect(tracked.activeCount()).toBe(0);
+		expect(tracked.addCalls()).toBe(tracked.removeCalls());
+
+		nextBlocked.resolve({ done: true, value: undefined });
+	});
+
+	test("forced-GC regression: bounded retained heap growth across 150k ignored events with AbortSignal", async () => {
+		const controller = new AbortController();
+		let heapAt50k = 0;
+		let heapAt150k = 0;
+
+		async function* generateEvents() {
+			for (let i = 0; i < 150_000; i++) {
+				if (i === 50_000) {
+					Bun.gc(true);
+					Bun.gc(true);
+					heapAt50k = process.memoryUsage().heapUsed;
+				}
+				yield { type: "response.created" };
+			}
+			Bun.gc(true);
+			Bun.gc(true);
+			heapAt150k = process.memoryUsage().heapUsed;
+			yield {
+				type: "response.output_item.done",
+				item: { type: "compaction", encrypted_content: "enc_blob" },
+			};
+			yield {
+				type: "response.completed",
+				response: { usage: { input_tokens: 10, output_tokens: 20 } },
+			};
+		}
+
+		const result = await collectCodexCompactionV2Events(generateEvents(), controller.signal, sanitize);
+		expect(result.compactionItem.encrypted_content).toBe("enc_blob");
+		expect(heapAt50k).toBeGreaterThan(0);
+		expect(heapAt150k).toBeGreaterThan(0);
+
+		const heapGrowth = heapAt150k - heapAt50k;
+		const maxAllowanceBytes = 4 * 1024 * 1024; // <4 MiB allowance
+		expect(heapGrowth).toBeLessThan(maxAllowanceBytes);
 	});
 });

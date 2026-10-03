@@ -149,7 +149,7 @@ export async function collectCodexCompactionV2Stream(
  * - cleanup every early exit including provider failures;
  * - preserve the primary error when cleanup rejects.
  */
-function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSignal | undefined): AsyncIterable<T> {
+export function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSignal | undefined): AsyncIterable<T> {
 	const iterator = events[Symbol.asyncIterator]();
 	let returnInitiated = false;
 	let completed = false;
@@ -171,38 +171,11 @@ function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSignal | und
 		}
 	};
 
-	let onAbort: (() => void) | undefined;
-	const abortResolver = signal ? Promise.withResolvers<never>() : undefined;
-
-	if (signal && abortResolver) {
-		onAbort = () => {
-			void initiateReturn(false);
-			if (isTimeoutError(signal.reason)) {
-				abortResolver.reject(
-					new Error(
-						"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
-					),
-				);
-			} else {
-				abortResolver.reject(cancellationError("Codex compaction was aborted before response.completed"));
-			}
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-	}
-
-	const cleanupAbortListener = () => {
-		if (signal && onAbort) {
-			signal.removeEventListener("abort", onAbort);
-			onAbort = undefined;
-		}
-	};
-
 	return {
 		[Symbol.asyncIterator]() {
 			return {
 				async next(): Promise<IteratorResult<T>> {
 					if (signal?.aborted) {
-						cleanupAbortListener();
 						void initiateReturn(false);
 						if (isTimeoutError(signal.reason)) {
 							throw new Error(
@@ -212,19 +185,49 @@ function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSignal | und
 						throw cancellationError("Codex compaction was aborted before response.completed");
 					}
 
+					if (!signal) {
+						try {
+							const result = await iterator.next();
+							if (result.done) {
+								completed = true;
+							}
+							return result;
+						} catch (err) {
+							try {
+								await initiateReturn(true);
+							} catch {
+								// Preserve primary error
+							}
+							throw err;
+						}
+					}
+
+					const { promise: abortPromise, reject: abortReject } = Promise.withResolvers<never>();
+					void abortPromise.catch(() => {});
+
+					const onAbort = () => {
+						void initiateReturn(false);
+						if (isTimeoutError(signal.reason)) {
+							abortReject(
+								new Error(
+									"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+								),
+							);
+						} else {
+							abortReject(cancellationError("Codex compaction was aborted before response.completed"));
+						}
+					};
+
+					signal.addEventListener("abort", onAbort, { once: true });
 					try {
 						const nextPromise = iterator.next();
-						const result = abortResolver
-							? await Promise.race([nextPromise, abortResolver.promise])
-							: await nextPromise;
+						const result = await Promise.race([nextPromise, abortPromise]);
 						if (result.done) {
 							completed = true;
-							cleanupAbortListener();
 						}
 						return result;
 					} catch (err) {
-						cleanupAbortListener();
-						if (!signal?.aborted) {
+						if (!signal.aborted) {
 							try {
 								await initiateReturn(true);
 							} catch {
@@ -232,11 +235,12 @@ function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSignal | und
 							}
 						}
 						throw err;
+					} finally {
+						signal.removeEventListener("abort", onAbort);
 					}
 				},
 
 				async return(value?: unknown): Promise<IteratorResult<T>> {
-					cleanupAbortListener();
 					if (!completed && !signal?.aborted) {
 						try {
 							await initiateReturn(true);
