@@ -24,9 +24,9 @@ import chalk from "chalk";
 import {
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
-	RETAINED_BACKEND_FILE,
 	isAbandonedEmptyReservation,
 	isolationClaimIsLive,
+	RETAINED_BACKEND_FILE,
 	readIsolationOwner,
 	readRetainedMountBackend,
 	tryWithIsolationLifecycleLock,
@@ -192,12 +192,16 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 						currentStat.found.ino !== 0 &&
 						(currentStat.found.dev !== initialStat.dev || currentStat.found.ino !== initialStat.ino)
 					) {
-						throw new Error(`Isolation directory instance changed during cleanup: ${target.path}; refusing removal`);
+						throw new Error(
+							`Isolation directory instance changed during cleanup: ${target.path}; refusing removal`,
+						);
 					}
 					if (initialToken !== undefined) {
 						const currentOwner = await readIsolationOwner(target.path).catch(() => null);
 						if (currentOwner?.token !== initialToken) {
-							throw new Error(`Isolation directory instance changed during cleanup: ${target.path}; refusing removal`);
+							throw new Error(
+								`Isolation directory instance changed during cleanup: ${target.path}; refusing removal`,
+							);
 						}
 					}
 

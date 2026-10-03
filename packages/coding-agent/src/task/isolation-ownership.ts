@@ -9,15 +9,16 @@ import * as path from "node:path";
 import * as natives from "@veyyon/natives";
 import {
 	errorMessage,
+	type FileLockOptions,
 	getProcessStartIdentity,
 	getWorktreesDir,
 	isEnoent,
 	isProcessInstanceAlive,
+	type TryFileLockResult,
 	tryWithFileLock,
 	withFileLock,
-	type FileLockOptions,
-	type TryFileLockResult,
 } from "@veyyon/utils";
+
 const { IsoBackendKind } = natives;
 
 /** Sidecar recording the mounting backend of a retained workspace. */
@@ -136,12 +137,7 @@ export async function readIsolationOwner(baseDir: string): Promise<IsolationOwne
 		throw new Error(`Invalid isolation owner record in ${baseDir}: record must be an object`);
 	}
 	const rec = decoded as Record<string, unknown>;
-	if (
-		typeof rec.pid !== "number" ||
-		!Number.isInteger(rec.pid) ||
-		rec.pid <= 0 ||
-		rec.pid > 0x7fffffff
-	) {
+	if (typeof rec.pid !== "number" || !Number.isInteger(rec.pid) || rec.pid <= 0 || rec.pid > 0x7fffffff) {
 		throw new Error(`Invalid isolation owner record in ${baseDir}: pid must be a positive integer <= 0x7fffffff`);
 	}
 	if (typeof rec.token !== "string" || rec.token.trim().length === 0) {
@@ -216,10 +212,7 @@ export async function isAbandonedEmptyReservation(baseDir: string): Promise<bool
 
 	try {
 		const entries = await fs.readdir(baseDir);
-		return (
-			entries.length > 0 &&
-			entries.every(e => e === ISOLATION_OWNER_FILE || e === ISOLATION_CLAIM_FILE)
-		);
+		return entries.length > 0 && entries.every(e => e === ISOLATION_OWNER_FILE || e === ISOLATION_CLAIM_FILE);
 	} catch {
 		return false;
 	}

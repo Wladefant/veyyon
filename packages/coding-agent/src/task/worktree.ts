@@ -6,14 +6,15 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, getWorktreeDir, isEnoent, logger, Snowflake } from "@veyyon/utils";
 import * as git from "../utils/git";
 import * as jj from "../utils/jj";
-import { claimIsolationSlot, releaseIsolationClaim } from "./isolation-ownership";
-import { mapWithConcurrencyLimit } from "./parallel";
 import {
+	claimIsolationSlot,
 	isAbandonedEmptyReservation,
+	releaseIsolationClaim,
 	tryWithIsolationLifecycleLock,
 	withIsolationLifecycleLock,
 	writeIsolationOwner,
 } from "./isolation-ownership";
+import { mapWithConcurrencyLimit } from "./parallel";
 
 const { IsoBackendKind } = natives;
 

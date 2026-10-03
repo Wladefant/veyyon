@@ -12,15 +12,15 @@ import * as path from "node:path";
 import * as natives from "@veyyon/natives";
 import * as utils from "@veyyon/utils";
 import { clearWorktrees } from "../../src/cli/worktree-cli";
-import { retainIsolationWorkspace } from "../../src/task/isolation-runner";
 import {
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
 	type IsolationOwnerRecord,
-	readIsolationOwner,
 	RETAINED_BACKEND_FILE,
+	readIsolationOwner,
 	writeRetainedBackend,
 } from "../../src/task/isolation-ownership";
+import { retainIsolationWorkspace } from "../../src/task/isolation-runner";
 import { ensureIsolation, getRepoRoot, getTaskIsolationSegment } from "../../src/task/worktree";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
 
