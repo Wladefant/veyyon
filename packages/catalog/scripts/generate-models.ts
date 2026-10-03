@@ -23,6 +23,14 @@ import { createModelManager } from "../src/model-manager";
 import { hasBillableCost } from "../src/models";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import { toModelSpec } from "../src/provider-models/bundled-references";
+import {
+	CODEX_IMAGE_MODEL,
+	codexContextWindowFloor,
+	codexCostPatch,
+	codexLongContextCost,
+	codexServiceTierCost,
+	resolveCodexMaxContextWindow,
+} from "../src/provider-models/codex-subscription";
 import { COMMAND_CODE_STATIC_MODELS } from "../src/provider-models/command-code";
 import {
 	allowsUnauthenticatedCatalogDiscovery,
@@ -33,18 +41,23 @@ import {
 import { PROVIDER_DESCRIPTORS, PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import { filterModelsDevCatalogRows } from "../src/provider-models/models-dev-policies";
 import {
+	ABLITERATION_STATIC_MODELS,
 	ANTHROPIC_CURATED_FALLBACK_MODELS,
 	buildFireworksFastSeed,
 	buildXaiOAuthStaticSeed,
 	clampFireworksKimiMaxTokens,
 	clampKimiK27CodeMaxTokens,
+	GMI_CLOUD_STATIC_MODELS,
 	isFireworksKimiK2ModelId,
 	isKimiK27CodeModelId,
+	META_MUSE_STATIC_MODELS,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
+	MUSE_CODE_STATIC_MODELS,
 	mapModelsDevToModels,
 	NOUS_RESEARCH_BUNDLED_MODELS,
 	projectOpenAIProReasoningAliases,
 	SAKANA_FUGU_STATIC_MODELS,
+	STEPFUN_STATIC_MODELS,
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
 import { type OpenAICodexAccount, openaiCodexModelManagerOptions } from "../src/provider-models/special";
@@ -337,6 +350,34 @@ function applyCodexPricingFallback(models: readonly ModelSpec[]): ModelSpec[] {
 			cost: { ...openAICost },
 		};
 	});
+}
+
+/**
+ * Fill what `/codex/models` leaves out of the subscription rows (see
+ * `codex-subscription.ts`): the 1M floor, the extended-context ceiling, tier
+ * multipliers, the >272K rate card and the curated prices, then seed the hosted
+ * image tool. A live discovery value that is already higher keeps winning.
+ */
+function applyCodexSubscriptionFields(models: readonly ModelSpec[]): ModelSpec[] {
+	const patched = models.map(model => {
+		if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses" || model.kind === "image") {
+			return model;
+		}
+		const floor = codexContextWindowFloor(model.id);
+		const maxContextWindow = resolveCodexMaxContextWindow(model.id, model.maxContextWindow);
+		const longContextCost = codexLongContextCost(model.id);
+		const costPatch = codexCostPatch(model.id);
+		return {
+			...model,
+			...(floor !== undefined ? { contextWindow: Math.max(model.contextWindow ?? 0, floor) } : {}),
+			...(maxContextWindow !== undefined ? { maxContextWindow } : {}),
+			serviceTierCost: codexServiceTierCost(model.id),
+			...(longContextCost !== undefined ? { longContextCost } : {}),
+			...(costPatch !== undefined ? { cost: { ...costPatch } } : {}),
+		};
+	});
+	if (patched.some(model => model.provider === "openai-codex" && model.id === CODEX_IMAGE_MODEL.id)) return patched;
+	return [...patched, CODEX_IMAGE_MODEL];
 }
 
 /**
@@ -675,6 +716,24 @@ async function generateModels() {
 	if (!authoritativeCatalogProviders.has("command-code")) {
 		allModels.push(...COMMAND_CODE_STATIC_MODELS);
 	}
+	if (!authoritativeCatalogProviders.has("abliteration")) {
+		allModels.push(...ABLITERATION_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("meta")) {
+		allModels.push(...META_MUSE_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("muse-code")) {
+		allModels.push(...MUSE_CODE_STATIC_MODELS);
+	}
+	// Seed the GMI Cloud default model so a fresh install (and a regen without a
+	// `GMI_API_KEY`) still resolves the descriptor's `defaultModel` synchronously
+	// at boot. If live `/v1/models` discovery succeeds, it is authoritative.
+	if (!authoritativeCatalogProviders.has("gmi-cloud")) {
+		allModels.push(...GMI_CLOUD_STATIC_MODELS);
+	}
+	if (!authoritativeCatalogProviders.has("stepfun")) {
+		allModels.push(...STEPFUN_STATIC_MODELS);
+	}
 	// Seed the GitLab Duo Agent fallback model so a fresh install (no credentialed
 	// dynamic discovery/cache yet) still surfaces the provider's default model in the
 	// built-in catalog. The descriptor deliberately has NO `catalogDiscovery`, so it is
@@ -766,6 +825,7 @@ async function generateModels() {
 	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	allModels = applyPremiumMultiplierOverrides(allModels);
 	allModels = applyCodexPricingFallback(allModels);
+	allModels = applyCodexSubscriptionFields(allModels);
 	allModels = applyKimiMaxTokensCap(allModels);
 	allModels = applyFireworksDeepSeekReasoningShape(allModels);
 	allModels = filterModelsDevCatalogRows(allModels);

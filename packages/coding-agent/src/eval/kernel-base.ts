@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, Snowflake } from "@veyyon/utils";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
+import { type BackendProbeOptions, DEFAULT_PROBE_TIMEOUT_MS } from "./probe";
 import { type KernelDisplayOutput, renderKernelDisplay } from "./py/display";
 import { hostHasInheritableConsole, shouldDetachKernel, shouldHideKernelWindow } from "./py/spawn-options";
 
@@ -242,7 +243,11 @@ export interface KernelAvailabilityCheckerOptions<TRuntime> {
 	filterEnv: (env: Record<string, string | undefined>) => Record<string, string | undefined>;
 	enumerateRuntimes: (cwd: string, baseEnv: Record<string, string | undefined>, interpreter?: string) => TRuntime[];
 	missingReason: string;
-	probeRuntime: (runtime: TRuntime, cwd: string) => Promise<{ exitCode: number }>;
+	probeRuntime: (
+		runtime: TRuntime,
+		cwd: string,
+		probeOptions?: BackendProbeOptions,
+	) => Promise<{ exitCode: number | null; timedOut?: boolean; aborted?: boolean }>;
 	getExecutablePath: (runtime: TRuntime) => string;
 	includeFailedExecutablePath?: boolean;
 	formatFailureReason: (failures: string[], runtimes: TRuntime[]) => string;
@@ -250,34 +255,53 @@ export interface KernelAvailabilityCheckerOptions<TRuntime> {
 
 export function createKernelAvailabilityChecker<TRuntime>(
 	options: KernelAvailabilityCheckerOptions<TRuntime>,
-): (cwd: string, interpreter?: string) => Promise<KernelAvailabilityResult<TRuntime>> {
+): (
+	cwd: string,
+	interpreter?: string,
+	probeOptions?: BackendProbeOptions,
+) => Promise<KernelAvailabilityResult<TRuntime>> {
 	const cache = new Map<string, Promise<KernelAvailabilityResult<TRuntime>>>();
-	return async (cwd: string, interpreter?: string): Promise<KernelAvailabilityResult<TRuntime>> => {
-		if (isBunTestRuntime() || $flag(options.skipFlag)) {
-			return { ok: true };
-		}
+	return async (cwd, interpreter, probeOptions): Promise<KernelAvailabilityResult<TRuntime>> => {
+		if (probeOptions?.signal?.aborted) return { ok: false, reason: "Runtime availability probe was cancelled." };
+		if (!probeOptions?.forceProbe && (isBunTestRuntime() || $flag(options.skipFlag))) return { ok: true };
 		const resolvedCwd = path.resolve(cwd);
 		const key = `${resolvedCwd}\0${interpreter ?? ""}`;
-		const cached = cache.get(key);
+		// A caller's cancellation or deadline must not own another caller's probe.
+		const shareProbe = !probeOptions?.signal && probeOptions?.timeoutMs === undefined && !probeOptions?.forceProbe;
+		const cached = shareProbe ? cache.get(key) : undefined;
 		if (cached) return await cached;
+		const budget = Math.min(
+			probeOptions?.timeoutMs && probeOptions.timeoutMs > 0 ? probeOptions.timeoutMs : DEFAULT_PROBE_TIMEOUT_MS,
+			DEFAULT_PROBE_TIMEOUT_MS,
+		);
+		const deadline = Date.now() + budget;
 		const probePromise = (async (): Promise<KernelAvailabilityResult<TRuntime>> => {
 			try {
 				const settings = await Settings.init();
 				const { env } = settings.getShellConfig();
 				const baseEnv = options.filterEnv(env);
 				const runtimes = options.enumerateRuntimes(resolvedCwd, baseEnv, interpreter);
-				if (runtimes.length === 0) {
-					return { ok: false, reason: options.missingReason };
-				}
+				if (runtimes.length === 0) return { ok: false, reason: options.missingReason };
 				const failures: string[] = [];
 				for (const runtime of runtimes) {
 					const execPath = options.getExecutablePath(runtime);
 					try {
-						const probe = await options.probeRuntime(runtime, resolvedCwd);
-						if (probe.exitCode === 0) {
-							return { ok: true, executablePath: execPath, runtime };
+						if (probeOptions?.signal?.aborted)
+							return { ok: false, reason: "Runtime availability probe was cancelled." };
+						const remaining = deadline - Date.now();
+						if (remaining <= 0) {
+							failures.push(`${execPath} (probe timed out)`);
+							break;
 						}
-						failures.push(`${execPath} (exit code ${probe.exitCode})`);
+						const probe = await options.probeRuntime(runtime, resolvedCwd, {
+							...probeOptions,
+							timeoutMs: remaining,
+						});
+						if (probe.aborted) return { ok: false, reason: "Runtime availability probe was cancelled." };
+						if (probe.exitCode === 0) return { ok: true, executablePath: execPath, runtime };
+						failures.push(
+							probe.timedOut ? `${execPath} (probe timed out)` : `${execPath} (exit code ${probe.exitCode})`,
+						);
 					} catch (err) {
 						failures.push(`${execPath} (${errorMessage(err)})`);
 					}
@@ -291,11 +315,9 @@ export function createKernelAvailabilityChecker<TRuntime>(
 				return { ok: false, reason: errorMessage(err) };
 			}
 		})();
-		cache.set(key, probePromise);
+		if (shareProbe) cache.set(key, probePromise);
 		const result = await probePromise;
-		if (!result.ok && cache.get(key) === probePromise) {
-			cache.delete(key);
-		}
+		if (!result.ok && cache.get(key) === probePromise) cache.delete(key);
 		return result;
 	};
 }
@@ -317,9 +339,11 @@ export function createLanguageAvailabilityChecker<TRuntime, TKey extends string>
 ): (
 	cwd: string,
 	interpreter?: string,
+	probeOptions?: BackendProbeOptions,
 ) => Promise<{ ok: boolean; reason?: string; runtime?: TRuntime } & { [K in TKey]?: string }> {
 	const checker = createKernelAvailabilityChecker<TRuntime>(options);
-	return async (cwd, interpreter) => adaptAvailabilityResult(await checker(cwd, interpreter), pathKey);
+	return async (cwd, interpreter, probeOptions) =>
+		adaptAvailabilityResult(await checker(cwd, interpreter, probeOptions), pathKey);
 }
 
 export function assembleSpawnEnv(
@@ -898,7 +922,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
-					const text = decoder.decode(value);
+					const text = decoder.decode(value, { stream: true });
 					if (text.trim()) {
 						logger.warn(`${this.#options.languageName} runner stderr`, { text });
 					}

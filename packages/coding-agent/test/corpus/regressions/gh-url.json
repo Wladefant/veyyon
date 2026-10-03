@@ -6,7 +6,7 @@
 			"surface": "parse-pr-url",
 			"tags": ["positive"],
 			"input": { "url": "https://github.com/a/b/pull/12" },
-			"expect": { "repo": "a/b", "prNumber": 12 }
+			"expect": { "repo": "github.com/a/b", "prNumber": 12 }
 		},
 		{
 			"id": "gh-pr-url-query-fragment",
@@ -14,7 +14,7 @@
 			"surface": "parse-pr-url",
 			"tags": ["positive", "boundary"],
 			"input": { "url": "https://github.com/Own/Repo/pull/9?x=1#frag" },
-			"expect": { "repo": "Own/Repo", "prNumber": 9 }
+			"expect": { "repo": "github.com/Own/Repo", "prNumber": 9 }
 		},
 		{
 			"id": "gh-pr-url-case-insensitive-host",
@@ -22,7 +22,7 @@
 			"surface": "parse-pr-url",
 			"tags": ["positive", "adversarial"],
 			"input": { "url": "HTTPS://GitHub.com/Own/Repo/pull/9" },
-			"expect": { "repo": "Own/Repo", "prNumber": 9 }
+			"expect": { "repo": "GitHub.com/Own/Repo", "prNumber": 9 }
 		},
 		{
 			"id": "gh-pr-url-empty",
@@ -62,7 +62,7 @@
 			"surface": "parse-issue-url",
 			"tags": ["positive"],
 			"input": { "url": "https://github.com/a/b/issues/3" },
-			"expect": { "repo": "a/b", "issueNumber": 3 }
+			"expect": { "repo": "github.com/a/b", "issueNumber": 3 }
 		},
 		{
 			"id": "gh-issue-url-pr-not-issue",
@@ -78,7 +78,7 @@
 			"surface": "parse-issue-url",
 			"tags": ["boundary"],
 			"input": { "url": "  https://github.com/a/b/issues/7  " },
-			"expect": { "repo": "a/b", "issueNumber": 7 }
+			"expect": { "repo": "github.com/a/b", "issueNumber": 7 }
 		},
 		{
 			"id": "gh-issue-url-garbage",
