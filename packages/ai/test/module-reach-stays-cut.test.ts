@@ -176,8 +176,12 @@ const AUTH_STORAGE_CEILING = 227;
  * 83 since 2026-09-29, measured: `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`.
  * `catalog/build.ts`, already in this closure, returns each model's resolved compat record through it,
  * so it adds one module and no subtree.
+ *
+ * 84 since 2026-10-01, measured: `catalog/catalog-spans.ts`, the zero-import leaf that indexes each
+ * provider's byte range in `models.json`. `catalog/models.ts`, already in this closure, parses one
+ * provider's span through it instead of the whole document, so it adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 83;
+const ENV_API_KEY_CEILING = 84;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;
