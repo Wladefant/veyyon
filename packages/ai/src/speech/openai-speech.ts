@@ -10,7 +10,9 @@ export async function synthesizeOpenAiSpeech(
 	options: SpeechOptions,
 ): Promise<SpeechResult> {
 	if (request.sampleRate !== undefined) {
-		throw new AIError.ValidationError("openai-speech does not support sampleRate");
+		throw new AIError.ValidationError(
+			"openai-speech does not support sampleRate",
+		);
 	}
 	if (request.bitRate !== undefined) {
 		throw new AIError.ValidationError("openai-speech does not support bitRate");
@@ -21,7 +23,15 @@ export async function synthesizeOpenAiSpeech(
 		voice: request.voice ?? DEFAULT_OPENAI_VOICE,
 		response_format: request.format,
 		...(request.speed !== undefined ? { speed: request.speed } : {}),
-		...(request.instructions !== undefined ? { instructions: request.instructions } : {}),
+		...(request.instructions !== undefined
+			? { instructions: request.instructions }
+			: {}),
 	};
-	return postSpeechRequest(model, "/audio/speech", payload, request.format, options);
+	return postSpeechRequest(
+		model,
+		"/audio/speech",
+		payload,
+		request.format,
+		options,
+	);
 }

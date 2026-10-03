@@ -30,6 +30,8 @@ export async function synthesizeSpeech(
 		case "openai-speech":
 			return synthesizeOpenAiSpeech(model, request, options);
 		default:
-			throw new AIError.ConfigurationError(`Unsupported speech API: ${model.api}`);
+			throw new AIError.ConfigurationError(
+				`Unsupported speech API: ${model.api}`,
+			);
 	}
 }

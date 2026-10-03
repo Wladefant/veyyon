@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import type { Api, FetchImpl, Model } from "@veyyon/catalog/types";
 import { ConfigurationError, ValidationError } from "../src/error";
-import { DEFAULT_XAI_SAMPLE_RATE, synthesizeOpenAiSpeech, synthesizeSpeech, synthesizeXaiSpeech } from "../src/speech";
+import {
+	DEFAULT_XAI_SAMPLE_RATE,
+	synthesizeOpenAiSpeech,
+	synthesizeSpeech,
+	synthesizeXaiSpeech,
+} from "../src/speech";
 
 const openaiModel = {
 	id: "tts-1",
@@ -49,10 +54,18 @@ describe("speech adapters and router", () => {
 		expect(captured?.body.voice).toBe("shimmer");
 
 		await expect(
-			synthesizeOpenAiSpeech(openaiModel, { text: "err", format: "mp3", sampleRate: 16000 }, { apiKey: "k" }),
+			synthesizeOpenAiSpeech(
+				openaiModel,
+				{ text: "err", format: "mp3", sampleRate: 16000 },
+				{ apiKey: "k" },
+			),
 		).rejects.toThrow(ValidationError);
 		await expect(
-			synthesizeOpenAiSpeech(openaiModel, { text: "err", format: "mp3", bitRate: 64000 }, { apiKey: "k" }),
+			synthesizeOpenAiSpeech(
+				openaiModel,
+				{ text: "err", format: "mp3", bitRate: 64000 },
+				{ apiKey: "k" },
+			),
 		).rejects.toThrow(ValidationError);
 	});
 
@@ -76,24 +89,46 @@ describe("speech adapters and router", () => {
 			output_format: { codec: "wav", sample_rate: 48000 },
 		});
 
-		await expect(synthesizeXaiSpeech(xaiModel, { text: "t", format: "flac" }, { apiKey: "k" })).rejects.toThrow(
-			ValidationError,
-		);
 		await expect(
-			synthesizeXaiSpeech(xaiModel, { text: "t", format: "mp3", speed: 1.5 }, { apiKey: "k" }),
+			synthesizeXaiSpeech(
+				xaiModel,
+				{ text: "t", format: "flac" },
+				{ apiKey: "k" },
+			),
 		).rejects.toThrow(ValidationError);
 		await expect(
-			synthesizeXaiSpeech(xaiModel, { text: "t", format: "mp3", instructions: "whisper" }, { apiKey: "k" }),
+			synthesizeXaiSpeech(
+				xaiModel,
+				{ text: "t", format: "mp3", speed: 1.5 },
+				{ apiKey: "k" },
+			),
 		).rejects.toThrow(ValidationError);
 		await expect(
-			synthesizeXaiSpeech(xaiModel, { text: "a".repeat(15001), format: "mp3" }, { apiKey: "k" }),
+			synthesizeXaiSpeech(
+				xaiModel,
+				{ text: "t", format: "mp3", instructions: "whisper" },
+				{ apiKey: "k" },
+			),
+		).rejects.toThrow(ValidationError);
+		await expect(
+			synthesizeXaiSpeech(
+				xaiModel,
+				{ text: "a".repeat(15001), format: "mp3" },
+				{ apiKey: "k" },
+			),
 		).rejects.toThrow(ValidationError);
 	});
 
 	it("synthesizeSpeech routes to provider adapter with distinct wire endpoints and payloads", async () => {
-		const capturedRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+		const capturedRequests: Array<{
+			url: string;
+			body: Record<string, unknown>;
+		}> = [];
 		const fetchImpl: FetchImpl = async (input, init) => {
-			capturedRequests.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+			capturedRequests.push({
+				url: String(input),
+				body: JSON.parse(String(init?.body)),
+			});
 			return new Response(new Uint8Array([5, 6]), { status: 200 });
 		};
 
@@ -112,7 +147,9 @@ describe("speech adapters and router", () => {
 		expect(xaiRes.audio).toEqual(new Uint8Array([5, 6]));
 
 		expect(capturedRequests).toHaveLength(2);
-		expect(capturedRequests[0]?.url).toBe("https://api.openai.com/v1/audio/speech");
+		expect(capturedRequests[0]?.url).toBe(
+			"https://api.openai.com/v1/audio/speech",
+		);
 		expect(capturedRequests[0]?.body).toEqual({
 			model: "tts-1",
 			input: "Route test",
@@ -135,7 +172,11 @@ describe("speech adapters and router", () => {
 
 		const unsupported = { ...openaiModel, api: "anthropic-messages" as Api };
 		await expect(
-			synthesizeSpeech(unsupported, { text: "Fail", format: "mp3" }, { apiKey: "k", fetch: fetchImpl }),
+			synthesizeSpeech(
+				unsupported,
+				{ text: "Fail", format: "mp3" },
+				{ apiKey: "k", fetch: fetchImpl },
+			),
 		).rejects.toThrow(ConfigurationError);
 	});
 });
