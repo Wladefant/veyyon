@@ -9,9 +9,11 @@ import { getProviderDetails, type ProviderDetails } from "@veyyon/ai/provider-de
 import { resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
-import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
+
 type SessionManagerStateSnapshot = Parameters<SessionManager["restoreState"]>[0];
+
 import { Loader, Markdown, type OverlayHandle, Spacer, Text } from "@veyyon/tui";
 import {
 	APP_NAME,
@@ -1148,6 +1150,19 @@ export class CommandController {
 	}
 
 	async #restoreAfterMoveFailure(previousState: SessionManagerStateSnapshot, error?: unknown): Promise<void> {
+		// moveTo already relocated the journal and artifacts on disk. Restoring the in-memory
+		// snapshot alone would claim the old path while the files sit at the new one, so the
+		// physical move is reversed first. If that fails the manager keeps describing the new
+		// location, which is where the files really are.
+		try {
+			await this.ctx.sessionManager.moveTo(previousState.cwd, previousState.sessionDir);
+		} catch (reverseError) {
+			logger.error("Failed to move the session back after a failed directory change", { error: reverseError });
+			this.ctx.showError(
+				`Move failed while applying directory change: ${errorMessage(error)}. The session could not be moved back and stays at ${this.ctx.sessionManager.getCwd()}: ${errorMessage(reverseError)}`,
+			);
+			return;
+		}
 		this.ctx.sessionManager.restoreState(previousState);
 		try {
 			await this.ctx.applyCwdChange(previousState.cwd);
