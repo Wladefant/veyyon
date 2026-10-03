@@ -3522,14 +3522,21 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Compose and paint only the viewport for one resize fast-path frame, as an
-	 * alternate-screen per-row overwrite: the normal buffer may reflow full-width
-	 * rows on a width change before the app can repaint, and on the alternate
-	 * screen those transient resizes truncate instead of pushing wrapped
-	 * fragments into native scrollback. State-isolated: advances no
-	 * commit/window/diff field and calls neither `#commit` nor `#emitFullPaint`,
-	 * so the settle full paint reconciles against the pre-drag screen state and
-	 * rebuilds normal-screen history once.
+	 * Emit a throwaway viewport repaint for the resize fast path as a per-row
+	 * overwrite. A width change can make the terminal's normal buffer reflow
+	 * full-width rows before the app repaints, so a width drag borrows the
+	 * alternate screen: transient resizes truncate the viewport instead of
+	 * pushing wrapped fragments into native scrollback. A height-only resize
+	 * reflows nothing, so it repaints the normal screen in place — borrowing the
+	 * alt buffer there is pure flicker, and on terminals that re-report their
+	 * size when the alt buffer toggles it is self-sustaining: leaving a
+	 * fullscreen overlay's alt screen fires a height-only SIGWINCH echo, which
+	 * would otherwise re-borrow the alt buffer for one frame (the settings-exit
+	 * flash, #5854). Normal-screen history is rebuilt once at settle via
+	 * `#emitFullPaint`. State-isolated: advances no commit/window/diff field and
+	 * calls neither `#commit` nor `#emitFullPaint`, so the settle full paint
+	 * reconciles against the pre-drag screen state and rebuilds normal-screen
+	 * history once.
 	 */
 	#renderResizeViewport(width: number, height: number): void {
 		if (width <= 0 || height <= 0) return;
@@ -3544,8 +3551,10 @@ export class TUI extends Container {
 		// authoritative accounting, and its beginPass() wipes these frames.
 		this.#imageBudget.beginPass(true);
 		const { window, contentRows } = this.#composeResizeViewport(width, height);
+		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
+		const altEnter = widthChanged ? this.#enterResizeAltSequence() : "";
 		let buffer = homeRewriteSequence(
-			this.#paintBeginSequence + this.#enterResizeAltSequence(),
+			this.#paintBeginSequence + altEnter,
 			window,
 			width,
 			height,
