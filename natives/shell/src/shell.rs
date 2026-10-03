@@ -4352,6 +4352,68 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			.expect("reader task should not panic");
 	}
 
+	/// Feed `parts` through `read_output_buffered` as separate reads and return
+	/// the concatenated streamed chunks with the final buffered text.
+	async fn buffered_read_of(parts: &[&[u8]]) -> (String, BufferedOutput) {
+		use std::io::Write as _;
+
+		let (reader, mut writer) = pipe_to_files("test").expect("test pipe should be created");
+		let (chunk_tx, chunk_rx) = flume::unbounded::<String>();
+		let (activity_tx, _activity_rx) = flume::bounded(1);
+		let handle = tokio::spawn(read_output_buffered(
+			reader,
+			Some(chunk_tx),
+			CancellationToken::new(),
+			activity_tx,
+			1 << 20,
+		));
+		for part in parts {
+			writer.write_all(part).expect("write to test pipe");
+			writer.flush().expect("flush test pipe");
+			time::sleep(Duration::from_millis(50)).await;
+		}
+		drop(writer);
+		let output = time::timeout(Duration::from_secs(5), handle)
+			.await
+			.expect("reader should finish at EOF")
+			.expect("reader task should not panic");
+		let mut streamed = String::new();
+		while let Ok(chunk) = chunk_rx.try_recv() {
+			streamed.push_str(&chunk);
+		}
+		(streamed, output)
+	}
+
+	/// A multibyte character split across two reads is streamed whole, and the
+	/// streamed text equals the final buffered text. On a GBK host (ACP 936) the
+	/// pair `d6 d0 ce c4` must read as 中文, not as four U+FFFD.
+	#[tokio::test]
+	async fn buffered_reader_streams_split_pair_and_matches_final_text() {
+		let (streamed, output) = buffered_read_of(&[&[0xd6], &[0xd0, 0xce], &[0xc4, b'\n']]).await;
+		assert_eq!(streamed, output.text, "streamed chunks must equal the buffered text");
+		assert_eq!(output.text, decode_bytes(&[0xd6, 0xd0, 0xce, 0xc4, b'\n']));
+		#[cfg(windows)]
+		{
+			// SAFETY: GetACP has no preconditions.
+			if unsafe { windows_sys::Win32::Globalization::GetACP() } == 936 {
+				assert_eq!(output.text, "中文\n");
+			}
+		}
+
+		let (streamed, output) = buffered_read_of(&[&[0xe4], &[0xb8, 0xad]]).await;
+		assert_eq!(streamed, "中");
+		assert_eq!(output.text, "中");
+	}
+
+	/// A byte sequence still incomplete at EOF is flushed by `decoder.finish()`,
+	/// so the streamed text and the buffered text agree on the replacement.
+	#[tokio::test]
+	async fn buffered_reader_flushes_incomplete_tail_at_eof() {
+		let (streamed, output) = buffered_read_of(&[b"ok ", &[0xe4]]).await;
+		assert_eq!(output.text, "ok \u{FFFD}");
+		assert_eq!(streamed, output.text, "finish() must flush the held byte to the stream");
+	}
+
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn execute_shell_streams_separates_stdout_and_stderr() {
