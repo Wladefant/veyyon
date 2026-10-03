@@ -2,18 +2,25 @@ import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
 
-export const loginTypeSafe = createApiKeyLogin({
-	providerLabel: "TypeSafe",
-	authUrl: "https://typesafe.ai",
-	instructions: "Copy your API key from your TypeSafe account",
-	promptMessage: "Paste your TypeSafe API key",
-	placeholder: "sk-...",
-	validation: {
-		kind: "models-endpoint",
-		provider: "TypeSafe",
-		modelsUrl: "https://api.typesafe.ai/v1/models",
-	},
-});
+const AUTH_URL = "https://console.typesafe.ai/";
+const DEFAULT_BASE_URL = "https://api.typesafe.ai";
+
+/** The models-endpoint check honours `TYPESAFE_BASE_URL`, like discovery and System One requests. */
+export function loginTypeSafe(callbacks: OAuthLoginCallbacks): Promise<string> {
+	const baseUrl = (process.env.TYPESAFE_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
+	return createApiKeyLogin({
+		providerLabel: "TypeSafe",
+		authUrl: AUTH_URL,
+		instructions: "Create or copy your API key from the TypeSafe console.",
+		promptMessage: "Paste your TypeSafe API key",
+		placeholder: "API key",
+		validation: {
+			kind: "models-endpoint",
+			provider: "TypeSafe",
+			modelsUrl: `${baseUrl}/v1/models`,
+		},
+	})(callbacks);
+}
 
 export const typesafeProvider = {
 	id: "typesafe",
