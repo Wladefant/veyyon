@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added raw decoded WebSocket event stream for provider-native Codex compaction ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Registered DeepInfra as a built-in provider with chat-completion API key validation ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added core image generation data types and metadata contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Added image response decoding, data URL formatting, and dimension mapping utilities ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
@@ -40,6 +41,13 @@
 
 ### Fixed
 - Saved /login API key and OAuth credentials take precedence over literal, environment, and command-backed fallback API keys registered by extensions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
+- Fixed Codex compaction WebSocket cleanup types: `return()` calls pass their argument and the wrapped generator implements `Symbol.asyncDispose` by delegating to `return()` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Unified Codex compaction semantic validation between collector and transport layers with shared O(1) accumulator (`CodexCompactionV2Accumulator`), deferred `turnState` and `modelsEtag` metadata commits until semantic validation succeeds with rollback on rejection, and enforced frame count (1024) and byte budget (16 MiB) bounds on buffered WebSocket compaction streams before falling back to SSE ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
+- Fixed the `ai` test fixtures (codex compaction collector listener types, codex turn-state model, typesafe login callbacks) to match current types so `check:ts` passes in an isolated workspace ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed the Codex unexpected-stream-end debug log reading the removed `turnState` field of the WebSocket session state; it now reads the request's turn-state cell ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Registered the `local`, `web` and `typesafe` catalog providers in the provider registry, restoring its compile-time completeness check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Corrected the `typesafe` login to the values from its catalog auth rule: console URL `https://console.typesafe.ai/`, and a models-endpoint check that honours `TYPESAFE_BASE_URL` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Credential database initialization errors now identify the failing database file while preserving SQLite error codes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 585d0096e49d981274d21c1b5063b461ae2132e0).
 - Preserved pre-stream provider error provenance in `errorMessage` while keeping assistant content empty, preventing pre-stream diagnostic text from blocking safe transient retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9f80d24e20014d98748bdca81356661741e00f94).
 - Deferred projected native thinking end events in the leaked-thinking stream wrapper until their source block ends, preserving signatures on late completion ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 764a1f7e9c06ef40953e9b7a8bbafddc168fcd34).

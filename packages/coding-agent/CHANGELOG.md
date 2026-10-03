@@ -9,7 +9,11 @@
 ### Fixed
 - Preserved /login API key and OAuth credential precedence over extension fallback API keys, including command-backed values, during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
 
+- Fixed the plan-mode pending-model-switch test to use the current `startup.quiet` setting and `InteractiveMode.init()` signature ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Typed the replace executor's entry as one optional-field shape so reading either the batch or the single-call spelling type-checks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Keep terminal text readable on painted surfaces by emitting explicit contrasting ANSI foregrounds for empty theme tokens ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 3634ec23229951ed4902dae6ca9a2b021b65392e).
+- Nested patch persistence removes only newly created patch files on write failure and preserves existing destination data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1c01111697356e0c2d7bf41fb93ac97807943604).
 
 ## [18.1.11] - 2026-09-05
 
