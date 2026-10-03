@@ -6,7 +6,7 @@ import { getProcessStartIdentity, getProcessStartTime } from "@veyyon/utils/proc
 import { acquireBrokerLease, releaseBrokerLease } from "../../src/launch/broker-lease";
 import { createDaemonBrokerClient } from "../../src/launch/client";
 import { daemonBrokerLeasePath } from "../../src/launch/paths";
-import { hasLiveDaemonProjectPresence } from "../../src/launch/presence";
+import { hasLiveDaemonProjectPresence, pruneDeadDaemonRuntimeDirs } from "../../src/launch/presence";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const dirs: string[] = [];
@@ -163,3 +163,31 @@ it("starts a responsive broker over a stale legacy lease whose PID is an unrelat
 		client.close();
 	}
 }, 15_000);
+
+it("prunes an aged runtime pinned by reused legacy broker and presence PIDs without touching current scope", async () => {
+	const root = path.join(await runtime(), "daemons");
+	const current = path.join(root, "1111111111111111");
+	const stale = path.join(root, "2222222222222222");
+	await fs.mkdir(current, { recursive: true });
+	await fs.mkdir(path.join(stale, "clients"), { recursive: true });
+	const leasePath = daemonBrokerLeasePath(stale);
+	const presencePath = path.join(stale, "clients", "legacy.json");
+	for (const file of [leasePath, presencePath]) {
+		await fs.writeFile(file, JSON.stringify({ pid: process.pid }));
+		await fs.utimes(file, 1, 1);
+	}
+	await fs.utimes(stale, 1, 1);
+	await pruneDeadDaemonRuntimeDirs(current);
+	expect(await Bun.file(leasePath).exists()).toBe(false);
+	expect((await fs.stat(current)).isDirectory()).toBe(true);
+});
+
+it("leaves an in-flight atomic presence staging file alone", async () => {
+	const dir = await runtime();
+	const clients = path.join(dir, "clients");
+	await fs.mkdir(clients);
+	const staging = path.join(clients, ".live.json.tmp");
+	await fs.writeFile(staging, '{"pid":');
+	expect(await hasLiveDaemonProjectPresence(dir)).toBe(false);
+	expect(await fs.readFile(staging, "utf8")).toBe('{"pid":');
+});
