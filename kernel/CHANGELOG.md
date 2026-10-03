@@ -46,6 +46,7 @@
 
 ### Fixed
 
+- The session loader no longer instantiates the `@veyyon/utils` barrel through its cold-entry store, which cut the modules it loads from 141 to 88 and the modules the `read` tool loads from 360 to 333.
 - A title change made while a session file rewrite is queued or in progress is written to the file once instead of twice, and a change that lands after the rewrite read its body is published by a second pass instead of being lost with its title.
 - An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
 - An unquoted YAML scalar that spells an enum member, such as `advisor.syncBacklog: 3`, reads as that member and is no longer reported as invalid at load.

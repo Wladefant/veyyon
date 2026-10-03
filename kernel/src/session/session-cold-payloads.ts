@@ -24,7 +24,7 @@
  * or externalizes comes back truncated or restored from the blob store, and a replayed reasoning
  * signature persistence drops does not come back.
  */
-import { errorMessage, isRecord } from "@veyyon/utils";
+import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { isBlobRef, isTextBlobRef } from "./blob-store";
 import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
