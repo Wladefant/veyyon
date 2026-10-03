@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cursor sessions now preserve interrupted headless turns when SIGINT or SIGTERM stops print mode ([#10965](https://github.com/can1357/oh-my-pi/issues/10965)).
+- Nested patch persistence cleans up in-progress patch destinations on write failure ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1c01111697356e0c2d7bf41fb93ac97807943604).
 
 ## [18.1.11] - 2026-09-05
 
