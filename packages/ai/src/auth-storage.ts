@@ -299,9 +299,8 @@ export class AuthStorage {
 	/** Temporary rate-limit blocks, in memory and persisted. */
 	readonly #blocks: CredentialBlocks;
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
-	#rankingStrategyResolver?: (
-		provider: Provider,
-	) => CredentialRankingStrategy | undefined;
+	#runtimeUsageProviders = new Map<Provider, UsageProvider>();
+	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
 	#usageCacheEpoch = 0;
 	#usageRequestInFlight: Map<string, Promise<UsageReport | null>> = new Map();
@@ -356,14 +355,12 @@ export class AuthStorage {
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
 		this.#store = store;
-		this.#configValueResolver =
-			options.configValueResolver ?? defaultConfigValueResolver;
-		this.#usageProviderResolver =
-			options.usageProviderResolver ?? resolveDefaultUsageProvider;
-		this.#rankingStrategyResolver =
-			options.rankingStrategyResolver ?? resolveDefaultRankingStrategy;
-		if (options.loadBalancing !== undefined)
-			this.#loadBalancing = options.loadBalancing;
+		this.#configValueResolver = options.configValueResolver ?? defaultConfigValueResolver;
+		const configuredUsageProviderResolver = options.usageProviderResolver ?? resolveDefaultUsageProvider;
+		this.#usageProviderResolver = provider =>
+			this.#runtimeUsageProviders.get(provider) ?? configuredUsageProviderResolver(provider);
+		this.#rankingStrategyResolver = options.rankingStrategyResolver ?? resolveDefaultRankingStrategy;
+		if (options.loadBalancing !== undefined) this.#loadBalancing = options.loadBalancing;
 		if (options.onCredentialFailover) {
 			// Permanent for this AuthStorage's lifetime; the unsubscribe handle is discarded.
 			this.onCredentialFailover(options.onCredentialFailover);
@@ -2598,11 +2595,13 @@ export class AuthStorage {
 		const resolver = this.#usageProviderResolver;
 		if (!resolver) return null;
 
-		const providerImpl = resolver(request.provider);
+		const providerImpl = request.usageProvider ?? resolver(request.provider);
 		if (!providerImpl) return null;
 
 		let params: UsageFetchParams = {
-			...request,
+			provider: request.provider,
+			credential: request.credential,
+			baseUrl: request.baseUrl,
 			accountKey: buildUsageCacheIdentity(request.credential),
 			signal: timeoutSignal,
 		};
@@ -2638,7 +2637,8 @@ export class AuthStorage {
 						refreshedCredential,
 					);
 					params = {
-						...request,
+						provider: request.provider,
+						baseUrl: request.baseUrl,
 						credential: refreshedCredential,
 						accountKey: buildUsageCacheIdentity(refreshedCredential),
 						signal: timeoutSignal,
@@ -2880,8 +2880,9 @@ export class AuthStorage {
 		);
 		if (!credential) return false;
 
+		const usageProvider = this.usageProviderFor(provider);
 		const cacheKey = buildUsageReportCacheKey(
-			buildUsageRequestForOauth(provider, credential, options?.baseUrl),
+			buildUsageRequestForOauth(provider, credential, options?.baseUrl, usageProvider),
 		);
 		const now = Date.now();
 		const parsedReport = parseHeaders(headers, now);
@@ -2964,9 +2965,10 @@ export class AuthStorage {
 		return true;
 	}
 
-	#collectUsageRequests(options?: {
-		baseUrlResolver?: (provider: Provider) => string | undefined;
-	}): UsageRequestDescriptor[] {
+	#collectUsageRequests(
+		options?: { baseUrlResolver?: (provider: Provider) => string | undefined },
+		providerFilter?: ReadonlySet<Provider>,
+	): UsageRequestDescriptor[] {
 		const resolver = this.#usageProviderResolver;
 		if (!resolver) return [];
 
@@ -2974,10 +2976,13 @@ export class AuthStorage {
 		// Providers with no stored credential still need a request built, because a usage backend can
 		// report a quota for an account the store has not seen yet. The set of them comes from the
 		// registry rather than a local table; see `usage/registry.ts`.
-		const providers = new Set<string>([
-			...this.#data.keys(),
-			...listRegisteredUsageProviders().map((provider) => provider.id),
-		]);
+		const providers =
+			providerFilter ??
+			new Set<string>([
+				...this.#data.keys(),
+				...this.#runtimeUsageProviders.keys(),
+				...listRegisteredUsageProviders().map(provider => provider.id),
+			]);
 
 		for (const providerId of providers) {
 			const provider = providerId as Provider;
@@ -3006,6 +3011,7 @@ export class AuthStorage {
 					provider,
 					{ type: "api_key", apiKey },
 					options?.baseUrlResolver?.(provider),
+					providerImpl,
 				);
 				if (providerImpl.supports && !providerImpl.supports(request)) continue;
 				requests.push(request);
@@ -3017,12 +3023,8 @@ export class AuthStorage {
 				const credential = entry.credential;
 				const request =
 					credential.type === "api_key"
-						? buildUsageRequest(
-								provider,
-								{ type: "api_key", apiKey: credential.key },
-								baseUrl,
-							)
-						: buildUsageRequestForOauth(provider, credential, baseUrl);
+						? buildUsageRequest(provider, { type: "api_key", apiKey: credential.key }, baseUrl, providerImpl)
+						: buildUsageRequestForOauth(provider, credential, baseUrl, providerImpl);
 				if (providerImpl.supports && !providerImpl.supports(request)) continue;
 				requests.push(request);
 			}
@@ -3083,8 +3085,9 @@ export class AuthStorage {
 					storeHook(provider, credential, options?.signal),
 				);
 				if (report) {
+					const usageProvider = this.usageProviderFor(provider);
 					this.#reconcileCodexUsageBlock(
-						buildUsageRequestForOauth(provider, credential, options?.baseUrl),
+						buildUsageRequestForOauth(provider, credential, options?.baseUrl, usageProvider),
 						report,
 					);
 				}
@@ -3097,8 +3100,9 @@ export class AuthStorage {
 			if (!resolvedApiKey) return null;
 			usageCredential.apiKey = resolvedApiKey;
 		}
+		const usageProvider = this.usageProviderFor(provider);
 		return this.#fetchUsageCached(
-			buildUsageRequest(provider, usageCredential, options?.baseUrl),
+			buildUsageRequest(provider, usageCredential, options?.baseUrl, usageProvider),
 			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
 		);
 	}
@@ -3112,6 +3116,19 @@ export class AuthStorage {
 	 */
 	usageProviderFor(provider: Provider): UsageProvider | undefined {
 		return this.#usageProviderResolver?.(provider);
+	}
+
+	/** Register a usage backend for this process without changing other sessions. */
+	setUsageProvider(provider: Provider, implementation: UsageProvider): void {
+		if (implementation.id !== provider) {
+			throw new Error(`Usage provider "${implementation.id}" does not match "${provider}".`);
+		}
+		this.#runtimeUsageProviders.set(provider, implementation);
+	}
+
+	/** Restore the configured backend and its cached reports after extension removal. */
+	removeUsageProvider(provider: Provider): void {
+		this.#runtimeUsageProviders.delete(provider);
 	}
 
 	async fetchUsageReports(options?: {
@@ -3143,20 +3160,34 @@ export class AuthStorage {
 				});
 				this.#usageReportsInFlight.set(OVERRIDE_KEY, shared);
 			}
-			const reports = await raceWithSignal(
-				shared,
+			const reports = await raceWithSignal(shared, options?.signal, "usage fetch aborted");
+			if (shouldReconcileStoreHookReports && reports) this.#reconcileCodexUsageBlocksFromReports(reports);
+			if (!reports || !shouldReconcileStoreHookReports) return reports;
+
+			// The broker owns its reported providers; only extension/runtime providers
+			// absent from its response need local credentials and a local probe.
+			const brokerProviders = new Set(reports.map(report => report.provider));
+			const localProviders = new Set<Provider>();
+			for (const provider of this.#runtimeUsageProviders.keys()) {
+				if (!brokerProviders.has(provider)) localProviders.add(provider);
+			}
+			const localRequests = this.#collectUsageRequests(options, localProviders);
+			if (localRequests.length === 0) return reports;
+			const localReports = await raceWithSignal(
+				this.#fetchLocalUsageReports(localRequests),
 				options?.signal,
 				"usage fetch aborted",
 			);
-			if (shouldReconcileStoreHookReports && reports)
-				this.#reconcileCodexUsageBlocksFromReports(reports);
-			return reports;
+			return localReports?.length ? [...reports, ...localReports] : reports;
 		}
 		if (!this.#usageProviderResolver) return null;
 
 		const requests = this.#collectUsageRequests(options);
 		if (requests.length === 0) return [];
+		return raceWithSignal(this.#fetchLocalUsageReports(requests), options?.signal, "usage fetch aborted");
+	}
 
+	async #fetchLocalUsageReports(requests: UsageRequestDescriptor[]): Promise<UsageReport[] | null> {
 		this.#usageLogger?.debug("Usage fetch requested", {
 			providers: [
 				...new Set(requests.map((request) => request.provider)),
@@ -3193,7 +3224,6 @@ export class AuthStorage {
 				(report): report is UsageReport => report !== null,
 			);
 			const deduped = this.#dedupeUsageReports(reports);
-			// no outer cache write — see comment above.
 			const resolved = deduped;
 			this.#usageLogger?.debug("Usage fetch resolved", {
 				reports: resolved.map((report) => {
@@ -3287,14 +3317,12 @@ export class AuthStorage {
 
 			const baseUrl = options?.baseUrlResolver?.(row.provider as Provider);
 			const cred = row.credential;
+			const provider = row.provider as Provider;
+			const usageProvider = this.usageProviderFor(provider);
 			const initialRequest: UsageRequestDescriptor =
 				cred.type === "api_key"
-					? buildUsageRequest(
-							row.provider as Provider,
-							{ type: "api_key", apiKey: cred.key },
-							baseUrl,
-						)
-					: buildUsageRequestForOauth(row.provider as Provider, cred, baseUrl);
+					? buildUsageRequest(provider, { type: "api_key", apiKey: cred.key }, baseUrl, usageProvider)
+					: buildUsageRequestForOauth(provider, cred, baseUrl, usageProvider);
 
 			// Scoped per-row deadline: cancelled at both loop exits below so the
 			// backing timer never outlives the row's probes (a bare
@@ -3733,8 +3761,7 @@ export class AuthStorage {
 				blockedUntil,
 				allowanceSpent,
 				usageMeasured,
-				hasPriorityBoost:
-					strategy.hasPriorityBoost?.(primary, primaryUncapped) ?? false,
+				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
 				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
 				secondaryUsed: normalizeUsageFraction(secondaryTarget),
 				secondaryRequiredDrain: computeWindowRequiredDrain(
@@ -5187,8 +5214,9 @@ export class AuthStorage {
 		const expired = Date.now() - 1;
 		for (const entry of this.#getStoredCredentials(provider)) {
 			if (entry.credential.type !== "oauth") continue;
+			const usageProvider = this.usageProviderFor(provider as Provider);
 			const cacheKey = buildUsageReportCacheKey(
-				buildUsageRequestForOauth(provider, entry.credential, baseUrl),
+				buildUsageRequestForOauth(provider as Provider, entry.credential, baseUrl, usageProvider),
 			);
 			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
 			this.#usageCache.set(cacheKey, {
@@ -5217,12 +5245,11 @@ export class AuthStorage {
 				const credentials = this.#store.listAuthCredentials();
 				for (const entry of credentials) {
 					if (entry.credential.type !== "oauth") continue;
+					const usageProvider = this.usageProviderFor(entry.provider as Provider);
 					const cacheKey = buildUsageReportCacheKey(
-						buildUsageRequestForOauth(entry.provider, entry.credential),
+						buildUsageRequestForOauth(entry.provider as Provider, entry.credential, undefined, usageProvider),
 					);
-					const existing = this.#usageCache.getStale<UsageReport | null>(
-						cacheKey,
-					);
+					const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
 					this.#usageCache.set(cacheKey, {
 						value: existing?.value ?? null,
 						expiresAt: expired,

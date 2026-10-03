@@ -30,6 +30,7 @@ import type {
 	TSchema,
 } from "@veyyon/ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@veyyon/ai/oauth/types";
+import type { UsageProvider } from "@veyyon/ai/usage";
 import type { HostView } from "@veyyon/kernel/registry/host-view";
 import type * as TypeBox from "@veyyon/kernel/registry/typebox";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "@veyyon/kernel/registry/widget";
@@ -1348,6 +1349,8 @@ export interface ExtensionAPI {
 
 /** Configuration for registering a provider via pi.registerProvider(). */
 export interface ProviderConfig {
+	/** Process-local usage backend. Removal restores the configured provider. */
+	usage?: Omit<UsageProvider, "id">;
 	/** Base URL for the API endpoint. Required when defining models. */
 	baseUrl?: string;
 	/**

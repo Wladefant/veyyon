@@ -532,12 +532,11 @@ export const codexRankingStrategy: CredentialRankingStrategy = {
 		return { primary: findLimit("primary"), secondary: findLimit("secondary") };
 	},
 	windowDefaults: { primaryMs: HOUR_MS, secondaryMs: WEEK_MS },
-	hasPriorityBoost(primary, primaryUncapped = false) {
-		// A missing primary window is only an uncapped signal when the same
-		// request scope still reports its secondary window. Empty or
-		// differently-scoped reports remain unmeasured.
-		if (primaryUncapped) return true;
-		if (!primary) return false;
+	hasPriorityBoost(primary, primaryUncapped = false, context) {
+		// Chat plans can omit an uncapped primary window while retaining their
+		// weekly window. Spark always has a capped primary meter, so a missing
+		// Spark primary is incomplete rather than uncapped.
+		if (!primary) return primaryUncapped && !isCodexSparkRequest(context);
 		const windowId = primary.scope.windowId?.toLowerCase();
 		const durationMs = primary.window?.durationMs;
 		const isFiveHourWindow =

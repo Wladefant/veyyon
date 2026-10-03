@@ -13,11 +13,11 @@ import { clamp01, DAY_MS, formatCount, formatDuration, formatNumber, pluralize, 
 import { SUB_CELL_BAR_RAMP, subCellBar } from "@veyyon/utils/bar";
 import chalk from "chalk";
 import { credentialRemedySentence } from "../config/missing-credentials";
-import { ModelRegistry } from "../config/model-registry";
 import { formatProviderName } from "../session/account-format";
 // `session/auth-broker-config`, which OWNS this, not the `sdk` barrel that re-exports it: the barrel is
 // the whole application and this file wants one function.
 import { discoverAuthStorage } from "../session/auth-broker-config";
+import { createCliModelRuntime } from "./model-runtime";
 
 const BAR_WIDTH = 28;
 
@@ -834,7 +834,8 @@ function redactReportForJson(
 }
 
 export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
-	const authStorage = await discoverAuthStorage();
+	const runtime = cmd.action === "invalidate" || cmd.history ? undefined : await createCliModelRuntime();
+	const authStorage = runtime?.modelRegistry.authStorage ?? (await discoverAuthStorage());
 	try {
 		if (cmd.action === "invalidate") {
 			const provider = cmd.provider?.toLowerCase();
@@ -877,7 +878,10 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			process.stdout.write(`${formatUsageHistory(entries, sinceMs, nowMs, redaction)}\n`);
 			return;
 		}
-		const modelRegistry = new ModelRegistry(authStorage);
+		if (!runtime) throw new Error("Usage reports require an initialized model runtime.");
+		const modelRegistry = runtime.modelRegistry;
+		// Refresh credentials before local extension probes and account labels use them.
+		await authStorage.reload();
 		const reports =
 			(await authStorage.fetchUsageReports({
 				baseUrlResolver: provider => modelRegistry.getProviderBaseUrl(provider),
@@ -954,6 +958,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 
 		process.stdout.write(`${formatUsageBreakdown(filteredReports, accounts, Date.now(), redaction)}\n`);
 	} finally {
-		authStorage.close();
+		if (runtime) runtime.close?.();
+		else authStorage.close();
 	}
 }

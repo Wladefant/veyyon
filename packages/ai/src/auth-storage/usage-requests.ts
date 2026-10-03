@@ -6,7 +6,7 @@
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
-import type { UsageCredential } from "../usage";
+import type { UsageCredential, UsageProvider } from "../usage";
 import type { StoredCredential } from "./credentials";
 import type { AuthCredential, OAuthCredential } from "./types";
 import { REMOTE_REFRESH_SENTINEL } from "./types";
@@ -25,6 +25,8 @@ export type UsageRequestDescriptor = {
 	provider: Provider;
 	credential: UsageCredential;
 	baseUrl?: string;
+	cacheVersion?: number | string;
+	usageProvider?: UsageProvider;
 };
 
 export function buildUsageCredential(credential: AuthCredential): UsageCredential {
@@ -84,7 +86,7 @@ function normalizeUsageBaseUrl(baseUrl?: string): string {
 export function buildUsageReportCacheKey(request: UsageRequestDescriptor): string {
 	const baseUrl = normalizeUsageBaseUrl(request.baseUrl) || "default";
 	const identity = buildUsageCacheIdentity(request.credential);
-	const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
+	const versionOverride = request.cacheVersion ?? USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
 	const providerKey = versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
 	return `report:${providerKey}:${baseUrl}:${identity}`;
 }
@@ -92,7 +94,7 @@ export function buildUsageReportCacheKey(request: UsageRequestDescriptor): strin
 export function buildUsageReportsCacheKey(requests: ReadonlyArray<UsageRequestDescriptor>): string {
 	const snapshot = requests
 		.map(request => {
-			const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
+			const versionOverride = request.cacheVersion ?? USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
 			const providerKey =
 				versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
 			return `${providerKey}:${normalizeUsageBaseUrl(request.baseUrl) || "default"}:${buildUsageCacheIdentity(request.credential)}`;
@@ -106,16 +108,18 @@ export function buildUsageRequest(
 	provider: Provider,
 	credential: UsageCredential,
 	baseUrl?: string,
+	usageProvider?: UsageProvider,
 ): UsageRequestDescriptor {
-	return { provider, credential, baseUrl };
+	return { provider, credential, baseUrl, cacheVersion: usageProvider?.cacheVersion, usageProvider };
 }
 
 export function buildUsageRequestForOauth(
 	provider: Provider,
 	credential: OAuthCredential,
 	baseUrl?: string,
+	usageProvider?: UsageProvider,
 ): UsageRequestDescriptor {
-	return buildUsageRequest(provider, buildUsageCredential(credential), baseUrl);
+	return buildUsageRequest(provider, buildUsageCredential(credential), baseUrl, usageProvider);
 }
 
 export function buildRefreshableOauthCredential(credential: UsageCredential): OAuthCredential | null {

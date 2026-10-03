@@ -259,6 +259,11 @@ export interface UsageProvider {
 	supports?(params: UsageFetchParams): boolean;
 	/** True when fetchUsage contacts upstream and can authenticate the credential for health checks. */
 	validatesCredentials?: boolean;
+	/**
+	 * Cache version used when persisting usage reports. Overrides the default
+	 * version for this provider so runtime overrides key their own rows.
+	 */
+	cacheVersion?: number | string;
 }
 
 /** Request context used when ranking usage for a specific model. */
@@ -299,5 +304,9 @@ export interface CredentialRankingStrategy {
 	 * ticker start). `primaryUncapped` is true only when the fetched report has
 	 * an applicable secondary window but no applicable primary window.
 	 */
-	hasPriorityBoost?(primary: UsageLimit | undefined, primaryUncapped?: boolean): boolean;
+	hasPriorityBoost?(
+		primary: UsageLimit | undefined,
+		primaryUncapped?: boolean,
+		context?: CredentialRankingContext,
+	): boolean;
 }
