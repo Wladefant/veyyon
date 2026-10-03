@@ -569,6 +569,16 @@ function canStreamLex(text: string): boolean {
 	return !HAS_REF_DEF.test(text) && !text.includes("\r");
 }
 
+// A copy of `text` in storage of its own. A slice shares the buffer of the string
+// it was cut from, and so does every token marked cuts from that slice. A streamed
+// text is a new buffer on every frame, so tail tokens frozen on one frame after
+// another each held that frame's whole text: 76 MiB for one 206,000-character
+// answer. A structured clone is rebuilt from serialized bytes, so it cannot share
+// the source buffer, and it keeps the content exact (lone surrogates included).
+function unsharedCopy(text: string): string {
+	return structuredClone(text);
+}
+
 // Untrusted model output can over-nest markdown structure: a blockquote nests
 // once per leading `>` (`>>>>…`), a list once per indentation step. marked's
 // block lexer recurses per nesting level and is super-linear on list indent, so
@@ -1112,10 +1122,7 @@ export class Markdown implements Component {
 			// Blank replacement: render() early-returns before #lexTokens can see
 			// the non-append edit, so drop the frozen stream state here or it
 			// outlives the content it indexed.
-			this.#streamPrefixText = undefined;
-			this.#streamPrefixTokens = undefined;
-			this.#streamPrefixLineCache = undefined;
-			this.#streamPrefixSource = undefined;
+			this.#dropFrozenPrefix();
 			this.#settledExposedText = undefined;
 		}
 		this.invalidate();
@@ -1130,12 +1137,22 @@ export class Markdown implements Component {
 
 	releaseRenderCache(): void {
 		this.invalidate();
-		// Every field below is derived from #text and rebuilt by the next render: a
-		// full lex re-freezes the stable prefix, and the row caches refill as rows render.
+		this.#dropDerivedState();
+	}
+
+	// The frozen stream prefix: its text, its tokens, its rendered rows and the
+	// text it was cut from.
+	#dropFrozenPrefix(): void {
 		this.#streamPrefixText = undefined;
 		this.#streamPrefixTokens = undefined;
 		this.#streamPrefixLineCache = undefined;
 		this.#streamPrefixSource = undefined;
+	}
+
+	// Every field derived from #text that the next render rebuilds: a full lex
+	// re-freezes the stable prefix, and the row caches refill as rows render.
+	#dropDerivedState(): void {
+		this.#dropFrozenPrefix();
 		this.#normalizedCleanHead = undefined;
 		this.#streamingDiffLineCache = undefined;
 		this.#openFenceRowCache = undefined;
@@ -1149,8 +1166,10 @@ export class Markdown implements Component {
 		const next = value === true;
 		if (this.#transientRenderCache === next) return;
 		this.#transientRenderCache = next;
-		// The rows are only read while streaming; a sealed block would hold them for nothing.
-		if (!next) this.#openFenceRowCache = undefined;
+		// The derived state serves the frames of a growing text and holds strings
+		// cut from those frames. A sealed block renders from its final text, so it
+		// keeps what one render of that text keeps and nothing from the stream.
+		if (!next) this.#dropDerivedState();
 		this.invalidate();
 	}
 
@@ -1212,7 +1231,9 @@ export class Markdown implements Component {
 		) {
 			const tail = text.slice(prefix.length);
 			if (canStreamLex(tail)) {
-				const tailTokens = markdownParser.lexer(tail);
+				// The tail is lexed from a copy so the tokens frozen out of it hold the
+				// tail alone, not the whole frame's text (see unsharedCopy).
+				const tailTokens = markdownParser.lexer(unsharedCopy(tail));
 				const tokens = [...prefixTokens, ...tailTokens];
 				this.#freezeStablePrefix(text, tokens, { preserveExisting: true });
 				// `text` extends the prefix, proven just above, and the freeze only
@@ -1227,10 +1248,7 @@ export class Markdown implements Component {
 			this.#freezeStablePrefix(text, tokens, { preserveExisting: false });
 			if (this.#streamPrefixText !== undefined) this.#streamPrefixSource = text;
 		} else {
-			this.#streamPrefixText = undefined;
-			this.#streamPrefixTokens = undefined;
-			this.#streamPrefixLineCache = undefined;
-			this.#streamPrefixSource = undefined;
+			this.#dropFrozenPrefix();
 		}
 		return tokens;
 	}
@@ -1281,12 +1299,7 @@ export class Markdown implements Component {
 			}
 		}
 
-		if (!opts.preserveExisting) {
-			this.#streamPrefixText = undefined;
-			this.#streamPrefixTokens = undefined;
-			this.#streamPrefixLineCache = undefined;
-			this.#streamPrefixSource = undefined;
-		}
+		if (!opts.preserveExisting) this.#dropFrozenPrefix();
 	}
 
 	render(width: number): readonly string[] {
@@ -1301,6 +1314,9 @@ export class Markdown implements Component {
 		// Recomputed below by the streaming path; every other path (cache-served,
 		// empty text, non-streaming full render) exposes no settled rows.
 		this.#lastRenderSettledRows = 0;
+		// A render outside streaming reports no settled rows, which ends the exposed
+		// lineage the same way a rewind does, so its text is no longer needed.
+		if (!this.transientRenderCache) this.#settledExposedText = undefined;
 
 		// Calculate available width for content (subtract horizontal padding)
 		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
