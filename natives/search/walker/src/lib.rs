@@ -1367,8 +1367,9 @@ impl WalkRequest {
 	/// This is a files-only API for consumers that own their output ordering.
 	/// Candidates may be delivered in any order. [`WalkOptions::order`],
 	/// [`WalkRequest::visit_order`], [`WalkOptions::emit_root`], and
-	/// [`WalkRequest::limit`] are ignored. Directory-open errors are skipped
-	/// with grep-style semantics instead of being delivered to visitors.
+	/// [`WalkRequest::limit`] are ignored. A directory that vanished or cannot
+	/// be read by permission is skipped with grep-style semantics; any other
+	/// directory-open failure ends the walk with [`WalkError::InvalidData`].
 	///
 	/// [`ParallelWalkControl::Stop`] sets a shared stop flag; workers check that
 	/// flag before reading each directory and while processing directory
@@ -1625,7 +1626,7 @@ struct ParallelWalkContext {
 
 struct ParallelWalkShared<'a, E, S, H> {
 	stop:      AtomicBool,
-	error:     Mutex<Option<E>>,
+	error:     Mutex<Option<WalkError<E>>>,
 	sink:      &'a S,
 	heartbeat: &'a H,
 }
@@ -1644,21 +1645,42 @@ impl<'a, E, S, H> ParallelWalkShared<'a, E, S, H> {
 	}
 
 	fn record_error(&self, error: E) {
+		self.record_failure(WalkError::Interrupted(error));
+	}
+
+	fn record_failure(&self, failure: WalkError<E>) {
 		let mut slot = match self.error.lock() {
 			Ok(slot) => slot,
 			Err(poisoned) => poisoned.into_inner(),
 		};
 		if slot.is_none() {
-			*slot = Some(error);
+			*slot = Some(failure);
 		}
 		self.request_stop();
 	}
 
-	fn take_error(&self) -> Option<E> {
+	fn take_error(&self) -> Option<WalkError<E>> {
 		match self.error.lock() {
 			Ok(mut slot) => slot.take(),
 			Err(poisoned) => poisoned.into_inner().take(),
 		}
+	}
+}
+
+/// Decide what a failed directory read means to a parallel walk.
+///
+/// This is the [`DirectoryErrorMode::SkipSkippable`] rule the serial walk
+/// applies in `handle_read_dir_error`: a directory that vanished or that the
+/// caller may not read is skipped, and any other failure ends the walk.
+/// Dropping the rest let a directory that could not be opened read as an empty
+/// one.
+fn parallel_directory_failure<E>(dir: &Path, error: ReadDirError<E>) -> Option<WalkError<E>> {
+	match error {
+		ReadDirError::Walk(error) => Some(error),
+		ReadDirError::Io(error) if is_skippable_directory_error(&error) => None,
+		ReadDirError::Io(error) => {
+			Some(WalkError::InvalidData { path: dir.to_path_buf(), message: error.to_string() })
+		},
 	}
 }
 
@@ -1727,7 +1749,7 @@ where
 	}
 
 	if let Some(error) = shared.take_error() {
-		Err(WalkError::Interrupted(error))
+		Err(error)
 	} else if shared.should_stop() {
 		Ok(WalkStatus::Stopped)
 	} else {
@@ -1883,12 +1905,10 @@ fn walk_parallel_dir<'scope, E, S, H>(
 		derive_ignore_from_entries,
 	) {
 		Ok(ignore_entries) => ignore_entries,
-		Err(ReadDirError::Io(_) | ReadDirError::Walk(WalkError::InvalidData { .. })) => {
-			recycle_parallel_scratch(scratch);
-			return;
-		},
-		Err(ReadDirError::Walk(WalkError::Interrupted(error))) => {
-			shared.record_error(error);
+		Err(error) => {
+			if let Some(failure) = parallel_directory_failure(&dir, error) {
+				shared.record_failure(failure);
+			}
 			recycle_parallel_scratch(scratch);
 			return;
 		},
@@ -4631,7 +4651,13 @@ mod platform {
 	}
 
 	fn open_dir(path: &Path) -> io::Result<HandleGuard> {
-		let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
+		// A path past MAX_PATH only opens through the extended-length (`\\?\`)
+		// form; without it `CreateFileW` fails and a deep tree reads as empty.
+		let extended = path.to_str().map(crate::cache::extended_length_path_str);
+		let mut path: Vec<u16> = match &extended {
+			Some(text) => std::ffi::OsStr::new(&**text).encode_wide().collect(),
+			None => path.as_os_str().encode_wide().collect(),
+		};
 		path.push(0);
 		// SAFETY: `path` is NUL-terminated; the returned handle is owned by
 		// `HandleGuard` on success.
@@ -5744,5 +5770,62 @@ mod tests {
 			!paths.iter().any(|path| path == "child.txt"),
 			"FollowLinks::Never should not traverse a symlink root, got: {paths:?}"
 		);
+	}
+
+	/// Run `walk_parallel_dir` on `dir` alone and return what the walk recorded.
+	fn parallel_failure_for(root: &Path, dir: PathBuf) -> Option<WalkError<Infallible>> {
+		let request = WalkRequest::from_options(root, test_options());
+		let options = request.effective_options();
+		let context = ParallelWalkContext {
+			root: root.to_path_buf(),
+			options,
+			filter: request.filter.clone(),
+			matcher: FastIgnore::new(options, request.overrides),
+		};
+		let sink = |_: &FileCandidate| Ok::<_, Infallible>(ParallelWalkControl::Continue);
+		let heartbeat = || Ok::<(), Infallible>(());
+		let shared = ParallelWalkShared::new(&sink, &heartbeat);
+		let root_ignore = context.matcher.root_state(&context.root);
+		rayon::scope(|scope| {
+			walk_parallel_dir(scope, &context, &shared, dir, String::new(), 0, root_ignore, false);
+		});
+		shared.take_error()
+	}
+
+	/// A directory the OS cannot open for a reason other than "gone" or
+	/// "forbidden": the name is not a valid path on the host.
+	#[cfg(any(unix, windows))]
+	fn unopenable_dir(root: &Path) -> PathBuf {
+		#[cfg(unix)]
+		{
+			use std::os::unix::ffi::OsStrExt;
+			root.join(std::ffi::OsStr::from_bytes(b"embedded\0nul"))
+		}
+		#[cfg(windows)]
+		{
+			root.join("invalid?name")
+		}
+	}
+
+	#[cfg(any(unix, windows))]
+	#[test]
+	fn a_directory_the_parallel_walk_cannot_open_is_reported_not_dropped() {
+		let tree = temp_tree("parallel-unopenable");
+		let bad = unopenable_dir(tree.path());
+
+		match parallel_failure_for(tree.path(), bad.clone()) {
+			Some(WalkError::InvalidData { path, .. }) => assert_eq!(path, bad),
+			other => panic!("an unopenable directory should be reported, got: {other:?}"),
+		}
+	}
+
+	#[test]
+	fn a_directory_that_vanished_is_still_skipped_by_the_parallel_walk() {
+		let tree = temp_tree("parallel-vanished");
+		let gone = tree.path().join("gone");
+
+		let failure = parallel_failure_for(tree.path(), gone);
+
+		assert!(failure.is_none(), "a vanished directory is skippable, got: {failure:?}");
 	}
 }
