@@ -1774,6 +1774,14 @@ export class SessionManager {
 		let header: SessionHeader | undefined;
 		let adoptedCwd: string | undefined;
 		if (fileEntries.length > 0) {
+			await resolveBlobRefsInEntries(
+				fileEntries,
+				new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
+				{
+					source: resolvedSessionFile,
+					operatorNotices: this.#operatorNotices,
+				},
+			);
 			const initialHeader = fileEntries.find(e => e.type === "session") as SessionHeader | undefined;
 			const initialVersion = initialHeader?.version ?? 1;
 			const hadV3EvalTargets = initialVersion === 3 && hasV3EvalMigrationTargets(fileEntries);
@@ -1784,14 +1792,6 @@ export class SessionManager {
 			if (migrated && hadV3EvalTargets) {
 				this.#evalMigrationRewriteRequired = true;
 			}
-			await resolveBlobRefsInEntries(
-				fileEntries,
-				new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
-				{
-					source: resolvedSessionFile,
-					operatorNotices: this.#operatorNotices,
-				},
-			);
 			const migrationArtifacts = new ArtifactManager(sessionFileStem(resolvedSessionFile));
 			if (
 				await migrateToolResultEntries(fileEntries, {
@@ -3146,13 +3146,13 @@ export class SessionManager {
 		const sourceEntries = structuredClone(
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
 		) as FileEntry[];
-		const artifactManager = new ArtifactManager(sessionFileStem(sourcePath));
-		await migrateToCurrentVersion(sourceEntries, {
-			saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
-		});
 		await resolveBlobRefsInEntries(sourceEntries, new BlobStore(blobsDirForSessionDir(path.dirname(sourcePath))), {
 			source: sourcePath,
 			operatorNotices: options?.operatorNotices,
+		});
+		const artifactManager = new ArtifactManager(sessionFileStem(sourcePath));
+		await migrateToCurrentVersion(sourceEntries, {
+			saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
 		});
 
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;

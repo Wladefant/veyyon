@@ -17,11 +17,11 @@ async function readHistory(file: string): Promise<{ header: SessionHeader; entri
 	const loaded = await loadEntriesFromFile(file, sessionStorage);
 	const header = loaded[0];
 	if (header?.type !== "session") throw new Error(`Session '${file}' has no readable session header`);
+	await resolveBlobRefsInEntries(loaded, new BlobStore(getBlobsDir()));
 	const artifactManager = new ArtifactManager(sessionFileStem(file));
 	await migrateToCurrentVersion(loaded, {
 		saveArtifact: (content, toolType) => artifactManager.save(content, toolType),
 	});
-	await resolveBlobRefsInEntries(loaded, new BlobStore(getBlobsDir()));
 	return { header, entries: loaded.filter((entry): entry is SessionEntry => entry.type !== "session") };
 }
 

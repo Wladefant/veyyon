@@ -155,10 +155,6 @@ interface EvalMigrationTarget {
 function collectV3ToV4Targets(entries: FileEntry[]): EvalMigrationTarget[] {
 	const targets: EvalMigrationTarget[] = [];
 	for (const entry of entries) {
-		if (entry.type === "session") {
-			entry.version = 4;
-			continue;
-		}
 
 		if (entry.type !== "message") continue;
 		const message = entry.message as {
@@ -208,22 +204,25 @@ async function executePlansAsync(
 
 /** Migrate v3 → v4: bound oversized eval jsonOutputs to versioned preview with durable artifact reference. */
 async function migrateV3ToV4(entries: FileEntry[], context?: SessionMigrationContext): Promise<void> {
+	const staged: { details: EvalMigrationTarget["details"]; outputs: unknown[] }[] = [];
 	for (const { details } of collectV3ToV4Targets(entries)) {
 		const plans = details.jsonOutputs.map(planEvalDisplayOutputMigration);
-		details.jsonOutputs = await executePlansAsync(plans, async plan => {
+		const outputs = await executePlansAsync(plans, async plan => {
 			if (!context?.saveArtifact) {
 				throw new Error("Cannot migrate oversized eval display: no artifact storage available");
 			}
 			return await context.saveArtifact(plan.fullText, "eval-display");
 		});
-		details.displayVersion = EVAL_DISPLAY_VERSION;
+		staged.push({ details, outputs });
 	}
+	commitV3ToV4(entries, staged);
 }
 
 function migrateV3ToV4Sync(entries: FileEntry[], context?: SessionMigrationContext): void {
+	const staged: { details: EvalMigrationTarget["details"]; outputs: unknown[] }[] = [];
 	for (const { details } of collectV3ToV4Targets(entries)) {
 		const plans = details.jsonOutputs.map(planEvalDisplayOutputMigration);
-		details.jsonOutputs = executePlansSync(plans, plan => {
+		const outputs = executePlansSync(plans, plan => {
 			if (!context?.saveArtifact) {
 				throw new Error("Cannot migrate oversized eval display: no artifact storage available");
 			}
@@ -233,7 +232,21 @@ function migrateV3ToV4Sync(entries: FileEntry[], context?: SessionMigrationConte
 			}
 			return res;
 		});
+		staged.push({ details, outputs });
+	}
+	commitV3ToV4(entries, staged);
+}
+
+function commitV3ToV4(
+	entries: FileEntry[],
+	staged: { details: EvalMigrationTarget["details"]; outputs: unknown[] }[],
+): void {
+	for (const { details, outputs } of staged) {
+		details.jsonOutputs = outputs;
 		details.displayVersion = EVAL_DISPLAY_VERSION;
+	}
+	for (const entry of entries) {
+		if (entry.type === "session") entry.version = 4;
 	}
 }
 

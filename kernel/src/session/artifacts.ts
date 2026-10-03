@@ -88,6 +88,7 @@ export class ArtifactManager {
 	readonly #dir: string;
 	#dirCreated = false;
 	#initPromise: Promise<void> | null = null;
+	#idsInitialized = false;
 
 	/**
 	 * @param dir Directory that will hold artifact files. Created lazily on first save.
@@ -114,6 +115,7 @@ export class ArtifactManager {
 		// the readdir yield in #scanExistingIds (which would hand duplicate ids).
 		this.#initPromise ??= this.#scanExistingIds();
 		await this.#initPromise;
+		this.#idsInitialized = true;
 	}
 
 	#ensureDirSync(): void {
@@ -121,8 +123,10 @@ export class ArtifactManager {
 			fsSync.mkdirSync(this.#dir, { recursive: true });
 			this.#dirCreated = true;
 		}
-		if (this.#initPromise === null) {
+		if (!this.#idsInitialized) {
 			this.#scanExistingIdsSync();
+			this.#idsInitialized = true;
+			this.#initPromise ??= Promise.resolve();
 		}
 	}
 
@@ -145,7 +149,7 @@ export class ArtifactManager {
 				});
 			}
 		}
-		this.#nextId = maxId + 1;
+		this.#nextId = Math.max(this.#nextId, maxId + 1);
 	}
 
 	/**
@@ -163,15 +167,25 @@ export class ArtifactManager {
 				if (id > maxId) maxId = id;
 			}
 		}
-		this.#nextId = maxId + 1;
+		this.#nextId = Math.max(this.#nextId, maxId + 1);
 	}
 
 	/**
-	 * Atomically allocate next artifact ID.
-	 * IDs are sequential within the session.
+	 * Claim a sequential ID across managers and processes. Keep the hidden
+	 * reservation after publication: a failed save must not recycle its ID.
 	 */
 	allocateId(): number {
-		return this.#nextId++;
+		fsSync.mkdirSync(this.#dir, { recursive: true });
+		for (;;) {
+			const id = this.#nextId++;
+			try {
+				fsSync.mkdirSync(path.join(this.#dir, `.artifact-id-${id}`));
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+				throw error;
+			}
+			return id;
+		}
 	}
 
 	/**
@@ -237,7 +251,7 @@ export class ArtifactManager {
 	 */
 	async listFiles(): Promise<string[]> {
 		try {
-			return await fs.readdir(this.#dir);
+			return (await fs.readdir(this.#dir)).filter(file => !file.startsWith(".artifact-id-"));
 		} catch (err) {
 			if (!isEnoent(err)) {
 				logger.warn("Artifact directory could not be read; truncated tool outputs are unreachable", {
