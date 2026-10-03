@@ -219,6 +219,7 @@ describe("worktree isolation helpers", () => {
 			const left = await fs.readdir(path.dirname(handle.mergedDir));
 			expect(left.sort()).toEqual([ISOLATION_OWNER_FILE, path.basename(handle.mergedDir)].sort());
 			expect(left).not.toContain(ISOLATION_CLAIM_FILE);
+			await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });
 		});
 
 		it("clears a claim whose process is gone", async () => {
