@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getProcessStartIdentity, getProcessStartTime } from "@veyyon/utils/process-liveness";
 import { acquireBrokerLease, releaseBrokerLease } from "../../src/launch/broker-lease";
+import { createDaemonBrokerClient } from "../../src/launch/client";
 import { daemonBrokerLeasePath } from "../../src/launch/paths";
 import { hasLiveDaemonProjectPresence } from "../../src/launch/presence";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
@@ -146,5 +147,19 @@ for await (const chunk of Bun.stdin.stream()) {
 		for (const child of children) if (child.exitCode === null) child.kill();
 		await Promise.all(children.map(child => child.exited));
 		cleanup();
+	}
+}, 15_000);
+
+it("starts a responsive broker over a stale legacy lease whose PID is an unrelated live process", async () => {
+	const dir = await runtime();
+	const leasePath = daemonBrokerLeasePath(dir);
+	await fs.writeFile(leasePath, JSON.stringify({ pid: process.pid }));
+	await fs.utimes(leasePath, 1, 1);
+	const client = await createDaemonBrokerClient(dir, { runtimeDir: dir, idleGraceMs: 100 });
+	try {
+		expect(await client.request({ op: "ping" })).toEqual({ op: "ping", projectDir: dir });
+		await client.request({ op: "shutdown" });
+	} finally {
+		client.close();
 	}
 }, 15_000);
