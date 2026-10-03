@@ -88,17 +88,19 @@ const OMP_BUNDLED_PROVIDERS: readonly string[] = [
 
 /** Providers omp bundles that Veyyon does not, each with the reason it is not ported yet. */
 const OMP_PROVIDER_OPT_OUTS: Readonly<Record<string, string>> = {
-	aiand: "port pending (Refs #107)",
-	"alibaba-token-plan": "port pending (Refs #107)",
-	"bedrock-mantle": "port pending (Refs #107)",
-	"cline-pass": "port pending (Refs #107)",
+	aiand: "needs the omp KDL seed layer and its reasoning_efforts discovery mapping; no key to discover rows",
+	"alibaba-token-plan": "needs the Token Plan credential envelope and usage client; no key to discover rows",
+	"bedrock-mantle": "AWS SigV4 and bearer-token auth path; needs an independent auth review before it lands",
+	"cline-pass":
+		"needs the cline-enabled-false disable mode and the cline-pass wire model id transform in the model contract; no key to discover rows",
 	commandcode: 'same provider as the local "command-code" id; renaming would orphan saved credentials',
 	deepinfra: "open port, PR 354",
-	helmcode: "port pending (Refs #107)",
+	helmcode: "omp bundles keyed discovery rows hydrated from resold vendors and ships no static seed; no key here",
 	local: "open port, PR 351 (synthetic role provider)",
 	typesafe: "open port, PR 345",
 	web: "open port, PR 351 (synthetic role provider)",
-	"yolo-auto": "port pending (Refs #107)",
+	"yolo-auto":
+		"its deepseek-flash-v4 row needs the chat-template thinking format, which the model contract here lacks",
 };
 
 describe("bundled provider parity with oh-my-pi", () => {
