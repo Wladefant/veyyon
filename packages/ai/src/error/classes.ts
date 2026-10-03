@@ -159,8 +159,8 @@ export const CODEX_WEBSOCKET_TRANSPORT_ERROR_PREFIX = "Codex websocket transport
  * transport, so `classify()` reaches it by identity instead of by name.
  */
 export class CodexWebSocketTransportError extends Error {
-	constructor(detail: string) {
-		super(`${CODEX_WEBSOCKET_TRANSPORT_ERROR_PREFIX}: ${detail}`);
+	constructor(detail: string, options?: ErrorOptions) {
+		super(`${CODEX_WEBSOCKET_TRANSPORT_ERROR_PREFIX}: ${detail}`, options);
 		this.name = "CodexWebSocketTransportError";
 	}
 }
