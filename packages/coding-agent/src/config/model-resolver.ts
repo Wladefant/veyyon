@@ -24,7 +24,10 @@ import { buildModelProviderPriorityRank } from "@veyyon/catalog/identity";
 import { stripThinkingVariantToken } from "@veyyon/catalog/identity/family";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@veyyon/catalog/provider-models";
-import { resolveBareVariantAlias, resolveVariantAlias } from "@veyyon/catalog/variant-collapse";
+import {
+	resolveBareVariantAlias,
+	resolveVariantAlias,
+} from "@veyyon/catalog/variant-collapse";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { logger } from "@veyyon/utils";
 import { fuzzyMatch } from "@veyyon/utils/fuzzy";
@@ -38,7 +41,10 @@ import {
 } from "../thinking";
 import { isAuthenticated, kNoAuth } from "./auth-state";
 import type { ModelRegistry } from "./model-registry";
-import { type ModelRegistryView, modelResolutionFailureMessage } from "./model-resolution-failure";
+import {
+	type ModelRegistryView,
+	modelResolutionFailureMessage,
+} from "./model-resolution-failure";
 import {
 	DEFAULT_MODEL_ROLE_ALIAS,
 	DEFAULT_MODEL_SLOT,
@@ -61,24 +67,37 @@ function isKnownProvider(provider: string): provider is KnownProvider {
  * group by canonical provider priority so native/OAuth transports beat mirrors
  * without changing unrelated provider fallback precedence.
  */
-export function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<Api> | undefined {
-	const firstDefault = availableModels.find(
-		model => isKnownProvider(model.provider) && DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
+export function pickDefaultAvailableModel(
+	availableModels: Model<Api>[],
+	hasConcreteCredential?: (provider: string) => boolean,
+): Model<Api> | undefined {
+	const concrete = hasConcreteCredential
+		? availableModels.filter((model) => hasConcreteCredential(model.provider))
+		: undefined;
+	const models = concrete?.length ? concrete : availableModels;
+	const firstDefault = models.find(
+		(model) =>
+			isKnownProvider(model.provider) &&
+			DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
 	);
-	if (!firstDefault) return availableModels[0];
+	if (!firstDefault) return models[0];
 
 	const providerPriority = buildModelProviderPriorityRank();
-	const sharedDefaultMatches = availableModels.filter(
-		model =>
+	const sharedDefaultMatches = models.filter(
+		(model) =>
 			model.id === firstDefault.id &&
 			isKnownProvider(model.provider) &&
 			DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
 	);
 	return sharedDefaultMatches.slice().sort((a, b) => {
-		const aRank = providerPriority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
-		const bRank = providerPriority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		const aRank =
+			providerPriority.get(a.provider.toLowerCase()) ??
+			Number.POSITIVE_INFINITY;
+		const bRank =
+			providerPriority.get(b.provider.toLowerCase()) ??
+			Number.POSITIVE_INFINITY;
 		if (aRank !== bRank) return aRank - bRank;
-		return availableModels.indexOf(a) - availableModels.indexOf(b);
+		return models.indexOf(a) - models.indexOf(b);
 	})[0];
 }
 
@@ -101,13 +120,21 @@ interface ModelStringParseOptions extends ThinkingSuffixOptions {
 // (and the literal-id / exact-match guards on the callers) because real model
 // ids end in `:max` (e.g. `glm-4.7:max`) — an ungated split would silently
 // reinterpret them as a thinking suffix.
-const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowMaxSuffix: true, allowAutoAlias: true };
+const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = {
+	allowMaxSuffix: true,
+	allowAutoAlias: true,
+};
 
-function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ConfiguredThinkingLevel | undefined {
+function parseThinkingSuffix(
+	value: string,
+	options?: ThinkingSuffixOptions,
+): ConfiguredThinkingLevel | undefined {
 	const level = parseThinkingLevel(value);
-	if (level === ThinkingLevel.Max) return options?.allowMaxSuffix === true ? level : undefined;
+	if (level === ThinkingLevel.Max)
+		return options?.allowMaxSuffix === true ? level : undefined;
 	if (level !== undefined) return level;
-	if (options?.allowAutoAlias === true && value === AUTO_THINKING) return AUTO_THINKING;
+	if (options?.allowAutoAlias === true && value === AUTO_THINKING)
+		return AUTO_THINKING;
 	return undefined;
 }
 
@@ -129,21 +156,32 @@ function splitThinkingSuffix(
 	const colonIdx = pattern.lastIndexOf(":");
 	if (colonIdx <= minColonIndex) return { base: pattern };
 	const level = parseThinkingSuffix(pattern.slice(colonIdx + 1), options);
-	return level ? { base: pattern.slice(0, colonIdx), level } : { base: pattern };
+	return level
+		? { base: pattern.slice(0, colonIdx), level }
+		: { base: pattern };
 }
 
-function matchingGlobModels(pattern: string, availableModels: readonly Model<Api>[]): Model<Api>[] {
+function matchingGlobModels(
+	pattern: string,
+	availableModels: readonly Model<Api>[],
+): Model<Api>[] {
 	const glob = new Bun.Glob(pattern.toLowerCase());
-	return availableModels.filter(model => {
+	return availableModels.filter((model) => {
 		const fullId = `${model.provider}/${model.id}`;
-		return glob.match(fullId.toLowerCase()) || glob.match(model.id.toLowerCase());
+		return (
+			glob.match(fullId.toLowerCase()) || glob.match(model.id.toLowerCase())
+		);
 	});
 }
 
 function resolveGlobScopePattern(
 	pattern: string,
 	availableModels: readonly Model<Api>[],
-): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } {
+): {
+	models: Model<Api>[];
+	thinkingLevel?: ThinkingLevel;
+	explicitThinkingLevel: boolean;
+} {
 	// Glob scopes describe which models are enabled, not per-role thinking.
 	// Coerce the `auto` sentinel to a concrete-only view so scope callers stay
 	// typed on `ThinkingLevel` and `enabledModels: [\"openai/*:auto\"]` doesn't
@@ -158,11 +196,19 @@ function resolveGlobScopePattern(
 		};
 	}
 
-	const maxSuffix = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+	const maxSuffix = splitThinkingSuffix(
+		pattern,
+		-1,
+		MAX_THINKING_SUFFIX_OPTIONS,
+	);
 	if (maxSuffix.level !== undefined) {
 		const literalMatches = matchingGlobModels(pattern, availableModels);
 		if (literalMatches.length > 0) {
-			return { models: literalMatches, thinkingLevel: undefined, explicitThinkingLevel: false };
+			return {
+				models: literalMatches,
+				thinkingLevel: undefined,
+				explicitThinkingLevel: false,
+			};
 		}
 		const thinkingLevel = concreteThinkingLevel(maxSuffix.level);
 		return {
@@ -189,7 +235,9 @@ function resolveGlobScopePattern(
 export function parseModelString(
 	modelStr: string,
 	options?: ModelStringParseOptions,
-): { provider: string; id: string; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+):
+	| { provider: string; id: string; thinkingLevel?: ConfiguredThinkingLevel }
+	| undefined {
 	const slashIdx = modelStr.indexOf("/");
 	if (slashIdx <= 0) return undefined;
 	const id = modelStr.slice(slashIdx + 1);
@@ -197,13 +245,19 @@ export function parseModelString(
 	const provider = modelStr.slice(0, slashIdx);
 	// Strip strict thinking level suffixes first (e.g. "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high").
 	const strict = splitThinkingSuffix(id);
-	if (strict.level) return strict.base ? { provider, id: strict.base, thinkingLevel: strict.level } : undefined;
+	if (strict.level)
+		return strict.base
+			? { provider, id: strict.base, thinkingLevel: strict.level }
+			: undefined;
 	// `max` is a real thinking level, but real model IDs can also end in
 	// `:max`. Context-aware callers pass a literal lookup so those models win.
 	const maxAlias = splitThinkingSuffix(id, -1, options);
 	if (maxAlias.level) {
-		if (options?.isLiteralModelId?.(provider, id) === true) return { provider, id };
-		return maxAlias.base ? { provider, id: maxAlias.base, thinkingLevel: maxAlias.level } : undefined;
+		if (options?.isLiteralModelId?.(provider, id) === true)
+			return { provider, id };
+		return maxAlias.base
+			? { provider, id: maxAlias.base, thinkingLevel: maxAlias.level }
+			: undefined;
 	}
 	return { provider, id };
 }
@@ -216,7 +270,12 @@ export function formatModelString(model: Model<Api>): string {
 }
 
 function getSingleRoutingOnly(routing: unknown): string | undefined {
-	if (!routing || typeof routing !== "object" || !("only" in routing) || !Array.isArray(routing.only)) {
+	if (
+		!routing ||
+		typeof routing !== "object" ||
+		!("only" in routing) ||
+		!Array.isArray(routing.only)
+	) {
 		return undefined;
 	}
 	if (routing.only.length !== 1) return undefined;
@@ -227,7 +286,10 @@ function getSingleRoutingOnly(routing: unknown): string | undefined {
 function getSingleUpstreamRoute(model: Model<Api>): string | undefined {
 	const compat = model.compat;
 	if (!compat || typeof compat !== "object") return undefined;
-	if (modelMatchesHost(model, "vercelAIGateway") && "vercelGatewayRouting" in compat) {
+	if (
+		modelMatchesHost(model, "vercelAIGateway") &&
+		"vercelGatewayRouting" in compat
+	) {
 		return getSingleRoutingOnly(compat.vercelGatewayRouting);
 	}
 	if (modelMatchesHost(model, "openrouter") && "openRouterRouting" in compat) {
@@ -242,11 +304,18 @@ export function formatModelStringWithRouting(model: Model<Api>): string {
 	return upstream ? `${selector}@${upstream}` : selector;
 }
 
-export function formatModelSelectorValue(selector: string, thinkingLevel: ConfiguredThinkingLevel | undefined): string {
-	return thinkingLevel && thinkingLevel !== ThinkingLevel.Inherit ? `${selector}:${thinkingLevel}` : selector;
+export function formatModelSelectorValue(
+	selector: string,
+	thinkingLevel: ConfiguredThinkingLevel | undefined,
+): string {
+	return thinkingLevel && thinkingLevel !== ThinkingLevel.Inherit
+		? `${selector}:${thinkingLevel}`
+		: selector;
 }
 
-function getOpenRouterRouteSuffix(modelId: string): { baseId: string; suffix: string } | undefined {
+function getOpenRouterRouteSuffix(
+	modelId: string,
+): { baseId: string; suffix: string } | undefined {
 	const colonIdx = modelId.lastIndexOf(":");
 	if (colonIdx === -1) {
 		return undefined;
@@ -295,7 +364,10 @@ function getOpenRouterFallbackModelIds(modelId: string): string[] {
 	return orderedCandidates;
 }
 
-function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Model<Api> {
+function cloneModelWithRequestedId(
+	model: Model<Api>,
+	requestedId: string,
+): Model<Api> {
 	return {
 		...model,
 		id: requestedId,
@@ -317,11 +389,16 @@ function resolveBedrockInferenceProfileModelId(
 	availableModels: readonly Model<Api>[],
 ): Model<Api> | undefined {
 	const requestedId = modelId.trim();
-	if (hasBedrockInferenceProfileThinkingSuffix(requestedId) || !BEDROCK_INFERENCE_PROFILE_ARN.test(requestedId)) {
+	if (
+		hasBedrockInferenceProfileThinkingSuffix(requestedId) ||
+		!BEDROCK_INFERENCE_PROFILE_ARN.test(requestedId)
+	) {
 		return undefined;
 	}
 
-	const template = availableModels.find(model => model.provider.toLowerCase() === AMAZON_BEDROCK_PROVIDER);
+	const template = availableModels.find(
+		(model) => model.provider.toLowerCase() === AMAZON_BEDROCK_PROVIDER,
+	);
 	if (!template) return undefined;
 
 	return buildModel({
@@ -370,7 +447,9 @@ const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
  * not special-case slugs like `default` here, or aggregator routing to an
  * upstream named `default` would break.
  */
-export function splitUpstreamRouting(pattern: string): { base: string; upstream: string } | undefined {
+export function splitUpstreamRouting(
+	pattern: string,
+): { base: string; upstream: string } | undefined {
 	const at = pattern.lastIndexOf("@");
 	if (at <= 0) return undefined;
 	const rest = pattern.slice(at + 1);
@@ -383,7 +462,10 @@ export function splitUpstreamRouting(pattern: string): { base: string; upstream:
 
 /** OpenRouter and Vercel AI Gateway are the aggregators that honor per-request upstream routing. */
 function supportsUpstreamRouting(model: Model<Api>): boolean {
-	return modelMatchesHost(model, "openrouter") || modelMatchesHost(model, "vercelAIGateway");
+	return (
+		modelMatchesHost(model, "openrouter") ||
+		modelMatchesHost(model, "vercelAIGateway")
+	);
 }
 
 /** Pin a resolved aggregator model to a single upstream provider via its compat routing block. */
@@ -403,7 +485,9 @@ type ModelsWithProviderIndex = readonly Model<Api>[] & {
 	[kProviderModelIndex]?: Map<string, Model<Api> | null>;
 };
 
-function getProviderModelIndex(availableModels: readonly Model<Api>[]): Map<string, Model<Api> | null> {
+function getProviderModelIndex(
+	availableModels: readonly Model<Api>[],
+): Map<string, Model<Api> | null> {
 	const tagged = availableModels as ModelsWithProviderIndex;
 	const cached = tagged[kProviderModelIndex];
 	if (cached) return cached;
@@ -444,15 +528,22 @@ export function resolveProviderModelReference(
 	// model: hand-table aliases first, then the `X-thinking` → `X` grammar
 	// for auto-derived pairs. Exact lookup above always wins while raw is live.
 	const variantAliasId =
-		resolveVariantAlias(normalizedProvider, normalizedModelId) ?? stripThinkingVariantToken(normalizedModelId);
+		resolveVariantAlias(normalizedProvider, normalizedModelId) ??
+		stripThinkingVariantToken(normalizedModelId);
 	if (variantAliasId) {
-		const aliased = index.get(`${normalizedProvider}\u0000${variantAliasId.toLowerCase()}`);
+		const aliased = index.get(
+			`${normalizedProvider}\u0000${variantAliasId.toLowerCase()}`,
+		);
 		if (aliased) {
 			return aliased;
 		}
 	}
 
-	const bedrockInferenceProfile = resolveBedrockInferenceProfileReference(provider, modelId, availableModels);
+	const bedrockInferenceProfile = resolveBedrockInferenceProfileReference(
+		provider,
+		modelId,
+		availableModels,
+	);
 	if (bedrockInferenceProfile) {
 		return bedrockInferenceProfile;
 	}
@@ -462,7 +553,9 @@ export function resolveProviderModelReference(
 	}
 
 	for (const fallbackId of getOpenRouterFallbackModelIds(modelId).slice(1)) {
-		const fallback = index.get(`${normalizedProvider}\u0000${fallbackId.toLowerCase()}`);
+		const fallback = index.get(
+			`${normalizedProvider}\u0000${fallbackId.toLowerCase()}`,
+		);
 		if (fallback === null) {
 			return undefined;
 		}
@@ -491,7 +584,12 @@ export interface ModelMatchPreferences {
 
 export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable">;
 type CliModelRegistry = Pick<ModelRegistry, "getAll"> &
-	Partial<Pick<ModelRegistry, "hasConfiguredAuth" | "getAvailable" | "getError" | "getProviderModels">>;
+	Partial<
+		Pick<
+			ModelRegistry,
+			"hasConfiguredAuth" | "getAvailable" | "getError" | "getProviderModels"
+		>
+	>;
 
 interface ModelPreferenceContext {
 	modelUsageRank: Map<string, number>;
@@ -519,8 +617,12 @@ function buildPreferenceContext(
 			providerUsageRank.set(parsed.provider, i);
 		}
 	}
-	const providerPriorityRank = buildModelProviderPriorityRank(preferences?.providerOrder);
-	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? []);
+	const providerPriorityRank = buildModelProviderPriorityRank(
+		preferences?.providerOrder,
+	);
+	const deprioritizedProviders = new Set(
+		preferences?.deprioritizeProviders ?? [],
+	);
 	const modelOrder = new Map<string, number>();
 	for (let i = 0; i < availableModels.length; i += 1) {
 		modelOrder.set(formatModelString(availableModels[i]), i);
@@ -541,7 +643,9 @@ export function getModelMatchPreferences(
 ): ModelMatchPreferences {
 	const agentDir = settings?.getAgentDir?.();
 	return {
-		usageOrder: agentDir ? AgentStorage.forAgentDir(agentDir)?.getModelUsageOrder() : undefined,
+		usageOrder: agentDir
+			? AgentStorage.forAgentDir(agentDir)?.getModelUsageOrder()
+			: undefined,
 		providerOrder: settings?.get?.("modelProviderOrder"),
 	};
 }
@@ -553,13 +657,17 @@ function mergeModelMatchPreferences(
 	const settingsPreferences = getModelMatchPreferences(settings);
 	return {
 		usageOrder: preferences?.usageOrder ?? settingsPreferences.usageOrder,
-		providerOrder: preferences?.providerOrder ?? settingsPreferences.providerOrder,
+		providerOrder:
+			preferences?.providerOrder ?? settingsPreferences.providerOrder,
 		deprioritizeProviders: preferences?.deprioritizeProviders,
 		hasConfiguredAuth: preferences?.hasConfiguredAuth,
 	};
 }
 
-function pickPreferredModel(candidates: Model<Api>[], context: ModelPreferenceContext): Model<Api> {
+function pickPreferredModel(
+	candidates: Model<Api>[],
+	context: ModelPreferenceContext,
+): Model<Api> {
 	if (candidates.length <= 1) return candidates[0];
 	return candidates.slice().sort((a, b) => {
 		if (context.hasConfiguredAuth) {
@@ -575,19 +683,32 @@ function pickPreferredModel(candidates: Model<Api>[], context: ModelPreferenceCo
 		const aUsage = context.modelUsageRank.get(aKey);
 		const bUsage = context.modelUsageRank.get(bKey);
 		if (aUsage !== undefined || bUsage !== undefined) {
-			return (aUsage ?? Number.POSITIVE_INFINITY) - (bUsage ?? Number.POSITIVE_INFINITY);
+			return (
+				(aUsage ?? Number.POSITIVE_INFINITY) -
+				(bUsage ?? Number.POSITIVE_INFINITY)
+			);
 		}
 
-		const aProviderPriority = context.providerPriorityRank.get(a.provider.toLowerCase());
-		const bProviderPriority = context.providerPriorityRank.get(b.provider.toLowerCase());
+		const aProviderPriority = context.providerPriorityRank.get(
+			a.provider.toLowerCase(),
+		);
+		const bProviderPriority = context.providerPriorityRank.get(
+			b.provider.toLowerCase(),
+		);
 		if (aProviderPriority !== undefined || bProviderPriority !== undefined) {
-			return (aProviderPriority ?? Number.POSITIVE_INFINITY) - (bProviderPriority ?? Number.POSITIVE_INFINITY);
+			return (
+				(aProviderPriority ?? Number.POSITIVE_INFINITY) -
+				(bProviderPriority ?? Number.POSITIVE_INFINITY)
+			);
 		}
 
 		const aProviderUsage = context.providerUsageRank.get(a.provider);
 		const bProviderUsage = context.providerUsageRank.get(b.provider);
 		if (aProviderUsage !== undefined || bProviderUsage !== undefined) {
-			return (aProviderUsage ?? Number.POSITIVE_INFINITY) - (bProviderUsage ?? Number.POSITIVE_INFINITY);
+			return (
+				(aProviderUsage ?? Number.POSITIVE_INFINITY) -
+				(bProviderUsage ?? Number.POSITIVE_INFINITY)
+			);
 		}
 
 		const aDeprioritized = context.deprioritizedProviders.has(a.provider);
@@ -615,7 +736,10 @@ function isAlias(id: string): boolean {
 	return !datePattern.test(id);
 }
 
-function includeSyntheticAllowedModels(available: Model<Api>[], allowedModels: Iterable<Model<Api>>): Model<Api>[] {
+function includeSyntheticAllowedModels(
+	available: Model<Api>[],
+	allowedModels: Iterable<Model<Api>>,
+): Model<Api>[] {
 	const allowedByKey = new Map<string, Model<Api>>();
 	for (const model of allowedModels) {
 		const key = formatModelString(model);
@@ -676,8 +800,12 @@ function matchModel(
 	// An empty pattern is a substring of every id and a `*` here is not a glob
 	// (glob scope is `matchingGlobModels`): either would pick the first model of
 	// the whole registry, or of a provider, in silence.
-	if (!modelPattern || modelPattern === DEFAULT_MODEL_ROLE_ALIAS) return undefined;
-	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
+	if (!modelPattern || modelPattern === DEFAULT_MODEL_ROLE_ALIAS)
+		return undefined;
+	const exactRefMatch = findExactModelReferenceMatch(
+		modelPattern,
+		availableModels,
+	);
 	if (exactRefMatch) {
 		return exactRefMatch;
 	}
@@ -687,12 +815,17 @@ function matchModel(
 	// IDs like "openai/gpt-4o:extended") still resolve as IDs instead of being
 	// misread as a provider-qualified selector.
 	const lowerPattern = modelPattern.toLowerCase();
-	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === lowerPattern);
+	const exactMatches = availableModels.filter(
+		(m) => m.id.toLowerCase() === lowerPattern,
+	);
 	if (exactMatches.length > 0) {
 		return pickPreferredModel(exactMatches, context);
 	}
 
-	const bedrockInferenceProfile = resolveBedrockInferenceProfileModelId(modelPattern, availableModels);
+	const bedrockInferenceProfile = resolveBedrockInferenceProfileModelId(
+		modelPattern,
+		availableModels,
+	);
 	if (bedrockInferenceProfile) {
 		return bedrockInferenceProfile;
 	}
@@ -702,13 +835,21 @@ function matchModel(
 	// declared the alias win ties. Auto-derived `X-thinking` pairs resolve
 	// through the grammar fallback.
 	const bareAlias = resolveBareVariantAlias(modelPattern);
-	const bareAliasTargetId = bareAlias?.id ?? stripThinkingVariantToken(modelPattern);
+	const bareAliasTargetId =
+		bareAlias?.id ?? stripThinkingVariantToken(modelPattern);
 	if (bareAliasTargetId) {
 		const lowerAliasTarget = bareAliasTargetId.toLowerCase();
-		const aliasMatches = availableModels.filter(m => m.id.toLowerCase() === lowerAliasTarget);
+		const aliasMatches = availableModels.filter(
+			(m) => m.id.toLowerCase() === lowerAliasTarget,
+		);
 		if (aliasMatches.length > 0) {
-			const preferred = bareAlias ? aliasMatches.filter(m => bareAlias.providers.includes(m.provider)) : [];
-			return pickPreferredModel(preferred.length > 0 ? preferred : aliasMatches, context);
+			const preferred = bareAlias
+				? aliasMatches.filter((m) => bareAlias.providers.includes(m.provider))
+				: [];
+			return pickPreferredModel(
+				preferred.length > 0 ? preferred : aliasMatches,
+				context,
+			);
 		}
 	}
 	// Check for provider/modelId format — fuzzy match within provider only.
@@ -717,7 +858,9 @@ function matchModel(
 		const provider = modelPattern.substring(0, slashIndex);
 		const modelId = modelPattern.substring(slashIndex + 1);
 		const lowerProvider = provider.toLowerCase();
-		const providerModels = availableModels.filter(m => m.provider.toLowerCase() === lowerProvider);
+		const providerModels = availableModels.filter(
+			(m) => m.provider.toLowerCase() === lowerProvider,
+		);
 		if (providerModels.length === 0) {
 			// The prefix is not a known provider in this candidate set, so treat the
 			// slash as part of the raw model ID and continue with generic matching.
@@ -730,27 +873,38 @@ function matchModel(
 			// slug — but only for aggregator providers (OpenRouter / Vercel Gateway). Other
 			// providers have ids that legitimately end in `@` (Vertex `claude-opus-4-8@default`),
 			// and the fallback never routes them, so they must keep fuzzy matching.
-			if (splitUpstreamRouting(modelId) && providerModels.some(supportsUpstreamRouting)) {
+			if (
+				splitUpstreamRouting(modelId) &&
+				providerModels.some(supportsUpstreamRouting)
+			) {
 				return undefined;
 			}
 			const scored = providerModels
-				.map(model => ({ model, match: fuzzyMatch(modelId, model.id) }))
-				.filter(entry => entry.match.matches);
+				.map((model) => ({ model, match: fuzzyMatch(modelId, model.id) }))
+				.filter((entry) => entry.match.matches);
 			if (scored.length === 0) {
 				return undefined;
 			}
 
 			scored.sort((a, b) => {
-				if (a.match.score !== b.match.score) return a.match.score - b.match.score;
+				if (a.match.score !== b.match.score)
+					return a.match.score - b.match.score;
 				const aKey = formatModelString(a.model);
 				const bKey = formatModelString(b.model);
-				const aUsage = context.modelUsageRank.get(aKey) ?? Number.POSITIVE_INFINITY;
-				const bUsage = context.modelUsageRank.get(bKey) ?? Number.POSITIVE_INFINITY;
+				const aUsage =
+					context.modelUsageRank.get(aKey) ?? Number.POSITIVE_INFINITY;
+				const bUsage =
+					context.modelUsageRank.get(bKey) ?? Number.POSITIVE_INFINITY;
 				if (aUsage !== bUsage) return aUsage - bUsage;
 
-				const aProviderUsage = context.providerUsageRank.get(a.model.provider) ?? Number.POSITIVE_INFINITY;
-				const bProviderUsage = context.providerUsageRank.get(b.model.provider) ?? Number.POSITIVE_INFINITY;
-				if (aProviderUsage !== bProviderUsage) return aProviderUsage - bProviderUsage;
+				const aProviderUsage =
+					context.providerUsageRank.get(a.model.provider) ??
+					Number.POSITIVE_INFINITY;
+				const bProviderUsage =
+					context.providerUsageRank.get(b.model.provider) ??
+					Number.POSITIVE_INFINITY;
+				if (aProviderUsage !== bProviderUsage)
+					return aProviderUsage - bProviderUsage;
 
 				const aOrder = context.modelOrder.get(aKey) ?? 0;
 				const bOrder = context.modelOrder.get(bKey) ?? 0;
@@ -762,7 +916,9 @@ function matchModel(
 
 	// No exact match - fall back to partial matching
 	const matches = availableModels.filter(
-		m => m.id.toLowerCase().includes(lowerPattern) || m.name?.toLowerCase().includes(lowerPattern),
+		(m) =>
+			m.id.toLowerCase().includes(lowerPattern) ||
+			m.name?.toLowerCase().includes(lowerPattern),
 	);
 
 	if (matches.length === 0) {
@@ -770,8 +926,8 @@ function matchModel(
 	}
 
 	// Separate into aliases and dated versions
-	const aliases = matches.filter(m => isAlias(m.id));
-	const datedVersions = matches.filter(m => !isAlias(m.id));
+	const aliases = matches.filter((m) => isAlias(m.id));
+	const datedVersions = matches.filter((m) => !isAlias(m.id));
 
 	if (aliases.length > 0) {
 		return pickPreferredModel(aliases, context);
@@ -782,10 +938,12 @@ function matchModel(
 		return datedVersions[0];
 	}
 
-	const sortedById = datedVersions.slice().sort((a, b) => b.id.localeCompare(a.id));
+	const sortedById = datedVersions
+		.slice()
+		.sort((a, b) => b.id.localeCompare(a.id));
 	const topId = sortedById[0]?.id;
 	if (!topId) return undefined;
-	const topCandidates = sortedById.filter(model => model.id === topId);
+	const topCandidates = sortedById.filter((model) => model.id === topId);
 	return pickPreferredModel(topCandidates, context);
 }
 
@@ -821,15 +979,29 @@ function parseModelPatternWithContext(
 	// Try exact match first
 	const exactMatch = matchModel(pattern, availableModels, context);
 	if (exactMatch) {
-		return { model: exactMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+		return {
+			model: exactMatch,
+			thinkingLevel: undefined,
+			warning: undefined,
+			explicitThinkingLevel: false,
+		};
 	}
 
 	// No match - try stripping a valid thinking suffix and recursing.
 	// `max` is accepted only after the full pattern failed, so literal model IDs
 	// ending in `:max` keep winning over the thinking suffix.
-	const { base, level } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+	const { base, level } = splitThinkingSuffix(
+		pattern,
+		-1,
+		MAX_THINKING_SUFFIX_OPTIONS,
+	);
 	if (level) {
-		const result = parseModelPatternWithContext(base, availableModels, context, options);
+		const result = parseModelPatternWithContext(
+			base,
+			availableModels,
+			context,
+			options,
+		);
 		if (result.model) {
 			// Only use this thinking level if no warning from inner recursion
 			const explicitThinkingLevel = !result.warning;
@@ -846,18 +1018,33 @@ function parseModelPatternWithContext(
 	const lastColonIndex = pattern.lastIndexOf(":");
 	if (lastColonIndex === -1) {
 		// No colons, pattern simply doesn't match any model
-		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+		return {
+			model: undefined,
+			thinkingLevel: undefined,
+			warning: undefined,
+			explicitThinkingLevel: false,
+		};
 	}
 	const prefix = pattern.substring(0, lastColonIndex);
 	const suffix = pattern.substring(lastColonIndex + 1);
 
 	const allowFallback = options?.allowInvalidThinkingSelectorFallback ?? true;
 	if (!allowFallback) {
-		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+		return {
+			model: undefined,
+			thinkingLevel: undefined,
+			warning: undefined,
+			explicitThinkingLevel: false,
+		};
 	}
 
 	// Invalid suffix - recurse on prefix and warn
-	const result = parseModelPatternWithContext(prefix, availableModels, context, options);
+	const result = parseModelPatternWithContext(
+		prefix,
+		availableModels,
+		context,
+		options,
+	);
 	if (result.model) {
 		return {
 			model: result.model,
@@ -878,7 +1065,12 @@ function matchPatternWithContext(
 	context: ModelPreferenceContext,
 	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
-	const direct = parseModelPatternWithContext(pattern, availableModels, context, options);
+	const direct = parseModelPatternWithContext(
+		pattern,
+		availableModels,
+		context,
+		options,
+	);
 	if (direct.model) return direct;
 
 	// No direct match: a trailing `@upstream` may be a provider-routing selector.
@@ -886,9 +1078,18 @@ function matchPatternWithContext(
 	// Vercel Gateway); otherwise `@` stays part of the id and `direct` stands.
 	const routing = splitUpstreamRouting(pattern);
 	if (routing) {
-		const routed = parseModelPatternWithContext(routing.base, availableModels, context, options);
+		const routed = parseModelPatternWithContext(
+			routing.base,
+			availableModels,
+			context,
+			options,
+		);
 		if (routed.model && supportsUpstreamRouting(routed.model)) {
-			return { ...routed, model: applyUpstreamRouting(routed.model, routing.upstream), upstream: routing.upstream };
+			return {
+				...routed,
+				model: applyUpstreamRouting(routed.model, routing.upstream),
+				upstream: routing.upstream,
+			};
 		}
 	}
 	return direct;
@@ -909,7 +1110,10 @@ export function parseModelPattern(
 }
 
 const DEFAULT_MODEL_ROLE = "default";
-const MODEL_ROLE_ALIAS_PREFIXES = [MODEL_ROLE_ALIAS_PREFIX, LEGACY_MODEL_ROLE_ALIAS_PREFIX];
+const MODEL_ROLE_ALIAS_PREFIXES = [
+	MODEL_ROLE_ALIAS_PREFIX,
+	LEGACY_MODEL_ROLE_ALIAS_PREFIX,
+];
 
 function isModelRole(role: string): role is ModelRole {
 	return (MODEL_ROLE_IDS as string[]).includes(role);
@@ -923,17 +1127,32 @@ function isModelRole(role: string): role is ModelRole {
  * one-character token (`*:xhigh`).
  */
 function modelRoleAliasPrefixLength(value: string): number | undefined {
-	if (value === DEFAULT_MODEL_ROLE_ALIAS || value.startsWith(`${DEFAULT_MODEL_ROLE_ALIAS}:`)) return 0;
-	return MODEL_ROLE_ALIAS_PREFIXES.find(prefix => value.startsWith(prefix))?.length;
+	if (
+		value === DEFAULT_MODEL_ROLE_ALIAS ||
+		value.startsWith(`${DEFAULT_MODEL_ROLE_ALIAS}:`)
+	)
+		return 0;
+	return MODEL_ROLE_ALIAS_PREFIXES.find((prefix) => value.startsWith(prefix))
+		?.length;
 }
 
-function getModelRoleAlias(value: string, settings?: Settings): string | undefined {
+function getModelRoleAlias(
+	value: string,
+	settings?: Settings,
+): string | undefined {
 	const normalized = value.trim();
 	const prefixLength = modelRoleAliasPrefixLength(normalized);
 	if (prefixLength === undefined) return undefined;
 
-	const candidate = normalized === DEFAULT_MODEL_ROLE_ALIAS ? DEFAULT_MODEL_ROLE : normalized.slice(prefixLength);
-	if (isModelRole(candidate) || candidate === DEFAULT_MODEL_ROLE || settings?.getModelRole(candidate) !== undefined) {
+	const candidate =
+		normalized === DEFAULT_MODEL_ROLE_ALIAS
+			? DEFAULT_MODEL_ROLE
+			: normalized.slice(prefixLength);
+	if (
+		isModelRole(candidate) ||
+		candidate === DEFAULT_MODEL_ROLE ||
+		settings?.getModelRole(candidate) !== undefined
+	) {
 		return candidate;
 	}
 	return undefined;
@@ -953,7 +1172,9 @@ export type RolePatternFailure =
 	/** The role's chain of `@role` values returns to a role already on the chain. */
 	| { kind: "role-cycle"; role: string; chain: string[] };
 
-export type RolePatternResolution = { kind: "patterns"; patterns: string[] } | RolePatternFailure;
+export type RolePatternResolution =
+	| { kind: "patterns"; patterns: string[] }
+	| RolePatternFailure;
 
 /** Roles a `@role` selector may name: the built-in set plus every configured custom role. */
 function knownRoleNames(settings?: Settings): string[] {
@@ -963,7 +1184,10 @@ function knownRoleNames(settings?: Settings): string[] {
 }
 
 /** The operator-facing sentence for a {@link RolePatternFailure}. */
-export function describeRolePatternFailure(failure: RolePatternFailure, settings?: Settings): string {
+export function describeRolePatternFailure(
+	failure: RolePatternFailure,
+	settings?: Settings,
+): string {
 	const alias = formatModelRoleAlias(failure.role);
 	switch (failure.kind) {
 		case "unset-role":
@@ -987,10 +1211,14 @@ export function describeRolePatternFailure(failure: RolePatternFailure, settings
  * try second. Role aliases are left alone here; expansion happens in
  * {@link resolveConfiguredModelPatterns}.
  */
-export function normalizeModelPatternList(value: string | string[] | undefined): string[] {
+export function normalizeModelPatternList(
+	value: string | string[] | undefined,
+): string[] {
 	if (!value) return [];
-	const patterns = Array.isArray(value) ? value.flatMap(pattern => pattern.split(",")) : value.split(",");
-	return patterns.map(pattern => pattern.trim()).filter(Boolean);
+	const patterns = Array.isArray(value)
+		? value.flatMap((pattern) => pattern.split(","))
+		: value.split(",");
+	return patterns.map((pattern) => pattern.trim()).filter(Boolean);
 }
 
 /**
@@ -1026,7 +1254,8 @@ function resolveConfiguredRolePattern(
 
 	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
 		normalized,
-		modelRoleAliasPrefixLength(normalized) ?? LEGACY_MODEL_ROLE_ALIAS_PREFIX.length,
+		modelRoleAliasPrefixLength(normalized) ??
+			LEGACY_MODEL_ROLE_ALIAS_PREFIX.length,
 		MAX_THINKING_SUFFIX_OPTIONS,
 	);
 	const role = getModelRoleAlias(aliasCandidate, settings);
@@ -1037,27 +1266,40 @@ function resolveConfiguredRolePattern(
 		// with no mention of the role that does not exist. (The legacy `pi/`
 		// spelling is left alone: `pi/` is also a plausible provider prefix.)
 		if (normalized.startsWith(MODEL_ROLE_ALIAS_PREFIX)) {
-			return { kind: "unknown-role", role: aliasCandidate.slice(MODEL_ROLE_ALIAS_PREFIX.length) };
+			return {
+				kind: "unknown-role",
+				role: aliasCandidate.slice(MODEL_ROLE_ALIAS_PREFIX.length),
+			};
 		}
 		return { kind: "patterns", patterns: [normalized] };
 	}
-	if (visited.includes(role)) return { kind: "role-cycle", role, chain: visited };
+	if (visited.includes(role))
+		return { kind: "role-cycle", role, chain: visited };
 
 	const configured = settings?.getModelRole(role)?.trim();
-	const configuredPatterns = configured ? normalizeModelPatternList(configured) : [];
+	const configuredPatterns = configured
+		? normalizeModelPatternList(configured)
+		: [];
 	if (configuredPatterns.length === 0) {
 		return { kind: "unset-role", role };
 	}
 
-	const expanded = expandPatternChain(configuredPatterns, settings, [...visited, role]);
+	const expanded = expandPatternChain(configuredPatterns, settings, [
+		...visited,
+		role,
+	]);
 	if (expanded.kind !== "patterns" || !thinkingLevel) return expanded;
 	return {
 		kind: "patterns",
-		patterns: expanded.patterns.map(pattern => {
+		patterns: expanded.patterns.map((pattern) => {
 			// The alias suffix is the selector nearest the caller and therefore
 			// replaces a valid suffix stored on the aliased role. Appending produced
 			// `model:high:low`, leaving two contradictory selectors in one value.
-			const existing = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+			const existing = splitThinkingSuffix(
+				pattern,
+				-1,
+				MAX_THINKING_SUFFIX_OPTIONS,
+			);
 			return `${existing.base}:${thinkingLevel}`;
 		}),
 	};
@@ -1091,7 +1333,10 @@ function expandPatternChain(
  */
 export function expandRoleAlias(value: string, settings?: Settings): string {
 	const normalized = value.trim();
-	if (normalized === DEFAULT_MODEL_ROLE || normalized === DEFAULT_MODEL_ROLE_ALIAS) {
+	if (
+		normalized === DEFAULT_MODEL_ROLE ||
+		normalized === DEFAULT_MODEL_ROLE_ALIAS
+	) {
 		// Bare "default" / "*" are inherit/wildcard sentinels, never expanded.
 		return normalized;
 	}
@@ -1105,7 +1350,9 @@ export function expandRoleAlias(value: string, settings?: Settings): string {
 	}
 
 	const resolved = resolveConfiguredRolePattern(value, settings);
-	return (resolved.kind === "patterns" ? resolved.patterns[0] : undefined) ?? value;
+	return (
+		(resolved.kind === "patterns" ? resolved.patterns[0] : undefined) ?? value
+	);
 }
 
 /**
@@ -1121,7 +1368,10 @@ export function expandConfiguredModelPatterns(
 	return expandPatternChain(normalizeModelPatternList(value), settings, []);
 }
 
-export function resolveConfiguredModelPatterns(value: string | string[] | undefined, settings?: Settings): string[] {
+export function resolveConfiguredModelPatterns(
+	value: string | string[] | undefined,
+	settings?: Settings,
+): string[] {
 	const expanded = expandConfiguredModelPatterns(value, settings);
 	return expanded.kind === "patterns" ? expanded.patterns : [];
 }
@@ -1176,34 +1426,65 @@ export function resolveModelRoleValue(
 	options?: { settings?: Settings; matchPreferences?: ModelMatchPreferences },
 ): ResolvedModelRoleValue {
 	if (!roleValue) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
+		return {
+			model: undefined,
+			thinkingLevel: undefined,
+			explicitThinkingLevel: false,
+			warning: undefined,
+		};
 	}
 
 	const normalized = roleValue.trim();
 	if (!normalized || normalized === DEFAULT_MODEL_ROLE) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
+		return {
+			model: undefined,
+			thinkingLevel: undefined,
+			explicitThinkingLevel: false,
+			warning: undefined,
+		};
 	}
 
-	const effectivePatterns = resolveConfiguredModelPatterns(normalized, options?.settings);
+	const effectivePatterns = resolveConfiguredModelPatterns(
+		normalized,
+		options?.settings,
+	);
 	if (!effectivePatterns || effectivePatterns.length === 0) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
+		return {
+			model: undefined,
+			thinkingLevel: undefined,
+			explicitThinkingLevel: false,
+			warning: undefined,
+		};
 	}
 
 	let warning: string | undefined;
-	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
+	const matchPreferences = mergeModelMatchPreferences(
+		options?.settings,
+		options?.matchPreferences,
+	);
 	// Build the O(n) preference context (model-order map over all available
 	// models) once and reuse it across every fallback pattern instead of
 	// rebuilding it per pattern inside parseModelPattern.
-	const preferenceContext = buildPreferenceContext(availableModels, matchPreferences);
+	const preferenceContext = buildPreferenceContext(
+		availableModels,
+		matchPreferences,
+	);
 	for (const effectivePattern of effectivePatterns) {
-		const resolved = matchPatternWithContext(effectivePattern, availableModels, preferenceContext);
+		const resolved = matchPatternWithContext(
+			effectivePattern,
+			availableModels,
+			preferenceContext,
+		);
 		if (resolved.model) {
 			return {
 				model: resolved.model,
 				thinkingLevel: resolved.explicitThinkingLevel
 					? resolved.thinkingLevel === AUTO_THINKING
 						? AUTO_THINKING
-						: (resolveThinkingLevelForModel(resolved.model, resolved.thinkingLevel) ?? resolved.thinkingLevel)
+						: (resolveThinkingLevelForModel(
+								resolved.model,
+								resolved.thinkingLevel,
+							) ?? resolved.thinkingLevel)
 					: resolved.thinkingLevel,
 				explicitThinkingLevel: resolved.explicitThinkingLevel,
 				warning: resolved.warning,
@@ -1214,16 +1495,27 @@ export function resolveModelRoleValue(
 		}
 	}
 
-	return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning };
+	return {
+		model: undefined,
+		thinkingLevel: undefined,
+		explicitThinkingLevel: false,
+		warning,
+	};
 }
 
 interface ExplicitThinkingSelectorOptions {
 	isLiteralModelId?: (provider: string, id: string) => boolean;
 }
 
-function isLiteralModelSelector(value: string, options?: ExplicitThinkingSelectorOptions): boolean {
+function isLiteralModelSelector(
+	value: string,
+	options?: ExplicitThinkingSelectorOptions,
+): boolean {
 	const parsed = parseModelString(value);
-	return parsed !== undefined && options?.isLiteralModelId?.(parsed.provider, parsed.id) === true;
+	return (
+		parsed !== undefined &&
+		options?.isLiteralModelId?.(parsed.provider, parsed.id) === true
+	);
 }
 
 export function extractExplicitThinkingSelector(
@@ -1239,15 +1531,22 @@ export function extractExplicitThinkingSelector(
 	let current = normalized;
 	while (!visited.has(current)) {
 		visited.add(current);
-		const rolePrefixLength = modelRoleAliasPrefixLength(current) ?? LEGACY_MODEL_ROLE_ALIAS_PREFIX.length;
+		const rolePrefixLength =
+			modelRoleAliasPrefixLength(current) ??
+			LEGACY_MODEL_ROLE_ALIAS_PREFIX.length;
 		const strictSelector = splitThinkingSuffix(current, rolePrefixLength).level;
 		if (strictSelector) {
 			return strictSelector;
 		}
-		const maxSelector = splitThinkingSuffix(current, rolePrefixLength, MAX_THINKING_SUFFIX_OPTIONS).level;
+		const maxSelector = splitThinkingSuffix(
+			current,
+			rolePrefixLength,
+			MAX_THINKING_SUFFIX_OPTIONS,
+		).level;
 		if (
 			maxSelector &&
-			(modelRoleAliasPrefixLength(current) !== undefined || !isLiteralModelSelector(current, options))
+			(modelRoleAliasPrefixLength(current) !== undefined ||
+				!isLiteralModelSelector(current, options))
 		) {
 			return maxSelector;
 		}
@@ -1268,14 +1567,19 @@ export function resolveModelFromString(
 	available: Model<Api>[],
 	matchPreferences?: ModelMatchPreferences,
 ): Model<Api> | undefined {
-	const exact = available.find(model => `${model.provider}/${model.id}` === value);
+	const exact = available.find(
+		(model) => `${model.provider}/${model.id}` === value,
+	);
 	if (exact) return exact;
 	const parsed = parseModelString(value, {
 		...MAX_THINKING_SUFFIX_OPTIONS,
-		isLiteralModelId: (provider, id) => available.some(model => model.provider === provider && model.id === id),
+		isLiteralModelId: (provider, id) =>
+			available.some((model) => model.provider === provider && model.id === id),
 	});
 	if (parsed) {
-		const parsedExact = available.find(model => model.provider === parsed.provider && model.id === parsed.id);
+		const parsedExact = available.find(
+			(model) => model.provider === parsed.provider && model.id === parsed.id,
+		);
 		if (parsedExact) return parsedExact;
 	}
 	return parseModelPattern(value, available, matchPreferences).model;
@@ -1288,7 +1592,12 @@ export function resolveModelOverride(
 	modelPatterns: string[],
 	modelRegistry: ModelLookupRegistry,
 	settings?: Settings,
-): { model?: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel; explicitThinkingLevel: boolean; warning?: string } {
+): {
+	model?: Model<Api>;
+	thinkingLevel?: ConfiguredThinkingLevel;
+	explicitThinkingLevel: boolean;
+	warning?: string;
+} {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
 	const availableModels = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
@@ -1304,7 +1613,12 @@ export function resolveModelOverride(
 			matchPreferences,
 		});
 		if (model) {
-			return { model, thinkingLevel, explicitThinkingLevel, warning: patternWarning };
+			return {
+				model,
+				thinkingLevel,
+				explicitThinkingLevel,
+				warning: patternWarning,
+			};
 		}
 		if (!warning && patternWarning) warning = patternWarning;
 	}
@@ -1360,7 +1674,11 @@ export async function resolveModelOverrideWithAuthFallback(
 		return { ...primary, authFallbackUsed: false };
 	}
 
-	const fallback = resolveModelOverride([parentActiveModelPattern], modelRegistry, settings);
+	const fallback = resolveModelOverride(
+		[parentActiveModelPattern],
+		modelRegistry,
+		settings,
+	);
 	if (!fallback.model) {
 		return { ...primary, authFallbackUsed: false };
 	}
@@ -1372,7 +1690,11 @@ export async function resolveModelOverrideWithAuthFallback(
 		return { ...primary, authFallbackUsed: false };
 	}
 
-	return { ...fallback, authFallbackUsed: true, warning: primary.warning ?? fallback.warning };
+	return {
+		...fallback,
+		authFallbackUsed: true,
+		warning: primary.warning ?? fallback.warning,
+	};
 }
 
 /** A role chain walk: the winning selection, plus the roles that were set but could not resolve. */
@@ -1401,9 +1723,18 @@ function walkRoleChain(
 	const misconfiguredRoles: string[] = [];
 	for (const role of roles) {
 		const configured = settings.getModelRole(role)?.trim();
-		const resolved = resolveModelRoleValue(configured, availableModels, { settings, matchPreferences });
+		const resolved = resolveModelRoleValue(configured, availableModels, {
+			settings,
+			matchPreferences,
+		});
 		if (resolved.model) {
-			return { selection: { model: resolved.model, thinkingLevel: resolved.thinkingLevel }, misconfiguredRoles };
+			return {
+				selection: {
+					model: resolved.model,
+					thinkingLevel: resolved.thinkingLevel,
+				},
+				misconfiguredRoles,
+			};
 		}
 		if (configured) misconfiguredRoles.push(role);
 	}
@@ -1440,15 +1771,25 @@ export function resolveRoleSelectionWithInherit(
 	availableModels: readonly Model<Api>[],
 	liveModel?: Model<Api>,
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
-	const { selection, misconfiguredRoles } = walkRoleChain(roles, settings, availableModels);
+	const { selection, misconfiguredRoles } = walkRoleChain(
+		roles,
+		settings,
+		availableModels,
+	);
 	if (selection) return selection;
 	if (misconfiguredRoles.length > 0) return undefined;
 	if (liveModel) return { model: liveModel, thinkingLevel: undefined };
-	const persisted = resolveModelRoleValue(settings.getModelRole(DEFAULT_MODEL_SLOT), availableModels, {
-		settings,
-		matchPreferences: getModelMatchPreferences(settings),
-	});
-	return persisted.model ? { model: persisted.model, thinkingLevel: persisted.thinkingLevel } : undefined;
+	const persisted = resolveModelRoleValue(
+		settings.getModelRole(DEFAULT_MODEL_SLOT),
+		availableModels,
+		{
+			settings,
+			matchPreferences: getModelMatchPreferences(settings),
+		},
+	);
+	return persisted.model
+		? { model: persisted.model, thinkingLevel: persisted.thinkingLevel }
+		: undefined;
 }
 
 /**
@@ -1472,7 +1813,9 @@ export function fallbackForUnavailableDefault(
 	// The provider to sign into is the prefix of the configured selector when it
 	// carries one; a bare model id (`opus`) does not name a provider, so the
 	// clause stays generic rather than guessing one.
-	const configuredProvider = configuredDefault?.includes("/") ? configuredDefault.split("/")[0] : undefined;
+	const configuredProvider = configuredDefault?.includes("/")
+		? configuredDefault.split("/")[0]
+		: undefined;
 	// This warning reaches `veyyon commit`, `--print` startup and `bench` as well
 	// as the interactive session (see the doc comment above), so the remedies are
 	// shell commands. `veyyon auth` was named here and is not a command at all:
@@ -1505,7 +1848,12 @@ export function resolveAdvisorRoleSelection(
 	availableModels: readonly Model<Api>[],
 	liveModel?: Model<Api>,
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
-	return resolveRoleSelectionWithInherit(["advisor"], settings, availableModels, liveModel);
+	return resolveRoleSelectionWithInherit(
+		["advisor"],
+		settings,
+		availableModels,
+		liveModel,
+	);
 }
 
 /**
@@ -1528,8 +1876,12 @@ export async function resolveModelScope(
 	const availableModels = modelRegistry.getAvailable();
 	const context = buildPreferenceContext(availableModels, preferences);
 	const scopedModels: ScopedModel[] = [];
-	const addScopedModel = (model: Model<Api>, thinkingLevel: ThinkingLevel | undefined, explicit: boolean) => {
-		if (scopedModels.some(sm => modelsAreEqual(sm.model, model))) return;
+	const addScopedModel = (
+		model: Model<Api>,
+		thinkingLevel: ThinkingLevel | undefined,
+		explicit: boolean,
+	) => {
+		if (scopedModels.some((sm) => modelsAreEqual(sm.model, model))) return;
 		scopedModels.push({
 			model,
 			thinkingLevel: explicit
@@ -1541,7 +1893,11 @@ export async function resolveModelScope(
 
 	for (const pattern of patterns) {
 		// Check if pattern contains glob characters
-		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
+		if (
+			pattern.includes("*") ||
+			pattern.includes("?") ||
+			pattern.includes("[")
+		) {
 			// Extract optional thinking level suffix (e.g., "provider/*:high") only
 			// after literal `:max` globs had a chance to match real model IDs.
 			const {
@@ -1566,7 +1922,10 @@ export async function resolveModelScope(
 		// entry exactly like `--model` would pick. (Bare `*` stays a match-all
 		// glob above; scope semantics, not the default-role alias.)
 		if (settings && modelRoleAliasPrefixLength(pattern) !== undefined) {
-			const resolved = resolveModelRoleValue(pattern, availableModels, { settings, matchPreferences: preferences });
+			const resolved = resolveModelRoleValue(pattern, availableModels, {
+				settings,
+				matchPreferences: preferences,
+			});
 			if (resolved.warning) logger.warn(resolved.warning);
 			if (!resolved.model) {
 				logger.warn(`No models match pattern "${pattern}"`);
@@ -1575,16 +1934,17 @@ export async function resolveModelScope(
 			if (resolved.thinkingLevel === AUTO_THINKING) {
 				addScopedModel(resolved.model, undefined, false);
 			} else {
-				addScopedModel(resolved.model, resolved.thinkingLevel, resolved.explicitThinkingLevel);
+				addScopedModel(
+					resolved.model,
+					resolved.thinkingLevel,
+					resolved.explicitThinkingLevel,
+				);
 			}
 			continue;
 		}
 
-		const { model, thinkingLevel, warning, explicitThinkingLevel } = parseModelPatternWithContext(
-			pattern,
-			availableModels,
-			context,
-		);
+		const { model, thinkingLevel, warning, explicitThinkingLevel } =
+			parseModelPatternWithContext(pattern, availableModels, context);
 
 		if (warning) {
 			logger.warn(warning);
@@ -1629,13 +1989,18 @@ export async function resolveAllowedModels(
 	if (!patterns || patterns.length === 0) {
 		return available;
 	}
-	const scoped = await resolveModelScope(patterns, modelRegistry, preferences, settings);
+	const scoped = await resolveModelScope(
+		patterns,
+		modelRegistry,
+		preferences,
+		settings,
+	);
 	if (scoped.length === 0) {
 		return [];
 	}
 	return includeSyntheticAllowedModels(
 		available,
-		scoped.map(entry => entry.model),
+		scoped.map((entry) => entry.model),
 	);
 }
 
@@ -1669,7 +2034,11 @@ export function filterAvailableModelsByEnabledPatterns(
 	};
 
 	for (const pattern of patterns) {
-		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
+		if (
+			pattern.includes("*") ||
+			pattern.includes("?") ||
+			pattern.includes("[")
+		) {
 			for (const model of resolveGlobScopePattern(pattern, available).models) {
 				addAllowed(model);
 			}
@@ -1734,7 +2103,11 @@ function resolveNamedProviderReference(
 		const pattern = cliModel.toLowerCase().startsWith(prefix.toLowerCase())
 			? cliModel.substring(prefix.length)
 			: trimmedModel;
-		const idPart = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
+		const idPart = splitThinkingSuffix(
+			pattern,
+			-1,
+			MAX_THINKING_SUFFIX_OPTIONS,
+		).base;
 		if (idPart === "" || idPart === DEFAULT_MODEL_ROLE_ALIAS) return undefined;
 		return resolveProviderModelReference(provider, pattern, models);
 	}
@@ -1744,7 +2117,11 @@ function resolveNamedProviderReference(
 	const provider = trimmedModel.substring(0, slashIndex).trim();
 	const modelId = trimmedModel.substring(slashIndex + 1).trim();
 	if (!provider || !modelId) return undefined;
-	return resolveProviderModelReference(provider, modelId, modelRegistry.getProviderModels(provider));
+	return resolveProviderModelReference(
+		provider,
+		modelId,
+		modelRegistry.getProviderModels(provider),
+	);
 }
 
 /**
@@ -1757,21 +2134,38 @@ export function resolveCliModel(options: {
 	settings?: Settings;
 	preferences?: ModelMatchPreferences;
 }): ResolveCliModelResult {
-	const { cliProvider, cliModel, modelRegistry, settings, preferences: callerPreferences } = options;
+	const {
+		cliProvider,
+		cliModel,
+		modelRegistry,
+		settings,
+		preferences: callerPreferences,
+	} = options;
 	// Default the ambiguity tie-break to the registry's own credential check so
 	// every CLI resolution path prefers providers the user can actually call.
 	const preferences: ModelMatchPreferences = {
 		...callerPreferences,
 		hasConfiguredAuth:
 			callerPreferences?.hasConfiguredAuth ??
-			(modelRegistry.hasConfiguredAuth ? model => modelRegistry.hasConfiguredAuth!(model) : undefined),
+			(modelRegistry.hasConfiguredAuth
+				? (model) => modelRegistry.hasConfiguredAuth!(model)
+				: undefined),
 	};
 
 	if (!cliModel) {
-		return { model: undefined, selector: undefined, warning: undefined, error: undefined };
+		return {
+			model: undefined,
+			selector: undefined,
+			warning: undefined,
+			error: undefined,
+		};
 	}
 
-	const named = resolveNamedProviderReference(cliProvider, cliModel, modelRegistry);
+	const named = resolveNamedProviderReference(
+		cliProvider,
+		cliModel,
+		modelRegistry,
+	);
 	if (named) {
 		return {
 			model: named,
@@ -1792,7 +2186,9 @@ export function resolveCliModel(options: {
 		getAvailable: () =>
 			modelRegistry.getAvailable?.() ??
 			(modelRegistry.hasConfiguredAuth
-				? availableModels.filter(model => modelRegistry.hasConfiguredAuth!(model))
+				? availableModels.filter((model) =>
+						modelRegistry.hasConfiguredAuth!(model),
+					)
 				: availableModels),
 		getError: () => modelRegistry.getError?.(),
 	};
@@ -1801,7 +2197,10 @@ export function resolveCliModel(options: {
 			model: undefined,
 			selector: undefined,
 			warning: undefined,
-			error: modelResolutionFailureMessage([cliProvider ? `${cliProvider}/${cliModel}` : cliModel], failureView),
+			error: modelResolutionFailureMessage(
+				[cliProvider ? `${cliProvider}/${cliModel}` : cliModel],
+				failureView,
+			),
 		};
 	}
 
@@ -1820,7 +2219,10 @@ export function resolveCliModel(options: {
 			};
 		}
 		roleExpandedPatterns = expansion.patterns;
-		const resolved = resolveModelRoleValue(cliModel, availableModels, { settings, matchPreferences: preferences });
+		const resolved = resolveModelRoleValue(cliModel, availableModels, {
+			settings,
+			matchPreferences: preferences,
+		});
 		if (resolved.model) {
 			return {
 				model: resolved.model,
@@ -1837,7 +2239,9 @@ export function resolveCliModel(options: {
 		providerMap.set(model.provider.toLowerCase(), model.provider);
 	}
 
-	let provider = cliProvider ? providerMap.get(cliProvider.toLowerCase()) : undefined;
+	let provider = cliProvider
+		? providerMap.get(cliProvider.toLowerCase())
+		: undefined;
 	if (cliProvider && !provider) {
 		return {
 			model: undefined,
@@ -1864,11 +2268,15 @@ export function resolveCliModel(options: {
 			// Within each group (authenticated / not) catalog order still decides,
 			// so resolution stays deterministic across runs.
 			const exactIdMatches = availableModels.filter(
-				model => model.id.toLowerCase() === lower || `${model.provider}/${model.id}`.toLowerCase() === lower,
+				(model) =>
+					model.id.toLowerCase() === lower ||
+					`${model.provider}/${model.id}`.toLowerCase() === lower,
 			);
 			exact =
 				exactIdMatches.length > 1 && modelRegistry.hasConfiguredAuth
-					? (exactIdMatches.find(model => modelRegistry.hasConfiguredAuth?.(model)) ?? exactIdMatches[0])
+					? (exactIdMatches.find((model) =>
+							modelRegistry.hasConfiguredAuth?.(model),
+						) ?? exactIdMatches[0])
 					: exactIdMatches[0];
 		}
 		if (exact) {
@@ -1902,7 +2310,11 @@ export function resolveCliModel(options: {
 	}
 
 	if (provider) {
-		const idPart = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
+		const idPart = splitThinkingSuffix(
+			pattern,
+			-1,
+			MAX_THINKING_SUFFIX_OPTIONS,
+		).base;
 		if (idPart === "" || idPart === DEFAULT_MODEL_ROLE_ALIAS) {
 			// A provider and no model is a selector error, not a lookup miss: the
 			// matcher rejects it (see `matchModel`), and the remedy is the provider's
@@ -1921,7 +2333,11 @@ export function resolveCliModel(options: {
 					`run "veyyon models ${provider}" to list its models.`,
 			};
 		}
-		const exactProviderMatch = resolveProviderModelReference(provider, pattern, availableModels);
+		const exactProviderMatch = resolveProviderModelReference(
+			provider,
+			pattern,
+			availableModels,
+		);
 		if (exactProviderMatch) {
 			return {
 				model: exactProviderMatch,
@@ -1933,10 +2349,17 @@ export function resolveCliModel(options: {
 		}
 	}
 
-	const candidates = provider ? availableModels.filter(model => model.provider === provider) : availableModels;
-	const { model, thinkingLevel, warning, upstream } = parseModelPattern(pattern, candidates, preferences, {
-		allowInvalidThinkingSelectorFallback: false,
-	});
+	const candidates = provider
+		? availableModels.filter((model) => model.provider === provider)
+		: availableModels;
+	const { model, thinkingLevel, warning, upstream } = parseModelPattern(
+		pattern,
+		candidates,
+		preferences,
+		{
+			allowInvalidThinkingSelectorFallback: false,
+		},
+	);
 
 	if (!model) {
 		const display = provider ? `${provider}/${pattern}` : cliModel;
@@ -1945,7 +2368,10 @@ export function resolveCliModel(options: {
 			selector: undefined,
 			thinkingLevel: undefined,
 			warning,
-			error: modelResolutionFailureMessage(roleExpandedPatterns ?? [display], failureView),
+			error: modelResolutionFailureMessage(
+				roleExpandedPatterns ?? [display],
+				failureView,
+			),
 		};
 	}
 
@@ -1980,22 +2406,34 @@ export async function findSmolModel(
 
 	// 1. Try saved model from settings
 	if (savedModel) {
-		const match = resolveModelFromString(savedModel, availableModels, undefined);
+		const match = resolveModelFromString(
+			savedModel,
+			availableModels,
+			undefined,
+		);
 		if (match) return match;
 	}
 
 	// 2. Try priority chain
 	for (const pattern of MODEL_PRIO.smol) {
 		// Try exact match with provider prefix
-		const providerMatch = availableModels.find(m => `${m.provider}/${m.id}`.toLowerCase() === pattern);
+		const providerMatch = availableModels.find(
+			(m) => `${m.provider}/${m.id}`.toLowerCase() === pattern,
+		);
 		if (providerMatch) return providerMatch;
 
 		// Try exact match first
-		const exactMatch = parseModelPattern(pattern, availableModels, undefined).model;
+		const exactMatch = parseModelPattern(
+			pattern,
+			availableModels,
+			undefined,
+		).model;
 		if (exactMatch) return exactMatch;
 
 		// Try fuzzy match (substring)
-		const fuzzyMatch = availableModels.find(m => m.id.toLowerCase().includes(pattern));
+		const fuzzyMatch = availableModels.find((m) =>
+			m.id.toLowerCase().includes(pattern),
+		);
 		if (fuzzyMatch) return fuzzyMatch;
 	}
 
@@ -2020,18 +2458,28 @@ export async function findSlowModel(
 
 	// 1. Try saved model from settings
 	if (savedModel) {
-		const match = resolveModelFromString(savedModel, availableModels, undefined);
+		const match = resolveModelFromString(
+			savedModel,
+			availableModels,
+			undefined,
+		);
 		if (match) return match;
 	}
 
 	// 2. Try priority chain
 	for (const pattern of MODEL_PRIO.slow) {
 		// Try exact match first
-		const exactMatch = parseModelPattern(pattern, availableModels, undefined).model;
+		const exactMatch = parseModelPattern(
+			pattern,
+			availableModels,
+			undefined,
+		).model;
 		if (exactMatch) return exactMatch;
 
 		// Try fuzzy match (substring)
-		const fuzzyMatch = availableModels.find(m => m.id.toLowerCase().includes(pattern.toLowerCase()));
+		const fuzzyMatch = availableModels.find((m) =>
+			m.id.toLowerCase().includes(pattern.toLowerCase()),
+		);
 		if (fuzzyMatch) return fuzzyMatch;
 	}
 

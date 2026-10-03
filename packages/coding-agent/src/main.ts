@@ -1789,7 +1789,7 @@ interface RootLaunch extends LaunchMode {
 	readonly settings: Settings;
 	readonly authStorage: AuthStorage;
 	readonly modelRegistry: ModelRegistry;
-	readonly scopedModels: ScopedModel[];
+	scopedModels: ScopedModel[];
 	readonly notifs: (InteractiveModeNotify | null)[];
 	readonly showStartupSplash: boolean;
 }
@@ -1910,6 +1910,7 @@ async function enterResumedSessionProject(
 	// Re-scope project settings (.claude/settings.yml etc.) to the resumed
 	// project in place so the session is built with its configuration.
 	await launch.settings.reloadForCwd(projectDir);
+	launch.scopedModels = await resolveLaunchScope(launch.parsedArgs, launch.settings, launch.modelRegistry);
 	return projectDir;
 }
 

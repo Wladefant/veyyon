@@ -134,4 +134,30 @@ describe("issue #6913: Harmony control-token escaping at the request boundary", 
 		expect(wire).toContain(ESCAPED);
 		expect(wire).not.toContain(MARKER);
 	});
+	it("escapes replayed EasyInputMessage items that omit the type field", () => {
+		const model = makeModel("gpt-5.6");
+		// Documented EasyInputMessage shape: `{ role, content }` with no `type`.
+		// The responses server persists it verbatim into providerPayload.
+		const user: UserMessage = {
+			role: "user",
+			timestamp: 0,
+			content: "continue",
+			providerPayload: createOpenAIResponsesHistoryPayload("openai", [
+				{ role: "user", content: [{ type: "input_text", text: `typeless ${MARKER} turn` }] },
+			]),
+		};
+
+		const wire = collectWireText(
+			buildResponsesInput({
+				model,
+				context: { messages: [user] },
+				strictResponsesPairing: false,
+				supportsImageDetailOriginal: false,
+				nativeHistory: { replay: true, filterReasoning: false },
+			}),
+		);
+
+		expect(wire).toContain(ESCAPED);
+		expect(wire).not.toContain(MARKER);
+	});
 });

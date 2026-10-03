@@ -6,7 +6,6 @@
  * script, and the runner's TSV/Base64 wire protocol.
  */
 import { $flag } from "@veyyon/utils";
-import { $ } from "bun";
 import {
 	BaseKernel,
 	createLanguageAvailabilityChecker,
@@ -20,6 +19,7 @@ import {
 	kernelIpcTraceEnvVar,
 	launchKernelSubprocess,
 } from "../kernel-base";
+import { runBoundedProbe } from "../probe";
 import type { KernelDisplayOutput } from "../py/display";
 import { JULIA_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.jl" with { type: "text" };
@@ -57,7 +57,8 @@ export const checkJuliaKernelAvailability = createLanguageAvailabilityChecker<Ju
 		filterEnv,
 		enumerateRuntimes: (cwd, baseEnv, interpreter) => enumerateJuliaRuntimes(cwd, baseEnv, interpreter),
 		missingReason: "Julia executable not found on PATH. Please install Julia (https://julialang.org/).",
-		probeRuntime: (runtime, cwd) => $`${runtime.juliaPath} -e "exit(0)"`.quiet().nothrow().cwd(cwd).env(runtime.env),
+		probeRuntime: (runtime, cwd, probeOptions) =>
+			runBoundedProbe([runtime.juliaPath, "-e", "exit(0)"], { cwd, env: runtime.env, ...probeOptions }),
 		getExecutablePath: runtime => runtime.juliaPath,
 		includeFailedExecutablePath: true,
 		formatFailureReason: failures => `No working Julia interpreter found. Tried: ${failures.join("; ")}`,

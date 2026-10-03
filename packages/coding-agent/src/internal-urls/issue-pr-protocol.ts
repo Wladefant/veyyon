@@ -34,7 +34,7 @@ import {
 	type PrDiffFile,
 	resolveDefaultRepoMemoized,
 } from "../tools/web/gh-fetch";
-import { parsePositiveDecimalInt } from "../tools/web/gh-format";
+import { assertAllowedGhHost, formatRepoRef, parsePositiveDecimalInt, parseRepoRef } from "../tools/web/gh-format";
 import { type CacheStatus, formatFreshnessNote } from "../tools/web/github-cache";
 import * as git from "../utils/git";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
@@ -109,12 +109,12 @@ function parseListOptions(url: InternalUrl, scheme: Scheme, repo: string | undef
 }
 
 function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
-	const host = url.rawHost || url.hostname;
+	let host = url.rawHost || url.hostname;
 	const rawPath = url.rawPathname ?? url.pathname;
 	// Strip a single leading slash so we can detect empty internal segments
 	// (e.g. `pr://owner//77` → pathname `//77` → stripped `/77` → ["", "77"]).
 	const stripped = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
-	const parts: string[] = [];
+	let parts: string[] = [];
 	if (stripped !== "") {
 		for (const seg of stripped.split("/")) {
 			let decoded: string;
@@ -128,6 +128,30 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 			}
 			parts.push(seg);
 		}
+	}
+
+	// Detect a leading `<host>/` prefix. A dotted first segment can only be a
+	// host, because GitHub owner names are alphanumeric-plus-hyphen, so dotted
+	// hosts work with every shape below. A single-label host (`ghe`,
+	// `localhost`) is only recognizable from the item number's position, so it
+	// is accepted in the numbered form alone — `<host>/<owner>/<repo>` with no
+	// number is indistinguishable from `<owner>/<repo>/<bad-number>`, and
+	// keeping the latter's error beats guessing.
+	let repoHost: string | undefined;
+	const dottedHost = host.includes(".");
+	if (dottedHost && parts.length < 2) {
+		throw new Error(
+			`Invalid ${scheme}:// URL. Expected ${scheme}://<host>/<owner>/<repo> or ${scheme}://<host>/<owner>/<repo>/<number>`,
+		);
+	}
+	const hostPrefixed = dottedHost
+		? parts.length >= 2
+		: parts.length >= 3 && parsePositiveDecimalInt(parts[2]) !== undefined;
+	if (hostPrefixed) {
+		assertAllowedGhHost(host);
+		repoHost = host;
+		host = parts[0] ?? "";
+		parts = parts.slice(1);
 	}
 
 	// Shapes:
@@ -157,11 +181,11 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 		diffParts = parts;
 	} else if (host && parts.length === 1) {
 		// scheme://owner/repo  → list
-		repo = `${host}/${parts[0]}`;
+		repo = formatRepoRef(repoHost, `${host}/${parts[0]}`);
 		return parseListOptions(url, scheme, repo);
 	} else if (host && parts.length >= 2) {
 		// scheme://owner/repo/N[/diff[/<sub>]]
-		repo = `${host}/${parts[0]}`;
+		repo = formatRepoRef(repoHost, `${host}/${parts[0]}`);
 		numberPart = parts[1];
 		diffParts = parts.slice(2);
 	} else {
@@ -304,7 +328,9 @@ async function fetchAndRenderList(
 	url: InternalUrl,
 	context: ResolveContext | undefined,
 ): Promise<InternalResource> {
-	const repo = await resolveListRepo(scheme, options.repo, context);
+	const resolvedRepo = await resolveListRepo(scheme, options.repo, context);
+	const listRef = parseRepoRef(resolvedRepo);
+	const repo = formatRepoRef(listRef.host, listRef.slug);
 	const cwd = resolveCwd(context);
 	const fields =
 		scheme === "issue"

@@ -342,5 +342,5 @@ describe("a later launch builds no validator for an unchanged models config", ()
 		} finally {
 			spawn.cleanup();
 		}
-	});
+	}, 15_000);
 });

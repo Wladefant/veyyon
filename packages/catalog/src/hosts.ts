@@ -67,6 +67,8 @@ export const KNOWN_HOSTS = {
 	opencode: { providers: ["opencode-go", "opencode-zen"], urlMarkers: ["opencode.ai"] },
 	/** ZenMux's Anthropic-compatible proxy (`zenmux.ai/api/anthropic`) forwards to signature-enforcing Anthropic. */
 	zenmux: { providers: ["zenmux"], urlMarkers: ["zenmux.ai"] },
+	/** Abliteration (`api.abliteration.ai`). OpenAI-compatible; OpenAI-style `reasoning_effort` ladder with a legacy top-level `thinking` toggle. */
+	abliteration: { providers: ["abliteration"], urlMarkers: ["api.abliteration.ai"] },
 	chutes: { urlMarkers: ["chutes.ai"] },
 } as const satisfies Record<string, HostClassSpec>;
 

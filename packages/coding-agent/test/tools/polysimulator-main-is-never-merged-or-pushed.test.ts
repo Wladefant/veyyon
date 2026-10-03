@@ -534,14 +534,14 @@ describe("Polysimulator main guard", () => {
 					`GIT_DIR=${polysimDir}/.git git push origin main`,
 					`git --git-dir=${polysimDir}/.git push origin main`,
 					"GH_REPO=Bavariance/polysimulator gh pr merge 123",
-					'cd "$CHECKOUT" && git push origin main',
 				],
 				options,
 			);
 			expect(
 				checkPolysimMainDenial("git push origin main", testDir, { GIT_DIR: `${polysimDir}/.git` }, options)?.reason,
 			).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
-			expectAllowed(["git push origin main", "gh pr merge 123"], options);
+			// A checkout the guard cannot resolve is an unknown repository, which is not polysimulator.
+			expectAllowed(["git push origin main", "gh pr merge 123", 'cd "$CHECKOUT" && git push origin main'], options);
 		});
 
 		it("does not refuse reads, non-main writes, or text that only mentions a push", () => {
@@ -565,7 +565,7 @@ describe("Polysimulator main guard", () => {
 			expect(checkPushTargetPolysimMainDenial("git@github.com:Bavariance/polysimulator.git", "main")?.reason).toBe(
 				POLYSIM_MAIN_DENIAL_MESSAGE,
 			);
-			expect(checkPushTargetPolysimMainDenial(undefined, "main")?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
+			expect(checkPushTargetPolysimMainDenial(undefined, "main")).toBeUndefined();
 			expect(
 				checkPushTargetPolysimMainDenial("git@github.com:Bavariance/polysimulator.git", "feat/x"),
 			).toBeUndefined();
@@ -601,14 +601,62 @@ describe("Polysimulator main guard", () => {
 					application: "bash",
 					args: ["-c", "git push https://github.com/Bavariance/polysimulator.git HEAD:main"],
 				},
-				{ op: "send", name: "shell", text: "git push origin main" },
 			]) {
 				const decision = tool.approval(params);
 				expect(typeof decision === "object" && "deny" in decision && decision.reason).toBe(
 					POLYSIM_MAIN_DENIAL_MESSAGE,
 				);
 			}
+			expect(tool.approval({ op: "send", name: "shell", text: "git push origin main" })).toBe("exec");
 			expect(tool.approval({ op: "start", name: "web", application: "bun", args: ["run", "dev"] })).toBe("exec");
+		});
+	});
+
+	// WHY: the founders' rule covers Bavariance/polysimulator only. Every other repository, including
+	// Wladefant/veyyon and a repository the guard cannot identify, merges and pushes main freely.
+	// Gap: a repository reached only through a wrapper script the matcher cannot read is not identified.
+	describe("Repository scope", () => {
+		const denial = (cmd: string, options: PolysimGuardOptions) =>
+			checkPolysimMainDenial(cmd, testDir, undefined, options);
+		const veyyonCwd = mockPolysimOptions({ remotes: UNRELATED_REMOTES, prBase: "main" });
+		const polysimCwd = mockPolysimOptions({ remotes: POLYSIM_REMOTES, prBase: "main" });
+		const noRemotes = mockPolysimOptions({ remotes: {}, prBase: "main" });
+
+		it("does not block merging, reviewing or pushing main in Wladefant/veyyon", () => {
+			for (const cmd of [
+				"gh pr merge 5 -R Wladefant/veyyon",
+				"gh pr merge 5 --repo Wladefant/veyyon --admin",
+				"gh pr merge https://github.com/Wladefant/veyyon/pull/5",
+				"gh pr review 5 --approve -R Wladefant/veyyon",
+				"git push https://github.com/Wladefant/veyyon.git main",
+				"git push origin main",
+				"gh pr merge 5",
+				"GH_REPO=Wladefant/veyyon gh pr merge 5",
+				"gh api -X PUT repos/Wladefant/veyyon/pulls/5/merge",
+			]) {
+				expect({ cmd, denial: denial(cmd, veyyonCwd) }).toEqual({ cmd, denial: undefined });
+			}
+		});
+
+		it("still blocks polysimulator even when the working directory is another repository", () => {
+			for (const cmd of [
+				"gh pr merge 5 -R Bavariance/polysimulator",
+				"gh pr merge 5 --repo Bavariance/polysimulator",
+				"gh pr merge https://github.com/Bavariance/polysimulator/pull/5",
+				"git push https://github.com/Bavariance/polysimulator.git main",
+			]) {
+				expect({ cmd, denied: denial(cmd, veyyonCwd)?.reason }).toEqual({
+					cmd,
+					denied: POLYSIM_MAIN_DENIAL_MESSAGE,
+				});
+			}
+			expect(denial("git push origin main", polysimCwd)?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
+		});
+
+		it("does not block a repository it cannot identify", () => {
+			for (const cmd of ["git push origin main", "gh pr merge 5", "gh pr merge 5 -R Someone/else"]) {
+				expect({ cmd, denial: denial(cmd, noRemotes) }).toEqual({ cmd, denial: undefined });
+			}
 		});
 	});
 

@@ -32,7 +32,6 @@ import {
 	type AuthCredential,
 	AuthStorage,
 	SqliteAuthCredentialStore,
-	type UsageCostHistoryEntry,
 	type UsageCredential,
 	type UsageFetchContext,
 	type UsageLimit,
@@ -74,7 +73,6 @@ interface ProviderCase {
 	baseUrl?: string;
 	/** Response bodies keyed by a fragment of the URL the provider builds. */
 	responses?: readonly (readonly [string, unknown])[];
-	costHistory?: readonly UsageCostHistoryEntry[];
 	/** Every window label the card must show, in the order it must show them. */
 	labels: readonly string[];
 	/** Column every bar in the group starts in, which is what makes them align. */
@@ -314,10 +312,17 @@ const PROVIDER_CASES: Record<string, ProviderCase> = {
 	},
 	"opencode-go": {
 		credential: { type: "api_key", apiKey: "opencode-go-key" },
-		costHistory: [
-			{ recordedAt: NOW_MS - HOUR_MS, provider: "opencode-go", accountKey: "opencode", costUsd: 3.5 },
-			{ recordedAt: NOW_MS - 3 * DAY_MS, provider: "opencode-go", accountKey: "opencode", costUsd: 7.25 },
-			{ recordedAt: NOW_MS - 20 * DAY_MS, provider: "opencode-go", accountKey: "opencode", costUsd: 11 },
+		responses: [
+			[
+				"/v1/usage",
+				{
+					usage: {
+						rolling: { status: "ok", percent: 10, resetsAt: "2030-01-01T00:00:00Z" },
+						weekly: { status: "ok", percent: 10, resetsAt: "2030-01-01T00:00:00Z" },
+						monthly: { status: "ok", percent: 10, resetsAt: "2030-01-01T00:00:00Z" },
+					},
+				},
+			],
 		],
 		// Three short labels: the group sizes its own column instead of padding out to the clamp.
 		labels: ["5 Hour", "Weekly", "Monthly"],
@@ -404,13 +409,10 @@ function fetchFromTable(responses: readonly (readonly [string, unknown])[]): Fet
 
 function contextFor(providerCase: ProviderCase): UsageFetchContext {
 	const responses = providerCase.responses ?? [];
-	const history = providerCase.costHistory ?? [];
 	return {
 		fetch: fetchFromTable(responses),
 		// Injected so a provider that retries never reaches a real clock.
 		retryWait: async () => {},
-		listUsageCosts: query =>
-			history.filter(entry => (query?.sinceMs === undefined ? true : entry.recordedAt >= query.sinceMs)),
 	};
 }
 

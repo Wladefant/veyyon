@@ -50,6 +50,14 @@ export const BARE_BODY_AUTO_PIPED_WARNING =
 export const MINUS_ROW_REJECTED =
 	"`-` rows are not valid; the range already names the lines being changed. For Markdown bullets or other literal `-` lines, prefix the literal row with `+`: `+- item`.";
 
+/**
+ * Bare `-` body rows accepted as literal Markdown bullets. Only emitted when
+ * the hunk is unambiguously a bullet list: every `-` row is bullet-shaped
+ * (`- item`) and the body has no unified-diff `+new` counterpart rows.
+ */
+export const MINUS_BULLET_AUTO_PIPED_WARNING =
+	"Auto-prefixed bare `- ` bullet row(s) as literal content with `+`. For Markdown bullets, write `+- item`.";
+
 /** Replace hunk with no body. */
 export const EMPTY_REPLACE = `\`SWAP N${HL_RANGE_SEP}M:\` needs at least one \`+TEXT\` body row. To delete lines, use \`DEL N${HL_RANGE_SEP}M\`.`;
 

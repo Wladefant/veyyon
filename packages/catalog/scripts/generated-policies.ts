@@ -17,6 +17,7 @@ import {
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
+import { codexContextWindowFloor } from "../src/provider-models/codex-subscription";
 import { applyCommandCodeContract } from "../src/provider-models/command-code";
 import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import {
@@ -62,12 +63,6 @@ const CODEX_GPT_5_4_PRIORITY_BY_VARIANT: Partial<Record<OpenAIVariant, number>> 
 	nano: 2,
 };
 
-const CODEX_GPT_5_6_372K_MODEL_IDS: Record<string, true> = {
-	"gpt-5.6-luna": true,
-	"gpt-5.6-sol": true,
-	"gpt-5.6-terra": true,
-};
-
 const COPILOT_GENERATED_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
 	"claude-opus-4.6": { contextWindow: 168000, maxTokens: 32000 },
 	"gpt-5.2": { contextWindow: 272000, maxTokens: 128000 },
@@ -84,6 +79,10 @@ const COPILOT_GENERATED_LIMITS: Record<string, { contextWindow: number; maxToken
 export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
 	for (const model of models) {
 		applyGeneratedModelPolicy(model);
+		// A row the host reports as not reasoning carries no effort surface: a reference
+		// fill can attach one from a reasoning sibling (`qwen/qwen3.8-max` on OpenRouter),
+		// and the rebake below then has no thinking to derive from it.
+		if (model.reasoning !== true && model.reasoningOptions !== undefined) delete model.reasoningOptions;
 		rebakeModelThinking(model);
 	}
 }
@@ -106,7 +105,13 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	if (isVariantCollapsedSpec(model)) return;
 	const requiresProviderAuthoredEffort =
 		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
-	const deploymentAuthored = model.provider === "command-code" && model.thinking !== undefined;
+	const deploymentAuthored =
+		(model.provider === "command-code" ||
+			model.provider === "abliteration" ||
+			model.provider === "meta" ||
+			model.provider === "muse-code" ||
+			model.provider === "stepfun") &&
+		model.thinking !== undefined;
 	const thinking = resolveModelThinking(
 		deploymentAuthored ? model : { ...model, thinking: undefined },
 		buildCompat(model),
@@ -386,7 +391,7 @@ function inferGeneratedApplyPatchToolType(
 	model: ModelSpec<Api>,
 	parsedModel: ParsedModel,
 ): ModelSpec<Api>["applyPatchToolType"] {
-	if (parsedModel.family !== "openai" || parsedModel.version.major !== 5) {
+	if (parsedModel.family !== "openai" || parsedModel.version.major < 5 || parsedModel.version.major >= 7) {
 		return undefined;
 	}
 	if (model.provider === "openai" && model.api === "openai-responses") {
@@ -417,12 +422,9 @@ function applyOpenAICatalogPolicy(model: ModelSpec<Api>, parsedModel: OpenAIMode
 			model.contextWindow = 272000;
 		}
 	}
-	// GPT-5.6 luna/sol/terra on the Codex transport: OpenAI's Codex model
-	// registry declares context_window = max_context_window = 372000, but Codex
-	// discovery under-reports it — omitting the field for some accounts and
-	// actively returning 272000 for others (#5705, #6259). Pin the true 372K
-	// input window on the bundled catalog; discovery enforces the same floor.
-	if (model.api === "openai-codex-responses" && CODEX_GPT_5_6_372K_MODEL_IDS[model.id]) {
-		model.contextWindow = 372000;
-	}
+	// GPT-5.6 luna/sol/terra on the Codex transport: OpenAI enabled a 1M window for
+	// subscription Codex while the registry still reports 272000; discovery
+	// enforces the same floor.
+	const codexFloor = model.api === "openai-codex-responses" ? codexContextWindowFloor(model.id) : undefined;
+	if (codexFloor !== undefined) model.contextWindow = codexFloor;
 }

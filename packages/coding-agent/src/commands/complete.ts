@@ -8,7 +8,7 @@
  * first field. The import surface is kept deliberately narrow so a TAB press
  * doesn't pay for the full agent boot.
  */
-import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { type GeneratedProvider, getBundledChatModels, getBundledProviders } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Command } from "@veyyon/utils/cli";
 import { SETTINGS_SCHEMA } from "../config/settings-schema";
@@ -55,7 +55,7 @@ function completeModels(prefix: string): void {
 	const seen = new Set<string>();
 	const lines: string[] = [];
 	for (const provider of getBundledProviders()) {
-		for (const model of getBundledModels(provider as GeneratedProvider)) {
+		for (const model of getBundledChatModels(provider as GeneratedProvider)) {
 			// Offer both the fully-qualified `provider/id` and the bare `id`
 			// (matches the fuzzy resolution `--model` accepts).
 			const candidates = [`${model.provider}/${model.id}`, model.id];

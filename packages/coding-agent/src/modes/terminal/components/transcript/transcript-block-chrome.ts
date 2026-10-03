@@ -22,8 +22,34 @@ export interface TranscriptBlockParts {
 	/** The block's content, mounted at the rail. */
 	body: Component;
 	/** Trailing hint or terminal state, already styled. Omitted by a block that
-	 *  is finished the moment it is printed and takes no key. */
-	footer?: string;
+	 *  is finished the moment it is printed and takes no key. A function is read
+	 *  at paint time, for a hint whose truth changes without a rebuild (the
+	 *  `/btw` branch action, gated on the main turn being idle). */
+	footer?: string | (() => string);
+}
+
+/** A footer row read at paint time; rebuilds its {@link Text} only when the line changes. */
+class LiveFooter implements Component {
+	#read: () => string;
+	#line: string | undefined;
+	#text: Text | undefined;
+
+	constructor(read: () => string) {
+		this.#read = read;
+	}
+
+	render(width: number): readonly string[] {
+		const line = this.#read();
+		if (line !== this.#line || !this.#text) {
+			this.#line = line;
+			this.#text = new Text(line, COMPOSER_INSET_COLS, 0);
+		}
+		return this.#text.render(width);
+	}
+
+	invalidate(): void {
+		this.#text = undefined;
+	}
 }
 
 /**
@@ -45,7 +71,8 @@ export function mountTranscriptBlock(block: Container, parts: TranscriptBlockPar
 	block.addChild(parts.body);
 	if (parts.footer !== undefined) {
 		block.addChild(new Spacer(1));
-		block.addChild(new Text(parts.footer, COMPOSER_INSET_COLS, 0));
+		const footer = parts.footer;
+		block.addChild(typeof footer === "function" ? new LiveFooter(footer) : new Text(footer, COMPOSER_INSET_COLS, 0));
 	}
 }
 

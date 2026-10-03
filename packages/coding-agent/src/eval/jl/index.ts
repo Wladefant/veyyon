@@ -11,6 +11,6 @@ export function namespaceSessionId(sessionId: string): string {
 export default createKernelBackend<JuliaExecutorOptions>({
 	id: "julia",
 	sessionPrefix: JULIA_SESSION_PREFIX,
-	checkAvailability: (cwd, interpreter) => checkJuliaKernelAvailability(cwd, interpreter),
+	checkAvailability: (cwd, interpreter, probeOptions) => checkJuliaKernelAvailability(cwd, interpreter, probeOptions),
 	execute: (code, options) => executeJulia(code, options),
 });

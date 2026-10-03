@@ -109,6 +109,8 @@ function createFleet(): { workers: FakeWorker[]; spawnWorker: () => MnemopiEmbed
 				onError(): () => void {
 					return () => {};
 				},
+				ref() {},
+				unref() {},
 				async terminate(): Promise<void> {
 					worker.terminated = true;
 					onMessage = undefined;

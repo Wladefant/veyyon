@@ -46,6 +46,7 @@ function model(provider: string, id: string, api: Api): Pick<Model, "provider" |
  * assertion below, which is the point: the decision is recorded, not defaulted.
  */
 const NO_SERVICE_TIER_KNOB = [
+	"abliteration",
 	"aimlapi",
 	"alibaba-coding-plan",
 	"amazon-bedrock",
@@ -64,6 +65,7 @@ const NO_SERVICE_TIER_KNOB = [
 	"github-copilot",
 	"gitlab-duo",
 	"gitlab-duo-agent",
+	"gmi-cloud",
 	"google-antigravity",
 	"google-gemini-cli",
 	"groq",
@@ -72,11 +74,13 @@ const NO_SERVICE_TIER_KNOB = [
 	"kimi-code",
 	"litellm",
 	"lm-studio",
+	"meta",
 	"minimax",
 	"minimax-code",
 	"minimax-code-cn",
 	"mistral",
 	"moonshot",
+	"muse-code",
 	"nanogpt",
 	"nous-research",
 	"novita",
@@ -88,6 +92,7 @@ const NO_SERVICE_TIER_KNOB = [
 	"qianfan",
 	"qwen-portal",
 	"sakana",
+	"stepfun",
 	"synthetic",
 	"together",
 	"umans",

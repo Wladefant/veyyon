@@ -35,18 +35,25 @@ test("synchronous recovery preserves damaged pages and creates usable database",
 	const dbPath = dir.join("store.db");
 	const damaged = await corruptSchema(dbPath);
 
-	openSqliteDatabaseSync(dbPath, db => {
-		db.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('recovered')");
-		db.close();
-	}, { recoverCorruption: true });
+	openSqliteDatabaseSync(
+		dbPath,
+		db => {
+			db.run("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('recovered')");
+			db.close();
+		},
+		{ recoverCorruption: true },
+	);
 
 	const backups = (await corruptBackups(dir.path())).filter(f => !/-wal$|-shm$|-journal$/.test(f));
 	expect(backups).toHaveLength(1);
 	expect(await fs.readFile(path.join(dir.path(), backups[0]!))).toEqual(damaged);
 
 	const rows = openSqliteDatabaseSync(dbPath, db => {
-		try { return db.query<{ v: string }, []>("SELECT v FROM t").all(); }
-		finally { db.close(); }
+		try {
+			return db.query<{ v: string }, []>("SELECT v FROM t").all();
+		} finally {
+			db.close();
+		}
 	});
 	expect(rows).toEqual([{ v: "recovered" }]);
 });
@@ -55,19 +62,27 @@ test("recovery preserves all sidecars under one private backup prefix", async ()
 	await using dir = await TempDir.create("@omp-corrupt-sidecars-");
 	const dbPath = dir.join("store.db");
 	const sidecars: Record<string, Buffer> = {
-		"": Buffer.from("bad db"), "-wal": Buffer.from("bad wal"), "-shm": Buffer.from("bad shm"), "-journal": Buffer.from("bad jrnl"),
+		"": Buffer.from("bad db"),
+		"-wal": Buffer.from("bad wal"),
+		"-shm": Buffer.from("bad shm"),
+		"-journal": Buffer.from("bad jrnl"),
 	};
 	for (const [ext, data] of Object.entries(sidecars)) await fs.writeFile(`${dbPath}${ext}`, data);
 
-	await openSqliteDatabase(dbPath, async db => {
-		try { db.run("CREATE TABLE t (v TEXT)"); }
-		catch (error) {
-			sidecars["-shm"] = await fs.readFile(`${dbPath}-shm`);
-			await fs.writeFile(`${dbPath}-journal`, sidecars["-journal"]);
-			throw error;
-		}
-		db.close();
-	}, { recoverCorruption: true });
+	await openSqliteDatabase(
+		dbPath,
+		async db => {
+			try {
+				db.run("CREATE TABLE t (v TEXT)");
+			} catch (error) {
+				sidecars["-shm"] = await fs.readFile(`${dbPath}-shm`);
+				await fs.writeFile(`${dbPath}-journal`, sidecars["-journal"]);
+				throw error;
+			}
+			db.close();
+		},
+		{ recoverCorruption: true },
+	);
 
 	const backups = (await corruptBackups(dir.path())).filter(f => !/-wal$|-shm$|-journal$/.test(f));
 	expect(backups).toHaveLength(1);
@@ -81,8 +96,11 @@ test("negative control: opt-in recovery ignores non-corruption errors", async ()
 	await using dir = await TempDir.create("@omp-corrupt-negative-");
 	const dbPath = dir.join("store.db");
 	let err: unknown;
-	try { openSqliteDatabaseSync(dbPath, db => db.run("INSERT INTO missing VALUES (1)"), { recoverCorruption: true }); }
-	catch (e) { err = e; }
+	try {
+		openSqliteDatabaseSync(dbPath, db => db.run("INSERT INTO missing VALUES (1)"), { recoverCorruption: true });
+	} catch (e) {
+		err = e;
+	}
 	expect(isSqliteCorruptionError(err)).toBe(false);
 	expect((err as Error).message).toContain(dbPath);
 	expect(await corruptBackups(dir.path())).toHaveLength(0);

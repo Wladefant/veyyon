@@ -8,8 +8,6 @@ import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type {
 	CredentialRankingStrategy,
-	UsageCostHistoryEntry,
-	UsageCostHistoryQuery,
 	UsageHistoryEntry,
 	UsageHistoryQuery,
 	UsageLogger,
@@ -424,10 +422,6 @@ export interface AuthCredentialStore {
 	 * skipped — the broker host records into its own database instead.
 	 */
 	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
-	/** Append observed request costs for providers without upstream usage APIs. */
-	recordUsageCosts?(entries: UsageCostHistoryEntry[]): void;
-	/** Read observed request costs, oldest first. */
-	listUsageCosts?(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[];
 	/** Read recorded usage-limit snapshots, oldest first. */
 	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
 	/**

@@ -71,6 +71,8 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,
 			sessionManager: { getHeader: () => null },
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => true,
 			state: {
 				messages: [makeAssistantMessage("aborted", "Request aborted by user")],
 			},
@@ -89,6 +91,8 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,
 			sessionManager: { getHeader: () => null },
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => true,
 			state: {
 				messages: [makeAssistantMessage("error", "API provider error")],
 			},
@@ -107,6 +111,8 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,
 			sessionManager: { getHeader: () => null },
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => true,
 			state: {
 				messages: [makeAssistantMessage("stop")],
 			},

@@ -243,7 +243,7 @@ describe("wrapLeakedThinkingStream", () => {
 
 		expect(thinks(result).map(b => b.thinkingSignature)).toEqual([signature]);
 	});
-	it("finalizes a native thinking block by source index after later blocks start", async () => {
+	it("emits a late native thinking signature by source index after later blocks start", async () => {
 		const firstSignature = "sig-first";
 		const secondSignature = "sig-second";
 		const call: ToolCall = {
@@ -254,7 +254,7 @@ describe("wrapLeakedThinkingStream", () => {
 		};
 		const first = { type: "thinking" as const, thinking: "first", thinkingSignature: "" };
 		const second = { type: "thinking" as const, thinking: "second", thinkingSignature: "" };
-		const { result } = await runWrapper(inner => {
+		const { events, result } = await runWrapper(inner => {
 			inner.push({ type: "start", partial: msg() });
 			inner.push({
 				type: "thinking_delta",
@@ -290,6 +290,15 @@ describe("wrapLeakedThinkingStream", () => {
 			inner.push({ type: "done", reason: "stop", message: signed });
 		});
 
+		const firstEnd = events.find(event => event.type === "thinking_end" && event.contentIndex === 0);
+		if (firstEnd?.type !== "thinking_end") throw new Error("Missing first projected thinking_end");
+		expect(firstEnd.partial.content[firstEnd.contentIndex]).toEqual({
+			type: "thinking",
+			thinking: first.thinking,
+			thinkingSignature: firstSignature,
+		});
+		expect(events.indexOf(firstEnd)).toBeGreaterThan(events.findIndex(event => event.type === "toolcall_start"));
+		expect(events.filter(event => event.type === "thinking_end" && event.contentIndex === 0)).toHaveLength(1);
 		expect(thinks(result).map(block => [block.thinking, block.thinkingSignature])).toEqual([
 			["first", firstSignature],
 			["second", secondSignature],

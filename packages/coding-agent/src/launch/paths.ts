@@ -25,7 +25,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, getConfigRootDir, isEisdir, isEnoent } from "@veyyon/utils";
+import { getAgentDir, getConfigRootDir, hasFsCode, isEacces, isEisdir, isEnoent } from "@veyyon/utils";
 
 /**
  * Every on-disk name in the daemon runtime layout, in the one place a rename can be made.
@@ -196,7 +196,7 @@ export async function canonicalProjectDir(projectDir: string): Promise<string> {
 	try {
 		return await fs.realpath(resolved);
 	} catch (error) {
-		if (isEnoent(error) || isEisdir(error)) return resolved;
+		if (isEnoent(error) || isEisdir(error) || isEacces(error) || hasFsCode(error, "EPERM")) return resolved;
 		throw error;
 	}
 }

@@ -9,6 +9,7 @@
  */
 import type { Message } from "@veyyon/ai";
 import type { AgentMessageKind } from "@veyyon/kernel/registry/message-kind";
+import { formatBackgroundNotice as formatDefaultBackgroundNotice } from "../../async/auto-background";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { formatOutputNotice, type OutputMeta } from "../core/output-notice";
 
@@ -95,7 +96,7 @@ export function formatBackgroundNotice(jobId: string, reason: BackgroundReason =
 	if (reason === "manual") {
 		return `Backgrounded as job ${jobId} at the operator's request; result will be delivered automatically.`;
 	}
-	return `Backgrounded as job ${jobId}; result will be delivered automatically.`;
+	return formatDefaultBackgroundNotice(jobId);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import packageJson from "../../package.json" with { type: "json" };
 
 /**
@@ -15,4 +16,21 @@ import packageJson from "../../package.json" with { type: "json" };
  */
 export function getOpenCodeUserAgent(): string {
 	return `Veyyon/${packageJson.version}`;
+}
+
+/**
+ * Derive the `x-opencode-session` value from a local session or install id.
+ *
+ * Hashed rather than sent verbatim: the gateway needs one stable value per
+ * conversation to route a session's requests to the same upstream provider and
+ * hit its prompt cache, and nothing more. A digest supplies that without
+ * handing a third party the identifier the local session, its transcript and
+ * its files are keyed by. `ses_` plus 32 hex characters matches the shape the
+ * gateway issues for its own sessions.
+ *
+ * Defined here beside {@link getOpenCodeUserAgent} because catalog discovery
+ * sends the header too and `@veyyon/catalog` cannot import `@veyyon/ai`.
+ */
+export function openCodeSessionHeaderValue(sessionId: string): string {
+	return `ses_${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}`;
 }

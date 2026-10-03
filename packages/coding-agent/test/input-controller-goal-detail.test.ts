@@ -83,7 +83,7 @@ function createContext(opts: { goalModeEnabled?: boolean; goalModePaused?: boole
 		goalModeEnabled: opts.goalModeEnabled ?? false,
 		goalModePaused: opts.goalModePaused ?? false,
 		openGoalDetail,
-		canBranchBtw: () => false,
+		handlesBtwBranchKey: () => false,
 		canCopyBtw: () => false,
 		focusedAgentId: undefined,
 		// Required members of the context. Omitting them used to be tolerated by

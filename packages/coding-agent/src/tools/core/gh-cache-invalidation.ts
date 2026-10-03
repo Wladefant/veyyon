@@ -49,12 +49,17 @@ const MUTATING_PR_SUBCMDS: Record<string, true> = {
 
 /** Parse `token` as an issue or PR URL (per `subject`) via the shared `gh-url` parsers. */
 function parseSubjectUrl(subject: "issue" | "pr", token: string): { repo?: string; num?: number } {
-	if (subject === "pr") {
-		const { repo, prNumber } = parsePrUrl(token);
-		return { repo, num: prNumber };
+	try {
+		if (subject === "pr") {
+			const { repo, prNumber } = parsePrUrl(token);
+			return { repo, num: prNumber };
+		}
+		const { repo, issueNumber } = parseIssueUrl(token);
+		return { repo, num: issueNumber };
+	} catch {
+		// A URL on a host outside the allowlist names no cache row: nothing to invalidate.
+		return {};
 	}
-	const { repo, issueNumber } = parseIssueUrl(token);
-	return { repo, num: issueNumber };
 }
 
 /**

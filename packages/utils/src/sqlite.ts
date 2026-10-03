@@ -93,12 +93,15 @@ function sqliteFileIdentity(dbPath: string): SqliteFileIdentity {
 	try {
 		const s = fs.statSync(dbPath);
 		return `${s.dev}:${s.ino}:${s.birthtimeMs}`;
-	} catch (e) { return isEnoent(e) ? null : undefined; }
+	} catch (e) {
+		return isEnoent(e) ? null : undefined;
+	}
 }
 
 function closeFailedDatabase(db: Database | undefined, error: unknown, identity: SqliteFileIdentity): void {
-	try { db?.close(); }
-	catch (closeError) {
+	try {
+		db?.close();
+	} catch (closeError) {
 		const orig = error instanceof Error ? error : new Error(String(error));
 		orig.message += `; failed to close the SQLite handle: ${closeError instanceof Error ? closeError.message : String(closeError)}`;
 		throw new SqliteAttemptFailure(orig, identity, { canRecover: false });
@@ -110,7 +113,12 @@ export interface SqliteOpenOptions {
 	onCorruptionPreserved?: (backupPath: string, error: unknown) => void;
 }
 
-function handleOpenError(db: Database | undefined, error: unknown, identity: SqliteFileIdentity, recover?: boolean): never {
+function handleOpenError(
+	db: Database | undefined,
+	error: unknown,
+	identity: SqliteFileIdentity,
+	recover?: boolean,
+): never {
 	if (recover && isSqliteCorruptionError(error)) throw new SqliteAttemptFailure(error, identity, { db });
 	closeFailedDatabase(db, error, identity);
 	throw new SqliteAttemptFailure(error, identity);
@@ -155,7 +163,9 @@ function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined):
 	const preserved: string[] = [];
 	for (const suffix of SQLITE_STORE_SUFFIXES) {
 		try {
-			try { fs.chmodSync(`${dbPath}${suffix}`, 0o600); } catch {}
+			try {
+				fs.chmodSync(`${dbPath}${suffix}`, 0o600);
+			} catch {}
 			fs.copyFileSync(`${dbPath}${suffix}`, `${backupPath}${suffix}`, fs.constants.COPYFILE_EXCL);
 			preserved.push(suffix);
 		} catch (error) {
@@ -167,13 +177,23 @@ function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined):
 	const removed: string[] = [];
 	try {
 		for (const s of preserved) {
-			try { fs.unlinkSync(`${dbPath}${s}`); removed.push(s); }
-			catch (err) { if (!isEnoent(err)) throw err; }
+			try {
+				fs.unlinkSync(`${dbPath}${s}`);
+				removed.push(s);
+			} catch (err) {
+				if (!isEnoent(err)) throw err;
+			}
 		}
 	} catch (error) {
 		for (const s of removed) {
-			try { fs.copyFileSync(`${backupPath}${s}`, `${dbPath}${s}`, fs.constants.COPYFILE_EXCL); } catch (rb) {
-				logger.error("SQLite quarantine rollback failed; original preserved at backup path", { path: `${dbPath}${s}`, backupPath: `${backupPath}${s}`, error: String(rb) });
+			try {
+				fs.copyFileSync(`${backupPath}${s}`, `${dbPath}${s}`, fs.constants.COPYFILE_EXCL);
+			} catch (rb) {
+				logger.error("SQLite quarantine rollback failed; original preserved at backup path", {
+					path: `${dbPath}${s}`,
+					backupPath: `${backupPath}${s}`,
+					error: String(rb),
+				});
 			}
 		}
 		throw error;
@@ -197,7 +217,9 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 				}
 				return currentIdentity === failure.identity ? quarantineCorruptSqliteStore(dbPath, failure.db) : null;
 			});
-		} finally { closeFailedDatabase(failure.db, failure.original, failure.identity); }
+		} finally {
+			closeFailedDatabase(failure.db, failure.original, failure.identity);
+		}
 	} catch (preservationError) {
 		const annotated = annotateSqliteError(failure.original, dbPath);
 		annotated.message += `; failed to preserve the corrupt database: ${preservationError instanceof Error ? preservationError.message : String(preservationError)}`;
@@ -205,7 +227,9 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 	}
 	if (backupPath === null) return;
 	logger.warn("SQLite database corrupt; preserved damaged store before recreating it", {
-		path: dbPath, backupPath, warning: "Stored credentials from this database may require re-login.",
+		path: dbPath,
+		backupPath,
+		warning: "Stored credentials from this database may require re-login.",
 	});
 	options.onCorruptionPreserved?.(backupPath, failure.original);
 }
@@ -215,10 +239,16 @@ export async function openSqliteDatabase<T>(
 	initialize: (db: Database) => T | Promise<T>,
 	options: SqliteOpenOptions = {},
 ): Promise<T> {
-	try { return await openWithBusyRetries(dbPath, initialize, options); }
-	catch (error) { recoverCorruptDatabase(dbPath, error, options); }
-	try { return await openWithBusyRetries(dbPath, initialize, {}); }
-	catch (error) { throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath); }
+	try {
+		return await openWithBusyRetries(dbPath, initialize, options);
+	} catch (error) {
+		recoverCorruptDatabase(dbPath, error, options);
+	}
+	try {
+		return await openWithBusyRetries(dbPath, initialize, {});
+	} catch (error) {
+		throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath);
+	}
 }
 
 export function openSqliteDatabaseSync<T>(
@@ -226,10 +256,16 @@ export function openSqliteDatabaseSync<T>(
 	initialize: (db: Database) => T,
 	options: SqliteOpenOptions = {},
 ): T {
-	try { return openOnce(dbPath, initialize, options); }
-	catch (error) { recoverCorruptDatabase(dbPath, error, options); }
-	try { return openOnce(dbPath, initialize, {}); }
-	catch (error) { throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath); }
+	try {
+		return openOnce(dbPath, initialize, options);
+	} catch (error) {
+		recoverCorruptDatabase(dbPath, error, options);
+	}
+	try {
+		return openOnce(dbPath, initialize, {});
+	} catch (error) {
+		throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath);
+	}
 }
 
 /** Adds the failing store's path to an error without losing SQLite result codes or its original stack. */

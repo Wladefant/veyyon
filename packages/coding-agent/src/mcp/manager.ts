@@ -575,7 +575,7 @@ export class MCPManager {
 					// network interruption).
 					connection.transport.onClose = () => {
 						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
-						this.#emitConnectionStatus({ type: "connecting", serverNames: [name] });
+						this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
 						void this.reconnectServer(name);
 					};
 
@@ -1223,7 +1223,7 @@ export class MCPManager {
 		}
 		connection.transport.onClose = () => {
 			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
-			this.#emitConnectionStatus({ type: "connecting", serverNames: [name] });
+			this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
 			void this.reconnectServer(name);
 		};
 		try {

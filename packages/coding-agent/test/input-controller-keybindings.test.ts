@@ -1,8 +1,11 @@
-import { describe, expect, it, type Mock, vi } from "bun:test";
+import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import type { ImageContent } from "@veyyon/ai";
+import { BtwController } from "@veyyon/coding-agent/modes/terminal/controllers/btw-controller";
 import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { PROMPTS } from "@veyyon/coding-agent/prompts/registry";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { Container, type TUI } from "@veyyon/tui";
 
 type FakeEditor = {
 	onEscape?: () => void;
@@ -97,8 +100,9 @@ async function createContext() {
 	const updatePendingMessagesDisplay = vi.fn();
 	const handleBtwBranchKey = vi.fn(async () => true);
 	const handleBtwCopyKey = vi.fn(async () => true);
-	const canBranchBtw = vi.fn(() => false);
 	const canCopyBtw = vi.fn(() => false);
+	const hasActiveBtw = vi.fn(() => false);
+	const handlesBtwBranchKey = vi.fn(() => false);
 	const editor: FakeEditor = {
 		setText(text: string) {
 			editorText = text;
@@ -198,9 +202,9 @@ async function createContext() {
 		toggleThinkingBlockVisibility: vi.fn(),
 		showModelSelector,
 		updateEditorBorderColor: vi.fn(),
-		hasActiveBtw: vi.fn(() => false),
+		hasActiveBtw,
+		handlesBtwBranchKey,
 		handleBtwBranchKey,
-		canBranchBtw,
 		canCopyBtw,
 		handleBtwCopyKey,
 		showError,
@@ -232,7 +236,8 @@ async function createContext() {
 			resetDisplay,
 			handleBtwBranchKey,
 			addInputListener,
-			canBranchBtw,
+			hasActiveBtw,
+			handlesBtwBranchKey,
 			handleBtwCopyKey,
 			canCopyBtw,
 			showError,
@@ -366,7 +371,7 @@ describe("InputController keybinding setup", () => {
 
 	it("routes b to branch a branchable /btw panel", async () => {
 		const { InputController, ctx, spies } = await createContext();
-		(ctx.canBranchBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		spies.handlesBtwBranchKey.mockReturnValue(true);
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
@@ -380,7 +385,7 @@ describe("InputController keybinding setup", () => {
 
 	it("lets b fall through while the editor has draft text", async () => {
 		const { InputController, ctx, editor, spies } = await createContext();
-		(ctx.canBranchBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		spies.handlesBtwBranchKey.mockReturnValue(true);
 		editor.setText("build a branch");
 		const controller = new InputController(ctx);
 
@@ -393,8 +398,23 @@ describe("InputController keybinding setup", () => {
 		expect(spies.handleBtwBranchKey).not.toHaveBeenCalled();
 	});
 
-	it("lets b fall through when /btw is not branchable", async () => {
+	it("consumes b while a completed /btw branch is unavailable", async () => {
 		const { InputController, ctx, spies } = await createContext();
+		spies.handlesBtwBranchKey.mockReturnValue(true);
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const listener = spies.addInputListener.mock.calls[1]?.[0];
+		expect(listener).toBeDefined();
+		const result = listener?.("b");
+
+		expect(result).toEqual({ consume: true });
+		expect(spies.handleBtwBranchKey.mock.calls).toHaveLength(1);
+	});
+
+	it("lets b reach the composer before an active /btw answer is branchable", async () => {
+		const { InputController, ctx, spies } = await createContext();
+		spies.hasActiveBtw.mockReturnValue(true);
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
@@ -406,9 +426,76 @@ describe("InputController keybinding setup", () => {
 		expect(spies.handleBtwBranchKey).not.toHaveBeenCalled();
 	});
 
+	// WHY: the b-key contract spans two real objects, the input controller and the BtwController that
+	// answers `handlesBtwBranchKey`. Stubbing that answer (as the tests above do) cannot see the
+	// controller reserve `b` too early, so this wires the production controller into the context.
+	describe("with the production /btw controller", () => {
+		beforeAll(async () => {
+			await initTheme();
+		});
+
+		async function createBtwWiredContext(runEphemeralTurn: () => Promise<unknown>) {
+			const { InputController, ctx, spies } = await createContext();
+			const handleBtwBranch = vi.fn(async () => {});
+			const controller = new BtwController({
+				ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
+				btwContainer: new Container(),
+				session: {
+					model: { provider: "anthropic", id: "claude-sonnet-4-5" },
+					isStreaming: false,
+					runEphemeralTurn,
+				} as unknown as InteractiveModeContext["session"],
+				sessionManager: {
+					getLeafId: () => "leaf-1",
+					getSessionId: () => "session-1",
+				} as unknown as InteractiveModeContext["sessionManager"],
+				showStatus: vi.fn(),
+				showError: vi.fn(),
+				handleBtwBranch,
+			});
+			Object.assign(ctx, {
+				hasActiveBtw: () => controller.hasActiveRequest(),
+				handlesBtwBranchKey: () => controller.handlesBranchKey(),
+				handleBtwBranchKey: () => controller.handleBranch(),
+			});
+			new InputController(ctx).setupKeyHandlers();
+			const press = (key: string) => dispatchInput(registeredInputListeners(spies.addInputListener), key);
+			return { controller, handleBtwBranch, press };
+		}
+
+		it("lets b reach the composer while the /btw answer is still streaming", async () => {
+			const { controller, handleBtwBranch, press } = await createBtwWiredContext(
+				() => Promise.withResolvers<never>().promise,
+			);
+			await controller.start("Question?");
+			expect(controller.hasActiveRequest()).toBe(true);
+
+			expect(press("b")).toBeUndefined();
+			expect(handleBtwBranch.mock.calls).toEqual([]);
+		});
+
+		it("consumes b and promotes the answer once the /btw answer is complete", async () => {
+			const assistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Answer" }],
+			};
+			const { controller, handleBtwBranch, press } = await createBtwWiredContext(async () => ({
+				replyText: "Answer",
+				assistantMessage,
+			}));
+			await controller.start("Question?");
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(press("b")).toEqual({ consume: true });
+			await Promise.resolve();
+			expect(handleBtwBranch.mock.calls).toHaveLength(1);
+		});
+	});
+
 	it("lets b fall through while another input is focused", async () => {
 		const { InputController, ctx, setFocused, spies } = await createContext();
-		(ctx.canBranchBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		spies.handlesBtwBranchKey.mockReturnValue(true);
 		setFocused({ pasteText: vi.fn() });
 		const controller = new InputController(ctx);
 

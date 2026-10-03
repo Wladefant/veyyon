@@ -6,16 +6,19 @@ import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 import { mountTranscriptBlock } from "../transcript/transcript-block-chrome";
 
 /** Exported so a caller (and the rail suite) can enumerate every state the panel paints. */
-export type BtwPanelState = "running" | "complete" | "aborted" | "error";
+export type BtwPanelState = "running" | "complete" | "branching" | "aborted" | "error";
 
 interface BtwPanelComponentOptions {
 	question: string;
 	tui: TUI;
+	/** Whether the controller would accept `b` now. Read at paint time, so the hint tracks the main turn. */
+	canBranch?: () => boolean;
 }
 
 export class BtwPanelComponent extends Container {
 	#question: string;
 	#tui: TUI;
+	#canBranch: (() => boolean) | undefined;
 	#state: BtwPanelState = "running";
 	#answer = "";
 	#errorMessage: string | undefined;
@@ -26,6 +29,7 @@ export class BtwPanelComponent extends Container {
 		super();
 		this.#question = options.question;
 		this.#tui = options.tui;
+		this.#canBranch = options.canBranch;
 		this.#rebuild();
 	}
 
@@ -45,6 +49,11 @@ export class BtwPanelComponent extends Container {
 
 	markComplete(): void {
 		this.#settle("complete");
+	}
+
+	/** Shows that the completed answer is being promoted into the chat session. */
+	markBranching(): void {
+		this.#settle("branching");
 	}
 
 	markAborted(): void {
@@ -83,7 +92,7 @@ export class BtwPanelComponent extends Container {
 		mountTranscriptBlock(this, {
 			header: theme.bold(theme.fg("accent", replaceTabs(`/btw ${this.#question}`))),
 			body: this.#contentComponent(),
-			footer: this.#footerLine(),
+			footer: () => this.#footerLine(),
 		});
 		// Component-scoped: a rebuild replaces only this panel's own children
 		// (streaming deltas arrive per token, and a full compose would re-walk
@@ -96,8 +105,15 @@ export class BtwPanelComponent extends Container {
 		switch (this.#state) {
 			case "running":
 				return theme.fg("muted", "Esc cancel /btw");
-			case "complete":
-				return theme.fg("muted", this.isCopyable() ? "c copy · b branch to chat · Esc dismiss" : "Esc dismiss");
+			case "complete": {
+				if (!this.isCopyable()) return theme.fg("muted", "Esc dismiss");
+				const actions = ["c copy"];
+				if (this.#canBranch?.() ?? this.isBranchable()) actions.push("b branch to chat");
+				actions.push("Esc dismiss");
+				return theme.fg("muted", actions.join(" · "));
+			}
+			case "branching":
+				return theme.fg("muted", `${theme.status.pending} Branching to chat…`);
 			case "aborted":
 				return theme.fg("warning", `${theme.status.warning} Cancelled · Esc dismiss`);
 			case "error":

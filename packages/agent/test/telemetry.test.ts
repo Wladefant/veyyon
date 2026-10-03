@@ -277,6 +277,7 @@ const ASSISTANT_BLOCKS: { [K in AssistantBlock["type"]]: Extract<AssistantBlock,
 	redactedThinking: { type: "redactedThinking", data: "REDACTED" },
 	fallback: { type: "fallback", from: { model: "sonnet" }, to: { model: "haiku" } },
 	toolCall: { type: "toolCall", id: "call-7", name: "write", arguments: { path: "/b" } },
+	image: { type: "image", data: "SU1H", mimeType: "image/png" },
 };
 
 const ASSISTANT_PARTS: { [K in AssistantBlock["type"]]: OtelPartShape[] } = {
@@ -287,6 +288,7 @@ const ASSISTANT_PARTS: { [K in AssistantBlock["type"]]: OtelPartShape[] } = {
 	// reader of the turn can act on, and it carries no text to export.
 	fallback: [],
 	toolCall: [{ type: "tool_call", id: "call-7", name: "write", arguments: { path: "/b" } }],
+	image: [{ type: "blob", modality: "image", mime_type: "image/png", content: "SU1H" }],
 };
 
 interface OtelPartShape {
@@ -1007,5 +1009,49 @@ describe("service tier request attribute", () => {
 		});
 		span?.end();
 		expect(onlySpan().attributes[OpenAIAttr.RequestServiceTier]).toBe("priority");
+	});
+
+	it("emits the service tier for a custom OpenAI model relay reaching the wire", () => {
+		const relayModel = buildModel({
+			id: "gpt-4o",
+			name: "Custom Relay GPT-4o",
+			api: "openai-responses",
+			provider: "custom-relay",
+			baseUrl: "https://relay.example.com/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 32_768,
+		});
+		const telemetry = telemetryFor({});
+		const span = startChatSpan(telemetry, relayModel, {
+			stepNumber: 0,
+			request: { serviceTier: "priority" },
+		});
+		span?.end();
+		expect(onlySpan().attributes[OpenAIAttr.RequestServiceTier]).toBe("priority");
+	});
+
+	it("omits the service tier when the model does not support it", () => {
+		const unsupportedModel = buildModel({
+			id: "mock-model",
+			name: "Unsupported Model",
+			api: "anthropic-messages",
+			provider: "custom-unsupported",
+			baseUrl: "https://custom.example.com",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 32_768,
+		});
+		const telemetry = telemetryFor({});
+		const span = startChatSpan(telemetry, unsupportedModel, {
+			stepNumber: 0,
+			request: { serviceTier: "priority" },
+		});
+		span?.end();
+		expect(onlySpan().attributes[OpenAIAttr.RequestServiceTier]).toBeUndefined();
 	});
 });

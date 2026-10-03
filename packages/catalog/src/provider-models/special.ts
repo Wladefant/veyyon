@@ -1,43 +1,87 @@
 import { lazy } from "@veyyon/utils/abortable";
-import { fetchCodexModels } from "../discovery/codex";
+import { type CodexModelDiscoveryResult, fetchCodexModels } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
+import { fetchTypeSafeModels, TYPESAFE_DEFAULT_BASE_URL } from "../discovery/typesafe";
 import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
 import type { ModelManagerOptions } from "../model-manager";
-import type { FetchImpl } from "../types";
+import type { FetchImpl, ModelSpec } from "../types";
 
 // ---------------------------------------------------------------------------
 // OpenAI Codex
 // ---------------------------------------------------------------------------
+
+/** One Codex OAuth account to fetch a catalog for. */
+export interface OpenAICodexAccount {
+	/** OAuth access token used for `Authorization: Bearer ...`. */
+	accessToken: string;
+	/** ChatGPT account id sent as the `chatgpt-account-id` header. */
+	accountId?: string;
+}
+
+export function openAICodexModelCacheProviderId(accountFingerprint?: string): string {
+	return accountFingerprint ? `openai-codex:union-v1:${accountFingerprint}` : "openai-codex:union-v1";
+}
 
 export interface OpenAICodexModelManagerConfig {
 	accessToken?: string;
 	accountId?: string;
 	clientVersion?: string;
 	fetch?: FetchImpl;
+	cacheProviderId?: string;
+	accountFingerprint?: string;
+	/**
+	 * Resolves configured Codex OAuth accounts. Fetches each account and
+	 * unions results by id. Returns null on failure to keep previous models.
+	 */
+	resolveAccounts?: () => Promise<readonly OpenAICodexAccount[] | null>;
 }
 
 export function openaiCodexModelManagerOptions(
 	config: OpenAICodexModelManagerConfig = {},
 ): ModelManagerOptions<"openai-codex-responses"> {
-	const { accessToken, accountId, clientVersion, fetch } = config;
+	const { resolveAccounts, accessToken, accountId, clientVersion, fetch, cacheProviderId, accountFingerprint } =
+		config;
 	return {
 		providerId: "openai-codex",
+		cacheProviderId: cacheProviderId ?? openAICodexModelCacheProviderId(accountFingerprint),
 		dynamicModelsAuthoritative: true,
-		...(accessToken
+		...(resolveAccounts || accessToken
 			? {
 					fetchDynamicModels: async hooks => {
-						const result = await fetchCodexModels({
-							accessToken,
-							accountId,
-							clientVersion,
-							fetchFn: fetch,
-							onFailure: hooks?.onFailure,
-						});
-						return result?.models ?? null;
+						const accounts = resolveAccounts
+							? await resolveAccounts()
+							: [{ accessToken: accessToken!, accountId }];
+						if (!accounts || accounts.length === 0) return null;
+						const results = await Promise.all(
+							accounts.map(account =>
+								fetchCodexModels({
+									accessToken: account.accessToken,
+									accountId: account.accountId,
+									clientVersion,
+									fetchFn: fetch,
+									onFailure: hooks?.onFailure,
+								}),
+							),
+						);
+						return unionCodexModels(results);
 					},
 				}
 			: undefined),
 	};
+}
+
+/** Unions per-account Codex catalogs by model id; returns null if any account failed. */
+function unionCodexModels(
+	results: readonly (CodexModelDiscoveryResult | null)[],
+): ModelSpec<"openai-codex-responses">[] | null {
+	const byId = new Map<string, ModelSpec<"openai-codex-responses">>();
+	for (const result of results) {
+		if (!result) return null;
+		for (const model of result.models) {
+			if (!byId.has(model.id)) byId.set(model.id, model);
+		}
+	}
+	return [...byId.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -181,4 +225,106 @@ export interface ZaiModelManagerConfig {}
 
 export function zaiModelManagerOptions(_config: ZaiModelManagerConfig = {}): ModelManagerOptions<"anthropic-messages"> {
 	return { providerId: "zai" };
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic role providers
+// ---------------------------------------------------------------------------
+
+export const LOCAL_STATIC_MODELS: readonly ModelSpec<"local-inference">[] = [
+	{ id: "kokoro", name: "Kokoro-82M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tts", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "parakeet-tdt-0.6b-v3", name: "Parakeet TDT 0.6B v3", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "whisper-base", name: "Whisper Base", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "whisper-small", name: "Whisper Small", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "whisper-large-v3-turbo", name: "Whisper Large v3 Turbo", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "stt", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "lfm2.5-230m", name: "LFM2.5 230M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "lfm2.5-350m", name: "LFM2.5 350M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "falcon-h1-90m", name: "Falcon H1 Tiny 90M", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "qwen3-1.7b", name: "Qwen3 1.7B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "llama3.2:3b", name: "Llama 3.2 3B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "gemma-3-1b", name: "Gemma 3 1B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "qwen2.5-1.5b", name: "Qwen2.5 1.5B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+	{ id: "lfm2-1.2b", name: "LFM2 1.2B", api: "local-inference", provider: "local", baseUrl: "local://inference", kind: "tiny", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: null, maxTokens: null },
+];
+
+export function localModelManagerOptions(): ModelManagerOptions<"local-inference"> {
+	return {
+		providerId: "local",
+		staticModels: LOCAL_STATIC_MODELS,
+	};
+}
+
+export const WEB_STATIC_MODELS: readonly ModelSpec<"web-search">[] = [
+	"parallel", "perplexity", "zai", "exa", "tinyfish", "jina", "kagi", "tavily",
+	"firecrawl", "brave", "kimi", "synthetic", "ollama", "searxng", "startpage",
+	"duckduckgo", "ecosia", "google", "mojeek", "public",
+].map(id => ({
+	id,
+	name: id === "public" ? "Public Web" : id === "zai" ? "Z.AI" : id.charAt(0).toUpperCase() + id.slice(1),
+	api: "web-search" as const,
+	provider: "web" as const,
+	baseUrl: "web://search",
+	kind: "search" as const,
+	reasoning: false,
+	input: ["text" as const],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: null,
+	maxTokens: null,
+}));
+
+export function webModelManagerOptions(): ModelManagerOptions<"web-search"> {
+	return {
+		providerId: "web",
+		staticModels: WEB_STATIC_MODELS,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// TypeSafe
+// ---------------------------------------------------------------------------
+
+export const TYPESAFE_STATIC_MODELS: readonly ModelSpec<"typesafe">[] = [
+	{
+		id: "jev-latest",
+		name: "TypeSafe jev",
+		api: "typesafe",
+		provider: "typesafe",
+		baseUrl: TYPESAFE_DEFAULT_BASE_URL,
+		kind: "judge",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+];
+
+/** Credentials and endpoint overrides for the TypeSafe catalog manager. */
+export interface TypeSafeModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/** Discover account-visible judge models while keeping the bundled offline seed. */
+export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig = {}): ModelManagerOptions<"typesafe"> {
+	const { apiKey } = config;
+	const envBaseUrl = Bun.env.TYPESAFE_BASE_URL?.trim();
+	const baseUrl = (config.baseUrl ?? (envBaseUrl || TYPESAFE_DEFAULT_BASE_URL)).replace(/\/+$/, "");
+	const staticModels = TYPESAFE_STATIC_MODELS.map(model => ({ ...model, baseUrl }));
+	return {
+		providerId: "typesafe",
+		staticModels,
+		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
+		...(apiKey
+			? {
+					fetchDynamicModels: () =>
+						fetchTypeSafeModels({
+							apiKey,
+							baseUrl,
+							fetch: config.fetch,
+						}),
+				}
+			: undefined),
+	};
 }

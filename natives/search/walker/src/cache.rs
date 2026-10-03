@@ -170,19 +170,23 @@ fn cache_key(root: &Path, mut options: WalkOptions) -> CacheKey {
 	CacheKey { root: root.to_path_buf(), options }
 }
 
-/// Normalize a filesystem path to a forward-slash relative string.
-pub fn normalize_relative_path<'a>(root: &Path, path: &'a Path) -> Cow<'a, str> {
-	let relative = path.strip_prefix(root).unwrap_or(path);
+/// Normalize a filesystem path to a forward-slash string on Windows.
+pub fn normalize_path(path: &Path) -> Cow<'_, str> {
 	if cfg!(windows) {
-		let relative = relative.to_string_lossy();
-		if relative.contains('\\') {
-			Cow::Owned(relative.replace('\\', "/"))
+		let path = path.to_string_lossy();
+		if path.contains('\\') {
+			Cow::Owned(path.replace('\\', "/"))
 		} else {
-			relative
+			path
 		}
 	} else {
-		relative.to_string_lossy()
+		path.to_string_lossy()
 	}
+}
+
+/// Normalize a filesystem path to a forward-slash relative string.
+pub fn normalize_relative_path<'a>(root: &Path, path: &'a Path) -> Cow<'a, str> {
+	normalize_path(path.strip_prefix(root).unwrap_or(path))
 }
 
 /// Return whether a path contains the exact component name.

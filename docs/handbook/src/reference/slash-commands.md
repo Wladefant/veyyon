@@ -127,7 +127,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/plan-review` | Re-open plan review |
 | `/goal …` | Goal set/show/pause/resume/drop/budget |
 | `/guided-goal` | Guided goal wizard |
-| `/loop` | Loop mode controls |
+| `/loop` | Loop mode controls; Esc suspends the ongoing loop, a new manual prompt resumes it, and `/loop` again disables it |
 | `/prewalk [model]` | Arm the prewalk switch for this session: the agent moves to the cheap model at its next edit or write, once the todo list exists. The target comes from the argument or `prewalk.cheapModel`; with neither, the command fails naming the setting |
 | `/secret` | Store a credential the agent uses by placeholder and never receives. A command comes first on every surface and every argument after it is a plain word: `/secret add <value>` stores it in a terminal, `/secret add` alone opens a hidden field, `/secret from-env <VAR>` reads it out of the environment, and the name is prompted afterwards, with Enter accepting the generated one. The commands are `add`, `from-env`, `list`, `rm`, `clear`, `rename`, `value`, `scope`, `copy`, `extend`, `log`, `discard`, `help`; a first word that is none of them is rejected and nothing is stored. See [Secrets](../features/secrets.md) |
 | `/settings`, `/setup` | Settings UI; `/setup` opens first-run provider sign-in |

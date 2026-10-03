@@ -5,7 +5,7 @@ import { buildModel } from "./build";
 import { type CatalogSpan, indexCatalogModelSpans, indexCatalogSpans } from "./catalog-spans";
 import type { ModelReferenceCandidate } from "./identity/reference";
 import modelsJsonAsset from "./models.json" with { type: "file" };
-import type { Api, Model, ModelSpec, Usage } from "./types";
+import { type Api, type Model, type ModelSpec, modelKind, type Usage } from "./types";
 import { ZERO_MODEL_COST } from "./utils";
 
 /**
@@ -224,6 +224,15 @@ export function getBundledProviders(): GeneratedProvider[] {
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
 	const models = getProviderModelMap(provider);
 	return models ? (Array.from(models.values()) as Model<Api>[]) : [];
+}
+
+/**
+ * Chat models only: the bundled rows a session, a completion list or a gateway
+ * may offer. Runner models (image generation) ride in the catalog for their own
+ * tools and are not listed here.
+ */
+export function getBundledChatModels(provider: GeneratedProvider): Model<Api>[] {
+	return getBundledModels(provider).filter(model => modelKind(model) === "chat");
 }
 
 /**

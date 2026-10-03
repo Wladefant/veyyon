@@ -24,7 +24,7 @@ import {
 import { AuthBrokerClient, RemoteAuthCredentialStore, type SnapshotResponse } from "@veyyon/ai/auth-broker";
 import { DEFAULT_AUTH_GATEWAY_BIND, startAuthGateway } from "@veyyon/ai/auth-gateway";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { type GeneratedProvider, getBundledChatModels, getBundledProviders } from "@veyyon/catalog/models";
 import { errorMessage, formatCount, VERSION } from "@veyyon/utils";
 import chalk from "chalk";
 import { Settings } from "../config/settings";
@@ -119,7 +119,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const modelById = new Map<string, Model<Api>>();
 	for (const provider of getBundledProviders()) {
 		if (!providersWithCreds.has(provider)) continue;
-		for (const model of getBundledModels(provider as GeneratedProvider)) {
+		for (const model of getBundledChatModels(provider as GeneratedProvider)) {
 			// Always set the qualified key (no collision possible)
 			modelById.set(`${model.provider}/${model.id}`, model);
 			// Bare id as fallback for legacy clients (first-write-wins)
@@ -327,7 +327,7 @@ const RETRYABLE_MODEL_ERROR_RE =
  * router entries with negative/missing cost.
  */
 function pickProbeCandidates(provider: string): Model<Api>[] {
-	const bundled = getBundledModels(provider as GeneratedProvider);
+	const bundled = getBundledChatModels(provider as GeneratedProvider);
 	if (bundled.length === 0) return [];
 	const candidates = bundled.filter(model => {
 		if (model.transport === "pi-native") return false;

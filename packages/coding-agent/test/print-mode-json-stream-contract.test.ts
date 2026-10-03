@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
-import { printableEvent, runPrintMode } from "@veyyon/coding-agent/modes/print-mode";
-import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { type PrintModeSession, printableEvent, runPrintMode } from "@veyyon/coding-agent/modes/print-mode";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 
 /**
@@ -66,7 +65,7 @@ function makeAssistantMessage(text: string): AssistantMessage {
  * identity, because these tests assert what print mode does with whatever the
  * seam hands it, and the seam's own expansion is covered where it lives.
  */
-function createReplaySession(events: AgentSessionEvent[], header?: unknown): AgentSession {
+function createReplaySession(events: AgentSessionEvent[], header?: unknown): PrintModeSession {
 	const messages: AssistantMessage[] = [];
 	let emit: ((event: AgentSessionEvent) => void) | undefined;
 	return {
@@ -87,7 +86,9 @@ function createReplaySession(events: AgentSessionEvent[], header?: unknown): Age
 			emit = listener;
 			return () => {};
 		},
-	} as unknown as AgentSession;
+		prepareForHeadlessAdvisorDrain: () => {},
+		waitForAdvisorCatchup: async () => true,
+	};
 }
 
 describe("every line of --mode json output parses on its own", () => {

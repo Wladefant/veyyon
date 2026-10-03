@@ -4,11 +4,13 @@
  * The comparison is taken through `test/differential/harness.ts`, whose header states the frozen
  * oracle, the shared defect class and the styling policy every cell here runs under.
  *
- * The tool has three actions and two card shapes, so both are swept: the `open` and `close` row over
+ * The tool has four actions and two card shapes, so both are swept: the `open` and `close` row over
  * every action, every browser kind the registry can report and every outcome, and the `run` panel
  * over the script, its output, both ceilings and four terminal widths. The browser kinds and the
- * actions are recorded as total records of their own unions, so a fifth kind or a fourth action fails
- * the type check here rather than going uncompared.
+ * actions are recorded as total records of their own unions, so a new kind or action fails the type
+ * check here rather than going uncompared. `save_state`, and the context and state file an `open`
+ * names, came after main's renderer froze: they are listed by name and drawn against their own
+ * expectations instead.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -60,7 +62,10 @@ const BROWSER_KINDS: Record<NonNullable<BrowserToolDetails["browser"]>, true> = 
 };
 
 /** Every action the tool takes, as a total record of the schema's own union. */
-const ACTIONS: Record<BrowserParams["action"], true> = { open: true, close: true, run: true };
+const ACTIONS: Record<BrowserParams["action"], true> = { open: true, close: true, run: true, save_state: true };
+
+/** Actions main's renderer never drew, so there is nothing of main's to compare them to. */
+const NEWER_THAN_MAIN: ReadonlySet<BrowserParams["action"]> = new Set(["save_state"]);
 
 const KINDS = Object.keys(BROWSER_KINDS) as Array<NonNullable<BrowserToolDetails["browser"]>>;
 const EVERY_ACTION = Object.keys(ACTIONS) as Array<BrowserParams["action"]>;
@@ -120,7 +125,7 @@ describe("browser tool differential", () => {
 
 	it("draws the tab row byte for byte, over every action, every browser kind and every outcome", () => {
 		for (const action of EVERY_ACTION) {
-			if (action === "run") continue;
+			if (action === "run" || NEWER_THAN_MAIN.has(action)) continue;
 			for (const kind of KINDS) {
 				const args: BrowserViewArgs = { action, name: "docs", url: "https://example.com/asked-for" };
 				const settled: BrowserViewResult = {
@@ -164,6 +169,53 @@ describe("browser tool differential", () => {
 		expect(flat).toContain("headless");
 		expect(flat).toContain("example.com/docs/getting-started");
 		expect(drawn.join("\n")).toContain(theme.styledSymbol("tool.browser", "accent"));
+	});
+
+	/**
+	 * What main never drew. A `save_state` row names the operation and the file it wrote, never
+	 * reading as an open; an `open` into a context names the context, the default context names
+	 * none; a state file appears on the rows that read or write one and not on a close.
+	 */
+	it("draws a save_state row, and the context and state file of an open, in their own words", () => {
+		const rowOf = (args: BrowserViewArgs, details: BrowserToolDetails): string =>
+			stripVTControlCharacters(resultView({ content: [], details }, COLLAPSED, args, 200).join("\n"));
+		const saved = rowOf(
+			{ action: "save_state", name: "admin", storage_state: ".auth/admin.json" },
+			{
+				action: "save_state",
+				name: "admin",
+				browser: "headless",
+				context: "admin",
+				storageState: "/repo/.auth/admin.json",
+			},
+		);
+		expect(saved).toContain('Save the state of tab "admin"');
+		expect(saved).not.toContain("Open");
+		expect(saved).toContain('context "admin"');
+		expect(saved).toContain("/repo/.auth/admin.json");
+		// The call card, before any result, names the file as the model wrote it.
+		const called = stripVTControlCharacters(
+			callView({ action: "save_state", name: "admin", storage_state: ".auth/admin.json" }, COLLAPSED, 200).join(
+				"\n",
+			),
+		);
+		expect(called).toContain('Save the state of tab "admin"');
+		expect(called).toContain(".auth/admin.json");
+
+		const opened = rowOf(
+			{ action: "open", name: "admin", context: "admin", url: URL },
+			{ action: "open", name: "admin", url: URL, browser: "headless", context: "admin" },
+		);
+		expect(opened).toContain('context "admin"');
+		const defaulted = stripVTControlCharacters(
+			callView({ action: "open", name: "docs", context: "default", url: URL }, COLLAPSED, 200).join("\n"),
+		);
+		expect(defaulted).not.toContain("context");
+		const closed = rowOf(
+			{ action: "close", name: "admin" },
+			{ action: "close", name: "admin", storageState: "/repo/x.json" },
+		);
+		expect(closed).not.toContain("x.json");
 	});
 
 	it("draws every way a close names its tabs byte for byte: all, one, and killed", () => {

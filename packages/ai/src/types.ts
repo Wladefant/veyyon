@@ -341,6 +341,12 @@ export interface StreamOptions {
 
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
+	/**
+	 * Disable native reasoning when the caller supplies an external scratchpad.
+	 * OpenAI Responses emits `reasoning: { effort: "none" }`; Anthropic and
+	 * Google transports use their native thinking-off controls.
+	 */
+	forceReasoningOff?: boolean;
 }
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()

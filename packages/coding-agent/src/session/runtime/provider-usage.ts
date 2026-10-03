@@ -13,7 +13,6 @@
  *   asking first when the policy is unset.
  */
 import type {
-	AssistantMessage,
 	Model,
 	OAuthAccountIdentity,
 	ProviderResponseMetadata,
@@ -46,12 +45,7 @@ export const CODEX_AUTO_REDEEM_SOURCE = "codex-auto-reset";
 /** The credential store slice usage reads and writes. `AuthStorage` satisfies this. */
 export type ProviderUsageAuth = Pick<
 	AuthStorage,
-	| "ingestUsageHeaders"
-	| "recordUsageCost"
-	| "fetchUsageReports"
-	| "redeemResetCredit"
-	| "listResetCredits"
-	| "getOAuthAccountIdentity"
+	"ingestUsageHeaders" | "fetchUsageReports" | "redeemResetCredit" | "listResetCredits" | "getOAuthAccountIdentity"
 >;
 
 /** What {@link ProviderUsage} needs from the session that holds it. */
@@ -85,17 +79,6 @@ export class ProviderUsage {
 		host.authStorage().ingestUsageHeaders(provider, response.headers, {
 			sessionId: host.agentSessionId(),
 			baseUrl: host.providerBaseUrl(provider),
-		});
-	}
-
-	/** Record the cost a provider reports per turn. Only OpenCode Go bills against a local ledger. */
-	recordTurnCost(message: AssistantMessage): void {
-		if (message.provider !== "opencode-go") return;
-		const host = this.#host;
-		host.authStorage().recordUsageCost(message.provider, message.usage.cost.total, {
-			sessionId: host.sessionId(),
-			recordedAt: message.timestamp,
-			baseUrl: host.providerBaseUrl(message.provider),
 		});
 	}
 

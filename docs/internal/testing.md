@@ -49,6 +49,25 @@ bun needs the `./` prefix on a path: without it the argument is a name FILTER ma
 against the files discovery already found, not a path, so a target discovery did not
 collect matches nothing and the run reports clean.
 
+#### The one exception: real-browser suites on a host with Chromium
+
+The sandbox guest has no Chromium, so the three real-browser suites
+(`HOST_BROWSER_SUITES` in `sandbox-gate.ts`) skip there. `VEYYON_TEST_HOST_BROWSER=1`
+admits them on a host instead. It is default off, exact (`1` and nothing else), and every
+condition below is required or the run is refused with the reason:
+
+- `PUPPETEER_EXECUTABLE_PATH` is an absolute path to an existing browser binary. Hide the
+  system Chrome from discovery too (`ProgramFiles`, `ProgramFiles(x86)`, `ProgramW6432`
+  pointed at a nonexistent directory): `ensureChromiumExecutable` prefers an installed
+  system Chrome over the variable.
+- Every test path named on the command line is one of those suites.
+- `HOME`/`USERPROFILE` (and `LOCALAPPDATA`) point at a throwaway directory whose name
+  starts with `veyyon-host-browser-home-`.
+
+The readability proofs (clauses A-D) cannot hold on a host and are replaced, not skipped:
+the real-data tripwire stays preloaded and still refuses every mutating call that names
+the real home. A process that sets the flag and meets none of this exits 1.
+
 A pinned boundary that is unavailable is an error, never a quiet fall back to a weaker
 one. If no boundary is available at all, the suite does not run. Read
 `scripts/test-sandbox/README.md` before changing any of it.

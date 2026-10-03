@@ -390,8 +390,16 @@ KITTY_PID=$!
 # nowhere on screen. So the placement is read back, retried against a freshly
 # resolved id, and the run is aborted rather than recorded if the window will not
 # sit where the theme needs it.
+#
+# Never the root window. Before the terminal maps, the class search is empty and the
+# fallback search returns the root, which answers a geometry query at the full screen
+# size and "moves" to +0+0 -- so a plain capture, whose margin is 0, accepted it as
+# placed. Aimed at the root, every `xdotool key --window` is delivered nowhere and
+# reports success: a take typed its prompt through kitty's socket, its Return went to
+# the root, and the prompt sat unsubmitted in the composer until the guard gave up.
 pick_window() {
-	local found="" candidate candidates="" width height
+	local found="" candidate candidates="" width height root
+	root="$(xwininfo -root 2>/dev/null | sed -n 's/.*Window id: \(0x[0-9a-fA-F]*\).*/\1/p')"
 	case "${SCENE_TERMINAL}" in
 	xterm)
 		candidates="$(xdotool search --class "XTerm" 2>/dev/null || true)"
@@ -413,6 +421,7 @@ pick_window() {
 
 	for candidate in ${candidates}; do
 		[ "${candidate}" = "0" ] && continue
+		[ -n "${root}" ] && [ "$((candidate))" = "$((root))" ] && continue
 		read -r width height <<<"$(xdotool getwindowgeometry "${candidate}" 2>/dev/null | sed -n 's/.*Geometry: \([0-9]*\)x\([0-9]*\)/\1 \2/p')"
 		if [ "${width:-0}" -gt 1 ] && [ "${height:-0}" -gt 1 ]; then
 			found="${candidate}"

@@ -33,10 +33,13 @@
  * window carries the real tool calls, so the model still sees the file work.
  */
 
+import { scheduler } from "node:timers/promises";
 import type { ApiKey, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex-responses";
-import { resolveServerCompactionTransport } from "@veyyon/ai/providers/openai-compaction";
+import { resolveServerCompactionTransport, type ServerCompactionRequest } from "@veyyon/ai/providers/openai-compaction";
+import { logger } from "@veyyon/utils";
+import { isUnexpectedSocketCloseMessage } from "@veyyon/utils/fetch-retry";
 import type { CompactionPreparation, CompactionResult, SummaryOptions } from "./compaction";
 import { defaultConvertToLlm } from "./messages";
 import {
@@ -62,6 +65,29 @@ export {
 	serverCompactionRouteAbsent,
 } from "@veyyon/ai/providers/openai-compaction";
 export * from "./remote-compaction-entry";
+
+/**
+ * Max retries for streaming Codex compaction on transient unexpected socket closures.
+ * Matches upstream V2_COMPACTION_MAX_RETRIES.
+ */
+export const CODEX_COMPACTION_MAX_SOCKET_RETRIES = 2;
+/** Detect an unexpected socket closure error during transport or stream reading. */
+export function isUnexpectedSocketCloseError(error: unknown): boolean {
+	const cause = typeof error === "object" && error !== null && "cause" in error ? error.cause : undefined;
+	for (const candidate of [error, cause]) {
+		const message =
+			typeof candidate === "string"
+				? candidate
+				: typeof candidate === "object" &&
+						candidate !== null &&
+						"message" in candidate &&
+						typeof candidate.message === "string"
+					? candidate.message
+					: undefined;
+		if (message && isUnexpectedSocketCloseMessage(message)) return true;
+	}
+	return false;
+}
 
 /**
  * Compact the prepared span on the session model's provider and return the
@@ -117,29 +143,17 @@ export async function compactWithProvider(
 	const instructions = [options?.remoteInstructions, customInstructions].filter(Boolean).join("\n\n");
 	const remote = await withAuth(
 		apiKey,
-		key =>
-			transport.compact({
+		async key => {
+			const compactRequest: ServerCompactionRequest = {
 				model,
 				messages: llmMessages,
 				previousWindow,
 				instructions: instructions.length > 0 ? instructions : undefined,
-				// Codex keys request identity to the live conversation; the
-				// official and Azure routes ignore all four. The cache key is the
-				// turn's own, so the compaction lands on the session's cached
-				// prefix instead of opening a second lineage beside it.
 				sessionId: options?.sessionId,
 				promptCacheKey: options?.promptCacheKey,
 				providerSessionState: options?.providerSessionState,
 				codexCompaction: createOpenAICodexCompactionRequestContext({
 					context: options?.codexCompaction,
-					// `responses_compaction_v2` names the wire the transport posts:
-					// an ordinary streaming `{base}/codex/responses` turn whose last
-					// input item is `compaction_trigger`. The declaration and the
-					// route are one decision — `responses_compact` metadata sent to
-					// the turn route is a mismatch, and so is the reverse — so
-					// changing either one means changing both. Measured 2026-09-01:
-					// the `/compact` route answers 404 and this one answers 200 with
-					// the compaction item.
 					implementation: "responses_compaction_v2",
 				}),
 				apiKey: key,
@@ -147,7 +161,31 @@ export async function compactWithProvider(
 				fetch: options?.fetch,
 				timeoutMs: SERVER_COMPACTION_TIMEOUT_MS,
 				sanitizeErrorText: text => options?.obfuscateProviderText?.(text) ?? text,
-			}),
+			};
+			const isCodex = model.provider === "openai-codex" || model.api === "openai-codex-responses";
+			if (!isCodex) return transport.compact(compactRequest);
+			for (let attempt = 0; ; attempt++) {
+				if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+				try {
+					return await transport.compact(compactRequest);
+				} catch (err) {
+					if (
+						attempt < CODEX_COMPACTION_MAX_SOCKET_RETRIES &&
+						!signal?.aborted &&
+						isUnexpectedSocketCloseError(err)
+					) {
+						const backoffMs = 100 * 2 ** attempt;
+						logger.warn(
+							`Codex compaction attempt ${attempt + 1} failed (socket closed), retrying in ${backoffMs}ms`,
+							{ model: model.id, attempt: attempt + 1 },
+						);
+						await scheduler.wait(backoffMs, { signal });
+						continue;
+					}
+					throw err;
+				}
+			}
+		},
 		{ signal, missingKeyMessage: "Server-side compaction credentials unavailable" },
 	);
 

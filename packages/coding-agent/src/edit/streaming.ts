@@ -34,7 +34,6 @@ import { computeEditDiff, type DiffError, type DiffResult } from "./diff";
 import { computeHashlineDiff, computeHashlineSectionDiff } from "./hashline/diff";
 import { type ApplyPatchEntry, expandApplyPatchToEntries, expandApplyPatchToPreviewEntries } from "./modes/apply-patch";
 import { computePatchDiff, type PatchEditEntry } from "./modes/patch";
-import type { ReplaceEditEntry } from "./modes/replace";
 
 export interface PerFileDiffPreview {
 	path: string;
@@ -316,9 +315,21 @@ function splitApplyPatchPerFile(input: string): EditMatcherEntry[] {
 // Strategies
 // -----------------------------------------------------------------------------
 
+type ReplaceEditLike = {
+	old_string?: string;
+	new_string?: string;
+	replace_all?: boolean;
+	old_text?: string;
+	new_text?: string;
+	all?: boolean;
+};
+
 interface ReplaceArgs {
 	path?: string;
-	edits?: ReplaceEditEntry[];
+	old_string?: string;
+	new_string?: string;
+	replace_all?: boolean;
+	edits?: readonly ReplaceEditLike[];
 	__partialJson?: string;
 }
 
@@ -340,12 +351,15 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 	},
 	async computeDiffPreview(args, ctx) {
 		if (!args.path) return null;
-		const first = args.edits?.[0];
-		if (!first || first.old_text === undefined || first.new_text === undefined) return null;
+		const first: ReplaceEditLike | undefined = args.edits?.[0];
+		const oldText = args.old_string ?? first?.old_string ?? first?.old_text;
+		const newText = args.new_string ?? first?.new_string ?? first?.new_text;
+		const all = args.replace_all ?? first?.replace_all ?? first?.all;
+		if (oldText === undefined || newText === undefined) return null;
 		ctx.signal.throwIfAborted();
-		const result = await computeEditDiff(args.path, first.old_text, first.new_text, ctx.cwd, {
+		const result = await computeEditDiff(args.path, oldText, newText, ctx.cwd, {
 			fuzzy: ctx.allowFuzzy ?? true,
-			all: first.all,
+			all,
 			threshold: ctx.fuzzyThreshold,
 			streaming: ctx.isStreaming,
 		});
@@ -353,12 +367,14 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 		return [toPerFilePreview(args.path, result)];
 	},
 	matcherDigest(args) {
+		if (typeof args?.new_string === "string") return args.new_string;
 		const edits = args?.edits;
 		if (!Array.isArray(edits)) return undefined;
 		let digest: string | undefined;
 		for (const edit of edits) {
-			if (typeof edit?.new_text !== "string") continue;
-			digest = digest === undefined ? edit.new_text : `${digest}\n${edit.new_text}`;
+			const text = edit?.new_string ?? edit?.new_text;
+			if (typeof text !== "string") continue;
+			digest = digest === undefined ? text : `${digest}\n${text}`;
 		}
 		return digest;
 	},

@@ -194,7 +194,7 @@ class MockWebSocket {
 
 describe("Responses Lite all_turns invariant suite", () => {
 	const allCodexCatalogModels = getBundledModels("openai-codex").filter(
-		(m): m is Model<"openai-codex-responses"> => m.api === "openai-codex-responses",
+		(m): m is Model<"openai-codex-responses"> => m.api === "openai-codex-responses" && m.kind === undefined,
 	);
 
 	it("discovers both lite-eligible and lite-ineligible models from the catalog", () => {

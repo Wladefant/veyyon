@@ -531,6 +531,12 @@ export interface SingleResult {
 	outputMeta?: { lineCount: number; charCount: number };
 	/** Structured salvage state captured when a run is force-stopped by budget or timeout cutoff. */
 	salvageState?: SalvageState;
+	/** Ran inside an isolation worktree; not resumable or messageable. */
+	isolated?: boolean;
+	/** On-disk copies of `nestedPatches` written before isolation workspace removal. */
+	nestedPatchPaths?: string[];
+	/** False when `patchPath` is an empty root diff and work lives in `nestedPatchPaths`. */
+	hasRootChanges?: boolean;
 }
 
 /** Structured salvage state emitted when a run is force-stopped by budget or timeout. */

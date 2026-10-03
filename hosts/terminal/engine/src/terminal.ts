@@ -1729,17 +1729,22 @@ export class ProcessTerminal implements Terminal {
 		process.stdin.removeListener("error", this.#stdinErrorHandler);
 		this.#disconnectHandler = undefined;
 
-		// Restore raw mode state, best-effort: a revoked pty (pane recycled, ssh
-		// dropped) is no longer a tty and Bun's node:tty shim throws ENOENT.
+		// Restore raw mode state. On a disconnected terminal (pane recycled, ssh
+		// dropped) the fd is no longer a tty and Bun's node:tty shim throws ENOENT;
+		// there is nothing left to restore, and throwing would abort the caller. On
+		// a live terminal the failure surfaces, after the rest of the teardown,
+		// because swallowing it would silently leave stdin in raw mode.
+		let restoreError: unknown;
 		if (process.stdin.setRawMode) {
 			try {
 				process.stdin.setRawMode(this.#wasRaw);
-			} catch {
-				// Terminal already gone
+			} catch (err) {
+				if (!this.#dead) restoreError = err;
 			}
 		}
 		this.#stdoutErrorCleanup?.();
 		this.#stdoutErrorCleanup = undefined;
+		if (restoreError !== undefined) throw restoreError;
 	}
 
 	#ensureStdoutErrorHandler(): void {

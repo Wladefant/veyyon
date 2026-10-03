@@ -359,49 +359,35 @@ describe("searchCodex model selection", () => {
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
 	});
 
-	it("encodes explicit gpt-5.6-sol as a Responses-Lite request", async () => {
-		process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = "gpt-5.6-sol";
-		const result = await searchCodex(makeSearchParams("Sol web search", mockCodexFetch("gpt-5.6-sol")));
-
-		expect(capturedRequest).not.toBeNull();
-		const headers = new Headers(capturedRequest?.headers);
-		expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
-		expect(headers.get("session-id")).toBeTruthy();
-		expect(headers.get("thread-id")).toBeTruthy();
-		expect(headers.get("x-codex-window-id")).toBeTruthy();
-		expect(capturedRequest?.body).toEqual(
-			expect.objectContaining({
-				model: "gpt-5.6-sol",
-				tool_choice: { type: "web_search" },
-				reasoning: { context: "all_turns" },
-				parallel_tool_calls: false,
+	it("keeps hosted web_search top-level for every bundled Codex model", async () => {
+		// Sweep the catalog so a new Lite SKU cannot silently relocate the hosted tool.
+		const modelIds = new Set([
+			"gpt-5.6-sol",
+			...catalogModels
+				.getBundledChatModels("openai-codex")
+				.filter(model => model.api === "openai-codex-responses")
+				.map(model => model.id),
+		]);
+		for (const modelId of modelIds) {
+			process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = modelId;
+			const result = await searchCodex(makeSearchParams("hosted search", mockCodexFetch(modelId)));
+			const headers = new Headers(capturedRequest?.headers);
+			expect(headers.has("x-openai-internal-codex-responses-lite")).toBe(false);
+			expect(capturedRequest?.body).toMatchObject({
+				model: modelId,
+				tools: [{ type: "web_search", search_context_size: "high" }],
+				instructions: "Codex test system prompt",
 				input: [
-					{
-						type: "additional_tools",
-						role: "developer",
-						tools: [{ type: "web_search", search_context_size: "high" }],
-					},
-					{
-						type: "message",
-						role: "developer",
-						content: [{ type: "input_text", text: "Codex test system prompt" }],
-					},
 					{
 						type: "message",
 						role: "user",
-						content: [{ type: "input_text", text: "Sol web search" }],
+						content: [{ type: "input_text", text: "hosted search" }],
 					},
 				],
-				client_metadata: expect.objectContaining({
-					session_id: headers.get("session-id"),
-					thread_id: headers.get("thread-id"),
-					"x-codex-window-id": headers.get("x-codex-window-id"),
-				}),
-			}),
-		);
-		expect(capturedRequest?.body?.tools).toBeUndefined();
-		expect(capturedRequest?.body?.instructions).toBeUndefined();
-		expect(result.model).toBe("gpt-5.6-sol");
+			});
+			expect(capturedRequest?.body?.client_metadata).toBeUndefined();
+			expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
+		}
 	});
 
 	it("does not retry default candidates when VEYYON_CODEX_WEB_SEARCH_MODEL is explicitly unsupported", async () => {
@@ -685,7 +671,9 @@ describe("searchCodex model selection", () => {
 		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
 		const bundled = catalogModels.getBundledModels("openai-codex");
 		const modified = bundled.map(m =>
-			m.id === "gpt-5.6-luna" ? { ...m, compat: { ...m.compat, supportsNamedToolChoice: false } } : m,
+			m.id === "gpt-5.6-luna"
+				? { ...m, useResponsesLite: false, compat: { ...m.compat, supportsNamedToolChoice: false } }
+				: m,
 		);
 		vi.spyOn(catalogModels, "getBundledModels").mockReturnValue(modified as Model<Api>[]);
 
@@ -699,7 +687,9 @@ describe("searchCodex model selection", () => {
 		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
 		const bundled = catalogModels.getBundledModels("openai-codex");
 		const modified = bundled.map(m =>
-			m.id === "gpt-5.6-luna" ? { ...m, compat: { ...m.compat, supportsNamedToolChoice: true } } : m,
+			m.id === "gpt-5.6-luna"
+				? { ...m, useResponsesLite: false, compat: { ...m.compat, supportsNamedToolChoice: true } }
+				: m,
 		);
 		vi.spyOn(catalogModels, "getBundledModels").mockReturnValue(modified as Model<Api>[]);
 

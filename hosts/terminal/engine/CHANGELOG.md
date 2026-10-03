@@ -19,9 +19,11 @@
 - A user-driven redraw such as a Ctrl+O transcript expand or a display reset replays the whole transcript on a ConPTY host again instead of losing its leading rows to the bulk-paint bound, and the one-shot reset intent is consumed by that render so a later `/resume` or handoff paint stays bounded ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The engine ends every rewritten row at column zero, so a row that fills the width on a ConPTY host cannot spend its pending wrap on the next cursor move and scroll a live row into native history ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed duplicate `stdin` event listeners (`end`, `close`, `error`) being registered if `ProcessTerminal.start()` is called repeatedly on an active terminal instance ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- `ProcessTerminal.stop()` throws a raw-mode restore failure on a live terminal instead of swallowing it and leaving stdin in raw mode; the failure is still suppressed once the terminal has disconnected ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
+- A full-width overlay that is not fullscreen, such as the `/autoresearch status` run screen, replaces the rows of an inline Kitty image drawn with Unicode placeholders instead of letting the image cover it; a narrower overlay still leaves those rows untouched ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 

@@ -92,10 +92,13 @@ export function buildInMemoryTextResult(
 	// from requested content, so `raw:31-31` must return line 31 and nothing
 	// else (verbatim-extraction contract).
 	const rawDisplay = options.raw === true;
+	const hasTrailingNewline = text.endsWith("\n");
+	const contentLines = hasTrailingNewline && allLines.length > 1 ? allLines.length - 1 : allLines.length;
+	const contextCeiling = requestedEnd > contentLines ? allLines.length : contentLines;
 	const expanded = expandRangeWithContext(
 		requestedStart,
 		requestedEnd,
-		allLines.length,
+		contextCeiling,
 		!rawDisplay && offset !== undefined && offset > 1,
 		!rawDisplay && limit !== undefined,
 	);

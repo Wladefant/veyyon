@@ -40,6 +40,18 @@ describe("symbol presets carry glyphs, not leaked placeholder words", () => {
 	}
 });
 
+describe("nerd preset glyphs name the intended Nerd Fonts v3 icon", () => {
+	/**
+	 * Nerd Font codepoints are opaque, so a wrong one ships silently: C# edits wore the D3.js icon
+	 * (U+E7BC) and the context meter wore the Microsoft logo (U+E70F, dev-windows). Each pin names the
+	 * icon it is.
+	 */
+	it("draws C# with nf-dev-csharp and context with nf-cod-window", () => {
+		expect(NERD_SYMBOLS["lang.csharp"]).toBe("\u{E7B2}");
+		expect(NERD_SYMBOLS["icon.context"]).toBe("\u{EB7F}");
+	});
+});
+
 describe("unicode preset width contract — no ambiguous or emoji-width glyphs", () => {
 	/**
 	 * The bug this locks out: ⓘ (U+24D8, East-Asian-ambiguous) and ⏳/⏹

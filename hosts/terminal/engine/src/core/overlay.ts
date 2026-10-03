@@ -269,7 +269,14 @@ export function compositeLineAt(
 	overlayWidth: number,
 	totalWidth: number,
 ): string {
-	if (TERMINAL.isImageLine(baseLine)) return baseLine;
+	if (TERMINAL.isImageLine(baseLine)) {
+		// A full-width overlay such as the `/autoresearch status` screen is opaque: replace the
+		// Unicode placeholder cells so the image cannot cover the modal. A partial
+		// overlay cannot safely splice placement control sequences.
+		if (startCol !== 0 || overlayWidth < totalWidth) return baseLine;
+		const overlay = sliceWithWidth(overlayLine, 0, totalWidth, true);
+		return SGR_RESET + overlay.text + " ".repeat(Math.max(0, totalWidth - overlay.width));
+	}
 
 	// Single pass through baseLine extracts both before and after segments
 	const afterStart = startCol + overlayWidth;

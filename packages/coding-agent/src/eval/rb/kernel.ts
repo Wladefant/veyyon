@@ -9,7 +9,6 @@
  * with it via BaseKernel.
  */
 import { $flag } from "@veyyon/utils";
-import { $ } from "bun";
 import {
 	BaseKernel,
 	createLanguageAvailabilityChecker,
@@ -23,6 +22,7 @@ import {
 	kernelIpcTraceEnvVar,
 	launchKernelSubprocess,
 } from "../kernel-base";
+import { runBoundedProbe } from "../probe";
 import { RUBY_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.rb" with { type: "text" };
 import {
@@ -59,7 +59,8 @@ export const checkRubyKernelAvailability = createLanguageAvailabilityChecker<Rub
 		filterEnv,
 		enumerateRuntimes: (cwd, baseEnv, interpreter) => enumerateRubyRuntimes(cwd, baseEnv, interpreter),
 		missingReason: "Ruby executable not found on PATH",
-		probeRuntime: (runtime, cwd) => $`${runtime.rubyPath} -e ${"exit 0"}`.quiet().nothrow().cwd(cwd).env(runtime.env),
+		probeRuntime: (runtime, cwd, probeOptions) =>
+			runBoundedProbe([runtime.rubyPath, "-e", "exit 0"], { cwd, env: runtime.env, ...probeOptions }),
 		getExecutablePath: runtime => runtime.rubyPath,
 		includeFailedExecutablePath: true,
 		formatFailureReason: failures => `No working Ruby interpreter found. Tried: ${failures.join("; ")}`,

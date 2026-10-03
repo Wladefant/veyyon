@@ -380,6 +380,31 @@ describe("openai-codex Responses Lite input shaping", () => {
 		expect(noTools.parallel_tool_calls).toBe(false);
 	});
 
+	// Lite relocates tools into input; this must not weaken caller constraints.
+	for (const choice of ["none", "required"] as const) {
+		it(`preserves explicit ${choice} tool use under Lite`, async () => {
+			const model = createCodexModel("gpt-5.6-terra");
+			const tools = [{ type: "function", name: "handoff", parameters: { type: "object" } }];
+			const lite = await transformRequestBody({ model: model.id, tools, tool_choice: choice }, model, {
+				responsesLite: true,
+			});
+			expect(lite.tool_choice).toBe(choice);
+			expect(lite.tools).toBeUndefined();
+			expect(lite.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools });
+		});
+	}
+
+	it("falls back from forced hosted tools to auto under Lite", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const lite = await transformRequestBody(
+			{ model: model.id, tools: [{ type: "web_search" }], tool_choice: { type: "web_search" } },
+			model,
+			{ responsesLite: true },
+		);
+		expect(lite.tool_choice).toBe("auto");
+		expect(lite.tools).toBeUndefined();
+	});
+
 	it("moves instructions and tools into input items under lite", async () => {
 		const model = createCodexModel("gpt-5.6-terra");
 		const tools = [{ type: "function", name: "shot", parameters: { type: "object" } }];

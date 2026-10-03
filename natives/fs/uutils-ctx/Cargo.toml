@@ -12,6 +12,9 @@ path = "src/lib.rs"
 # I/O shim consumed by vendored uutils code, which is held to upstream's lint
 # policy, not ours.
 
+[target.'cfg(windows)'.dependencies]
+brush-core.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 

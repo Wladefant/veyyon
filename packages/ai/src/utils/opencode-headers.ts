@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { getOpenCodeUserAgent } from "@veyyon/catalog/wire/opencode-headers";
+import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "@veyyon/catalog/wire/opencode-headers";
+
+export { openCodeSessionHeaderValue };
 
 /**
  * The provider ids that reach an OpenCode gateway: the OAuth provider and the
@@ -26,20 +27,6 @@ export function conversationIdForOpenCode(
 	options: { promptCacheKey?: string; sessionId?: string } | undefined,
 ): string | undefined {
 	return options?.promptCacheKey ?? options?.sessionId;
-}
-
-/**
- * Derive the `x-opencode-session` value from the local session id.
- *
- * Hashed rather than sent verbatim: the gateway needs one stable value per
- * conversation to route a session's requests to the same upstream provider and
- * hit its prompt cache, and nothing more. A digest supplies that without
- * handing a third party the identifier the local session, its transcript and
- * its files are keyed by. `ses_` plus 32 hex characters matches the shape the
- * gateway issues for its own sessions.
- */
-export function openCodeSessionHeaderValue(sessionId: string): string {
-	return `ses_${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}`;
 }
 
 /**

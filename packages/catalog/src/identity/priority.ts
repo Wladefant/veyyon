@@ -21,6 +21,7 @@ const DEFAULT_MODEL_PROVIDER_ORDER = [
 	"fireworks",
 	"cerebras",
 	"baseten",
+	"deepinfra",
 	"openrouter",
 	"aimlapi",
 	"together",
@@ -46,7 +47,9 @@ function addProviderRank(rank: Map<string, number>, provider: string): void {
 	rank.set(normalized, rank.size);
 }
 
-export function buildModelProviderPriorityRank(configuredProviderOrder?: readonly string[]): Map<string, number> {
+export function buildModelProviderPriorityRank(
+	configuredProviderOrder?: readonly string[],
+): Map<string, number> {
 	const rank = new Map<string, number>();
 	for (const provider of configuredProviderOrder ?? []) {
 		addProviderRank(rank, provider);

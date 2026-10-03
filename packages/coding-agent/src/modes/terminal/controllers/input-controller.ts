@@ -187,7 +187,6 @@ export type InputControllerContext = TuiSlashCommandHostContext &
 	SkillCommandHost &
 	Pick<
 		InteractiveModeContext,
-		| "canBranchBtw"
 		| "cancelPendingSubmission"
 		| "canCopyBtw"
 		| "clearEditor"
@@ -202,6 +201,7 @@ export type InputControllerContext = TuiSlashCommandHostContext &
 		| "handleOmfgEscape"
 		| "handlePythonCommand"
 		| "handleSTTToggle"
+		| "handlesBtwBranchKey"
 		| "hasActiveBtw"
 		| "hasActiveOmfg"
 		| "hasDisplayableThinkingContent"
@@ -357,7 +357,9 @@ export class InputController {
 			this.#btwBranchListenerInstalled = true;
 			this.#addEmptyComposerKeyListener(
 				"b",
-				() => this.ctx.canBranchBtw(),
+				// Reserved for a completed (or in-flight) branch even while the promotion is refused,
+				// so a refused `b` reports why instead of leaking a stray `b` into the composer.
+				() => this.ctx.handlesBtwBranchKey(),
 				() => this.ctx.handleBtwBranchKey(),
 			);
 		}
@@ -432,12 +434,15 @@ export class InputController {
 			}
 
 			if (this.ctx.loopModeEnabled) {
-				this.ctx.pauseLoop();
+				// Esc suspends the loop even mid-iteration: abort the live turn,
+				// then drop the captured prompt so the 800ms auto-resubmit never
+				// fires. Loop stays enabled (paused) — the next manual prompt
+				// resumes with a new body.
 				if (this.ctx.session.isStreaming) {
 					this.#abortStreamingTurn();
-				} else {
-					this.ctx.cancelPendingSubmission();
 				}
+				this.ctx.pauseLoop();
+				this.ctx.cancelPendingSubmission();
 				return;
 			}
 			if (this.ctx.focusedAgentId) {

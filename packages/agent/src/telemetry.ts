@@ -1014,7 +1014,7 @@ export function startChatSpan(
 		model,
 		parent: options.parent,
 		stepNumber: options.stepNumber,
-		attributes: buildChatRequestAttributes(options.stepNumber, options.request, model.provider),
+		attributes: buildChatRequestAttributes(options.stepNumber, options.request, model),
 	});
 	if (span) {
 		telemetry?.collector.beginChat(span, {
@@ -1048,7 +1048,7 @@ export interface ChatRequestSnapshot {
 	readonly messages?: readonly Message[];
 }
 
-function buildChatRequestAttributes(stepNumber: number, request: ChatRequestSnapshot, provider: string): Attributes {
+function buildChatRequestAttributes(stepNumber: number, request: ChatRequestSnapshot, model: Model): Attributes {
 	const attrs: Attributes = {
 		[PiGenAIAttr.AgentStepNumber]: stepNumber,
 		[GenAIAttr.OutputType]: "text",
@@ -1064,7 +1064,8 @@ function buildChatRequestAttributes(stepNumber: number, request: ChatRequestSnap
 	if (request.stopSequences && request.stopSequences.length > 0) {
 		attrs[GenAIAttr.RequestStopSequences] = request.stopSequences.slice();
 	}
-	if (request.serviceTier && shouldSendServiceTier(request.serviceTier, provider)) {
+	// Record the tier only when it reaches the wire for this model (Codex drops unadvertised tiers).
+	if (request.serviceTier && shouldSendServiceTier(request.serviceTier, model)) {
 		attrs[OpenAIAttr.RequestServiceTier] = request.serviceTier;
 	}
 	if (request.reasoningEffort) attrs[PiGenAIAttr.RequestReasoningEffort] = request.reasoningEffort;
@@ -1311,6 +1312,9 @@ function assistantContentToOtelParts(content: AssistantMessage["content"]): Otel
 				break;
 			case "toolCall":
 				parts.push({ type: "tool_call", id: part.id, name: part.name, arguments: part.arguments });
+				break;
+			case "image":
+				parts.push({ type: "blob", modality: "image", mime_type: part.mimeType, content: part.data });
 				break;
 		}
 	}
