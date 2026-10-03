@@ -69,29 +69,38 @@ function resolveThinkingDisplay(segment: ThinkingSegment, proseOnly: boolean): {
  * ASCII rendering resolves asynchronously, so even a completed fence can
  * re-layout rows that already looked settled. Fence-aware so a mermaid
  * example inside a regular code block never triggers the deferral.
+ *
+ * Runs on the whole streamed text on every delta and every reveal tick, so it
+ * visits only the lines that can be fences: a fence line holds a run of three
+ * backticks or tildes, so the scan jumps between those runs with `indexOf` and
+ * matches {@link CODE_FENCE_LINE} against the one line around each. Prose
+ * between fences is never split, sliced or matched.
  */
 function containsMermaidFence(text: string): boolean {
 	let fence: string | null = null;
-	for (const line of text.split("\n")) {
-		const fenceMatch = CODE_FENCE_LINE.exec(line);
-		if (fence !== null) {
+	let ticks = text.indexOf("```");
+	let tildes = text.indexOf("~~~");
+	let from = 0;
+	while (true) {
+		if (ticks !== -1 && ticks < from) ticks = text.indexOf("```", from);
+		if (tildes !== -1 && tildes < from) tildes = text.indexOf("~~~", from);
+		const at = ticks === -1 ? tildes : tildes === -1 ? ticks : Math.min(ticks, tildes);
+		if (at === -1) return false;
+		const newline = text.indexOf("\n", at);
+		const lineEnd = newline === -1 ? text.length : newline;
+		const fenceMatch = CODE_FENCE_LINE.exec(text.slice(text.lastIndexOf("\n", at) + 1, lineEnd));
+		if (fenceMatch && fence !== null) {
 			// Inside a code block: only a bare matching closing fence ends it.
-			if (
-				fenceMatch &&
-				fenceMatch[2]!.trim() === "" &&
-				fenceMatch[1]![0] === fence[0] &&
-				fenceMatch[1]!.length >= fence.length
-			) {
+			if (fenceMatch[2]!.trim() === "" && fenceMatch[1]![0] === fence[0] && fenceMatch[1]!.length >= fence.length) {
 				fence = null;
 			}
-			continue;
-		}
-		if (fenceMatch) {
+		} else if (fenceMatch) {
 			if (/^mermaid\b/.test(fenceMatch[2]!.trim())) return true;
 			fence = fenceMatch[1]!;
 		}
+		if (newline === -1) return false;
+		from = newline + 1;
 	}
-	return false;
 }
 
 /**
