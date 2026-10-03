@@ -736,6 +736,8 @@ function printSessionEmitting(notices: readonly AgentSessionEvent[]): PrintModeS
 			return true;
 		},
 		dispose: async () => {},
+		prepareForHeadlessAdvisorDrain: () => {},
+		waitForAdvisorCatchup: async () => true,
 		displayAssistantContent: content => content,
 		// `--mode json` re-redacts every line through this. Identity: these tests assert
 		// that a spend NOTICE reaches a stream in every mode, and the notice names the

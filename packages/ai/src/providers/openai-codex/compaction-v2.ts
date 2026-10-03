@@ -46,7 +46,9 @@ import { readSseJson } from "@veyyon/utils/stream";
 import { isRecord } from "@veyyon/utils/type-guards";
 
 /** The input item that turns a normal responses request into a compaction. */
-export const CODEX_COMPACTION_TRIGGER_ITEM: Readonly<Record<string, string>> = { type: "compaction_trigger" };
+export const CODEX_COMPACTION_TRIGGER_ITEM: Readonly<Record<string, string>> = {
+	type: "compaction_trigger",
+};
 
 /** Retained-message budget codex-rs applies to the replacement history. */
 export const CODEX_COMPACTION_V2_RETAINED_TOKEN_BUDGET = 64_000;
@@ -139,6 +141,120 @@ export async function collectCodexCompactionV2Stream(
 	return collectCodexCompactionV2Events(readSseJson<CodexCompactionV2Event>(body, signal), signal, sanitize);
 }
 
+/**
+ * Wrap an async iterable with for-await/return semantics:
+ * - reject pre-aborted signal without pulling from the source;
+ * - race pending next() against abort;
+ * - initiate return once, and do not wait on a blocked return during abort;
+ * - cleanup every early exit including provider failures;
+ * - preserve the primary error when cleanup rejects.
+ */
+export function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSignal | undefined): AsyncIterable<T> {
+	const iterator = events[Symbol.asyncIterator]();
+	let returnInitiated = false;
+	let completed = false;
+
+	const initiateReturn = async (awaitReturn: boolean): Promise<void> => {
+		if (returnInitiated) return;
+		returnInitiated = true;
+		try {
+			const returnPromise = iterator.return?.();
+			if (returnPromise) {
+				if (awaitReturn) {
+					await returnPromise;
+				} else {
+					void Promise.resolve(returnPromise).catch(() => {});
+				}
+			}
+		} catch (err) {
+			if (awaitReturn) throw err;
+		}
+	};
+
+	return {
+		[Symbol.asyncIterator]() {
+			return {
+				async next(): Promise<IteratorResult<T>> {
+					if (signal?.aborted) {
+						void initiateReturn(false);
+						if (isTimeoutError(signal.reason)) {
+							throw new Error(
+								"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+							);
+						}
+						throw cancellationError("Codex compaction was aborted before response.completed");
+					}
+
+					if (!signal) {
+						try {
+							const result = await iterator.next();
+							if (result.done) {
+								completed = true;
+							}
+							return result;
+						} catch (err) {
+							try {
+								await initiateReturn(true);
+							} catch {
+								// Preserve primary error
+							}
+							throw err;
+						}
+					}
+
+					const { promise: abortPromise, reject: abortReject } = Promise.withResolvers<never>();
+					void abortPromise.catch(() => {});
+
+					const onAbort = () => {
+						void initiateReturn(false);
+						if (isTimeoutError(signal.reason)) {
+							abortReject(
+								new Error(
+									"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+								),
+							);
+						} else {
+							abortReject(cancellationError("Codex compaction was aborted before response.completed"));
+						}
+					};
+
+					signal.addEventListener("abort", onAbort, { once: true });
+					try {
+						const nextPromise = iterator.next();
+						const result = await Promise.race([nextPromise, abortPromise]);
+						if (result.done) {
+							completed = true;
+						}
+						return result;
+					} catch (err) {
+						if (!signal.aborted) {
+							try {
+								await initiateReturn(true);
+							} catch {
+								// Preserve primary error
+							}
+						}
+						throw err;
+					} finally {
+						signal.removeEventListener("abort", onAbort);
+					}
+				},
+
+				async return(value?: unknown): Promise<IteratorResult<T>> {
+					if (!completed && !signal?.aborted) {
+						try {
+							await initiateReturn(true);
+						} catch {
+							// Preserve primary error
+						}
+					}
+					return { done: true, value: value as T };
+				},
+			};
+		},
+	};
+}
+
 /** Collect decoded native events under the same window contract as the SSE transport. */
 export async function collectCodexCompactionV2Events(
 	events: AsyncIterable<unknown>,
@@ -151,7 +267,7 @@ export async function collectCodexCompactionV2Events(
 	let sawCompleted = false;
 	let usage: CodexCompactionV2Usage | undefined;
 
-	for await (const event of events) {
+	for await (const event of iterateWithAbort(events, signal)) {
 		if (!isRecord(event)) continue;
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (type === "response.output_item.done") {
@@ -177,20 +293,15 @@ export async function collectCodexCompactionV2Events(
 		}
 	}
 
-	if (!sawCompleted) {
-		// `readSseEvents` ends the stream on an aborted signal instead of throwing,
-		// so the reason is read here. A deadline is a timeout the caller's retry
-		// ladder classifies as one; a cancellation propagates as itself. Reporting
-		// either as "closed before response.completed" made a 180 s deadline on a
-		// 234k-token span look like a backend fault on every codex compaction.
-		if (signal?.aborted) {
-			if (isTimeoutError(signal.reason)) {
-				throw new Error(
-					"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
-				);
-			}
-			throw cancellationError("Codex compaction was aborted before response.completed");
+	if (signal?.aborted) {
+		if (isTimeoutError(signal.reason)) {
+			throw new Error(
+				"Codex compaction timed out before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
+			);
 		}
+		throw cancellationError("Codex compaction was aborted before response.completed");
+	}
+	if (!sawCompleted) {
 		throw new Error(
 			"Codex compaction stream closed before response.completed. The history was NOT compacted; the caller falls back to local compaction.",
 		);
@@ -206,7 +317,10 @@ export async function collectCodexCompactionV2Events(
 			`Codex compaction returned ${compactionItems.length} compaction items among ${outputItemCount} output items, expected exactly one. The history was NOT compacted; the caller falls back to local compaction.`,
 		);
 	}
-	logger.debug("Codex compaction stream produced its window", { outputItemCount, ...usage });
+	logger.debug("Codex compaction stream produced its window", {
+		outputItemCount,
+		...usage,
+	});
 	return { compactionItem, usage };
 }
 

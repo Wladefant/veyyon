@@ -2,16 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added DeepInfra provider descriptor and keyless authoritative model discovery from tagged public catalog metadata ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
+- Declared GPT-6 Astra reasoning configuration-update support and generated first-party GPT-6 freeform `apply_patch` metadata ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Preserved specialist runner models across authoritative dynamic discovery pruning and collision resolution, and inherited model kinds and web search grounding capabilities ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Registered local inference and web search synthetic role providers with specialist static model seeds ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added TypeSafe dynamic judge model discovery and catalog descriptor ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the StepFun provider (`stepfun`) with live model discovery, reasoning-effort controls, and bundled default models ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added catalog descriptors and static model definitions for Abliteration, Meta Model API, and Muse Code ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the GMI Cloud provider (`gmi-cloud`) with dynamic model discovery and bundled default model seed ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the `openai-codex` subscription fields: 1M context for `gpt-5.6-*`, a `maxContextWindow` ceiling (872K, 922K for Astra and GPT-6.1 Sol), `longContext` pricing above 272K, `serviceTierCost` for flex and priority, zero cache-write cost for GPT-6 subscription models, the `gpt-daybreak-blue-latest` price, and the hidden `gpt-image-2` image runner ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added `getBundledChatModels` and `resolveSessionContextWindow`, which cap a session at the standard-pricing window unless extended context is on ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+### Changed
+
+- OpenCode gateway model discovery now sends the `x-opencode-session` header derived from the install id alongside the Veyyon user agent ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
+- Regenerated the bundled catalog for 19 providers: it gains `claude-sonnet-5-5`, `gemini-3.8-flash` and about 340 OpenRouter, Kilo, Vercel, ZenMux, Venice, OpenCode Zen and Copilot rows, and drops retired Bedrock and Novita rows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Removed
 
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
 - Removed redundant `grok-composer-2.5-fast` OAuth contract test from `xai-oauth-bundle.test.ts` as curated seed parity loops already verify its properties ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
+- Typed the Antigravity discovery `fetcher` option as `FetchImpl`, so a caller's fetch override type-checks without a `preconnect` adapter ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Discovered Antigravity image generation models from account capabilities and selected advertised models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Defaulted paid xAI and SuperGrok model selection to Grok 4.6.
 - Versioned the GitHub Copilot model cache per credential and endpoint so stale routing rows are refetched.
 - Aligned runtime model discovery with generation-time exclusion policies for Amazon Bedrock, Z.AI, Fireworks, and Xiaomi, and relaxed literal ZenMux default model assertions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed static catalog generation to union OpenAI Codex models across all configured OAuth accounts via the model manager path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Aborted OpenAI Codex catalog discovery when any account credential fails to refresh to keep bundled models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog and forward the configured transport fetch ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Invalidated stale paid-xAI model-cache rows written under Chat Completions so the Responses migration takes effect immediately instead of waiting for TTL expiry ([#107](https://github.com/Wladefant/veyyon/issues/107)).
