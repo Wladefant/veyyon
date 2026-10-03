@@ -7,6 +7,7 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Preserved /login API key and OAuth credential precedence over extension fallback API keys, including command-backed values, during model discovery and request auth ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).
 - Fixed an uncaught `EPERM ... watch` that ended the whole process when the watched git HEAD or custom theme directory was deleted or locked: the watchers now log a warning, close and stop refreshing live ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed an implicit-any type error in the HTML export markdown test so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recognized local login placeholders in model selection while preserving resolved credentials and existing request bearer values ([#107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1d78d2b97e3901c8a0d051acb612a783ca14f5c7, 0e483420eeccffba3a48c40ad962ed9fddb87d6a).
