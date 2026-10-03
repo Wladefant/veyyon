@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
-import { errorMessage, formatCount, lazy, logger, prompt, truncate } from "@veyyon/utils";
+import { errorMessage, formatCount, lazy, logger, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../eval/bridge-timeout";
@@ -8,22 +8,10 @@ import { IdleTimeout } from "../../eval/idle-timeout";
 import type { BackendProbeOptions } from "../../eval/probe";
 import { defaultEvalSessionId } from "../../eval/session-id";
 import { upsertStatusEvent } from "../../eval/status-events";
-import type {
-	EvalCellResult,
-	EvalDisplayOutput,
-	EvalLanguage,
-	EvalStatusEvent,
-	EvalToolDetails,
-} from "../../eval/types";
+import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../../eval/types";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
-import {
-	DEFAULT_MAX_BYTES,
-	OutputSink,
-	type OutputSummary,
-	TailBuffer,
-	truncateHeadBytes,
-} from "../../session/streaming-output";
+import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../../session/streaming-output";
 import { type EnabledAgentCatalog, resolveEnabledAgents } from "../../task/agent-settings";
 import { discoverAgents } from "../../task/discovery";
 import { resolveSpawnPolicy } from "../../task/spawn-policy";
@@ -39,6 +27,7 @@ import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice, TOOL_TIMEOUTS } from "../core/tool-timeouts";
 import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
+import { EVAL_DISPLAY_VERSION, formatDisplayJson } from "./eval-display";
 import { evalToolView } from "./eval-view";
 import { evalBackendLoaders } from "./manifest";
 
@@ -158,47 +147,6 @@ export type EvalToolResult = {
 };
 
 export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
-
-/** Shared cap for each structured `display()` preview returned by eval. */
-const MAX_DISPLAY_TEXT_BYTES = 8000;
-const DISPLAY_ELISION_RESERVE_BYTES = 64;
-
-export interface FormattedDisplayJson {
-	fullText: string;
-	previewText: string;
-	detailsValue: unknown;
-	truncated: boolean;
-}
-
-export function formatDisplayJson(value: unknown): FormattedDisplayJson {
-	let fullText: string;
-	try {
-		fullText = JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		fullText = String(value);
-	}
-	const totalBytes = Buffer.byteLength(fullText, "utf-8");
-	if (totalBytes <= MAX_DISPLAY_TEXT_BYTES) {
-		return { fullText, previewText: fullText, detailsValue: value, truncated: false };
-	}
-
-	const head = truncateHeadBytes(fullText, MAX_DISPLAY_TEXT_BYTES - DISPLAY_ELISION_RESERVE_BYTES);
-	const previewText = `${head.text}\n[…${fullText.length - head.text.length}ch elided…]`;
-	return {
-		fullText,
-		previewText,
-		detailsValue: {
-			preview: previewText,
-			truncated: true,
-			totalBytes,
-		},
-		truncated: true,
-	};
-}
-
-export function formatDisplayJsonForText(value: unknown): string {
-	return formatDisplayJson(value).previewText;
-}
 
 export interface EvalToolDescriptionOptions {
 	py?: boolean;
@@ -628,6 +576,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					};
 					if (jsonOutputs.length > 0) {
 						details.jsonOutputs = jsonOutputs;
+						details.displayVersion = EVAL_DISPLAY_VERSION;
 					}
 					if (images.length > 0) {
 						details.images = images;
@@ -754,12 +703,17 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				for (const output of result.displayOutputs) {
 					if (output.type === "json") {
 						const formatted = formatDisplayJson(output.data);
+						const storageNotice =
+							formatted.truncated && !artifactPath
+								? "\n[Full display value was not kept: artifact storage is unavailable]"
+								: "";
+						const displayText = `${formatted.previewText}${storageNotice}`;
 						const label = `display[${cellDisplayTexts.length + 1}]:\n`;
 						jsonOutputs.push(formatted.detailsValue);
-						cellDisplayTexts.push(`${label}${formatted.previewText}`);
+						cellDisplayTexts.push(`${label}${displayText}`);
 						if (formatted.truncated) {
 							outputSink.push(`${label}${formatted.fullText}\n`, {
-								inline: `${label}${formatted.previewText}\n`,
+								inline: `${label}${displayText}\n`,
 								emitInline: false,
 							});
 						}
@@ -830,6 +784,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 						languages,
 						cells: [cellResult],
 						jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
+						displayVersion: EVAL_DISPLAY_VERSION,
 						statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
 					};
 					if (isError) details.isError = true;

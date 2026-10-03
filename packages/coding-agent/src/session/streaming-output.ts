@@ -801,6 +801,10 @@ export class OutputSink {
 	// Queue of chunks waiting for the file sink to be created.
 	#pendingFileWrites?: string[];
 	#fileReady = false;
+	#artifactError?: Error;
+	#createFileSinkPromise?: Promise<void>;
+	#pendingArtifactWrites = 0;
+	#artifactWritesSettled?: PromiseWithResolvers<void>;
 
 	readonly #artifactPath?: string;
 	readonly #artifactId?: string;
@@ -1045,7 +1049,7 @@ export class OutputSink {
 		// resolves (typically <2). The cap is enforced on drain.
 		if (!this.#pendingFileWrites) {
 			this.#pendingFileWrites = [chunk];
-			void this.#createFileSink();
+			this.#createFileSinkPromise = this.#createFileSink();
 		} else {
 			this.#pendingFileWrites.push(chunk);
 		}
@@ -1062,40 +1066,62 @@ export class OutputSink {
 	 * straight pass-through, preserving the historical "stream everything"
 	 * contract.
 	 */
+	#writeArtifactChunk(chunk: string): void {
+		if (this.#artifactError || !this.#file) return;
+		const written = this.#file.sink.write(chunk);
+		if (typeof written === "number") return;
+		if (this.#pendingArtifactWrites === 0) {
+			this.#artifactWritesSettled = Promise.withResolvers<void>();
+		}
+		this.#pendingArtifactWrites++;
+		void written
+			.catch(error => {
+				this.#artifactError ??= error instanceof Error ? error : new Error(String(error));
+			})
+			.finally(() => {
+				this.#pendingArtifactWrites--;
+				if (this.#pendingArtifactWrites === 0) this.#artifactWritesSettled?.resolve();
+			});
+	}
+
 	#emitToSink(chunk: string): void {
-		if (!this.#file || chunk.length === 0) return;
-		if (this.#artifactMaxBytes === 0) {
-			this.#file.sink.write(chunk);
-			return;
-		}
-		const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-		const room = this.#artifactHeadClosed ? 0 : this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
-		if (room >= chunkBytes) {
-			this.#file.sink.write(chunk);
-			this.#artifactHeadBytesWritten += chunkBytes;
-			return;
-		}
-		let overflow = chunk;
-		if (room > 0) {
-			const headSlice = truncateHeadBytes(chunk, room);
-			if (headSlice.bytes > 0) {
-				this.#file.sink.write(headSlice.text);
-				this.#artifactHeadBytesWritten += headSlice.bytes;
+		if (this.#artifactError || !this.#file || chunk.length === 0) return;
+		try {
+			if (this.#artifactMaxBytes === 0) {
+				this.#writeArtifactChunk(chunk);
+				return;
 			}
-			// Even when UTF-8 boundary safety leaves a few bytes of nominal room,
-			// this chunk has already overflowed the head window. Close it now so a
-			// later small ASCII chunk cannot be written before this overflow tail.
-			this.#artifactHeadClosed = true;
-			overflow = chunk.substring(headSlice.text.length);
-		}
-		if (overflow.length === 0 || this.#artifactTailBudget === 0) {
-			// No tail budget: count the dropped bytes so the notice reflects them.
-			if (overflow.length > 0) {
-				this.#artifactTailIncomingBytes += Buffer.byteLength(overflow, "utf-8");
+			const chunkBytes = Buffer.byteLength(chunk, "utf-8");
+			const room = this.#artifactHeadClosed ? 0 : this.#artifactHeadBudget - this.#artifactHeadBytesWritten;
+			if (room >= chunkBytes) {
+				this.#writeArtifactChunk(chunk);
+				this.#artifactHeadBytesWritten += chunkBytes;
+				return;
 			}
-			return;
+			let overflow = chunk;
+			if (room > 0) {
+				const headSlice = truncateHeadBytes(chunk, room);
+				if (headSlice.bytes > 0) {
+					this.#writeArtifactChunk(headSlice.text);
+					this.#artifactHeadBytesWritten += headSlice.bytes;
+				}
+				// Even when UTF-8 boundary safety leaves a few bytes of nominal room,
+				// this chunk has already overflowed the head window. Close it now so a
+				// later small ASCII chunk cannot be written before this overflow tail.
+				this.#artifactHeadClosed = true;
+				overflow = chunk.substring(headSlice.text.length);
+			}
+			if (overflow.length === 0 || this.#artifactTailBudget === 0) {
+				// No tail budget: count the dropped bytes so the notice reflects them.
+				if (overflow.length > 0) {
+					this.#artifactTailIncomingBytes += Buffer.byteLength(overflow, "utf-8");
+				}
+				return;
+			}
+			this.#pushArtifactTail(overflow);
+		} catch (error) {
+			this.#artifactError = error instanceof Error ? error : new Error(String(error));
 		}
-		this.#pushArtifactTail(overflow);
 	}
 
 	#pushArtifactTail(chunk: string): void {
@@ -1144,7 +1170,7 @@ export class OutputSink {
 				}
 				this.#pendingFileWrites = undefined;
 			}
-		} catch {
+		} catch (error) {
 			try {
 				await this.#file?.sink?.end();
 			} catch {
@@ -1153,6 +1179,7 @@ export class OutputSink {
 			this.#file = undefined;
 			this.#pendingFileWrites = undefined;
 			this.#fileReady = false;
+			this.#artifactError = error instanceof Error ? error : new Error(String(error));
 		}
 	}
 
@@ -1263,10 +1290,10 @@ export class OutputSink {
 			const notice =
 				`${headSep}[ARTIFACT TRUNCATED: kept first ${formatBytes(headWritten)} + last ${formatBytes(tailBytes)} ` +
 				`of ${formatBytes(totalCapped)}; ${formatBytes(droppedBytes)} elided from the middle]${tailSep}`;
-			this.#file.sink.write(notice);
+			this.#writeArtifactChunk(notice);
 		}
 		if (tailBytes > 0) {
-			this.#file.sink.write(this.#artifactTailRing);
+			this.#writeArtifactChunk(this.#artifactTailRing);
 		}
 	}
 
@@ -1281,9 +1308,32 @@ export class OutputSink {
 		this.#partialEscape = "";
 		const totalLines = this.#sawData ? this.#totalLines + 1 : 0;
 
+		if (this.#createFileSinkPromise) {
+			try {
+				await this.#createFileSinkPromise;
+			} catch (error) {
+				this.#artifactError ??= error instanceof Error ? error : new Error(String(error));
+			}
+		}
+
 		if (this.#file) {
-			this.#flushArtifactTailIfCapped();
-			await this.#file.sink.end();
+			try {
+				await this.#artifactWritesSettled?.promise;
+				if (!this.#artifactError) this.#flushArtifactTailIfCapped();
+				await this.#artifactWritesSettled?.promise;
+			} catch (error) {
+				this.#artifactError ??= error instanceof Error ? error : new Error(String(error));
+			} finally {
+				try {
+					await this.#file.sink.end();
+				} catch (error) {
+					this.#artifactError ??= error instanceof Error ? error : new Error(String(error));
+				}
+			}
+		}
+
+		if (this.#artifactError) {
+			throw this.#artifactError;
 		}
 
 		// Compose the visible output. With head retention, splice head + marker
