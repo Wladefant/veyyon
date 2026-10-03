@@ -257,7 +257,12 @@ describe("the modules that were repointed stay cut", () => {
 		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
 		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt
 		// loader, on top of the fork's own graph. Growth from those named modules, not a new edge out of a cut.
-		["agent/src/proxy.ts", 148],
+		// `agent/src/proxy.ts` 148 -> 150 on 2026-10-02, by exactly two modules: `catalog/src/types.ts` and
+		// `contracts/model/src/model.ts`. `catalog/models.ts` and `catalog/model-manager.ts`, both already on this
+		// reach, now import the value `modelKind` (chat versus runner rows) through `./types`, which was a type-only
+		// import and so cost nothing before. `types.ts` re-exports the contract module; no consumer gained an edge
+		// to a subsystem it did not already reach.
+		["agent/src/proxy.ts", 150],
 		["apps/stats/src/parser.ts", 125],
 		["apps/stats/src/db.ts", 127],
 		["apps/stats/src/sync-worker.ts", 126],
