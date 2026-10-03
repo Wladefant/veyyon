@@ -42,6 +42,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Fixed the provider in-flight wakeup watcher throwing an uncaught `EPERM` when its directory vanished: it now warns, closes and falls back to the timer ([Refs #73](https://github.com/Wladefant/veyyon/issues/73)).
 - Fixed type errors in the Anthropic alignment and Codex stream test fixtures so the workspace typecheck passes (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Classified only trailing volatile segments as memory recall suffix in Anthropic prompt caching, preserving cache breakpoints when stable policy blocks follow recalled content ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7c5549d1db5cbc637be93ff0f36ca199f22b8fc4).
 - Fixed Codex compaction WebSocket cleanup types: `return()` calls pass their argument and the wrapped generator implements `Symbol.asyncDispose` by delegating to `return()` ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
