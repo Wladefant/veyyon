@@ -255,22 +255,43 @@ export function iterateWithAbort<T>(events: AsyncIterable<T>, signal: AbortSigna
 	};
 }
 
+export interface CodexCompactionV2AccumulatorOptions {
+	readonly sanitize?: (text: string) => string;
+	readonly deferProviderFailures?: boolean;
+}
+
 /**
  * O(1)-retention accumulator and semantic validator for a Codex v2 compaction event stream.
  * Exactly one compaction item with non-empty string encrypted_content is required,
- * alongside response.completed. Provider errors are rejected immediately.
+ * alongside response.completed. Provider errors are rejected immediately unless deferred for collection.
  */
 export class CodexCompactionV2Accumulator {
 	private compactionItem: Record<string, unknown> | undefined;
 	private validCompactionCount = 0;
 	private malformedCompactionItems = 0;
 	private sawCompleted = false;
+	private providerFailure?: { event: CodexCompactionV2Event; type: string };
 	outputItemCount = 0;
 	usage?: CodexCompactionV2Usage;
 	private readonly sanitize: (text: string) => string;
+	private readonly deferProviderFailures: boolean;
 
-	constructor(sanitize: (text: string) => string = text => text) {
-		this.sanitize = sanitize;
+	constructor(sanitizeOrOptions: ((text: string) => string) | CodexCompactionV2AccumulatorOptions = text => text) {
+		if (typeof sanitizeOrOptions === "function") {
+			this.sanitize = sanitizeOrOptions;
+			this.deferProviderFailures = false;
+		} else {
+			this.sanitize = sanitizeOrOptions.sanitize ?? (text => text);
+			this.deferProviderFailures = sanitizeOrOptions.deferProviderFailures ?? false;
+		}
+	}
+
+	get hasProviderFailure(): boolean {
+		return this.providerFailure !== undefined;
+	}
+
+	get failureEvent(): CodexCompactionV2Event | undefined {
+		return this.providerFailure?.event;
 	}
 
 	observe(event: unknown): void {
@@ -299,13 +320,26 @@ export class CodexCompactionV2Accumulator {
 			return;
 		}
 		if (type === "response.failed" || type === "response.incomplete" || type === "error") {
-			throw new Error(
-				`${describeFailure(event as CodexCompactionV2Event, type, this.sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
-			);
+			this.providerFailure = { event: event as CodexCompactionV2Event, type };
+			if (!this.deferProviderFailures) {
+				throw new Error(
+					`${describeFailure(event as CodexCompactionV2Event, type, this.sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
+				);
+			}
 		}
 	}
 
 	finish(): CodexCompactionV2StreamResult {
+		if (this.providerFailure) {
+			if (!this.deferProviderFailures) {
+				throw new Error(
+					`${describeFailure(this.providerFailure.event, this.providerFailure.type, this.sanitize)}. The history was NOT compacted; the caller falls back to local compaction.`,
+				);
+			}
+			throw new Error(
+				"Codex compaction stream failed: provider error. The history was NOT compacted; the caller falls back to local compaction.",
+			);
+		}
 		if (!this.sawCompleted) {
 			throw new Error(
 				"Codex compaction stream closed before response.completed. The history was NOT compacted; the caller falls back to local compaction.",

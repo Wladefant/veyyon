@@ -1624,26 +1624,49 @@ function toCodexRequestBody(body: OpenAICodexCompactionBody): RequestBody {
  * Open a provider-native V2 compaction stream through Codex's WebSocket-first
  * transport, replaying WebSocket transport failures over SSE.
  */
+interface CodexCompactionBaselineState {
+	readonly turnState: string | undefined;
+	readonly modelsEtag: string | undefined;
+}
+
 export async function openCodexCompactionEventStream(
 	model: Model<"openai-codex-responses">,
 	body: OpenAICodexCompactionBody,
 	options: OpenAICodexCompactionStreamOptions,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
 	const requestSetup = createRequestSetup(options);
-	let requestContext: CodexRequestContext;
+	let requestContext: CodexRequestContext | undefined;
+	let baselineState: CodexCompactionBaselineState | undefined;
 	let initial: {
 		eventStream: AsyncGenerator<Record<string, unknown>>;
 		requestBodyForState: RequestBody;
 		transport: CodexTransport;
+		cleanup?: () => Promise<void>;
 	};
 	try {
 		requestContext = createCodexRequestContext(model, toCodexRequestBody(body), options, {
 			isolateCompactionTransport: false,
+			startNewTurn: false,
+		});
+		baselineState = Object.freeze({
+			turnState: requestContext.turnState?.value,
+			modelsEtag: requestContext.websocketState?.modelsEtag,
 		});
 		initial = await openInitialCodexEventStream(model, options, requestSetup, requestContext);
 	} catch (error) {
+		if (requestContext && baselineState) {
+			if (requestContext.turnState) {
+				requestContext.turnState.value = baselineState.turnState;
+			}
+			if (requestContext.websocketState) {
+				requestContext.websocketState.modelsEtag = baselineState.modelsEtag;
+			}
+		}
 		requestSetup.requestAbortController.abort();
 		throw error;
+	}
+	if (!requestContext || !baselineState) {
+		throw new Error("Codex compaction context was not initialized");
 	}
 
 	if (requestContext.websocketState) {
@@ -1652,7 +1675,91 @@ export async function openCodexCompactionEventStream(
 		// replacement history makes that baseline stale for the next normal turn.
 		resetCodexWebSocketAppendState(requestContext.websocketState);
 	}
-	return streamCodexCompactionEvents(model, options, requestSetup, requestContext, initial);
+	const innerGenerator = streamCodexCompactionEvents(
+		model,
+		options,
+		requestSetup,
+		requestContext,
+		initial,
+		baselineState,
+	);
+
+	let cleanedUp = false;
+	const runCleanup = async (cleanupReason?: unknown): Promise<void> => {
+		if (cleanedUp) return;
+		cleanedUp = true;
+		if (requestContext?.turnState) {
+			requestContext.turnState.value = baselineState?.turnState;
+		}
+		if (requestContext?.websocketState) {
+			requestContext.websocketState.modelsEtag = baselineState?.modelsEtag;
+		}
+		try {
+			requestSetup.requestAbortController.abort(cleanupReason);
+		} catch {}
+		try {
+			const closeSource = async () => {
+				try {
+					await initial?.cleanup?.();
+				} catch {}
+				try {
+					await initial?.eventStream.return?.();
+				} catch {}
+			};
+			const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
+			const timer = setTimeout(timeoutResolve, 500);
+			try {
+				await Promise.race([closeSource(), timeoutPromise]);
+			} finally {
+				clearTimeout(timer);
+			}
+		} catch {}
+	};
+
+	let hasStarted = false;
+	let isCompleted = false;
+
+	const wrappedGenerator: AsyncGenerator<Record<string, unknown>> = {
+		async next(...args) {
+			hasStarted = true;
+			try {
+				const result = await innerGenerator.next(...args);
+				if (result.done) {
+					isCompleted = true;
+				}
+				return result;
+			} catch (err) {
+				await runCleanup(err);
+				throw err;
+			}
+		},
+		async return(value) {
+			if (!hasStarted || !isCompleted) {
+				await runCleanup();
+			}
+			return await innerGenerator.return(value);
+		},
+		async throw(err) {
+			if (!hasStarted || !isCompleted) {
+				await runCleanup(err);
+			}
+			return await innerGenerator.throw(err);
+		},
+		[Symbol.asyncIterator]() {
+			return this;
+		},
+	};
+
+	return wrappedGenerator;
+}
+
+function checkCodexCompactionSignal(
+	options?: OpenAICodexCompactionStreamOptions,
+	requestSetup?: CodexRequestSetup,
+): void {
+	if (options?.signal?.aborted || requestSetup?.requestSignal?.aborted) {
+		throw options?.signal?.reason ?? requestSetup?.requestSignal?.reason ?? new Error("Aborted");
+	}
 }
 
 async function* streamCodexCompactionEvents(
@@ -1664,13 +1771,13 @@ async function* streamCodexCompactionEvents(
 		eventStream: AsyncGenerator<Record<string, unknown>>;
 		requestBodyForState: RequestBody;
 		transport: CodexTransport;
+		cleanup?: () => Promise<void>;
 	},
+	baselineState: CodexCompactionBaselineState,
 ): AsyncGenerator<Record<string, unknown>> {
 	let completed = false;
+	let activeCleanup: (() => Promise<void>) | undefined = initial.cleanup;
 	const websocketState = requestContext.websocketState;
-	const turnState = requestContext.turnState;
-	const previousTurnState = turnState?.value;
-	const previousModelsEtag = websocketState?.modelsEtag;
 	try {
 		if (initial.transport === "websocket") {
 			// Do not expose a WebSocket attempt until it finishes: an SSE replay
@@ -1679,9 +1786,7 @@ async function* streamCodexCompactionEvents(
 			let bufferedBytes = 0;
 			try {
 				for await (const event of initial.eventStream) {
-					if (options.signal?.aborted || requestSetup.requestSignal?.aborted) {
-						throw options.signal?.reason ?? requestSetup.requestSignal?.reason ?? new Error("Aborted");
-					}
+					checkCodexCompactionSignal(options, requestSetup);
 					const eventBytes = estimateEventJsonBytes(event);
 					if (
 						bufferedEvents.length + 1 > CODEX_COMPACTION_WS_MAX_BUFFERED_EVENTS ||
@@ -1707,41 +1812,57 @@ async function* streamCodexCompactionEvents(
 				const state = requestContext.websocketState;
 				if (state) recordCodexWebSocketFailure(state, true);
 				const fallback = await openCodexSseTransport(model, requestContext, requestSetup, options, state);
+				activeCleanup = fallback.cleanup;
 				if (state) state.lastTransport = fallback.transport;
-				yield* drainCodexCompactionEvents(fallback.eventStream, requestContext);
+				yield* drainCodexCompactionEvents(fallback.eventStream, requestContext, options, requestSetup);
+				checkCodexCompactionSignal(options, requestSetup);
 				completed = true;
 				return;
 			}
-			if (options.signal?.aborted || requestSetup.requestSignal?.aborted) {
-				throw options.signal?.reason ?? requestSetup.requestSignal?.reason ?? new Error("Aborted");
-			}
+			checkCodexCompactionSignal(options, requestSetup);
 
 			// Semantic validation of the full WebSocket attempt before state commit or yielding.
-			const validator = new CodexCompactionV2Accumulator();
+			const validator = new CodexCompactionV2Accumulator({ deferProviderFailures: true });
 			for (const event of bufferedEvents) {
 				validator.observe(event);
 			}
-			validator.finish();
 
-			// Apply metadata only once the WebSocket attempt succeeded and validated:
-			// a discarded or rejected attempt must not leak its `x-codex-turn-state` into the session.
-			for (const event of bufferedEvents) {
-				applyCodexCompactionResponseMetadata(requestContext.turnState, websocketState, event);
-				yield event;
+			if (validator.hasProviderFailure) {
+				// Replay the buffered events to the consumer so the collector sees the
+				// provider failure and sanitizes any sensitive error details.
+				// Do not commit metadata, and reject if consumer ignores the failure.
+				for (const event of bufferedEvents) {
+					checkCodexCompactionSignal(options, requestSetup);
+					yield event;
+				}
+				checkCodexCompactionSignal(options, requestSetup);
+				validator.finish();
+			} else {
+				validator.finish();
+				for (const event of bufferedEvents) {
+					checkCodexCompactionSignal(options, requestSetup);
+					applyCodexCompactionResponseMetadata(requestContext.turnState, websocketState, event);
+					yield event;
+				}
+				checkCodexCompactionSignal(options, requestSetup);
 			}
 		} else {
-			yield* drainCodexCompactionEvents(initial.eventStream, requestContext);
+			yield* drainCodexCompactionEvents(initial.eventStream, requestContext, options, requestSetup);
 		}
+		checkCodexCompactionSignal(options, requestSetup);
 		completed = true;
 	} finally {
 		if (!completed) {
 			requestSetup.requestAbortController.abort();
 			if (requestContext.turnState) {
-				requestContext.turnState.value = previousTurnState;
+				requestContext.turnState.value = baselineState.turnState;
 			}
 			if (websocketState) {
-				websocketState.modelsEtag = previousModelsEtag;
+				websocketState.modelsEtag = baselineState.modelsEtag;
 			}
+			try {
+				await activeCleanup?.();
+			} catch {}
 		}
 	}
 }
@@ -1763,13 +1884,19 @@ function applyCodexCompactionResponseMetadata(
 async function* drainCodexCompactionEvents(
 	events: AsyncGenerator<Record<string, unknown>>,
 	requestContext: CodexRequestContext,
+	options?: OpenAICodexCompactionStreamOptions,
+	requestSetup?: CodexRequestSetup,
 ): AsyncGenerator<Record<string, unknown>> {
-	const validator = new CodexCompactionV2Accumulator();
+	const validator = new CodexCompactionV2Accumulator({ deferProviderFailures: true });
 	for await (const event of events) {
+		checkCodexCompactionSignal(options, requestSetup);
 		validator.observe(event);
-		applyCodexCompactionResponseMetadata(requestContext.turnState, requestContext.websocketState, event);
+		if (!validator.hasProviderFailure) {
+			applyCodexCompactionResponseMetadata(requestContext.turnState, requestContext.websocketState, event);
+		}
 		yield event;
 	}
+	checkCodexCompactionSignal(options, requestSetup);
 	validator.finish();
 }
 
@@ -1835,6 +1962,7 @@ async function openInitialCodexEventStream(
 	eventStream: AsyncGenerator<Record<string, unknown>>;
 	requestBodyForState: RequestBody;
 	transport: CodexTransport;
+	cleanup?: () => Promise<void>;
 }> {
 	const { transformedBody, websocketState } = requestContext;
 	if (websocketState && shouldUseCodexWebSocket(model, websocketState, options?.preferWebsockets)) {
@@ -1895,6 +2023,7 @@ async function openCodexWebSocketTransport(
 	eventStream: AsyncGenerator<Record<string, unknown>>;
 	requestBodyForState: RequestBody;
 	transport: CodexTransport;
+	cleanup?: () => Promise<void>;
 }> {
 	const canAppendBeforeRequest = websocketState.canAppend === true;
 	const chainedBody = buildCodexChainedRequestBody(requestContext.transformedBody, websocketState);
@@ -1975,10 +2104,19 @@ async function openCodexWebSocketTransport(
 		requestSetup.requestSignal,
 		onSseEvent,
 	);
+	const cleanup = async (): Promise<void> => {
+		try {
+			websocketConnection.close("abandoned");
+		} catch {}
+		try {
+			await eventStream.return?.();
+		} catch {}
+	};
 	return {
 		eventStream,
 		requestBodyForState,
 		transport: "websocket",
+		cleanup,
 	};
 }
 
@@ -2018,6 +2156,7 @@ async function openCodexSseTransport(
 	eventStream: AsyncGenerator<Record<string, unknown>>;
 	requestBodyForState: RequestBody;
 	transport: CodexTransport;
+	cleanup?: () => Promise<void>;
 }> {
 	const canAppendBeforeRequest = state?.canAppend === true;
 	let wireBody = body;
@@ -2070,13 +2209,41 @@ async function openCodexSseTransport(
 	await notifyProviderResponse(options, handle.response, model, handle.requestId);
 	// A response means `prepareBody` serialized the attempt that received it.
 	recordCodexTurnRequestDiagnostics(state, wireBody, wireJson!, "sse", canAppendBeforeRequest);
+	const cleanup = async (): Promise<void> => {
+		try {
+			if (handle.response.body && !handle.response.body.locked) {
+				await handle.response.body.cancel();
+			}
+		} catch {}
+		try {
+			await handle.events.return?.();
+		} catch {}
+	};
+	const originalEvents = handle.events;
+	const eventsWithBodyCancel: AsyncGenerator<Record<string, unknown>> = {
+		next: originalEvents.next.bind(originalEvents),
+		async return(val) {
+			try {
+				if (handle.response.body && !handle.response.body.locked) {
+					await handle.response.body.cancel();
+				}
+			} catch {}
+			return originalEvents.return ? await originalEvents.return(val) : { done: true, value: val };
+		},
+		throw: originalEvents.throw ? originalEvents.throw.bind(originalEvents) : undefined,
+		[Symbol.asyncIterator]() {
+			return this;
+		},
+	} as AsyncGenerator<Record<string, unknown>>;
+
 	return {
-		eventStream: requestSetup.wrapCodexSseStream(handle.events),
+		eventStream: requestSetup.wrapCodexSseStream(eventsWithBodyCancel),
 		// SSE never records a chain baseline (see `#handleResponseCompleted`), so
 		// the wire body is held as sent. A deep copy here cost a full clone of the
 		// transcript before the first event was read.
 		requestBodyForState: wireBody,
 		transport: "sse",
+		cleanup,
 	};
 }
 

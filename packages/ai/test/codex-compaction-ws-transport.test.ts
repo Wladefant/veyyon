@@ -69,19 +69,62 @@ function getSessionModelsEtag(pState: Map<string, ProviderSessionState>): string
 function seedPriorState(
 	pState: Map<string, ProviderSessionState>,
 	sessionId: string,
-	turnState: string,
+	turnState: string | undefined,
 	modelsEtag: string,
 ): void {
-	const codexState = pState.get("openai-codex-responses") as
+	const sessionKey = `account:acc:https://chatgpt.com/backend-api:gpt-5.6-sol:${sessionId}`;
+	const publicSessionKey = `https://chatgpt.com/backend-api:gpt-5.6-sol:${sessionId}`;
+	let codexState = pState.get("openai-codex-responses") as
 		| {
-				metadataSessions?: Map<string, { turnStates: Map<string, { value?: string }> }>;
-				webSocketSessions?: Map<string, CodexWebSocketSessionState>;
+				metadataSessions: Map<
+					string,
+					{ sessionId: string; turnId: string; turnStates: Map<string, { value?: string }> }
+				>;
+				webSocketSessions: Map<string, CodexWebSocketSessionState>;
+				webSocketPublicToPrivate: Map<string, string>;
+				close?: () => void;
 		  }
 		| undefined;
-	const turnCell = codexState?.metadataSessions?.get(sessionId)?.turnStates.values().next().value;
-	if (turnCell) turnCell.value = turnState;
-	const ws = Array.from(codexState?.webSocketSessions?.values() ?? [])[0];
-	if (ws) ws.modelsEtag = modelsEtag;
+	if (!codexState) {
+		codexState = {
+			metadataSessions: new Map(),
+			webSocketSessions: new Map(),
+			webSocketPublicToPrivate: new Map(),
+			close: () => {},
+		};
+		pState.set("openai-codex-responses", codexState as unknown as ProviderSessionState);
+	}
+	codexState.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
+
+	let metadataSession = codexState.metadataSessions.get(sessionId);
+	if (!metadataSession) {
+		metadataSession = {
+			sessionId,
+			turnId: "prior_turn_id",
+			turnStates: new Map(),
+		};
+		codexState.metadataSessions.set(sessionId, metadataSession);
+	}
+	metadataSession.turnStates.set(sessionKey, { value: turnState });
+
+	let ws = codexState.webSocketSessions.get(sessionKey);
+	if (!ws) {
+		ws = {
+			disableWebsocket: false,
+			canAppend: false,
+			fallbackCount: 0,
+			prewarmed: false,
+			stats: {
+				fullContextRequests: 0,
+				deltaRequests: 0,
+				lastInputItems: 0,
+			},
+			modelsEtag,
+		} as CodexWebSocketSessionState;
+		codexState.webSocketSessions.set(sessionKey, ws);
+	} else {
+		ws.modelsEtag = modelsEtag;
+	}
 }
 
 describe("openCodexCompactionEventStream", () => {
@@ -160,6 +203,7 @@ describe("openCodexCompactionEventStream", () => {
 		global.WebSocket = FailWs as unknown as typeof WebSocket;
 		const pState = new Map<string, ProviderSessionState>();
 		const fetch400: FetchImpl = async () => new Response("error", { status: 400 });
+		seedPriorState(pState, "s3", "prev_ts", "prev_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s3",
@@ -167,7 +211,6 @@ describe("openCodexCompactionEventStream", () => {
 			preferWebsockets: true,
 			fetch: fetch400,
 		});
-		seedPriorState(pState, "s3", "prev_ts", "prev_etag");
 		await expect(async () => {
 			for await (const _ of stream) {
 			}
@@ -213,13 +256,13 @@ describe("openCodexCompactionEventStream", () => {
 		}
 		global.WebSocket = MissingCompactionWs as unknown as typeof WebSocket;
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sem_missing", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_sem_missing",
 			providerSessionState: pState,
 			preferWebsockets: true,
 		});
-		seedPriorState(pState, "s_sem_missing", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow("expected exactly one");
 		expect(getSessionTurnState(pState, "s_sem_missing")).toBe("prior_ts");
@@ -247,13 +290,13 @@ describe("openCodexCompactionEventStream", () => {
 		}
 		global.WebSocket = MalformedWs as unknown as typeof WebSocket;
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sem_malformed", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_sem_malformed",
 			providerSessionState: pState,
 			preferWebsockets: true,
 		});
-		seedPriorState(pState, "s_sem_malformed", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow("no encrypted_content");
 		expect(getSessionTurnState(pState, "s_sem_malformed")).toBe("prior_ts");
@@ -285,13 +328,13 @@ describe("openCodexCompactionEventStream", () => {
 		}
 		global.WebSocket = DuplicateCompactionWs as unknown as typeof WebSocket;
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sem_dup", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_sem_dup",
 			providerSessionState: pState,
 			preferWebsockets: true,
 		});
-		seedPriorState(pState, "s_sem_dup", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow("expected exactly one");
 		expect(getSessionTurnState(pState, "s_sem_dup")).toBe("prior_ts");
@@ -319,13 +362,13 @@ describe("openCodexCompactionEventStream", () => {
 		}
 		global.WebSocket = EarlyCloseWs as unknown as typeof WebSocket;
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sem_close", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_sem_close",
 			providerSessionState: pState,
 			preferWebsockets: true,
 		});
-		seedPriorState(pState, "s_sem_close", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow(
 			"stream closed before response.completed",
@@ -354,13 +397,13 @@ describe("openCodexCompactionEventStream", () => {
 		}
 		global.WebSocket = ProviderFailedWs as unknown as typeof WebSocket;
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sem_fail", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_sem_fail",
 			providerSessionState: pState,
 			preferWebsockets: true,
 		});
-		seedPriorState(pState, "s_sem_fail", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow("Model is unavailable");
 		expect(getSessionTurnState(pState, "s_sem_fail")).toBe("prior_ts");
@@ -374,9 +417,17 @@ describe("openCodexCompactionEventStream", () => {
 			`data: ${JSON.stringify({ type: "response.completed" })}`,
 		].join("\n\n");
 		const fetchMock: FetchImpl = async () =>
-			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+			new Response(sse, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "sse_http_etag",
+					"x-codex-turn-state": "sse_http_ts",
+				},
+			});
 
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sse_missing", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_sse_missing",
@@ -384,7 +435,6 @@ describe("openCodexCompactionEventStream", () => {
 			preferWebsockets: false,
 			fetch: fetchMock,
 		});
-		seedPriorState(pState, "s_sse_missing", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow("expected exactly one");
 		expect(getSessionTurnState(pState, "s_sse_missing")).toBe("prior_ts");
@@ -397,9 +447,17 @@ describe("openCodexCompactionEventStream", () => {
 			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "compaction", encrypted_content: "blob" } })}`,
 		].join("\n\n");
 		const fetchMock: FetchImpl = async () =>
-			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+			new Response(sse, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "sse_http_etag",
+					"x-codex-turn-state": "sse_http_ts",
+				},
+			});
 
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sse_close", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_sse_close",
@@ -407,7 +465,6 @@ describe("openCodexCompactionEventStream", () => {
 			preferWebsockets: false,
 			fetch: fetchMock,
 		});
-		seedPriorState(pState, "s_sse_close", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow(
 			"stream closed before response.completed",
@@ -433,9 +490,17 @@ describe("openCodexCompactionEventStream", () => {
 			`data: ${JSON.stringify({ type: "response.completed" })}`,
 		].join("\n\n");
 		const fetchMock: FetchImpl = async () =>
-			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+			new Response(sse, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "fallback_http_etag",
+					"x-codex-turn-state": "fallback_http_ts",
+				},
+			});
 
 		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_fallback_malformed", "prior_ts", "prior_etag");
 		const stream = await openCodexCompactionEventStream(model, body, {
 			apiKey: token,
 			sessionId: "s_fallback_malformed",
@@ -443,7 +508,6 @@ describe("openCodexCompactionEventStream", () => {
 			preferWebsockets: true,
 			fetch: fetchMock,
 		});
-		seedPriorState(pState, "s_fallback_malformed", "prior_ts", "prior_etag");
 
 		await expect(collectCodexCompactionV2Events(stream, undefined, t => t)).rejects.toThrow("no encrypted_content");
 		expect(getSessionTurnState(pState, "s_fallback_malformed")).toBe("prior_ts");
@@ -622,5 +686,485 @@ describe("openCodexCompactionEventStream", () => {
 		abort.abort(new Error("caller cancelled mid-stream"));
 		await expect(consumptionPromise).rejects.toThrow("aborted");
 		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	test("valid SSE body commits HTTP response metadata", async () => {
+		const sse = [
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "compaction", encrypted_content: "valid_blob" } })}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 42 } } })}`,
+		].join("\n\n");
+		const fetchMock: FetchImpl = async () =>
+			new Response(sse, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "committed_etag",
+					"x-codex-turn-state": "committed_ts",
+				},
+			});
+
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_sse_commit", "prior_ts", "prior_etag");
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_sse_commit",
+			providerSessionState: pState,
+			preferWebsockets: false,
+			fetch: fetchMock,
+		});
+
+		const result = await collectCodexCompactionV2Events(stream, undefined, t => t);
+		expect(result.compactionItem.encrypted_content).toBe("valid_blob");
+		expect(getSessionTurnState(pState, "s_sse_commit")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("committed_etag");
+	});
+
+	test("opening failure restores baseline state if metadata reached transport", async () => {
+		const fetchMock: FetchImpl = async () =>
+			new Response(null, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "reached_etag",
+					"x-codex-turn-state": "reached_ts",
+				},
+			});
+
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_open_fail", "prior_ts", "prior_etag");
+		await expect(
+			openCodexCompactionEventStream(model, body, {
+				apiKey: token,
+				sessionId: "s_open_fail",
+				providerSessionState: pState,
+				preferWebsockets: false,
+				fetch: fetchMock,
+			}),
+		).rejects.toThrow();
+
+		expect(getSessionTurnState(pState, "s_open_fail")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+	test("suspendedStart on direct SSE: calling return before next cancels body and aborts requestSignal", async () => {
+		let cancelCalled = false;
+		let observedSignal: AbortSignal | undefined;
+		const streamBody = new ReadableStream<Uint8Array>({
+			start() {},
+			cancel() {
+				cancelCalled = true;
+			},
+		});
+
+		const fetchMock: FetchImpl = async (_input, init) => {
+			observedSignal = init?.signal;
+			return new Response(streamBody, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "sse_etag_unconsumed",
+					"x-codex-turn-state": "sse_ts_unconsumed",
+				},
+			});
+		};
+
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_suspended_sse", "prior_ts", "prior_etag");
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_suspended_sse",
+			providerSessionState: pState,
+			preferWebsockets: false,
+			fetch: fetchMock,
+		});
+
+		expect(cancelCalled).toBe(false);
+		expect(observedSignal).toBeDefined();
+		expect(observedSignal!.aborted).toBe(false);
+
+		await stream.return();
+
+		expect(cancelCalled).toBe(true);
+		expect(streamBody.locked).toBe(false);
+		expect(observedSignal!.aborted).toBe(true);
+		expect(getSessionTurnState(pState, "s_suspended_sse")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+
+	test("early WS abandonment: calling return before next closes socket and rolls back metadata", async () => {
+		let wsClosed = false;
+		class AbandonWs extends BaseMockWs {
+			close() {
+				wsClosed = true;
+			}
+		}
+		global.WebSocket = AbandonWs as unknown as typeof WebSocket;
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_abandon_ws", "prior_ts", "prior_etag");
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_abandon_ws",
+			providerSessionState: pState,
+			preferWebsockets: true,
+		});
+
+		expect(wsClosed).toBe(false);
+		await stream.return();
+
+		expect(wsClosed).toBe(true);
+		expect(getSessionTurnState(pState, "s_abandon_ws")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+
+	test("fake secret echo on WS with sanitize: marker absent, sanitizer called, metadata rolled back", async () => {
+		const SECRET_MARKER = "SECRET_MARKER_WS_987654";
+		const SECRET_CODE = "SECRET_CODE_WS_1234";
+		class SecretEchoWs extends BaseMockWs {
+			send(data: string) {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				if (frame.type === "response.create") {
+					queueMicrotask(() => {
+						this.emit({
+							type: "response.metadata",
+							headers: { "x-codex-turn-state": "new_ws_ts", "x-models-etag": "new_ws_etag" },
+						});
+						this.emit({
+							type: "response.failed",
+							response: {
+								error: {
+									message: `Provider failed with token ${SECRET_MARKER}`,
+									code: SECRET_CODE,
+								},
+							},
+						});
+					});
+				}
+			}
+		}
+		global.WebSocket = SecretEchoWs as unknown as typeof WebSocket;
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_secret_ws", "prior_ts", "prior_etag");
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_secret_ws",
+			providerSessionState: pState,
+			preferWebsockets: true,
+		});
+
+		let sanitizeCalls = 0;
+		const sanitize = (text: string): string => {
+			sanitizeCalls += 1;
+			return text.replaceAll(SECRET_MARKER, "[REDACTED_MSG]").replaceAll(SECRET_CODE, "[REDACTED_CODE]");
+		};
+
+		let thrownError: Error | undefined;
+		try {
+			await collectCodexCompactionV2Events(stream, undefined, sanitize);
+		} catch (error) {
+			thrownError = error as Error;
+		}
+
+		expect(thrownError).toBeDefined();
+		expect(sanitizeCalls).toBeGreaterThan(0);
+		expect(thrownError!.message).not.toContain(SECRET_MARKER);
+		expect(thrownError!.message).not.toContain(SECRET_CODE);
+		expect(thrownError!.message).toContain("[REDACTED_MSG]");
+		expect(thrownError!.message).toContain("[REDACTED_CODE]");
+		expect(getSessionTurnState(pState, "s_secret_ws")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+
+	test("fake secret echo on direct SSE with sanitize: marker absent, sanitizer called, metadata rolled back", async () => {
+		const SECRET_MARKER = "SECRET_MARKER_SSE_987654";
+		const SECRET_CODE = "SECRET_CODE_SSE_1234";
+		const sse = [
+			`data: ${JSON.stringify({ type: "response.metadata", headers: { "x-codex-turn-state": "new_sse_ts", "x-models-etag": "new_sse_etag" } })}`,
+			`data: ${JSON.stringify({
+				type: "response.failed",
+				response: {
+					error: {
+						message: `SSE failed with token ${SECRET_MARKER}`,
+						code: SECRET_CODE,
+					},
+				},
+			})}`,
+		].join("\n\n");
+
+		const fetchMock: FetchImpl = async () =>
+			new Response(sse, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "sse_meta_etag",
+					"x-codex-turn-state": "sse_meta_ts",
+				},
+			});
+
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_secret_sse", "prior_ts", "prior_etag");
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_secret_sse",
+			providerSessionState: pState,
+			preferWebsockets: false,
+			fetch: fetchMock,
+		});
+
+		let sanitizeCalls = 0;
+		const sanitize = (text: string): string => {
+			sanitizeCalls += 1;
+			return text.replaceAll(SECRET_MARKER, "[REDACTED_MSG]").replaceAll(SECRET_CODE, "[REDACTED_CODE]");
+		};
+
+		let thrownError: Error | undefined;
+		try {
+			await collectCodexCompactionV2Events(stream, undefined, sanitize);
+		} catch (error) {
+			thrownError = error as Error;
+		}
+
+		expect(thrownError).toBeDefined();
+		expect(sanitizeCalls).toBeGreaterThan(0);
+		expect(thrownError!.message).not.toContain(SECRET_MARKER);
+		expect(thrownError!.message).not.toContain(SECRET_CODE);
+		expect(thrownError!.message).toContain("[REDACTED_MSG]");
+		expect(thrownError!.message).toContain("[REDACTED_CODE]");
+		expect(getSessionTurnState(pState, "s_secret_sse")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+
+	test("consumer ignores failure on WS: transport still rolls back and rejects on completion", async () => {
+		class IgnoreFailureWs extends BaseMockWs {
+			send(data: string) {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				if (frame.type === "response.create") {
+					queueMicrotask(() => {
+						this.emit({
+							type: "response.metadata",
+							headers: { "x-codex-turn-state": "ignore_ts", "x-models-etag": "ignore_etag" },
+						});
+						this.emit({
+							type: "response.failed",
+							response: { error: { message: "Ignored failure" } },
+						});
+					});
+				}
+			}
+		}
+		global.WebSocket = IgnoreFailureWs as unknown as typeof WebSocket;
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_ignore_ws", "prior_ts", "prior_etag");
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_ignore_ws",
+			providerSessionState: pState,
+			preferWebsockets: true,
+		});
+
+		const events: unknown[] = [];
+		await expect(
+			(async () => {
+				for await (const event of stream) {
+					events.push(event);
+				}
+			})(),
+		).rejects.toThrow("provider error");
+
+		expect(events.length).toBeGreaterThan(0);
+		expect(getSessionTurnState(pState, "s_ignore_ws")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+
+	test("consumer ignores failure on direct SSE: transport still rolls back and rejects on completion", async () => {
+		const sse = [
+			`data: ${JSON.stringify({ type: "response.metadata", headers: { "x-codex-turn-state": "sse_ign_ts", "x-models-etag": "sse_ign_etag" } })}`,
+			`data: ${JSON.stringify({ type: "response.failed", response: { error: { message: "Ignored SSE failure" } } })}`,
+		].join("\n\n");
+
+		const fetchMock: FetchImpl = async () =>
+			new Response(sse, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"x-models-etag": "sse_ign_http_etag",
+					"x-codex-turn-state": "sse_ign_http_ts",
+				},
+			});
+
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_ignore_sse", "prior_ts", "prior_etag");
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_ignore_sse",
+			providerSessionState: pState,
+			preferWebsockets: false,
+			fetch: fetchMock,
+		});
+
+		const events: unknown[] = [];
+		await expect(
+			(async () => {
+				for await (const event of stream) {
+					events.push(event);
+				}
+			})(),
+		).rejects.toThrow("provider error");
+
+		expect(events.length).toBeGreaterThan(0);
+		expect(getSessionTurnState(pState, "s_ignore_sse")).toBe("prior_ts");
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+	test("raw API consumer: abort during buffered replay after first next() rejects and rolls back state", async () => {
+		class ReplayAbortWs extends BaseMockWs {
+			send(data: string) {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				if (frame.type === "response.create") {
+					queueMicrotask(() => {
+						this.emit({
+							type: "response.metadata",
+							headers: { "x-codex-turn-state": "abort_mid_ts", "x-models-etag": "abort_mid_etag" },
+						});
+						this.emit({
+							type: "response.output_item.done",
+							item: { type: "compaction", encrypted_content: "blob" },
+						});
+						this.emit({ type: "response.completed", response: { usage: { input_tokens: 10 } } });
+					});
+				}
+			}
+		}
+		global.WebSocket = ReplayAbortWs as unknown as typeof WebSocket;
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_replay_abort", undefined, "prior_etag");
+		const abortController = new AbortController();
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_replay_abort",
+			providerSessionState: pState,
+			preferWebsockets: true,
+			signal: abortController.signal,
+		});
+
+		const first = await stream.next();
+		expect(first.done).toBe(false);
+		expect(first.value).toMatchObject({ type: "response.metadata" });
+		expect(getSessionTurnState(pState, "s_replay_abort")).toBe("abort_mid_ts");
+		expect(getSessionModelsEtag(pState)).toBe("abort_mid_etag");
+
+		abortController.abort(new Error("caller canceled mid-replay"));
+
+		await expect(stream.next()).rejects.toThrow("caller canceled mid-replay");
+		expect(getSessionTurnState(pState, "s_replay_abort")).toBeUndefined();
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+
+	test("raw API consumer: abort after final yielded completed before final next() rejects and rolls back state", async () => {
+		class ReplayAbortAfterCompleteWs extends BaseMockWs {
+			send(data: string) {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				if (frame.type === "response.create") {
+					queueMicrotask(() => {
+						this.emit({
+							type: "response.metadata",
+							headers: { "x-codex-turn-state": "abort_post_ts", "x-models-etag": "abort_post_etag" },
+						});
+						this.emit({
+							type: "response.output_item.done",
+							item: { type: "compaction", encrypted_content: "blob" },
+						});
+						this.emit({ type: "response.completed", response: { usage: { input_tokens: 10 } } });
+					});
+				}
+			}
+		}
+		global.WebSocket = ReplayAbortAfterCompleteWs as unknown as typeof WebSocket;
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_replay_abort_post", undefined, "prior_etag");
+		const abortController = new AbortController();
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_replay_abort_post",
+			providerSessionState: pState,
+			preferWebsockets: true,
+			signal: abortController.signal,
+		});
+
+		const first = await stream.next();
+		expect(first.done).toBe(false);
+		expect(first.value).toMatchObject({ type: "response.metadata" });
+		expect(getSessionTurnState(pState, "s_replay_abort_post")).toBe("abort_post_ts");
+		expect(getSessionModelsEtag(pState)).toBe("abort_post_etag");
+
+		const second = await stream.next();
+		expect(second.done).toBe(false);
+		expect(second.value).toMatchObject({ type: "response.output_item.done" });
+
+		const third = await stream.next();
+		expect(third.done).toBe(false);
+		expect(third.value).toMatchObject({ type: "response.completed" });
+
+		// Caller aborts after receiving the completed event, before the final terminal next()
+		abortController.abort(new Error("caller canceled after completed"));
+
+		await expect(stream.next()).rejects.toThrow("caller canceled after completed");
+		expect(getSessionTurnState(pState, "s_replay_abort_post")).toBeUndefined();
+		expect(getSessionModelsEtag(pState)).toBe("prior_etag");
+	});
+
+	test("raw API consumer uncanceled control: consumes full replay successfully and commits metadata", async () => {
+		class ReplaySuccessControlWs extends BaseMockWs {
+			send(data: string) {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				if (frame.type === "response.create") {
+					queueMicrotask(() => {
+						this.emit({
+							type: "response.metadata",
+							headers: { "x-codex-turn-state": "ok_replay_ts", "x-models-etag": "ok_replay_etag" },
+						});
+						this.emit({
+							type: "response.output_item.done",
+							item: { type: "compaction", encrypted_content: "blob" },
+						});
+						this.emit({ type: "response.completed", response: { usage: { input_tokens: 10 } } });
+					});
+				}
+			}
+		}
+		global.WebSocket = ReplaySuccessControlWs as unknown as typeof WebSocket;
+		const pState = new Map<string, ProviderSessionState>();
+		seedPriorState(pState, "s_replay_ok", undefined, "prior_etag");
+		const abortController = new AbortController();
+
+		const stream = await openCodexCompactionEventStream(model, body, {
+			apiKey: token,
+			sessionId: "s_replay_ok",
+			providerSessionState: pState,
+			preferWebsockets: true,
+			signal: abortController.signal,
+		});
+
+		const first = await stream.next();
+		expect(first.done).toBe(false);
+		expect(first.value).toMatchObject({ type: "response.metadata" });
+
+		const second = await stream.next();
+		expect(second.done).toBe(false);
+		expect(second.value).toMatchObject({ type: "response.output_item.done" });
+
+		const third = await stream.next();
+		expect(third.done).toBe(false);
+		expect(third.value).toMatchObject({ type: "response.completed" });
+
+		const fourth = await stream.next();
+		expect(fourth.done).toBe(true);
+
+		expect(getSessionTurnState(pState, "s_replay_ok")).toBe("ok_replay_ts");
+		expect(getSessionModelsEtag(pState)).toBe("ok_replay_etag");
 	});
 });
