@@ -12,7 +12,7 @@
 
 ### Fixed
 
-- Fixed Shift+Enter submitting the prompt and Ctrl+Enter inserting a newline in Windows Terminal 1.24 and earlier; Shift+Enter now inserts a newline and Ctrl+Enter sends a follow-up, as on other platforms ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Shift+Enter and Ctrl+Enter arriving as plain Enter or a bare line feed in Windows Terminal 1.24 and earlier, by requesting win32-input-mode on native Windows consoles and decoding its key records ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a bracketed paste on the Windows console leaking its marker tails and submitting a partial prompt at each pasted newline, because decoded win32 key records skipped paste handling ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed AltGr characters (such as `[`, `]`, `{`, `}` on Hungarian and other international layouts) being dropped in Windows Terminal with the kitty keyboard protocol, where they instead triggered Alt shortcuts like word movement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a deadlock on Windows when a terminal pane closes by exiting immediately without waiting for stdout to drain when the terminal disconnects ([#107](https://github.com/Wladefant/veyyon/issues/107)).

@@ -146,10 +146,11 @@ function encodeKey(record: KeyRecord): string | null {
 			if (mod === 1) return "\t";
 			return mod === 2 ? "\x1b[Z" : `\x1b[9;${mod}u`;
 		case VK_BACK:
-			if (mod === 1) return "\x7f";
+			// Shift+Backspace is Backspace on every legacy terminal.
+			if (mod === 1 || mod === 2) return "\x7f";
 			return mod === 3 ? "\x1b\x7f" : `\x1b[127;${mod}u`;
 		case VK_ESCAPE:
-			return mod === 1 ? "\x1b" : `\x1b[27;${mod}u`;
+			return mod === 1 || mod === 2 ? "\x1b" : `\x1b[27;${mod}u`;
 		case VK_SPACE:
 			if (!ctrl && !alt) return " ";
 			return `\x1b[32;${mod}u`;

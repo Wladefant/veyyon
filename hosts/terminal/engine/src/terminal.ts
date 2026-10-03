@@ -1436,7 +1436,10 @@ export class ProcessTerminal implements Terminal {
 	#createWin32KeyBuffer(): StdinBuffer {
 		const buffer = new StdinBuffer({ timeout: 50 });
 		buffer.on("data", (sequence: string) => this.#inputHandler?.(sequence));
-		buffer.on("paste", (content: string) => this.#inputHandler?.(`\x1b[200~${content}\x1b[201~`));
+		// conhost reports a pasted CRLF as CR then LF records; fold the pair into one newline.
+		buffer.on("paste", (content: string) =>
+			this.#inputHandler?.(`\x1b[200~${content.replace(/\r\n/g, "\n")}\x1b[201~`),
+		);
 		return buffer;
 	}
 

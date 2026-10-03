@@ -51,6 +51,12 @@ describe("Win32InputModeDecoder", () => {
 		expect(matchesKey(decodeOne("\x1b[27;1;27;1;0;1_"), "escape")).toBe(true);
 	});
 
+	it("maps Shift+Backspace and Shift+Escape to plain Backspace and Escape", () => {
+		expect(decodeOne("\x1b[8;14;8;1;16;1_")).toBe("\x7f");
+		expect(decodeOne("\x1b[27;1;27;1;16;1_")).toBe("\x1b");
+		expect(matchesKey(decodeOne("\x1b[8;14;8;1;16;1_"), "backspace")).toBe(true);
+	});
+
 	it("keeps Ctrl+Shift+letter distinct from Ctrl+letter", () => {
 		const ctrlShiftP = decodeOne("\x1b[80;25;16;1;24;1_");
 		expect(matchesKey(ctrlShiftP, "ctrl+shift+p")).toBe(true);
@@ -118,7 +124,7 @@ describe("Win32InputModeDecoder", () => {
 // A character record as conhost emits it for typed or pasted text (VK 0, Uc = the code unit).
 function textRecords(text: string): string[] {
 	return Array.from(text, ch => {
-		if (ch === "\r" || ch === "\n") return ENTER;
+		if (ch === "\r") return ENTER;
 		const uc = ch.charCodeAt(0);
 		return `\x1b[0;0;${uc};1;0;1_`;
 	});
@@ -182,11 +188,11 @@ describe("ProcessTerminal win32-input-mode fallback", () => {
 
 		const open = [ESC_RECORD, ...textRecords("[200~")];
 		const close = [ESC_RECORD, ...textRecords("[201~")];
-		// CRLF pasted as two Enter records, as conhost reports it.
+		// A pasted CRLF: an Enter record, then a bare LF character record.
 		await harness.feed(...open, ...textRecords("one\r\ntwo"), ...close);
 		await harness.feed(ENTER);
 
-		expect(recorder.received).toEqual(["\x1b[200~one\r\rtwo\x1b[201~", "\r"]);
+		expect(recorder.received).toEqual(["\x1b[200~one\ntwo\x1b[201~", "\r"]);
 	});
 
 	it("prefers a late kitty reply and turns win32-input-mode back off", async () => {
