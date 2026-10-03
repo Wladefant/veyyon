@@ -1,7 +1,14 @@
 import type { FetchImpl, Usage } from "@veyyon/catalog/types";
 import type { ApiKey } from "../auth-retry";
 
-export const SPEECH_FORMATS = ["mp3", "wav", "pcm", "opus", "aac", "flac"] as const;
+export const SPEECH_FORMATS = [
+	"mp3",
+	"wav",
+	"pcm",
+	"opus",
+	"aac",
+	"flac",
+] as const;
 
 export type SpeechFormat = (typeof SPEECH_FORMATS)[number];
 

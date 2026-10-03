@@ -20,6 +20,41 @@ export const KNOWN_APIS = [
 export type KnownApi = (typeof KNOWN_APIS)[number];
 export type Api = KnownApi | (string & {});
 
+/** Catalog kinds used to isolate role-specific runners from session chat models. */
+export const MODEL_KINDS = [
+	"chat",
+	"tiny",
+	"image",
+	"tts",
+	"stt",
+	"search",
+	"judge",
+] as const;
+/** Technical capability of a catalog model; absent model kinds mean chat. */
+export type ModelKind = (typeof MODEL_KINDS)[number];
+/** Grounding transport available to chat models selected by the web role. */
+export type WebSearchGrounding =
+	| "gemini"
+	| "anthropic"
+	| "codex"
+	| "xai"
+	| "openrouter";
+/** Non-chat runner protocols accepted by catalog seeds, outside the chat dispatch union. */
+export const RUNNER_APIS = [
+	"local-inference",
+	"web-search",
+	"typesafe",
+	"openai-images",
+	"openrouter-images",
+	"xai-tts",
+	"openai-speech",
+] as const;
+
+/** Resolve a model's kind while preserving chat semantics for existing catalog rows. */
+export function modelKind(model: Pick<Model, "kind">): ModelKind {
+	return model.kind ?? "chat";
+}
+
 /**
  * Canonical thinking transports, as a value so the set can be enumerated at run
  * time. A transport says only how a chosen effort is ENCODED on the wire: a
@@ -248,7 +283,12 @@ export interface Usage {
 	};
 }
 
-export type OpenAIReasoningFormat = "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+export type OpenAIReasoningFormat =
+	| "openai"
+	| "openrouter"
+	| "zai"
+	| "qwen"
+	| "qwen-chat-template";
 
 /**
  * How each OpenAI-compatible dialect encodes "stop reasoning", as a value so
@@ -264,7 +304,8 @@ export const OPENAI_REASONING_DISABLE_MODES = [
 	"qwen-template-false",
 ] as const;
 
-export type OpenAIReasoningDisableMode = (typeof OPENAI_REASONING_DISABLE_MODES)[number];
+export type OpenAIReasoningDisableMode =
+	(typeof OPENAI_REASONING_DISABLE_MODES)[number];
 
 export type OpenAIStreamMarkupHealingPattern = "kimi" | "dsml" | "thinking";
 
@@ -450,6 +491,8 @@ export interface OpenAICompat {
 	 * true to opt a compatible gateway in, false to opt out.
 	 */
 	supportsServerCompaction?: boolean;
+	/** Whether Responses input accepts mid-conversation reasoning effort updates. Default: GPT-6 Astra only. */
+	supportsConfigurationUpdate?: boolean;
 	/** Strip leaked DeepSeek chat-template special tokens from visible content deltas. Default: auto-detected. */
 	stripDeepseekSpecialTokens?: boolean;
 	/** Heal leaked chat-template/tool-call/thinking markup from visible content deltas. Default: auto-detected. */
@@ -581,7 +624,9 @@ export interface VercelGatewayRouting {
 	order?: string[];
 }
 
-type ResolvedToolStrictMode = NonNullable<OpenAICompat["toolStrictMode"]> | "mixed";
+type ResolvedToolStrictMode =
+	| NonNullable<OpenAICompat["toolStrictMode"]>
+	| "mixed";
 
 /**
  * Fields whose meaning is identical across chat-completions and Responses surfaces.
@@ -677,6 +722,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "streamMarkupHealingPattern"
 			| "reasoningDeltasMayBeCumulative"
 			| "supportsServerCompaction"
+			| "supportsConfigurationUpdate"
 			| "emptyLengthFinishIsContextError"
 			| "usesOpenAIToolCallIdLimit"
 			| "promptCacheSessionHeader"
@@ -714,7 +760,8 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 	};
 
 /** Fully-resolved Responses-API compat view (same contract as `ResolvedOpenAICompat`). */
-export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompat {
+export interface ResolvedOpenAIResponsesCompat
+	extends ResolvedOpenAISharedCompat {
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
 	supportsImageDetailOriginal: boolean;
@@ -726,6 +773,7 @@ export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompa
 	 * so a second compatible host opts in with this data entry alone.
 	 */
 	supportsServerCompaction: boolean;
+	supportsConfigurationUpdate: boolean;
 	streamIdleTimeoutMs?: number;
 }
 
@@ -734,7 +782,8 @@ export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompa
  * (default) or Chat Completions (`VEYYON_OPENROUTER_RESPONSES=0`) with the same
  * model object, so its resolved compat must satisfy both handlers.
  */
-export type ResolvedOpenRouterCompat = ResolvedOpenAICompat & ResolvedOpenAIResponsesCompat;
+export type ResolvedOpenRouterCompat = ResolvedOpenAICompat &
+	ResolvedOpenAIResponsesCompat;
 
 /** Fully-resolved anthropic-messages compat view (same contract as `ResolvedOpenAICompat`). */
 export type ResolvedAnthropicCompat = Required<AnthropicCompat> & {
@@ -819,7 +868,10 @@ export type CompatOf<TApi extends Api> = TApi extends "openrouter"
 	? ResolvedOpenRouterCompat
 	: TApi extends "openai-completions"
 		? ResolvedOpenAICompat
-		: TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
+		: TApi extends
+					| "openai-responses"
+					| "azure-openai-responses"
+					| "openai-codex-responses"
 			? ResolvedOpenAIResponsesCompat
 			: TApi extends "anthropic-messages"
 				? ResolvedAnthropicCompat
@@ -832,6 +884,10 @@ export type CompatOf<TApi extends Api> = TApi extends "openrouter"
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
+	/** Role-specific runner capability; omitted for ordinary chat models. */
+	kind?: ModelKind;
+	/** Grounding transport supported by this chat model. */
+	webSearch?: WebSearchGrounding;
 	/**
 	 * Model id to send on the wire when it differs from `id`. Used by catalog
 	 * variants that present one upstream model under several local entries —
@@ -905,6 +961,18 @@ export interface Model<TApi extends Api = Api> {
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
 	contextWindow: number | null;
+	/**
+	 * Larger prompt window the model accepts when extended context is enabled.
+	 * {@link contextWindow} stays the default window; a catalog or discovery
+	 * source sets this only when the provider states a higher ceiling.
+	 */
+	maxContextWindow?: number;
+	/**
+	 * Bill multipliers per service tier for providers that scale the whole
+	 * request by tier (Codex: `flex` is half price, `priority` a premium). A
+	 * tier the record omits bills at 1x.
+	 */
+	serviceTierCost?: Readonly<Partial<Record<"flex" | "priority", number>>>;
 	maxTokens: number | null;
 	/**
 	 * When `true`, providers MUST omit `max_output_tokens` (Responses) /
@@ -981,7 +1049,8 @@ export interface Model<TApi extends Api = Api> {
  * vocabulary of `buildModel`. Identical to `Model` except `compat` carries the
  * sparse override shape and nothing is resolved yet.
  */
-export interface ModelSpec<TApi extends Api = Api> extends Omit<Model<TApi>, "compat" | "compatConfig" | "cost"> {
+export interface ModelSpec<TApi extends Api = Api>
+	extends Omit<Model<TApi>, "compat" | "compatConfig" | "cost"> {
 	/** Sparse model cost; normalized to {@link Model.cost} defaults by `buildModel`. */
 	cost?: Partial<Model<TApi>["cost"]>;
 	/** Sparse compatibility overrides; resolved into `Model.compat` by `buildModel`. */
