@@ -537,18 +537,13 @@ describe("AgentSession transient-error recovery replay safety", () => {
 				requestedModels.push(`${reqModel.provider}/${reqModel.id}`);
 				attempt++;
 				if (attempt === 1) {
-					return streamOpenAIAnthropicShim(
-						reqModel as Model<"openai-completions">,
-						ctx,
-						opts,
-						{
-							anthropicBaseUrl: "https://unused.local",
-							defaultFormat: "openai",
-							extraHeaders: () => {
-								throw new Error("fetch failed");
-							},
+					return streamOpenAIAnthropicShim(reqModel as Model<"openai-completions">, ctx, opts, {
+						anthropicBaseUrl: "https://unused.local",
+						defaultFormat: "openai",
+						extraHeaders: () => {
+							throw new Error("fetch failed");
 						},
-					);
+					});
 				}
 				return mock.stream(reqModel, ctx, opts);
 			},
