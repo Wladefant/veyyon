@@ -60,7 +60,7 @@ test("synchronous recovery preserves damaged pages and creates usable database",
 	expect(dirStat.isDirectory()).toBe(true);
 	expect(await fs.readFile(path.join(backupDir, "store.db"))).toEqual(damaged);
 	if (preservedBackupPath) {
-		expect(preservedBackupPath).toBe(path.join(backupDir, "store.db"));
+		expect(await fs.realpath(preservedBackupPath)).toBe(await fs.realpath(path.join(backupDir, "store.db")));
 	}
 
 	const rows = openSqliteDatabaseSync(dbPath, db => {
@@ -904,7 +904,7 @@ test.skipIf(process.platform !== "win32")(
 );
 
 test.skipIf(process.platform !== "win32")(
-	"regression: windows NTFS ADS case aliases share physical store and hashed quarantine guard",
+	"regression: Windows file and stream aliases share canonical recovery identity and pending guard",
 	async () => {
 		await using dir = await TempDir.create("@omp-corrupt-ads-aliases-");
 		const baseDb = dir.join("base.db");
@@ -919,34 +919,49 @@ test.skipIf(process.platform !== "win32")(
 			initDb.close();
 		}
 
-		// Build aliases covering drive letter case, basename case, stream case, directory case, and mixed variants
 		const resolved = path.resolve(adsPath);
-		const drive = resolved.slice(0, 1);
-		const altDrive = (drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()) + resolved.slice(1);
-
 		const baseDir = path.dirname(adsPath);
-		const upperDir = baseDir.toUpperCase();
-
-		const aliases = [
-			altDrive,
-			path.join(baseDir, "BASE.DB:stream.db"),
-			path.join(baseDir, "base.db:STREAM.DB"),
-			path.join(baseDir, "BASE.DB:STREAM.DB"),
-			path.join(baseDir, "Base.Db:Stream.Db"),
-			path.join(upperDir, "base.db:stream.db"),
-			path.join(upperDir, "BASE.DB:STREAM.DB"),
-			altDrive.slice(0, 2) + path.join(baseDir.slice(2), "BASE.DB:STREAM.DB"),
-			altDrive.slice(0, 2) + path.join(baseDir.slice(2), "base.db:STREAM.DB"),
+		const junction = dir.join("junction");
+		nodeFs.symlinkSync(baseDir, junction, "junction");
+		const shortDir = childProcess
+			.execFileSync("cmd.exe", ["/d", "/c", "for %I in (%SQLITE_ALIAS_DIR%) do @echo %~sI"], {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 5000,
+				env: { ...process.env, SQLITE_ALIAS_DIR: `"${baseDir}"` },
+			})
+			.trim();
+		const candidates = [
+			{ kind: "extended prefix", file: path.toNamespacedPath(resolved) },
+			{ kind: "device prefix", file: `\\\\.\\${resolved}`, optional: true },
+			{ kind: "drive case", file: resolved[0]!.toLowerCase() + resolved.slice(1) },
+			{ kind: "basename case", file: path.join(baseDir, "BASE.DB:stream.db") },
+			{ kind: "stream case", file: path.join(baseDir, "base.db:STREAM.DB") },
+			{ kind: "directory case", file: path.join(baseDir.toUpperCase(), "base.db:stream.db") },
+			{ kind: "forward slashes", file: resolved.replaceAll("\\", "/") },
+			{ kind: "8.3 parent", file: path.join(shortDir, "base.db:stream.db") },
+			{ kind: "junction", file: path.join(junction, "base.db:stream.db") },
+			{ kind: "trailing dot", file: path.join(baseDir, "base.db.:stream.db"), optional: true },
+			{ kind: "trailing space", file: path.join(baseDir, "base.db :stream.db"), optional: true },
+			{ kind: "UNC admin share", file: `\\\\localhost\\${resolved[0]}$${resolved.slice(2)}`, optional: true },
 		];
+		const aliases: string[] = [];
 
 		// 2. Verify all aliases read the SAME store directly with Bun
-		for (const alias of aliases) {
-			const db = new Database(alias);
+		for (const candidate of candidates) {
+			let db: Database | undefined;
 			try {
+				db = new Database(candidate.file);
 				const row = db.query<{ v: string }, []>("SELECT v FROM sentinel").get();
+				if (row?.v !== "initial-value") throw new Error("filename does not resolve to the sentinel store");
 				expect(row).toEqual({ v: "initial-value" });
+				aliases.push(candidate.file);
+				console.log(`ALIAS ${candidate.kind}: same physical store`);
+			} catch (error) {
+				if (!candidate.optional) throw error;
+				console.log(`ALIAS ${candidate.kind}: not a supported same-store alias: ${String(error)}`);
 			} finally {
-				db.close();
+				db?.close();
 			}
 		}
 
@@ -1070,6 +1085,21 @@ test.skipIf(process.platform !== "win32")(
 					),
 				).rejects.toThrow(/quarantine.*pending|pending.*quarantine/i);
 				expect(asyncOptRan).toBe(false);
+			}
+			nodeFs.unlinkSync(adsPath);
+			for (const alias of aliases) {
+				for (const recoverCorruption of [false, true]) {
+					const initialize = (db: Database) => {
+						db.close();
+						throw new Error("pending guard allowed initialization after stream removal");
+					};
+					expect(() => openSqliteDatabaseSync(alias, initialize, { recoverCorruption })).toThrow(
+						/interrupted quarantine/,
+					);
+					await expect(openSqliteDatabase(alias, initialize, { recoverCorruption })).rejects.toThrow(
+						/interrupted quarantine/,
+					);
+				}
 			}
 		} finally {
 			nodeFs.unlinkSync(hashedMarker);

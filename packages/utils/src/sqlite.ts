@@ -98,14 +98,62 @@ function isTransientSqliteStore(dbPath: string): boolean {
 }
 
 function recoveryFileStem(dbPath: string): string {
-	// NTFS stream names are valid SQLite files but cannot name lock directories.
-	if (process.platform === "win32" && path.basename(dbPath).includes(":")) {
-		return path.join(
-			path.dirname(dbPath),
-			`.sqlite-${crypto.createHash("sha256").update(path.resolve(dbPath).toLowerCase()).digest("hex")}`,
-		);
+	if (process.platform !== "win32") return dbPath;
+	const resolved = path.resolve(dbPath);
+	const basename = path.basename(resolved);
+	const streamAt = basename.indexOf(":");
+	const baseName = streamAt < 0 ? basename : basename.slice(0, streamAt);
+	const stream = streamAt < 0 ? "" : basename.slice(streamAt).toLowerCase();
+	const basePath = path.join(path.dirname(resolved), baseName);
+	let canonicalBase: string;
+	let baseExists = true;
+	try {
+		canonicalBase = fs.realpathSync.native(basePath);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+		baseExists = false;
+		let link: string | undefined;
+		try {
+			link = fs.readlinkSync(basePath);
+		} catch (linkError) {
+			if (!isEnoent(linkError) && (linkError as NodeJS.ErrnoException).code !== "EINVAL") throw linkError;
+		}
+		if (link) {
+			canonicalBase = recoveryFileStem(path.resolve(path.dirname(basePath), link));
+		} else {
+			const parent = fs.realpathSync.native(path.dirname(basePath));
+			// Ordinary Win32 names ignore trailing dots/spaces; extended names do not.
+			const name = resolved.startsWith("\\\\?\\") ? baseName : baseName.replace(/[. ]+$/, "");
+			canonicalBase = path.join(parent, name);
+		}
 	}
-	return dbPath;
+	canonicalBase = canonicalBase
+		.replace(/^\\\\[?.]\\UNC\\/i, "\\\\")
+		.replace(/^\\\\[?.]\\/, "")
+		.toLowerCase();
+	// Native realpath retains UNC administrative-share spelling. Fold it into
+	// a drive spelling only after proving both names identify the same object.
+	const share = /^\\\\[^\\]+\\([a-z])\$(\\.*)$/i.exec(canonicalBase);
+	if (share) {
+		const driveBase = `${share[1]}:${share[2]}`;
+		try {
+			const unc = fs.statSync(baseExists ? canonicalBase : path.dirname(canonicalBase));
+			const drive = fs.statSync(baseExists ? driveBase : path.dirname(driveBase));
+			if (unc.dev === drive.dev && unc.ino === drive.ino) canonicalBase = driveBase;
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+	}
+	if (!stream) return canonicalBase;
+	// Resolve the base file, not its ADS: aliases share a key even after the
+	// stream is removed. NTFS streams cannot themselves name lock directories.
+	return path.join(
+		path.dirname(canonicalBase),
+		`.sqlite-${crypto
+			.createHash("sha256")
+			.update(canonicalBase + stream)
+			.digest("hex")}`,
+	);
 }
 
 function sqliteFileIdentity(dbPath: string): SqliteFileIdentity {
