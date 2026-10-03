@@ -90,12 +90,13 @@ describe("the registry once the defaults are loaded", () => {
 		]);
 	});
 
-	/** The four providers that rank their credentials by their own rules, and only those four. */
-	it("registers exactly the four ranking strategies", () => {
+	/** The five providers that rank their credentials by their own rules, and only those five. */
+	it("registers exactly the five ranking strategies", () => {
 		expect(DEFAULT_RANKING_STRATEGIES.map(([provider]) => provider).sort()).toEqual([
 			"anthropic",
 			"google-antigravity",
 			"openai-codex",
+			"opencode-go",
 			"zai",
 		]);
 		for (const [provider, strategy] of DEFAULT_RANKING_STRATEGIES) {

@@ -51,6 +51,10 @@ import type { CmuxSocketClient } from "./socket-client";
 // deadline is a different concept from the whole-tool timeout.
 const DEFAULT_OP_TIMEOUT_MS = 30_000;
 
+/** Why a cmux tab has no storage state: its surface shares the cmux app's session. */
+const CMUX_HAS_NO_STORAGE_STATE =
+	"Storage state needs the headless browser: a cmux tab runs in the cmux app's own session. Open the tab without app.cmux.";
+
 interface ScreenshotOptions {
 	selector?: string;
 	fullPage?: boolean;
@@ -526,6 +530,15 @@ export class CmuxTab {
 
 	async scroll(dx: number, dy: number): Promise<void> {
 		await this.#request("browser.scroll", { dx, dy });
+	}
+
+	/** A cmux surface runs in the cmux app's own session, whose cookies the tab cannot read or write. */
+	async storageState(_opts?: { path?: string }): Promise<never> {
+		throw new ToolError(CMUX_HAS_NO_STORAGE_STATE);
+	}
+
+	async loadStorageState(_stateOrPath: unknown): Promise<never> {
+		throw new ToolError(CMUX_HAS_NO_STORAGE_STATE);
 	}
 
 	async waitFor(selector: string, opts?: { timeout?: number }): Promise<CmuxElementHandle> {

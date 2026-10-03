@@ -217,6 +217,8 @@ export class AdvisorRoster {
 	#yieldQueueUnsubscribe: (() => void) | undefined;
 	/** Live advisors. Empty when no advisor is active. */
 	#advisors: ActiveAdvisor[] = [];
+	/** Headless print-mode drain preserves advice without starting hidden turns. */
+	#preserveAdvice = false;
 	/** Provider-facing UUIDv7 identities keyed by primary provider session and advisor slug. */
 	readonly #providerSessionIds = new Map<string, string>();
 	/** Aggregate of the most recent stop's recorder closes; awaited by dispose() and
@@ -372,6 +374,26 @@ export class AdvisorRoster {
 	/** A user-initiated prompt or queued message resumes, so advice may wake the primary again. */
 	allowAutoResume(): void {
 		this.#autoResumeSuppressed = false;
+	}
+
+	/** Prevent advisor notes from starting hidden primary turns during headless drain. */
+	prepareForHeadlessDrain(): void {
+		this.#preserveAdvice = true;
+	}
+
+	/**
+	 * Wait for active advisor reviews to drain before shutdown.
+	 */
+	async waitForCatchup(timeoutMs: number): Promise<{
+		results: boolean[];
+		abandoned: Array<{ name: string; backlog: number }>;
+	}> {
+		const results = await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(timeoutMs, 1)));
+		const abandoned = this.#advisors
+			.map((advisor, index) => ({ name: advisor.name, backlog: advisor.runtime.backlog, caughtUp: results[index] }))
+			.filter(a => a.caughtUp === false && a.backlog > 0)
+			.map(({ name, backlog }) => ({ name, backlog }));
+		return { results, abandoned };
 	}
 
 	/** Remove advisor concern/blocker cards from the agent-core steer/follow-up
@@ -920,6 +942,7 @@ export class AdvisorRoster {
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
 			autoResumeSuppressed: this.#autoResumeSuppressed,
+			preserveOnly: this.#preserveAdvice,
 			// Key on the live agent-core loop, not session `isStreaming` (which also
 			// counts in-flight prompts during post-turn unwind). Only a running
 			// loop consumes a steer at its next boundary.

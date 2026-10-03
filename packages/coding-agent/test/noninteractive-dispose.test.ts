@@ -8,7 +8,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import { TempDir } from "@veyyon/utils";
 import { type PrintModeSession, runPrintMode } from "../src/modes/print-mode";
-import type { AgentSession } from "../src/session/agent-session";
+
 import * as telemetryExport from "../src/telemetry-export";
 
 /** Stand-in for `process.exit`: it terminates, so nothing after it should run. */
@@ -52,6 +52,11 @@ describe("print mode disposes the session before exit", () => {
 			obfuscateProviderText: (text: string) => text,
 			state: { messages: [errorMsg] },
 			sessionManager: { getHeader: () => undefined },
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => {
+				order.push("catchup");
+				return true;
+			},
 			dispose: async () => {
 				order.push("dispose");
 			},
@@ -62,6 +67,9 @@ describe("print mode disposes the session before exit", () => {
 			throw new ProcessExit(code);
 		}) as never);
 		const stderrSpy = spyOn(process.stderr, "write").mockImplementation((() => true) as never);
+		const flushSpy = spyOn(telemetryExport, "flushTelemetryExport").mockImplementation(async () => {
+			order.push("flush");
+		});
 		try {
 			await runPrintMode(session, { mode: "text", initialMessage: "hi" });
 		} catch (err) {
@@ -69,9 +77,10 @@ describe("print mode disposes the session before exit", () => {
 		} finally {
 			exitSpy.mockRestore();
 			stderrSpy.mockRestore();
+			flushSpy.mockRestore();
 		}
 
-		expect(order).toEqual(["dispose", "exit"]);
+		expect(order).toEqual(["catchup", "flush", "dispose", "exit"]);
 	});
 
 	it(
