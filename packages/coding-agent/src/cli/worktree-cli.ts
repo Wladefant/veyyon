@@ -18,8 +18,20 @@
 import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { errorMessage, formatCount, getWorktreesDir, isEnoent } from "@veyyon/utils";
+import * as natives from "@veyyon/natives";
+import { errorMessage, formatCount, getWorktreesDir, isEnoent, isProcessInstanceAlive } from "@veyyon/utils";
 import chalk from "chalk";
+import {
+	ISOLATION_CLAIM_FILE,
+	ISOLATION_OWNER_FILE,
+	isAbandonedEmptyReservation,
+	isolationClaimIsLive,
+	RETAINED_BACKEND_FILE,
+	readIsolationOwner,
+	readRetainedMountBackend,
+	tryWithIsolationLifecycleLock,
+} from "../task/isolation-ownership";
+import { isTaskIsolationDir } from "../task/worktree";
 import * as git from "../utils/git";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
@@ -57,6 +69,29 @@ export interface ClearWorktreesOptions {
 	/** Print what would be removed without touching the filesystem. */
 	dryRun: boolean;
 	json: boolean;
+}
+
+async function stopRetainedMount(dir: string): Promise<void> {
+	const backend = await readRetainedMountBackend(dir);
+	if (backend === undefined) return;
+	if (backend === natives.IsoBackendKind.Projfs) {
+		// Projfs stop owns process-local handles; a fresh CLI cannot stop a live projection.
+		throw new Error("Cannot stop retained Projfs from this process; workspace left intact.");
+	}
+	let found = false;
+	for (const name of TASK_ISOLATION_MOUNT_DIRS) {
+		const candidate = path.join(dir, name);
+		const stat = await fs.stat(candidate).catch(error => {
+			if (isEnoent(error)) return undefined;
+			throw error;
+		});
+		if (!stat?.isDirectory()) continue;
+		await natives.isoStop(backend, candidate);
+		found = true;
+	}
+	if (!found) {
+		throw new Error("Retained isolation mount directory is missing; workspace left intact.");
+	}
 }
 
 export async function listWorktrees(options: ListWorktreesOptions): Promise<void> {
@@ -123,6 +158,60 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 				if (!removed) {
 					await fs.rm(target.path, { recursive: true, force: true });
 					parentsToPrune.add(target.parentRepo);
+				}
+			} else if (target.kind === "task-isolation") {
+				const lockResult = await tryWithIsolationLifecycleLock(target.path, async () => {
+					const stat = await statPath(target.path);
+					if (!stat?.found) return;
+
+					if (await isAbandonedEmptyReservation(target.path)) {
+						await fs.rm(target.path, { recursive: true, force: true });
+						return;
+					}
+					const sidecarStat = await statPath(path.join(target.path, RETAINED_BACKEND_FILE));
+					const hasSidecar = sidecarStat?.found?.isFile();
+					const owner = await readIsolationOwner(target.path).catch(() => null);
+
+					if (!hasSidecar) {
+						if (owner && isProcessInstanceAlive(owner.pid, owner.startIdentity)) {
+							throw new Error(
+								`Missing retained backend metadata in ${target.path}; refusing removal (active live owner PID ${owner.pid})`,
+							);
+						}
+						throw new Error(`Missing retained backend metadata in ${target.path}; refusing removal`);
+					}
+					const initialStat = stat.found;
+					const initialToken = owner?.token;
+
+					await stopRetainedMount(target.path);
+
+					const currentStat = await statPath(target.path);
+					if (!currentStat?.found) return;
+					if (
+						initialStat.ino !== 0 &&
+						currentStat.found.ino !== 0 &&
+						(currentStat.found.dev !== initialStat.dev || currentStat.found.ino !== initialStat.ino)
+					) {
+						throw new Error(
+							`Isolation directory instance changed during cleanup: ${target.path}; refusing removal`,
+						);
+					}
+					if (initialToken !== undefined) {
+						const currentOwner = await readIsolationOwner(target.path).catch(() => null);
+						if (currentOwner?.token !== initialToken) {
+							throw new Error(
+								`Isolation directory instance changed during cleanup: ${target.path}; refusing removal`,
+							);
+						}
+					}
+
+					await fs.rm(target.path, { recursive: true, force: true });
+				});
+
+				if (!lockResult.acquired) {
+					throw new Error(
+						`Missing retained backend metadata in ${target.path}; refusing removal (lock unavailable or workspace in use)`,
+					);
 				}
 			} else {
 				await fs.rm(target.path, { recursive: true, force: true });
@@ -251,6 +340,8 @@ async function statPath(target: string): Promise<{ found: Stats | null } | undef
 }
 
 async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
+	// A slot mid-setup holds no mount dir yet; the process that claimed it owns it.
+	if (await isolationClaimIsLive(dir)) return { path: dir, kind: "task-isolation" };
 	const gitEntry = path.join(dir, ".git");
 	const gitStat = await statPath(gitEntry);
 	if (!gitStat) {
@@ -258,6 +349,23 @@ async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
 	}
 	if (gitStat.found?.isFile()) {
 		return classifyPrCheckout(dir, gitEntry);
+	}
+	const hasOwnerRecord = (await statPath(path.join(dir, ISOLATION_OWNER_FILE)))?.found?.isFile();
+	const hasRetainedSidecar = (await statPath(path.join(dir, RETAINED_BACKEND_FILE)))?.found?.isFile();
+	const hasClaimFile = (await statPath(path.join(dir, ISOLATION_CLAIM_FILE)))?.found?.isFile();
+	if (isTaskIsolationDir(dir) || hasOwnerRecord || hasRetainedSidecar || hasClaimFile) {
+		for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
+			const mountPath = path.join(dir, mountDir);
+			const mountStat = await statPath(mountPath);
+			if (!mountStat) {
+				return { path: dir, kind: "task-isolation", undeterminedReason: `cannot stat ${mountPath}` };
+			}
+		}
+		return {
+			path: dir,
+			kind: "task-isolation",
+			orphanReason: "task-isolation leftover (no live task owns it)",
+		};
 	}
 	for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
 		const mountPath = path.join(dir, mountDir);
