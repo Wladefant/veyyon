@@ -10,9 +10,8 @@ import type { AssistantMessage, ImageContent, Model } from "@veyyon/ai";
 import { logger, postmortem, sanitizeText } from "@veyyon/utils";
 import { EXIT_FAILURE, EXIT_INTERRUPTED } from "../cli/exit-codes";
 import { awaitStdoutDrain } from "../cli/stdout-drain";
-import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import type { ResolvedModelRoleValue } from "../config/model-resolver";
-import type { ConfiguredThinkingLevel } from "../thinking";
+import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import { transformProviderPayload } from "../provider-boundary";
 import { SECRET_SPEND_NOTICE_SOURCE } from "../secrets/notices";
 import type { AgentSession } from "../session/agent-session";
@@ -21,6 +20,7 @@ import { isSilentAbort } from "../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../slash-commands/types";
 import { flushTelemetryExport } from "../telemetry-export";
+import type { ConfiguredThinkingLevel } from "../thinking";
 import { initializeExtensions } from "./runtime-init";
 
 /**
@@ -270,11 +270,7 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 		if (typeof session.resolveRoleModelWithThinking === "function") {
 			const resolved = session.resolveRoleModelWithThinking("plan");
 			if (resolved) {
-				const transition = resolvePlanModelTransition(
-					session.model as Model | undefined,
-					resolved,
-					false,
-				);
+				const transition = resolvePlanModelTransition(session.model as Model | undefined, resolved, false);
 				if (transition.kind === "thinking") {
 					session.setThinkingLevel?.(transition.thinkingLevel);
 				} else if (transition.kind === "apply") {

@@ -183,7 +183,6 @@ describe("print mode working indicator", () => {
 		expect(modeChanges).toEqual([{ mode: "plan", data: { planFilePath: "local://PLAN.md" } }]);
 	});
 
-
 	it("does not write the text-mode working indicator in JSON mode while the prompt is pending", async () => {
 		const delayed = createDelayedSession(makeAssistantMessage("json answer"));
 		const run = runPrintMode(delayed.session, { mode: "json", initialMessage: "hello" });
