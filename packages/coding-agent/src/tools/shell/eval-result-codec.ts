@@ -22,6 +22,7 @@ import {
 	resultTextSpan,
 	sliceResultSpan,
 } from "../core/output-notice";
+import { EVAL_DISPLAY_VERSION, formatDisplayJson } from "./eval-display";
 
 /** The tag a written line carries in place of top-level `statusEvents`: the first cell's events. */
 export const FROM_CELL0 = "cell0";
@@ -58,6 +59,28 @@ function slimCells(cells: unknown[], body: string): unknown[] {
 /** How an eval result is written to a session file and read back. */
 export const evalResultCodec: ToolResultCodec = {
 	toolName: "eval" satisfies BuiltinToolName,
+	async migrate(details, context) {
+		if (!isRecord(details) || !Array.isArray(details.jsonOutputs)) return false;
+		if (details.displayVersion === EVAL_DISPLAY_VERSION) return false;
+		if (details.displayVersion !== undefined && details.displayVersion !== 0) {
+			throw new Error(`Unsupported eval display version: ${details.displayVersion}`);
+		}
+		const migrated: unknown[] = [];
+		for (const value of details.jsonOutputs) {
+			const formatted = formatDisplayJson(value);
+			if (!formatted.truncated) {
+				migrated.push(value);
+				continue;
+			}
+			// Commit the bounded value only after atomic artifact publication succeeds.
+			const artifactId = await context.saveArtifact(formatted.fullText, "eval-display");
+			if (!isRecord(formatted.detailsValue)) throw new Error("Invalid bounded eval display representation");
+			migrated.push({ ...formatted.detailsValue, artifactId });
+		}
+		details.jsonOutputs = migrated;
+		details.displayVersion = EVAL_DISPLAY_VERSION;
+		return true;
+	},
 	slim(details, content) {
 		if (!isRecord(details)) return details;
 		const body = firstResultText(content);
