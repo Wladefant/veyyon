@@ -308,6 +308,85 @@ export function isolationBreaches(): Breach[] {
 }
 
 /**
+ * The opt-in for the real-browser suites, default off.
+ *
+ * The sandbox is a Linux boundary with no Chromium, so the suites that drive a real browser can
+ * never run inside it, and a suite that always skips proves nothing about a 2k-line browser port.
+ * This is a narrow, explicit alternative that keeps the property the gate exists for -- no suite
+ * writes into the operator's real home -- by a different proof: the process's own home is a
+ * disposable directory the launcher made and named for the purpose, the run names only the
+ * browser suites, and the real-data tripwire stays loaded beside it.
+ *
+ * Every condition is required, and each one can only make the run harder to admit:
+ *
+ * 1. `VEYYON_TEST_HOST_BROWSER=1`, spelled out, so it is never on by accident or by `$HOME/.env`.
+ * 2. `PUPPETEER_EXECUTABLE_PATH` is an absolute path to an existing file: the host's own browser.
+ * 3. Every test path on the command line is one of {@link HOST_BROWSER_SUITES}, and there is at
+ *    least one. A bare `bun test` or a whole directory is refused.
+ * 4. `os.homedir()` is a directory whose name starts with {@link HOST_BROWSER_HOME_PREFIX}: not
+ *    the account's home, so the bare-name `.veyyon*` writes that left 136 directories land in a
+ *    directory made to be thrown away.
+ * 5. A `VEYYON_CONFIG_DIR` must resolve inside that disposable home.
+ *
+ * Clauses A-D and the sandbox marker are what this mode replaces: they prove the real home
+ * UNREACHABLE, and on a host it is readable by construction. The real-data tripwire preloaded
+ * beside this gate is unchanged and still refuses every mutating call that names the real home,
+ * so the property that survives is "no write reaches it", not "it cannot be read".
+ */
+export const HOST_BROWSER_ENV = "VEYYON_TEST_HOST_BROWSER";
+
+/** The prefix a disposable home must carry for a host-browser run. */
+export const HOST_BROWSER_HOME_PREFIX = "veyyon-host-browser-home-";
+
+/** The only suites a host-browser run may name: the ones gated on a launchable Chromium. */
+export const HOST_BROWSER_SUITES: readonly string[] = [
+	"a-browser-context-keeps-its-own-session-and-a-state-file-restores-it.test.ts",
+	"browser-tab-evaluate.test.ts",
+	"tab-fill-replaces-a-value-with-one-real-edit.test.ts",
+];
+
+/**
+ * Every reason a host-browser run is not admitted. Empty means admitted.
+ *
+ * `testPaths` are the command-line arguments after the runner's own flags. Pure over its inputs so
+ * the gate suite can assert each condition without spawning.
+ */
+export function hostBrowserBreaches(testPaths: readonly string[], env: NodeJS.ProcessEnv, home: string): string[] {
+	const reasons: string[] = [];
+	const executable = env.PUPPETEER_EXECUTABLE_PATH;
+	if (!executable || !path.isAbsolute(executable)) {
+		reasons.push("PUPPETEER_EXECUTABLE_PATH must be an absolute path to the host's Chromium");
+	} else {
+		try {
+			if (!fsModule.statSync(executable).isFile()) throw new Error("not a file");
+		} catch {
+			reasons.push(`PUPPETEER_EXECUTABLE_PATH (${executable}) is not an existing file`);
+		}
+	}
+	if (testPaths.length === 0) {
+		reasons.push("no test path was named; a host-browser run names the browser suites explicitly");
+	}
+	for (const testPath of testPaths) {
+		if (!HOST_BROWSER_SUITES.includes(path.basename(testPath))) {
+			reasons.push(`${testPath} is not a browser suite (${HOST_BROWSER_SUITES.join(", ")})`);
+		}
+	}
+	if (!path.basename(home).startsWith(HOST_BROWSER_HOME_PREFIX)) {
+		reasons.push(
+			`os.homedir() (${home}) is not a disposable home: its name must start with ${HOST_BROWSER_HOME_PREFIX}`,
+		);
+	}
+	const override = env.VEYYON_CONFIG_DIR;
+	if (override !== undefined && override.trim() !== "") {
+		const resolved = path.isAbsolute(override) ? path.resolve(override) : path.resolve(home, override);
+		if (!isUnder(resolved, home)) {
+			reasons.push(`VEYYON_CONFIG_DIR (${resolved}) resolves outside the disposable home`);
+		}
+	}
+	return reasons;
+}
+
+/**
  * The refusal, as text.
  *
  * Separate from the exit so the gate suite can assert the wording without spawning, and
@@ -334,7 +413,8 @@ export function refusalMessage(argv: readonly string[], breaches: readonly Breac
 		`\n` +
 		`There is no flag to skip this, and setting ${SANDBOX_MARKER_ENV} by hand does not help: the checks above\n` +
 		`read the filesystem, and no environment variable can make a directory unreadable. If you are seeing this\n` +
-		`from inside the sandbox, the sandbox failed to isolate and the run must not continue.\n`
+		`from inside the sandbox, the sandbox failed to isolate and the run must not continue.\n` +
+		`The one exception is the real-browser suites, which a host with Chromium may run under ${HOST_BROWSER_ENV}=1; see docs/internal/testing.md.\n`
 	);
 }
 
@@ -349,6 +429,18 @@ export function refusalMessage(argv: readonly string[], breaches: readonly Breac
  */
 export function enforceIsolationOrExit(): void {
 	const argv = ["bun", "test", ...process.argv.slice(1)];
+	if (process.env[HOST_BROWSER_ENV] === "1") {
+		const testPaths = process.argv.slice(1).filter(arg => !arg.startsWith("-"));
+		const reasons = hostBrowserBreaches(testPaths, process.env, osModule.homedir());
+		// Clauses A-D prove the real home UNREACHABLE, which a host run cannot: the operator's home is
+		// readable by construction. What stands in for them is the disposable home, the suite
+		// allowlist and the config-dir check above, plus the real-data tripwire loaded beside this
+		// gate, which refuses every mutating fs/sqlite call that names the real home.
+		const breaches: Breach[] = reasons.map(reason => ({ clause: "C", path: "(host-browser)", detail: reason }));
+		if (breaches.length === 0) return;
+		process.stderr.write(refusalMessage(argv, breaches));
+		process.exit(1);
+	}
 	if (!process.env[SANDBOX_MARKER_ENV]) {
 		process.stderr.write(
 			refusalMessage(argv, [
