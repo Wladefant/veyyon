@@ -4,12 +4,20 @@
 
 ### Added
 
+- Registered DeepInfra as a built-in provider with chat-completion API key validation ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added core image generation data types and metadata contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
+- Added image response decoding, data URL formatting, and dimension mapping utilities ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
+- Added image HTTP transport with bearer token confinement and case-variant header normalization ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c, cfa658186db0af5f91055d953431b64e5e25eff1).
+- Added OpenAI and xAI speech adapters and synthesizeSpeech entrypoint ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
+- Added speech synthesis types and transport with bearer confinement and authentication retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c, cfa658186db0af5f91055d953431b64e5e25eff1).
 - Added the StepFun provider (`stepfun`) registry definition with an API-key login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Abliteration, Meta Model API, and Muse Code provider definitions and login transports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the GMI Cloud provider (`gmi-cloud`) registry definition with an API-key paste login ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Supported zstd request body compression for official Codex SSE endpoints, falling back to uncompressed JSON on encoding rejection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Billed Codex service tiers from the model's `serviceTierCost` before the historical flex and priority rates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added stable conversation-effort planning for Responses configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added Responses wire types for conversation reasoning configuration updates ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Kept Responses request reasoning effort stable while replaying later effort changes inside Astra conversations ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Extracted shared auth-gateway request dispatch, credential resolution, account identity, and abort mirroring helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7a68adf5137c992f6a8cb016bbf8959d1613b41c).
 - Shared gateway usage-limit blocking and authentication-failure credential invalidation across request adapters.
 - Honored injected gateway transports for native and translated requests, in both streaming and completed responses.
@@ -40,6 +48,9 @@
 - Fixed Anthropic usage reports carrying the organization id as their account id, which left every account row empty on the Accounts screen once a second Anthropic account was signed in ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Prevented crashes during Codex WebSocket cleanup when closing stale sockets with ERR_SOCKET_CLOSED ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed Codex turn-state lifecycle to isolate compatibility-scoped cells and clear stale tokens on fresh non-compaction turns ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Preserved Codex WebSocket append state across throttling rejections and gated retry baselines on completed responses ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 73b684511bf60018fff14712a0016672419f9389).
+- Distinguished concrete credentials from ambient AWS and Vertex sources during startup model selection ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Codex SSE request retries to re-serialize payloads per attempt, preserving onPayload hooks and zstd compression compatibility ([Refs #343](https://github.com/Wladefant/veyyon/pull/343)).
 - Fixed Codex stream close retries gating on committed visible content and emitted deltas rather than open empty blocks, emitting balancing end events before replay and classifying premature closes as stream corruption ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Corrected auth gateway video modality types and merged Codex continuation fixtures; provider behavior is unchanged.
