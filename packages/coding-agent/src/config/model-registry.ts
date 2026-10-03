@@ -1157,7 +1157,11 @@ export class ModelRegistry {
 	#resolveCommandBackedApiKey(provider: string): CommandApiKeyResolution {
 		const keyConfig = this.#customProviderApiKeys.get(provider);
 		if (!isConfigValueCommand(keyConfig)) return { configured: false };
-		const fallback = this.#runtimeProviderApiKeys.get(provider)?.fallback ?? false;
+		const runtimeKey = this.#runtimeProviderApiKeys.get(provider);
+		// Fallback ownership follows the key actually installed: a static
+		// models.json command that replaced the extension key is not a fallback.
+		const fallback =
+			runtimeKey?.keyConfig === keyConfig && runtimeKey.fallback;
 		const value = resolveConfigValue(
 			keyConfig,
 			`API key for provider "${provider}"`,
