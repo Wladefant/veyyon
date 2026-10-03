@@ -2075,7 +2075,7 @@ class CodexStreamProcessor {
 							transport: this.runtime.transport,
 							terminalEventSeen: false,
 							unexpectedStreamEnd: true,
-							sentTurnStateHeader: Boolean(this.requestContext.websocketState?.turnState),
+							sentTurnStateHeader: Boolean(this.requestContext.turnState.value),
 							sentModelsEtagHeader: Boolean(this.requestContext.websocketState?.modelsEtag),
 						});
 					throw new CodexProviderStreamError("Codex stream ended before terminal completion event", {
