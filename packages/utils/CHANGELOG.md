@@ -66,6 +66,7 @@
 
 ### Fixed
 
+- Autocomplete matches skill names at hyphen-delimited boundaries in both leading and mid-prompt completions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 ### Fixed
 - Prioritize exact slash-command aliases over earlier same-prefix commands in sync autocomplete so `/q` resolves to `quit` rather than `queue` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
