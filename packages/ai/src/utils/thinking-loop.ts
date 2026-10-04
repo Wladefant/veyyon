@@ -170,44 +170,47 @@ function describeVerbatimRepeat(unit: string, count: number): string {
  * stream that aborts on the first hit and never right for a run buried mid-text behind a tidy
  * closing paragraph. Re-asking the tail question at every offset would be quadratic (900-char window
  * × 200 candidate lengths × every position), so the run is found directly: for each unit length,
- * walk the positions where `text[i]` equals `text[i + len]` and measure how far that agreement
+ * find the positions where `text[i]` equals `text[i + len]` and measure how far that agreement
  * holds. An unbroken agreement of `n` chars means the text is periodic with period `len` across
  * `n + len` chars, which is `(n + len) / len` back-to-back repeats. The shortest length that clears
  * the floors wins, so the reported unit is the repeat itself and not a multiple of it.
+ *
+ * A run clears the floors only when its agreement reaches `floor` positions, so every such run
+ * covers one of the positions probed `floor` apart. Only those positions are compared until one
+ * agrees, and the run around it is measured then: clean text costs about one comparison per char
+ * across all 199 lengths instead of one per char per length.
  *
  * Only this verbatim path applies. The segment-similarity and lexical-stall heuristics are
  * calibrated against reasoning streams, where restating a paragraph is itself the defect; a summary
  * restates by construction, so those two would reject good summaries.
  */
 export function detectDegenerateRepetition(text: string): string | null {
-	if (text.length < VERBATIM_MIN_REPEATED_CHARS) return null;
-	for (let len = 2; len <= VERBATIM_MAX_UNIT && text.length >= len * 4; len++) {
-		let runStart = 0;
-		let agreement = 0;
-		for (let i = 0; i + len <= text.length; i++) {
-			if (i + len < text.length && text.charCodeAt(i) === text.charCodeAt(i + len)) {
-				if (agreement === 0) runStart = i;
-				agreement++;
+	const length = text.length;
+	if (length < VERBATIM_MIN_REPEATED_CHARS) return null;
+	for (let len = 2; len <= VERBATIM_MAX_UNIT && length >= len * 4; len++) {
+		// Four repeats need `3 * len` agreeing positions, and the char floor `MIN - len` of them.
+		const floor = Math.max(3 * len, VERBATIM_MIN_REPEATED_CHARS - len);
+		// Every run starting before `from` has been judged, and `from - 1` is not part of a run.
+		let from = 0;
+		for (let probe = floor - 1; probe + len < length; probe = from + floor - 1) {
+			if (text.charCodeAt(probe) !== text.charCodeAt(probe + len)) {
+				from = probe + 1;
 				continue;
 			}
-			if (agreement > 0) {
-				const count = Math.floor((agreement + len) / len);
-				const unit = text.slice(runStart, runStart + len);
-				// Same judgement the streamed detector applies: a whitespace-free run that
-				// only continues a longer token is one long name cycling, not a sampler
-				// runaway. Both paths have to agree, or a path echoed in a completed
-				// message is a loop while the same bytes streamed are not.
-				const continuesToken = !/\s/.test(unit) && runStart > 0 && !/\s/.test(text[runStart - 1] as string);
-				if (
-					count >= 4 &&
-					count * len >= VERBATIM_MIN_REPEATED_CHARS &&
-					VERBATIM_UNIT_CONTENT.test(unit) &&
-					!continuesToken
-				) {
-					return describeVerbatimRepeat(unit, count);
-				}
-				agreement = 0;
-			}
+			let runStart = probe;
+			while (runStart > from && text.charCodeAt(runStart - 1) === text.charCodeAt(runStart - 1 + len)) runStart--;
+			let runEnd = probe + 1;
+			while (runEnd + len < length && text.charCodeAt(runEnd) === text.charCodeAt(runEnd + len)) runEnd++;
+			from = runEnd + 1;
+			const count = Math.floor((runEnd - runStart + len) / len);
+			if (count < 4 || count * len < VERBATIM_MIN_REPEATED_CHARS) continue;
+			const unit = text.slice(runStart, runStart + len);
+			// Same judgement the streamed detector applies: a whitespace-free run that
+			// only continues a longer token is one long name cycling, not a sampler
+			// runaway. Both paths have to agree, or a path echoed in a completed
+			// message is a loop while the same bytes streamed are not.
+			const continuesToken = !/\s/.test(unit) && runStart > 0 && !/\s/.test(text[runStart - 1] as string);
+			if (VERBATIM_UNIT_CONTENT.test(unit) && !continuesToken) return describeVerbatimRepeat(unit, count);
 		}
 	}
 	return null;
