@@ -322,6 +322,7 @@ export async function runInteractiveBashPty(
 		artifactId?: string;
 		/** Inline byte budget, priced by the caller's session. See `BashExecutorOptions.spillThreshold`. */
 		spillThreshold?: number;
+		artifactMaxBytes?: number;
 		/** Session CPU budget name; the PTY command joins that budget group. */
 		cpuBudgetId?: string;
 	},
@@ -333,7 +334,7 @@ export async function runInteractiveBashPty(
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
-		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
+		artifactMaxBytes: options.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings),
 		...(options.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),

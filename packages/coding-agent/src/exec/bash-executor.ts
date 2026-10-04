@@ -49,6 +49,8 @@ export interface BashExecutorOptions {
 	/** Artifact path/id for full output storage */
 	artifactPath?: string;
 	artifactId?: string;
+	/** Maximum artifact bytes before truncation, from the caller's session settings */
+	artifactMaxBytes?: number;
 	/**
 	 * How many bytes of output may stay inline, from the caller's session.
 	 *
@@ -322,7 +324,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
-		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
+		artifactMaxBytes: options?.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings),
 		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),

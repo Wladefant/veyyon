@@ -38,7 +38,7 @@ import { truncateForPrompt } from "../core/approval";
 import { invalidateGithubCacheForBashCommand } from "../core/gh-cache-invalidation";
 import { inlineBudgetFor, inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
-import { formatArtifactErrorNotice, type OutputMeta } from "../core/output-meta";
+import { formatArtifactErrorNotice, type OutputMeta, resolveOutputSinkArtifactMaxBytes } from "../core/output-meta";
 import { resolveToCwd } from "../core/path-utils";
 import { checkPolysimMainDenial } from "../core/polysim-main-guard";
 import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath } from "../core/render-utils";
@@ -795,6 +795,7 @@ export class BashTool
 						artifactPath,
 						artifactId,
 						spillThreshold: inlineBudgetFor(this.session),
+						artifactMaxBytes: this.#resolveArtifactMaxBytes(),
 						onChunk: chunk => {
 							lastOutputAt = performance.now();
 							tailBuffer.append(chunk);
@@ -1358,6 +1359,11 @@ export class BashTool
 		});
 	}
 
+	#resolveArtifactMaxBytes(): number | undefined {
+		const cap = this.session.settings?.get?.("tools.artifactMaxBytes");
+		return cap !== undefined ? resolveOutputSinkArtifactMaxBytes(this.session.settings) : undefined;
+	}
+
 	/** Spawn the command on the operator's terminal when `interactiveUi` is set, else through the executor streaming its tail. */
 	async #spawnLocal(
 		{ command, commandCwd, resolvedEnv, timeoutMs, cpuLimit }: PreparedBashCall,
@@ -1381,6 +1387,7 @@ export class BashTool
 					artifactPath,
 					artifactId,
 					spillThreshold: inlineBudgetFor(this.session),
+					artifactMaxBytes: this.#resolveArtifactMaxBytes(),
 					...(cpuBudgetId ? { cpuBudgetId } : {}),
 				})
 			: await executeBash(command, {
@@ -1392,6 +1399,7 @@ export class BashTool
 					artifactPath,
 					artifactId,
 					spillThreshold: inlineBudgetFor(this.session),
+					artifactMaxBytes: this.#resolveArtifactMaxBytes(),
 					onChunk: streamTailUpdates(tailBuffer, onUpdate),
 					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
 				});
