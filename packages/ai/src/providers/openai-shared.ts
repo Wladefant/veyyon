@@ -2490,9 +2490,12 @@ export type ToolCallArgumentsDeltaShape = "incremental" | "cumulative";
  * throws rather than silently inheriting an arbitrary default.
  */
 export const RESPONSES_PROVIDER_TOOL_CALL_DELTA_SHAPES: Readonly<Record<string, ToolCallArgumentsDeltaShape>> = {
+	abliteration: "incremental",
 	azure: "incremental",
 	"github-copilot": "incremental",
 	"gitlab-duo": "incremental",
+	meta: "incremental",
+	"muse-code": "incremental",
 	ollama: "incremental",
 	openai: "incremental",
 	"openai-codex": "cumulative",
@@ -2501,6 +2504,7 @@ export const RESPONSES_PROVIDER_TOOL_CALL_DELTA_SHAPES: Readonly<Record<string, 
 	"opencode-zen": "incremental",
 	openrouter: "incremental",
 	sakana: "incremental",
+	xai: "incremental",
 	"xai-oauth": "incremental",
 };
 
