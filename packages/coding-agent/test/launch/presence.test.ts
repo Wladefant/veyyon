@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getProcessStartTime } from "@veyyon/utils/process-liveness";
 import { hasLiveDaemonProjectPresence, registerDaemonProjectPresence } from "../../src/launch/presence";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
@@ -146,5 +147,40 @@ describe("hasLiveDaemonProjectPresence", () => {
 		expect(await Bun.file(truncated).exists()).toBe(false);
 		expect(await Bun.file(wrongShape).exists()).toBe(false);
 		expect(await Bun.file(nonObject).exists()).toBe(false);
+	});
+
+	it("ambiguous live client presence preserved without broker identity witness", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "legacy-ambiguous.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "legacy-ambiguous" }));
+			// Mtime before process start: simulates wall-clock step / WSL resume
+			const recordMtime = (startedAt ?? Date.now()) - 10_000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+
+			// Ambiguous client presence lacks broker endpoint witness: fail-closed preserves it
+			expect(await hasLiveDaemonProjectPresence(runtimeDir)).toBe(true);
+			// Presence file must not be pruned
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
 	});
 });

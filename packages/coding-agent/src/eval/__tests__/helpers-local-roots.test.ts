@@ -10,12 +10,16 @@ import { createHelpers, type HelperContext } from "../js/shared/helpers";
  * `local:` directory under the cwd instead of landing where `read local://x.md`
  * resolves. These lock the substitution contract and its guards.
  */
-function makeCtx(cwd: string, roots: Record<string, string>): HelperContext {
+function makeCtx(
+	cwd: string,
+	roots: Record<string, string>,
+	opts?: { emitStatus?: (status: Record<string, unknown>) => void; env?: Map<string, string> },
+): HelperContext {
 	return {
 		cwd: () => cwd,
-		env: new Map(),
+		env: opts?.env ?? new Map(),
 		localRoots: () => roots,
-		emitStatus: () => {},
+		emitStatus: opts?.emitStatus ?? (() => {}),
 		session: () => ({ artifactsDir: null, sessionId: "test" }),
 	};
 }
@@ -52,5 +56,38 @@ describe("eval js helpers internal-url resolution", () => {
 		const rel = await helpers.writeFile("foo/bar.txt", "bar");
 		expect(rel).toBe(path.join(tmp.path(), "foo", "bar.txt"));
 		expect(await helpers.read("foo/bar.txt")).toBe("bar");
+	});
+});
+
+describe("eval js helpers env get/set", () => {
+	it("emits status events excluding seeded opaque secret while returning actual value unchanged", () => {
+		using tmp = TempDir.createSync("@eval-helpers-env-");
+		const events: Array<Record<string, unknown>> = [];
+		const helpers = createHelpers(makeCtx(tmp.path(), {}, { emitStatus: status => events.push(status) }));
+
+		const secretValue = "seeded-opaque-env-secret-js-9876";
+		const secretKey = "TEST_OPAQUE_SECRET_ENV_JS";
+
+		const setRet = helpers.env(secretKey, secretValue);
+		const getRet = helpers.env(secretKey);
+
+		// Actual env returns unchanged
+		expect(setRet).toBe(secretValue);
+		expect(getRet).toBe(secretValue);
+
+		// Captured status events exclude seeded opaque secret
+		const serializedEvents = JSON.stringify(events);
+		expect(serializedEvents).not.toContain(secretValue);
+
+		// Status events preserve key and action metadata without value field
+		const setEvent = events.find(e => e.op === "env" && e.action === "set");
+		expect(setEvent).toBeDefined();
+		expect(setEvent?.key).toBe(secretKey);
+		expect(setEvent?.value).toBe("<redacted>");
+
+		const getEvent = events.find(e => e.op === "env" && e.action === "get");
+		expect(getEvent).toBeDefined();
+		expect(getEvent?.key).toBe(secretKey);
+		expect(getEvent?.value).toBe("<redacted>");
 	});
 });

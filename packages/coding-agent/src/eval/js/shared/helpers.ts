@@ -1,4 +1,6 @@
 import * as path from "node:path";
+import { types } from "node:util";
+import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
 
 import { ToolError } from "../../../tools/core/tool-errors";
 import { type KernelStore, openKernelStore } from "../../kernel-store";
@@ -37,6 +39,7 @@ export interface HelperContext {
  * onto the global scope.
  */
 export interface HelperBundle {
+	isProxy(value: unknown): boolean;
 	read(rawPath: string, options?: HelperOptions): Promise<string>;
 	writeFile(rawPath: string, data: unknown): Promise<string>;
 	env(key?: string, value?: string): string | Record<string, string> | undefined;
@@ -62,6 +65,7 @@ export function createHelpers(ctx: HelperContext): HelperBundle {
 		return store;
 	};
 	return {
+		isProxy: types.isProxy,
 		read: async (rawPath, options = {}) => {
 			const { filePath, file, size } = await resolveRegularFile(ctx, rawPath);
 			let text = await file.text();
@@ -118,11 +122,11 @@ export function createHelpers(ctx: HelperContext): HelperBundle {
 			}
 			if (value !== undefined) {
 				ctx.env.set(key, value);
-				ctx.emitStatus({ op: "env", key, value, action: "set" });
+				ctx.emitStatus({ op: "env", key: redactUsageText(key, []), value: "<redacted>", action: "set" });
 				return value;
 			}
 			const result = ctx.env.get(key) ?? Bun.env[key];
-			ctx.emitStatus({ op: "env", key, value: result, action: "get" });
+			ctx.emitStatus({ op: "env", key: redactUsageText(key, []), value: "<redacted>", action: "get" });
 			return result;
 		},
 	};

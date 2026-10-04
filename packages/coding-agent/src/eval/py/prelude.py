@@ -50,10 +50,10 @@ if "__veyyon_prelude_loaded__" not in globals():
             return items
         if value is not None:
             os.environ[key] = value
-            _emit_status("env", key=key, value=value, action="set")
+            _emit_status("env", key=key, value="<redacted>", action="set")
             return value
         val = os.environ.get(key)
-        _emit_status("env", key=key, value=val, action="get")
+        _emit_status("env", key=key, value="<redacted>", action="get")
         return val
 
     _KV_VALUE_SIZE_LIMIT = 256 * 1024
@@ -361,14 +361,12 @@ if "__veyyon_prelude_loaded__" not in globals():
     kv = _Kv()
 
     def _format_def(value) -> str:
-        try:
-            if callable(value):
-                name = getattr(value, "__qualname__", None) or type(value).__name__
-                return f"function {name}"
-            text = repr(value)
-            return f"{type(value).__name__} {text[:57] + '...' if len(text) > 60 else text}"
-        except Exception:
-            return type(value).__name__
+        kind = type(value)
+        if kind in (list, tuple, dict, set, frozenset, bytes, bytearray):
+            return f"{kind.__name__}({len(value)})"
+        if callable(value):
+            return "function"
+        return kind.__name__
 
     def defs() -> list:
         """What this kernel already defines, so a cell can check before re-sending a definition."""
@@ -455,8 +453,7 @@ if "__veyyon_prelude_loaded__" not in globals():
             end = start + limit if limit else len(lines)
             lines = lines[start:end]
             data = "".join(lines)
-        preview = data[:500]
-        _emit_status("read", path=str(p), chars=len(data), preview=preview)
+        _emit_status("read", path=str(p), chars=len(data))
         return data
 
     def write(path: str | Path, content: str) -> Path:
