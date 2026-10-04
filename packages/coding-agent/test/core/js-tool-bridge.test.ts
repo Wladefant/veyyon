@@ -142,6 +142,29 @@ describe("callSessionTool", () => {
 		]);
 	});
 
+	it("redacts status previews before truncating without changing the explicit result", async () => {
+		const token = "credential-sentinel-123456789";
+		const text = `${"x".repeat(460)} Authorization: Bearer ${token}`;
+		for (const name of ["read", "bash"]) {
+			const tool = createTool(name, async () => ({
+				content: [{ type: "text", text }],
+				details: { isError: true },
+			}));
+			const events: unknown[] = [];
+			const result = await callSessionTool(
+				name,
+				{},
+				{
+					session: createSession([tool]),
+					emitStatus: event => events.push(event),
+				},
+			);
+			expect(JSON.stringify(events)).not.toContain("credential-sentinel");
+			expect(JSON.stringify(events)).toContain("<redacted");
+			expect(result).toMatchObject({ text });
+		}
+	});
+
 	it("throws when the requested tool is not available in the session registry", async () => {
 		const session = createSession([]);
 

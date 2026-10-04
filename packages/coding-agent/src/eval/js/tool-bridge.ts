@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { errorMessage, isRecord } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
@@ -115,12 +116,13 @@ function summarizeToolResult(
 	const details = (
 		result.details && typeof result.details === "object" ? (result.details as Record<string, unknown>) : {}
 	) as Record<string, unknown>;
+	const safePreview = redactUsageText(text, []).slice(0, 500);
 	const withError = (event: JsStatusEvent): JsStatusEvent =>
-		hasError ? { ...event, hasError: true, error: text.slice(0, 500) } : event;
+		hasError ? { ...event, hasError: true, error: safePreview } : event;
 
 	switch (name) {
 		case "read":
-			return withError({ op: "read", path: record.path, chars: text.length, preview: text.slice(0, 500) });
+			return withError({ op: "read", path: record.path, chars: text.length, preview: safePreview });
 		case "write":
 			return withError({
 				op: "write",
@@ -142,7 +144,7 @@ function summarizeToolResult(
 				op: "run",
 				cmd: record.command,
 				code: typeof details.exitCode === "number" ? details.exitCode : undefined,
-				output: text.slice(0, 500),
+				output: safePreview,
 			});
 		default:
 			return withError({ op: name, chars: text.length });
@@ -216,7 +218,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 	} catch (error) {
 		options.emitStatus?.({
 			op: name,
-			error: errorMessage(error),
+			error: redactUsageText(errorMessage(error), []),
 		});
 		throw error;
 	}
