@@ -35,6 +35,7 @@ export type {
 	ColumnUnit,
 	DiagnosticMeta,
 	LimitsMeta,
+	OutputArtifactError,
 	OutputMeta,
 	SourceMeta,
 	TruncationMeta,
@@ -44,6 +45,8 @@ export type {
 // this file for them, and forwarding costs nothing: that module imports two formatters and the
 // diagnostic renderer.
 export {
+	formatArtifactErrorNotice,
+	formatArtifactReference,
 	formatColumnTruncatedNotice,
 	formatFullOutputReference,
 	formatOutputNotice,
@@ -54,7 +57,12 @@ export {
 } from "./output-notice";
 
 import type { ColumnUnit, OutputMeta, TruncationMeta } from "./output-notice";
-import { formatFullOutputReference, formatOutputNotice, formatTruncationMetaNotice } from "./output-notice";
+import {
+	formatArtifactErrorNotice,
+	formatFullOutputReference,
+	formatOutputNotice,
+	formatTruncationMetaNotice,
+} from "./output-notice";
 
 // =============================================================================
 // OutputMetaBuilder - Fluent API for building OutputMeta
@@ -67,6 +75,7 @@ export interface TruncationOptions {
 	/** The scan stopped after the shown window; `result.totalLines` is a lower bound, not the file length. */
 	totalLinesUnknown?: boolean;
 	artifactId?: string;
+	artifactElidedBytes?: number;
 }
 
 export interface TruncationSummaryOptions {
@@ -105,6 +114,19 @@ export type LimitsInput = {
  *   .get();
  * ```
  */
+/**
+ * Resolve the maximum byte size for streaming output artifact files from settings.
+ * 0 means unbounded.
+ */
+export function resolveOutputSinkArtifactMaxBytes(settings: Settings | undefined): number {
+	const mb = settings?.get("tools.artifactMaxBytes") ?? (getDefault("tools.artifactMaxBytes") as number);
+	if (!Number.isFinite(mb) || mb < 0) {
+		throw new RangeError(`tools.artifactMaxBytes must be a non-negative number (got ${mb})`);
+	}
+	if (mb === 0) return 0;
+	return mb * 1024 * 1024;
+}
+
 export class OutputMetaBuilder {
 	#meta: OutputMeta = {};
 
@@ -112,7 +134,10 @@ export class OutputMetaBuilder {
 	truncation(result: TruncationResult, options: TruncationOptions): this {
 		if (!result.truncated) return this;
 
-		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId } = options;
+		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId, artifactElidedBytes } = options;
+		if (artifactElidedBytes && artifactElidedBytes > 0) {
+			this.#meta.artifactElidedBytes = artifactElidedBytes;
+		}
 		const outputLines = result.outputLines ?? result.totalLines;
 		const outputBytes = result.outputBytes ?? result.totalBytes;
 		const isMiddle = direction === "middle" || result.truncatedBy === "middle";
@@ -146,6 +171,7 @@ export class OutputMetaBuilder {
 				elidedLines,
 				elidedBytes,
 				artifactId,
+				artifactElidedBytes,
 			};
 			return this;
 		}
@@ -170,6 +196,7 @@ export class OutputMetaBuilder {
 			outputBytes,
 			shownRange: { start: shownStart, end: shownEnd },
 			artifactId,
+			artifactElidedBytes,
 			nextOffset: direction === "head" ? shownEnd + 1 : undefined,
 			...(totalLinesUnknown ? { totalLinesUnknown } : {}),
 		};
@@ -179,6 +206,14 @@ export class OutputMetaBuilder {
 
 	/** Add truncation info from OutputSummary. No-op if not truncated. */
 	truncationFromSummary(summary: OutputSummary, options: TruncationSummaryOptions): this {
+		if (summary.artifactError) {
+			this.#meta.artifactError = summary.artifactError;
+		}
+		if (summary.artifactElidedBytes && summary.artifactElidedBytes > 0) {
+			this.#meta.artifactElidedBytes = summary.artifactElidedBytes;
+		}
+		const artifactId = summary.artifactError ? undefined : summary.artifactId;
+		const artifactElidedBytes = summary.artifactError ? undefined : summary.artifactElidedBytes;
 		// A per-line column cap only trims individual lines (with a `…` marker);
 		// it is not a window/byte truncation, so surface it as its own limit
 		// notice rather than a "Showing lines X-Y … limit" range. This runs even
@@ -186,7 +221,7 @@ export class OutputMetaBuilder {
 		// caps in UTF-8 bytes and mirrors the raw stream to `summary.artifactId`
 		// whenever the cap drops bytes, so the notice says "bytes" and points there.
 		if (summary.columnMax != null && summary.columnMax > 0 && (summary.columnTruncatedLines ?? 0) > 0) {
-			this.columnTruncated(summary.columnMax, "bytes", summary.artifactId);
+			this.columnTruncated(summary.columnMax, "bytes", artifactId);
 		}
 		if (!summary.truncated) return this;
 
@@ -210,7 +245,8 @@ export class OutputMetaBuilder {
 				tailRange: tailLines > 0 ? { start: totalLines - tailLines + 1, end: totalLines } : undefined,
 				elidedBytes: summary.elidedBytes,
 				elidedLines,
-				artifactId: summary.artifactId,
+				artifactId,
+				artifactElidedBytes,
 			};
 			return this;
 		}
@@ -230,7 +266,8 @@ export class OutputMetaBuilder {
 				outputLines: summary.outputLines,
 				outputBytes: summary.outputBytes,
 				elidedAmountUnknown: true,
-				artifactId: summary.artifactId,
+				artifactId,
+				artifactElidedBytes,
 			};
 			return this;
 		}
@@ -261,7 +298,8 @@ export class OutputMetaBuilder {
 			outputLines: summary.outputLines,
 			outputBytes: summary.outputBytes,
 			shownRange: { start: shownStart, end: shownEnd },
-			artifactId: summary.artifactId,
+			artifactId,
+			artifactElidedBytes,
 			nextOffset: direction === "head" ? shownEnd + 1 : undefined,
 		};
 
@@ -433,8 +471,16 @@ export function formatStyledArtifactReference(artifactId: string, theme: Theme):
  * Returns null if no truncation metadata present.
  */
 export function formatStyledTruncationWarning(meta: OutputMeta | undefined, theme: Theme): string | null {
-	if (!meta?.truncation) return null;
-	const message = formatTruncationMetaNotice(meta.truncation);
+	if (!meta?.truncation && !meta?.artifactError) return null;
+	const parts: string[] = [];
+	if (meta.truncation) {
+		parts.push(formatTruncationMetaNotice(meta.truncation, meta.source));
+	}
+	if (meta.artifactError) {
+		parts.push(formatArtifactErrorNotice(meta.artifactError));
+	}
+	if (parts.length === 0) return null;
+	const message = parts.join(". ");
 	return theme.fg("warning", wrapBrackets(message, theme));
 }
 
@@ -538,9 +584,9 @@ async function spillLargeResultToArtifact(
 	// threshold back, unaffected by the turn curve.
 	const threshold = inlineBudgetFor({ getTurnIndex: context?.getTurnIndex, settings: context?.settings });
 
-	// Skip if tool already saved an artifact
+	// Skip if tool already saved an artifact or failed capturing it
 	const existingMeta = (result.details as { meta?: OutputMeta } | undefined)?.meta;
-	if (existingMeta?.truncation?.artifactId) return result;
+	if (existingMeta?.truncation?.artifactId || existingMeta?.artifactError) return result;
 
 	// Measure total text content
 	const textParts: string[] = [];
