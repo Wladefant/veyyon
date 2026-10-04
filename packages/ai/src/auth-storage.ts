@@ -3406,10 +3406,13 @@ export class AuthStorage {
 				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
 				try {
-					const report = await providerImpl.fetchUsage(params, {
+					const rawReport = await providerImpl.fetchUsage(params, {
 						...ctx,
 						logger: redactingUsageLogger(ctx.logger, probeSecrets),
 					});
+					// Read the report only through the redacted snapshot: no getter or method the
+					// backend put on it runs, and nothing below can copy the key out of it.
+					const report = rawReport === null ? null : redactUsageValue(rawReport, probeSecrets);
 					if (report === null) {
 						base.reason = "usage probe returned no data for this credential";
 					} else {

@@ -85,13 +85,27 @@ export function redactUsageText(text: string, secrets: readonly string[]): strin
 	return redactProviderSecrets(result);
 }
 
+/** What stands in for anything the snapshot could not read without running the value's own code. */
+const UNREADABLE = "[unreadable]";
+
+const dateToISOString = Date.prototype.toISOString;
+const dateGetTime = Date.prototype.getTime;
+
+/** The own data value of `key`: an accessor is never invoked, so no code of the value's runs. */
+function ownDataValue(object: object, key: PropertyKey): unknown {
+	const descriptor = Object.getOwnPropertyDescriptor(object, key);
+	return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+}
+
 /**
- * A plain snapshot of `value` with every string inside it redacted, property names included. The
- * snapshot is built from own enumerable data, so a `toJSON` or any other function on the input is
- * dropped rather than carried into the copy, where JSON.stringify would call it and bring the key
- * back. Other non-string leaves are shared, objects and arrays are rebuilt, and a cycle is cut rather
- * than followed, so a hostile report cannot hang the fetch. Only the nodes on the current path count
- * as a cycle: a node reachable twice without looping is copied once and reused.
+ * A plain snapshot of `value` with every string inside it redacted, property names included. It runs
+ * none of the value's own code: only own enumerable data properties are read, so an accessor, a
+ * `toJSON`, a `toString` or a `toISOString` on the input is never called and a function is dropped.
+ * Binary data becomes a placeholder, a Date is read through the intrinsic methods and an Error keeps
+ * its own name and message. Anything that still throws (a Proxy trap) becomes a fixed placeholder, never
+ * the error's message. Objects and arrays are rebuilt and a cycle is cut rather than followed, so a
+ * hostile report cannot hang the fetch. Only the nodes on the current path count as a cycle: a node
+ * reachable twice without looping is copied once and reused.
  */
 export function redactUsageValue<T>(value: T, secrets: readonly string[]): T {
 	return redactNode(value, secrets, new Set(), new Map()) as T;
@@ -106,22 +120,54 @@ function redactNode(
 	if (typeof value === "string") return redactUsageText(value, secrets);
 	if (typeof value === "function" || typeof value === "symbol") return undefined;
 	if (value === null || typeof value !== "object") return value;
-	if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
 	if (ancestors.has(value)) return undefined;
 	if (done.has(value)) return done.get(value);
-	if (value instanceof Error) return redactUsageText(String(value), secrets);
 	ancestors.add(value);
-	const copy = Array.isArray(value)
-		? value.map(item => redactNode(item, secrets, ancestors, done))
-		: Object.fromEntries(
-				Object.entries(value).map(([key, item]) => [
-					redactUsageText(key, secrets),
-					redactNode(item, secrets, ancestors, done),
-				]),
-			);
-	ancestors.delete(value);
-	done.set(value, copy);
-	return copy;
+	try {
+		const copy = snapshotObject(value, secrets, ancestors, done);
+		done.set(value, copy);
+		return copy;
+	} catch {
+		return UNREADABLE;
+	} finally {
+		ancestors.delete(value);
+	}
+}
+
+function snapshotObject(
+	value: object,
+	secrets: readonly string[],
+	ancestors: Set<object>,
+	done: Map<object, unknown>,
+): unknown {
+	if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof SharedArrayBuffer) {
+		return "[binary data]";
+	}
+	if (value instanceof Date) {
+		const time = dateGetTime.call(value);
+		return Number.isNaN(time) ? null : redactUsageText(dateToISOString.call(value), secrets);
+	}
+	if (value instanceof Error) {
+		const name = ownDataValue(value, "name");
+		const message = ownDataValue(value, "message");
+		const label = typeof name === "string" ? name : "Error";
+		return redactUsageText(typeof message === "string" ? `${label}: ${message}` : label, secrets);
+	}
+	if (Array.isArray(value)) {
+		const length = ownDataValue(value, "length");
+		const items: unknown[] = [];
+		for (let index = 0; typeof length === "number" && index < length; index++) {
+			items.push(redactNode(ownDataValue(value, index), secrets, ancestors, done));
+		}
+		return items;
+	}
+	const entries: Array<[string, unknown]> = [];
+	for (const key of Object.keys(value)) {
+		const descriptor = Object.getOwnPropertyDescriptor(value, key);
+		if (descriptor === undefined || !("value" in descriptor)) continue;
+		entries.push([redactUsageText(key, secrets), redactNode(descriptor.value, secrets, ancestors, done)]);
+	}
+	return Object.fromEntries(entries);
 }
 
 /** A logger that redacts the message and every string in the metadata before the wrapped logger sees it. */

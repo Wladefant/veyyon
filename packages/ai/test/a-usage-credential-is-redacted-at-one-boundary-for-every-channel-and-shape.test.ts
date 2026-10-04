@@ -151,6 +151,58 @@ describe("the usage credential boundary", () => {
 		expect(out.reports[0]?.metadata?.safe).toBe("plain-value");
 	});
 
+	it("keeps the key's bytes out of a report that carries a Buffer or a typed array", async () => {
+		const bytes = Array.from(Buffer.from(KEY)).join(",");
+		const r = await rig(
+			reporting(() => ({
+				metadata: { blob: Buffer.from(KEY), view: new Uint8Array(Buffer.from(KEY)), keep: "plain-value" },
+			})),
+		);
+		const out = await drive(r);
+		expectClean(observe(r, out), [KEY, bytes]);
+		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
+	});
+
+	it("does not call a Date's own toISOString, which can return the key", async () => {
+		const stamp = new Date(1_700_000_000_000);
+		stamp.toISOString = () => KEY;
+		const r = await rig(reporting(() => ({ metadata: { stamp } })));
+		const out = await drive(r);
+		expectClean(observe(r, out), [KEY]);
+		expect(out.reports[0]?.metadata?.stamp).toBe("2023-11-14T22:13:20.000Z");
+	});
+
+	it("does not run an enumerable getter that throws an Error holding the key", async () => {
+		const metadata: Record<string, unknown> = { keep: "plain-value" };
+		Object.defineProperty(metadata, "boom", {
+			enumerable: true,
+			get() {
+				throw new Error(KEY);
+			},
+		});
+		const r = await rig(reporting(() => ({ metadata })));
+		const out = await drive(r);
+		expect(out.checks[0]?.ok).toBe(true);
+		expectClean(observe(r, out), [KEY]);
+		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
+	});
+
+	it("replaces a value that throws on inspection with a fixed placeholder, never the error text", async () => {
+		const hostile = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error(KEY);
+				},
+			},
+		);
+		const r = await rig(reporting(() => ({ metadata: { hostile, keep: "plain-value" } })));
+		const out = await drive(r);
+		expect(out.checks[0]?.ok).toBe(true);
+		expectClean(observe(r, out), [KEY]);
+		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
+	});
+
 	it("redacts a key used as an object property name in a report and in logger metadata", async () => {
 		const backend: UsageProvider = {
 			id: PROVIDER,
