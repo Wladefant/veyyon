@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 
 export interface MemoryThread {
 	id: string;
@@ -54,7 +55,12 @@ function addColumnIfMissing(db: Database, table: string, column: string, definit
 }
 
 export function openMemoryDb(dbPath: string): Database {
-	const db = new Database(dbPath);
+	// Threads, stage-1 outputs and job state are derived from the session rollouts and re-derived on the next
+	// run, so a corrupt file is quarantined (backup kept) and recreated.
+	return openSqliteDatabaseSync(dbPath, initializeMemoryDb, { recoverCorruption: true });
+}
+
+function initializeMemoryDb(db: Database): Database {
 	// Install the busy handler BEFORE any lock-taking statement. See #2421.
 	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec(`

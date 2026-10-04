@@ -1,7 +1,8 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { errorMessage, getAutoresearchDbPath, getAutoresearchProjectDir, logger, tryParseJson } from "@veyyon/utils";
+import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import * as git from "../utils/git";
 import type { ASIData, ExperimentStatus, MetricDirection, NumericMetricMap } from "./types";
 import { EXPERIMENT_STATUSES } from "./types";
@@ -360,16 +361,24 @@ export class AutoresearchStorage {
 		this.#dbPath = dbPath;
 		this.#projectDir = projectDir;
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-		this.#db = new Database(dbPath);
-		// Install the busy handler BEFORE any lock-taking statement. See #2421.
-		this.#db.run("PRAGMA busy_timeout = 5000");
-		this.#db.run(SCHEMA_SQL);
-		const versionRow = this.#db.query("PRAGMA user_version").get() as { user_version: number } | null;
-		const currentVersion = versionRow?.user_version ?? 0;
-		if (currentVersion < SCHEMA_VERSION) {
-			migrateSchema(this.#db, currentVersion);
-			this.#db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-		}
+		// The session and run log is the only record of the experiments: a corrupt file is left untouched and
+		// reported rather than quarantined and recreated empty.
+		this.#db = openSqliteDatabaseSync(
+			dbPath,
+			db => {
+				// Install the busy handler BEFORE any lock-taking statement. See #2421.
+				db.run("PRAGMA busy_timeout = 5000");
+				db.run(SCHEMA_SQL);
+				const versionRow = db.query("PRAGMA user_version").get() as { user_version: number } | null;
+				const currentVersion = versionRow?.user_version ?? 0;
+				if (currentVersion < SCHEMA_VERSION) {
+					migrateSchema(db, currentVersion);
+					db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+				}
+				return db;
+			},
+			{ failClosedReason: "the autoresearch log holds experiment history that cannot be rebuilt; restore it from a backup" },
+		);
 	}
 
 	get dbPath(): string {

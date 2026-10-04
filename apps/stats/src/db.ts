@@ -1,10 +1,10 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import type { StopReason, Usage } from "@veyyon/ai";
 import type { GeneratedProvider } from "@veyyon/catalog/models";
 import { emptyCost, getBundledModel, hasBillableCost } from "@veyyon/catalog/models";
 import { DAY_MS, getConfigRootDir, getStatsDbPath } from "@veyyon/utils";
-import { tableExists } from "@veyyon/utils/sqlite";
+import { openSqliteDatabaseSync, tableExists } from "@veyyon/utils/sqlite";
 import { classifyAgentType } from "./parser";
 import type {
 	AgentType,
@@ -65,11 +65,16 @@ export async function initDb(): Promise<Database> {
 	// Ensure directory exists
 	await fs.mkdir(getConfigRootDir(), { recursive: true });
 
-	db = new Database(getStatsDbPath());
+	// Every row is parsed out of the session files, which stay on disk, so a corrupt stats.db is quarantined
+	// (backup kept) and rebuilt by the next sync.
+	db = openSqliteDatabaseSync(getStatsDbPath(), prepareStatsDb, { recoverCorruption: true });
+	return db;
+}
+
+function prepareStatsDb(db: Database): Database {
 	// Install the busy handler BEFORE any lock-taking statement.
 	db.run("PRAGMA busy_timeout = 5000");
 	db.run("PRAGMA journal_mode = WAL");
-
 	// Whether `messages` predates this init — drives the one-time agent_type
 	// backfill below, so it must be sampled before CREATE TABLE adds the table.
 	const messagesTableExisted = tableExists(db, "messages");

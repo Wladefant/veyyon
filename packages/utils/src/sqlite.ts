@@ -234,8 +234,19 @@ function closePeerCorruptHandles(dbPath: string, own: Database | undefined): voi
 	}
 }
 
+type DatabaseConstructorOptions = Exclude<ConstructorParameters<typeof Database>[1], number | undefined>;
+
 export interface SqliteOpenOptions {
+	/** Quarantine a corrupt store (keeping a backup) and recreate it. For stores whose contents can be rebuilt. */
 	recoverCorruption?: boolean;
+	/**
+	 * Fail-closed policy for a store whose data cannot be rebuilt: corruption is never auto-recovered, is
+	 * detected even when it surfaces mid-initialization, and the error names this reason so the operator knows
+	 * the file was left untouched on purpose. Ignored when `recoverCorruption` is set.
+	 */
+	failClosedReason?: string;
+	/** Options for the `Database` constructor (`strict`, `create`, ...). */
+	databaseOptions?: DatabaseConstructorOptions;
 	onCorruptionPreserved?: (backupPath: string, error: unknown) => void;
 }
 
@@ -272,15 +283,17 @@ function handleOpenError(
 	db: Database | undefined,
 	caught: unknown,
 	identity: SqliteFileIdentity,
-	recover?: boolean,
+	options: SqliteOpenOptions,
 ): never {
-	const error = recover ? revealHiddenCorruption(db, caught) : caught;
+	const recover = options.recoverCorruption === true;
+	const failClosed = !recover && options.failClosedReason !== undefined;
+	const error = recover || failClosed ? revealHiddenCorruption(db, caught) : caught;
 	if (recover && isSqliteCorruptionError(error)) {
 		registerCorruptHandle(dbPath, db);
 		throw new SqliteAttemptFailure(error, identity, { db });
 	}
 	closeFailedDatabase(db, caught, identity);
-	throw new SqliteAttemptFailure(caught, identity);
+	throw new SqliteAttemptFailure(failClosed ? error : caught, identity);
 }
 
 async function openWithBusyRetries<T>(
@@ -292,12 +305,12 @@ async function openWithBusyRetries<T>(
 		let db: Database | undefined;
 		const identity = sqliteFileIdentity(dbPath);
 		try {
-			db = openStoreUnderRecoveryLock(dbPath);
+			db = openStoreUnderRecoveryLock(dbPath, options.databaseOptions);
 			db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 			return await initialize(db);
 		} catch (error) {
 			if (!isSqliteBusyError(error) || attempt + 1 >= BUSY_MAX_ATTEMPTS) {
-				handleOpenError(dbPath, db, error, identity, options.recoverCorruption);
+				handleOpenError(dbPath, db, error, identity, options);
 			}
 			closeFailedDatabase(db, error, identity);
 			await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: BUSY_BASE_DELAY_MS, jitter: 0 }));
@@ -309,16 +322,16 @@ function openOnce<T>(dbPath: string, initialize: (db: Database) => T, options: S
 	let db: Database | undefined;
 	const identity = sqliteFileIdentity(dbPath);
 	try {
-		db = openStoreUnderRecoveryLock(dbPath);
+		db = openStoreUnderRecoveryLock(dbPath, options.databaseOptions);
 		db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 		return initialize(db);
 	} catch (error) {
-		handleOpenError(dbPath, db, error, identity, options.recoverCorruption);
+		handleOpenError(dbPath, db, error, identity, options);
 	}
 }
 
-function openStoreUnderRecoveryLock(dbPath: string): Database {
-	if (isTransientSqliteStore(dbPath)) return new Database(dbPath);
+function openStoreUnderRecoveryLock(dbPath: string, databaseOptions?: DatabaseConstructorOptions): Database {
+	if (isTransientSqliteStore(dbPath)) return new Database(dbPath, databaseOptions);
 	const stem = recoveryFileStem(dbPath);
 	const probe = path.join(path.dirname(stem), `.sqlite-write-probe-${crypto.randomUUID()}`);
 	try {
@@ -329,14 +342,14 @@ function openStoreUnderRecoveryLock(dbPath: string): Database {
 			// A read-only parent cannot publish a quarantine. Preserve SQLite's
 			// ability to read it, but still refuse a previously interrupted one.
 			assertNoPendingQuarantine(dbPath);
-			return new Database(dbPath);
+			return new Database(dbPath, databaseOptions);
 		}
 		throw error;
 	}
 	fs.unlinkSync(probe);
 	return withFileLockSync(`${stem}.recovery`, () => {
 		assertNoPendingQuarantine(dbPath);
-		return new Database(dbPath);
+		return new Database(dbPath, databaseOptions);
 	});
 }
 
@@ -456,7 +469,11 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 		throw annotateSqliteError(failure.original, dbPath);
 	}
 	if (!options.recoverCorruption || !failure.canRecover || !isSqliteCorruptionError(failure.original)) {
-		throw annotateSqliteError(failure.original, dbPath);
+		const annotated = annotateSqliteError(failure.original, dbPath);
+		if (!options.recoverCorruption && options.failClosedReason && isSqliteCorruptionError(failure.original)) {
+			annotated.message += `; left untouched, not auto-recovered: ${options.failClosedReason}`;
+		}
+		throw annotated;
 	}
 	let backupPath: string | null;
 	try {
