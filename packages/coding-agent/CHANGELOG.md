@@ -187,6 +187,7 @@
 
 ### Fixed
 
+- A tool card in a rebuilt transcript serializes its call's arguments through one accessor shared by every block instead of a getter allocated per block, so a drawn tool turn keeps one closure and two scopes instead of two and four (`bash`: 0.9 closures and 1.85 scopes per turn instead of 1.9 and 3.85).
 - The terminal components barrel exports `HOOK_EDITOR_TEXT_PAD_COLS`, `computeModalDims`, `sizingForArea` and the other modal sizing names again, which it dropped when they moved to `chrome/modal-geometry.ts`.
 - The compiled binary loads a legacy extension that imports `@mariozechner/pi-coding-agent`, `@earendil-works/pi-tui`, `@veyyon/ai` or another shimmed package root, or a `pi-` subpath such as `@mariozechner/pi-ai/oauth`, instead of failing it with `no bundled module registered for @veyyon/pi-coding-agent` or `Cannot find package '@mariozechner/pi-ai'`.
 - The slash popup a launch's first `/` opens states `/context` and `/compact` without a context figure while the session is at rest, instead of measuring it and building every active tool's schema inside the keystroke, so the first `/` echoes in 5.5 ms instead of 27.2 ms and its popup settles in 38.1 ms instead of 59.5 ms (median of 11).
