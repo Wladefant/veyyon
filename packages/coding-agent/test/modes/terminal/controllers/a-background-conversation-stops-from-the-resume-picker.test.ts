@@ -140,7 +140,11 @@ describe("stopping a background conversation from /resume", () => {
 
 		expect(beta.aborts).toEqual([USER_INTERRUPT_LABEL]);
 		expect(alpha.aborts).toEqual([]);
-		expect(BackgroundSessions.global().list().map(entry => entry.sessionId)).toEqual(["session-a"]);
+		expect(
+			BackgroundSessions.global()
+				.list()
+				.map(entry => entry.sessionId),
+		).toEqual(["session-a"]);
 		expect(metadataOf(selector, "Alpha")).toContain("running");
 		alpha.finish();
 	});
