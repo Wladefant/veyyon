@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { Process } from "@veyyon/natives";
-import { AnsiStripper } from "@veyyon/utils";
+import { AnsiStripper, DIR_OVERRIDE_ENV_KEYS } from "@veyyon/utils";
 import { parseDocument } from "yaml";
 import { AUTONOMY_LABEL } from "../packages/coding-agent/src/tools/core/approval-modes";
 import { computeDigest, median, recordSettledStartup } from "./record-settled-startup";
@@ -238,6 +238,17 @@ async function killProcessTree(pid: number | undefined, target: Process | null):
 	}
 }
 
+/**
+ * The caller's environment without the keys that relocate veyyon's directories. A bench started from a
+ * veyyon session inherits `VEYYON_CODING_AGENT_DIR`, and the measured process then loads the caller's
+ * profile, model roles and credentials instead of the seeded home.
+ */
+export function inheritedEnvironment(): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	for (const key of DIR_OVERRIDE_ENV_KEYS) delete env[key];
+	return env;
+}
+
 export async function recordFrame(
 	command: string,
 	args: string[],
@@ -252,7 +263,7 @@ export async function recordFrame(
 	const child = spawn(command, args, {
 		cwd,
 		stdio: ["pipe", "pipe", "pipe"],
-		env: { ...process.env, ...env },
+		env: { ...inheritedEnvironment(), ...env },
 	});
 	child.once("spawn", () => {
 		processState.target = child.pid === undefined ? null : Process.fromPid(child.pid);
@@ -323,7 +334,7 @@ export async function timeRun(
 	const child = spawn(command, args, {
 		cwd,
 		stdio: ["ignore", "pipe", "pipe"],
-		env: { ...process.env, ...env },
+		env: { ...inheritedEnvironment(), ...env },
 	});
 	child.once("spawn", () => {
 		processState.target = child.pid === undefined ? null : Process.fromPid(child.pid);
@@ -442,7 +453,7 @@ export async function extractInstalledNatives(
 	try {
 		await execFileAsync(command, [...prefix, "grep", "veyyon-native-self-test", probe], {
 			cwd,
-			env: { ...process.env, HOME: installed, VEYYON_PROFILE: "" },
+			env: { ...inheritedEnvironment(), HOME: installed, VEYYON_PROFILE: "" },
 		});
 	} catch (err) {
 		process.stderr.write(`seed: native addon probe failed, the launch arms will extract instead: ${String(err)}\n`);
