@@ -2,7 +2,16 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
+import { getProcessStartTime } from "@veyyon/utils/process-liveness";
+import {
+	acquireBrokerLease,
+	type BrokerLease,
+	type BrokerLeaseClock,
+	releaseBrokerLease,
+} from "../../src/launch/broker-lease";
+import { daemonBrokerEndpoint, daemonBrokerLeasePath, daemonBrokerTokenPath } from "../../src/launch/paths";
 import { pruneDeadDaemonRuntimeDirs } from "../../src/launch/presence";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const STALE = new Date(Date.now() - 30 * 60_000);
 let deadPid = 0;
@@ -26,6 +35,192 @@ async function scope(
 	}
 	if (init.stale) await fs.utimes(dir, STALE, STALE);
 	return dir;
+}
+
+interface LiveChildEndpoint {
+	pid: number;
+	startedAt: number;
+	close: () => Promise<void>;
+	waitForPing: () => Promise<void>;
+	proceedPing: () => void;
+}
+
+async function spawnChildEndpointListener(
+	runtimeDir: string,
+	options: {
+		token?: string;
+		gatePing?: boolean;
+	} = {},
+): Promise<LiveChildEndpoint> {
+	const { env, cleanup } = hermeticSpawnEnv();
+	const token = options.token ?? "test-token";
+	const gatePing = options.gatePing ?? false;
+	const endpoint = daemonBrokerEndpoint(runtimeDir);
+	const childScript = `
+import * as net from "node:net";
+
+const endpoint = process.env.CHILD_ENDPOINT!;
+const token = process.env.CHILD_TOKEN!;
+const gatePing = process.env.CHILD_GATE_PING === "1";
+
+let onProceed: (() => void) | null = null;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+	if (chunk.includes("proceed") && onProceed) {
+		const cb = onProceed;
+		onProceed = null;
+		cb();
+	}
+});
+
+const server = net.createServer((socket) => {
+	let buffered = "";
+	socket.setEncoding("utf8");
+	socket.on("data", (chunk) => {
+		buffered += chunk;
+		const idx = buffered.indexOf("\\n");
+		if (idx < 0) return;
+		const line = buffered.slice(0, idx);
+		buffered = buffered.slice(idx + 1);
+		try {
+			const req = JSON.parse(line);
+			if (req.token === token) {
+				const send = () => {
+					socket.write(
+						JSON.stringify({
+							id: req.id,
+							ok: true,
+							result: { op: "ping", pid: process.pid, projectDir: "/p" },
+						}) + "\\n",
+					);
+				};
+				if (gatePing) {
+					onProceed = send;
+					process.stdout.write("ping\\n");
+				} else {
+					send();
+				}
+			} else {
+				socket.write(JSON.stringify({ id: req.id, ok: false }) + "\\n");
+			}
+		} catch {
+			socket.destroy();
+		}
+	});
+});
+
+server.listen(endpoint, () => {
+	process.stdout.write("ready\\n");
+});
+
+process.stdin.on("end", () => {
+	server.close(() => process.exit(0));
+});
+`;
+
+	const child = Bun.spawn([process.execPath, "-e", childScript], {
+		env: {
+			...env,
+			CHILD_ENDPOINT: endpoint,
+			CHILD_TOKEN: token,
+			CHILD_GATE_PING: gatePing ? "1" : "0",
+		},
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "ignore",
+	});
+
+	const reader = child.stdout.getReader();
+	let streamBuf = "";
+	const readUntil = async (target: string): Promise<void> => {
+		while (!streamBuf.includes(target)) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			streamBuf += new TextDecoder().decode(value);
+		}
+		const idx = streamBuf.indexOf(target);
+		if (idx >= 0) {
+			streamBuf = streamBuf.slice(idx + target.length);
+		}
+	};
+	await readUntil("ready\n");
+
+	const startedAt = getProcessStartTime(child.pid);
+	if (startedAt === null) {
+		child.kill();
+		await child.exited;
+		reader.releaseLock();
+		cleanup();
+		throw new Error("Child process start time unavailable");
+	}
+
+	const waitForPing = async (): Promise<void> => {
+		await readUntil("ping\n");
+	};
+
+	const proceedPing = (): void => {
+		child.stdin.write("proceed\n");
+		child.stdin.flush();
+	};
+
+	const close = async () => {
+		try {
+			child.stdin.end();
+		} catch {}
+		child.kill("SIGTERM");
+		await child.exited;
+		reader.releaseLock();
+		cleanup();
+	};
+
+	return {
+		pid: child.pid,
+		startedAt,
+		close,
+		waitForPing,
+		proceedPing,
+	};
+}
+
+async function spawnLiveChild(): Promise<{ pid: number; startedAt: number; close: () => Promise<void> }> {
+	const { env, cleanup } = hermeticSpawnEnv();
+	const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+		env,
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "ignore",
+	});
+	const reader = child.stdout.getReader();
+	await reader.read();
+	reader.releaseLock();
+	const startedAt = getProcessStartTime(child.pid);
+	if (startedAt === null) {
+		child.kill();
+		await child.exited;
+		cleanup();
+		throw new Error("Child process start time unavailable");
+	}
+	return {
+		pid: child.pid,
+		startedAt,
+		close: async () => {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		},
+	};
+}
+
+async function spawnDeadChild(): Promise<number> {
+	const { env, cleanup } = hermeticSpawnEnv();
+	const proc = Bun.spawn([process.execPath, "-e", "process.exit(0)"], {
+		env,
+		stdout: "ignore",
+		stderr: "ignore",
+	});
+	await proc.exited;
+	cleanup();
+	return proc.pid;
 }
 
 describe("pruneDeadDaemonRuntimeDirs", () => {
@@ -99,5 +294,299 @@ describe("pruneDeadDaemonRuntimeDirs", () => {
 		using tempDir = TempDir.createSync("@veyyon-daemon-prune-missing-");
 		const current = path.join(tempDir.path(), "run", "daemons", "hash0000000000000");
 		await expect(pruneDeadDaemonRuntimeDirs(current)).resolves.toBeUndefined();
+	});
+
+	it("ambiguous legacy live owner authenticated matching PID keeps directory and endpoint even when boot/age says stale", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-case1-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "1111222233334444");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const child = await spawnChildEndpointListener(targetScope);
+		try {
+			const leasePath = daemonBrokerLeasePath(targetScope);
+			const raw = { pid: child.pid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			const recordMtime = child.startedAt - 10_000;
+			await fs.utimes(leasePath, recordMtime / 1000, recordMtime / 1000);
+			await fs.writeFile(daemonBrokerTokenPath(targetScope), "test-token");
+			await fs.utimes(targetScope, STALE, STALE);
+
+			const staleClock: BrokerLeaseClock = {
+				now: () => recordMtime + 25 * 3600 * 1000,
+				bootTimeMs: () => recordMtime + 20 * 60 * 1000,
+			};
+
+			await pruneDeadDaemonRuntimeDirs(current, staleClock);
+
+			expect(await fs.exists(targetScope)).toBe(true);
+			expect(await fs.exists(daemonBrokerEndpoint(targetScope))).toBe(true);
+			expect(await fs.exists(leasePath)).toBe(true);
+		} finally {
+			await child.close();
+		}
+	});
+
+	it("absent endpoint with recent ambiguous live PID keeps directory", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-case2-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "2222333344445555");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const child = await spawnLiveChild();
+		try {
+			const leasePath = daemonBrokerLeasePath(targetScope);
+			const raw = { pid: child.pid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			const recordMtime = child.startedAt - 10_000;
+			await fs.utimes(leasePath, recordMtime / 1000, recordMtime / 1000);
+			await fs.utimes(targetScope, STALE, STALE);
+
+			const recentClock: BrokerLeaseClock = {
+				now: () => recordMtime + 30 * 60 * 1000,
+				bootTimeMs: () => 0,
+			};
+
+			await pruneDeadDaemonRuntimeDirs(current, recentClock);
+
+			expect(await fs.exists(targetScope)).toBe(true);
+		} finally {
+			await child.close();
+		}
+	});
+
+	it("dead or reaped owner is pruned", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-case3-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "3333444455556666");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const deadPid = await spawnDeadChild();
+		const leasePath = daemonBrokerLeasePath(targetScope);
+		const raw = { pid: deadPid };
+		await fs.writeFile(leasePath, JSON.stringify(raw));
+		const recordMtime = Date.now() - 30 * 60 * 1000;
+		await fs.utimes(leasePath, recordMtime / 1000, recordMtime / 1000);
+		await fs.utimes(targetScope, STALE, STALE);
+
+		await pruneDeadDaemonRuntimeDirs(current);
+
+		expect(await fs.exists(targetScope)).toBe(false);
+	});
+
+	it("authenticated wrong-PID endpoint retires stale record while preserving directory and live endpoint", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-case4-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "4444555566667777");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const sleeper = await spawnLiveChild();
+		const child = await spawnChildEndpointListener(targetScope);
+		try {
+			const leasePath = daemonBrokerLeasePath(targetScope);
+			const raw = { pid: sleeper.pid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			await fs.writeFile(daemonBrokerTokenPath(targetScope), "test-token");
+			await fs.utimes(targetScope, STALE, STALE);
+
+			await pruneDeadDaemonRuntimeDirs(current);
+
+			expect(await fs.exists(targetScope)).toBe(true);
+			expect(await fs.exists(daemonBrokerEndpoint(targetScope))).toBe(true);
+			expect(await fs.exists(leasePath)).toBe(false);
+		} finally {
+			await child.close();
+			await sleeper.close();
+		}
+	});
+
+	it("dead recorded PID with live authenticated replacement endpoint retires stale lease and keeps scope", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-dead-record-live-endpoint-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "4444555566668888");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const deadPid = await spawnDeadChild();
+		const child = await spawnChildEndpointListener(targetScope);
+		try {
+			const leasePath = daemonBrokerLeasePath(targetScope);
+			const raw = { pid: deadPid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			await fs.writeFile(daemonBrokerTokenPath(targetScope), "test-token");
+			await fs.utimes(targetScope, STALE, STALE);
+
+			await pruneDeadDaemonRuntimeDirs(current);
+
+			expect(await fs.exists(targetScope)).toBe(true);
+			expect(await fs.exists(daemonBrokerEndpoint(targetScope))).toBe(true);
+			expect(await fs.exists(leasePath)).toBe(false);
+		} finally {
+			await child.close();
+		}
+	});
+
+	it("live fresh broker publication during ping contends under prune lock and succeeds after prune", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-contention-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "4444555566669999");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const sleeper = await spawnLiveChild();
+		const child = await spawnChildEndpointListener(targetScope, { gatePing: true });
+		const leasePath = daemonBrokerLeasePath(targetScope);
+		let freshLease: BrokerLease | null = null;
+		try {
+			const raw = { pid: sleeper.pid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			await fs.writeFile(daemonBrokerTokenPath(targetScope), "test-token");
+			await fs.utimes(targetScope, STALE, STALE);
+
+			const prunePromise = pruneDeadDaemonRuntimeDirs(current);
+			await child.waitForPing();
+
+			const contendedLease = await acquireBrokerLease(targetScope);
+			expect(contendedLease).toBeNull();
+
+			child.proceedPing();
+			await prunePromise;
+
+			expect(await fs.exists(targetScope)).toBe(true);
+			expect(await fs.exists(daemonBrokerEndpoint(targetScope))).toBe(true);
+			expect(await fs.exists(leasePath)).toBe(false);
+
+			freshLease = await acquireBrokerLease(targetScope);
+			expect(freshLease).not.toBeNull();
+			expect(await fs.exists(leasePath)).toBe(true);
+			const readLease = JSON.parse(await fs.readFile(leasePath, "utf8"));
+			expect(readLease.pid).toBe(process.pid);
+		} finally {
+			if (freshLease) await releaseBrokerLease(freshLease);
+			await child.close();
+			await sleeper.close();
+		}
+	});
+
+	it("identity mismatch with matching numeric authenticated listener retires stale record and keeps scope", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-identity-mismatch-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "444455556666aaaa");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const child = await spawnChildEndpointListener(targetScope);
+		const leasePath = daemonBrokerLeasePath(targetScope);
+		let freshLease: BrokerLease | null = null;
+		try {
+			const raw = { pid: child.pid, processIdentity: "mismatched-identity-uuid-0000" };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			await fs.writeFile(daemonBrokerTokenPath(targetScope), "test-token");
+			await fs.utimes(targetScope, STALE, STALE);
+
+			await pruneDeadDaemonRuntimeDirs(current);
+
+			expect(await fs.exists(targetScope)).toBe(true);
+			expect(await fs.exists(daemonBrokerEndpoint(targetScope))).toBe(true);
+			expect(await fs.exists(leasePath)).toBe(false);
+
+			freshLease = await acquireBrokerLease(targetScope);
+			expect(freshLease).not.toBeNull();
+			expect(await fs.exists(leasePath)).toBe(true);
+			const readLease = JSON.parse(await fs.readFile(leasePath, "utf8"));
+			expect(readLease.pid).toBe(process.pid);
+		} finally {
+			if (freshLease) await releaseBrokerLease(freshLease);
+			await child.close();
+		}
+	});
+
+	it("inconclusive older than 24h prunes directory even when bootTimeMs is 0", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-case5a-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "5555666677778888");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const child = await spawnLiveChild();
+		try {
+			const leasePath = daemonBrokerLeasePath(targetScope);
+			const raw = { pid: child.pid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			const recordMtime = child.startedAt - 10_000;
+			await fs.utimes(leasePath, recordMtime / 1000, recordMtime / 1000);
+			await fs.utimes(targetScope, STALE, STALE);
+
+			const ageOnlyClock: BrokerLeaseClock = {
+				now: () => recordMtime + 25 * 3600 * 1000,
+				bootTimeMs: () => 0,
+			};
+
+			await pruneDeadDaemonRuntimeDirs(current, ageOnlyClock);
+
+			expect(await fs.exists(targetScope)).toBe(false);
+		} finally {
+			await child.close();
+		}
+	});
+
+	it("inconclusive with boot 15min after record prunes directory even when age is 30min", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-case5b-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "6666777788889999");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+
+		const child = await spawnLiveChild();
+		try {
+			const leasePath = daemonBrokerLeasePath(targetScope);
+			const raw = { pid: child.pid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			const recordMtime = child.startedAt - 10_000;
+			await fs.utimes(leasePath, recordMtime / 1000, recordMtime / 1000);
+			await fs.utimes(targetScope, STALE, STALE);
+
+			const bootOnlyClock: BrokerLeaseClock = {
+				now: () => recordMtime + 30 * 60 * 1000,
+				bootTimeMs: () => recordMtime + 15 * 60 * 1000,
+			};
+
+			await pruneDeadDaemonRuntimeDirs(current, bootOnlyClock);
+
+			expect(await fs.exists(targetScope)).toBe(false);
+		} finally {
+			await child.close();
+		}
 	});
 });

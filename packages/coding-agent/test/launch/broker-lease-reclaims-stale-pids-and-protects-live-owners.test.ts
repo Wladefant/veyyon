@@ -74,7 +74,7 @@ it("preserves unverifiable legacy live owners instead of stealing their lease", 
 	expect(await acquireBrokerLease(dir)).toBeNull();
 });
 
-it("prunes legacy presence and keeps the broker lease of a live process that started after the record", async () => {
+it("preserves legacy presence and keeps the broker lease of a live process that started after the record", async () => {
 	const dir = await runtime();
 	expect(getProcessStartTime(process.pid)).not.toBeNull();
 	const leasePath = daemonBrokerLeasePath(dir);
@@ -85,8 +85,8 @@ it("prunes legacy presence and keeps the broker lease of a live process that sta
 	const presencePath = path.join(clients, "legacy.json");
 	await fs.writeFile(presencePath, JSON.stringify({ pid: process.pid }));
 	await fs.utimes(presencePath, 1, 1);
-	expect(await hasLiveDaemonProjectPresence(dir)).toBe(false);
-	expect(await fs.readdir(clients)).toEqual([]);
+	expect(await hasLiveDaemonProjectPresence(dir)).toBe(true);
+	expect(await fs.readdir(clients)).toEqual(["legacy.json"]);
 	// The start time alone cannot tell PID reuse from a clock step, and nothing answers as the owner:
 	// with no boot evidence and a record younger than the maximum age, a live PID is never taken over
 	// (see broker-lease-survives-clock-steps-...). The record's mtime is 1 s after the epoch.
@@ -150,7 +150,7 @@ for await (const chunk of Bun.stdin.stream()) {
 	}
 }, 15_000);
 
-it("prunes an aged runtime pinned by reused legacy broker and presence PIDs without touching current scope", async () => {
+it("preserves an aged runtime when legacy client presence has a live PID without touching current scope", async () => {
 	const root = path.join(await runtime(), "daemons");
 	const current = path.join(root, "1111111111111111");
 	const stale = path.join(root, "2222222222222222");
@@ -164,7 +164,7 @@ it("prunes an aged runtime pinned by reused legacy broker and presence PIDs with
 	}
 	await fs.utimes(stale, 1, 1);
 	await pruneDeadDaemonRuntimeDirs(current);
-	expect(await Bun.file(leasePath).exists()).toBe(false);
+	expect(await Bun.file(leasePath).exists()).toBe(true);
 	expect((await fs.stat(current)).isDirectory()).toBe(true);
 });
 

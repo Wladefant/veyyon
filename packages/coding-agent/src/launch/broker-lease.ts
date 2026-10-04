@@ -33,9 +33,9 @@ function classifyDaemonOwner(raw: unknown, recordMtimeMs?: number): DaemonOwnerV
 	return startedAt === null || startedAt <= recordMtimeMs + 2_000 ? "alive" : "legacy-reused";
 }
 
-/** Preserve unknown owners unless identity or a legacy creation-time comparison proves PID reuse. */
+/** Without an endpoint witness, ambiguous wall-clock evidence must preserve a live client. */
 export function daemonOwnerIsAlive(raw: unknown, recordMtimeMs?: number): boolean {
-	return classifyDaemonOwner(raw, recordMtimeMs) === "alive";
+	return classifyDaemonOwner(raw, recordMtimeMs) !== "dead";
 }
 
 /** One absolute deadline for the whole ping exchange, not an inactivity timer: a trickling peer cannot extend it. */
@@ -113,12 +113,39 @@ export interface BrokerLeaseClock {
 	bootTimeMs?: () => number;
 }
 
+/** A stale record can be removed without retiring a scope that a replacement broker serves. */
+export type DaemonOwnerRetirement = "keep" | "retire-record" | "retire-scope";
+
+/** Shared retirement evidence for lease acquisition and runtime pruning. */
+export async function daemonOwnerRetirement(
+	runtimeDir: string,
+	raw: unknown,
+	recordMtimeMs: number,
+	clock: BrokerLeaseClock = {},
+): Promise<DaemonOwnerRetirement> {
+	const verdict = classifyDaemonOwner(raw, recordMtimeMs);
+	const record = raw as { pid?: unknown; processIdentity?: unknown } | undefined;
+	if (verdict === "alive" && typeof record?.processIdentity === "string") return "keep";
+	const pid = typeof record?.pid === "number" ? record.pid : 0;
+	// An authenticated endpoint overrides clock evidence even when the recorded
+	// process is dead: another PID proves a stale record, not a dead runtime.
+	const witness = await brokerEndpointWitness(runtimeDir, pid);
+	// A reused PID can answer as the same number, but cannot restore the old identity.
+	if (verdict === "dead" && witness !== "inconclusive") return "retire-record";
+	if (witness === "owner") return "keep";
+	if (witness === "other-pid") return "retire-record";
+	if (verdict === "dead") return "retire-scope";
+	const now = clock.now ?? Date.now;
+	const bootTimeMs = clock.bootTimeMs ?? (() => Date.now() - os.uptime() * 1_000);
+	return recordMtimeMs < bootTimeMs() - LEGACY_BOOT_MARGIN_MS || now() - recordMtimeMs > LEGACY_LEASE_MAX_AGE_MS
+		? "retire-scope"
+		: "keep";
+}
+
 export async function acquireBrokerLease(
 	runtimeDir: string,
 	clock: BrokerLeaseClock = {},
 ): Promise<BrokerLease | null> {
-	const now = clock.now ?? Date.now;
-	const bootTimeMs = clock.bootTimeMs ?? (() => Date.now() - os.uptime() * 1_000);
 	const leasePath = daemonBrokerLeasePath(runtimeDir);
 	// Serialize observation, stale retirement and publication. A bare wx retry can
 	// delete a winner's freshly published lease when two starters observe a corpse.
@@ -132,34 +159,9 @@ export async function acquireBrokerLease(
 				// No writer using this transition lock can still be publishing.
 			}
 			const recordMtimeMs = (await fs.stat(leasePath)).mtimeMs;
-			const verdict = classifyDaemonOwner(raw, recordMtimeMs);
-			const record = (verdict === "dead" ? { pid: 0 } : raw) as { pid: number; processIdentity?: unknown };
-			// A legacy record has no process identity, so even a start time that fits it proves nothing about a
-			// long-lived owner. Every live legacy record goes through the same evidence order.
-			const isLegacy =
-				verdict === "legacy-reused" || (verdict === "alive" && typeof record.processIdentity !== "string");
-			if (verdict === "alive" && !isLegacy) {
-				logger.debug("Broker lease is held by a live owner; not starting a broker", { leasePath });
+			if ((await daemonOwnerRetirement(runtimeDir, raw, recordMtimeMs, clock)) === "keep") {
+				logger.debug("Broker lease owner is alive and not disproved; not starting a broker", { leasePath });
 				return null;
-			}
-			if (isLegacy) {
-				const ageMs = now() - recordMtimeMs;
-				// 1. An authenticated ping is the only direct evidence: the recorded PID answering means keep, and
-				//    overrides every clock-derived signal below; another PID answering means the record is stale.
-				const witness = await brokerEndpointWitness(runtimeDir, record.pid);
-				// 2. Only when the endpoint is inconclusive (absent, refused, EOF, timeout, garbage) may the clock decide:
-				//    a record far older than this boot, or older than the maximum age.
-				const predatesBoot = recordMtimeMs < bootTimeMs() - LEGACY_BOOT_MARGIN_MS;
-				const reclaim =
-					witness === "other-pid" || (witness === "inconclusive" && (predatesBoot || ageMs > LEGACY_LEASE_MAX_AGE_MS));
-				if (!reclaim) {
-					logger.debug("Legacy broker lease owner is alive and not disproved; not starting a broker", {
-						leasePath,
-						witness,
-						ageMs,
-					});
-					return null;
-				}
 			}
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
