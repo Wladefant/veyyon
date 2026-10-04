@@ -106,6 +106,18 @@ export function getAllImageBlocks(
 	return [...contentImages, ...detailImages];
 }
 
+/**
+ * The images a block built from `result` shows: every image block that carries both its bytes and
+ * its type. Derived from the result alone, so a card can ask for them without building its views.
+ */
+export function toolExecutionImages(result: ToolExecutionBuildParams["result"]): ToolExecutionImageItem[] | undefined {
+	const images: ToolExecutionImageItem[] = [];
+	for (const img of getAllImageBlocks(result)) {
+		if (img.data && img.mimeType) images.push({ data: img.data, mimeType: img.mimeType });
+	}
+	return images.length > 0 ? images : undefined;
+}
+
 export function getImageSourceName(result: { details?: unknown } | undefined, args: unknown): string | undefined {
 	const detailsRecord = isRecord(result?.details) ? result.details : undefined;
 	const argsRecord = isRecord(args) ? args : undefined;
@@ -314,12 +326,7 @@ export function buildToolExecutionDisplay(
 			? buildGenericDisplay(args, renderableResult, isPartial, params.frame)
 			: undefined;
 
-	// Image extraction
-	const imageBlocks = getAllImageBlocks(result);
 	const imageSourcePath = getImageSourceName(result, args);
-	const images: ToolExecutionImageItem[] = imageBlocks
-		.filter(img => img.data && img.mimeType)
-		.map(img => ({ data: img.data, mimeType: img.mimeType }));
 
 	const isError = params.isError === true || renderableResult?.isError === true;
 
@@ -333,7 +340,7 @@ export function buildToolExecutionDisplay(
 		notExecutedReason: notExecuted,
 		neverRan,
 		generic,
-		images: images.length > 0 ? images : undefined,
+		images: toolExecutionImages(result),
 		imageSourcePath,
 		policies,
 		failures: views.failures,

@@ -7,20 +7,24 @@
  * again before any frame showed it. The construction drew the call view, which for a `write` is the
  * whole file highlighted, and the result view replaced it a moment later: on a 4,712-block session
  * rebuilding and drawing the transcript took 999 ms that way and takes 603 ms drawn at render. A
- * streaming call drew once per argument delta, not once per frame.
+ * streaming call drew once per argument delta, not once per frame. A terminal drawing Kitty images
+ * converts a result's pictures to PNG, and the card found them by building its block on every result
+ * it was handed: a streaming command built every view of its card once per output chunk, for a
+ * frame that drew only the last.
  *
  * The block behind the display projected every view it carries, and the card built it on every
  * change and on every question about its state: whether to animate, whether it is finalized,
  * whether the next call displaces it. A rebuilt 3,959-card transcript built 13,210 blocks for the
  * 3,959 its first frame drew.
  *
- * THE CLASS. Any mutator of the card that draws or builds eagerly, and any state query that builds.
- * The sweep reads the card's public methods off its prototype at run time and fails on a method
- * nobody has classified, so a new mutator is red until it is driven here, and a new method that
- * neither changes nor draws the card is red until it is driven as a query. Every mutator and query
- * is called with no render after it, and nothing may draw or project a view; the frame after each
- * visible change must show that change, which catches a mutator that forgot to mark the display
- * stale.
+ * THE CLASS. Any mutator of the card that draws or builds eagerly, under any image protocol the
+ * terminal reports, and any state query that builds. Every mutator runs under each protocol of the
+ * enum and under none. The sweep reads the card's public methods off its prototype at run time and
+ * fails on a method nobody has classified, so a new mutator is red until it is driven here, and a
+ * new method that neither changes nor draws the card is red until it is driven as a query. Every
+ * mutator and query is called with no render after it, and nothing may draw or project a view; the
+ * frame after each visible change must show that change, which catches a mutator that forgot to
+ * mark the display stale.
  *
  * WHAT IT DOES NOT CATCH. Components other than `ToolExecutionComponent` (the read group, assistant
  * messages, custom message renderers) are not swept. `setArgsComplete`, `seal`, `setShowImages`,
@@ -41,7 +45,7 @@ import * as highlightModule from "@veyyon/coding-agent/theme/highlight";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { toolViewDefinitions } from "@veyyon/coding-agent/tools/view-registry";
 import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
-import type { TUI } from "@veyyon/tui";
+import { ImageProtocol, setTerminalImageProtocol, TERMINAL, type TUI } from "@veyyon/tui";
 import type { ToolExecutionBlock } from "@veyyon/wire/presentation";
 import { createToolExecution } from "../../../helpers/tool-execution";
 
@@ -243,7 +247,12 @@ function projectionsOfOneBuild(args: unknown): number {
 	return projections.count;
 }
 
+/** Every image protocol a terminal can report, and none, since the card does a protocol's own work on a result. */
+const PROTOCOLS: readonly (ImageProtocol | null)[] = [null, ...Object.values(ImageProtocol)];
+
 describe("a tool card draws only the frames it shows", () => {
+	const originalProtocol = TERMINAL.imageProtocol;
+
 	beforeAll(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
@@ -253,6 +262,7 @@ describe("a tool card draws only the frames it shows", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+		setTerminalImageProtocol(originalProtocol);
 	});
 
 	it("classifies every public method of the card", () => {
@@ -268,19 +278,22 @@ describe("a tool card draws only the frames it shows", () => {
 		]);
 	});
 
-	for (const [name, mutation] of Object.entries(MUTATIONS)) {
-		it(`${name} draws and builds nothing until the next render, which shows it`, () => {
-			vi.useFakeTimers();
-			const card = writeCard();
-			plain(card);
-			const draws = countDraws();
-			const projections = countProjections();
-			mutation.apply(card);
-			mutation.apply(card);
-			expect({ draws: draws.count, projections: projections.count }).toEqual({ draws: 0, projections: 0 });
-			const frame = plain(card);
-			if (mutation.shows) expect(mutation.shows(frame)).toBe(true);
-		});
+	for (const protocol of PROTOCOLS) {
+		for (const [name, mutation] of Object.entries(MUTATIONS)) {
+			it(`${name} draws and builds nothing until the next render, which shows it, with image protocol ${protocol}`, () => {
+				vi.useFakeTimers();
+				setTerminalImageProtocol(protocol);
+				const card = writeCard();
+				plain(card);
+				const draws = countDraws();
+				const projections = countProjections();
+				mutation.apply(card);
+				mutation.apply(card);
+				expect({ draws: draws.count, projections: projections.count }).toEqual({ draws: 0, projections: 0 });
+				const frame = plain(card);
+				if (mutation.shows) expect(mutation.shows(frame)).toBe(true);
+			});
+		}
 	}
 
 	it("answers every question about its state without building its block", async () => {

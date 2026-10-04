@@ -32,9 +32,11 @@ import {
 	buildToolRenderContext,
 	createToolExecutionProducer,
 	notExecutedReason,
+	type ToolExecutionBuildParams,
 	type ToolExecutionDrawContext,
 	type ToolExecutionListener,
 	ToolExecutionProducer,
+	toolExecutionImages,
 } from "../../../../presentation/tool-execution";
 import { recordImageDisplay } from "../../../../session/image-visibility";
 import type { HighlightRequest } from "../../../../theme/highlight";
@@ -627,7 +629,7 @@ export class ToolExecutionComponent
 				wasPartialResult && partialResultPainted,
 				isPartial,
 			);
-			this.#maybeConvertImagesForKitty();
+			this.#maybeConvertImagesForKitty(result);
 		} finally {
 			this.#inSyncUpdate = false;
 		}
@@ -654,9 +656,12 @@ export class ToolExecutionComponent
 		recordImageDisplay(toolCallId, index, fallback);
 	}
 
-	#maybeConvertImagesForKitty(): void {
+	#maybeConvertImagesForKitty(result: ToolExecutionBuildParams["result"]): void {
 		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
-		const images = this.#block.display?.images;
+		// Every streamed partial result lands here. The block's images are a function of the result, so
+		// they are read from it: building the block to find them would project every view of the card,
+		// once per update, for a frame that draws only the last one.
+		const images = toolExecutionImages(result);
 		if (!images || images.length === 0) return;
 
 		for (let i = 0; i < images.length; i++) {
