@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import { buildModel } from "@veyyon/catalog/build";
 import { readModelCache, writeModelCache } from "@veyyon/catalog/model-cache";
 import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
-import { openMemoryDb } from "../src/memory/storage";
 import { TempDir } from "@veyyon/utils";
+import { openMemoryDb } from "../src/memory/storage";
 
 /**
  * Corruption policy per store class (https://github.com/Wladefant/veyyon/issues/467).
