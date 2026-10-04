@@ -247,7 +247,8 @@ describe("claim marker process incarnation", () => {
 				stubBackend();
 
 				const handle = await ensureIsolation(repo, "reused-allocate");
-				expect(handle.mergedDir).toBe(path.join(slot, "m"));
+				expect(path.dirname(handle.mergedDir)).toBe(slot);
+				expect(path.basename(handle.mergedDir)).toMatch(/^m-[0-9a-f]{16}$/);
 				const owner = JSON.parse(await fs.readFile(path.join(slot, ISOLATION_OWNER_FILE), "utf8"));
 				expect(owner.pid).toBe(process.pid);
 			});

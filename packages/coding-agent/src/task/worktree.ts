@@ -13,7 +13,9 @@ import {
 	isAbandonedEmptyReservation,
 	type LinkedWorktreeRegistration,
 	readIsolationOwner,
+	REGISTRATION_OWNER_FILE,
 	releaseIsolationClaim,
+	stampLinkedWorktreeRegistration,
 	tryWithIsolationLifecycleLock,
 	withIsolationLifecycleLock,
 	writeIsolationOwner,
@@ -28,7 +30,17 @@ export const TASK_BRANCH_PREFIX = "veyyon/task/";
 
 export const TASK_ISOLATION_DIR_PREFIX = "t";
 export const TASK_ISOLATION_DIR_DIGEST_CHARS = 9;
-export const TASK_ISOLATION_MOUNT_DIR = "m";
+/** Mount dir name prefix; the full name is unique per isolation instance, see {@link isolationMountName}. */
+export const TASK_ISOLATION_MOUNT_PREFIX = "m-";
+
+/**
+ * Per-instance mount directory name. Git names a linked worktree's registration after the
+ * checkout's basename, so a basename unique to one isolation instance means no other checkout
+ * is ever allocated its registration name, even after `git worktree prune` frees it.
+ */
+export function isolationMountName(token: string): string {
+	return `${TASK_ISOLATION_MOUNT_PREFIX}${token.replaceAll("-", "").slice(0, 16)}`;
+}
 
 const TASK_ISOLATION_DIR_REGEX = new RegExp(
 	`^${TASK_ISOLATION_DIR_PREFIX}[0-9a-fA-F]{${TASK_ISOLATION_DIR_DIGEST_CHARS}}(?:\\.retained(?:-.*)?)?$`,
@@ -511,7 +523,8 @@ export async function ensureIsolation(
 ): Promise<IsolationHandle> {
 	const repoRoot = await getRepoRoot(baseCwd);
 	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
-	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
+	const ownerToken = crypto.randomUUID();
+	const mergedDir = path.join(baseDir, isolationMountName(ownerToken));
 	const resolution = natives.isoResolve(preferred ?? null);
 	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
 	let fallbackReason = resolution.reason ?? null;
@@ -545,10 +558,15 @@ export async function ensureIsolation(
 					cause: error,
 				});
 			}
-			const owner = await writeIsolationOwner(baseDir);
+			const owner = await writeIsolationOwner(baseDir, ownerToken);
 
 			try {
 				await natives.isoStart(candidate, repoRoot, mergedDir);
+				// A copy backend registers a linked worktree in the source repo: stamp it so only this
+				// instance can later clear it.
+				await stampLinkedWorktreeRegistration(mergedDir, owner.token).catch(error =>
+					logger.warn("isolation registration not stamped at setup", { baseDir, error: errorMessage(error) }),
+				);
 				// Record the backend at setup, not only on retention, so `veyyon worktree clear` can
 				// reclaim the slot after this owner crashes. Marked unretained: while the owner lives,
 				// clear still refuses the slot.
@@ -591,46 +609,28 @@ export async function ensureIsolation(
  * repositories, naming exactly the directories {@link findLinkedWorktreeAdminDirs} found.
  * Best effort: a registration that is already gone needs nothing.
  *
- * Check-then-delete cannot be made safe: `git worktree prune` (run by git itself, outside any
- * lock of ours) may free the name after our read and another checkout may reuse it before the
- * delete. So the verified directory is first renamed, atomically, to a private tombstone beside
- * `worktrees/`. The rename fails if the name is already gone, and what it moved is re-verified
- * by its own `gitdir` backlink. Only a tombstone that still names this checkout is deleted; any
- * other directory is renamed straight back.
+ * A registration is removed only while its `gitdir` backlink still names the removed checkout
+ * AND its owner token is the one found at collection. Every isolation checkout has a unique
+ * basename (see {@link isolationMountName}) and git names the registration after that
+ * basename, so no other checkout can ever be allocated this registration name; the checks
+ * are defence against a forged or copied pointer, not against name reuse.
  */
 export async function removeLinkedWorktreeRegistrations(
 	registrations: readonly LinkedWorktreeRegistration[],
 ): Promise<void> {
-	for (const { adminDir, backlink } of registrations) {
-		const tombstone = path.join(path.dirname(path.dirname(adminDir)), `veyyon-removing-${crypto.randomUUID()}`);
+	for (const { adminDir, backlink, token } of registrations) {
 		try {
-			await fs.rename(adminDir, tombstone);
+			const current = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
+			const currentToken = (await fs.readFile(path.join(adminDir, REGISTRATION_OWNER_FILE), "utf8")).trim();
+			if (current !== backlink || currentToken !== token) {
+				logger.warn("left a worktree registration that is no longer this isolation's", { adminDir });
+				continue;
+			}
+			await fs.rm(adminDir, { recursive: true, force: true });
 		} catch (err) {
-			if (!isEnoent(err)) {
-				logger.warn("could not remove worktree registration after isolation removal", {
-					adminDir,
-					error: errorMessage(err),
-				});
-			}
-			continue;
-		}
-		try {
-			let current: string | null = null;
-			try {
-				current = path.resolve(adminDir, (await fs.readFile(path.join(tombstone, "gitdir"), "utf8")).trim());
-			} catch {
-				/* unreadable backlink: not provably ours */
-			}
-			if (current === backlink) {
-				await fs.rm(tombstone, { recursive: true, force: true });
-			} else {
-				// Another checkout reused the name between the read and the rename: give it back.
-				await fs.rename(tombstone, adminDir);
-			}
-		} catch (err) {
-			logger.warn("could not finish removing worktree registration after isolation removal", {
+			if (isEnoent(err)) continue;
+			logger.warn("could not remove worktree registration after isolation removal", {
 				adminDir,
-				tombstone,
 				error: errorMessage(err),
 			});
 		}

@@ -3,7 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
-import { RETAINED_BACKEND_FILE, readRetainedMountBackend } from "@veyyon/coding-agent/task/isolation-ownership";
+import {
+	RETAINED_BACKEND_FILE,
+	readRetainedMountBackend,
+	stampLinkedWorktreeRegistration,
+	writeIsolationOwner,
+} from "@veyyon/coding-agent/task/isolation-ownership";
 import {
 	applyEligibleNestedPatches,
 	mergeIsolatedChanges,
@@ -543,6 +548,7 @@ describe("retainIsolationWorkspace", () => {
 		const isolationDir = path.join(baseDir, "m");
 		await fs.mkdir(baseDir);
 		await git(repo, "worktree", "add", "--detach", isolationDir);
+		await stampLinkedWorktreeRegistration(isolationDir, (await writeIsolationOwner(baseDir)).token);
 
 		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Rcopy);
 

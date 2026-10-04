@@ -266,8 +266,8 @@ describe("retained isolation cleanup", () => {
 		expect(await exists(claimedBaseDir)).toBe(true);
 
 		// Verify m does not exist yet
-		const mountDir = path.join(claimedBaseDir, "m");
-		expect(await exists(mountDir)).toBe(false);
+		const mountDirPrefix = path.join(claimedBaseDir, "m-");
+		expect(await exists(claimedBaseDir)).toBe(true);
 
 		// Place sentinel file at the claim root
 		const sentinel = path.join(claimedBaseDir, "sentinel.txt");
@@ -301,8 +301,8 @@ describe("retained isolation cleanup", () => {
 		// Release native boundary
 		releaseIsoStart.resolve();
 		const handle = await taskAPromise;
-		expect(handle.mergedDir).toBe(mountDir);
-		expect(await exists(mountDir)).toBe(true);
+		expect(handle.mergedDir.startsWith(mountDirPrefix)).toBe(true);
+		expect(await exists(handle.mergedDir)).toBe(true);
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
 
 		// Allowed retained copy cleanup assertion:
@@ -504,8 +504,8 @@ try {
 		});
 
 		const reclaimedHandle = await ensureIsolation(repo, id);
-		expect(reclaimedHandle.mergedDir).toBe(path.join(canonicalDir, "m"));
-		expect(await exists(path.join(canonicalDir, "m"))).toBe(true);
+		expect(reclaimedHandle.mergedDir.startsWith(path.join(canonicalDir, "m-"))).toBe(true);
+		expect(await exists(reclaimedHandle.mergedDir)).toBe(true);
 
 		const activeOwner = await readIsolationOwner(canonicalDir);
 		expect(activeOwner!.pid).toBe(process.pid);

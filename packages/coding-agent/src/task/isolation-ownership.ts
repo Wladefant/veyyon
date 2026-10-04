@@ -27,6 +27,13 @@ export const RETAINED_BACKEND_FILE = ".veyyon-retained-backend.json";
 /** Process ownership record created during atomic slot claim. */
 export const ISOLATION_OWNER_FILE = ".veyyon-owner.json";
 
+/**
+ * Token file stamped into the git registration (`<repo>/.git/worktrees/<name>`) of an isolation
+ * checkout. Together with the unique mount directory name it proves the registration belongs to
+ * exactly one isolation instance.
+ */
+export const REGISTRATION_OWNER_FILE = "veyyon-owner";
+
 export interface IsolationOwnerRecord {
 	pid: number;
 	startIdentity: string | null;
@@ -135,19 +142,57 @@ export async function writeIsolationOwner(
 export interface LinkedWorktreeRegistration {
 	adminDir: string;
 	backlink: string;
+	/** Owner token the registration carried when found; deletion requires it to be unchanged. */
+	token: string;
+}
+
+/** Resolve the registration directory a checkout's `.git` pointer file names, or null. */
+async function readRegistrationPointer(checkout: string): Promise<{ adminDir: string; backlink: string } | null> {
+	try {
+		const pointer = await fs.readFile(path.join(checkout, ".git"), "utf8");
+		const match = /^gitdir:\s*(.+?)\s*$/m.exec(pointer);
+		if (!match) return null;
+		const adminDir = path.resolve(checkout, match[1]);
+		// Only a genuine registration: <repo>/.git/worktrees/<name>.
+		if (path.basename(path.dirname(adminDir)) !== "worktrees") return null;
+		const backlink = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
+		return { adminDir, backlink };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Stamp the isolation owner token into the registration of a freshly created linked-worktree
+ * checkout. Only a registration whose backlink names this checkout is stamped. Best effort: a
+ * checkout that is not a linked worktree has no registration to stamp.
+ */
+export async function stampLinkedWorktreeRegistration(checkout: string, token: string): Promise<void> {
+	const registration = await readRegistrationPointer(checkout);
+	if (registration === null || registration.backlink !== path.resolve(checkout, ".git")) return;
+	await fs.writeFile(path.join(registration.adminDir, REGISTRATION_OWNER_FILE), token, "utf8");
 }
 
 /**
  * Registration directories (`<repo>/.git/worktrees/<name>`) of the linked-worktree checkouts
- * inside an isolation slot. A copy backend such as Rcopy materialises `git worktree add`
- * checkouts, so deleting the slot with `fs.rm` alone leaves the source repo listing a missing
- * worktree, and the next `ensureIsolation` for the same id fails with "missing but already
- * registered". Callers collect these before removal and delete exactly these directories
- * afterwards. Targeted on purpose: a repo-wide `git worktree prune` would also drop the
- * registration of another task whose checkout is mid-move during its own retention. Looks at
- * the slot and one level below it, which covers the mount dir of a plain and of a retained slot.
+ * inside an isolation slot that this slot's instance created. A copy backend such as Rcopy
+ * materialises `git worktree add` checkouts, so deleting the slot with `fs.rm` alone leaves the
+ * source repo listing a missing worktree, and the next `ensureIsolation` for the same id fails
+ * with "missing but already registered". Callers collect these before removal and delete
+ * exactly these directories afterwards. A registration qualifies only when its `gitdir`
+ * backlink names the checkout AND its owner token equals the slot's owner token, so a copied
+ * view of another worktree's `.git` pointer never qualifies. Each checkout has a unique
+ * basename, so git never reuses the registration name for another checkout. Looks at the slot
+ * and one level below it, which covers the mount dir of a plain and of a retained slot.
  */
 export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<LinkedWorktreeRegistration[]> {
+	let owner: IsolationOwnerRecord | null;
+	try {
+		owner = await readIsolationOwner(baseDir);
+	} catch {
+		return [];
+	}
+	if (owner === null) return [];
 	const candidates = [baseDir];
 	try {
 		for (const entry of await fs.readdir(baseDir, { withFileTypes: true })) {
@@ -158,20 +203,14 @@ export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<Link
 	}
 	const adminDirs: LinkedWorktreeRegistration[] = [];
 	for (const dir of candidates) {
+		const registration = await readRegistrationPointer(dir);
+		if (registration === null || registration.backlink !== path.resolve(dir, ".git")) continue;
 		try {
-			const pointer = await fs.readFile(path.join(dir, ".git"), "utf8");
-			const match = /^gitdir:\s*(.+?)\s*$/m.exec(pointer);
-			if (!match) continue;
-			const adminDir = path.resolve(dir, match[1]);
-			// Only a genuine registration: <repo>/.git/worktrees/<name>.
-			if (path.basename(path.dirname(adminDir)) !== "worktrees") continue;
-			// The registration must point back at this very checkout. A copied view of a source
-			// linked worktree inherits the source's `.git` pointer, whose backlink names the source.
-			const backlink = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
-			if (backlink !== path.resolve(dir, ".git")) continue;
-			adminDirs.push({ adminDir, backlink });
+			const token = (await fs.readFile(path.join(registration.adminDir, REGISTRATION_OWNER_FILE), "utf8")).trim();
+			if (token !== owner.token) continue;
+			adminDirs.push({ ...registration, token });
 		} catch {
-			/* not a linked worktree */
+			/* unstamped registration: not provably ours */
 		}
 	}
 	return adminDirs;

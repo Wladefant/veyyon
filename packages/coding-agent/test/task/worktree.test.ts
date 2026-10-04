@@ -7,7 +7,9 @@ import {
 	findLinkedWorktreeAdminDirs,
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
+	REGISTRATION_OWNER_FILE,
 	RETAINED_BACKEND_FILE,
+	writeIsolationOwner,
 } from "@veyyon/coding-agent/task/isolation-ownership";
 import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
@@ -324,98 +326,121 @@ describe("worktree isolation helpers", () => {
 			await cleanupIsolation(again);
 		});
 
-		it("ignores a registration whose backlink names another checkout, and skips removal after its name is reused", async () => {
+		it("collects and removes only a registration that names this checkout and carries this slot's owner token", async () => {
 			const slot = await fs.mkdtemp(path.join(os.tmpdir(), "slot-"));
 			tempDirs.push(slot);
+			const owner = await writeIsolationOwner(slot);
 			const admin = path.join(slot, "src", ".git", "worktrees", "wt");
 			await fs.mkdir(admin, { recursive: true });
 			const checkout = path.join(slot, "mount");
 			await fs.mkdir(checkout);
 			await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${admin}\n`);
+			const gitdirFile = path.join(admin, "gitdir");
+			const tokenFile = path.join(admin, REGISTRATION_OWNER_FILE);
 
 			// Copied view of a source linked worktree: the registration names the source, not this copy.
-			await fs.writeFile(path.join(admin, "gitdir"), path.join(slot, "source", ".git"));
+			await fs.writeFile(gitdirFile, path.join(slot, "source", ".git"));
+			await fs.writeFile(tokenFile, owner.token);
 			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
 
-			// Genuine registration is found, then its name is reused by another checkout before removal.
-			await fs.writeFile(path.join(admin, "gitdir"), path.join(checkout, ".git"));
+			// Right backlink but another isolation's token (or none): not provably ours.
+			await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
+			await fs.writeFile(tokenFile, "someone-else");
+			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+			await fs.rm(tokenFile);
+			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+
+			await fs.writeFile(tokenFile, owner.token);
 			const found = await findLinkedWorktreeAdminDirs(slot);
 			expect(found).toHaveLength(1);
-			await fs.writeFile(path.join(admin, "gitdir"), path.join(slot, "other", ".git"));
-			await removeLinkedWorktreeRegistrations(found);
-			expect(await Bun.file(path.join(admin, "gitdir")).exists()).toBe(true);
 
-			await fs.writeFile(path.join(admin, "gitdir"), path.join(checkout, ".git"));
+			// A forged token or a repointed backlink after collection makes removal a no-op.
+			await fs.writeFile(tokenFile, "forged");
 			await removeLinkedWorktreeRegistrations(found);
-			expect(await Bun.file(path.join(admin, "gitdir")).exists()).toBe(false);
+			expect(await Bun.file(gitdirFile).exists()).toBe(true);
+			await fs.writeFile(tokenFile, owner.token);
+			await fs.writeFile(gitdirFile, path.join(slot, "other", ".git"));
+			await removeLinkedWorktreeRegistrations(found);
+			expect(await Bun.file(gitdirFile).exists()).toBe(true);
+
+			await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
+			await removeLinkedWorktreeRegistrations(found);
+			expect(await Bun.file(gitdirFile).exists()).toBe(false);
 		});
 
-		it("does not delete a registration another checkout reuses after the final backlink read", async () => {
+		it("never lets another isolation reuse the registration name freed after the final backlink read", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
+				await runGit(source, ["worktree", "add", "--detach", mergedDir]);
+			});
 			const { repo: source } = await createGitRepo();
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "reuse-race-"));
-			tempDirs.push(root);
-			const checkoutA = path.join(root, "a", "m");
-			const checkoutB = path.join(root, "b", "m");
-			await fs.mkdir(path.dirname(checkoutA), { recursive: true });
-			await fs.mkdir(path.dirname(checkoutB), { recursive: true });
-			await runGit(source, ["worktree", "add", "--detach", checkoutA]);
-			const found = await findLinkedWorktreeAdminDirs(path.join(root, "a"));
+			const a = await ensureIsolation(source, "reuse-a");
+			const baseA = path.dirname(a.mergedDir);
+			const found = await findLinkedWorktreeAdminDirs(baseA);
 			expect(found).toHaveLength(1);
 			const adminDir = found[0].adminDir;
 
-			// Slot A is removed; between the helper's read and its delete, real git frees the admin name
-			// and checkout B (a different id) is registered under the same name.
-			await fs.rm(path.join(root, "a"), { recursive: true, force: true });
-			const realRename = fs.rename;
+			// Slot A is removed; right at A's registration delete, real git frees the name (prune) and a
+			// different-id isolation B is registered.
+			await fs.rm(baseA, { recursive: true, force: true });
 			const realRm = fs.rm;
-			let raced = false;
-			const reuse = async () => {
-				if (raced) return;
-				raced = true;
-				await runGit(source, ["worktree", "prune", "--expire", "now"]);
-				await runGit(source, ["worktree", "add", "--detach", checkoutB]);
-				await fs.writeFile(path.join(checkoutB, "sentinel-b"), "b\n");
-				await runGit(checkoutB, ["add", "sentinel-b"]);
-			};
-			vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-				if (from === adminDir) await reuse();
-				return realRename(from, to);
-			});
+			let b: Awaited<ReturnType<typeof ensureIsolation>> | undefined;
 			vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-				if (target === adminDir) await reuse();
+				if (target === adminDir && b === undefined) {
+					await runGit(source, ["worktree", "prune", "--expire", "now"]);
+					b = await ensureIsolation(source, "reuse-b");
+					await fs.writeFile(path.join(b.mergedDir, "sentinel-b"), "b\n");
+					await runGit(b.mergedDir, ["add", "sentinel-b"]);
+				}
 				return realRm(target, options);
 			});
 
 			await removeLinkedWorktreeRegistrations(found);
 
-			expect(raced).toBe(true);
-			expect(await runGit(checkoutB, ["status", "--porcelain"])).toContain("sentinel-b");
-			const reused = await findLinkedWorktreeAdminDirs(path.join(root, "b"));
-			expect(reused.map(registration => registration.adminDir)).toEqual([adminDir]);
+			if (b === undefined) throw new Error("the registration delete was never reached");
+			const adminB = (await findLinkedWorktreeAdminDirs(path.dirname(b.mergedDir)))[0].adminDir;
+			expect(adminB).not.toBe(adminDir);
+			expect(await Bun.file(path.join(adminDir, "gitdir")).exists()).toBe(false);
+			expect(await runGit(b.mergedDir, ["status", "--porcelain"])).toContain("sentinel-b");
+			await cleanupIsolation(b);
 		});
 
-		it("does not repoint the source worktree registration when retaining a copied .git pointer", async () => {
+		it("does not repoint a source isolation's registration when retaining a copied .git pointer", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
+				await runGit(source, ["worktree", "add", "--detach", mergedDir]);
+			});
 			const { repo: source } = await createGitRepo();
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "retain-adopt-"));
-			tempDirs.push(root);
-			const sourceWorktree = path.join(root, "source-wt");
-			await runGit(source, ["worktree", "add", "--detach", sourceWorktree]);
-			// Copy backends materialise regular files, including the source worktree's `.git` pointer.
-			const slot = path.join(root, "slot");
-			const mergedDir = path.join(slot, "m");
-			await fs.cp(sourceWorktree, mergedDir, { recursive: true });
+			const live = await ensureIsolation(source, "retain-live");
+			const liveAdmin = (await findLinkedWorktreeAdminDirs(path.dirname(live.mergedDir)))[0].adminDir;
+
+			// Copy backends materialise regular files, including the live checkout's `.git` pointer.
+			const slot = await fs.mkdtemp(path.join(os.tmpdir(), "retain-adopt-"));
+			tempDirs.push(slot);
+			const mergedDir = path.join(slot, path.basename(live.mergedDir));
+			await fs.cp(live.mergedDir, mergedDir, { recursive: true });
+			await writeIsolationOwner(slot);
 			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
-			const adminDir = (await findLinkedWorktreeAdminDirs(sourceWorktree))[0].adminDir;
 
 			const retained = await retainIsolationWorkspace(mergedDir, natives.IsoBackendKind.Rcopy);
 
 			expect(retained.dir).not.toBe(mergedDir);
-			// The live source registration still names the source and is not collectable as the copy's.
 			expect(await findLinkedWorktreeAdminDirs(path.dirname(retained.dir))).toEqual([]);
-			expect(path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim())).toBe(
-				path.join(sourceWorktree, ".git"),
+			expect(path.resolve(liveAdmin, (await fs.readFile(path.join(liveAdmin, "gitdir"), "utf8")).trim())).toBe(
+				path.join(live.mergedDir, ".git"),
 			);
-			expect(await runGit(sourceWorktree, ["status", "--porcelain"])).toBe("");
+			expect(await runGit(live.mergedDir, ["status", "--porcelain"])).toBe("");
+			await cleanupIsolation(live);
 		});
 
 		it("removes only its own worktree registration, never another slot's of the same repo", async () => {
@@ -529,7 +554,7 @@ describe("worktree isolation helpers", () => {
 				const mergedLeaf = path.basename(handle.mergedDir);
 				const isolationSegment = path.basename(path.dirname(handle.mergedDir));
 
-				expect(mergedLeaf).toBe("m");
+				expect(mergedLeaf).toMatch(/^m-[0-9a-f]{16}$/);
 				expect(isolationSegment).not.toContain(longTaskId);
 				expect(isolationSegment.length).toBeLessThanOrEqual(12);
 			} finally {
