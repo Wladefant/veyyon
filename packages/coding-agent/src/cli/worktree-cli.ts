@@ -22,9 +22,9 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, formatCount, getWorktreesDir, isEnoent, isProcessInstanceAlive } from "@veyyon/utils";
 import chalk from "chalk";
 import {
+	findLinkedWorktreeRepos,
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
-	findLinkedWorktreeRepos,
 	isAbandonedEmptyReservation,
 	isolationClaimIsLive,
 	isRetainedWorkspace,
