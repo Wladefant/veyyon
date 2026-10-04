@@ -161,53 +161,26 @@ export async function readIsolationOwner(baseDir: string): Promise<IsolationOwne
  * Directories with any other contents fail closed (return `false`).
  */
 export async function isAbandonedEmptyReservation(baseDir: string): Promise<boolean> {
-	let pid: number | null = null;
-	let startIdentity: string | null = null;
+	let pid: number;
+	let startIdentity: string | null;
 
-	try {
-		const rawClaim = await fs.readFile(path.join(baseDir, ISOLATION_CLAIM_FILE), "utf8");
-		let decoded: unknown;
-		try {
-			decoded = JSON.parse(rawClaim);
-		} catch {
-			return false;
-		}
-		if (decoded && typeof decoded === "object" && "pid" in decoded) {
-			const candidatePid = decoded.pid;
-			if (
-				typeof candidatePid === "number" &&
-				Number.isInteger(candidatePid) &&
-				candidatePid > 0 &&
-				candidatePid <= 0x7fffffff
-			) {
-				pid = candidatePid;
-				if ("startIdentity" in decoded && typeof decoded.startIdentity === "string") {
-					startIdentity = decoded.startIdentity;
-				}
-			} else {
-				return false;
-			}
-		} else {
-			return false;
-		}
-	} catch (err) {
-		if (!isEnoent(err)) return false;
-	}
-
-	if (pid === null) {
-		let owner: IsolationOwnerRecord | null = null;
+	const claim = await readClaimIncarnation(baseDir);
+	if (claim.state === "unreadable") return false;
+	if (claim.state === "present") {
+		pid = claim.pid;
+		startIdentity = claim.startIdentity;
+	} else {
+		let owner: IsolationOwnerRecord | null;
 		try {
 			owner = await readIsolationOwner(baseDir);
 		} catch {
 			return false;
 		}
-		if (owner) {
-			pid = owner.pid;
-			startIdentity = owner.startIdentity;
-		}
+		if (!owner) return false;
+		pid = owner.pid;
+		startIdentity = owner.startIdentity;
 	}
 
-	if (pid === null) return false;
 	if (isProcessInstanceAlive(pid, startIdentity)) return false;
 
 	try {
@@ -219,13 +192,46 @@ export async function isAbandonedEmptyReservation(baseDir: string): Promise<bool
 }
 
 /**
- * Path for a base directory's exclusive lifecycle lock outside the scanned
- * `wt` directory (under a sibling `isolation-locks` directory).
+ * One canonical spelling of a physical path, so every alias of an isolation
+ * slot (a case variant on Windows, a junction or symlink on a parent
+ * directory) names the same lock and compares equal. Resolves the deepest
+ * existing ancestor with `fs.realpath` and appends the not-yet-existing rest;
+ * on win32 the result is lowercased with `\` separators.
  */
-export function getIsolationLifecycleLockPath(baseDir: string): string {
-	const resolved = path.resolve(baseDir);
-	const name = path.basename(resolved);
-	const hash = crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 16);
+export async function canonicalIsolationPath(target: string): Promise<string> {
+	const resolved = path.resolve(target);
+	const rest: string[] = [];
+	let current = resolved;
+	let real: string | undefined;
+	for (;;) {
+		try {
+			real = await fs.realpath(current);
+			break;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+			const parent = path.dirname(current);
+			if (parent === current) {
+				real = current;
+				break;
+			}
+			rest.unshift(path.basename(current));
+			current = parent;
+		}
+	}
+	const joined = rest.length > 0 ? path.join(real, ...rest) : real;
+	return process.platform === "win32" ? joined.replace(/\//g, "\\").toLowerCase() : joined;
+}
+
+/**
+ * Path for a base directory's exclusive lifecycle lock outside the scanned
+ * `wt` directory (under a sibling `isolation-locks` directory). The lock name
+ * hashes the canonical path, so every alias of one slot shares one lock.
+ */
+export async function getIsolationLifecycleLockPath(baseDir: string): Promise<string> {
+	const canonical = await canonicalIsolationPath(baseDir);
+	const name = path.basename(canonical);
+	const hash = crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 	let locksDir: string;
 	try {
 		const wtRoot = path.resolve(getWorktreesDir());
@@ -245,7 +251,7 @@ export async function withIsolationLifecycleLock<T>(
 	fn: () => Promise<T>,
 	options?: FileLockOptions,
 ): Promise<T> {
-	const lockPath = getIsolationLifecycleLockPath(baseDir);
+	const lockPath = await getIsolationLifecycleLockPath(baseDir);
 	await fs.mkdir(path.dirname(lockPath), { recursive: true });
 	return await withFileLock(lockPath, fn, options);
 }
@@ -258,7 +264,7 @@ export async function tryWithIsolationLifecycleLock<T>(
 	fn: () => Promise<T>,
 	options?: FileLockOptions,
 ): Promise<TryFileLockResult<T>> {
-	const lockPath = getIsolationLifecycleLockPath(baseDir);
+	const lockPath = await getIsolationLifecycleLockPath(baseDir);
 	await fs.mkdir(path.dirname(lockPath), { recursive: true });
 	return await tryWithFileLock(lockPath, fn, options);
 }
@@ -273,7 +279,11 @@ export async function withRetentionLifecycleLock<T>(
 	destinationBaseDir: string,
 	fn: () => Promise<T>,
 ): Promise<T> {
-	if (path.resolve(originalBaseDir) === path.resolve(destinationBaseDir)) {
+	const [original, destination] = await Promise.all([
+		canonicalIsolationPath(originalBaseDir),
+		canonicalIsolationPath(destinationBaseDir),
+	]);
+	if (original === destination) {
 		return await withIsolationLifecycleLock(originalBaseDir, fn);
 	}
 	return await withIsolationLifecycleLock(originalBaseDir, async () => {
@@ -299,7 +309,8 @@ export async function claimIsolationSlot(baseDir: string): Promise<void> {
 	const staging = `${baseDir}.claim-${process.pid}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
 	await fs.mkdir(staging);
 	try {
-		await fs.writeFile(path.join(staging, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: process.pid }), "utf8");
+		const marker = { pid: process.pid, startIdentity: getProcessStartIdentity(process.pid) };
+		await fs.writeFile(path.join(staging, ISOLATION_CLAIM_FILE), JSON.stringify(marker), "utf8");
 		await fs.rename(staging, baseDir);
 	} catch (error) {
 		await fs.rm(staging, { recursive: true, force: true });
@@ -312,32 +323,57 @@ export async function releaseIsolationClaim(baseDir: string): Promise<void> {
 	await fs.rm(path.join(baseDir, ISOLATION_CLAIM_FILE), { force: true });
 }
 
+type ClaimIncarnation =
+	| { state: "absent" }
+	| { state: "unreadable" }
+	| { state: "present"; pid: number; startIdentity: string | null };
+
 /**
- * Whether `dir` carries a claim whose process is still running. A claim left by
- * a dead process is stale and reads false, so a crashed setup stays reclaimable.
- * An unreadable or malformed marker reads true: removal is the unsafe answer.
+ * Read the process incarnation (pid plus start identity) a claim marker names.
+ * A marker written before start identities were recorded carries no
+ * `startIdentity` key; it takes the owner record's identity instead, so a
+ * reused PID is still told apart from the process that made the claim. A
+ * marker that is present but unparseable reads `unreadable`.
  */
-export async function isolationClaimIsLive(dir: string): Promise<boolean> {
+async function readClaimIncarnation(dir: string): Promise<ClaimIncarnation> {
 	let raw: string;
 	try {
 		raw = await fs.readFile(path.join(dir, ISOLATION_CLAIM_FILE), "utf8");
 	} catch (error) {
-		return !isEnoent(error);
+		return isEnoent(error) ? { state: "absent" } : { state: "unreadable" };
 	}
-	let pid: unknown;
+	let decoded: unknown;
 	try {
-		const decoded = JSON.parse(raw);
-		if (decoded && typeof decoded === "object" && "pid" in decoded) {
-			pid = decoded.pid;
-		}
+		decoded = JSON.parse(raw);
 	} catch {
-		return true;
+		return { state: "unreadable" };
 	}
-	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return true;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
+	if (!decoded || typeof decoded !== "object" || !("pid" in decoded)) return { state: "unreadable" };
+	const pid = decoded.pid;
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) {
+		return { state: "unreadable" };
 	}
+	if ("startIdentity" in decoded) {
+		return {
+			state: "present",
+			pid,
+			startIdentity: typeof decoded.startIdentity === "string" ? decoded.startIdentity : null,
+		};
+	}
+	const owner = await readIsolationOwner(dir).catch(() => null);
+	return { state: "present", pid, startIdentity: owner?.pid === pid ? owner.startIdentity : null };
+}
+
+/**
+ * Whether `dir` carries a claim whose process incarnation is still running. A
+ * claim left by a dead process, or by a process whose PID has since been reused
+ * by an unrelated one, is stale and reads false, so a crashed setup stays
+ * reclaimable. An unreadable or malformed marker reads true: removal is the
+ * unsafe answer.
+ */
+export async function isolationClaimIsLive(dir: string): Promise<boolean> {
+	const claim = await readClaimIncarnation(dir);
+	if (claim.state === "absent") return false;
+	if (claim.state === "unreadable") return true;
+	return isProcessInstanceAlive(claim.pid, claim.startIdentity);
 }
