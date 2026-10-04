@@ -221,4 +221,61 @@ print("__DEFS_JSON__=" + json.dumps(defs()))
 		expect(entries).toContain("scalar_bool: bool");
 		expect(entries).toContain("scalar_none: NoneType");
 	});
+
+	it("env get/set emits status events excluding seeded opaque secret while returning actual value unchanged", async () => {
+		const pythonCode = `
+import json
+
+events = []
+_orig_emit = _emit_status
+def _capturing_emit(op, **data):
+    events.append({"op": op, **data})
+    _orig_emit(op, **data)
+_emit_status = _capturing_emit
+
+secret_value = "seeded-opaque-env-secret-xyz-9876"
+secret_key = "TEST_OPAQUE_SECRET_ENV_VAR"
+
+set_ret = env(secret_key, secret_value)
+get_ret = env(secret_key)
+
+print("__ENV_EVENTS_JSON__=" + json.dumps(events))
+print("__ENV_RETURN_JSON__=" + json.dumps({"set": set_ret, "get": get_ret}))
+`;
+
+		const result = await runPrelude(pythonCode, {});
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+
+		const secret = "seeded-opaque-env-secret-xyz-9876";
+
+		const eventsMarker = "__ENV_EVENTS_JSON__=";
+		const eventsLine = result.stdout.split("\n").find(line => line.startsWith(eventsMarker));
+		expect(eventsLine).toBeDefined();
+		const events = JSON.parse(eventsLine!.slice(eventsMarker.length)) as Array<Record<string, unknown>>;
+
+		const returnMarker = "__ENV_RETURN_JSON__=";
+		const returnLine = result.stdout.split("\n").find(line => line.startsWith(returnMarker));
+		expect(returnLine).toBeDefined();
+		const returns = JSON.parse(returnLine!.slice(returnMarker.length)) as { set: string; get: string };
+
+		// Actual env returns unchanged
+		expect(returns.set).toBe(secret);
+		expect(returns.get).toBe(secret);
+
+		// Captured status events exclude seeded opaque secret
+		const serializedEvents = JSON.stringify(events);
+		expect(serializedEvents).not.toContain(secret);
+
+		// Status events preserve key and action metadata without value field
+		const setEvent = events.find(e => e.op === "env" && e.action === "set");
+		expect(setEvent).toBeDefined();
+		expect(setEvent?.key).toBe("TEST_OPAQUE_SECRET_ENV_VAR");
+		expect(setEvent?.value).toBe("<redacted>");
+
+		const getEvent = events.find(e => e.op === "env" && e.action === "get");
+		expect(getEvent).toBeDefined();
+		expect(getEvent?.key).toBe("TEST_OPAQUE_SECRET_ENV_VAR");
+		expect(getEvent?.value).toBe("<redacted>");
+	});
 });

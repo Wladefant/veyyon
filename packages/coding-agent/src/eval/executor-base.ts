@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
 import { errorMessage, getProjectDir, isCancellation, isTimeoutError, logger, postmortem } from "@veyyon/utils";
 import { Settings } from "../config/settings";
@@ -527,6 +528,16 @@ export async function executeWithKernelBase<
 
 	const collectDisplay = (output: KernelDisplayOutput): void => {
 		if (output.type === "status") {
+			if (output.event.op === "env" && "value" in output.event) {
+				output = {
+					...output,
+					event: {
+						...output.event,
+						key: typeof output.event.key === "string" ? redactUsageText(output.event.key, []) : undefined,
+						value: redactUsageText("<redacted>", []),
+					},
+				};
+			}
 			abortShield.handleStatus?.(output.event);
 			options?.onStatus?.(output.event);
 			if (!isJulia && isEvalTimeoutControlEvent(output.event)) return;
@@ -596,7 +607,9 @@ export async function executeWithKernelBase<
 		}
 
 		if (result.stdinRequested) {
-			const dumped = await sink.dumpWithArtifactStatus("Kernel requested stdin; interactive input is not supported.");
+			const dumped = await sink.dumpWithArtifactStatus(
+				"Kernel requested stdin; interactive input is not supported.",
+			);
 			return {
 				exitCode: 1,
 				cancelled: false,

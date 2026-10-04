@@ -81,7 +81,12 @@ if (!globalThis.__veyyon_js_prelude_loaded__) {
 		try {
 			if (typeof value === "function") return "function";
 			if (value === null) return "null";
-			if (Array.isArray(value)) return `Array(${value.length})`;
+			if (callHelper("isProxy", value)) return Array.isArray(value) ? "Array" : typeof value;
+			if (Array.isArray(value)) {
+				const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
+				return typeof length === "number" && Number.isSafeInteger(length) && length >= 0
+					? `Array(${length})` : "Array";
+			}
 			if (typeof value === "object") {
 				return `object(${Object.keys(value).length} keys)`;
 			}

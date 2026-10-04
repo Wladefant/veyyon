@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { types } from "node:util";
 import * as vm from "node:vm";
 import { JAVASCRIPT_PRELUDE_SOURCE } from "../js/shared/prelude";
 
@@ -6,6 +7,7 @@ describe("eval js defs() prelude helper", () => {
 	it("lists variable names and type/shape only without leaking secret values or representations", () => {
 		const sandbox: Record<string, unknown> = {
 			__veyyon_call_tool__: async () => ({}),
+			__veyyon_helpers__: { isProxy: types.isProxy },
 		};
 		vm.createContext(sandbox);
 		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
@@ -137,6 +139,7 @@ scalarUndefined = undefined;
 	it("avoids calling representation hooks or getters on metadata inspection", () => {
 		const sandbox: Record<string, unknown> = {
 			__veyyon_call_tool__: async () => ({}),
+			__veyyon_helpers__: { isProxy: types.isProxy },
 		};
 		vm.createContext(sandbox);
 		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
@@ -176,5 +179,39 @@ scalarUndefined = undefined;
 		expect(serializedOutput).not.toContain("LEAKED_SECRET_PROPERTY_VALUE");
 		expect(serializedOutput).not.toContain("LEAKED_TO_STRING_VALUE");
 		expect(serializedOutput).not.toContain("LEAKED_VALUE_OF_VALUE");
+	});
+
+	it("handles Proxy array length returning opaque secret string without leaking secret", () => {
+		const sandbox: Record<string, unknown> = {
+			__veyyon_call_tool__: async () => ({}),
+			__veyyon_helpers__: { isProxy: types.isProxy },
+		};
+		vm.createContext(sandbox);
+		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
+
+		const secretToken = "opaque-secret-proxy-array-length-sentinel-xyz";
+		let lengthReads = 0;
+		const forgedArray = new Proxy([], {
+			get(target, prop, receiver) {
+				if (prop === "length") {
+					lengthReads++;
+					return secretToken;
+				}
+				return Reflect.get(target, prop, receiver);
+			},
+		});
+
+		sandbox.forgedArray = forgedArray;
+
+		const defsFn = sandbox.defs as () => string[];
+		const entries = defsFn();
+
+		// Assert defs output contains no secret string
+		const serializedOutput = JSON.stringify(entries);
+		expect(serializedOutput).not.toContain(secretToken);
+		expect(lengthReads).toBe(0);
+
+		// Assert entry still lists name and Array without string interpolation of forged length
+		expect(entries).toContain("forgedArray: Array");
 	});
 });

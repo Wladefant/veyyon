@@ -50,10 +50,10 @@ if "__veyyon_prelude_loaded__" not in globals():
             return items
         if value is not None:
             os.environ[key] = value
-            _emit_status("env", key=key, value=value, action="set")
+            _emit_status("env", key=key, value="<redacted>", action="set")
             return value
         val = os.environ.get(key)
-        _emit_status("env", key=key, value=val, action="get")
+        _emit_status("env", key=key, value="<redacted>", action="get")
         return val
 
     _KV_VALUE_SIZE_LIMIT = 256 * 1024
