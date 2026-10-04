@@ -133,26 +133,31 @@ export async function acquireBrokerLease(
 			}
 			const recordMtimeMs = (await fs.stat(leasePath)).mtimeMs;
 			const verdict = classifyDaemonOwner(raw, recordMtimeMs);
-			if (verdict === "alive") {
+			const record = (verdict === "dead" ? { pid: 0 } : raw) as { pid: number; processIdentity?: unknown };
+			// A legacy record has no process identity, so even a start time that fits it proves nothing about a
+			// long-lived owner. Every live legacy record goes through the same evidence order.
+			const isLegacy =
+				verdict === "legacy-reused" || (verdict === "alive" && typeof record.processIdentity !== "string");
+			if (verdict === "alive" && !isLegacy) {
 				logger.debug("Broker lease is held by a live owner; not starting a broker", { leasePath });
 				return null;
 			}
-			if (verdict === "legacy-reused") {
-				const record = raw as { pid: number };
+			if (isLegacy) {
 				const ageMs = now() - recordMtimeMs;
-				// Positive evidence only: the record predates this boot (so its PID belongs to an earlier boot), or an
-				// authenticated reply names a different PID. EOF, refusal, timeout and an absent endpoint prove nothing.
+				// 1. An authenticated ping is the only direct evidence: the recorded PID answering means keep, and
+				//    overrides every clock-derived signal below; another PID answering means the record is stale.
+				const witness = await brokerEndpointWitness(runtimeDir, record.pid);
+				// 2. Only when the endpoint is inconclusive (absent, refused, EOF, timeout, garbage) may the clock decide:
+				//    a record far older than this boot, or older than the maximum age.
 				const predatesBoot = recordMtimeMs < bootTimeMs() - LEGACY_BOOT_MARGIN_MS;
-				const witness = predatesBoot ? "predates-boot" : await brokerEndpointWitness(runtimeDir, record.pid);
 				const reclaim =
-					witness === "predates-boot" ||
-					witness === "other-pid" ||
-					(witness === "inconclusive" && ageMs > LEGACY_LEASE_MAX_AGE_MS);
+					witness === "other-pid" || (witness === "inconclusive" && (predatesBoot || ageMs > LEGACY_LEASE_MAX_AGE_MS));
 				if (!reclaim) {
-					logger.warn(
-						"Legacy broker lease looks like PID reuse by start time, but its owner is alive and not disproved; keeping the owner",
-						{ leasePath, witness, ageMs },
-					);
+					logger.debug("Legacy broker lease owner is alive and not disproved; not starting a broker", {
+						leasePath,
+						witness,
+						ageMs,
+					});
 					return null;
 				}
 			}
