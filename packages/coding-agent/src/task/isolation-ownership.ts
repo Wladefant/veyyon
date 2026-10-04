@@ -137,7 +137,7 @@ export async function writeIsolationOwner(
  * deleting the slot with `fs.rm` alone leaves the repo listing a missing worktree, and the next
  * `ensureIsolation` for the same id fails with "missing but already registered". Callers collect
  * these before removal and run `git worktree prune` in each afterwards. Looks at the slot and
- * one level below it, which covers `<slot>/m` and `<slot>/.retained-*/m`.
+ * one level below it, which covers the mount dir of a plain slot and of a retained one.
  */
 export async function findLinkedWorktreeRepos(baseDir: string): Promise<string[]> {
 	const candidates = [baseDir];
