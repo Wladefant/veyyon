@@ -142,8 +142,14 @@ export function buildToolRenderContext(
 	const context: Record<string, unknown> = {};
 	if (toolName === "bash") {
 		if (result) {
-			const output = getTextOutput(result).trimEnd();
-			context.output = output;
+			// Computed when a renderer reads it. The bash card reads its result, not this, so the whole tail
+			// of a streaming command is not sanitized a second time on every frame for a field nobody read.
+			let output: string | undefined;
+			Object.defineProperty(context, "output", {
+				configurable: true,
+				enumerable: true,
+				get: () => (output ??= getTextOutput(result).trimEnd()),
+			});
 		}
 		context.expanded = options.expanded ?? false;
 		context.previewLines = DEFAULT_TERMINAL_PREVIEW_LINES;
