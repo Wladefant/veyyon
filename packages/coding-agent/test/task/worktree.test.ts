@@ -287,6 +287,59 @@ describe("worktree isolation helpers", () => {
 			await fs.rm(path.dirname(live.mergedDir), { recursive: true, force: true });
 		});
 
+		it("prunes the linked-worktree registration when clear removes a crashed copy-backend slot", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+				await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
+			});
+			vi.spyOn(console, "log").mockImplementation(() => {});
+			const crashed = await ensureIsolation(repo, "crash-registered");
+			const base = path.dirname(crashed.mergedDir);
+			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+			await gone.exited;
+			const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
+			await fs.writeFile(
+				path.join(base, ISOLATION_OWNER_FILE),
+				JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
+			);
+
+			await clearWorktrees({ all: true, dryRun: false, json: true });
+
+			await expect(fs.stat(base)).rejects.toThrow();
+			// The source repo no longer lists the removed checkout, so the same id can be set up again.
+			expect(await runGit(repo, ["worktree", "list", "--porcelain"])).not.toContain("prunable");
+			const again = await ensureIsolation(repo, "crash-registered");
+			expect((await fs.stat(again.mergedDir)).isDirectory()).toBe(true);
+			await cleanupIsolation(again);
+		});
+
+		it("refuses to clear a slot whose owner record cannot be read", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+				await fs.mkdir(mergedDir, { recursive: true });
+				await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "live owner work");
+			});
+			vi.spyOn(console, "log").mockImplementation(() => {});
+			const live = await ensureIsolation(repo, "unreadable-owner");
+			const base = path.dirname(live.mergedDir);
+			await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), "{ not json");
+
+			await clearWorktrees({ all: true, dryRun: false, json: true });
+
+			expect(await fs.readFile(path.join(live.mergedDir, "sentinel.txt"), "utf8")).toBe("live owner work");
+			await fs.rm(base, { recursive: true, force: true });
+		});
+
 		it("clears a claim whose process is gone", async () => {
 			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
 			await gone.exited;

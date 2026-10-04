@@ -24,6 +24,7 @@ import chalk from "chalk";
 import {
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
+	findLinkedWorktreeRepos,
 	isAbandonedEmptyReservation,
 	isolationClaimIsLive,
 	isRetainedWorkspace,
@@ -32,7 +33,7 @@ import {
 	readRetainedMountBackend,
 	tryWithIsolationLifecycleLock,
 } from "../task/isolation-ownership";
-import { isTaskIsolationDir } from "../task/worktree";
+import { isTaskIsolationDir, pruneLinkedWorktreeRepos } from "../task/worktree";
 import * as git from "../utils/git";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
@@ -171,7 +172,8 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					}
 					const sidecarStat = await statPath(path.join(target.path, RETAINED_BACKEND_FILE));
 					const hasSidecar = sidecarStat?.found?.isFile();
-					const owner = await readIsolationOwner(target.path).catch(() => null);
+					// An unreadable or corrupt owner record means a live owner cannot be ruled out: refuse.
+					const owner = await readIsolationOwner(target.path);
 
 					if (!hasSidecar) {
 						if (owner && isProcessInstanceAlive(owner.pid, owner.startIdentity)) {
@@ -193,6 +195,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					const initialStat = stat.found;
 					const initialToken = owner?.token;
 
+					const linkedRepos = await findLinkedWorktreeRepos(target.path);
 					await stopRetainedMount(target.path);
 
 					const currentStat = await statPath(target.path);
@@ -216,6 +219,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					}
 
 					await fs.rm(target.path, { recursive: true, force: true });
+					await pruneLinkedWorktreeRepos(linkedRepos);
 				});
 
 				if (!lockResult.acquired) {

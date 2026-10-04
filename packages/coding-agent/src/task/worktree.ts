@@ -8,6 +8,8 @@ import * as git from "../utils/git";
 import * as jj from "../utils/jj";
 import {
 	claimIsolationSlot,
+	findLinkedWorktreeRepos,
+	type IsolationOwnerRecord,
 	isAbandonedEmptyReservation,
 	readIsolationOwner,
 	releaseIsolationClaim,
@@ -583,17 +585,42 @@ export async function ensureIsolation(
 	return lockResult.value;
 }
 
+/**
+ * Drop the linked-worktree registrations a removed isolation slot left in its source
+ * repositories. Best effort: a repo that is gone or locked has nothing to prune.
+ */
+export async function pruneLinkedWorktreeRepos(repos: readonly string[]): Promise<void> {
+	for (const repo of repos) {
+		try {
+			await git.worktree.prune(repo);
+		} catch (err) {
+			logger.warn("could not prune worktree registrations after isolation removal", {
+				repo,
+				error: errorMessage(err),
+			});
+		}
+	}
+}
+
 /** Tear down a handle returned by {@link ensureIsolation}. */
 export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 	const baseDir = path.dirname(handle.mergedDir);
 	await withIsolationLifecycleLock(baseDir, async () => {
 		if (handle.ownerToken !== undefined) {
-			const current = await readIsolationOwner(baseDir).catch(() => null);
+			let current: IsolationOwnerRecord | null;
+			try {
+				current = await readIsolationOwner(baseDir);
+			} catch (err) {
+				// An unreadable owner record means ownership is unknown: leave the slot to `worktree clear`.
+				logger.warn("isolation cleanup skipped: owner record unreadable", { baseDir, error: errorMessage(err) });
+				return;
+			}
 			if (current !== null && current.token !== handle.ownerToken) {
 				logger.warn("isolation cleanup skipped: the slot now belongs to another task", { baseDir });
 				return;
 			}
 		}
+		const repos = await findLinkedWorktreeRepos(baseDir);
 		try {
 			try {
 				await natives.isoStop(handle.backend, handle.mergedDir);
@@ -606,6 +633,7 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 			}
 		} finally {
 			await fs.rm(baseDir, { recursive: true, force: true });
+			await pruneLinkedWorktreeRepos(repos);
 		}
 	});
 }

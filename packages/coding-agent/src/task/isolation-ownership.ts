@@ -132,6 +132,39 @@ export async function writeIsolationOwner(
 }
 
 /**
+ * Source repositories that hold a linked-worktree registration for a checkout inside an
+ * isolation slot. A copy backend such as Rcopy materialises `git worktree add` checkouts, so
+ * deleting the slot with `fs.rm` alone leaves the repo listing a missing worktree, and the next
+ * `ensureIsolation` for the same id fails with "missing but already registered". Callers collect
+ * these before removal and run `git worktree prune` in each afterwards. Looks at the slot and
+ * one level below it, which covers `<slot>/m` and `<slot>/.retained-*/m`.
+ */
+export async function findLinkedWorktreeRepos(baseDir: string): Promise<string[]> {
+	const candidates = [baseDir];
+	try {
+		for (const entry of await fs.readdir(baseDir, { withFileTypes: true })) {
+			if (entry.isDirectory()) candidates.push(path.join(baseDir, entry.name));
+		}
+	} catch {
+		return [];
+	}
+	const repos = new Set<string>();
+	for (const dir of candidates) {
+		try {
+			const pointer = await fs.readFile(path.join(dir, ".git"), "utf8");
+			const match = /^gitdir:\s*(.+?)\s*$/m.exec(pointer);
+			if (!match) continue;
+			// <repo>/.git/worktrees/<name> -> <repo>/.git -> <repo>
+			const commonDir = path.dirname(path.dirname(path.resolve(dir, match[1])));
+			repos.add(path.basename(commonDir) === ".git" ? path.dirname(commonDir) : commonDir);
+		} catch {
+			/* not a linked worktree */
+		}
+	}
+	return [...repos];
+}
+
+/**
  * Read the process ownership record of an isolation slot, or `null` when missing.
  * Throws on corrupt JSON or missing required fields so callers can fail closed.
  */
