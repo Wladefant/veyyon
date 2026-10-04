@@ -121,9 +121,17 @@ const CHUNK_TARGET_CHARS = 1 << 20;
 interface PublishedLines {
 	/** The header line as published. A header that serializes differently needs the whole file. */
 	header: string;
-	/** Each entry whose line is in the file, in file order. An entry replaced or dropped since no longer matches. */
-	entries: SessionEntry[];
-	/** Byte offset of each of those lines, parallel to `entries`. */
+	/**
+	 * The entries whose lines open the file: the first `baseLength` items of `base`, an array that is or
+	 * was `#entries`. Such an array only ever grows by `push`, so those items stay the entries that were
+	 * published without a copy of the list; an entry replaced or dropped since is in a newer `#entries`
+	 * and no longer matches.
+	 */
+	base: readonly SessionEntry[];
+	baseLength: number;
+	/** Each entry whose line was appended after the base, in file order, which can differ from `#entries`. */
+	appended: SessionEntry[];
+	/** Byte offset of each entry's line, the base's then the appended ones. */
 	entryOffsets: number[];
 }
 
@@ -708,7 +716,7 @@ export class SessionManager {
 		this.#lastBodyLines = undefined;
 		const header = this.#headerLine();
 		const foreign = this.#foreignLines;
-		const lines: PublishedLines = { header, entries: [], entryOffsets: [] };
+		const lines: PublishedLines = { header, base: this.#entries, baseLength: 0, appended: [], entryOffsets: [] };
 		yield this.#titleSlotLine();
 		yield header;
 		let bytes = yield* this.#entryLines(lines, 0, SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8"));
@@ -723,14 +731,17 @@ export class SessionManager {
 
 	/**
 	 * The lines of `#entries` from index `from` on, the first starting at byte `offset`. Each entry
-	 * and its offset is appended to `lines`. Returns the offset after the last line.
+	 * and its offset is recorded in `lines`: as a longer run of the base when the base is this
+	 * `#entries` and ends at `from`, otherwise appended. Returns the offset after the last line.
 	 */
 	*#entryLines(lines: PublishedLines, from: number, offset: number): Generator<string, number> {
 		const entries = this.#entries;
+		const extendsBase = lines.base === entries && lines.baseLength === from && lines.appended.length === 0;
 		for (let i = from; i < entries.length; i++) {
 			const entry = entries[i]!;
 			const line = this.#lineFor(entry);
-			lines.entries.push(entry);
+			if (extendsBase) lines.baseLength = i + 1;
+			else lines.appended.push(entry);
 			lines.entryOffsets.push(offset);
 			offset += Buffer.byteLength(line, "utf-8");
 			yield line;
@@ -745,7 +756,14 @@ export class SessionManager {
 	*#tailLines(lines: PublishedLines, keep: number, keepBytes: number): Generator<string> {
 		this.#lastBodyBytes = 0;
 		this.#lastBodyLines = undefined;
-		lines.entries.length = keep;
+		// The plan matched every kept entry against `#entries`, so while the base is still that array the
+		// kept entries are its first `keep`, appended ones included.
+		if (this.#entries === lines.base || keep <= lines.baseLength) {
+			lines.baseLength = keep;
+			lines.appended.length = 0;
+		} else {
+			lines.appended.length = keep - lines.baseLength;
+		}
 		lines.entryOffsets.length = keep;
 		this.#lastBodyBytes = yield* this.#entryLines(lines, keep, keepBytes);
 		this.#lastBodyLines = lines;
@@ -766,15 +784,17 @@ export class SessionManager {
 		if (!state || !lines || !this.#storage.rewriteTailAtomic || this.#foreignLines.length > 0) return undefined;
 		if (lines.header !== this.#headerLine() || !this.#fileIsExactlyAsPublished()) return undefined;
 		const entries = this.#entries;
-		let keep = Math.min(updatedFrom, lines.entries.length, entries.length);
-		for (let i = 0; i < keep; i++) {
-			if (lines.entries[i] !== entries[i]) {
+		const { base, baseLength, appended, entryOffsets } = lines;
+		let keep = Math.min(updatedFrom, entryOffsets.length, entries.length);
+		// The base matches without a walk while it is `#entries`, which only grows while its file is current.
+		for (let i = base === entries ? Math.min(keep, baseLength) : 0; i < keep; i++) {
+			if ((i < baseLength ? base[i] : appended[i - baseLength]) !== entries[i]) {
 				keep = i;
 				break;
 			}
 		}
 		if (keep === 0) return undefined;
-		const keepBytes = keep < lines.entries.length ? lines.entryOffsets[keep]! : state.size;
+		const keepBytes = keep < entryOffsets.length ? entryOffsets[keep]! : state.size;
 		return { lines, keep, keepBytes };
 	}
 
@@ -1172,7 +1192,7 @@ export class SessionManager {
 		if (state === null) return;
 		const offset = state.size;
 		const length = Buffer.byteLength(line, "utf-8");
-		state.lines?.entries.push(entry);
+		state.lines?.appended.push(entry);
 		state.lines?.entryOffsets.push(offset);
 		state.size += length;
 		if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
@@ -1289,15 +1309,15 @@ export class SessionManager {
 				if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
 			}
 		}
-		const { entries, entryOffsets } = lines;
+		const { base, baseLength, appended, entryOffsets } = lines;
 		const identity = state.identity;
 		const blobs = this.#blobs;
 		let pinned = false;
-		for (let i = 0; i < entries.length; i++) {
-			const entry = entries[i]!;
+		for (let i = 0; i < entryOffsets.length; i++) {
+			const entry = i < baseLength ? base[i]! : appended[i - baseLength]!;
 			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type) && (live === undefined || live.has(entry))) continue;
 			const offset = entryOffsets[i]!;
-			const end = i + 1 < entries.length ? entryOffsets[i + 1]! : state.size;
+			const end = i + 1 < entryOffsets.length ? entryOffsets[i + 1]! : state.size;
 			if (!pinned) {
 				pinned = this.#cold.pin(
 					identity,
@@ -1800,7 +1820,13 @@ export class SessionManager {
 		this.#publishedFileState = {
 			size: layout.size,
 			identity: layout.identity,
-			lines: { header: layout.header, entries: this.#entries.slice(), entryOffsets: layout.entryOffsets },
+			lines: {
+				header: layout.header,
+				base: this.#entries,
+				baseLength: this.#entries.length,
+				appended: [],
+				entryOffsets: layout.entryOffsets,
+			},
 		};
 	}
 
