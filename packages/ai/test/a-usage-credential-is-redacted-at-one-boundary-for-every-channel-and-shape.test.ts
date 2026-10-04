@@ -65,6 +65,11 @@ async function rig(backend: UsageProvider, key: string = KEY, credential?: Store
 	return { db, storage, usageLog, globalLog };
 }
 
+function historyRows(r: Rig): string {
+	const persisted = r.db.query("SELECT * FROM usage_history").all();
+	return JSON.stringify({ persisted, listed: r.storage.listUsageHistory() });
+}
+
 function usageRows(db: Database): string {
 	return JSON.stringify(db.query("SELECT key, value FROM cache WHERE key LIKE 'usage_cache:%'").all());
 }
@@ -80,6 +85,7 @@ function observe(
 		usageLog: r.usageLog.join("\n"),
 		globalLog: r.globalLog.join("\n"),
 		persistedUsageRows: usageRows(r.db),
+		usageHistory: historyRows(r),
 	};
 }
 
@@ -899,5 +905,33 @@ describe("the usage credential boundary", () => {
 			expect(typeof text).toBe("string");
 			expect(text).not.toContain(KEY);
 		}
+	});
+
+	it("keeps the credential out of recorded usage history and keeps an account's rows grouped", async () => {
+		const limit = (id: string): UsageLimit =>
+			({
+				id,
+				label: `Window ${KEY}`,
+				scope: { provider: "anthropic", accountId: KEY, windowId: KEY },
+				window: { label: KEY },
+				amount: { unit: "percent", used: 1, limit: 100 },
+			}) as UsageLimit;
+		const r = await rig(
+			reporting(() => ({ limits: [limit(`five-${KEY}`)], metadata: { email: KEY, accountId: KEY } })),
+			KEY,
+			{
+				type: "oauth",
+				access: KEY,
+				refresh: "refresh-token-placeholder",
+				expires: Date.now() + 3_600_000,
+				accountId: KEY,
+				email: `${KEY}@example.test`,
+			} as StoredCredential,
+		);
+		const out = await drive(r);
+		const rows = r.storage.listUsageHistory();
+		expect(rows.length).toBeGreaterThan(0);
+		expect(new Set(rows.map(row => row.accountKey)).size).toBe(1);
+		expectClean(observe(r, out), [KEY]);
 	});
 });

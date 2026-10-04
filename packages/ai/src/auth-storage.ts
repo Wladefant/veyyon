@@ -2876,12 +2876,16 @@ export class AuthStorage {
 			status: limit.status,
 			resetsAt: limit.window?.resetsAt,
 		}));
+		// Durable history is a persisted channel too: accountKey, email, accountId and the labels are built
+		// from stored identity and a backend's report, and any of them can hold the credential. Redaction is
+		// deterministic, so an account keeps one stable key and its rows keep grouping.
+		const secrets = usageCredentialSecrets(request.credential);
 		try {
-			record.call(this.#store, entries);
+			record.call(this.#store, redactUsageValue(entries, secrets));
 		} catch (error) {
 			this.#usageLogger?.debug("usage history record failed", {
 				provider: request.provider,
-				error: redactUsageError(error, usageCredentialSecrets(request.credential)),
+				error: redactUsageError(error, secrets),
 			});
 		}
 	}
