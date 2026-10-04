@@ -1,5 +1,6 @@
 import { calculateCost } from "@veyyon/catalog/models";
 import type { Api, FetchImpl, Model, Usage } from "@veyyon/catalog/types";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { type } from "arktype";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
@@ -111,7 +112,7 @@ export async function transcribeOpenAI(
 	const response = await withAuth(
 		options.apiKey,
 		async key => {
-			const attempt = await fetchImpl(`${model.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`, {
+			const attempt = await fetchImpl(`${trimTrailingSlashes(model.baseUrl)}/audio/transcriptions`, {
 				method: "POST",
 				headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
 				body: form,

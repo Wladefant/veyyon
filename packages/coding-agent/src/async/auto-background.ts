@@ -1,3 +1,5 @@
+import { clampLow } from "@veyyon/utils/math";
+
 /**
  * Shared foreground-wait helpers for tools that auto-background long-running
  * work as {@link AsyncJobManager} jobs (bash commands, eval cells): the
@@ -22,7 +24,7 @@ export function resolveAutoBackgroundWaitMs(thresholdMs: number, timeoutMs: numb
 	if (thresholdMs <= 0) return 0;
 	if (timeoutMs === undefined) return thresholdMs;
 	const timeoutBufferMs = 1_000;
-	return Math.max(0, Math.min(thresholdMs, timeoutMs - timeoutBufferMs));
+	return clampLow(thresholdMs, 0, timeoutMs - timeoutBufferMs);
 }
 
 /** Non-settled outcomes of {@link raceJobSettlement}. */

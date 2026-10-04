@@ -15,6 +15,7 @@
  * by every GitHub surface. Keep it that way.
  */
 
+import { hasUrlScheme } from "@veyyon/utils/url";
 import { ToolError } from "../core/tool-errors";
 
 /**
@@ -64,7 +65,7 @@ export function appendRepoFlag(args: string[], repo: string | undefined, identif
 	// A full URL identifier already names host, repo, and number; `gh` derives
 	// all three from it and rejects a competing `--repo`. That host is the one
 	// `gh` will talk to, so it is checked here, before the call.
-	if (identifier && URL_SCHEME_PATTERN.test(identifier)) {
+	if (identifier && hasUrlScheme(identifier)) {
 		assertAllowedGhHost(hostOfUrl(identifier));
 	}
 	if (!repo || identifier?.startsWith("https://")) {
@@ -78,8 +79,6 @@ export function appendRepoFlag(args: string[], repo: string | undefined, identif
 
 /** The host `gh` assumes when a ref names none and `GH_HOST` is unset. */
 export const GITHUB_HOST = "github.com";
-
-const URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 function hostOfUrl(value: string): string {
 	try {
