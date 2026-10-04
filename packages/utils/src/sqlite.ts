@@ -523,7 +523,7 @@ export async function openSqliteDatabase<T>(
 		recoverCorruptDatabase(dbPath, error, options);
 	}
 	try {
-		return await openWithBusyRetries(dbPath, initialize, {});
+		return await openWithBusyRetries(dbPath, initialize, { databaseOptions: options.databaseOptions });
 	} catch (error) {
 		throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath);
 	}
@@ -540,7 +540,7 @@ export function openSqliteDatabaseSync<T>(
 		recoverCorruptDatabase(dbPath, error, options);
 	}
 	try {
-		return openOnce(dbPath, initialize, {});
+		return openOnce(dbPath, initialize, { databaseOptions: options.databaseOptions });
 	} catch (error) {
 		throw annotateSqliteError(error instanceof SqliteAttemptFailure ? error.original : error, dbPath);
 	}

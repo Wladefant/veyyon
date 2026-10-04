@@ -32,10 +32,18 @@ export function getConn(dbPath?: string): Database {
 	mkdirSync(dirname(path), { recursive: true });
 	// The cost log is the only record of what memory injection cost, so a corrupt file is left untouched and
 	// reported rather than quarantined and recreated empty.
-	return openSqliteDatabaseSync(path, db => db, {
-		databaseOptions: { create: true, readwrite: true, strict: true },
-		failClosedReason: "the cost log is the only record of past memory costs; restore it from a backup",
-	});
+	return openSqliteDatabaseSync(
+		path,
+		db => {
+			// Reads the schema so corruption surfaces here, where it carries the file path and restore guidance.
+			db.query("SELECT count(*) FROM sqlite_master").get();
+			return db;
+		},
+		{
+			databaseOptions: { create: true, readwrite: true, strict: true },
+			failClosedReason: "the cost log is the only record of past memory costs; restore it from a backup",
+		},
+	);
 }
 
 export const COST_LOG_SCHEMA_VERSION = 1;

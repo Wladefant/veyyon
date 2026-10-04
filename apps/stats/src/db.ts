@@ -65,9 +65,11 @@ export async function initDb(): Promise<Database> {
 	// Ensure directory exists
 	await fs.mkdir(getConfigRootDir(), { recursive: true });
 
-	// Every row is parsed out of the session files, which stay on disk, so a corrupt stats.db is quarantined
-	// (backup kept) and rebuilt by the next sync.
-	db = openSqliteDatabaseSync(getStatsDbPath(), prepareStatsDb, { recoverCorruption: true });
+	// Rows come from the live session files only: sessions the GC archived (archive/sessions/*.jsonl.gz) are
+	// not re-parsed, so a rebuilt stats.db would silently lose their history. Corruption is left untouched.
+	db = openSqliteDatabaseSync(getStatsDbPath(), prepareStatsDb, {
+		failClosedReason: "stats.db holds usage history from GC-archived sessions that a rebuild cannot recover",
+	});
 	return db;
 }
 
