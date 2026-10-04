@@ -298,7 +298,77 @@ function resolveUserShellConfig(settings: Settings, baseConfig: ShellConfig): Sh
 	};
 }
 
+/**
+ * Hand-off between {@link executeBash} and {@link runBash}. `armed` flips once the
+ * run's own timeout/abort machinery exists (all pre-spawn awaits finished); until
+ * then `executeBash` itself enforces the deadline. `controller` aborts a setup that
+ * lost that race so a late-resolving await cannot go on to spawn a shell.
+ */
+interface SetupGate {
+	armed: boolean;
+	readonly controller: AbortController;
+	/** `performance.now()` at entry: the deadline counts from here, not from the spawn. */
+	readonly startedAt: number;
+}
+
+/**
+ * Run a command and always settle. The deadline starts here, before settings load,
+ * the shell snapshot, the CPU budget gates and the spawn. Each of those awaits can
+ * stall (a wedged `wsl.exe`, a hung rc file, a native call that never reports), and
+ * none of them had a timer: the call stayed pending forever (#465). Once the run is
+ * armed its own timer and native timeout take over, so partial output is kept.
+ */
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
+	const requestedTimeoutMs = options?.timeout;
+	const deadlineTimeoutMs =
+		requestedTimeoutMs === 0 ? undefined : Math.max(1_000, requestedTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
+	const userSignal = options?.signal;
+	if (deadlineTimeoutMs === undefined && !userSignal) {
+		return runBash(command, options, {
+			armed: false,
+			controller: new AbortController(),
+			startedAt: performance.now(),
+		});
+	}
+
+	const gate: SetupGate = { armed: false, controller: new AbortController(), startedAt: performance.now() };
+	const setupSettled = Promise.withResolvers<BashResult>();
+	const settleSetup = (timedOut: boolean): void => {
+		if (gate.armed || gate.controller.signal.aborted) return;
+		gate.controller.abort();
+		const notice =
+			timedOut && deadlineTimeoutMs !== undefined
+				? `Command timed out after ${Math.round(deadlineTimeoutMs / 1000)} seconds`
+				: "Command cancelled";
+		void new OutputSink()
+			.dumpWithArtifactStatus(notice)
+			.then(
+				summary => setupSettled.resolve({ exitCode: undefined, cancelled: true, timedOut, ...summary }),
+				setupSettled.reject,
+			);
+	};
+	const onUserAbort = () => settleSetup(false);
+	const setupTimer =
+		deadlineTimeoutMs === undefined ? undefined : setTimeout(() => settleSetup(true), deadlineTimeoutMs);
+	userSignal?.addEventListener("abort", onUserAbort, { once: true });
+	// An already-aborted signal never fires its event, and the run only looks at it after setup.
+	if (userSignal?.aborted) settleSetup(false);
+	const run = runBash(command, options, gate);
+	try {
+		return await Promise.race([run, setupSettled.promise]);
+	} finally {
+		clearTimeout(setupTimer);
+		userSignal?.removeEventListener("abort", onUserAbort);
+		// If the setup deadline won, `run` may still reject later; nobody awaits it.
+		run.catch(() => undefined);
+	}
+}
+
+async function runBash(
+	command: string,
+	options: BashExecutorOptions | undefined,
+	gate: SetupGate,
+): Promise<BashResult> {
 	const settings = await Settings.init();
 	const baseShellConfig = settings.getShellConfig();
 	const shellConfig =
@@ -364,6 +434,12 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	}
 	const cpuBudgetId =
 		options?.cpuBudgetId ?? (cpuLimit && (await cpuLimit.ensureGroup()) ? cpuLimit.budgetName : undefined);
+	// Last pre-spawn await is done. If the outer deadline already settled this call, spawn nothing;
+	// otherwise hand the deadline over to the run's own timer, which keeps partial output.
+	if (gate.controller.signal.aborted) {
+		return { exitCode: undefined, cancelled: true, ...(await sink.dumpWithArtifactStatus("Command cancelled")) };
+	}
+	gate.armed = true;
 	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey, minimizer);
 	const persistentSessionBroken = brokenShellSessions.has(sessionKey);
 	if (persistentSessionBroken) {
@@ -417,19 +493,27 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const requestedTimeoutMs = options?.timeout;
 	const deadlineTimeoutMs =
 		requestedTimeoutMs === 0 ? undefined : Math.max(1_000, requestedTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
-	const nativeTimeoutMs = requestedTimeoutMs !== undefined && requestedTimeoutMs > 0 ? requestedTimeoutMs : undefined;
+	// The deadline is absolute from the call's entry: time spent in setup is already spent.
+	const setupElapsedMs = performance.now() - gate.startedAt;
+	const nativeTimeoutMs =
+		requestedTimeoutMs !== undefined && requestedTimeoutMs > 0
+			? Math.max(1, requestedTimeoutMs - setupElapsedMs)
+			: undefined;
 	const nativeOwnsTimeout = nativeTimeoutMs !== undefined;
 	if (deadlineTimeoutMs !== undefined) {
-		timeoutTimer = setTimeout(() => {
-			// Explicit timeouts are already enforced inside veyyon-natives via
-			// `timeoutMs`. Do not also abort the JS AbortSignal here: on Windows,
-			// aborting that signal while a piped command is still forwarding output
-			// can terminate the Bun host before the native timeout result resolves.
-			if (!nativeOwnsTimeout) {
-				abortCurrentExecution();
-			}
-			timeoutDeferred.resolve("timeout");
-		}, deadlineTimeoutMs);
+		timeoutTimer = setTimeout(
+			() => {
+				// Explicit timeouts are already enforced inside veyyon-natives via
+				// `timeoutMs`. Do not also abort the JS AbortSignal here: on Windows,
+				// aborting that signal while a piped command is still forwarding output
+				// can terminate the Bun host before the native timeout result resolves.
+				if (!nativeOwnsTimeout) {
+					abortCurrentExecution();
+				}
+				timeoutDeferred.resolve("timeout");
+			},
+			Math.max(1, deadlineTimeoutMs - setupElapsedMs),
+		);
 	}
 
 	let resetSession = false;
