@@ -222,6 +222,43 @@ export function coldFieldsOf(target: object): readonly string[] | undefined {
 	return entry === undefined ? undefined : ColdEntrySlot.layoutOf(entry)?.messageKeys;
 }
 
+/**
+ * Read the line of the cold `entry` back as a load restores it, and check that it is the entry
+ * the line was recorded for.
+ */
+function readBack(entry: SessionEntry, state: ColdState): Record<string, unknown> {
+	const { file, offset, length, standIn } = state;
+	const line = file.reader.read(offset, length);
+	let restored: Record<string, unknown>;
+	try {
+		restored = file.restore(line) as unknown as Record<string, unknown>;
+	} catch (err) {
+		throw new Error(
+			`Session entry ${entry.id} could not be read back from bytes ${offset}-${offset + length} of session object ${file.reader.identity}: ${errorMessage(err)}`,
+		);
+	}
+	if (
+		restored.id !== entry.id ||
+		restored.type !== entry.type ||
+		(standIn !== undefined && !isRecord(restored.message))
+	) {
+		throw new Error(
+			`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${offset}-${offset + length} of session object ${file.reader.identity}`,
+		);
+	}
+	return restored;
+}
+
+/**
+ * `entry` as a load restores its line when it is cold, or undefined when it is warm. The entry
+ * stays cold: its accessors keep what they read in memory, so a reader that visits each entry of
+ * the history once, such as a spend tally, reads through this instead.
+ */
+export function readColdEntry(entry: SessionEntry): SessionEntry | undefined {
+	const state = ColdEntrySlot.state(entry);
+	return state === undefined ? undefined : (readBack(entry, state) as unknown as SessionEntry);
+}
+
 export class ColdEntryPayloads {
 	/** One accessor pair per field name, shared by every entry cooled on that field. */
 	readonly #accessors = new Map<string, PropertyDescriptor>();
@@ -355,33 +392,15 @@ export class ColdEntryPayloads {
 		const entry = (StandInSlot.entryOf(receiver) ?? receiver) as SessionEntry;
 		const state = ColdEntrySlot.state(entry);
 		if (state === undefined) return;
-		const { file, offset, length, layout, standIn } = state;
-		const line = file.reader.read(offset, length);
-		let restored: Record<string, unknown>;
-		try {
-			restored = file.restore(line) as unknown as Record<string, unknown>;
-		} catch (err) {
-			throw new Error(
-				`Session entry ${entry.id} could not be read back from bytes ${offset}-${offset + length} of session object ${file.reader.identity}: ${errorMessage(err)}`,
-			);
-		}
-		const restoredMessage = restored.message;
-		if (
-			restored.id !== entry.id ||
-			restored.type !== entry.type ||
-			(standIn !== undefined && !isRecord(restoredMessage))
-		) {
-			throw new Error(
-				`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${offset}-${offset + length} of session object ${file.reader.identity}`,
-			);
-		}
+		const { file, layout, standIn } = state;
+		const restored = readBack(entry, state);
 		// Cleared first, so a throw above leaves the entry cold and readable again.
 		ColdEntrySlot.warm(entry);
 		const record = entry as unknown as Record<string, unknown>;
 		for (const key of layout.keys) defineValue(record, key, restored[key]);
 		if (standIn !== undefined) {
 			StandInSlot.set(standIn, undefined);
-			const from = restoredMessage as Record<string, unknown>;
+			const from = restored.message as Record<string, unknown>;
 			for (const key of layout.messageKeys) defineValue(standIn, key, from[key]);
 			defineValue(record, "message", standIn);
 		}

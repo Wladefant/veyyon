@@ -2792,7 +2792,7 @@ export class AgentSession {
 				// handler, so a reset parked behind an await could clear a verdict the new turn has
 				// already reached.
 				this.#streamingEdit.resetForTurn();
-				this.#goalRuntime.onTurnStart(`turn-${++this.#goalTurnCounter}`, this.#goalUsage());
+				this.#goalRuntime.onTurnStart(`turn-${++this.#goalTurnCounter}`);
 				await this.#emitSessionEvent(event);
 				this.#ttsr.onTurnStart();
 				return;
@@ -2820,7 +2820,7 @@ export class AgentSession {
 			case "agent_end": {
 				await this.#emitSessionEvent(expandAgentEndEvent(this, event));
 				const settledMessages = this.agent.state.messages;
-				await this.#goalRuntime.onAgentEnd({ currentUsage: this.#goalUsage() });
+				await this.#goalRuntime.onAgentEnd();
 				await this.#runAgentEndMaintenance(settledMessages);
 				await this.#extensionEvents.agentEnd(settledMessages);
 				return;

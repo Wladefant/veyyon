@@ -39,6 +39,14 @@
  * table is typed against the union, so a new role fails the type check until it has a row), reads
  * every small field the fresh load holds, runs those scans, and pins the reads at zero.
  *
+ * A turn reads the session's spend only when a goal is charged for it, and the spend of the
+ * summarized history lives in the large fields of its assistant turns and `task` results. Read
+ * through the accessors, the first tally on a resumed session moved that whole history back into
+ * memory: the first turn after resuming a 154 MiB session cost 470 ms of CPU and 103 MiB of peak
+ * RSS more than the turns after it. The turn sweep runs a whole turn with no goal and pins the
+ * reads at zero, then charges a goal and pins the reads at one per such entry, the totals at those
+ * of the same file held in memory, and every summarized entry still on disk afterwards.
+ *
  * A branch summary walks every message it sends the provider by property descriptor, and that walk
  * rejects accessors, which is what a cold message's large fields are. The size estimate the summary
  * runs first reads most of them back, so the walk met a cold message only when the history cooled
@@ -83,13 +91,18 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { SessionSpend, SessionStats } from "@veyyon/coding-agent/session/agent-session-types";
 import { isSuccessfulCheckpointEntry } from "@veyyon/coding-agent/session/rewind-checkpoint";
 import { getLatestTodoPhasesSnapshotFromEntries } from "@veyyon/coding-agent/tools/agent/todo";
 import { shellDomain } from "@veyyon/coding-agent/tools/shell/manifest";
 import { BlobStore, blobsDirForSessionDir } from "@veyyon/kernel/session/blob-store";
 import { collectPendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
 import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
-import { MIN_COLD_STRING_LENGTH, RECORD_ONLY_ENTRY_TYPES } from "@veyyon/kernel/session/session-cold-payloads";
+import {
+	coldFieldsOf,
+	MIN_COLD_STRING_LENGTH,
+	RECORD_ONLY_ENTRY_TYPES,
+} from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionEntryBase } from "@veyyon/kernel/session/session-entries";
 import {
 	loadSessionFile,
@@ -737,6 +750,99 @@ async function summarizeBranch(
 }
 
 /**
+ * An `AgentSession` resumed on `manager`, its agent holding the context the manager builds and
+ * answering every request with `reply`. `close` disposes the session, which closes `manager`.
+ */
+async function resumeSession(
+	manager: SessionManager,
+	root: string,
+	reply: AssistantMessage,
+): Promise<{ session: AgentSession; close: () => Promise<void> }> {
+	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const session = new AgentSession({
+		agent: new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: { ...bundled, contextWindow: 200_000, maxTokens: 64_000 },
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: manager.buildSessionContext().messages,
+			},
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: { ...reply, timestamp: Date.now() } });
+					stream.end();
+				});
+				return stream;
+			},
+		}),
+		sessionManager: manager,
+		settings: Settings.isolated(),
+		modelRegistry: new ModelRegistry(authStorage),
+	});
+	return {
+		session,
+		close: async () => {
+			await session.dispose();
+			authStorage.close();
+		},
+	};
+}
+
+/** {@link everyRoleHistory} and a `task` result whose details hold the usage of the agents it ran. */
+function spendHistory(): SessionEntry[] {
+	const entries = everyRoleHistory();
+	entries.push({
+		type: "message",
+		id: "m00099",
+		parentId: entries.at(-1)!.id,
+		timestamp: new Date(Date.UTC(2024, 0, 2)).toISOString(),
+		message: {
+			role: "toolResult",
+			toolCallId: "call-task",
+			toolName: "task",
+			content: [{ type: "text", text: big("task-output") }],
+			details: {
+				note: big("task-details"),
+				usage: {
+					input: 7,
+					output: 3,
+					cacheRead: 0,
+					cacheWrite: 2,
+					totalTokens: 12,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 },
+				},
+			},
+			isError: false,
+			timestamp: 1,
+		},
+	});
+	return entries;
+}
+
+/** A reply whose usage a goal is charged `input + output + cacheWrite` = 345 tokens of. */
+const RESUMED_REPLY: AssistantMessage = {
+	...assistantTurn("resumed answer", 30),
+	usage: {
+		input: 300,
+		output: 40,
+		cacheRead: 9,
+		cacheWrite: 5,
+		totalTokens: 354,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 },
+	},
+};
+
+/** The spend of a session's stats, without what names the session or measures its live context. */
+function spendOf({ sessionFile: _file, sessionId: _id, contextUsage: _context, ...spend }: SessionStats): SessionSpend {
+	return spend;
+}
+
+/**
  * The live branch as a session that branched holds it, and as one that never branched does: the
  * whole file in file order, which the manager walks by index instead of by a set of the live entries.
  */
@@ -1124,6 +1230,76 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(serialized(manager)).toEqual(expected);
 			expect(storage.open.size).toBe(0);
 			await manager.close();
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"runs a turn on a resumed session without reading the summarized history back ($load)",
+		async arm => {
+			const fixture = await writeSession(spendHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const compacted = fixture.compacted.map(id => manager.getEntry(id)!);
+			const inMemory = () => compacted.filter(entry => coldFieldsOf(entry) === undefined).map(entry => entry.id);
+			expect(inMemory()).toEqual([]);
+
+			const { session, close } = await resumeSession(manager, path.dirname(fixture.dir), RESUMED_REPLY);
+			try {
+				await session.prompt("after the resume");
+				await session.agent.waitForIdle();
+				const leaf = manager.getLeafEntry();
+				expect(leaf?.type === "message" && leaf.message.role === "assistant" && leaf.message.content).toEqual(
+					RESUMED_REPLY.content,
+				);
+				expect(storage.reads).toBe(0);
+				expect(inMemory()).toEqual([]);
+			} finally {
+				await close();
+			}
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"charges a goal the spend of the summarized history and leaves that history on disk ($load)",
+		async arm => {
+			const fixture = await writeSession(spendHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const root = path.dirname(fixture.dir);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const compacted = fixture.compacted.map(id => manager.getEntry(id)!);
+			const inMemory = () => compacted.filter(entry => coldFieldsOf(entry) === undefined).map(entry => entry.id);
+			// The summarized entries whose spend sits in their large fields.
+			const spending = compacted.filter(
+				entry =>
+					entry.type === "message" &&
+					(entry.message.role === "assistant" ||
+						(entry.message.role === "toolResult" && entry.message.toolName === "task")),
+			);
+			expect(spending.map(entry => entry.id)).toEqual(["m00003", "m00099"]);
+
+			const reference = await resumeSession(await openInMemoryCopy(fixture), root, RESUMED_REPLY);
+			const cold = await resumeSession(manager, root, RESUMED_REPLY);
+			try {
+				const expected = spendOf(reference.session.getSessionStats());
+				// The summarized `task` result is the only cache write the file records.
+				expect(expected.tokens.cacheWrite).toBe(2);
+				expect(spendOf(cold.session.getSessionStats())).toEqual(expected);
+				expect(storage.reads).toBe(spending.length);
+				expect(inMemory()).toEqual([]);
+
+				await cold.session.goalRuntime.createGoal({ objective: "Finish the resumed work" });
+				await cold.session.prompt("after the resume");
+				await cold.session.agent.waitForIdle();
+				expect(cold.session.getGoalModeState()?.goal).toMatchObject({ tokensUsed: 345, turnsCompleted: 1 });
+				// The tally of the summarized history is kept; the turn reads none of it again.
+				expect(storage.reads).toBe(spending.length);
+				expect(inMemory()).toEqual([]);
+			} finally {
+				await cold.close();
+				await reference.close();
+			}
 		},
 	);
 
