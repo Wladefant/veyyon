@@ -121,9 +121,12 @@ const PRUNING_CEILING = 195;
  * from `./prompt-variables` and the second only `handlebars/runtime`, so the growth is those two files
  * and no subtree.
  */
-// RE-MEASURED 2026-10-03 after recent upstream merges: 333 for compaction engine, 227 for remote summarizer.
-const COMPACTION_ENGINE_CEILING = 333;
-const REMOTE_SUMMARIZER_CEILING = 227;
+// RE-MEASURED 2026-10-04: engine 334, remote summarizer 228. The one new module is
+// `packages/ai/src/utils/credential-redaction.ts` (redaction of secrets from outbound payloads and
+// function-call arguments). `utils.ts` and `providers/transform-messages.ts`, already on both reaches,
+// import it; it is a leaf, so the growth is that one file and no subtree.
+const COMPACTION_ENGINE_CEILING = 334;
+const REMOTE_SUMMARIZER_CEILING = 228;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {

@@ -246,11 +246,32 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * second only the `handlebars/runtime` package entry, so a binary launch evaluates no Handlebars
  * compiler module.
  *
+ * 1641 to 1666, re-measured 2026-10-04 in the sandbox (1686 before the bridge edit below). Measured
+ * against a worktree of 6692675b17, the commit that set 1641: 46 modules added, one removed
+ * (`modes/launch-facts.ts` moved to `config/launch-facts.ts`: net +45, and the
+ * branch's own `credential-redaction.ts` is one of the 46). 20 of the 46 were accidental and are cut:
+ * `cursor-bridge-tools.ts` imported `EditTool` eagerly for a Cursor-only path, which put the whole
+ * `edit/` tree (hashline, apply-patch, replace, streaming, `plugins/hashline`, the lark grammar and
+ * deferred LSP diagnostics) on every launch; it now loads `./edit` on first use, as `tools/index.ts`
+ * does. The 26 that remain are justified, each reached through a module already on the graph:
+ * - `cursor-bridge-tools.ts` itself, the file `sdk.ts` imports for the Cursor bridge.
+ * - Providers ported from upstream and added to the registry the launch reads: `registry/abliteration`,
+ *   `deepinfra`, `gmi-cloud`, `local`, `meta`, `muse-code`, `oauth/muse-code`, `stepfun`, `typesafe`,
+ *   `web`; `utils/vercel-headers`; `catalog/discovery/typesafe`, `catalog/provider-models/codex-subscription`,
+ *   `catalog/provider-models/models-dev-policies`; `catalog/context-window` (imported by
+ *   `config/model-registry`).
+ * - `ai/utils/credential-redaction`, the leaf that `utils.ts` and `providers/transform-messages.ts` import.
+ * - `launch/broker-lease` (imported by `launch/broker` and `launch/presence`), `config/launch-facts`.
+ * - `async/auto-background` (imported by `tools/shell/bash`), `tools/shell/eval-display` (imported by
+ *   `eval` and `eval-result-codec`), `utils/activity-signal`, `utils/rearming-timeout`.
+ * - `prompts/tools/isolation-summary.md` and `isolation-recovery-hint.md`, the rows of `prompts/tools/rows.ts`.
+ * - `hosts/terminal/engine/src/windows-input-mode`, a leaf of the terminal engine.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1641;
+const LAUNCH_REACH_CEILING = 1666;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
