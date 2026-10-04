@@ -135,6 +135,14 @@ import {
 	orderUsageRankedCandidates,
 } from "./auth-storage/usage-ranking";
 import {
+	redactingUsageLogger,
+	redactUsageError,
+	redactUsageReport,
+	redactUsageText,
+	redactUsageValue,
+	usageCredentialSecrets,
+} from "./auth-storage/usage-redaction";
+import {
 	getScopedUsageLimits,
 	getUsageReportIdentifiers,
 	getUsageReportMetadataValue,
@@ -2652,6 +2660,10 @@ export class AuthStorage {
 					};
 				} catch (error) {
 					const errorMsg = String(error);
+					const safeErrorMsg = redactUsageText(
+						errorMsg,
+						usageCredentialSecrets(request.credential),
+					);
 					// Definitive failure (invalid_grant / 401 not from a network blip) means
 					// the refresh token itself is dead — probing with the original credential
 					// will 401, the catch below will return null, and #fetchUsageCached's
@@ -2674,7 +2686,7 @@ export class AuthStorage {
 									request.provider,
 									index,
 									refreshableCredential,
-									`oauth refresh failed during usage probe: ${errorMsg}`,
+									`oauth refresh failed during usage probe: ${safeErrorMsg}`,
 								);
 								if (disabled) {
 									this.#usageLogger?.warn(
@@ -2682,7 +2694,7 @@ export class AuthStorage {
 										{
 											provider: request.provider,
 											credentialId,
-											error: errorMsg,
+											error: safeErrorMsg,
 										},
 									);
 									// Neutralize last-good for this cache key: write a null
@@ -2702,7 +2714,7 @@ export class AuthStorage {
 						"Usage credential refresh failed, using original credential",
 						{
 							provider: request.provider,
-							error: errorMsg,
+							error: safeErrorMsg,
 						},
 					);
 				}
@@ -2711,11 +2723,23 @@ export class AuthStorage {
 
 		if (providerImpl.supports && !providerImpl.supports(params)) return null;
 
+		const fetchSecrets = [
+			...new Set([
+				...usageCredentialSecrets(request.credential),
+				...usageCredentialSecrets(params.credential),
+			]),
+		];
 		try {
-			const report = await providerImpl.fetchUsage(params, {
+			const fetched = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
-				logger: this.#usageLogger,
+				logger: redactingUsageLogger(this.#usageLogger, fetchSecrets),
 			});
+			// Everything below reads the redacted snapshot, never the backend's own object.
+			const report = fetched === null ? null : redactUsageReport(fetched, fetchSecrets);
+			if (fetched !== null && report === undefined) {
+				logger.debug("AuthStorage usage fetch returned an unreadable report", { provider: request.provider });
+				return null;
+			}
 			// Attribute the report to the credential's organization. The orgId and
 			// orgName fallbacks apply independently: Claude's usage endpoint stamps
 			// orgId from the `anthropic-organization-id` response header but never
@@ -2739,7 +2763,9 @@ export class AuthStorage {
 					};
 				}
 			}
-			return report;
+			// Redact last: the org fallback above filled fields from the stored credential, and the
+			// value returned here is the one that is cached and persisted.
+			return report ? (redactUsageReport(report, fetchSecrets) ?? null) : null;
 		} catch (error) {
 			if (
 				error instanceof AIError.ProviderHttpError &&
@@ -2756,7 +2782,7 @@ export class AuthStorage {
 			}
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
-				error: String(error),
+				error: redactUsageValue(error, fetchSecrets),
 			});
 			return null;
 		}
@@ -3354,11 +3380,20 @@ export class AuthStorage {
 							accountKey: buildUsageCacheIdentity(refreshedCredential),
 						};
 					} catch (error) {
-						refreshError = `oauth refresh failed: ${errorMessage(error)}`;
+						refreshError = `oauth refresh failed: ${redactUsageError(error, [])}`;
 					}
 				}
 			}
 
+			// Every secret this row's probes held. `base` is redacted with them once, where it is pushed,
+			// so a field copied from the backend's report, a resolved completion probe and an error all
+			// pass the same boundary and a field added later does too.
+			const probeSecrets = [
+				...new Set([
+					...usageCredentialSecrets(initialRequest.credential),
+					...usageCredentialSecrets(params.credential),
+				]),
+			];
 			if (refreshError) {
 				probeTimeout.cancel();
 				base.ok = false;
@@ -3372,7 +3407,7 @@ export class AuthStorage {
 				this.#authDeadCredentials.add(row.id);
 				// Refresh failed → the access token is unusable. Skip both probes;
 				// they would only re-surface the same upstream failure.
-				results.push(base);
+				results.push(redactUsageValue(base, probeSecrets));
 				continue;
 			}
 
@@ -3388,9 +3423,18 @@ export class AuthStorage {
 				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
 				try {
-					const report = await providerImpl.fetchUsage(params, ctx);
+					const rawReport = await providerImpl.fetchUsage(params, {
+						...ctx,
+						logger: redactingUsageLogger(ctx.logger, probeSecrets),
+					});
+					// Read the report only through the redacted snapshot: no getter or method the
+					// backend put on it runs, and nothing below can copy the key out of it.
+					const report = rawReport === null ? null : redactUsageReport(rawReport, probeSecrets);
 					if (report === null) {
 						base.reason = "usage probe returned no data for this credential";
+					} else if (report === undefined) {
+						base.ok = false;
+						base.reason = "usage probe returned a report that could not be read";
 					} else {
 						base.ok = true;
 						const accountId = getUsageReportMetadataValue(report, "accountId");
@@ -3402,7 +3446,7 @@ export class AuthStorage {
 					}
 				} catch (error) {
 					base.ok = false;
-					base.reason = errorMessage(error);
+					base.reason = redactUsageError(error, probeSecrets);
 				}
 			}
 			probeTimeout.cancel();
@@ -3427,17 +3471,14 @@ export class AuthStorage {
 							signal: completionTimeout.signal,
 						});
 					} catch (error) {
-						base.completion = {
-							ok: false,
-							reason: errorMessage(error),
-						};
+						base.completion = { ok: false, reason: redactUsageError(error, probeSecrets) };
 					} finally {
 						completionTimeout.cancel();
 					}
 				}
 			}
 
-			results.push(base);
+			results.push(redactUsageValue(base, probeSecrets));
 		}
 
 		return results;
