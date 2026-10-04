@@ -100,7 +100,8 @@ export function buildUsageReportCacheKey(request: UsageRequestDescriptor): strin
 	const identity = buildUsageCacheIdentity(request.credential);
 	const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
 	const providerKey = versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
-	return `${USAGE_REPORT_CACHE_NAMESPACE}:${providerKey}:${baseUrl}:${usageIdentityDigest(identity)}`;
+	// The base URL can carry a query string a caller put a credential in, so it is digested with the identity.
+	return `${USAGE_REPORT_CACHE_NAMESPACE}:${providerKey}:${usageIdentityDigest(`${baseUrl}\n${identity}`)}`;
 }
 
 export function buildUsageReportsCacheKey(requests: ReadonlyArray<UsageRequestDescriptor>): string {

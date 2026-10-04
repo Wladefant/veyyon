@@ -20,7 +20,6 @@
  * The public types, the sqlite store and the row predicates are re-exported from this module.
  */
 
-import { types } from "node:util";
 import * as logger from "@veyyon/utils/logger";
 import { clamp } from "@veyyon/utils/math";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
@@ -142,6 +141,7 @@ import {
 	redactUsageText,
 	redactUsageValue,
 	usageCredentialSecrets,
+	usageErrorStatus,
 } from "./auth-storage/usage-redaction";
 import {
 	getScopedUsageLimits,
@@ -2660,11 +2660,7 @@ export class AuthStorage {
 						signal: timeoutSignal,
 					};
 				} catch (error) {
-					const errorMsg = String(error);
-					const safeErrorMsg = redactUsageText(
-						errorMsg,
-						usageCredentialSecrets(request.credential),
-					);
+					const safeErrorMsg = redactUsageError(error, usageCredentialSecrets(request.credential));
 					// Definitive failure (invalid_grant / 401 not from a network blip) means
 					// the refresh token itself is dead — probing with the original credential
 					// will 401, the catch below will return null, and #fetchUsageCached's
@@ -2672,7 +2668,7 @@ export class AuthStorage {
 					// (including its already-elapsed `resetsAt`). CAS-disable the row and
 					// clear the cache so the credential drops out of the report instead of
 					// freezing in place until the user notices and re-logs in.
-					if (AIError.isDefinitiveOAuthFailure(errorMsg)) {
+					if (AIError.isDefinitiveOAuthFailure(safeErrorMsg)) {
 						const credentialId = this.#findStoredCredentialIdForUsageCredential(
 							request.provider,
 							request.credential,
@@ -2768,12 +2764,10 @@ export class AuthStorage {
 			// value returned here is the one that is cached and persisted.
 			return report ? (redactUsageReport(report, fetchSecrets) ?? null) : null;
 		} catch (error) {
-			// A Proxy is not asked what it is: `instanceof` runs its getPrototypeOf trap.
-			if (
-				!types.isProxy(error) &&
-				error instanceof AIError.ProviderHttpError &&
-				(error.status === 401 || error.status === 403)
-			) {
+			// Classified without running user code: no `instanceof` (a Proxy's getPrototypeOf trap) and no
+			// plain `status` read (a getter may throw the credential).
+			const failureStatus = usageErrorStatus(error);
+			if (failureStatus === 401 || failureStatus === 403) {
 				// Definitive auth failure (revoked key, lapsed subscription): purge the
 				// last-good report so #fetchUsageCached's failure branch cannot keep
 				// rendering and ranking from stale quota the way it does for transient

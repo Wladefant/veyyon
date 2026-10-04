@@ -122,7 +122,7 @@ function redactNode(
 	if (typeof value === "function" || typeof value === "symbol") return undefined;
 	if (value === null || typeof value !== "object") return value;
 	// A Proxy runs its traps on every reflective read, so it is never reflected on.
-	if (types.isProxy(value)) return UNREADABLE;
+	if (isOrInheritsFromProxy(value)) return UNREADABLE;
 	if (ancestors.has(value)) return undefined;
 	if (done.has(value)) return done.get(value);
 	ancestors.add(value);
@@ -202,7 +202,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * gives a fixed placeholder. Use it instead of `String(error)` wherever the error came from a backend.
  */
 export function redactUsageError(error: unknown, secrets: readonly string[]): string {
-	if (types.isProxy(error)) return UNREADABLE;
+	if (typeof error === "object" && error !== null && isOrInheritsFromProxy(error)) return UNREADABLE;
 	if (error instanceof Error) {
 		const message = ownDataValue(error, "message");
 		if (typeof message === "string") return redactUsageText(message, secrets);
@@ -221,4 +221,36 @@ export function redactingUsageLogger(
 		debug: (message, meta) => logger.debug(redactUsageText(message, secrets), redactUsageValue(meta, secrets)),
 		warn: (message, meta) => logger.warn(redactUsageText(message, secrets), redactUsageValue(meta, secrets)),
 	};
+}
+
+/**
+ * Whether the value or anything on its prototype chain is a Proxy. `instanceof` and an inherited property
+ * read ask a Proxy prototype's traps, so a value with one is never reflected on.
+ */
+function isOrInheritsFromProxy(value: object): boolean {
+	let node: object | null = value;
+	for (let depth = 0; node !== null && depth < 32; depth++) {
+		if (types.isProxy(node)) return true;
+		node = Object.getPrototypeOf(node);
+	}
+	return node !== null;
+}
+
+/**
+ * The numeric `status` of a thrown HTTP error, read without running user code: a Proxy anywhere on the
+ * prototype chain is never asked anything, and `status` is taken only from a data property, so a getter
+ * (which may throw the credential) is not called. Anything unreadable is undefined, which callers treat
+ * as a generic failure.
+ */
+export function usageErrorStatus(error: unknown): number | undefined {
+	let node: unknown = error;
+	for (let depth = 0; depth < 32 && typeof node === "object" && node !== null; depth++) {
+		if (types.isProxy(node)) return undefined;
+		const descriptor = Object.getOwnPropertyDescriptor(node, "status");
+		if (descriptor !== undefined) {
+			return "value" in descriptor && typeof descriptor.value === "number" ? descriptor.value : undefined;
+		}
+		node = Object.getPrototypeOf(node);
+	}
+	return undefined;
 }

@@ -19,6 +19,7 @@ import {
 	type CredentialHealthResult,
 	SqliteAuthCredentialStore,
 } from "@veyyon/ai/auth-storage";
+import { ProviderHttpError } from "@veyyon/ai/error";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import type { UsageLimit, UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import * as logger from "@veyyon/utils/logger";
@@ -115,6 +116,17 @@ async function drive(
 	const reports = await r.storage.fetchUsageReports();
 	const checks = await r.storage.checkCredentials(completionProbe ? { completionProbe } : undefined);
 	return { reports: reports ?? [], checks };
+}
+
+function expireRows(r: Rig): void {
+	const row = r.db.query("SELECT key, value FROM cache WHERE key LIKE 'usage_cache:%'").get() as
+		| { key: string; value: string }
+		| null;
+	const entry = JSON.parse(row?.value ?? "{}") as { expiresAt: number };
+	entry.expiresAt = Date.now() - 1000;
+	r.db
+		.query("UPDATE cache SET value = ? WHERE key = ?")
+		.run(JSON.stringify(entry), row?.key ?? "");
 }
 
 function throwing(message: string): UsageProvider {
@@ -511,5 +523,101 @@ describe("the usage credential boundary", () => {
 		const out = await drive(r);
 		expect(traps).toBe(0);
 		expectClean(observe(r, out), [KEY]);
+	});
+
+	it("keeps a base URL query string out of the cache row key", async () => {
+		const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })));
+		await r.storage.fetchUsageReports({ baseUrlResolver: () => `https://usage.example.test/v1?key=${KEY}` });
+		expect(usageRows(r.db)).toContain("clean");
+		expectClean({ persistedUsageRows: usageRows(r.db) }, [KEY]);
+	});
+
+	describe("classifying a thrown HTTP error runs no user code", () => {
+		function failing(error: unknown): UsageProvider {
+			return {
+				id: PROVIDER,
+				async fetchUsage() {
+					throw error;
+				},
+			} as UsageProvider;
+		}
+
+		it("does not call a throwing status getter", async () => {
+			const error = new ProviderHttpError("neutral", 500);
+			Object.defineProperty(error, "status", {
+				get() {
+					throw new Error(KEY);
+				},
+			});
+			const r = await rig(failing(error));
+			const out = await drive(r);
+			expectClean(observe(r, out), [KEY]);
+		});
+
+		it("does not read status through a prototype getter either", async () => {
+			const proto = Object.create(ProviderHttpError.prototype, {
+				status: {
+					get() {
+						throw new Error(KEY);
+					},
+				},
+			});
+			const error = Object.setPrototypeOf(new Error("neutral"), proto);
+			const r = await rig(failing(error));
+			const out = await drive(r);
+			expectClean(observe(r, out), [KEY]);
+		});
+
+		it("does not run a trap on a Proxy prototype", async () => {
+			let traps = 0;
+			const proto = new Proxy(ProviderHttpError.prototype, {
+				get(target, prop, receiver) {
+					traps++;
+					return Reflect.get(target, prop, receiver);
+				},
+				getOwnPropertyDescriptor(target, prop) {
+					traps++;
+					return Reflect.getOwnPropertyDescriptor(target, prop);
+				},
+				getPrototypeOf(target) {
+					traps++;
+					return Reflect.getPrototypeOf(target);
+				},
+			});
+			const error = Object.setPrototypeOf(new Error(`rejected ${KEY}`), proto);
+			const r = await rig(failing(error));
+			const out = await drive(r);
+			expect(traps).toBe(0);
+			expectClean(observe(r, out), [KEY]);
+		});
+
+		const unauthorized: Array<[string, () => Error]> = [
+			["an own data status", () => new ProviderHttpError("unauthorized", 401)],
+			[
+				"a status data property inherited from the prototype",
+				() =>
+					Object.setPrototypeOf(
+						new Error("unauthorized"),
+						Object.create(ProviderHttpError.prototype, { status: { value: 401 } }),
+					),
+			],
+		];
+		for (const [label, build] of unauthorized) {
+			it(`still purges the last-good report on ${label}`, async () => {
+				let fail = false;
+				const backend: UsageProvider = {
+					id: PROVIDER,
+					async fetchUsage(params): Promise<UsageReport> {
+						if (fail) throw build();
+						return { provider: params.provider, fetchedAt: Date.now(), limits: [], metadata: { echo: "good" } };
+					},
+				} as UsageProvider;
+				const r = await rig(backend);
+				expect(JSON.stringify(await r.storage.fetchUsageReports())).toContain("good");
+				expireRows(r);
+				fail = true;
+				expect(JSON.stringify((await r.storage.fetchUsageReports()) ?? [])).not.toContain("good");
+			});
+		}
 	});
 });
