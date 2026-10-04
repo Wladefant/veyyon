@@ -56,9 +56,41 @@ function slimCells(cells: unknown[], body: string): unknown[] {
 	return changed ? slimmed : cells;
 }
 
+/** The keys a pre-version-1 bounded preview carried. Any other key means the value is user data. */
+const LEGACY_PREVIEW_KEYS: Record<string, true> = {
+	preview: true,
+	truncated: true,
+	totalBytes: true,
+	artifactId: true,
+};
+
+/**
+ * True only for an exact legacy preview envelope. A complete value that merely shares some of its
+ * fields (for example with an extra payload field) is user data and must keep every field.
+ */
+function isLegacyPreviewEnvelope(
+	value: unknown,
+): value is { preview: string; truncated: true; totalBytes: number; artifactId?: string } {
+	if (!isRecord(value)) return false;
+	for (const key of Object.keys(value)) {
+		if (!Object.hasOwn(LEGACY_PREVIEW_KEYS, key)) return false;
+	}
+	return (
+		typeof value.preview === "string" &&
+		value.truncated === true &&
+		typeof value.totalBytes === "number" &&
+		(value.artifactId === undefined || typeof value.artifactId === "string") &&
+		value.preview.includes("\n[…") &&
+		value.preview.endsWith("ch elided…]")
+	);
+}
+
 /** How an eval result is written to a session file and read back. */
 export const evalResultCodec: ToolResultCodec = {
 	toolName: "eval" satisfies BuiltinToolName,
+	needsMigration(details) {
+		return isRecord(details) && Array.isArray(details.jsonOutputs) && details.displayVersion !== EVAL_DISPLAY_VERSION;
+	},
 	async migrate(details, context) {
 		if (!isRecord(details) || !Array.isArray(details.jsonOutputs)) return false;
 		if (details.displayVersion === EVAL_DISPLAY_VERSION) return false;
@@ -67,6 +99,18 @@ export const evalResultCodec: ToolResultCodec = {
 		}
 		const migrated: unknown[] = [];
 		for (const value of details.jsonOutputs) {
+			if (isLegacyPreviewEnvelope(value)) {
+				migrated.push({
+					version: EVAL_DISPLAY_VERSION,
+					preview: value.preview,
+					truncated: true,
+					totalBytes: value.totalBytes,
+					...(typeof value.artifactId === "string"
+						? { artifactId: value.artifactId }
+						: { recoveryUnavailable: true }),
+				});
+				continue;
+			}
 			const formatted = formatDisplayJson(value);
 			if (!formatted.truncated) {
 				migrated.push(value);

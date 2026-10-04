@@ -1370,6 +1370,11 @@ export class OutputSink {
 		}
 	}
 
+	/** The artifact ID allocated for this sink, if any. */
+	get artifactId(): string | undefined {
+		return this.#file?.artifactId ?? this.#artifactId;
+	}
+
 	async dump(notice?: string): Promise<OutputSummary> {
 		return this.#dumpInternal(notice, true);
 	}
