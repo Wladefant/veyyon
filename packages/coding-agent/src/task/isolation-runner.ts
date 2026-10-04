@@ -286,6 +286,26 @@ export interface RetainedWorkspace {
 	sidecarOk: boolean;
 }
 
+/**
+ * A copy backend such as Rcopy materialises a linked git worktree, whose registration in the
+ * source repository records the path it was created at. After the slot moves, re-point that
+ * registration, or the deterministic slot path stays "registered but missing" and the next
+ * isolated run with the same id fails. Best effort: a workspace without a `.git` file is not
+ * a linked worktree, and a failed repair is logged because the retained copy is still intact.
+ */
+async function relinkMovedWorktree(mergedDir: string): Promise<void> {
+	try {
+		if (!(await fs.stat(path.join(mergedDir, ".git"))).isFile()) return;
+	} catch {
+		return;
+	}
+	try {
+		await git.worktree.repair(mergedDir, mergedDir);
+	} catch (err) {
+		logger.warn("could not re-link the retained isolation worktree", { mergedDir, error: errorMessage(err) });
+	}
+}
+
 export async function retainIsolationWorkspace(
 	isolationDir: string,
 	backend?: natives.IsoBackendKind,
@@ -315,6 +335,7 @@ export async function retainIsolationWorkspace(
 				}
 			}
 		}
+		if (retainedBase !== baseDir) await relinkMovedWorktree(path.join(retainedBase, path.basename(isolationDir)));
 		if (needsSidecar && backend !== undefined) {
 			try {
 				await writeRetainedBackend(retainedBase, backend);

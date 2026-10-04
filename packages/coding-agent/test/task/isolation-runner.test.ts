@@ -528,6 +528,34 @@ describe("retainIsolationWorkspace", () => {
 		tempRoots.push(path.dirname(retained.dir));
 	});
 
+	it("re-links a linked git worktree to its retained location", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-linked-"));
+		tempRoots.push(parent);
+		const repo = path.join(parent, "repo");
+		await fs.mkdir(repo);
+		await git(repo, "init");
+		await git(repo, "config", "user.email", "t@example.com");
+		await git(repo, "config", "user.name", "T");
+		await Bun.write(path.join(repo, "a.txt"), "a\n");
+		await git(repo, "add", "a.txt");
+		await git(repo, "commit", "-m", "base");
+		const baseDir = path.join(parent, "wt_linked");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(baseDir);
+		await git(repo, "worktree", "add", "--detach", isolationDir);
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Rcopy);
+
+		expect(retained.dir).not.toBe(isolationDir);
+		tempRoots.push(path.dirname(retained.dir));
+		// The moved checkout must still be a working worktree of the source repository.
+		expect((await git(retained.dir, "rev-parse", "--show-toplevel")).trim()).toBe(await fs.realpath(retained.dir));
+		const listed = await git(repo, "worktree", "list", "--porcelain");
+		expect(listed).toContain(await fs.realpath(retained.dir));
+		expect(listed).not.toContain(`worktree ${isolationDir}\n`);
+		expect(listed).not.toContain("prunable");
+	});
+
 	it("reports the original dir when the move fails", async () => {
 		const missingParent = path.join(os.tmpdir(), `veyyon-isolation-retain-missing-${Date.now()}`);
 		const isolationDir = path.join(missingParent, "wt_abc123", "m");

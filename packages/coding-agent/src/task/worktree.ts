@@ -9,10 +9,12 @@ import * as jj from "../utils/jj";
 import {
 	claimIsolationSlot,
 	isAbandonedEmptyReservation,
+	readIsolationOwner,
 	releaseIsolationClaim,
 	tryWithIsolationLifecycleLock,
 	withIsolationLifecycleLock,
 	writeIsolationOwner,
+	writeRetainedBackend,
 } from "./isolation-ownership";
 import { mapWithConcurrencyLimit } from "./parallel";
 
@@ -478,6 +480,12 @@ export interface IsolationHandle {
 	fellBack: boolean;
 	/** Why the downgrade happened; set when `fellBack` is true, `null` otherwise. */
 	fallbackReason: string | null;
+	/**
+	 * Token of the owner record written when this handle's slot was claimed. Cleanup refuses to
+	 * touch a slot whose current owner token differs, so a stale handle cannot delete the
+	 * workspace of a later task that took the same slot.
+	 */
+	ownerToken?: string;
 }
 
 /**
@@ -534,10 +542,16 @@ export async function ensureIsolation(
 					cause: error,
 				});
 			}
-			await writeIsolationOwner(baseDir);
+			const owner = await writeIsolationOwner(baseDir);
 
 			try {
 				await natives.isoStart(candidate, repoRoot, mergedDir);
+				// Record the backend at setup, not only on retention, so `veyyon worktree clear` can
+				// reclaim the slot after this owner crashes. Marked unretained: while the owner lives,
+				// clear still refuses the slot.
+				await writeRetainedBackend(baseDir, candidate, { retained: false }).catch(error =>
+					logger.warn("isolation backend metadata not recorded at setup", { baseDir, error: errorMessage(error) }),
+				);
 				await releaseIsolationClaim(baseDir).catch(error =>
 					logger.warn("isolation claim marker left in place", { baseDir, error: errorMessage(error) }),
 				);
@@ -547,6 +561,7 @@ export async function ensureIsolation(
 					backend: candidate,
 					fellBack,
 					fallbackReason: fellBack ? fallbackReason : null,
+					ownerToken: owner.token,
 				};
 			} catch (err) {
 				await fs.rm(baseDir, { recursive: true, force: true });
@@ -572,6 +587,13 @@ export async function ensureIsolation(
 export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 	const baseDir = path.dirname(handle.mergedDir);
 	await withIsolationLifecycleLock(baseDir, async () => {
+		if (handle.ownerToken !== undefined) {
+			const current = await readIsolationOwner(baseDir).catch(() => null);
+			if (current !== null && current.token !== handle.ownerToken) {
+				logger.warn("isolation cleanup skipped: the slot now belongs to another task", { baseDir });
+				return;
+			}
+		}
 		try {
 			try {
 				await natives.isoStop(handle.backend, handle.mergedDir);

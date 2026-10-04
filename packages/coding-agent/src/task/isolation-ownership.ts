@@ -46,15 +46,33 @@ export function isMountingIsolationBackend(backend: unknown): backend is natives
 }
 
 /**
- * Record every retained backend. Cleanup requires this record to distinguish
- * copy workspaces from mounts; a missing record never authorizes removal.
+ * Record the backend of an isolation workspace. Cleanup requires this record to distinguish
+ * copy workspaces from mounts; a missing record never authorizes removal. Setup writes it
+ * with `retained: false` so a crashed owner's slot is reclaimable; retention rewrites it
+ * with `retainedAt`, which {@link isRetainedWorkspace} reads.
  */
-export async function writeRetainedBackend(baseDir: string, backend: natives.IsoBackendKind): Promise<void> {
-	await fs.writeFile(
-		path.join(baseDir, RETAINED_BACKEND_FILE),
-		JSON.stringify({ backend, retainedAt: new Date().toISOString() }),
-		"utf8",
-	);
+export async function writeRetainedBackend(
+	baseDir: string,
+	backend: natives.IsoBackendKind,
+	options: { retained?: boolean } = {},
+): Promise<void> {
+	const record =
+		options.retained === false ? { backend } : { backend, retainedAt: new Date().toISOString() };
+	await fs.writeFile(path.join(baseDir, RETAINED_BACKEND_FILE), JSON.stringify(record), "utf8");
+}
+
+/**
+ * Whether the sidecar marks a deliberate retention (as opposed to the setup record of a slot
+ * a task may still be running in). An unreadable sidecar counts as not retained, so callers
+ * treating a live owner as a blocker stay conservative.
+ */
+export async function isRetainedWorkspace(dir: string): Promise<boolean> {
+	try {
+		const decoded: unknown = JSON.parse(await fs.readFile(path.join(dir, RETAINED_BACKEND_FILE), "utf8"));
+		return typeof decoded === "object" && decoded !== null && "retainedAt" in decoded;
+	} catch {
+		return false;
+	}
 }
 
 /**
