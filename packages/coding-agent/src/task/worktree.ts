@@ -590,20 +590,47 @@ export async function ensureIsolation(
  * Delete the linked-worktree registrations a removed isolation slot left in its source
  * repositories, naming exactly the directories {@link findLinkedWorktreeAdminDirs} found.
  * Best effort: a registration that is already gone needs nothing.
+ *
+ * Check-then-delete cannot be made safe: `git worktree prune` (run by git itself, outside any
+ * lock of ours) may free the name after our read and another checkout may reuse it before the
+ * delete. So the verified directory is first renamed, atomically, to a private tombstone beside
+ * `worktrees/`. The rename fails if the name is already gone, and what it moved is re-verified
+ * by its own `gitdir` backlink. Only a tombstone that still names this checkout is deleted; any
+ * other directory is renamed straight back.
  */
 export async function removeLinkedWorktreeRegistrations(
 	registrations: readonly LinkedWorktreeRegistration[],
 ): Promise<void> {
 	for (const { adminDir, backlink } of registrations) {
+		const tombstone = path.join(path.dirname(path.dirname(adminDir)), `veyyon-removing-${crypto.randomUUID()}`);
 		try {
-			// Native stop may already have released this registration and a different slot reused the
-			// name; remove only while it still points back at the checkout we found.
-			const current = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
-			if (current !== backlink) continue;
-			await fs.rm(adminDir, { recursive: true, force: true });
+			await fs.rename(adminDir, tombstone);
 		} catch (err) {
-			logger.warn("could not remove worktree registration after isolation removal", {
+			if (!isEnoent(err)) {
+				logger.warn("could not remove worktree registration after isolation removal", {
+					adminDir,
+					error: errorMessage(err),
+				});
+			}
+			continue;
+		}
+		try {
+			let current: string | null = null;
+			try {
+				current = path.resolve(adminDir, (await fs.readFile(path.join(tombstone, "gitdir"), "utf8")).trim());
+			} catch {
+				/* unreadable backlink: not provably ours */
+			}
+			if (current === backlink) {
+				await fs.rm(tombstone, { recursive: true, force: true });
+			} else {
+				// Another checkout reused the name between the read and the rename: give it back.
+				await fs.rename(tombstone, adminDir);
+			}
+		} catch (err) {
+			logger.warn("could not finish removing worktree registration after isolation removal", {
 				adminDir,
+				tombstone,
 				error: errorMessage(err),
 			});
 		}

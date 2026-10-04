@@ -29,7 +29,7 @@ import type { ToolSession } from "../tools";
 import * as git from "../utils/git";
 import type { ExecutorOptions } from "./executor";
 import { runSubprocess } from "./executor";
-import { withRetentionLifecycleLock, writeRetainedBackend } from "./isolation-ownership";
+import { findLinkedWorktreeAdminDirs, withRetentionLifecycleLock, writeRetainedBackend } from "./isolation-ownership";
 import type { SingleResult } from "./types";
 import * as worktree from "./worktree";
 import {
@@ -290,8 +290,9 @@ export interface RetainedWorkspace {
  * A copy backend such as Rcopy materialises a linked git worktree, whose registration in the
  * source repository records the path it was created at. After the slot moves, re-point that
  * registration, or the deterministic slot path stays "registered but missing" and the next
- * isolated run with the same id fails. Best effort: a workspace without a `.git` file is not
- * a linked worktree, and a failed repair is logged because the retained copy is still intact.
+ * isolated run with the same id fails. Callers invoke this only for a registration verified,
+ * before the move, to belong to this checkout. Best effort: a workspace without a `.git` file
+ * is not a linked worktree, and a failed repair is logged because the retained copy is intact.
  */
 async function relinkMovedWorktree(mergedDir: string): Promise<void> {
 	try {
@@ -320,6 +321,12 @@ export async function retainIsolationWorkspace(
 	}
 
 	return await withRetentionLifecycleLock(baseDir, retainedBase, async () => {
+		// Decide ownership BEFORE the move, while the checkout still sits at the path its registration
+		// names. A copy backend can inherit a source worktree's `.git` pointer whose registration
+		// names the source: repairing that would re-point the live source registration at this copy.
+		const ownsRegistration = (await findLinkedWorktreeAdminDirs(baseDir).catch(() => [])).some(
+			registration => registration.backlink === path.resolve(isolationDir, ".git"),
+		);
 		if (backend !== natives.IsoBackendKind.Projfs) {
 			// Retry transient Windows AV/indexer locks before conceding the slot.
 			for (let attempt = 0; attempt < 3; attempt++) {
@@ -335,7 +342,9 @@ export async function retainIsolationWorkspace(
 				}
 			}
 		}
-		if (retainedBase !== baseDir) await relinkMovedWorktree(path.join(retainedBase, path.basename(isolationDir)));
+		if (retainedBase !== baseDir && ownsRegistration) {
+			await relinkMovedWorktree(path.join(retainedBase, path.basename(isolationDir)));
+		}
 		if (needsSidecar && backend !== undefined) {
 			try {
 				await writeRetainedBackend(retainedBase, backend);
