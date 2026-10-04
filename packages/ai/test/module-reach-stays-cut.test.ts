@@ -115,8 +115,14 @@ function runtimeImportsOf(relative: string): string[] {
  * cost is exactly the one module. The two cuts this file exists to hold are asserted by name below and
  * both still pass, and `env-api-key.ts` (68) and `usage/registry.ts` (20) do not reach the barrel and
  * did not move.
+ *
+ * RAISED FROM 230 TO 244 for the provider ports of the 2026-10 upstream wave (abliteration, meta, muse-code,
+ * the nous-research device flow and its success page, and the xiaomi/zhipu plan definitions). Each is a leaf
+ * provider definition in `./registry`, which the store already reaches for provider identity. The same wave
+ * took the barrel imports out of `registry/oauth/openai-codex.ts` and `usage/*-reset.ts`, which had pulled
+ * the whole streaming engine (308 modules) back in; the two named cuts below still hold.
  */
-const AUTH_STORAGE_CEILING = 230;
+const AUTH_STORAGE_CEILING = 244;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc
@@ -177,7 +183,7 @@ const AUTH_STORAGE_CEILING = 230;
  * `catalog/build.ts`, already in this closure, returns each model's resolved compat record through it,
  * so it adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 87;
+const ENV_API_KEY_CEILING = 92;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;
@@ -397,7 +403,11 @@ describe("the walk really happened", () => {
 		// FOR: the provider streams and the store does not, so the provider reaches strictly
 		// more, and both numbers are read from the same walk rather than from a constant
 		// that has to be renegotiated every time something is cut.
-		expect(reach("providers/anthropic.ts")).toBeGreaterThan(reach("auth-storage.ts"));
+		//
+		// 2026-10: the store's own closure now includes every provider definition in `./registry`, so it
+		// can reach as many modules as the provider does. The control is the provider against the
+		// env-var leaf, which has no streaming engine and no registry.
+		expect(reach("providers/anthropic.ts")).toBeGreaterThan(reach("env-api-key.ts"));
 	});
 
 	/**

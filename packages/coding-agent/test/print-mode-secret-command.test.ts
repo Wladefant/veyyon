@@ -99,6 +99,8 @@ function createHarness(): PrintHarness {
 		refreshSecrets: vi.fn(async () => {}),
 		secretsEnabled: true,
 		agent: { appendMessage: vi.fn() },
+		prepareForHeadlessAdvisorDrain: vi.fn(),
+		waitForAdvisorCatchup: vi.fn(async () => {}),
 	} as unknown as AgentSession;
 	const realRunSecretCommand = secretHelper.runSecretCommandForSurface;
 	const isolatedPort: SecretCommandPort = {

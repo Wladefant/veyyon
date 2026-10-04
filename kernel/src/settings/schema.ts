@@ -20,7 +20,7 @@
 
 import type { AnyUiMetadata, SettingTab, SettingType } from "@veyyon/settings";
 import { isRecord } from "@veyyon/utils/type-guards";
-import { UNSET_NUMBER_OPTION_VALUE } from "./optional-number";
+import { UNSET_NUMBER, UNSET_NUMBER_OPTION_VALUE } from "./optional-number";
 
 /**
  * Every declared setting, by declaration merging.
@@ -256,10 +256,21 @@ export function describeSettingTypeMismatch(path: string, value: unknown): strin
 	switch (def.type) {
 		case "boolean":
 			return typeof value === "boolean" ? undefined : mismatch("a boolean (true or false)");
-		case "number":
+		case "number": {
 			// NaN and the infinities are numbers to `typeof` and poison every
 			// comparison they reach, so they are rejected with the non-numbers.
-			return typeof value === "number" && Number.isFinite(value) ? undefined : mismatch("a finite number");
+			if (typeof value !== "number" || !Number.isFinite(value)) {
+				return mismatch("a finite number");
+			}
+			if (value === UNSET_NUMBER && isUnsetNumberPath(path as SettingPath)) {
+				return undefined;
+			}
+			const ui = def.ui as { min?: number } | undefined;
+			if (ui?.min !== undefined && value < ui.min) {
+				return `${path}: expected a number >= ${ui.min}, found ${value}`;
+			}
+			return undefined;
+		}
 		case "string":
 			return typeof value === "string" ? undefined : mismatch("a string");
 		case "modelChain":

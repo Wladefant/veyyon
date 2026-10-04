@@ -75,6 +75,7 @@ function bashTool(): BashTool {
 					if (key === "async.enabled") return false;
 					if (key === "bash.autoBackground.enabled") return false;
 					if (key === "bashInterceptor.enabled") return false;
+					if (key === "tools.artifactMaxBytes") return 0;
 					return undefined;
 				},
 				getBashInterceptorRules: () => [],

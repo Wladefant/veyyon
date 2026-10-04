@@ -7,7 +7,12 @@ import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { OutputSink } from "../session/streaming-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/core/output-meta";
+import {
+	type OutputArtifactError,
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../tools/core/output-meta";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, isEvalTimeoutControlEvent } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 import {
@@ -93,6 +98,8 @@ export interface KernelExecutionResult {
 	cancelled: boolean;
 	truncated: boolean;
 	artifactId?: string | undefined;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
@@ -215,6 +222,11 @@ export async function waitForPromiseWithCancellation<T>(
 	options: { signal?: AbortSignal; deadlineMs?: number },
 	cancelledErrorClass: CancelledErrorClass,
 ): Promise<T> {
+	// Every exit below, including the early throws, abandons `promise` before the `.then` at the end can
+	// observe it. The caller built it a moment ago (a kernel start that rejects with the aborted signal's
+	// reason), so an abandoned rejection would surface as a process-fatal unhandled rejection. The cell
+	// reports the cancellation; the outcome of the abandoned work has nowhere left to go.
+	promise.catch(() => {});
 	if (options.signal?.aborted) {
 		throw new cancelledErrorClass(isTimedOutCancellation(options.signal.reason, cancelledErrorClass, options.signal));
 	}
@@ -498,6 +510,7 @@ export async function executeWithKernelBase<
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		// Priced by how long the result will sit in context, through the same
 		// owner every other tool uses. Without this the sink keeps a flat 50KB
 		// tail, which is why eval results reached 71KB and then cost a re-read on
@@ -564,13 +577,15 @@ export async function executeWithKernelBase<
 			const annotation = timedOut
 				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
 				: undefined;
-			const dumped = await sink.dump(annotation);
+			const dumped = await sink.dumpWithArtifactStatus(annotation);
 			return {
 				exitCode: undefined,
 				cancelled: true,
 				truncated: dumped.truncated,
 				output: dumped.output,
 				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
 				totalLines: dumped.totalLines,
 				totalBytes: dumped.totalBytes,
 				outputLines: dumped.outputLines,
@@ -581,13 +596,15 @@ export async function executeWithKernelBase<
 		}
 
 		if (result.stdinRequested) {
-			const dumped = await sink.dump("Kernel requested stdin; interactive input is not supported.");
+			const dumped = await sink.dumpWithArtifactStatus("Kernel requested stdin; interactive input is not supported.");
 			return {
 				exitCode: 1,
 				cancelled: false,
 				truncated: dumped.truncated,
 				output: dumped.output,
 				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
 				totalLines: dumped.totalLines,
 				totalBytes: dumped.totalBytes,
 				outputLines: dumped.outputLines,
@@ -598,13 +615,15 @@ export async function executeWithKernelBase<
 		}
 
 		const exitCode = result.status === "ok" ? 0 : 1;
-		const dumped = await sink.dump();
+		const dumped = await sink.dumpWithArtifactStatus();
 		return {
 			exitCode,
 			cancelled: false,
 			truncated: dumped.truncated,
 			output: dumped.output,
 			artifactId: dumped.artifactId ?? undefined,
+			artifactElidedBytes: dumped.artifactElidedBytes,
+			artifactError: dumped.artifactError,
 			totalLines: dumped.totalLines,
 			totalBytes: dumped.totalBytes,
 			outputLines: dumped.outputLines,
@@ -615,7 +634,7 @@ export async function executeWithKernelBase<
 	} catch (err) {
 		if (isCancellationError(err, cancelledErrorClass) || abortShield.abortRequested || abortShield.signal?.aborted) {
 			const timedOut = abortShield.timedOut || isTimedOutCancellation(err, cancelledErrorClass, abortShield.signal);
-			const dumped = await sink.dump(
+			const dumped = await sink.dumpWithArtifactStatus(
 				timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
 			);
 			return {
@@ -624,6 +643,8 @@ export async function executeWithKernelBase<
 				truncated: dumped.truncated,
 				output: dumped.output,
 				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
 				totalLines: dumped.totalLines,
 				totalBytes: dumped.totalBytes,
 				outputLines: dumped.outputLines,

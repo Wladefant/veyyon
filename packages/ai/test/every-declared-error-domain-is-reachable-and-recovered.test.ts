@@ -137,6 +137,15 @@ const DOMAIN_DECISIONS: Record<string, DomainSpec> = {
 			turn: { action: "retry" },
 		},
 	},
+	"empty-response": {
+		buildFixture: () => new Error("returned an empty response"),
+		expectedFlags: Flag.EmptyResponse,
+		expectedRecovery: {
+			transport: { action: "retry" },
+			credential: { action: "surface" },
+			turn: { action: "retry" },
+		},
+	},
 	"thinking-loop": {
 		buildFixture: () => ({ errorId: Flag.ThinkingLoop | Flag.Class }),
 		expectedFlags: Flag.ThinkingLoop,
@@ -253,8 +262,9 @@ describe("exhaustive error domain sweep", () => {
 				expect(retriable(classifiedId)).toBe(false);
 			}
 
+			expect(retriable(classifiedId, { replayUnsafe: true })).toBe(false);
 			if (domain.replaySafe) {
-				expect(retriable(classifiedId, { replayUnsafe: true })).toBe(true);
+				expect(retriable(classifiedId)).toBe(true);
 			}
 		}
 	});

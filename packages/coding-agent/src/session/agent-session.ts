@@ -585,6 +585,8 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 }
 
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
+/** Bound on draining post-prompt work before a /btw branch; a hung task must not hold the promotion forever. */
+const BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
 
 /**
  * Emit a warn-level log for a turn that ended in a provider error so recurring
@@ -665,6 +667,8 @@ export class AgentSession {
 	#goalRuntime: GoalRuntime;
 	/** The advisors watching this session's turns; see {@link AdvisorRoster}. */
 	readonly #advisorRoster: AdvisorRoster;
+	/** Async lifecycle handlers for visible advisor cards emitted outside the primary loop. */
+	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#goalTurnCounter = 0;
 	/** Spend over the summarized prefix, tallied once per compaction boundary. */
 	readonly #spendLedger = new SessionSpendLedger();
@@ -2476,7 +2480,16 @@ export class AgentSession {
 	 */
 	#handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type !== "agent_end") {
-			return this.#processAgentEvent(event);
+			const processing = this.#processAgentEvent(event);
+			if ((event.type === "message_start" || event.type === "message_end") && isAdvisorCard(event.message)) {
+				this.#pendingAdvisorCardEvents.add(processing);
+				void processing
+					.finally(() => this.#pendingAdvisorCardEvents.delete(processing))
+					.catch(error => {
+						logger.debug("Advisor card event processing failed", { error });
+					});
+			}
+			return processing;
 		}
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#postPrompt.track(promise);
@@ -2798,7 +2811,6 @@ export class AgentSession {
 			this.#skipPostTurnMaintenanceAssistantTimestamp = message.timestamp;
 		}
 		await this.#retry.closeRecovered(message);
-		this.#usage.recordTurnCost(message);
 	}
 
 	/** Settle-time effects of a persisted tool result: todo write outcome and checkpoint/rewind state. */
@@ -4116,6 +4128,51 @@ export class AgentSession {
 			unsubscribe();
 			signal?.removeEventListener("abort", wake);
 		}
+	}
+
+	/**
+	 * Prevent advisor notes from starting hidden primary turns while a headless
+	 * caller prints and drains the final primary response.
+	 */
+	prepareForHeadlessAdvisorDrain(): void {
+		this.#advisorRoster.prepareForHeadlessDrain();
+	}
+
+	async #waitForPendingAdvisorCardEvents(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + Math.max(0, timeoutMs);
+		while (this.#pendingAdvisorCardEvents.size > 0) {
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) return false;
+			const settled = Promise.allSettled([...this.#pendingAdvisorCardEvents]).then(() => true as const);
+			const { promise: timedOut, resolve } = Promise.withResolvers<false>();
+			const timer = setTimeout(() => resolve(false), remainingMs);
+			try {
+				if (!(await Promise.race([settled, timedOut]))) return false;
+			} finally {
+				clearTimeout(timer);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Wait for active advisor reviews and their emitted card events before a
+	 * headless caller disposes the session. Returns `false` and logs work disposal
+	 * will abandon when the shared deadline expires or an advisor fails.
+	 */
+	async waitForAdvisorCatchup(timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		const { abandoned } = await this.#advisorRoster.waitForCatchup(timeoutMs);
+		const cardEventsCaughtUp = await this.#waitForPendingAdvisorCardEvents(Math.max(0, deadline - Date.now()));
+		if (abandoned.length > 0 || !cardEventsCaughtUp) {
+			logger.warn("advisor shutdown drain incomplete; disposal will abandon reviews or cards", {
+				timeoutMs,
+				advisors: abandoned,
+				pendingAdvisorCards: this.#pendingAdvisorCardEvents.size,
+			});
+			return false;
+		}
+		return true;
 	}
 
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
@@ -9088,6 +9145,9 @@ export class AgentSession {
 	 */
 	async runEphemeralTurn(args: {
 		promptText: string;
+		history?: readonly Message[];
+		/** Session-local key for serialized side turns; rotate after cancellation or failure. */
+		conversationKey?: string;
 		onTextDelta?: (delta: string) => void;
 		signal?: AbortSignal;
 		dedupeReply?: boolean;
@@ -9101,7 +9161,7 @@ export class AgentSession {
 		// agent's pinned key when it has one (fork, tan, shared session), so mirror
 		// that rather than the session id or this side turn cold-misses the prefix.
 		const ephemeralPromptCacheKey = this.agent.promptCacheKey ?? cacheSessionId;
-		const snapshot = this.#buildEphemeralSnapshot(args.promptText);
+		const snapshot = this.#buildEphemeralSnapshot(args.promptText, args.history);
 		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
 		const context = await this.agent.buildSideRequestContext(llmMessages);
 		const options = await this.prepareSimpleStreamOptions(
@@ -9110,10 +9170,12 @@ export class AgentSession {
 				// Side-channel turns must not share OpenAI/Codex append-only
 				// conversation state with the main agent turn: IRC and /btw can run
 				// while the main turn is mid-tool-call. Keep the prompt-cache key
-				// stable, but give provider routing a unique request lineage. The
-				// shared provider state map is still required so Codex can allocate
-				// websocket state under that side-channel session id.
-				sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
+				// stable, but isolate provider routing from the main conversation.
+				// Serialized BTW follow-ups reuse a topic-specific lineage; standalone
+				// side requests retain their unique request lineage.
+				sessionId: args.conversationKey
+					? `${cacheSessionId}:side:conversation:${args.conversationKey}`
+					: `${cacheSessionId}:side:${Snowflake.next()}`,
 				promptCacheKey: ephemeralPromptCacheKey,
 				preferWebsockets: this.#preferWebsockets,
 				providerSessionState: this.#providerSessions.states,
@@ -9194,10 +9256,10 @@ export class AgentSession {
 	/**
 	 * Build a message snapshot for an ephemeral side-channel turn.  Includes
 	 * the in-flight streaming assistant message (if any) so the model sees
-	 * the partial response in context, then appends the prompt as a virtual
-	 * user message.
+	 * the partial response in context, then appends detached side-channel history
+	 * and the current prompt after the no-tools reminder.
 	 */
-	#buildEphemeralSnapshot(promptText: string): AgentMessage[] {
+	#buildEphemeralSnapshot(promptText: string, history?: readonly Message[]): AgentMessage[] {
 		const messages = [...this.messages];
 		const streaming = this.agent.state.streamMessage;
 		if (streaming && streaming.role === "assistant" && Array.isArray(streaming.content)) {
@@ -9231,6 +9293,10 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
+		if (history?.length) {
+			// Detach before the conversion pipeline can await or mutate caller-owned messages.
+			messages.push(...structuredClone(history));
+		}
 		messages.push({
 			role: "user",
 			content: [{ type: "text", text: promptText }],
@@ -9679,21 +9745,30 @@ export class AgentSession {
 		return { selectedText, cancelled: false };
 	}
 
+	/** Promotes a completed /btw answer from the explicitly authorized session and leaf. */
 	async branchFromBtw(
 		question: string,
 		assistantMessage: AssistantMessage,
+		leafId: string,
+		sessionId: string,
 	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
 		const previousSessionFile = this.sessionFile;
 		if (!this.sessionManager.getSessionFile()) {
 			throw new Error("Cannot branch /btw: session is not persisted");
 		}
 
-		const leafId = this.sessionManager.getLeafId();
-		if (!leafId) {
-			throw new Error("Cannot branch /btw: current session has no leaf");
+		// The user authorized THIS answer at THIS leaf of THIS session. A resumed or branched session
+		// keeps entry ids, so the leaf alone matches a session the answer never saw.
+		const authorized = () =>
+			this.sessionManager.getSessionId() === sessionId && this.sessionManager.getLeafId() === leafId;
+		if (!leafId || !authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 
+		// A promotion never parks behind or aborts a running turn: that turn's reply would land on
+		// the old leaf, or be thrown away, after the user chose to keep it.
 		if (
+			this.isStreaming ||
 			this.isBashRunning ||
 			this.isEvalRunning ||
 			this.isCompacting ||
@@ -9714,8 +9789,19 @@ export class AgentSession {
 			}
 		}
 
-		await this.#cancelPostPromptTasks();
+		// Leaf and session are re-checked after every await: an extension hook or the post-prompt
+		// drain can append to the transcript while this is suspended.
+		if (!authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
+		}
+
+		await withTimeout(
+			this.#cancelPostPromptTasks(),
+			BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS,
+			"Timed out draining post-prompt tasks before /btw branch",
+		);
 		if (
+			this.isStreaming ||
 			this.isBashRunning ||
 			this.isEvalRunning ||
 			this.isCompacting ||
@@ -9728,13 +9814,12 @@ export class AgentSession {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 		this.agent.replaceQueues([], []);
-		if (this.isStreaming) {
-			await this.abort({ goalReason: "internal", reason: "branching /btw" });
-			this.agent.replaceQueues([], []);
-		}
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
 
+		if (!authorized()) {
+			throw new Error("Cannot branch /btw: session changed since /btw started");
+		}
 		this.sessionManager.createBranchedSession(leafId);
 
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());

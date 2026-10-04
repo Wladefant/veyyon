@@ -672,6 +672,8 @@ const NOT_A_GATEWAY: Record<string, string> = {
 	"gemini.ts": "first-party Google: a model host that publishes its own limits",
 	"index.ts": "barrel",
 	"openai-compatible.ts": "generic OpenAI-compatible discovery against an endpoint that publishes its own limits",
+	"typesafe.ts":
+		"first-party TypeSafe judge service: publishes its own models via GET /v1/models rather than proxying vendor models through a gateway resolver (commit 5fcd8e4a24)",
 };
 
 /**

@@ -17,6 +17,7 @@
  */
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import { type ActivitySignal, processActivity } from "@veyyon/utils/activity-signal";
 import { getDebugLogPath } from "@veyyon/utils/dirs";
 import { $flag, isBunTestRuntime } from "@veyyon/utils/env";
 import { isKeyRelease, matchesKey } from "@veyyon/utils/keys";
@@ -69,13 +70,11 @@ import {
 	OverlayStack,
 } from "./overlay";
 import {
-	altScreenSequence,
 	chunkStillPainted,
 	firstChangedRow,
 	fullPaintReplay,
 	homeRewriteSequence,
 	lastChangedRow,
-	sameAltPaint,
 	scrollAppendSequence,
 	seamRewriteSequence,
 	windowDiffSequence,
@@ -136,6 +135,11 @@ export interface RenderScheduler {
 
 export interface TUIOptions {
 	renderScheduler?: RenderScheduler;
+	/**
+	 * Where the engine reports its keystrokes and frames between start() and stop(), and where its
+	 * loop watchdog parks at rest. Default `processActivity`.
+	 */
+	activity?: ActivitySignal;
 }
 
 export interface TUIStartOptions {
@@ -523,8 +527,12 @@ export class TUI extends Container {
 	#stopped = false;
 	// Always-on event-loop lag probe. The high default threshold keeps it quiet;
 	// it only logs `ui.loop-blocked` (with the current loop phase) when a frame
-	// budget is genuinely starved. Armed in start(), disarmed in stop().
+	// budget is genuinely starved. Armed in start(), disarmed in stop(). It
+	// parks while the session rests and wakes on the keystrokes and frames this
+	// engine reports to `#activity` between start() and stop().
 	#watchdog: LoopWatchdog;
+	#activity: ActivitySignal;
+	#detachActivity: (() => void) | undefined;
 
 	// Live tail of the last resident alt paint: the composed rows that had not
 	// moved onto the scroll tape yet. Together with the tape this is the whole
@@ -541,6 +549,8 @@ export class TUI extends Container {
 	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
 	#altActive = false;
 	#altPreviousLines: string[] = [];
+	#altPreviousWidth = 0;
+	#altPreviousHeight = 0;
 	// Caret placed by the last alt-buffer paint, or undefined when that paint
 	// left it hidden. Part of the repaint-skip test: identical rows with a moved
 	// caret still needs a paint, or the composer's cursor lags the text.
@@ -603,10 +613,14 @@ export class TUI extends Container {
 		this.terminal = terminal;
 		this.#overlays = new OverlayStack(terminal);
 		this.#renderScheduler = options?.renderScheduler ?? DEFAULT_RENDER_SCHEDULER;
+		this.#activity = options?.activity ?? processActivity;
 		if (showHardwareCursor !== undefined) this.#cursor.setShow(showHardwareCursor);
 		// A block's stacks come from the process's sampling profiler. A test process runs many
 		// TUIs and its own profiling, so it keeps the watchdog's timing and phase report only.
-		this.#watchdog = new LoopWatchdog({ stacks: isBunTestRuntime() ? undefined : stallSampler });
+		this.#watchdog = new LoopWatchdog({
+			stacks: isBunTestRuntime() ? undefined : stallSampler,
+			activity: this.#activity,
+		});
 	}
 
 	override render(width: number): readonly string[] {
@@ -1433,6 +1447,7 @@ export class TUI extends Container {
 
 	start(options?: TUIStartOptions): void {
 		this.#stopped = false;
+		this.#detachActivity ??= this.#activity.attachHost();
 		this.#watchdog.start();
 		this.#ghosttyInitialImageDelayDone = false;
 		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + GHOSTTY_INITIAL_IMAGE_DELAY_MS;
@@ -1564,6 +1579,8 @@ export class TUI extends Container {
 		// full-screen program a wheel that types arrow keys.
 		this.#syncAltScroll();
 		this.#watchdog.stop();
+		this.#detachActivity?.();
+		this.#detachActivity = undefined;
 		this.#renderTimer?.cancel();
 		this.#renderTimer = undefined;
 		// The request itself, not just its timer: a stopped engine owes no frame,
@@ -2218,6 +2235,7 @@ export class TUI extends Container {
 	 * one.
 	 */
 	#handleInput(data: string): void {
+		this.#activity.report();
 		pushLoopPhase("ui.input");
 		try {
 			this.#dispatchInput(data);
@@ -2440,6 +2458,7 @@ export class TUI extends Container {
 	 */
 	#doRender(): void {
 		if (this.#stopped) return;
+		this.#activity.report();
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 
@@ -3540,14 +3559,21 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Compose and paint only the viewport for one resize fast-path frame, as an
-	 * alternate-screen per-row overwrite: the normal buffer may reflow full-width
-	 * rows on a width change before the app can repaint, and on the alternate
-	 * screen those transient resizes truncate instead of pushing wrapped
-	 * fragments into native scrollback. State-isolated: advances no
-	 * commit/window/diff field and calls neither `#commit` nor `#emitFullPaint`,
-	 * so the settle full paint reconciles against the pre-drag screen state and
-	 * rebuilds normal-screen history once.
+	 * Emit a throwaway viewport repaint for the resize fast path as a per-row
+	 * overwrite. A width change can make the terminal's normal buffer reflow
+	 * full-width rows before the app repaints, so a width drag borrows the
+	 * alternate screen: transient resizes truncate the viewport instead of
+	 * pushing wrapped fragments into native scrollback. A height-only resize
+	 * reflows nothing, so it repaints the normal screen in place — borrowing the
+	 * alt buffer there is pure flicker, and on terminals that re-report their
+	 * size when the alt buffer toggles it is self-sustaining: leaving a
+	 * fullscreen overlay's alt screen fires a height-only SIGWINCH echo, which
+	 * would otherwise re-borrow the alt buffer for one frame (the settings-exit
+	 * flash, #5854). Normal-screen history is rebuilt once at settle via
+	 * `#emitFullPaint`. State-isolated: advances no commit/window/diff field and
+	 * calls neither `#commit` nor `#emitFullPaint`, so the settle full paint
+	 * reconciles against the pre-drag screen state and rebuilds normal-screen
+	 * history once.
 	 */
 	#renderResizeViewport(width: number, height: number): void {
 		if (width <= 0 || height <= 0) return;
@@ -3562,13 +3588,9 @@ export class TUI extends Container {
 		// authoritative accounting, and its beginPass() wipes these frames.
 		this.#imageBudget.beginPass(true);
 		const { window, contentRows } = this.#composeResizeViewport(width, height);
-		let buffer = homeRewriteSequence(
-			this.#paintBeginSequence + this.#enterResizeAltSequence(),
-			window,
-			width,
-			height,
-			this.#imageBudget,
-		);
+		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
+		const altEnter = widthChanged ? this.#enterResizeAltSequence() : "";
+		let buffer = homeRewriteSequence(this.#paintBeginSequence + altEnter, window, width, height, this.#imageBudget);
 		// Park the hardware cursor at the real content bottom, not the padded
 		// viewport bottom: a later height shrink would otherwise scroll the live
 		// rows below the cursor into native scrollback and duplicate them until
@@ -3712,16 +3734,62 @@ export class TUI extends Container {
 			for (const seq of imageTransmits) transmitBuffer += seq;
 			this.terminal.write(transmitBuffer);
 		}
-		// Skip an identical repaint (the modal is mostly static between
-		// keystrokes) — unless a forced repaint (resetDisplay,
-		// requestRender(true)) is pending: the redraw gesture must repair a
-		// corrupted modal even when our cached frame is byte-identical.
+		// A forced repaint (resetDisplay, requestRender(true)) rewrites every row
+		// even when the cached frame is byte-identical: the redraw gesture must
+		// repair a corrupted modal. Otherwise rewrite only the rows that changed
+		// (a keystroke in a modal touches a row or two), and skip an identical
+		// frame entirely.
 		const force = this.#forceViewportRepaintOnNextRender;
 		this.#forceViewportRepaintOnNextRender = false;
-		if (!force && sameAltPaint(this.#altPreviousLines, this.#altPreviousCursor, fitted, cursor)) return;
+		const geometryStable =
+			this.#altPreviousLines.length === height &&
+			this.#altPreviousWidth === width &&
+			this.#altPreviousHeight === height;
+		const full = force || !geometryStable;
+		let rowsBuffer = "";
+		for (let r = 0; r < height; r++) {
+			if (full) {
+				if (r > 0) rowsBuffer += "\n";
+			} else if (this.#altPreviousLines[r] !== fitted[r]) {
+				rowsBuffer += `\x1b[${r + 1};1H`;
+			} else {
+				continue;
+			}
+			rowsBuffer += lineRewriteSequence(fitted[r] ?? "", width, r, this.#imageBudget);
+		}
+		this.#altPreviousLines = fitted;
+		this.#altPreviousWidth = width;
+		this.#altPreviousHeight = height;
+		if (rowsBuffer === "") {
+			if (cursor !== undefined) {
+				if (
+					this.#altPreviousCursor === undefined ||
+					this.#altPreviousCursor.row !== cursor.row ||
+					this.#altPreviousCursor.col !== cursor.col
+				) {
+					const row = clampLow(cursor.row + 1, 1, Math.max(1, height));
+					const col = clampLow(cursor.col + 1, 1, Math.max(1, width));
+					this.terminal.write(`${this.#paintBeginSequence}\x1b[${row};${col}H${this.#paintEndSequence}`);
+				}
+				this.terminal.showCursor();
+				this.#cursor.recordRowOnly(cursor.row, true);
+				this.#altPreviousCursor = cursor;
+			} else if (this.#altPreviousCursor !== undefined) {
+				// Rows are unchanged but the caret marker is gone: the paint prologue hides the
+				// hardware cursor, which a skipped paint would leave on screen.
+				this.terminal.write(`${this.#paintBeginSequence}${this.#paintEndSequence}`);
+				this.#altPreviousCursor = undefined;
+			}
+			return;
+		}
+		let cursorSuffix = "";
+		if (cursor !== undefined) {
+			const row = clampLow(cursor.row + 1, 1, Math.max(1, height));
+			const col = clampLow(cursor.col + 1, 1, Math.max(1, width));
+			cursorSuffix = `\x1b[${row};${col}H`;
+		}
 		this.terminal.write(
-			altScreenSequence(this.#paintBeginSequence, fitted, width, height, cursor, this.#imageBudget) +
-				this.#paintEndSequence,
+			`${this.#paintBeginSequence}${full ? "\x1b[H" : ""}${rowsBuffer}${cursorSuffix}${this.#paintEndSequence}`,
 		);
 		if (cursor !== undefined) {
 			this.terminal.showCursor();
@@ -3730,8 +3798,7 @@ export class TUI extends Container {
 			this.#cursor.recordRowOnly(cursor.row, true);
 		}
 		this.#altPreviousCursor = cursor;
-		this.#altPreviousLines = fitted;
-		this.#fullRedrawCount += 1;
+		if (full) this.#fullRedrawCount += 1;
 	}
 
 	/**

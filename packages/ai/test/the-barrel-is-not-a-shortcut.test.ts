@@ -257,7 +257,12 @@ describe("the modules that were repointed stay cut", () => {
 		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
 		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt
 		// loader, on top of the fork's own graph. Growth from those named modules, not a new edge out of a cut.
-		["agent/src/proxy.ts", 148],
+		// `agent/src/proxy.ts` 148 -> 150 on 2026-10-02, by exactly two modules: `catalog/src/types.ts` and
+		// `contracts/model/src/model.ts`. `catalog/models.ts` and `catalog/model-manager.ts`, both already on this
+		// reach, now import the value `modelKind` (chat versus runner rows) through `./types`, which was a type-only
+		// import and so cost nothing before. `types.ts` re-exports the contract module; no consumer gained an edge
+		// to a subsystem it did not already reach.
+		["agent/src/proxy.ts", 150],
 		["apps/stats/src/parser.ts", 125],
 		["apps/stats/src/db.ts", 127],
 		["apps/stats/src/sync-worker.ts", 126],
@@ -277,7 +282,8 @@ describe("the modules that were repointed stay cut", () => {
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
 		// RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
-		["coding-agent/src/commit/shared-llm.ts", 215],
+		// RE-MEASURED 2026-10-04 after the upstream port wave (#219): 215 -> 226, the provider definitions and OAuth flows ported into `ai/src/registry`.
+		["coding-agent/src/commit/shared-llm.ts", 226],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

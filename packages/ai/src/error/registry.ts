@@ -48,6 +48,7 @@ import {
 } from "./domains/request";
 import {
 	contentDomain,
+	emptyResponseDomain,
 	gatewayCancellationIdentityRule,
 	gatewayCancellationWordingRule,
 	interruptDomain,
@@ -79,6 +80,7 @@ export const ERROR_DOMAINS: readonly ErrorDomain[] = [
 	toolChoiceDomain,
 	toolCallDomain,
 	streamDomain,
+	emptyResponseDomain,
 	thinkingLoopDomain,
 	refusalDomain,
 	transportDomain,
@@ -166,14 +168,14 @@ export function recover(id: number | undefined, stage: RecoveryStage): Recovery 
  * failure was transient, and it wins: a transport fault says the next attempt could differ, never
  * that repeating the turn is safe. HTTP/2 stream resets are classified transient for exactly that
  * reason and deliberately get no bypass here, because a reset that arrives after the stream
- * delivered a tool call is precisely the case the guard exists for. The one exception is the family
- * that declares itself `replaySafe`: a malformed function call was never well-formed enough to
- * execute, so there is nothing to duplicate.
+ * delivered a tool call is precisely the case the guard exists for. A malformed
+ * function call may be retried only when the caller has proved the whole turn
+ * replay-safe, since earlier output or tool calls may already have effects.
  */
 export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
 	if (vetoesRetry(id)) return false;
-	if (((id ?? 0) & REPLAY_SAFE_MASK) !== 0) return true;
 	if (opts?.replayUnsafe) return false;
+	if (((id ?? 0) & REPLAY_SAFE_MASK) !== 0) return true;
 	return ((id ?? 0) & TURN_RETRIABLE_MASK) !== 0;
 }
 

@@ -2,6 +2,8 @@ import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-reso
 import { errorMessage, isCancellation, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 // The owner, not the barrel: this module reaches the two discard contracts and nothing else.
 import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
+import { clampLow } from "@veyyon/utils/math";
+import type { BrowserContext } from "puppeteer-core";
 import { callSessionTool } from "../../../eval/js/tool-bridge";
 import { logWorkerMessage } from "../../../subprocess/worker-log";
 import { raceWithTimeout } from "../../../utils/fetch-timeout";
@@ -22,6 +24,7 @@ import {
 	type PuppeteerBrowserHandle,
 	releaseBrowser,
 } from "./registry";
+import { applyStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
 import type {
 	BrowserRunError,
 	ReadyInfo,
@@ -109,6 +112,8 @@ interface TabSessionBase<TBrowser extends BrowserHandle = BrowserHandle> {
 export interface WorkerTabSession extends TabSessionBase<PuppeteerBrowserHandle> {
 	backend: "worker";
 	worker: WorkerHandle;
+	/** The isolated context the tab's page is in, by the name `open` gave it; undefined for the browser's default context. */
+	contextName?: string;
 }
 
 export interface CmuxTabSession extends TabSessionBase<CmuxBrowserHandle> {
@@ -127,6 +132,15 @@ export interface AcquireTabOptions {
 	target?: string;
 	signal?: AbortSignal;
 	timeoutMs: number;
+	/**
+	 * `performance.now()` timestamp at which the caller's timeout budget
+	 * started. Callers whose deadline began before this acquisition —
+	 * `browser.ts` `open` starts its clock before `acquireBrowser` — pass it
+	 * through so time spent in earlier phases within the caller's deadline
+	 * counts against the worker-init budget instead of restarting it.
+	 * Omit for a fresh clock.
+	 */
+	deadlineStartMs?: number;
 	dialogs?: DialogPolicy;
 	cmuxSurface?: string;
 	/**
@@ -135,11 +149,21 @@ export interface AcquireTabOptions {
 	 * dispose. Optional — omitting it opts the tab out of session-scoped reap.
 	 */
 	ownerSessionId?: string;
+	/**
+	 * The isolated context to open the tab in: tabs naming the same one share cookies and storage,
+	 * apart from the browser's default context and every other name. Headless only. Undefined and
+	 * `"default"` name the default context; a reopened tab keeps the context it was in.
+	 */
+	context?: string;
+	/** Loaded into the tab's context before the tab navigates. Headless only. */
+	storageState?: StorageState;
 }
 
 export interface AcquireTabResult {
 	tab: TabSession;
 	created: boolean;
+	/** What `storageState` put into the tab's context, when one was given. */
+	stateLoaded?: StorageStateLoaded;
 }
 
 export interface RunInTabOptions {
@@ -157,15 +181,114 @@ const tabs = new Map<string, TabSession>();
 // Per-name acquisition chain: serializes concurrent `acquireTab` calls for the
 // same tab name so the existence check and `tabs.set` (separated by several
 // awaits) cannot interleave and leak a worker + browser refCount.
+// Headless targets a worker created before dying during init (page-created).
+// A killed worker can't close its own page; the supervisor closes the
+// recorded target instead. A shared browser's other targets must never be
+// touched.
+const workerPageTargets = new WeakMap<WorkerHandle, string>();
 const acquireChains = new Map<string, Promise<void>>();
 const GRACE_MS = 750;
+// Cold-start guard for the worker's `setup` handshake (realm usable: puppeteer
+// loaded, browser connected, page acquired). On hosts where the worker's cold
+// import stalls (observed: Bun worker inside a full RPC process), an
+// unbounded first-attempt init would consume the caller's entire timeout
+// before the inline fallback could engage. Budget: min(10s, remaining/3),
+// floor 2s, where remaining is what the caller's budget has left at attempt start.
+const SETUP_BUDGET_FLOOR_MS = 2_000;
+const SETUP_BUDGET_CAP_MS = 10_000;
+// Floor for the ready-phase budget: the 2s setup floor can consume more than
+// a sub-3s caller's entire init budget, so the remaining-budget math must
+// never hand raceWithTimeout a non-positive value.
+const READY_BUDGET_FLOOR_MS = 500;
 // Names of tabs the supervisor force-killed (timeout past grace, failed recycle),
 // mapped to the kill reason. Lets the next `run` on that name explain WHY the tab
 // vanished instead of a bare "not alive". Cleared when the name is opened again.
 const killedTabs = new Map<string, string>();
 
+const REPORTED_INIT_FAILURE = Symbol("reported-init-failure");
+
+function markReportedInitFailure(error: Error): Error {
+	Object.defineProperty(error, REPORTED_INIT_FAILURE, { value: true, configurable: true });
+	return error;
+}
+
+function isReportedInitFailure(error: unknown): boolean {
+	return error instanceof Error && REPORTED_INIT_FAILURE in error;
+}
+
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
+}
+
+/** The name `open` gives the browser's own context. */
+const DEFAULT_CONTEXT = "default";
+
+/** The isolated context `requested` names, or undefined for the browser's default context. */
+export function isolatedContextName(requested: string | undefined): string | undefined {
+	return requested === undefined || requested === "" || requested === DEFAULT_CONTEXT ? undefined : requested;
+}
+
+function describeContext(name: string | undefined): string {
+	return name === undefined ? "the default context" : `context ${JSON.stringify(name)}`;
+}
+
+/**
+ * A named isolated context and how many tabs are open in it. The main thread owns it, so every tab
+ * that names it shares one cookie jar whichever worker drives the tab, and the last tab to close
+ * closes it and everything left in it.
+ */
+interface NamedContext {
+	readonly context: Promise<BrowserContext>;
+	tabs: number;
+}
+
+const namedContexts = new WeakMap<PuppeteerBrowserHandle, Map<string, NamedContext>>();
+
+/** Take a tab's hold on context `name` of `browser`, creating it for the first tab that names it. */
+async function holdNamedContext(browser: PuppeteerBrowserHandle, name: string): Promise<BrowserContext> {
+	let byName = namedContexts.get(browser);
+	if (!byName) {
+		byName = new Map();
+		namedContexts.set(browser, byName);
+	}
+	let entry = byName.get(name);
+	if (!entry) {
+		entry = { context: browser.browser.createBrowserContext(), tabs: 0 };
+		byName.set(name, entry);
+	}
+	entry.tabs++;
+	try {
+		return await entry.context;
+	} catch (error) {
+		// A context that was never created holds nobody.
+		if (byName.get(name) === entry) byName.delete(name);
+		throw new ToolError(`Could not create browser ${describeContext(name)}: ${errorMessage(error)}`);
+	}
+}
+
+/** Drop a tab's hold on context `name`; the last hold closes the context and every page still in it. */
+async function releaseNamedContext(browser: PuppeteerBrowserHandle, name: string): Promise<void> {
+	const byName = namedContexts.get(browser);
+	const entry = byName?.get(name);
+	if (!byName || !entry) return;
+	entry.tabs--;
+	if (entry.tabs > 0) return;
+	byName.delete(name);
+	const context = await optionalResult(entry.context, "a context that was never created has nothing to close");
+	if (context) await bestEffort(context.close(), "a context that will not close goes with its browser");
+}
+
+/** Context `name` of `browser`, which a caller already holds. */
+async function heldNamedContext(browser: PuppeteerBrowserHandle, name: string): Promise<BrowserContext> {
+	const entry = namedContexts.get(browser)?.get(name);
+	if (!entry) throw new ToolError(`The browser has no ${describeContext(name)} open`);
+	return await entry.context;
+}
+
+/** The context tab `tab`'s page is in. */
+async function contextOfTab(tab: WorkerTabSession): Promise<BrowserContext> {
+	if (tab.contextName === undefined) return tab.browser.browser.defaultBrowserContext();
+	return await heldNamedContext(tab.browser, tab.contextName);
 }
 
 export function acquireTab(name: string, browser: BrowserHandle, opts: AcquireTabOptions): Promise<AcquireTabResult> {
@@ -187,6 +310,13 @@ async function acquireTabImpl(
 	browser: BrowserHandle,
 	opts: AcquireTabOptions,
 ): Promise<AcquireTabResult> {
+	// Worker-init deadline: the inline-fallback retry passes this same start
+	// so it can't restart the budget (which would let a cold import that
+	// consumed most of it spend the phase floors again for another full
+	// budget). Defaults to a fresh clock; callers whose own deadline started
+	// earlier (browser acquisition is not part of this budget) pass theirs
+	// through `deadlineStartMs` so that earlier time counts against it.
+	const startedAt = opts.deadlineStartMs ?? performance.now();
 	// Serialized opens can sit behind a slow predecessor in the per-name
 	// chain; honor an abort at dequeue instead of spawning a worker and
 	// browser hold nobody is waiting for.
@@ -205,8 +335,33 @@ async function acquireTabImpl(
 	// to reuse (e.g. reopening the sole tab with a different dialogs policy).
 	let tempHold = false;
 	const existing = tabs.get(name);
+	// A tab opened again with no context keeps the one it is in, including when a changed dialog policy
+	// reopens it; one that names a different context is refused rather than moved out from under its page.
+	const reopenedContext =
+		existing?.backend === "worker" && existing.browser === browser ? existing.contextName : undefined;
+	const contextName = opts.context === undefined ? reopenedContext : isolatedContextName(opts.context);
+	// Recreating a tab in the context it is in must not let the release of the old tab close that
+	// context, and every cookie in it, before the new tab holds it: the hold is taken first and handed
+	// to the new tab.
+	let contextHeld = false;
+	const keepContextAcrossRelease = async (): Promise<void> => {
+		if (
+			existing?.backend === "worker" &&
+			existing.browser === browser &&
+			contextName !== undefined &&
+			existing.contextName === contextName
+		) {
+			await holdNamedContext(existing.browser, contextName);
+			contextHeld = true;
+		}
+	};
 	if (existing) {
 		if (existing.browser === browser && existing.state === "alive") {
+			if (existing.backend === "worker" && opts.context !== undefined && contextName !== existing.contextName) {
+				throw new ToolError(
+					`Tab ${JSON.stringify(name)} is open in ${describeContext(existing.contextName)}; close it first, or open ${describeContext(contextName)} under another tab name.`,
+				);
+			}
 			const requestedCmuxSurface = "client" in browser ? (opts.cmuxSurface ?? browser.surface) : undefined;
 			if (existing.backend === "cmux" && existing.cmuxAttachedSurface !== requestedCmuxSurface) {
 				holdBrowser(browser);
@@ -215,8 +370,16 @@ async function acquireTabImpl(
 			} else if (opts.dialogs !== undefined && opts.dialogs !== existing.dialogPolicy) {
 				holdBrowser(browser);
 				tempHold = true;
+				await keepContextAcrossRelease();
 				await releaseTab(name, { kill: false });
 			} else {
+				let stateLoaded: StorageStateLoaded | undefined;
+				if (opts.storageState) {
+					if (existing.backend !== "worker" || browser.kind.kind !== "headless") {
+						throw new ToolError(headlessOnly(browser));
+					}
+					stateLoaded = await applyStorageState(await contextOfTab(existing), opts.storageState);
+				}
 				const reuseSteps: string[] = [];
 				if (opts.viewport && browser.kind.kind !== "cmux") {
 					const dsf = opts.viewport.deviceScaleFactor;
@@ -246,19 +409,21 @@ async function acquireTabImpl(
 				if (!reused) {
 					throw new Error(`Browser tab "${name}" was released while being reused; retry the operation`);
 				}
-				return { tab: reused, created: false };
+				return { tab: reused, created: false, ...(stateLoaded ? { stateLoaded } : {}) };
 			}
 		} else {
 			if (existing.browser === browser) {
 				holdBrowser(browser);
 				tempHold = true;
 			}
+			await keepContextAcrossRelease();
 			await releaseTab(name, { kill: false });
 		}
 	}
 
 	if ("client" in browser) {
 		try {
+			if (contextName !== undefined || opts.storageState) throw new ToolError(headlessOnly(browser));
 			const result = await acquireCmuxTab(name, browser, opts);
 			if (tempHold) await releaseBrowser(browser, { kill: false });
 			return result;
@@ -267,81 +432,150 @@ async function acquireTabImpl(
 			throw error;
 		}
 	}
-	let initPayload: WorkerInitPayload;
-	let worker: WorkerHandle;
+	return await openWorkerTab(name, browser, opts, tempHold, contextName, contextHeld, startedAt);
+}
+
+function headlessOnly(browser: BrowserHandle): string {
+	return `An isolated context and a storage state need the headless browser; a ${browser.kind.kind} tab runs in the app's own session.`;
+}
+
+/**
+ * Start a worker for a new tab named `name` in context `contextName` of `browser`, loading
+ * `opts.storageState` into that context first. `tempHold` is the browser hold the caller took to
+ * survive releasing an earlier tab of the same name, and `contextHeld` the context hold it took for
+ * the same reason; both pass to the new tab or are dropped on every exit.
+ */
+async function openWorkerTab(
+	name: string,
+	browser: PuppeteerBrowserHandle,
+	opts: AcquireTabOptions,
+	tempHold: boolean,
+	contextName: string | undefined,
+	contextHeld: boolean,
+	startedAt: number,
+): Promise<AcquireTabResult> {
+	let heldContext = contextHeld;
 	try {
-		initPayload = await buildInitPayload(browser, opts);
-		worker = await spawnTabWorker();
-	} catch (error) {
-		// Failing before the worker took its own hold must release the
-		// temporary one, or the browser's refCount never reaches 0 again.
-		if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
-		throw error;
-	}
-	let info: ReadyInfo;
-	try {
-		info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
-	} catch (error) {
-		// `BuildMessage`-class failures arrive asynchronously via the worker's `error` event,
-		// after `spawnTabWorker`'s synchronous try/catch has already returned. Fall back to
-		// the inline worker here so module-resolution failures don't poison every tab open.
-		await terminateWorker(worker, "open-init-failed");
-		if (worker.mode === "inline") {
+		let initPayload: WorkerInitPayload;
+		let worker: WorkerHandle;
+		let stateLoaded: StorageStateLoaded | undefined;
+		try {
+			if ((contextName !== undefined || opts.storageState) && browser.kind.kind !== "headless") {
+				throw new ToolError(headlessOnly(browser));
+			}
+			let context: BrowserContext | undefined;
+			if (contextName !== undefined) {
+				context = contextHeld
+					? await heldNamedContext(browser, contextName)
+					: await holdNamedContext(browser, contextName);
+				heldContext = true;
+			}
+			// Before the worker opens the page, so the page's first request already carries the cookies.
+			if (opts.storageState) {
+				stateLoaded = await applyStorageState(
+					context ?? browser.browser.defaultBrowserContext(),
+					opts.storageState,
+				);
+			}
+			initPayload = await buildInitPayload(browser, opts, context?.id);
+			worker = await spawnTabWorker();
+		} catch (error) {
+			// Failing before the worker took its own hold must release the
+			// temporary one, or the browser's refCount never reaches 0 again.
 			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
 			throw error;
 		}
-		logger.warn("Tab worker init failed; retrying with inline tab worker (no sync-loop guard)", {
-			error: errorMessage(error),
-		});
-		worker = await spawnInlineWorker();
+		// Init budget: the caller's timeout plus the supervisor grace — never a
+		// fixed floor. A floor larger than the caller's budget would keep a wedged
+		// worker (and its orphaned page on a shared browser) alive long after the
+		// caller gave up; the phase floors inside initializeTabWorker keep each
+		// phase positive for sub-second budgets, and the caller's abort signal is
+		// the hard backstop for floor overshoot.
+		const initBudgetMs = opts.timeoutMs + GRACE_MS;
+		let info: ReadyInfo;
 		try {
-			info = await initializeTabWorker(worker, initPayload, opts.timeoutMs + GRACE_MS);
-		} catch (inlineError) {
-			await terminateWorker(worker, "open-inline-failed");
-			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
-			const finalError = new ToolError(
-				`Failed to start browser tab worker (inline fallback also failed): ${errorMessage(inlineError)}`,
-			);
-			(finalError as { cause?: unknown }).cause = error;
-			throw finalError;
+			info = await initializeTabWorker(worker, initPayload, initBudgetMs, startedAt);
+		} catch (error) {
+			// `BuildMessage`-class failures arrive asynchronously via the worker's `error` event,
+			// after `spawnTabWorker`'s synchronous try/catch has already returned. Fall back to
+			// the inline worker here so module-resolution failures don't poison every tab open.
+			await terminateWorker(worker, "open-init-failed");
+			// A headless worker that died mid-init may have already created its page in the
+			// shared browser — a killed worker can't close it, so close the target the worker
+			// reported (no-op when it never got that far).
+			closeAbandonedWorkerPage(browser, worker);
+			if (worker.mode === "inline" || isReportedInitFailure(error)) {
+				if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+				throw error;
+			}
+			// Fail fast once the caller's init budget is exhausted: its timeout has already
+			// fired, so a retried result would only be discarded by the post-init abort check —
+			// don't spend the phase floors' excess on a cold start nobody is waiting for.
+			if (initBudgetExhausted(initBudgetMs, startedAt)) {
+				if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+				throw error;
+			}
+			logger.warn("Tab worker init failed; retrying with inline tab worker (no sync-loop guard)", {
+				error: errorMessage(error),
+			});
+			worker = await spawnInlineWorker();
+			try {
+				info = await initializeTabWorker(worker, initPayload, initBudgetMs, startedAt);
+			} catch (inlineError) {
+				await terminateWorker(worker, "open-inline-failed");
+				closeAbandonedWorkerPage(browser, worker);
+				if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+				const finalError = new ToolError(
+					`Failed to start browser tab worker (inline fallback also failed): ${errorMessage(inlineError)}`,
+				);
+				finalError.cause = error;
+				if (opts.signal?.aborted) throw new ToolAbortError("Browser tab open aborted");
+				throw finalError;
+			}
 		}
-	}
 
-	// If the caller aborted while we were spawning/initializing the worker,
-	// tear the freshly-built worker down before publishing the tab so the
-	// browser refCount (which `holdBrowser` below would take) never grows for
-	// a tab nobody is waiting for.
-	if (opts.signal?.aborted) {
-		await terminateWorker(worker, "open-aborted");
-		// The browser release runs while an abort is already being raised; its own failure must not
-		// replace `ToolAbortError`, and the refCount it adjusts is dropped with the browser anyway.
-		// `|| browser.refCount === 0` matches every sibling error path above (:257, :269,
-		// :281, :292). Without it, an abort here strands the handle `acquireBrowser`
-		// already published at refCount 0 — and nothing walks `browsers`, only `tabs`.
-		if (tempHold || browser.refCount === 0) {
-			await bestEffort(releaseBrowser(browser, { kill: false }), "the abort is what the caller gets, not this");
+		// If the caller aborted while we were spawning/initializing the worker,
+		// tear the freshly-built worker down before publishing the tab so the
+		// browser refCount (which `holdBrowser` below would take) never grows for
+		// a tab nobody is waiting for.
+		if (opts.signal?.aborted) {
+			await terminateWorker(worker, "open-aborted");
+			closeAbandonedWorkerPage(browser, worker);
+			// The browser release runs while an abort is already being raised; its own failure must not
+			// replace `ToolAbortError`, and the refCount it adjusts is dropped with the browser anyway.
+			// `|| browser.refCount === 0` matches every sibling error path above. Without it, an abort
+			// here strands the handle `acquireBrowser` already published at refCount 0 — and nothing
+			// walks `browsers`, only `tabs`.
+			if (tempHold || browser.refCount === 0) {
+				await bestEffort(releaseBrowser(browser, { kill: false }), "the abort is what the caller gets, not this");
+			}
+			throw new ToolAbortError("Browser tab open aborted");
 		}
-		throw new ToolAbortError("Browser tab open aborted");
-	}
 
-	holdBrowser(browser);
-	if (tempHold) await releaseBrowser(browser, { kill: false });
-	const tab: WorkerTabSession = {
-		name,
-		browser,
-		targetId: info.targetId,
-		backend: "worker",
-		worker,
-		state: "alive",
-		info,
-		pending: new Map(),
-		dialogPolicy: opts.dialogs,
-		kindTag: browser.kind.kind,
-		ownerSessionId: opts.ownerSessionId,
-	};
-	worker.onMessage(msg => handleTabMessage(tab, msg));
-	tabs.set(name, tab);
-	return { tab, created: true };
+		holdBrowser(browser);
+		if (tempHold) await releaseBrowser(browser, { kill: false });
+		const tab: WorkerTabSession = {
+			name,
+			browser,
+			targetId: info.targetId,
+			backend: "worker",
+			worker,
+			state: "alive",
+			info,
+			pending: new Map(),
+			dialogPolicy: opts.dialogs,
+			kindTag: browser.kind.kind,
+			ownerSessionId: opts.ownerSessionId,
+			...(contextName === undefined ? {} : { contextName }),
+		};
+		worker.onMessage(msg => handleTabMessage(tab, msg));
+		tabs.set(name, tab);
+		return { tab, created: true, ...(stateLoaded ? { stateLoaded } : {}) };
+	} catch (error) {
+		// The tab never opened, so its hold on the context goes; the context closes if nothing else is in it.
+		if (heldContext && contextName !== undefined) await releaseNamedContext(browser, contextName);
+		throw error;
+	}
 }
 
 async function acquireCmuxTab(
@@ -614,6 +848,8 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 	}
 	await terminateWorker(tab.worker, "release-tab");
 	if (forced && tab.kindTag === "headless") await closeOrphanTarget(tab);
+	// Before the browser hold goes: the last hold on a browser closes it, and the context with it.
+	if (tab.contextName !== undefined) await releaseNamedContext(tab.browser, tab.contextName);
 	await releaseBrowser(tab.browser, { kill: opts.kill ?? false });
 	tabs.delete(name);
 	return true;
@@ -670,7 +906,11 @@ function isLastSurfaceCloseError(err: unknown): boolean {
 	return /last/i.test(message);
 }
 
-async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTabOptions): Promise<WorkerInitPayload> {
+async function buildInitPayload(
+	browser: PuppeteerBrowserHandle,
+	opts: AcquireTabOptions,
+	browserContextId: string | undefined,
+): Promise<WorkerInitPayload> {
 	const browserWSEndpoint = browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
 	if (browser.kind.kind === "headless") {
@@ -682,6 +922,7 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 			url: opts.url,
 			waitUntil: opts.waitUntil,
 			timeoutMs: opts.timeoutMs,
+			...(browserContextId === undefined ? {} : { browserContextId }),
 		};
 	}
 	const page = await pickElectronTarget(browser.browser, opts.target);
@@ -691,6 +932,9 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 		browserWSEndpoint,
 		targetId,
 		dialogs: opts.dialogs,
+		url: opts.url,
+		waitUntil: opts.waitUntil,
+		timeoutMs: opts.timeoutMs,
 	};
 }
 
@@ -786,6 +1030,9 @@ function toErrorPayload(error: unknown): TabRunErrorPayload {
 }
 
 async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number): Promise<void> {
+	// Same deadline carry-over as acquireTabImpl: the inline-fallback retry
+	// must not restart the recycle's init budget.
+	const startedAt = performance.now();
 	const oldWorker = tab.worker;
 	await terminateWorker(oldWorker, "recycle-timed-out");
 	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
@@ -795,22 +1042,29 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 		browserWSEndpoint,
 		targetId: tab.targetId,
 		dialogs: tab.dialogPolicy,
+		timeoutMs,
 		// Unblock a wedged page (open JS dialog, hung navigation) before adopting it —
 		// otherwise init stalls, times out, and the tab gets force-killed.
 		recover: true,
 	};
 	let worker = await spawnTabWorker();
 	try {
-		const info = await initializeTabWorker(worker, payload, timeoutMs);
+		const info = await initializeTabWorker(worker, payload, timeoutMs, startedAt);
 		tab.worker = worker;
 		tab.info = info;
 		tab.state = "alive";
 		worker.onMessage(msg => handleTabMessage(tab, msg));
 	} catch (error) {
 		await terminateWorker(worker, "recycle-spawn-failed");
+		// The recycle's budget is exhausted: the run caller already timed out, so a
+		// retried init can't beat its deadline — fail fast and let the caller
+		// force-kill the tab instead of spending the phase floors' excess.
+		if (initBudgetExhausted(timeoutMs, startedAt)) {
+			throw error;
+		}
 		worker = await spawnInlineWorker();
 		try {
-			const info = await initializeTabWorker(worker, payload, timeoutMs);
+			const info = await initializeTabWorker(worker, payload, timeoutMs, startedAt);
 			tab.worker = worker;
 			tab.info = info;
 			tab.state = "alive";
@@ -820,7 +1074,7 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 			const finalError = new ToolError(
 				`Failed to recycle timed-out browser tab worker (inline fallback also failed): ${errorMessage(inlineError)}`,
 			);
-			Object.defineProperty(finalError, "cause", { value: error, configurable: true });
+			finalError.cause = error;
 			throw finalError;
 		}
 	}
@@ -841,22 +1095,59 @@ async function forceKillTab(name: string, reason: string): Promise<void> {
 	}
 	await terminateWorker(tab.worker, "force-kill");
 	if (tab.kindTag === "headless") await closeOrphanTarget(tab);
+	if (tab.contextName !== undefined) await releaseNamedContext(tab.browser, tab.contextName);
 	await releaseBrowser(tab.browser, { kill: false });
 	tabs.delete(name);
 }
 
-async function closeOrphanTarget(tab: WorkerTabSession): Promise<void> {
-	for (const target of tab.browser.browser.targets()) {
-		// Closing an orphaned target after its worker died. Each step tolerates the target already being gone,
-		// which is the common case: an id that cannot be read cannot match, a target that will not hand over a
-		// page has nothing to close, and a close that fails means it closed itself first. Nothing depends on the
-		// outcome -- the tab is already out of the registry.
+/**
+ * Best-effort close of a specific page target in the browser. A gone target
+ * or a released browser is skipped: per-target lookups and the page close are
+ * individually caught.
+ */
+async function closeTargetById(browser: PuppeteerBrowserHandle, targetId: string): Promise<void> {
+	for (const target of browser.browser.targets()) {
 		const id = await optionalResult(targetIdForTarget(target), "an id that cannot be read cannot match");
-		if (id !== tab.targetId) continue;
+		if (id !== targetId) continue;
 		const page = await optionalResult(target.page(), "a target that hands over no page has nothing to close");
 		if (page) await bestEffort(page.close(), "a close that fails means the target closed itself first");
 		return;
 	}
+}
+
+/**
+ * Best-effort cleanup for a forced-kill path: close the page the tab's worker
+ * reported as created. A run caller is never a browser ref holder, so the
+ * browser is still in the registry; the tab's browser is the only place that
+ * page can be, so no targetId guesswork across multiple sessions.
+ */
+async function closeOrphanTarget(tab: WorkerTabSession): Promise<void> {
+	await closeTargetById(tab.browser, tab.targetId);
+}
+
+/**
+ * Close the page a worker created (page-created) before dying during init.
+ * Fire-and-forget: the caller has already timed out, so the close must not
+ * delay error propagation — `page.close()` on a page still stuck in the
+ * navigation that caused the timeout waits about as long again. A killed worker
+ * can't clean up after itself; a shared browser's other targets must never be
+ * touched.
+ */
+function closeAbandonedWorkerPage(browser: PuppeteerBrowserHandle, worker: WorkerHandle): void {
+	const targetId = workerPageTargets.get(worker);
+	workerPageTargets.delete(worker);
+	if (!targetId) return;
+	// The close outlives its caller, and every caller here may go on to release
+	// the last browser reference — `closeTargetById` yields before it looks the
+	// target up, so a disconnect in that gap turns the lookup into a caught
+	// failure and leaves the page on the instance for good. Hold the browser
+	// across the close instead of blocking on it: the hold defers the release
+	// (and the dispose behind it) rather than cancelling one, so the refCount
+	// ends where it would have, one turn later.
+	holdBrowser(browser);
+	void closeTargetById(browser, targetId)
+		.catch(() => undefined)
+		.finally(() => void releaseBrowser(browser, { kill: false }).catch(() => undefined));
 }
 
 async function waitForClosed(tab: WorkerTabSession): Promise<void> {
@@ -967,25 +1258,78 @@ async function spawnInlineWorker(): Promise<WorkerHandle> {
 	};
 }
 
+/**
+ * Init a tab worker under a single listener spanning the whole init: a short
+ * `setup` handshake (bounded by the cold-start guard so a stalled cold start
+ * triggers the inline fallback early) and the ready wait for page acquisition
+ * and the first navigation. Both phases are bounded by the time LEFT of the
+ * caller's `timeoutMs` budget, measured from `deadlineStart` (performance.now()
+ * when the caller's budget began): a retried attempt — the inline fallback
+ * after a failed isolated worker — passes the same start, so total init
+ * across attempts stays within the caller's timeout instead of the retry
+ * restarting the clock. A headless worker's `page-created` report (the new
+ * target, sent before the slow post-creation CDP work) is recorded in
+ * `workerPageTargets` so a supervisor that kills the worker during init
+ * (budget exhausted, aborted open) can close exactly the page the worker
+ * created — a killed worker can't clean up after itself. The listener is
+ * never removed between the phases: the inline transport delivers messages
+ * on microtasks, so a `ready` or `init-failed` emitted right after `setup`
+ * (e.g. a fast `page.goto` rejection) could otherwise reach the
+ * already-settled setup listener before a phase switch re-listens and be
+ * dropped.
+ */
 async function initializeTabWorker(
 	worker: WorkerHandle,
 	payload: WorkerInitPayload,
 	timeoutMs: number,
+	deadlineStart: number = performance.now(),
 ): Promise<ReadyInfo> {
-	const { promise, resolve, reject } = Promise.withResolvers<ReadyInfo>();
+	// Derive both phase budgets from the remaining caller budget so a
+	// retried attempt (inline fallback) cannot outlive the caller's timeout.
+	// The floors keep the budgets positive when the remaining time is tiny;
+	// the caller's abort signal remains the hard backstop for the overshoot.
+	const remainingMs = timeoutMs - Math.round(performance.now() - deadlineStart);
+	// Cold-start guard: min(10s, remaining/3), floor 2s (see SETUP_BUDGET_*).
+	const setupBudgetMs = clampLow(Math.floor(remainingMs / 3), SETUP_BUDGET_FLOOR_MS, SETUP_BUDGET_CAP_MS);
+	const setup = Promise.withResolvers<void>();
+	const ready = Promise.withResolvers<ReadyInfo>();
+	let setupDone = false;
+	// Reject only the active phase's promise: the other one may never be
+	// awaited (a phase that already failed leaves the rest un-run), so
+	// rejecting it would be an unhandled rejection.
+	const failStartup = (error: Error) => {
+		(setupDone ? ready : setup).reject(error);
+	};
 	const unlisten = worker.onMessage(msg => {
-		if (msg.type === "ready") resolve(msg.info);
-		else if (msg.type === "init-failed") reject(errorFromPayload(msg.error));
+		if (msg.type === "page-created") {
+			// Record the headless target before the (potentially slow)
+			// post-creation CDP work: if this init is killed before ready,
+			// the supervisor closes exactly this target.
+			workerPageTargets.set(worker, msg.targetId);
+		} else if (msg.type === "setup") {
+			setupDone = true;
+			setup.resolve();
+		} else if (msg.type === "ready") ready.resolve(msg.info);
+		else if (msg.type === "init-failed") failStartup(markReportedInitFailure(errorFromPayload(msg.error)));
 		else if (msg.type === "log") logWorkerMessage(msg);
 	});
 	const unlistenError = worker.onError(error => {
-		reject(new ToolError(`Tab worker failed during startup: ${error.message}`));
+		failStartup(new ToolError(`Tab worker failed during startup: ${error.message}`));
 	});
 	try {
 		worker.send({ type: "init", payload });
+		await raceWithTimeout(
+			setup.promise,
+			setupBudgetMs,
+			() => new ToolError("Timed out waiting for tab worker setup"),
+		);
+		// The ready wait gets only what is left of the caller's budget at
+		// this point; the floor covers sub-3s budgets where the 2s setup
+		// floor alone exceeds it.
+		const readyBudgetMs = Math.max(READY_BUDGET_FLOOR_MS, timeoutMs - Math.round(performance.now() - deadlineStart));
 		return await raceWithTimeout(
-			promise,
-			timeoutMs,
+			ready.promise,
+			readyBudgetMs,
 			() => new ToolError("Timed out initializing browser tab worker"),
 		);
 	} finally {
@@ -994,12 +1338,24 @@ async function initializeTabWorker(
 	}
 }
 
+/**
+ * True once the caller's init budget (elapsed since `deadlineStart`) is fully
+ * consumed. A retry from this point can't be published — the caller's timeout
+ * has already fired, so the post-init abort check would discard the result
+ * anyway — so callers fail fast instead of spending the phase floors' excess
+ * on a cold start nobody is waiting for.
+ */
+function initBudgetExhausted(budgetMs: number, deadlineStart: number): boolean {
+	return budgetMs - Math.round(performance.now() - deadlineStart) <= 0;
+}
+
 export function initializeTabWorkerForTest(
 	worker: WorkerHandle,
 	payload: WorkerInitPayload,
 	timeoutMs: number,
+	deadlineStart: number = performance.now(),
 ): Promise<ReadyInfo> {
-	return initializeTabWorker(worker, payload, timeoutMs);
+	return initializeTabWorker(worker, payload, timeoutMs, deadlineStart);
 }
 
 function errorFromWorkerEvent(event: ErrorEvent): Error {

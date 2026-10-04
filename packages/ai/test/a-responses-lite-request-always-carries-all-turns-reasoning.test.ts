@@ -114,9 +114,15 @@ function createCodexFetchMock(sse: string, onRequest: (captured: CapturedCodexRe
 			return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
 		}
 		if (url.endsWith("/responses") || url.endsWith("/compact")) {
+			const rawBody =
+				init?.body instanceof Uint8Array
+					? new TextDecoder().decode(Bun.zstdDecompressSync(init.body))
+					: typeof init?.body === "string"
+						? init.body
+						: "{}";
 			onRequest({
 				headers: init?.headers instanceof Headers ? init.headers : new Headers(init?.headers),
-				body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {},
+				body: JSON.parse(rawBody) as Record<string, unknown>,
 			});
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		}
@@ -194,7 +200,7 @@ class MockWebSocket {
 
 describe("Responses Lite all_turns invariant suite", () => {
 	const allCodexCatalogModels = getBundledModels("openai-codex").filter(
-		(m): m is Model<"openai-codex-responses"> => m.api === "openai-codex-responses",
+		(m): m is Model<"openai-codex-responses"> => m.api === "openai-codex-responses" && m.kind === undefined,
 	);
 
 	it("discovers both lite-eligible and lite-ineligible models from the catalog", () => {

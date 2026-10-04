@@ -118,6 +118,7 @@ const EXTENSION_POLICY: Readonly<Record<string, ExtensionDecision>> = {
 	".cmd": RECORDED_OUTPUT,
 	".patch": RECORDED_OUTPUT,
 	".jsonl": NO_COMMENT_SYNTAX,
+	".tsv": NO_COMMENT_SYNTAX,
 	".recorder": "scan", // A Dockerfile named by its stage: `#` comments
 	".typed": { skip: "empty marker file" },
 	".LICENSE": LEGAL_TEXT,

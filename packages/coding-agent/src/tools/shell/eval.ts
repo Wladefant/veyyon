@@ -1,19 +1,14 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
-import { errorMessage, formatCount, lazy, logger, prompt, truncate } from "@veyyon/utils";
+import { errorMessage, formatCount, lazy, logger, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../eval/bridge-timeout";
 import { IdleTimeout } from "../../eval/idle-timeout";
+import type { BackendProbeOptions } from "../../eval/probe";
 import { defaultEvalSessionId } from "../../eval/session-id";
 import { upsertStatusEvent } from "../../eval/status-events";
-import type {
-	EvalCellResult,
-	EvalDisplayOutput,
-	EvalLanguage,
-	EvalStatusEvent,
-	EvalToolDetails,
-} from "../../eval/types";
+import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../../eval/types";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../../session/streaming-output";
@@ -27,11 +22,17 @@ import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
+import {
+	formatArtifactErrorNotice,
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../core/output-meta";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice, TOOL_TIMEOUTS } from "../core/tool-timeouts";
 import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
+import { EVAL_DISPLAY_VERSION, formatDisplayJson } from "./eval-display";
 import { evalToolView } from "./eval-view";
 import { evalBackendLoaders } from "./manifest";
 
@@ -151,38 +152,6 @@ export type EvalToolResult = {
 };
 
 export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
-
-/** Cap per `display()` value sent back to the model. */
-const MAX_DISPLAY_TEXT_CHARS = 8000;
-
-export function formatDisplayJsonForText(value: unknown): string {
-	let text: string;
-	try {
-		text = JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		text = String(value);
-	}
-	if (text.length <= MAX_DISPLAY_TEXT_CHARS) return text;
-	const chars = [...text];
-	if (chars.length <= MAX_DISPLAY_TEXT_CHARS) return text;
-	return `${truncate(text, MAX_DISPLAY_TEXT_CHARS, "")}\n[…${chars.length - MAX_DISPLAY_TEXT_CHARS}ch elided…]`;
-}
-
-/**
- * Format display() JSON values into text the model can see. Images are surfaced
- * separately as ImageContent so the model can actually inspect them; this helper
- * intentionally does not touch images.
- */
-function formatDisplayOutputsForText(outputs: EvalDisplayOutput[]): string {
-	const chunks: string[] = [];
-	let displayIndex = 0;
-	for (const output of outputs) {
-		if (output.type !== "json") continue;
-		displayIndex++;
-		chunks.push(`display[${displayIndex}]:\n${formatDisplayJsonForText(output.data)}`);
-	}
-	return chunks.join("\n\n");
-}
 
 export interface EvalToolDescriptionOptions {
 	py?: boolean;
@@ -311,7 +280,11 @@ function detailsNotice(cell: ResolvedEvalCell, maxTimeout?: number): string | un
 	return notices.length > 0 ? notices.join(" ") : undefined;
 }
 
-async function resolveBackend(session: ToolSession, language: EvalLanguage): Promise<ResolvedBackend> {
+async function resolveBackend(
+	session: ToolSession,
+	language: EvalLanguage,
+	probeOptions?: BackendProbeOptions,
+): Promise<ResolvedBackend> {
 	const backends = resolveEvalBackends(session);
 	const allowPy = backends.python;
 	const allowJs = backends.js;
@@ -321,7 +294,8 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	if (language === "python") {
 		if (!allowPy) throw new ToolError("Python backend is disabled (VEYYON_PY=0 or eval.py = false).");
 		const pythonBackend = await evalBackendLoaders.python();
-		if (!(await pythonBackend.isAvailable(session))) {
+		if (!(await pythonBackend.isAvailable(session, probeOptions))) {
+			if (probeOptions?.signal?.aborted) throw new ToolAbortError();
 			const alternatives = [allowJs ? '"js"' : null, allowRb ? '"rb"' : null, allowJl ? '"jl"' : null].filter(
 				Boolean,
 			);
@@ -336,7 +310,8 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	if (language === "ruby") {
 		if (!allowRb) throw new ToolError("Ruby backend is disabled (VEYYON_RB=0 or eval.rb = false).");
 		const rubyBackend = await evalBackendLoaders.ruby();
-		if (!(await rubyBackend.isAvailable(session))) {
+		if (!(await rubyBackend.isAvailable(session, probeOptions))) {
+			if (probeOptions?.signal?.aborted) throw new ToolAbortError();
 			const alternatives = [allowJs ? '"js"' : null, allowPy ? '"py"' : null, allowJl ? '"jl"' : null].filter(
 				Boolean,
 			);
@@ -351,7 +326,8 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	if (language === "julia") {
 		if (!allowJl) throw new ToolError("Julia backend is disabled (VEYYON_JL=0 or eval.jl = false).");
 		const juliaBackend = await evalBackendLoaders.julia();
-		if (!(await juliaBackend.isAvailable(session))) {
+		if (!(await juliaBackend.isAvailable(session, probeOptions))) {
+			if (probeOptions?.signal?.aborted) throw new ToolAbortError();
 			const alternatives = [allowJs ? '"js"' : null, allowPy ? '"py"' : null, allowRb ? '"rb"' : null].filter(
 				Boolean,
 			);
@@ -519,7 +495,19 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					: params.language === "jl"
 						? "julia"
 						: "js";
-		const resolved = await resolveBackend(session, cellLanguage);
+		const probeTimeout =
+			params.timeout === 0
+				? 0
+				: clampTimeout(
+						"eval",
+						params.timeout ?? TOOL_TIMEOUTS.eval.default,
+						session.settings.get("tools.maxTimeout"),
+					);
+		const resolved = await resolveBackend(session, cellLanguage, {
+			signal,
+			timeoutMs: probeTimeout > 0 ? probeTimeout * 1000 : undefined,
+		});
+		if (signal?.aborted) throw new ToolAbortError();
 		const cell: ResolvedEvalCell = {
 			index: 0,
 			title: params.title,
@@ -539,7 +527,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 		let outputDumped = false;
 		const finalizeOutput = async (): Promise<OutputSummary | undefined> => {
 			if (outputDumped || !outputSink) return outputSummary;
-			outputSummary = await outputSink.dump();
+			outputSummary = await outputSink.dumpWithArtifactStatus();
 			outputDumped = true;
 			return outputSummary;
 		};
@@ -593,6 +581,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					};
 					if (jsonOutputs.length > 0) {
 						details.jsonOutputs = jsonOutputs;
+						details.displayVersion = EVAL_DISPLAY_VERSION;
 					}
 					if (images.length > 0) {
 						details.images = images;
@@ -621,6 +610,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				session.assertEvalExecutionAllowed?.();
 				outputSink = new OutputSink({
 					artifactPath,
+					artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(session.settings),
 					artifactId,
 					// eval is the single largest producer of tool-result bytes, and its
 					// largest tenth of results carried two thirds of them. Price the
@@ -713,13 +703,26 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				const durationMs = Date.now() - startTime;
 
 				const cellStatusEvents: EvalStatusEvent[] = [];
-				const cellDisplayOutputs: EvalDisplayOutput[] = [];
+				const cellDisplayTexts: string[] = [];
 				const cellImageNotes: string[] = [];
 				let cellHasMarkdown = false;
 				for (const output of result.displayOutputs) {
 					if (output.type === "json") {
-						jsonOutputs.push(output.data);
-						cellDisplayOutputs.push(output);
+						const formatted = formatDisplayJson(output.data);
+						const storageNotice =
+							formatted.truncated && !artifactPath
+								? "\n[Full display value was not kept: artifact storage is unavailable]"
+								: "";
+						const displayText = `${formatted.previewText}${storageNotice}`;
+						const label = `display[${cellDisplayTexts.length + 1}]:\n`;
+						jsonOutputs.push(formatted.detailsValue);
+						cellDisplayTexts.push(`${label}${displayText}`);
+						if (formatted.truncated) {
+							outputSink.push(`${label}${formatted.fullText}\n`, {
+								inline: `${label}${displayText}\n`,
+								emitInline: false,
+							});
+						}
 					}
 					if (output.type === "image") {
 						const resized = await resizeImage(
@@ -736,11 +739,6 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 							mimeType: resized.mimeType,
 						};
 						images.push(image);
-						cellDisplayOutputs.push({
-							type: "image",
-							data: image.data,
-							mimeType: image.mimeType,
-						});
 						const dimensionNote = formatDimensionNote(resized);
 						if (dimensionNote) {
 							cellImageNotes.push(`display image ${cellImageNotes.length + 1}: ${dimensionNote}`);
@@ -757,7 +755,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 
 				const stdoutTrimmed = result.output.trim();
 				const imageText = cellImageNotes.join("\n");
-				const displayText = formatDisplayOutputsForText(cellDisplayOutputs);
+				const displayText = cellDisplayTexts.join("\n\n");
 				const visibleDisplayText =
 					displayText && imageText ? `${displayText}\n\n${imageText}` : displayText || imageText;
 				const cellOutput =
@@ -792,6 +790,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 						languages,
 						cells: [cellResult],
 						jsonOutputs: jsonOutputs.length > 0 ? jsonOutputs : undefined,
+						displayVersion: EVAL_DISPLAY_VERSION,
 						statusEvents: statusEvents.length > 0 ? statusEvents : undefined,
 					};
 					if (isError) details.isError = true;
@@ -825,7 +824,8 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					// They asked for the stop, and telling them their cell timed out when
 					// they cancelled it is the same conflation in the other direction.
 					if (signal?.aborted || sessionAbortController.signal.aborted) {
-						await finalizeOutput();
+						const finalSummary = await finalizeOutput();
+						const artifactError = finalSummary?.artifactError ?? result.artifactError;
 						// `result.output` is empty for an interrupted cell, so the streamed
 						// text is the only surviving record of how far the work got, and it
 						// is what the operator needs to decide whether to re-run.
@@ -835,6 +835,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 								`Eval cancelled: ${describeEvalCell(cell)} started and did NOT finish`,
 								"any state it had already mutated is still in the kernel",
 								partial ? `output so far:\n${partial}` : "it produced no output before the cancellation",
+								...(artifactError ? [formatArtifactErrorNotice(artifactError)] : []),
 							].join("; "),
 							{ cause: signal?.reason ?? sessionAbortController.signal.reason },
 						);
@@ -916,5 +917,7 @@ async function summarizeFinal(
 		outputLines,
 		outputBytes,
 		artifactId: rawSummary.artifactId,
+		artifactElidedBytes: rawSummary.artifactElidedBytes,
+		artifactError: rawSummary.artifactError,
 	};
 }

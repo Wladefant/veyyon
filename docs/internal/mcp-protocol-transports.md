@@ -180,6 +180,8 @@ For `request()`:
 - timeout uses `AbortController` via `createMCPTimeout` (`VEYYON_MCP_TIMEOUT_MS` override, else `config.timeout ?? 30000`; `0` disables)
 - external signal, if provided, is merged via `AbortSignal.any([...])`
 - AbortError handling distinguishes caller abort vs timeout
+- HTTP and legacy SSE deadlines include auth refresh and retry-argument rebuilding; late completions do not send another POST.
+- Closing either transport aborts pending operations, including requests with `timeout: 0`; a new connection starts a fresh lifetime.
 
 For `notify()`:
 
@@ -282,4 +284,4 @@ If the concern is message shape, id correlation, or MCP method ordering, it belo
 
 If the concern is framing (JSONL vs HTTP/SSE), stream parsing, fetch/spawn lifecycle, timeout clocks, or connection teardown, it belongs to transport implementation.
 
-*Verified against `ad7ede4a` on 2026-07-28.*
+*Verified against `262ce91243` on 2026-10-04.*

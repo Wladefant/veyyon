@@ -20,7 +20,7 @@
  */
 import { toNumber } from "@veyyon/catalog/utils";
 import type { FetchImpl } from "../types";
-import { isRecord } from "../utils";
+import { isRecord } from "@veyyon/utils/type-guards";
 import { normalizeCodexBaseUrl } from "./openai-codex-base-url";
 
 const RESET_CREDITS_PATH = "wham/rate-limit-reset-credits";

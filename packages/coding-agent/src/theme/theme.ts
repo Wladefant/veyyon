@@ -778,7 +778,7 @@ async function startThemeWatcher(): Promise<void> {
 	};
 
 	try {
-		themeWatcher = fs.watch(customThemesDir, (_eventType, filename) => {
+		const watcher = fs.watch(customThemesDir, (_eventType, filename) => {
 			if (currentThemeName !== watchedThemeName) {
 				return;
 			}
@@ -792,6 +792,17 @@ async function startThemeWatcher(): Promise<void> {
 			}
 			scheduleReload();
 		});
+		// A deleted or locked themes directory surfaces as an async 'error' event
+		// (EPERM on Windows); unhandled it is an uncaught exception.
+		watcher.on("error", error => {
+			logger.warn("Theme watcher failed; custom theme edits will not reload live", {
+				dir: customThemesDir,
+				error: String(error),
+			});
+			watcher.close();
+			if (themeWatcher === watcher) themeWatcher = undefined;
+		});
+		themeWatcher = watcher;
 	} catch {
 		// Ignore errors starting watcher
 	}

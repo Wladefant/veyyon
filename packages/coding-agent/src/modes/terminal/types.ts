@@ -137,6 +137,10 @@ export interface InteractiveModeContext {
 	attachMainSession(next: AgentSession): KeptSession;
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
+	/**
+	 * Execute a session relocation operation under BTW migration guards.
+	 */
+	withBtwSessionMove?(operation: () => Promise<boolean>): Promise<boolean>;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];
@@ -482,10 +486,16 @@ export interface InteractiveModeContext {
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
 	handleBtwBranchKey(): Promise<boolean>;
-	canBranchBtw(): boolean;
+	/** Whether plain `b` is reserved for a completed or pending /btw branch, even one refused right now. */
+	handlesBtwBranchKey(): boolean;
 	canCopyBtw(): boolean;
 	handleBtwCopyKey(): Promise<boolean>;
-	handleBtwBranch(question: string, assistantMessage: AssistantMessage): Promise<void>;
+	handleBtwBranch(
+		question: string,
+		assistantMessage: AssistantMessage,
+		leafId: string,
+		sessionId: string,
+	): Promise<void>;
 	handleOmfgCommand(complaint: string): Promise<void>;
 	hasActiveOmfg(): boolean;
 	handleOmfgEscape(): boolean;

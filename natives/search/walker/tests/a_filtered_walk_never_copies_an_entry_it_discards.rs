@@ -134,10 +134,31 @@ fn glob(pattern: &str) -> CompiledWalkGlob {
 }
 
 /// Every entry the walk sees, unfiltered and uncached: the reference answer.
+///
+/// WHY it repeats the walk until two reads agree: NTFS keeps a copy of each
+/// child directory's timestamps in its PARENT's index, and refreshes that copy
+/// lazily. The first listing after a tree is written can therefore report a
+/// directory mtime a millisecond or more behind its real one (observed:
+/// `src/d000` read 298 on the first walk and 445 on every later one, with the
+/// cache off for both), so a reference taken once and compared byte-for-byte
+/// against a later walk failed on Windows with no cache involved. The tree is
+/// not written to after it is built, so the listings converge; the bound keeps
+/// a tree that never does from hanging the test.
 fn reference(root: &Path) -> Vec<CollectedEntry> {
-	collect_entries_without_heartbeat(root, options(false))
-		.expect("reference walk should succeed")
-		.entries
+	let walk = || {
+		collect_entries_without_heartbeat(root, options(false))
+			.expect("reference walk should succeed")
+			.entries
+	};
+	let mut previous = walk();
+	for _ in 0..10 {
+		let next = walk();
+		if next == previous {
+			return next;
+		}
+		previous = next;
+	}
+	panic!("the reference walk did not settle: directory metadata kept changing");
 }
 
 fn paths(entries: &[CollectedEntry]) -> Vec<String> {

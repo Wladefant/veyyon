@@ -4,6 +4,7 @@ import * as evalIndex from "@veyyon/coding-agent/eval";
 import * as pyKernel from "@veyyon/coding-agent/eval/py/kernel";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { TempDir } from "@veyyon/utils/temp";
 
 function makeSession(): ToolSession {
 	return {
@@ -183,5 +184,60 @@ describe("EvalTool display() text surfacing", () => {
 		const text = result.content.map(c => (c.type === "text" ? c.text : "")).join("\n");
 		expect(text).toContain("ch elided");
 		expect(text.length).toBeLessThan(20000);
+	});
+
+	it("keeps oversized display details bounded and spills the full value to the artifact", async () => {
+		using tempDir = TempDir.createSync("@veyyon-eval-display-");
+		const artifactPath = tempDir.join("eval.log");
+		const huge = `start-${"x".repeat(100_000)}-end`;
+		vi.spyOn(pyKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		vi.spyOn(evalIndex.jsBackend, "execute").mockResolvedValue(
+			baseResult({
+				displayOutputs: [{ type: "json", data: { payload: huge } }],
+			}) as never,
+		);
+
+		const tool = new EvalTool({
+			...makeSession(),
+			allocateOutputArtifact: async () => ({ id: "large-display", path: artifactPath }),
+		});
+		const result = await tool.execute("call-huge-details", {
+			language: "js",
+			code: "display({ payload: huge });",
+		});
+
+		expect(Buffer.byteLength(JSON.stringify(result.details), "utf-8")).toBeLessThan(20_000);
+		expect(await Bun.file(artifactPath).text()).toContain(huge);
+		expect(result.details?.meta?.truncation?.artifactId).toBe("large-display");
+	});
+
+	it("reports intentional no-storage elision while retaining a bounded successful preview", async () => {
+		vi.spyOn(pyKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		vi.spyOn(evalIndex.jsBackend, "execute").mockResolvedValue(
+			baseResult({ displayOutputs: [{ type: "json", data: { payload: "x".repeat(50_000) } }] }) as never,
+		);
+		const tool = new EvalTool(makeSession());
+		const result = await tool.execute("call-no-storage", { language: "js", code: "display(large_value);" });
+		const text = result.content
+			.filter(block => block.type === "text")
+			.map(block => block.text)
+			.join("\n");
+		expect(text).toContain("Full display value was not kept: artifact storage is unavailable");
+		expect(Buffer.byteLength(text)).toBeLessThan(10_000);
+	});
+
+	it("surfaces artifact write failure instead of returning a lossy successful display", async () => {
+		using tempDir = TempDir.createSync("@veyyon-eval-storage-failure-");
+		vi.spyOn(pyKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		vi.spyOn(evalIndex.jsBackend, "execute").mockResolvedValue(
+			baseResult({ displayOutputs: [{ type: "json", data: { payload: "x".repeat(50_000) } }] }) as never,
+		);
+		const tool = new EvalTool({
+			...makeSession(),
+			allocateOutputArtifact: async () => ({ id: "failed", path: tempDir.join("absent", "eval.log") }),
+		});
+		const result = await tool.execute("call-failed-storage", { language: "js", code: "display(large_value);" });
+		expect(result.details?.meta?.artifactError).toMatch(/^(open|write|flush|end)$/);
+		expect(result.details?.meta?.truncation?.artifactId).toBeUndefined();
 	});
 });

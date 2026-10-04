@@ -7,10 +7,18 @@
  */
 import { chatGptWebModelManagerOptions } from "./chatgpt-web";
 import { commandCodeModelManagerOptions } from "./command-code";
-import type { ModelManagerConfig, ProviderCatalogEntry, ProviderDescriptor } from "./descriptor-types";
-import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
+import type {
+	ModelManagerConfig,
+	ProviderCatalogEntry,
+	ProviderDescriptor,
+} from "./descriptor-types";
+import {
+	googleModelManagerOptions,
+	googleVertexModelManagerOptions,
+} from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
 import {
+	abliterationModelManagerOptions,
 	aimlApiModelManagerOptions,
 	alibabaCodingPlanModelManagerOptions,
 	anthropicModelManagerOptions,
@@ -18,18 +26,22 @@ import {
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
 	coreWeaveModelManagerOptions,
+	deepinfraModelManagerOptions,
 	deepseekModelManagerOptions,
 	firepassModelManagerOptions,
 	fireworksModelManagerOptions,
 	githubCopilotModelManagerOptions,
+	gmiCloudModelManagerOptions,
 	groqModelManagerOptions,
 	huggingfaceModelManagerOptions,
 	kiloModelManagerOptions,
 	kimiCodeModelManagerOptions,
 	litellmModelManagerOptions,
 	lmStudioModelManagerOptions,
+	metaModelManagerOptions,
 	mistralModelManagerOptions,
 	moonshotModelManagerOptions,
+	museCodeModelManagerOptions,
 	nanoGptModelManagerOptions,
 	nousResearchModelManagerOptions,
 	novitaModelManagerOptions,
@@ -41,12 +53,14 @@ import {
 	openrouterModelManagerOptions,
 	qianfanModelManagerOptions,
 	qwenPortalModelManagerOptions,
+	resolveGithubCopilotCacheProviderId,
 	resolveLitellmCacheProviderId,
 	resolveOpencodeGoCacheProviderId,
 	resolveOpencodeZenCacheProviderId,
 	resolveOpenrouterCacheProviderId,
 	resolveVllmCacheProviderId,
 	sakanaModelManagerOptions,
+	stepfunModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
 	umansModelManagerOptions,
@@ -64,17 +78,30 @@ import {
 	cursorModelManagerOptions,
 	devinModelManagerOptions,
 	gitLabDuoWorkflowModelManagerOptions,
+	localModelManagerOptions,
 	resolveCursorCacheProviderId,
 	resolveGitLabDuoWorkflowCacheProviderId,
+	typesafeModelManagerOptions,
+	webModelManagerOptions,
 	zaiModelManagerOptions,
 } from "./special";
 
 export const CATALOG_PROVIDERS = [
 	{
+		id: "abliteration",
+		defaultModel: "abliterated-model",
+		envVars: ["ABLITERATION_API_KEY", "ABLIT_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			abliterationModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Abliteration" },
+	},
+	{
 		id: "aimlapi",
 		defaultModel: "gpt-5.5-2026-04-23",
 		envVars: ["AIMLAPI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => aimlApiModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			aimlApiModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "AIML API" },
 	},
@@ -82,14 +109,16 @@ export const CATALOG_PROVIDERS = [
 		id: "alibaba-coding-plan",
 		defaultModel: "qwen3.7-plus",
 		envVars: ["ALIBABA_CODING_PLAN_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => alibabaCodingPlanModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			alibabaCodingPlanModelManagerOptions(config),
 		catalogDiscovery: { label: "Alibaba Coding Plan" },
 	},
 	{
 		id: "baseten",
 		defaultModel: "moonshotai/Kimi-K2.7-Code",
 		envVars: ["BASETEN_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => basetenModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			basetenModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Baseten" },
 	},
@@ -101,7 +130,8 @@ export const CATALOG_PROVIDERS = [
 		id: "anthropic",
 		defaultModel: "claude-opus-5-5",
 		envVars: ["ANTHROPIC_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => anthropicModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			anthropicModelManagerOptions(config),
 		catalogDiscovery: { label: "Anthropic" },
 	},
 	{
@@ -113,7 +143,8 @@ export const CATALOG_PROVIDERS = [
 		id: "cerebras",
 		defaultModel: "zai-glm-4.7",
 		envVars: ["CEREBRAS_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => cerebrasModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			cerebrasModelManagerOptions(config),
 		catalogDiscovery: { label: "Cerebras" },
 	},
 	{
@@ -128,7 +159,8 @@ export const CATALOG_PROVIDERS = [
 		// bridge-specific name is consulted first so an operator can point the
 		// bridge at a different account without touching the official provider.
 		envVars: ["CODEX_CHATGPT_WEB_OAUTH_TOKEN", "OPENAI_CODEX_OAUTH_TOKEN"],
-		createModelManagerOptions: (config: ModelManagerConfig) => chatGptWebModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			chatGptWebModelManagerOptions(config),
 		// Every row is live: nothing is bundled and a cached row must not outlive
 		// the account capability that produced it.
 		dynamicModelsAuthoritative: true,
@@ -139,14 +171,16 @@ export const CATALOG_PROVIDERS = [
 		id: "cloudflare-ai-gateway",
 		defaultModel: "anthropic/claude-opus-4-8",
 		envVars: ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => cloudflareAiGatewayModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			cloudflareAiGatewayModelManagerOptions(config),
 		catalogDiscovery: { label: "Cloudflare AI Gateway" },
 	},
 	{
 		id: "command-code",
 		defaultModel: "claude-sonnet-4-6",
 		envVars: ["CMD_API_KEY", "COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => commandCodeModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			commandCodeModelManagerOptions(config),
 		publishesOwnModelLimits: true,
 		dynamicModelsAuthoritative: true,
 		// The Provider API answers `/models` without a key, so a fresh install
@@ -157,43 +191,67 @@ export const CATALOG_PROVIDERS = [
 		id: "cursor",
 		defaultModel: "claude-4.6-opus-high",
 		envVars: ["CURSOR_ACCESS_TOKEN"],
-		createModelManagerOptions: (config: ModelManagerConfig) => cursorModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			cursorModelManagerOptions(config),
 		resolveCacheProviderId: resolveCursorCacheProviderId,
-		catalogDiscovery: { label: "Cursor", envVars: ["CURSOR_API_KEY"], oauthProvider: "cursor" },
+		catalogDiscovery: {
+			label: "Cursor",
+			envVars: ["CURSOR_API_KEY"],
+			oauthProvider: "cursor",
+		},
+	},
+	{
+		id: "deepinfra",
+		defaultModel: "deepseek-ai/DeepSeek-V4-Flash-0731",
+		envVars: ["DEEPINFRA_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			deepinfraModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "DeepInfra", allowUnauthenticated: true },
 	},
 	{
 		id: "deepseek",
 		defaultModel: "deepseek-v4-pro",
 		envVars: ["DEEPSEEK_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => deepseekModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			deepseekModelManagerOptions(config),
 		catalogDiscovery: { label: "DeepSeek" },
 	},
 	{
 		id: "devin",
 		defaultModel: "swe-1-6",
 		envVars: ["DEVIN_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => devinModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			devinModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
-		catalogDiscovery: { label: "Devin", envVars: ["DEVIN_API_KEY"], oauthProvider: "devin" },
+		catalogDiscovery: {
+			label: "Devin",
+			envVars: ["DEVIN_API_KEY"],
+			oauthProvider: "devin",
+		},
 	},
 	{
 		id: "firepass",
 		defaultModel: "kimi-k2.6-turbo",
 		envVars: ["FIREPASS_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => firepassModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			firepassModelManagerOptions(config),
 	},
 	{
 		id: "fireworks",
 		defaultModel: "kimi-k2.7-code",
 		envVars: ["FIREWORKS_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => fireworksModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			fireworksModelManagerOptions(config),
 		catalogDiscovery: { label: "Fireworks" },
 	},
 	{
 		id: "github-copilot",
 		defaultModel: "gpt-5.5",
 		envVars: ["COPILOT_GITHUB_TOKEN"],
-		createModelManagerOptions: (config: ModelManagerConfig) => githubCopilotModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			githubCopilotModelManagerOptions(config),
+		resolveCacheProviderId: resolveGithubCopilotCacheProviderId,
 	},
 	{
 		id: "gitlab-duo",
@@ -204,15 +262,26 @@ export const CATALOG_PROVIDERS = [
 		id: "gitlab-duo-agent",
 		defaultModel: "claude_sonnet_4_6_vertex",
 		envVars: ["GITLAB_TOKEN"],
-		createModelManagerOptions: (config: ModelManagerConfig) => gitLabDuoWorkflowModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			gitLabDuoWorkflowModelManagerOptions(config),
 		resolveCacheProviderId: resolveGitLabDuoWorkflowCacheProviderId,
 		dynamicModelsAuthoritative: true,
+	},
+	{
+		id: "gmi-cloud",
+		defaultModel: "deepseek-ai/DeepSeek-V4-Flash",
+		envVars: ["GMI_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			gmiCloudModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "GMI Cloud" },
 	},
 	{
 		id: "google",
 		defaultModel: "gemini-3.1-pro-preview",
 		envVars: ["GEMINI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => googleModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			googleModelManagerOptions(config),
 	},
 	{
 		id: "google-antigravity",
@@ -227,48 +296,61 @@ export const CATALOG_PROVIDERS = [
 	{
 		id: "google-vertex",
 		defaultModel: "gemini-3.1-pro-preview",
-		createModelManagerOptions: (config: ModelManagerConfig) => googleVertexModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			googleVertexModelManagerOptions(config),
 		allowUnauthenticated: true,
 	},
 	{
 		id: "groq",
 		defaultModel: "openai/gpt-oss-120b",
 		envVars: ["GROQ_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => groqModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			groqModelManagerOptions(config),
 	},
 	{
 		id: "huggingface",
 		defaultModel: "deepseek-ai/DeepSeek-R1",
 		envVars: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
-		createModelManagerOptions: (config: ModelManagerConfig) => huggingfaceModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			huggingfaceModelManagerOptions(config),
 		catalogDiscovery: { label: "Hugging Face" },
 	},
 	{
 		id: "kilo",
 		defaultModel: "anthropic/claude-opus-4.8",
 		envVars: ["KILO_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => kiloModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			kiloModelManagerOptions(config),
 		catalogDiscovery: { label: "Kilo Gateway", allowUnauthenticated: true },
 	},
 	{
 		id: "kimi-code",
 		defaultModel: "kimi-for-coding",
-		createModelManagerOptions: (config: ModelManagerConfig) => kimiCodeModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			kimiCodeModelManagerOptions(config),
 		catalogDiscovery: { label: "Kimi Code", envVars: ["KIMI_API_KEY"] },
 	},
 	{
 		id: "litellm",
 		defaultModel: "claude-opus-5-5",
 		envVars: ["LITELLM_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => litellmModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			litellmModelManagerOptions(config),
 		resolveCacheProviderId: resolveLitellmCacheProviderId,
 		catalogDiscovery: { label: "LiteLLM", allowUnauthenticated: true },
+	},
+	{
+		id: "local",
+		defaultModel: "lfm2.5-230m",
+		createModelManagerOptions: () => localModelManagerOptions(),
+		catalogDiscovery: { label: "Local Inference", allowUnauthenticated: true },
 	},
 	{
 		id: "lm-studio",
 		defaultModel: "llama-3-8b",
 		envVars: ["LM_STUDIO_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => lmStudioModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			lmStudioModelManagerOptions(config),
 		allowUnauthenticated: true,
 	},
 	{
@@ -290,7 +372,23 @@ export const CATALOG_PROVIDERS = [
 		id: "mistral",
 		defaultModel: "devstral-medium-latest",
 		envVars: ["MISTRAL_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => mistralModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			mistralModelManagerOptions(config),
+	},
+	{
+		id: "meta",
+		defaultModel: "muse-spark-1.1",
+		envVars: ["MODEL_API_KEY", "META_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			metaModelManagerOptions(config),
+		catalogDiscovery: { label: "Meta Model API" },
+	},
+	{
+		id: "muse-code",
+		defaultModel: "muse-spark-1.3",
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			museCodeModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
 	},
 	{
 		id: "moonshot",
@@ -298,37 +396,45 @@ export const CATALOG_PROVIDERS = [
 		// KIMI_API_KEY is the most intuitive name for a Kimi/Moonshot key; accept it
 		// as a fallback so China users need not learn MOONSHOT_API_KEY. (#2883)
 		envVars: ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => moonshotModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			moonshotModelManagerOptions(config),
 		catalogDiscovery: { label: "Moonshot" },
 	},
 	{
 		id: "nanogpt",
 		defaultModel: "openai/gpt-5.5",
 		envVars: ["NANO_GPT_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => nanoGptModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			nanoGptModelManagerOptions(config),
 		catalogDiscovery: { label: "NanoGPT" },
 	},
 	{
 		id: "nous-research",
 		defaultModel: "anthropic/claude-sonnet-4.6",
 		envVars: ["NOUS_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => nousResearchModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			nousResearchModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		publishesOwnModelLimits: true,
-		catalogDiscovery: { label: "Nous Research", oauthProvider: "nous-research" },
+		catalogDiscovery: {
+			label: "Nous Research",
+			oauthProvider: "nous-research",
+		},
 	},
 	{
 		id: "nvidia",
 		defaultModel: "nvidia/llama-3.1-nemotron-70b-instruct",
 		envVars: ["NVIDIA_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => nvidiaModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			nvidiaModelManagerOptions(config),
 		catalogDiscovery: { label: "NVIDIA" },
 	},
 	{
 		id: "novita",
 		defaultModel: "moonshotai/kimi-k2.7-code",
 		envVars: ["NOVITA_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => novitaModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			novitaModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Novita", allowUnauthenticated: true },
 	},
@@ -336,21 +442,24 @@ export const CATALOG_PROVIDERS = [
 		id: "ollama",
 		defaultModel: "gpt-oss:20b",
 		envVars: ["OLLAMA_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => ollamaModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			ollamaModelManagerOptions(config),
 		allowUnauthenticated: true,
 	},
 	{
 		id: "ollama-cloud",
 		defaultModel: "gpt-oss:120b",
 		envVars: ["OLLAMA_CLOUD_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => ollamaCloudModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			ollamaCloudModelManagerOptions(config),
 		catalogDiscovery: { label: "Ollama Cloud", oauthProvider: "ollama-cloud" },
 	},
 	{
 		id: "openai",
 		defaultModel: "gpt-5.5",
 		envVars: ["OPENAI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => openaiModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			openaiModelManagerOptions(config),
 	},
 	{
 		id: "openai-codex",
@@ -362,7 +471,8 @@ export const CATALOG_PROVIDERS = [
 		id: "opencode-go",
 		defaultModel: "kimi-k2.7-code",
 		envVars: ["OPENCODE_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => opencodeGoModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			opencodeGoModelManagerOptions(config),
 		resolveCacheProviderId: resolveOpencodeGoCacheProviderId,
 		dynamicModelsAuthoritative: true,
 	},
@@ -370,7 +480,8 @@ export const CATALOG_PROVIDERS = [
 		id: "opencode-zen",
 		defaultModel: "claude-opus-4-8",
 		envVars: ["OPENCODE_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => opencodeZenModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			opencodeZenModelManagerOptions(config),
 		resolveCacheProviderId: resolveOpencodeZenCacheProviderId,
 		dynamicModelsAuthoritative: true,
 	},
@@ -378,7 +489,8 @@ export const CATALOG_PROVIDERS = [
 		id: "openrouter",
 		defaultModel: "openai/gpt-5.5",
 		envVars: ["OPENROUTER_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => openrouterModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			openrouterModelManagerOptions(config),
 		resolveCacheProviderId: resolveOpenrouterCacheProviderId,
 		catalogDiscovery: { label: "OpenRouter", allowUnauthenticated: true },
 	},
@@ -386,14 +498,16 @@ export const CATALOG_PROVIDERS = [
 		id: "qianfan",
 		defaultModel: "deepseek-v3.2",
 		envVars: ["QIANFAN_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => qianfanModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			qianfanModelManagerOptions(config),
 		catalogDiscovery: { label: "Qianfan" },
 	},
 	{
 		id: "qwen-portal",
 		defaultModel: "coder-model",
 		envVars: ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => qwenPortalModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			qwenPortalModelManagerOptions(config),
 		catalogDiscovery: {
 			label: "Qwen Portal",
 			oauthProvider: "qwen-portal",
@@ -403,15 +517,26 @@ export const CATALOG_PROVIDERS = [
 		id: "sakana",
 		defaultModel: "fugu",
 		envVars: ["SAKANA_API_KEY", "FUGU_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => sakanaModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			sakanaModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Sakana AI" },
+	},
+	{
+		id: "stepfun",
+		defaultModel: "step-5-preview",
+		envVars: ["STEPFUN_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			stepfunModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "StepFun" },
 	},
 	{
 		id: "synthetic",
 		defaultModel: "hf:zai-org/GLM-5.1",
 		envVars: ["SYNTHETIC_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => syntheticModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			syntheticModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Synthetic" },
 	},
@@ -419,29 +544,36 @@ export const CATALOG_PROVIDERS = [
 		id: "together",
 		defaultModel: "moonshotai/Kimi-K2.7-Code",
 		envVars: ["TOGETHER_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => togetherModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			togetherModelManagerOptions(config),
 		catalogDiscovery: { label: "Together" },
 	},
 	{
 		id: "umans",
 		defaultModel: "umans-coder",
 		envVars: ["UMANS_AI_CODING_PLAN_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => umansModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			umansModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
-		catalogDiscovery: { label: "Umans AI Coding Plan", allowUnauthenticated: true },
+		catalogDiscovery: {
+			label: "Umans AI Coding Plan",
+			allowUnauthenticated: true,
+		},
 	},
 	{
 		id: "venice",
 		defaultModel: "llama-3.3-70b",
 		envVars: ["VENICE_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => veniceModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			veniceModelManagerOptions(config),
 		catalogDiscovery: { label: "Venice", allowUnauthenticated: true },
 	},
 	{
 		id: "vercel-ai-gateway",
 		defaultModel: "anthropic/claude-opus-4.8",
 		envVars: ["AI_GATEWAY_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => vercelAiGatewayModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			vercelAiGatewayModelManagerOptions(config),
 		catalogDiscovery: {
 			label: "Vercel AI Gateway",
 			envVars: ["VERCEL_AI_GATEWAY_API_KEY"],
@@ -452,7 +584,8 @@ export const CATALOG_PROVIDERS = [
 		id: "vllm",
 		defaultModel: "gpt-oss-20b",
 		envVars: ["VLLM_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => vllmModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			vllmModelManagerOptions(config),
 		resolveCacheProviderId: resolveVllmCacheProviderId,
 		catalogDiscovery: { label: "vLLM", allowUnauthenticated: true },
 	},
@@ -460,30 +593,40 @@ export const CATALOG_PROVIDERS = [
 		id: "wafer-serverless",
 		defaultModel: "GLM-5.1",
 		envVars: ["WAFER_SERVERLESS_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => waferServerlessModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			waferServerlessModelManagerOptions(config),
 		catalogDiscovery: {
 			label: "Wafer Serverless",
 			oauthProvider: "wafer-serverless",
 		},
 	},
 	{
+		id: "web",
+		defaultModel: "public",
+		createModelManagerOptions: () => webModelManagerOptions(),
+		catalogDiscovery: { label: "Web Search", allowUnauthenticated: true },
+	},
+	{
 		id: "coreweave",
 		defaultModel: "openai/gpt-oss-120b",
 		envVars: ["COREWEAVE_API_KEY", "WANDB_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => coreWeaveModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			coreWeaveModelManagerOptions(config),
 		catalogDiscovery: { label: "CoreWeave Serverless Inference" },
 	},
 	{
 		id: "xai",
 		defaultModel: "grok-4.6",
 		envVars: ["XAI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => xaiModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			xaiModelManagerOptions(config),
 	},
 	{
 		id: "xai-oauth",
 		defaultModel: "grok-4.6",
 		envVars: ["XAI_OAUTH_TOKEN", "XAI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => xaiOAuthModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			xaiOAuthModelManagerOptions(config),
 		catalogDiscovery: {
 			label: "xAI Grok OAuth (SuperGrok)",
 			oauthProvider: "xai-oauth",
@@ -493,7 +636,8 @@ export const CATALOG_PROVIDERS = [
 		id: "xiaomi",
 		defaultModel: "mimo-v2.5",
 		envVars: ["XIAOMI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => xiaomiModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			xiaomiModelManagerOptions(config),
 		catalogDiscovery: { label: "Xiaomi" },
 	},
 	{
@@ -501,34 +645,56 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "mimo-v2.5",
 		envVars: ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) =>
-			xiaomiModelManagerOptions({ ...config, providerId: "xiaomi-token-plan-ams", tokenPlanRegion: "ams" }),
+			xiaomiModelManagerOptions({
+				...config,
+				providerId: "xiaomi-token-plan-ams",
+				tokenPlanRegion: "ams",
+			}),
 	},
 	{
 		id: "xiaomi-token-plan-cn",
 		defaultModel: "mimo-v2.5",
 		envVars: ["XIAOMI_TOKEN_PLAN_CN_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) =>
-			xiaomiModelManagerOptions({ ...config, providerId: "xiaomi-token-plan-cn", tokenPlanRegion: "cn" }),
+			xiaomiModelManagerOptions({
+				...config,
+				providerId: "xiaomi-token-plan-cn",
+				tokenPlanRegion: "cn",
+			}),
 	},
 	{
 		id: "xiaomi-token-plan-sgp",
 		defaultModel: "mimo-v2.5",
 		envVars: ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) =>
-			xiaomiModelManagerOptions({ ...config, providerId: "xiaomi-token-plan-sgp", tokenPlanRegion: "sgp" }),
+			xiaomiModelManagerOptions({
+				...config,
+				providerId: "xiaomi-token-plan-sgp",
+				tokenPlanRegion: "sgp",
+			}),
+	},
+	{
+		id: "typesafe",
+		defaultModel: "jev-latest",
+		envVars: ["TYPESAFE_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			typesafeModelManagerOptions(config),
+		catalogDiscovery: { label: "TypeSafe" },
 	},
 	{
 		id: "zai",
 		defaultModel: "glm-5.2",
 		envVars: ["ZAI_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => zaiModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			zaiModelManagerOptions(config),
 		catalogDiscovery: { label: "zAI" },
 	},
 	{
 		id: "zenmux",
 		defaultModel: "anthropic/claude-opus-4.8",
 		envVars: ["ZENMUX_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => zenmuxModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			zenmuxModelManagerOptions(config),
 		allowUnauthenticated: true,
 		catalogDiscovery: { label: "ZenMux", allowUnauthenticated: true },
 	},
@@ -536,7 +702,8 @@ export const CATALOG_PROVIDERS = [
 		id: "zhipu-coding-plan",
 		defaultModel: "glm-5.1",
 		envVars: ["ZHIPU_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => zhipuCodingPlanModelManagerOptions(config),
+		createModelManagerOptions: (config: ModelManagerConfig) =>
+			zhipuCodingPlanModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Zhipu Coding Plan" },
 	},
@@ -553,24 +720,29 @@ export type KnownProvider = (typeof CATALOG_PROVIDERS)[number]["id"];
  */
 const CATALOG_ENTRY_LIST: readonly ProviderCatalogEntry[] = CATALOG_PROVIDERS;
 
-export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = CATALOG_ENTRY_LIST.flatMap(provider => {
-	if (!provider.createModelManagerOptions || provider.specialModelManager) {
-		return [];
-	}
-	return [
-		{
-			providerId: provider.id,
-			defaultModel: provider.defaultModel,
-			createModelManagerOptions: provider.createModelManagerOptions,
-			resolveCacheProviderId: provider.resolveCacheProviderId,
-			allowUnauthenticated: provider.allowUnauthenticated,
-			dynamicModelsAuthoritative: provider.dynamicModelsAuthoritative,
-			catalogDiscovery: provider.catalogDiscovery
-				? { ...provider.catalogDiscovery, envVars: provider.catalogDiscovery.envVars ?? provider.envVars ?? [] }
-				: undefined,
-		},
-	];
-});
+export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] =
+	CATALOG_ENTRY_LIST.flatMap((provider) => {
+		if (!provider.createModelManagerOptions || provider.specialModelManager) {
+			return [];
+		}
+		return [
+			{
+				providerId: provider.id,
+				defaultModel: provider.defaultModel,
+				createModelManagerOptions: provider.createModelManagerOptions,
+				resolveCacheProviderId: provider.resolveCacheProviderId,
+				allowUnauthenticated: provider.allowUnauthenticated,
+				dynamicModelsAuthoritative: provider.dynamicModelsAuthoritative,
+				catalogDiscovery: provider.catalogDiscovery
+					? {
+							...provider.catalogDiscovery,
+							envVars:
+								provider.catalogDiscovery.envVars ?? provider.envVars ?? [],
+						}
+					: undefined,
+			},
+		];
+	});
 
 /**
  * Providers whose own endpoint is the sole authority for context windows and
@@ -578,15 +750,23 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = CATALOG_ENTRY
  * a member. Every pass that would backfill a limit from another host reads this
  * set instead of naming providers.
  */
-export const PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS: ReadonlySet<string> = new Set(
-	CATALOG_ENTRY_LIST.filter(provider => provider.publishesOwnModelLimits).map(provider => provider.id),
-);
+export const PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS: ReadonlySet<string> =
+	new Set(
+		CATALOG_ENTRY_LIST.filter(
+			(provider) => provider.publishesOwnModelLimits,
+		).map((provider) => provider.id),
+	);
 
 /** Default model IDs for all known providers, derived from the catalog table. */
-export const DEFAULT_MODEL_PER_PROVIDER: Record<KnownProvider, string> = Object.fromEntries(
-	CATALOG_PROVIDERS.map(provider => [provider.id, provider.defaultModel] as [string, string]),
-) as Record<KnownProvider, string>;
+export const DEFAULT_MODEL_PER_PROVIDER: Record<KnownProvider, string> =
+	Object.fromEntries(
+		CATALOG_PROVIDERS.map(
+			(provider) => [provider.id, provider.defaultModel] as [string, string],
+		),
+	) as Record<KnownProvider, string>;
 
-export function getCatalogProviderEntry(id: string): ProviderCatalogEntry | undefined {
-	return CATALOG_PROVIDERS.find(provider => provider.id === id);
+export function getCatalogProviderEntry(
+	id: string,
+): ProviderCatalogEntry | undefined {
+	return CATALOG_PROVIDERS.find((provider) => provider.id === id);
 }

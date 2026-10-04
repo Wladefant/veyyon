@@ -46,6 +46,7 @@ function model(provider: string, id: string, api: Api): Pick<Model, "provider" |
  * assertion below, which is the point: the decision is recorded, not defaulted.
  */
 const NO_SERVICE_TIER_KNOB = [
+	"abliteration",
 	"aimlapi",
 	"alibaba-coding-plan",
 	"amazon-bedrock",
@@ -58,12 +59,15 @@ const NO_SERVICE_TIER_KNOB = [
 	"command-code",
 	"coreweave",
 	"cursor",
+	// deepinfra (commit dc8b6988c6): keyless model discovery and chat completions with no wire service-tier knob.
+	"deepinfra",
 	"deepseek",
 	"devin",
 	"firepass",
 	"github-copilot",
 	"gitlab-duo",
 	"gitlab-duo-agent",
+	"gmi-cloud",
 	"google-antigravity",
 	"google-gemini-cli",
 	"groq",
@@ -72,11 +76,15 @@ const NO_SERVICE_TIER_KNOB = [
 	"kimi-code",
 	"litellm",
 	"lm-studio",
+	// local (commit 8c97038b5b): synthetic role provider for audio and tiny language models.
+	"local",
+	"meta",
 	"minimax",
 	"minimax-code",
 	"minimax-code-cn",
 	"mistral",
 	"moonshot",
+	"muse-code",
 	"nanogpt",
 	"nous-research",
 	"novita",
@@ -88,13 +96,18 @@ const NO_SERVICE_TIER_KNOB = [
 	"qianfan",
 	"qwen-portal",
 	"sakana",
+	"stepfun",
 	"synthetic",
 	"together",
+	// typesafe (commit 5fcd8e4a24): dynamic judge model discovery with no wire service-tier knob.
+	"typesafe",
 	"umans",
 	"venice",
 	"vercel-ai-gateway",
 	"vllm",
 	"wafer-serverless",
+	// web (commit 8c97038b5b): synthetic role provider for search engine models.
+	"web",
 	"xai",
 	"xai-oauth",
 	"xiaomi",

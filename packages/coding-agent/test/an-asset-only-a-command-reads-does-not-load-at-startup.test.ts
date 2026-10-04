@@ -43,9 +43,12 @@ const LARGE_ASSETS_AT_STARTUP = [
 	"packages/coding-agent/src/modes/terminal/data/emojis.json",
 ];
 
-/** Large files the startup graph imports by path and reads on demand: the bundled model catalog. */
-const LARGE_ASSETS_BY_PATH = ["packages/catalog/src/models.json"];
-
+/** Large files the startup graph imports by path and reads on demand: the bundled model catalog and native ledger bridge. */
+const LARGE_ASSETS_BY_PATH = [
+	"packages/catalog/src/models.json",
+	// d5382ac21a bundles native-ledger-bridge.py as an asset path for compiled standalone binaries
+	"packages/coding-agent/src/task/native-ledger-bridge.py",
+];
 const graphs = ENTRIES.map(entry => buildStartupImportGraph(REPO_ROOT, entry));
 const files = new Set(graphs.flatMap(graph => [...graph.files]));
 const byPath = new Set(graphs.flatMap(graph => [...graph.byPath]));
