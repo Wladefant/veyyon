@@ -537,16 +537,29 @@ markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnv
 // render of a fresh component. This module-level cache survives across
 // component lifetimes and eliminates redundant marked.lexer + highlightCode
 // (Rust FFI) work for content/layout combinations already seen this session.
+//
+// The key is the text the component holds, by reference, and the entry holds
+// the signature its rows were laid out under. A key that spells the text and the
+// signature together is a new string the length of the text: one copy of every
+// cached message, 2.9 KiB of the 10.2 KiB of strings a 3,000-character turn of an
+// interactive session kept. One text keeps one entry, the rows of its most recent
+// render.
 
-const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
+const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message texts
 const RENDER_CACHE_MAX_SIZE = 512 * 1024;
 const RENDER_CACHE_MAX_ENTRY_SIZE = 32 * 1024;
 const EMPTY_RENDER_LINES: readonly string[] = [];
-const renderCache = new LRUCache<string, readonly string[]>({
+
+/** The rows one text rendered to, with the width, padding, theme and capabilities they were laid out under. */
+interface RenderCacheEntry extends RenderSignature {
+	lines: readonly string[];
+}
+
+const renderCache = new LRUCache<string, RenderCacheEntry>({
 	max: RENDER_CACHE_MAX,
 	maxSize: RENDER_CACHE_MAX_SIZE,
 	maxEntrySize: RENDER_CACHE_MAX_ENTRY_SIZE,
-	sizeCalculation: renderedLinesCacheSize,
+	sizeCalculation: entry => renderedLinesCacheSize(entry.lines),
 });
 
 function renderedLinesCacheSize(lines: readonly string[]): number {
@@ -962,7 +975,8 @@ function codespanSwatch(code: string, glyph: string): string {
 	return colorSwatch(match[1], glyph);
 }
 
-interface RenderSignature {
+/** Every input besides the text that the rows of a render depend on. */
+export interface RenderSignature {
 	width: number;
 	paddingX: number;
 	paddingY: number;
@@ -1336,35 +1350,35 @@ export class Markdown implements Component {
 			return EMPTY_RENDER_LINES;
 		}
 
-		// Replace tabs with 3 spaces for consistent rendering, then bound structural
-		// nesting depth so pathological model output can't overflow or hang the lexer.
-		const normalizedText = this.#normalizeForRender(this.#text);
 		const signature = this.#renderSignature(width, paddingX);
 
 		// L2: module-level LRU — survives component disposal/recreation across
-		// session-tree navigations. Key encodes every dimension that affects the
-		// render output so different configurations never collide.
-		// Encode terminal capability state and theme/style function output samples
-		// so that capability shifts (image protocol changes, hyperlink toggle) or
-		// caller-supplied theme/bgColor functions that mutate their output without
-		// changing object identity invalidate the cache entry.
+		// session-tree navigations. Keyed by the raw text, which render
+		// normalization below is a function of, and served only under a signature
+		// equal in every dimension that affects the rows.
+		// The signature encodes terminal capability state and theme/style function
+		// output samples so that capability shifts (image protocol changes,
+		// hyperlink toggle) or caller-supplied theme/bgColor functions that mutate
+		// their output without changing object identity miss the cache entry.
 		// bgColor probe uses \x01 (single non-printable byte): chalk/ANSI wrappers
 		// pass arbitrary bytes through verbatim, so this is safe and minimizes the
 		// risk of clashing with a function that returns text verbatim.
 		// theme.heading is used as the representative theme probe — it's required
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
-		let cacheKey: string | undefined;
 		if (!this.transientRenderCache) {
-			cacheKey = renderCacheKey(normalizedText, signature);
-			const cached = renderCache.get(cacheKey);
-			if (cached !== undefined) {
+			const cached = renderCache.get(this.#text);
+			if (cached !== undefined && sameRenderSignature(cached, signature)) {
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
 				this.#cachedText = this.#text;
 				this.#cachedWidth = width;
-				this.#cachedLines = cached;
-				return cached;
+				this.#cachedLines = cached.lines;
+				return cached.lines;
 			}
 		}
+
+		// Replace tabs with 3 spaces for consistent rendering, then bound structural
+		// nesting depth so pathological model output can't overflow or hang the lexer.
+		const normalizedText = this.#normalizeForRender(this.#text);
 
 		// Parse markdown to HTML-like tokens
 		const tokens = this.#lexTokens(normalizedText);
@@ -1392,10 +1406,10 @@ export class Markdown implements Component {
 		this.#cachedWidth = width;
 		this.#cachedLines = result;
 
-		// Update L2 module-level LRU so future instances with the same key skip
-		// the marked.lexer + highlightCode (Rust FFI) work entirely.
-		if (cacheKey !== undefined) {
-			renderCache.set(cacheKey, result);
+		// Update L2 module-level LRU so future instances with the same text and
+		// signature skip the marked.lexer + highlightCode (Rust FFI) work entirely.
+		if (!this.transientRenderCache) {
+			renderCache.set(this.#text, { ...signature, lines: result });
 		}
 
 		return result;
@@ -2387,10 +2401,6 @@ export class Markdown implements Component {
 		}
 		return lines;
 	}
-}
-
-function renderCacheKey(normalizedText: string, signature: RenderSignature): string {
-	return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}`;
 }
 
 function codeTokenHasClosingFence(token: Token): boolean {

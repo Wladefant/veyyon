@@ -12,6 +12,7 @@
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
 - `TUIOptions.activity` sets the `ActivitySignal` the TUI attaches to between `start()` and `stop()`; the default is `processActivity`.
+- `RenderSignature`, every input besides the text that a `Markdown` render's rows depend on, is exported from `@veyyon/tui/components/markdown`.
 
 ### Changed
 
@@ -30,6 +31,7 @@
 - The prepared-frame cache keeps each composed row's fitted string and its source in two arrays instead of one `{ raw, width, line }` record per row, so a resumed 600-turn session holds 31,652 fewer objects and 105.4 MiB of heap instead of 107.0 MiB.
 - The scroll tape records scrolled-off rows only while `tui.scrollIsolation` is on and counts them otherwise, and turning scroll isolation on after the first paint replays the history into the tape, so a session with scroll isolation off holds none of the up to 20,000 row strings the tape kept.
 - A streaming `Markdown` render checks that its text still extends the frozen prefix by reference against the text the prefix was frozen from before comparing characters, and a `Container` with one child that draws rows returns that child's rows instead of copying them, so rendering each delta of a 1,000,000-character reply costs 49.8 ms in total instead of 70.4 ms and of a 400,000-character reply 14.1 ms instead of 19.0 ms (median of four).
+- The `Markdown` render cache is keyed by the text a component holds and compares the layout on lookup instead of keying on a new string that spells the text and the layout, so a cached message is held once instead of twice: after 135 turns of 3,000-character replies the session holds 18.0 MiB of strings and objects instead of 18.6 MiB, growing 10.4 KiB per turn instead of 15.0 KiB, and serving 100 cached messages to a rebuilt transcript takes 0.033 ms instead of 0.26 ms.
 
 ### Fixed
 
