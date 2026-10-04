@@ -68,7 +68,8 @@ export async function initDb(): Promise<Database> {
 	// Rows come from the live session files only: sessions the GC archived (archive/sessions/*.jsonl.gz) are
 	// not re-parsed, so a rebuilt stats.db would silently lose their history. Corruption is left untouched.
 	db = openSqliteDatabaseSync(getStatsDbPath(), prepareStatsDb, {
-		failClosedReason: "stats.db holds usage history from GC-archived sessions that a rebuild cannot recover",
+		failClosedReason:
+			"stats.db holds usage history from GC-archived sessions that a rebuild cannot recover; restore it from a backup",
 	});
 	return db;
 }
