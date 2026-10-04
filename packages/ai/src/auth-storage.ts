@@ -3363,11 +3363,20 @@ export class AuthStorage {
 							accountKey: buildUsageCacheIdentity(refreshedCredential),
 						};
 					} catch (error) {
-						refreshError = `oauth refresh failed: ${redactUsageText(errorMessage(error), usageCredentialSecrets(initialRequest.credential))}`;
+						refreshError = `oauth refresh failed: ${errorMessage(error)}`;
 					}
 				}
 			}
 
+			// Every secret this row's probes held. `base` is redacted with them once, where it is pushed,
+			// so a field copied from the backend's report, a resolved completion probe and an error all
+			// pass the same boundary and a field added later does too.
+			const probeSecrets = [
+				...new Set([
+					...usageCredentialSecrets(initialRequest.credential),
+					...usageCredentialSecrets(params.credential),
+				]),
+			];
 			if (refreshError) {
 				probeTimeout.cancel();
 				base.ok = false;
@@ -3381,16 +3390,10 @@ export class AuthStorage {
 				this.#authDeadCredentials.add(row.id);
 				// Refresh failed → the access token is unusable. Skip both probes;
 				// they would only re-surface the same upstream failure.
-				results.push(base);
+				results.push(redactUsageValue(base, probeSecrets));
 				continue;
 			}
 
-			const probeSecrets = [
-				...new Set([
-					...usageCredentialSecrets(initialRequest.credential),
-					...usageCredentialSecrets(params.credential),
-				]),
-			];
 			const providerImpl = resolver?.(row.provider as Provider);
 			if (!providerImpl) {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
@@ -3416,11 +3419,11 @@ export class AuthStorage {
 						if (accountId) base.accountId = accountId;
 						if (email) base.email = email;
 						const { raw: _raw, ...trimmed } = report;
-						base.report = redactUsageValue(trimmed, probeSecrets);
+						base.report = trimmed;
 					}
 				} catch (error) {
 					base.ok = false;
-					base.reason = redactUsageText(errorMessage(error), probeSecrets);
+					base.reason = errorMessage(error);
 				}
 			}
 			probeTimeout.cancel();
@@ -3445,17 +3448,14 @@ export class AuthStorage {
 							signal: completionTimeout.signal,
 						});
 					} catch (error) {
-						base.completion = {
-							ok: false,
-							reason: redactUsageText(errorMessage(error), probeSecrets),
-						};
+						base.completion = { ok: false, reason: errorMessage(error) };
 					} finally {
 						completionTimeout.cancel();
 					}
 				}
 			}
 
-			results.push(base);
+			results.push(redactUsageValue(base, probeSecrets));
 		}
 
 		return results;

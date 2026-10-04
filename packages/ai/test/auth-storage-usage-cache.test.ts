@@ -669,7 +669,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		const lastGood = makeReport("a@example.com");
 		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-1|email:a@example.com";
 		cache.set(cacheKey, {
-			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
+			value: JSON.stringify({ v: 2, value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
 		});
 
@@ -747,7 +747,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		const lastGood = makeReport("b@example.com");
 		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-2|email:b@example.com";
 		cache.set(cacheKey, {
-			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
+			value: JSON.stringify({ v: 2, value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
 		});
 
