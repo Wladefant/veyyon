@@ -14,6 +14,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
 import type { UsageLimit, UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 
 const PROVIDER = "fake-usage-backend";
@@ -387,5 +388,18 @@ describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () =>
 			completionProbe: async () => ({ ok: true, modelId: "m1", latencyMs: 42 }),
 		});
 		expect(checks[0]?.completion).toEqual({ ok: true, modelId: "m1", latencyMs: 42 });
+	});
+
+	it("removes a refreshed token that equals the base64 of the old short token, wherever it is embedded", () => {
+		const oldAccess = "abc";
+		const refreshed = Buffer.from(oldAccess).toString("base64"); // "YWJj"
+		// Both orders: the literal must win over the other secret's whole-token form whichever comes first.
+		for (const secrets of [
+			[oldAccess, refreshed],
+			[refreshed, oldAccess],
+		]) {
+			expect(redactUsageText(`x${refreshed}Z9 and ${refreshed}`, secrets)).not.toContain(refreshed);
+			expect(redactUsageText("a plain abc", secrets)).not.toContain("abc");
+		}
 	});
 });

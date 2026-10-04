@@ -57,7 +57,11 @@ function secretForms(secrets: readonly string[]): SecretForm[] {
 	if (cached) return cached;
 	const forms = new Map<string, SecretForm>();
 	const add = (pattern: string, percentEncoded: boolean, secret: string, bounded = false): void => {
-		if (pattern.length > 0 && !forms.has(pattern)) {
+		if (pattern.length === 0) return;
+		// The same spelling can be one secret's whole-token form and another's literal (a refreshed token
+		// equal to the old token's base64): the unbounded, literal pattern wins, so neither leaks.
+		const existing = forms.get(pattern);
+		if (existing === undefined || (existing.bounded && !bounded)) {
 			forms.set(pattern, { pattern, percentEncoded, secretLength: secret.length, bounded });
 		}
 	};
