@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile, errorMessage, isEnoent, logger, postmortem } from "@veyyon/utils";
 import { getProcessStartIdentity } from "@veyyon/utils/process-liveness";
-import { daemonOwnerIsAlive } from "./broker-lease";
+import { type BrokerLeaseClock, daemonOwnerCanBeRetired, daemonOwnerIsAlive } from "./broker-lease";
 import {
 	canonicalProjectDir,
 	daemonBrokerLeasePath,
@@ -103,8 +103,8 @@ export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<
 	return live;
 }
 
-/** Whether a runtime dir's recorded broker PID is still alive. */
-async function hasLiveDaemonBroker(runtimeDir: string): Promise<boolean> {
+/** Whether the broker lacks sufficient evidence for retirement. */
+async function hasLiveDaemonBroker(runtimeDir: string, clock: BrokerLeaseClock): Promise<boolean> {
 	let raw: unknown;
 	try {
 		raw = await Bun.file(daemonBrokerLeasePath(runtimeDir)).json();
@@ -114,7 +114,14 @@ async function hasLiveDaemonBroker(runtimeDir: string): Promise<boolean> {
 	if (typeof raw !== "object" || raw === null || !("pid" in raw) || typeof raw.pid !== "number") {
 		return false;
 	}
-	return daemonOwnerIsAlive(raw, (await fs.stat(daemonBrokerLeasePath(runtimeDir))).mtimeMs);
+	return !(await daemonOwnerCanBeRetired(
+		runtimeDir,
+		raw,
+		(
+			await fs.stat(daemonBrokerLeasePath(runtimeDir))
+		).mtimeMs,
+		clock,
+	));
 }
 
 /**
@@ -123,14 +130,17 @@ async function hasLiveDaemonBroker(runtimeDir: string): Promise<boolean> {
  * project directories leave behind (issue #8674).
  *
  * Best-effort and non-throwing: a scope is deleted only when its `broker.pid`
- * is absent/dead, no live client presence remains, and it has been untouched
+ * is absent or has retirement evidence, no live client presence remains, and it has been untouched
  * for {@link DAEMON_RUNTIME_STALE_GRACE_MS}. The caller's own `currentRuntimeDir`
  * is always skipped, and the sweep runs only inside the {@link DAEMONS_DIR}
  * container over entries named like a {@link DAEMON_SCOPE_KEY} — so a runtime
  * dir relocated elsewhere (e.g. the smoke test under `os.tmpdir()`) never
  * reclaims unrelated neighbours (issue #8721).
  */
-export async function pruneDeadDaemonRuntimeDirs(currentRuntimeDir: string): Promise<void> {
+export async function pruneDeadDaemonRuntimeDirs(
+	currentRuntimeDir: string,
+	clock: BrokerLeaseClock = {},
+): Promise<void> {
 	const root = path.dirname(currentRuntimeDir);
 	if (path.basename(root) !== DAEMONS_DIR) return;
 	const current = path.resolve(currentRuntimeDir);
@@ -146,7 +156,7 @@ export async function pruneDeadDaemonRuntimeDirs(currentRuntimeDir: string): Pro
 		}
 		return;
 	}
-	const now = Date.now();
+	const now = (clock.now ?? Date.now)();
 	for (const entry of entries) {
 		if (!entry.isDirectory() || !DAEMON_SCOPE_KEY.test(entry.name)) continue;
 		const dir = path.join(root, entry.name);
@@ -154,7 +164,7 @@ export async function pruneDeadDaemonRuntimeDirs(currentRuntimeDir: string): Pro
 		try {
 			const stat = await fs.stat(dir);
 			if (now - stat.mtimeMs < DAEMON_RUNTIME_STALE_GRACE_MS) continue;
-			if (await hasLiveDaemonBroker(dir)) continue;
+			if (await hasLiveDaemonBroker(dir, clock)) continue;
 			if (await hasLiveDaemonProjectPresence(dir)) continue;
 			await fs.rm(dir, { recursive: true, force: true });
 		} catch (error) {
