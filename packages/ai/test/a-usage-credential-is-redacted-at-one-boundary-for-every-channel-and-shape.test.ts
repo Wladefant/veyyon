@@ -124,6 +124,33 @@ describe("the usage credential boundary", () => {
 		expect(out.checks[0]?.reason).toContain("upstream said:");
 	});
 
+	it("redacts a three-character key whatever its length", async () => {
+		const r = await rig(throwing("upstream said: xq7"), "xq7");
+		const out = await drive(r);
+		expectClean(observe(r, out), ["xq7"]);
+		expect(out.checks[0]?.reason).toContain("upstream said:");
+	});
+
+	it("does not let an object's own toJSON bring the key back into a report, a log or the cache", async () => {
+		const withToJson = (): Record<string, unknown> => ({ safe: "plain-value", toJSON: () => ({ leaked: KEY }) });
+		const backend: UsageProvider = {
+			id: PROVIDER,
+			async fetchUsage(params, ctx): Promise<UsageReport> {
+				ctx.logger?.debug("probing", withToJson());
+				return {
+					provider: params.provider,
+					fetchedAt: Date.now(),
+					limits: [],
+					metadata: withToJson(),
+				} as UsageReport;
+			},
+		} as UsageProvider;
+		const r = await rig(backend);
+		const out = await drive(r);
+		expectClean(observe(r, out), [KEY]);
+		expect(out.reports[0]?.metadata?.safe).toBe("plain-value");
+	});
+
 	it("redacts a key used as an object property name in a report and in logger metadata", async () => {
 		const backend: UsageProvider = {
 			id: PROVIDER,

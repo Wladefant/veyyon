@@ -17,10 +17,10 @@ import { redactProviderSecrets } from "../error/error-body";
 import type { UsageCredential, UsageLogger } from "../usage";
 
 /**
- * Shorter than this and a literal replace would mangle ordinary words. Real credentials are never this
- * short, so a key under it is not worth the damage to every message that contains the same letters.
+ * A credential is removed whatever its length: a short key can only be a test key or a misconfiguration,
+ * and a leaked one is still a leaked one. The cost is a mangled word in an error message, which is cheap.
  */
-const MIN_EXACT_SECRET_LENGTH = 4;
+const MIN_EXACT_SECRET_LENGTH = 1;
 
 /** Every secret a usage credential holds, longest first so a key that contains another is removed whole. */
 export function usageCredentialSecrets(credential: UsageCredential): string[] {
@@ -86,10 +86,12 @@ export function redactUsageText(text: string, secrets: readonly string[]): strin
 }
 
 /**
- * A copy of `value` with every string inside it redacted, property names included. Non-string leaves
- * are shared, objects and arrays are rebuilt, and a cycle is cut rather than followed, so a hostile
- * report cannot hang the fetch. Only the nodes on the current path count as a cycle: a node reachable
- * twice without looping is copied once and reused.
+ * A plain snapshot of `value` with every string inside it redacted, property names included. The
+ * snapshot is built from own enumerable data, so a `toJSON` or any other function on the input is
+ * dropped rather than carried into the copy, where JSON.stringify would call it and bring the key
+ * back. Other non-string leaves are shared, objects and arrays are rebuilt, and a cycle is cut rather
+ * than followed, so a hostile report cannot hang the fetch. Only the nodes on the current path count
+ * as a cycle: a node reachable twice without looping is copied once and reused.
  */
 export function redactUsageValue<T>(value: T, secrets: readonly string[]): T {
 	return redactNode(value, secrets, new Set(), new Map()) as T;
@@ -102,7 +104,9 @@ function redactNode(
 	done: Map<object, unknown>,
 ): unknown {
 	if (typeof value === "string") return redactUsageText(value, secrets);
+	if (typeof value === "function" || typeof value === "symbol") return undefined;
 	if (value === null || typeof value !== "object") return value;
+	if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
 	if (ancestors.has(value)) return undefined;
 	if (done.has(value)) return done.get(value);
 	if (value instanceof Error) return redactUsageText(String(value), secrets);
