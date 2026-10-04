@@ -4,7 +4,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@veyyon/natives";
-import { errorMessage, isEnoent } from "@veyyon/utils";
+import { errorMessage, isEnoent, tryWithFileLock } from "@veyyon/utils";
 
 const { IsoBackendKind } = natives;
 
@@ -80,21 +80,51 @@ export async function readRetainedMountBackend(dir: string): Promise<natives.Iso
 export const ISOLATION_CLAIM_FILE = ".veyyon-isolation-claim.json";
 
 /**
+ * Serialize slot publication and cleanup. Locks live beside the scanned root,
+ * never inside it, so a concurrent clear cannot collect a held lock.
+ */
+export async function withIsolationSlotLock<T>(baseDir: string, action: () => Promise<T>): Promise<T> {
+	const lockRoot = `${path.dirname(baseDir)}.locks`;
+	await fs.mkdir(lockRoot, { recursive: true });
+	const result = await tryWithFileLock(path.join(lockRoot, path.basename(baseDir)), action);
+	if (!result.acquired) throw new Error(`Isolation slot is busy: ${baseDir}; refusing replacement or removal`);
+	return result.value;
+}
+
+/** A dead setup with only its marker has no filesystem layer to preserve. */
+export async function isolationClaimIsAbandoned(baseDir: string): Promise<boolean> {
+	let entries: string[];
+	try {
+		entries = await fs.readdir(baseDir);
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
+	return entries.length === 1 && entries[0] === ISOLATION_CLAIM_FILE && !(await isolationClaimIsLive(baseDir));
+}
+
+/**
  * Claim `baseDir` for the calling process. The directory is built under a
- * private sibling name with its marker already inside, then renamed into place,
- * so the slot never exists unmarked. Rename onto an occupied slot fails, which
+ * private directory outside the scanned root with its marker already inside,
+ * then renamed into place. Rename onto an occupied slot fails, which
  * refuses replacement; the private name is removed on any failure.
  */
 export async function claimIsolationSlot(baseDir: string): Promise<void> {
-	const staging = `${baseDir}.claim-${process.pid}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
-	await fs.mkdir(staging);
-	try {
-		await fs.writeFile(path.join(staging, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: process.pid }), "utf8");
-		await fs.rename(staging, baseDir);
-	} catch (error) {
-		await fs.rm(staging, { recursive: true, force: true });
-		throw error;
-	}
+	await withIsolationSlotLock(baseDir, async () => {
+		if (await isolationClaimIsAbandoned(baseDir)) await fs.rm(baseDir, { recursive: true });
+		const staging = path.join(
+			`${path.dirname(baseDir)}.locks`,
+			`${path.basename(baseDir)}.claim-${crypto.randomUUID()}`,
+		);
+		await fs.mkdir(staging);
+		try {
+			await fs.writeFile(path.join(staging, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: process.pid }), "utf8");
+			await fs.rename(staging, baseDir);
+		} catch (error) {
+			await fs.rm(staging, { recursive: true, force: true });
+			throw error;
+		}
+	});
 }
 
 /** Drop the marker once the slot holds its mount, so the workspace is an ordinary leftover again. */

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearWorktrees } from "@veyyon/coding-agent/cli/worktree-cli";
-import { ISOLATION_CLAIM_FILE } from "@veyyon/coding-agent/task/isolation-ownership";
+import { ISOLATION_CLAIM_FILE, writeRetainedBackend } from "@veyyon/coding-agent/task/isolation-ownership";
 import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
 	applyNestedPatches,
@@ -172,62 +172,91 @@ describe("worktree isolation helpers", () => {
 		// while the first was still being set up. A live claim must survive an
 		// ordinary clear; a claim left by a dead process must not. Native mount
 		// setup is substituted; actual kernel mounts are not proved.
-		it("keeps a slot claimed during native setup through an ordinary clear", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
+		describe("clearing isolation claims", () => {
+			let previousRoot: string | undefined;
+			let previousExitCode: typeof process.exitCode;
+			beforeEach(async () => {
+				previousRoot = process.env.VEYYON_WORKTREE_DIR;
+				previousExitCode = process.exitCode;
+				process.exitCode = 0;
+				const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-clear-claim-"));
+				tempDirs.push(fixture);
+				process.env.VEYYON_WORKTREE_DIR = path.join(fixture, "wt");
+				await fs.mkdir(getWorktreesDir());
 			});
-			const started = Promise.withResolvers<void>();
-			const proceed = Promise.withResolvers<void>();
-			let starts = 0;
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				// Only the first start blocks, so a regression that lets a later task claim the slot fails
-				// the assertion instead of hanging on `proceed`.
-				if (++starts === 1) {
-					started.resolve();
-					await proceed.promise;
+			afterEach(() => {
+				if (previousRoot === undefined) delete process.env.VEYYON_WORKTREE_DIR;
+				else process.env.VEYYON_WORKTREE_DIR = previousRoot;
+				process.exitCode = previousExitCode;
+			});
+			it("keeps a slot claimed during native setup through an ordinary clear", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				const started = Promise.withResolvers<void>();
+				const proceed = Promise.withResolvers<void>();
+				let starts = 0;
+				let liveSlot = "";
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					liveSlot = path.dirname(mergedDir);
+					// Only the first start blocks, so a regression that lets a later task claim the slot fails
+					// the assertion instead of hanging on `proceed`.
+					if (++starts === 1) {
+						started.resolve();
+						await proceed.promise;
+					}
+					await fs.mkdir(mergedDir, { recursive: true });
+					await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
+				});
+				const log = vi.spyOn(console, "log").mockImplementation(() => {});
+				const id = "claim-during-setup";
+				const first = ensureIsolation(repo, id);
+				// Racing `first` fails fast when the claim itself throws, instead of waiting out the test timeout.
+				await Promise.race([started.promise, first]);
+				// This test owns the extra orphan too: dry-run must include it, but not the live slot.
+				const orphan = path.join(getWorktreesDir(), "t000000001");
+				await fs.mkdir(path.join(orphan, "m"), { recursive: true });
+				await writeRetainedBackend(orphan, natives.IsoBackendKind.Rcopy);
+
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+				// A dry run reports what the scan classifies as orphaned, independent of the removal guards.
+				log.mockClear();
+				await clearWorktrees({ all: false, dryRun: true, json: true });
+				const dryRun = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+				expect(dryRun.wouldRemove ?? []).not.toContain(liveSlot);
+				expect(dryRun.wouldRemove).toContain(orphan);
+				await clearWorktrees({ all: false, dryRun: false, json: true });
+				expect(process.exitCode ?? 0).toBe(0);
+				const claimed: string[] = [];
+				for (const entry of await fs.readdir(getWorktreesDir())) {
+					if (await Bun.file(path.join(getWorktreesDir(), entry, ISOLATION_CLAIM_FILE)).exists())
+						claimed.push(entry);
 				}
-				await fs.mkdir(mergedDir, { recursive: true });
-				await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
+				// The clear must leave the in-flight slot, with its owner marker, on disk.
+				expect(claimed).toHaveLength(1);
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+
+				proceed.resolve();
+				const handle = await first;
+				expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
+				const left = await fs.readdir(path.dirname(handle.mergedDir));
+				expect(left).toEqual([path.basename(handle.mergedDir)]);
 			});
-			const log = vi.spyOn(console, "log").mockImplementation(() => {});
-			const id = "claim-during-setup";
-			const first = ensureIsolation(repo, id);
-			// Racing `first` fails fast when the claim itself throws, instead of waiting out the test timeout.
-			await Promise.race([started.promise, first]);
 
-			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
-			// A dry run reports what the scan classifies as orphaned, independent of the removal guards.
-			log.mockClear();
-			await clearWorktrees({ all: false, dryRun: true, json: true });
-			expect(log.mock.calls.map(call => String(call[0])).join("\n")).not.toContain("wouldRemove");
-			await clearWorktrees({ all: false, dryRun: false, json: true });
-			const claimed: string[] = [];
-			for (const entry of await fs.readdir(getWorktreesDir())) {
-				if (await Bun.file(path.join(getWorktreesDir(), entry, ISOLATION_CLAIM_FILE)).exists()) claimed.push(entry);
-			}
-			// The clear must leave the in-flight slot, with its owner marker, on disk.
-			expect(claimed).toHaveLength(1);
-			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
-
-			proceed.resolve();
-			const handle = await first;
-			expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
-			const left = await fs.readdir(path.dirname(handle.mergedDir));
-			expect(left).toEqual([path.basename(handle.mergedDir)]);
-		});
-
-		it("clears a claim whose process is gone", async () => {
-			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
-			await gone.exited;
-			const slot = path.join(getWorktreesDir(), "tdeadclaim");
-			await fs.mkdir(slot, { recursive: true });
-			await fs.writeFile(path.join(slot, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: gone.pid }));
-			vi.spyOn(console, "log").mockImplementation(() => {});
-			await clearWorktrees({ all: false, dryRun: false, json: true });
-			await expect(fs.stat(slot)).rejects.toThrow();
+			it("clears a claim whose process is gone", async () => {
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				const slot = path.join(getWorktreesDir(), "tdeadca11a");
+				await fs.mkdir(slot, { recursive: true });
+				await fs.writeFile(path.join(slot, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: gone.pid }));
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				await clearWorktrees({ all: false, dryRun: false, json: true });
+				expect(process.exitCode ?? 0).toBe(0);
+				await expect(fs.stat(slot)).rejects.toThrow();
+			});
 		});
 
 		it("retries isoResolve candidates when a backend is path-unavailable", async () => {

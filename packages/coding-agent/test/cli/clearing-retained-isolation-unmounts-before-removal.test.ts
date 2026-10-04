@@ -226,6 +226,142 @@ describe("retained isolation cleanup", () => {
 		expect(process.exitCode).toBe(1);
 	});
 
+	for (const reclaim of ["ordinary clear", "clear --all", "same-id setup"]) {
+		it(`reclaims a dead canonical claim through ${reclaim}`, async () => {
+			const repo = path.join(root, "repo");
+			await fs.mkdir(repo);
+			child_process.execFileSync("git", ["init", "-q", repo], { timeout: 10000 });
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+				await fs.mkdir(mergedDir, { recursive: true });
+			});
+			const handle = await ensureIsolation(repo, "dead-canonical-claim");
+			const workspace = path.dirname(handle.mergedDir);
+			expect(path.basename(workspace)).toMatch(/^t[0-9a-f]{9}$/);
+			await fs.rm(handle.mergedDir, { recursive: true });
+			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+			await gone.exited;
+			await fs.writeFile(path.join(workspace, ".veyyon-isolation-claim.json"), JSON.stringify({ pid: gone.pid }));
+			if (reclaim === "same-id setup") {
+				const replacement = await ensureIsolation(repo, "dead-canonical-claim");
+				expect(await exists(replacement.mergedDir)).toBe(true);
+				expect(await exists(path.join(workspace, ".veyyon-isolation-claim.json"))).toBe(false);
+			} else {
+				await clearWorktrees({ all: reclaim === "clear --all", dryRun: false, json: true });
+				expect(JSON.parse(stdout)).toMatchObject({ removed: 1, failed: 0 });
+				expect(await exists(workspace)).toBe(false);
+			}
+		});
+	}
+
+	// WHY: a clear's old backend read must not authorize deletion of a new
+	// same-id claim. Pause that read while another clear and task compete.
+	it("serializes stale clear authorization against replacement claims", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo);
+		child_process.execFileSync("git", ["init", "-q", repo], { timeout: 10000 });
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+		const replacementEntered = Promise.withResolvers<void>();
+		const replacementResume = Promise.withResolvers<void>();
+		let starts = 0;
+		vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+			if (++starts === 2) {
+				await fs.writeFile(path.join(path.dirname(mergedDir), "sentinel.txt"), "replacement claim");
+				replacementEntered.resolve();
+				await replacementResume.promise;
+			}
+			await fs.mkdir(mergedDir, { recursive: true });
+		});
+		const handle = await ensureIsolation(repo, "stale-clear-replacement");
+		const workspace = path.dirname(handle.mergedDir);
+		await writeRetainedBackend(workspace, handle.backend);
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const readFile = fs.readFile;
+		let paused = false;
+		vi.spyOn(fs, "readFile").mockImplementation((async (...args: Parameters<typeof fs.readFile>) => {
+			const bytes = await readFile(...args);
+			if (args[0] === path.join(workspace, RETAINED_BACKEND_FILE) && !paused) {
+				paused = true;
+				entered.resolve();
+				await resume.promise;
+			}
+			return bytes;
+		}) as typeof fs.readFile);
+		const first = clearWorktrees({ all: false, dryRun: false, json: true });
+		let replacement: Promise<typeof handle> | undefined;
+		try {
+			await Promise.race([
+				entered.promise,
+				first.then(() => {
+					throw new Error("clear did not pause");
+				}),
+			]);
+			await clearWorktrees({ all: false, dryRun: false, json: true });
+			if (await exists(workspace)) {
+				await expect(ensureIsolation(repo, "stale-clear-replacement")).rejects.toThrow("refusing replacement");
+			} else {
+				replacement = ensureIsolation(repo, "stale-clear-replacement");
+				await Promise.race([replacementEntered.promise, replacement]);
+			}
+			resume.resolve();
+			await first;
+			if (replacement) {
+				expect(await exists(path.join(workspace, "sentinel.txt"))).toBe(true);
+				expect(await fs.readFile(path.join(workspace, "sentinel.txt"), "utf8")).toBe("replacement claim");
+			}
+		} finally {
+			resume.resolve();
+			replacementResume.resolve();
+			await first;
+			await replacement;
+		}
+		expect(starts).toBe(1);
+	});
+
+	it("does not apply a stale scan to a replacement retained root", async () => {
+		const workspace = await makeWorkspace();
+		await writeRetainedBackend(workspace, natives.IsoBackendKind.Rcopy);
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const stat = fs.stat;
+		let paused = false;
+		vi.spyOn(fs, "stat").mockImplementation((async (...args: Parameters<typeof fs.stat>) => {
+			const found = await stat(...args);
+			if (args[0] === workspace && !paused) {
+				paused = true;
+				entered.resolve();
+				await resume.promise;
+			}
+			return found;
+		}) as typeof fs.stat);
+		const first = clearWorktrees({ all: false, dryRun: false, json: true });
+		try {
+			await Promise.race([entered.promise, first]);
+			await clearWorktrees({ all: false, dryRun: false, json: true });
+			await fs.mkdir(path.join(workspace, "m"), { recursive: true });
+			await writeRetainedBackend(workspace, natives.IsoBackendKind.Rcopy);
+			await fs.writeFile(path.join(workspace, "m", "sentinel.txt"), "replacement retained root");
+			resume.resolve();
+			await first;
+			expect(await exists(path.join(workspace, "m", "sentinel.txt"))).toBe(true);
+			expect(await fs.readFile(path.join(workspace, "m", "sentinel.txt"), "utf8")).toBe("replacement retained root");
+		} finally {
+			resume.resolve();
+			await first;
+		}
+	});
+
 	it("preserves an in-flight isolation claim and sentinel across ordinary clear and clear --all", async () => {
 		const repo = path.join(root, "repo");
 		await fs.mkdir(repo, { recursive: true });
@@ -273,8 +409,7 @@ describe("retained isolation cleanup", () => {
 		// Real ordinary clear: clearWorktrees({ all: false, dryRun: false, json: true })
 		await clearWorktrees({ all: false, dryRun: false, json: true });
 		const ordinaryResult = JSON.parse(stdout);
-		expect(ordinaryResult).toMatchObject({ removed: 0, failed: 1 });
-		expect(ordinaryResult.results[0].error).toContain("Missing retained backend metadata");
+		expect(ordinaryResult).toMatchObject({ removed: 0, kept: 1 });
 		expect(await exists(claimedBaseDir)).toBe(true);
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
 
@@ -282,7 +417,7 @@ describe("retained isolation cleanup", () => {
 		await clearWorktrees({ all: true, dryRun: false, json: true });
 		const allResult = JSON.parse(stdout);
 		expect(allResult).toMatchObject({ removed: 0, failed: 1 });
-		expect(allResult.results[0].error).toContain("Missing retained backend metadata");
+		expect(allResult.results[0].error).toContain("Live isolation claim");
 		expect(await exists(claimedBaseDir)).toBe(true);
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
 
