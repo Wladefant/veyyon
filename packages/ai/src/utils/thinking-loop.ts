@@ -16,7 +16,7 @@
  *
  * Three failure shapes are detected:
  * 1. **Verbatim tail repetition** — a short unit repeated back-to-back (e.g.
- *    "🌊 🌊 🌊 …"). Caught from a rolling 250-char tail.
+ *    "🌊 🌊 🌊 …"). Caught from the stream's last 900 chars.
  * 2. **Near-duplicate segments** — paragraphs that normalize to the same
  *    word-trigram fingerprint. Caught with a Jaccard window over recent
  *    paragraphs. Thresholds were calibrated on a real loop transcript plus
@@ -72,6 +72,9 @@ const VERBATIM_MAX_UNIT = 200;
 /** Char cap for an unterminated segment; forces a flush so a wall-of-text loop
  *  (no blank lines / headings) still segments. */
 const SEGMENT_CHAR_CAP = 700;
+/** A blank line, which ends a segment. Global so a search resumes at `lastIndex`; every use sets
+ *  `lastIndex` first. */
+const SEGMENT_BOUNDARY = /\n\s*\n/g;
 /** Normalized-length floor below which a segment is ignored (too short to be a
  *  meaningful paragraph; bare headings must not trip detection). */
 const SEGMENT_MIN_NORM_CHARS = 60;
@@ -222,10 +225,18 @@ export function detectDegenerateRepetition(text: string): string | null {
  * is responsible for stopping after the first hit.
  */
 export class ThinkingLoopDetector {
-	/** Rolling char tail for verbatim repeat detection. */
-	#tail = "";
+	/** The stream's last code units, at least {@link VERBATIM_TAIL_WINDOW} of them once that many
+	 *  arrived, for verbatim repeat detection. A delta is appended in place and the window is moved to
+	 *  the front once the buffer fills, so a delta costs its own length rather than a copy of the
+	 *  window. */
+	#tail = new Uint16Array(VERBATIM_TAIL_WINDOW * 2);
+	#tailLength = 0;
 	/** Pending thinking text not yet split into completed segments. */
 	#pending = "";
+	/** Where in {@link #pending} a segment boundary can still begin: the start of its trailing
+	 *  whitespace run. A boundary is whitespace from end to end, so one beginning earlier would sit
+	 *  wholly in text already searched, and only the run and what arrives after it is searched again. */
+	#boundaryFrom = 0;
 	/** Fingerprints of the most recent substantial segments (≤ SEGMENT_WINDOW). */
 	#window: Set<string>[] = [];
 	/** Count of substantial segments seen so far (warm-up gate). */
@@ -249,26 +260,41 @@ export class ThinkingLoopDetector {
 		if (!delta) return null;
 
 		// 1. Verbatim back-to-back repetition over the rolling tail.
-		this.#tail += delta;
-		if (this.#tail.length > VERBATIM_TAIL_WINDOW) this.#tail = this.#tail.slice(-VERBATIM_TAIL_WINDOW);
-		const verbatim = detectVerbatimRepetition(this.#tail);
+		const verbatim = detectVerbatimRepetition(this.#tail, this.#extendTail(delta));
 		if (verbatim) return describeVerbatimRepeat(verbatim[0], verbatim[1]);
 
 		// 2. Near-duplicate paragraph loop. Append, then drain completed segments.
 		this.#pending += delta;
 		while (true) {
-			const boundary = /\n\s*\n/.exec(this.#pending);
+			SEGMENT_BOUNDARY.lastIndex = this.#boundaryFrom;
+			const boundary = SEGMENT_BOUNDARY.exec(this.#pending);
 			let raw: string;
 			if (boundary) {
 				raw = this.#pending.slice(0, boundary.index);
-				this.#pending = this.#pending.slice(boundary.index + boundary[0].length);
+				this.#pending = this.#pending.slice(SEGMENT_BOUNDARY.lastIndex);
 			} else if (this.#pending.length > SEGMENT_CHAR_CAP) {
 				// No boundary yet but the segment is runaway-long: force a flush.
 				raw = this.#pending.slice(0, SEGMENT_CHAR_CAP);
 				this.#pending = this.#pending.slice(SEGMENT_CHAR_CAP);
 			} else {
+				// The char before `#boundaryFrom` is not whitespace, so the trailing run starts there at
+				// the earliest.
+				const pending = this.#pending;
+				let from = pending.length;
+				while (from > this.#boundaryFrom) {
+					const code = pending.charCodeAt(from - 1);
+					const space =
+						code < 0x80
+							? code === 0x20 || (code >= 0x09 && code <= 0x0d)
+							: /\s/.test(pending[from - 1] as string);
+					if (!space) break;
+					from--;
+				}
+				this.#boundaryFrom = from;
 				return null;
 			}
+			// What remains was cut from the front, so it is searched from its start.
+			this.#boundaryFrom = 0;
 			// An over-long segment is chunked so each piece stays comparable.
 			for (let rest = raw; rest.length > 0; ) {
 				const chunk = rest.length > SEGMENT_CHAR_CAP ? rest.slice(0, SEGMENT_CHAR_CAP) : rest;
@@ -279,6 +305,24 @@ export class ThinkingLoopDetector {
 		}
 	}
 
+	/** Appends `delta` to {@link #tail}, moving the last {@link VERBATIM_TAIL_WINDOW} code units to the
+	 *  front first when it would not fit, and returns the tail's new length. */
+	#extendTail(delta: string): number {
+		const tail = this.#tail;
+		let length = this.#tailLength;
+		let from = 0;
+		if (delta.length >= VERBATIM_TAIL_WINDOW) {
+			from = delta.length - VERBATIM_TAIL_WINDOW;
+			length = 0;
+		} else if (length + delta.length > tail.length) {
+			tail.copyWithin(0, length - VERBATIM_TAIL_WINDOW, length);
+			length = VERBATIM_TAIL_WINDOW;
+		}
+		for (let i = from; i < delta.length; i++) tail[length++] = delta.charCodeAt(i);
+		this.#tailLength = length;
+		return length;
+	}
+
 	/** Process the buffered trailing paragraph (one with no blank-line / heading
 	 *  terminator). Called when the thinking block ends so the final segment —
 	 *  which may be the one that completes a duplicate cluster — is not dropped. */
@@ -286,6 +330,7 @@ export class ThinkingLoopDetector {
 		if (!this.#pending) return null;
 		let rest = this.#pending;
 		this.#pending = "";
+		this.#boundaryFrom = 0;
 		while (rest.length > 0) {
 			const chunk = rest.length > SEGMENT_CHAR_CAP ? rest.slice(0, SEGMENT_CHAR_CAP) : rest;
 			rest = rest.slice(chunk.length);
@@ -612,14 +657,14 @@ const VERBATIM_UNIT_CONTENT = /[\p{L}\p{Extended_Pictographic}]/u;
  * `len` back from the end equals the last char, so the ladder jumps between occurrences of the last
  * char instead of comparing at every length.
  */
-function detectVerbatimRepetition(text: string): [unit: string, count: number] | null {
-	if (text.length < VERBATIM_MIN_REPEATED_CHARS) return null;
-	// Every index below is into `text`; the search space is its last `VERBATIM_TAIL_WINDOW` chars,
-	// read in place. A delta is pushed many times a second, so no candidate unit is sliced until it
-	// repeats: the comparison walks char codes, and a mismatch on the first char ends a length.
-	const end = text.length;
+function detectVerbatimRepetition(tail: Uint16Array, end: number): [unit: string, count: number] | null {
+	// Every index below is into `tail`; the search space is the last `VERBATIM_TAIL_WINDOW` code units
+	// before `end`, read in place. A delta is pushed many times a second, so no candidate unit becomes
+	// a string until it repeats: the comparison walks code units, and a mismatch on the first ends a
+	// length.
 	const start = end - Math.min(end, VERBATIM_TAIL_WINDOW);
 	const searchLength = end - start;
+	if (searchLength < VERBATIM_MIN_REPEATED_CHARS) return null;
 
 	// Distance from the end to the nearest letter/emoji, capped at the longest unit probed. Any unit
 	// shorter than this is punctuation, digits or whitespace and is never probed.
@@ -627,7 +672,7 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 	const scan = Math.min(searchLength, VERBATIM_MAX_UNIT);
 	for (let back = 1; back <= scan; back++) {
 		const at = end - back;
-		const code = text.charCodeAt(at);
+		const code = tail[at] as number;
 		// An ASCII char carries content exactly when it is a letter: no ASCII char is a pictograph.
 		if (code < 0x80) {
 			if (((code | 0x20) - 0x61) >>> 0 < 26) {
@@ -640,7 +685,7 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 		// surrogate is tested together with the high half in front of it, and a unit has to reach one
 		// char further back to hold the whole pair.
 		const isLowSurrogate = code >= 0xdc00 && code <= 0xdfff && at > start;
-		const char = isLowSurrogate ? text.slice(at - 1, at + 1) : (text[at] as string);
+		const char = isLowSurrogate ? String.fromCharCode(tail[at - 1] as number, code) : String.fromCharCode(code);
 		if (VERBATIM_UNIT_CONTENT.test(char)) {
 			contentAt = isLowSurrogate ? back + 1 : back;
 			break;
@@ -650,25 +695,22 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 
 	const minLen = Math.max(2, contentAt);
 	const maxLen = Math.min(VERBATIM_MAX_UNIT, Math.floor(searchLength / 4));
-	const last = text[end - 1] as string;
-	// `at` is the char `len` back from the end, and every `at` found holds the last char. `at` stays
-	// above `start` because `len` is at most a quarter of the window, so `at - 1` never goes negative.
-	for (
-		let at = text.lastIndexOf(last, end - 1 - minLen);
-		at >= end - 1 - maxLen;
-		at = text.lastIndexOf(last, at - 1)
-	) {
+	const last = tail[end - 1];
+	// `at` is the code unit `len` back from the end, and only an `at` holding the last one starts a
+	// comparison. `at` stays above `start` because `len` is at most a quarter of the window.
+	for (let at = end - 1 - minLen; at >= end - 1 - maxLen; at--) {
+		if (tail[at] !== last) continue;
 		const len = end - 1 - at;
 		const unitAt = end - len;
 		// The last `len` chars are one repeat; count the blocks before them that equal it.
 		let count = 1;
 		let pos = unitAt;
-		while (pos - len >= start && sameChars(text, pos - len, unitAt, len)) {
+		while (pos - len >= start && sameUnits(tail, pos - len, unitAt, len)) {
 			count++;
 			pos -= len;
 		}
 		if (count < 4 || len * count < VERBATIM_MIN_REPEATED_CHARS) continue;
-		const unit = text.slice(unitAt);
+		const unit = String.fromCharCode(...tail.subarray(unitAt, end));
 		// A whitespace-free unit can be a slice of ONE long token — a path segment, an
 		// identifier, a hash — that happens to cycle. A directory named
 		// `probe_on_and_on_and_on…` repeats `_on_and` past the character threshold while
@@ -676,16 +718,16 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 		// its footing. A runaway repeats ACROSS token boundaries, so a whitespace-free run
 		// that only continues a longer token is data and is left alone. A run starting at a
 		// token boundary still trips, which keeps a space-free script covered.
-		if (!/\s/.test(unit) && pos > start && !/\s/.test(text[pos - 1] as string)) continue;
+		if (!/\s/.test(unit) && pos > start && !/\s/.test(String.fromCharCode(tail[pos - 1] as number))) continue;
 		return [unit, count];
 	}
 	return null;
 }
 
-/** Whether `text` holds the same `length` chars at `a` and at `b`. */
-function sameChars(text: string, a: number, b: number, length: number): boolean {
+/** Whether `tail` holds the same `length` code units at `a` and at `b`. */
+function sameUnits(tail: Uint16Array, a: number, b: number, length: number): boolean {
 	for (let i = 0; i < length; i++) {
-		if (text.charCodeAt(a + i) !== text.charCodeAt(b + i)) return false;
+		if (tail[a + i] !== tail[b + i]) return false;
 	}
 	return true;
 }
