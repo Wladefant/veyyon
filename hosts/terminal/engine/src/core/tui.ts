@@ -947,6 +947,33 @@ export class TUI extends Container {
 	#layoutSizedChildren = new WeakSet<Component>();
 
 	/**
+	 * Rows the frame about to compose keeps for root child `child` without rendering it, read from
+	 * inside {@link onBeforeCompose}: a component-scoped frame reuses the previous rows of every root
+	 * child outside the subtrees whose repaint was requested, so a sizing pass reads their height here
+	 * instead of rendering them a second time. Undefined when the frame renders `child`, and outside
+	 * the sizing pass.
+	 */
+	reusedRows(child: Component): number | undefined {
+		if (!this.#sizing || this.#layoutSizedChildren.has(child)) return undefined;
+		if (this.#sizingRoots === undefined) {
+			this.#sizingRoots = this.#pendingRenderComponentsOnly
+				? this.#resolvePartialComposeRoots(this.terminal.columns, this.terminal.rows)
+				: null;
+		}
+		const roots = this.#sizingRoots;
+		if (roots === null || roots.has(child)) return undefined;
+		// A resolved frame's segments match the root children index for index.
+		const index = this.children.indexOf(child);
+		return index < 0 ? undefined : this.#frameSegments[index]!.lines.length;
+	}
+
+	// True while onBeforeCompose runs; reusedRows answers only then.
+	#sizing = false;
+	// The root children the frame being sized re-renders, null when it renders every one, undefined
+	// until the sizing pass first asks or after a render request changed the answer.
+	#sizingRoots: Set<Component> | null | undefined;
+
+	/**
 	 * Invoked after every frame commit, once the freshly composed row count is
 	 * readable via {@link composedFrameRows}. Lets a bottom-anchoring owner
 	 * correct its fill against the exact frame instead of a stale estimate; the
@@ -1685,6 +1712,7 @@ export class TUI extends Container {
 	requestRender(force = false, options?: RenderRequestOptions): void {
 		// Any non-component-scoped request makes the pending frame a full one.
 		this.#pendingRenderComponentsOnly = false;
+		this.#sizingRoots = undefined;
 		if (force) {
 			// Forced repaints landing inside the multiplexer resize debounce
 			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
@@ -1740,6 +1768,7 @@ export class TUI extends Container {
 			this.#pendingRenderComponentsOnly = true;
 		}
 		this.#componentRenderTargets.add(component);
+		this.#sizingRoots = undefined;
 		this.#requestOrdinaryRender();
 	}
 
@@ -2430,7 +2459,16 @@ export class TUI extends Container {
 
 		// Size any sibling-dependent layout before the children render, while a
 		// measurement of them is still a measurement of THIS frame.
-		this.onBeforeCompose?.();
+		if (this.onBeforeCompose) {
+			this.#sizing = true;
+			try {
+				this.onBeforeCompose();
+			} finally {
+				this.#sizing = false;
+				this.#sizingRoots = undefined;
+				this.#partialComposeChildren.clear();
+			}
+		}
 
 		// Consume the component-scoped accumulation: it describes the render
 		// requests made up to this frame, whichever path the frame takes.

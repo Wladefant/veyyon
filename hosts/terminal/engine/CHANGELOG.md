@@ -13,6 +13,7 @@
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
 - `TUIOptions.activity` sets the `ActivitySignal` the TUI attaches to between `start()` and `stop()`; the default is `processActivity`.
 - `RenderSignature`, every input besides the text that a `Markdown` render's rows depend on, is exported from `@veyyon/tui/components/markdown`.
+- `TUI.reusedRows(child)`, read inside `onBeforeCompose`, returns the rows a component-scoped frame keeps for a root child it does not re-render, and `undefined` when the frame renders the child or outside the sizing pass.
 
 ### Changed
 
