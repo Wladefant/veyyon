@@ -224,10 +224,7 @@ export class SshTool implements AgentTool<typeof sshSchema.value, SSHToolDetails
 		// path: the success return, and the non-zero-exit throw below.
 		const outputText = clampNotice ? `${clampNotice}\n\n${commandOutput}` : commandOutput;
 		const details: SSHToolDetails = {};
-		const response = toolResult(details)
-			.text(outputText)
-			.truncationFromSummary(result, { direction: "tail" })
-			.done();
+		const response = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" }).done();
 
 		if (result.cancelled || (result.exitCode !== 0 && result.exitCode !== undefined)) {
 			const notice = formatOutputNotice(details.meta);

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import type { SSHHost } from "@veyyon/coding-agent/discovery/capability/ssh";
 import * as connectionManager from "@veyyon/coding-agent/ssh/connection-manager";
 import * as sshfsMount from "@veyyon/coding-agent/ssh/sshfs-mount";
 import { formatOutputNotice } from "@veyyon/coding-agent/tools/core/output-meta";
@@ -32,8 +33,12 @@ function createTool(exitCode?: number) {
 		exited: exitCode === undefined ? pendingExit.promise : Promise.resolve(exitCode),
 		[Symbol.dispose]() {},
 	} as unknown as ChildProcess<"pipe">;
-	vi.spyOn(ptree, "spawn").mockImplementation(() => child);
-	const host = { name: "remote", host: "remote" };
+	vi.spyOn(ptree, "spawn").mockImplementation(() => child as never);
+	const host: SSHHost = {
+		name: "remote",
+		host: "remote",
+		_source: { provider: "test", providerName: "test", path: "/tmp/ssh-hosts.json", level: "project" },
+	};
 	const session = makeToolSession({
 		cwd: process.cwd(),
 		hasUI: false,
@@ -62,7 +67,10 @@ describe("SSH artifact errors reach the model", () => {
 			} else {
 				const error = await tool
 					.execute("ssh-capture", { host: "remote", command: "printf text", timeout: 30 })
-					.then(() => undefined, error => error);
+					.then(
+						() => undefined,
+						error => error,
+					);
 				expect(error).toBeInstanceOf(Error);
 				text = (error as Error).message;
 				expect(text).toContain("code 1");
@@ -81,7 +89,10 @@ describe("SSH artifact errors reach the model", () => {
 			controller.signal,
 			() => streamed.resolve(),
 		);
-		const rejected = execution.then(() => undefined, error => error);
+		const rejected = execution.then(
+			() => undefined,
+			error => error,
+		);
 		await streamed.promise;
 		controller.abort("user interrupt");
 		const error = await rejected;
