@@ -250,6 +250,128 @@ describe("hasLiveDaemonProjectPresence", () => {
 		}
 	});
 
+	it("ambiguous live client presence with real age 25h is kept when supplied clock is within 24h", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "ambiguous-real25h-injected1h.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "ambiguous-real25h-injected1h" }));
+			// Mtime 25h before real Date.now():
+			const recordMtime = Date.now() - 25 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+			const stat = await fs.stat(presenceFile);
+			const clock = {
+				now: () => stat.mtimeMs + 3600_000,
+				bootTimeMs: () => 0,
+			};
+
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clock)).toBe(true);
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("ambiguous live client presence with real age 1h expires and is pruned when supplied clock is older than 24h", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "ambiguous-real1h-injected25h.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "ambiguous-real1h-injected25h" }));
+			// Mtime 1h before real Date.now():
+			const recordMtime = Date.now() - 1 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+			const stat = await fs.stat(presenceFile);
+			const clock = {
+				now: () => stat.mtimeMs + 25 * 3600_000,
+				bootTimeMs: () => 0,
+			};
+
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clock)).toBe(false);
+			expect(await Bun.file(presenceFile).exists()).toBe(false);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("ambiguous live client presence evaluates exact 24h boundary using supplied clock", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "ambiguous-exact-boundary.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "ambiguous-exact-boundary" }));
+			const recordMtime = Date.now() - 10 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+			const stat = await fs.stat(presenceFile);
+
+			// Exactly 24h (24 * 3600 * 1000 ms): <= 24h, must be kept
+			const clockAt24h = {
+				now: () => stat.mtimeMs + 24 * 3600_000,
+				bootTimeMs: () => 0,
+			};
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clockAt24h)).toBe(true);
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+
+			// Over 24h by 1ms: > 24h, must expire and be pruned
+			const clockOver24h = {
+				now: () => stat.mtimeMs + 24 * 3600_000 + 1,
+				bootTimeMs: () => 0,
+			};
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clockOver24h)).toBe(false);
+			expect(await Bun.file(presenceFile).exists()).toBe(false);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
 	it("modern client presence matching live process identity is kept even when older than 24h", async () => {
 		const runtimeDir = await tempRuntimeDir();
 		const { env, cleanup } = hermeticSpawnEnv();
