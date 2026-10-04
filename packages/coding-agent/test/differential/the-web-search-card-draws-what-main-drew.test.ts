@@ -11,7 +11,7 @@
  *  - A warning outcome keeps the settled rail, where main coloured the rail warning. The state shows
  *    in the header's icon, which both arms draw the same way.
  *  - A `Name: value` row's value is a bare run, where main wrapped it in the theme's `text` colour --
- *    which in this preset is an empty pair: a reset, the value, another reset.
+ *    an explicit foreground since the theme stopped resolving an empty `text` to the terminal's own.
  *  - A source's domain and age sit at the END of the row, where main placed them immediately after
  *    the title it had cut to make room for them, joined by the theme's dot glyph.
  *  - The facts of the usage row are joined by the card's own comma, where main joined them with that
@@ -25,7 +25,7 @@
  * WHAT THIS SUITE DOES NOT CATCH. It never runs a query, so nothing here proves what a search
  * REPORTS: `test/web/search/*.test.ts` own that, and a `details` shape whose meaning changed would be
  * drawn identically by both arms. It compares one theme, so two tones that resolve to one colour in
- * it are indistinguishable here, and in this preset `text` resolves to no colour at all. Neither arm
+ * it are indistinguishable here. Neither arm
  * emits OSC 8 under the test terminal, so a source's link TARGET is proved by the unit suite rather
  * than by these bytes. The provider labels come from the provider table, so a renamed provider moves
  * both arms together.
@@ -165,13 +165,20 @@ describe("web_search tool differential", () => {
 		return out + row.slice(read);
 	}
 
+	/** The row without the escape that opens the theme's `text` colour, which is main's value wrapper. */
+	function withoutTextColour(row: string): string {
+		const wrapped = theme.fg("text", "\0");
+		const open = wrapped.slice(0, wrapped.indexOf("\0"));
+		return open === "" ? row : row.replaceAll(open, "");
+	}
+
 	/**
 	 * Rows with the deliberate differences of a settled card normalized away, so what is left is the
 	 * card's own content compared as terminal bytes.
 	 *
 	 * Four normalizations, each pinned in its own cell below. The plate: main opened a background run
 	 * on every row and padded it to the block's width, where a card of fetched data leaves the ground
-	 * alone. The idle resets above, which are main's `text` colour. The separator: main joined the
+	 * alone. The idle resets above, which are what is left of main's `text` colour once its open is dropped. The separator: main joined the
 	 * facts of a row with the theme's dot where the card states its own comma. And a source row, whose
 	 * tail moved to the end of the row, is compared as its WORDS -- the tones of its two tail runs are
 	 * pinned below instead.
@@ -186,7 +193,7 @@ describe("web_search tool differential", () => {
 			const plateless = row.replaceAll("\u001b[49m", "");
 			const words = SOURCE_ROW.test(plateless) ? stripVTControlCharacters(plateless) : plateless;
 			return (
-				withoutIdleResets(words)
+				withoutIdleResets(withoutTextColour(words))
 					// A held-back note, as the count and the unit both arms state.
 					.replace(/(?:\x1b\[[0-9;:]*m)*(… \d+ more \w+).*$/u, "$1")
 					// Either arm's separator between the facts of one row, including the one left at the end of a
@@ -432,13 +439,14 @@ describe("web_search tool differential", () => {
 			expect(kept(viewRows(result, EXPANDED, undefined, 40))).toEqual(15);
 		});
 
-		it("draws a metadata value as a bare run where main wrapped it in an empty colour pair", () => {
+		it("draws a metadata value as a bare run where main wrapped it in the theme's text colour", () => {
 			const result = found();
 			const value = "sonar @ Perplexity (API)";
 			const main = oracleRows(result, HOST_EXPANDED).find(row => row.includes(value)) ?? "";
 			const drawn = viewRows(result, EXPANDED).find(row => row.includes(value)) ?? "";
-			expect(theme.fg("text", value)).toEqual(`${CLOSE}${value}${CLOSE}`);
-			expect(main).toContain(`${theme.fg("muted", "Provider:")} ${CLOSE}${value}${CLOSE}`);
+			const wrapped = theme.fg("text", value);
+			expect(wrapped).not.toEqual(value);
+			expect(main).toContain(`${theme.fg("muted", "Provider:")} ${wrapped}`);
 			expect(drawn).toContain(`${theme.fg("muted", "Provider:")} ${value}`);
 		});
 
