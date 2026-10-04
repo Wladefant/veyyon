@@ -9,6 +9,7 @@ import * as jj from "../utils/jj";
 import {
 	claimIsolationSlot,
 	findLinkedWorktreeAdminDirs,
+	type LinkedWorktreeRegistration,
 	type IsolationOwnerRecord,
 	isAbandonedEmptyReservation,
 	readIsolationOwner,
@@ -590,9 +591,15 @@ export async function ensureIsolation(
  * repositories, naming exactly the directories {@link findLinkedWorktreeAdminDirs} found.
  * Best effort: a registration that is already gone needs nothing.
  */
-export async function removeLinkedWorktreeRegistrations(adminDirs: readonly string[]): Promise<void> {
-	for (const adminDir of adminDirs) {
+export async function removeLinkedWorktreeRegistrations(
+	registrations: readonly LinkedWorktreeRegistration[],
+): Promise<void> {
+	for (const { adminDir, backlink } of registrations) {
 		try {
+			// Native stop may already have released this registration and a different slot reused the
+			// name; remove only while it still points back at the checkout we found.
+			const current = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
+			if (current !== backlink) continue;
 			await fs.rm(adminDir, { recursive: true, force: true });
 		} catch (err) {
 			logger.warn("could not remove worktree registration after isolation removal", {

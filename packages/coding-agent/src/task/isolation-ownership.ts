@@ -131,6 +131,12 @@ export async function writeIsolationOwner(
 	return record;
 }
 
+/** A linked-worktree registration plus the checkout `.git` path its `gitdir` file named when found. */
+export interface LinkedWorktreeRegistration {
+	adminDir: string;
+	backlink: string;
+}
+
 /**
  * Registration directories (`<repo>/.git/worktrees/<name>`) of the linked-worktree checkouts
  * inside an isolation slot. A copy backend such as Rcopy materialises `git worktree add`
@@ -141,7 +147,7 @@ export async function writeIsolationOwner(
  * registration of another task whose checkout is mid-move during its own retention. Looks at
  * the slot and one level below it, which covers the mount dir of a plain and of a retained slot.
  */
-export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<string[]> {
+export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<LinkedWorktreeRegistration[]> {
 	const candidates = [baseDir];
 	try {
 		for (const entry of await fs.readdir(baseDir, { withFileTypes: true })) {
@@ -150,7 +156,7 @@ export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<stri
 	} catch {
 		return [];
 	}
-	const adminDirs: string[] = [];
+	const adminDirs: LinkedWorktreeRegistration[] = [];
 	for (const dir of candidates) {
 		try {
 			const pointer = await fs.readFile(path.join(dir, ".git"), "utf8");
@@ -158,7 +164,12 @@ export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<stri
 			if (!match) continue;
 			const adminDir = path.resolve(dir, match[1]);
 			// Only a genuine registration: <repo>/.git/worktrees/<name>.
-			if (path.basename(path.dirname(adminDir)) === "worktrees") adminDirs.push(adminDir);
+			if (path.basename(path.dirname(adminDir)) !== "worktrees") continue;
+			// The registration must point back at this very checkout. A copied view of a source
+			// linked worktree inherits the source's `.git` pointer, whose backlink names the source.
+			const backlink = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
+			if (backlink !== path.resolve(dir, ".git")) continue;
+			adminDirs.push({ adminDir, backlink });
 		} catch {
 			/* not a linked worktree */
 		}

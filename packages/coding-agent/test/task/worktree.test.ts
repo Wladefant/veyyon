@@ -77,7 +77,7 @@ async function createGitRepo(): Promise<{ baseBranch: string; repo: string }> {
 const initialExitCode = process.exitCode;
 
 afterEach(async () => {
-	process.exitCode = initialExitCode;
+	process.exitCode = initialExitCode ?? 0;
 	vi.restoreAllMocks();
 	jj.repo.clearRootCache();
 	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
