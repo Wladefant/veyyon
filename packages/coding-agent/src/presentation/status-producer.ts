@@ -221,7 +221,9 @@ function readUsageWindow(
 	const fraction = asRecord(limitObj.amount)?.usedFraction;
 	if (typeof fraction !== "number") return null;
 	const scope = asRecord(limitObj.scope);
-	const windowId = scope?.windowId;
+	const rawWindowId = scope?.windowId;
+	// Antigravity names its weekly window "weekly"; it is the same slot as the 7-day window.
+	const windowId = rawWindowId === "weekly" ? "7d" : rawWindowId;
 	if (windowId !== "5h" && windowId !== "7d") return null;
 	const tier = typeof scope?.tier === "string" && scope.tier !== "" ? scope.tier : undefined;
 	const resetsAt = asRecord(limitObj.window)?.resetsAt;

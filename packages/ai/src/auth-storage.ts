@@ -2346,9 +2346,16 @@ export class AuthStorage {
 			sessionPref?.type === "oauth"
 				? allCredentials[sessionPref.index]
 				: undefined;
-		return stickyCredential?.type === "oauth"
-			? stickyCredential
-			: oauthCredentials[0];
+		if (stickyCredential?.type === "oauth") return stickyCredential;
+		// No session preference: the account the operator globally selected (`/account use`)
+		// is the active one. Storage order (`oauthCredentials[0]`) is only the last resort,
+		// otherwise a switch leaves identity attribution on the previous account.
+		const selected = this.#routing.getSelectedCredential(provider);
+		if (selected?.type === "oauth") {
+			const selectedCredential = allCredentials[selected.index];
+			if (selectedCredential?.type === "oauth") return selectedCredential;
+		}
+		return oauthCredentials[0];
 	}
 
 	/**
@@ -5243,14 +5250,17 @@ export class AuthStorage {
 	 * Force-invalidate cached usage reports so the next fetch retrieves fresh
 	 * values from upstream providers. If `provider` is specified, only that
 	 * provider's credentials are invalidated; otherwise, all credentials in the
-	 * store are invalidated.
+	 * store are invalidated. `baseUrlResolver` must match the one used to fetch:
+	 * report cache keys include the base URL, so a sidecar-served provider's
+	 * entries are only evicted when the same URL is supplied.
 	 */
 	async invalidateUsageCache(
 		provider?: string,
 		signal?: AbortSignal,
+		baseUrlResolver?: (provider: string) => string | undefined,
 	): Promise<void> {
 		if (provider) {
-			this.#invalidateUsageReportCache(provider);
+			this.#invalidateUsageReportCache(provider, baseUrlResolver?.(provider));
 		} else {
 			this.#usageCacheEpoch += 1;
 			const expired = Date.now() - 1;
@@ -5259,7 +5269,11 @@ export class AuthStorage {
 				for (const entry of credentials) {
 					if (entry.credential.type !== "oauth") continue;
 					const cacheKey = buildUsageReportCacheKey(
-						buildUsageRequestForOauth(entry.provider, entry.credential),
+						buildUsageRequestForOauth(
+							entry.provider,
+							entry.credential,
+							baseUrlResolver?.(entry.provider),
+						),
 					);
 					const existing = this.#usageCache.getStale<UsageReport | null>(
 						cacheKey,
