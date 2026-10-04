@@ -9,9 +9,9 @@ import * as jj from "../utils/jj";
 import {
 	claimIsolationSlot,
 	findLinkedWorktreeAdminDirs,
-	type LinkedWorktreeRegistration,
 	type IsolationOwnerRecord,
 	isAbandonedEmptyReservation,
+	type LinkedWorktreeRegistration,
 	readIsolationOwner,
 	releaseIsolationClaim,
 	tryWithIsolationLifecycleLock,

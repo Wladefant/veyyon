@@ -7,6 +7,7 @@ import {
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
 	RETAINED_BACKEND_FILE,
+	findLinkedWorktreeAdminDirs,
 } from "@veyyon/coding-agent/task/isolation-ownership";
 import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
@@ -21,6 +22,7 @@ import {
 	getRepoRoot,
 	mergeTaskBranches,
 	parseIsolationMode,
+	removeLinkedWorktreeRegistrations,
 } from "@veyyon/coding-agent/task/worktree";
 import * as git from "@veyyon/coding-agent/utils/git";
 import * as jj from "@veyyon/coding-agent/utils/jj";
@@ -320,6 +322,32 @@ describe("worktree isolation helpers", () => {
 			const again = await ensureIsolation(repo, "crash-registered");
 			expect((await fs.stat(again.mergedDir)).isDirectory()).toBe(true);
 			await cleanupIsolation(again);
+		});
+
+		it("ignores a registration whose backlink names another checkout, and skips removal after its name is reused", async () => {
+			const slot = await fs.mkdtemp(path.join(os.tmpdir(), "slot-"));
+			tempDirs.push(slot);
+			const admin = path.join(slot, "src", ".git", "worktrees", "wt");
+			await fs.mkdir(admin, { recursive: true });
+			const checkout = path.join(slot, "mount");
+			await fs.mkdir(checkout);
+			await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${admin}\n`);
+
+			// Copied view of a source linked worktree: the registration names the source, not this copy.
+			await fs.writeFile(path.join(admin, "gitdir"), path.join(slot, "source", ".git"));
+			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+
+			// Genuine registration is found, then its name is reused by another checkout before removal.
+			await fs.writeFile(path.join(admin, "gitdir"), path.join(checkout, ".git"));
+			const found = await findLinkedWorktreeAdminDirs(slot);
+			expect(found).toHaveLength(1);
+			await fs.writeFile(path.join(admin, "gitdir"), path.join(slot, "other", ".git"));
+			await removeLinkedWorktreeRegistrations(found);
+			expect(await Bun.file(path.join(admin, "gitdir")).exists()).toBe(true);
+
+			await fs.writeFile(path.join(admin, "gitdir"), path.join(checkout, ".git"));
+			await removeLinkedWorktreeRegistrations(found);
+			expect(await Bun.file(path.join(admin, "gitdir")).exists()).toBe(false);
 		});
 
 		it("removes only its own worktree registration, never another slot's of the same repo", async () => {
