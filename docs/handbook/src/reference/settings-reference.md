@@ -529,6 +529,7 @@ veyyon config get compaction.threshold
 | `tools.artifactHeadBytes` | Artifact Head Size | number | `20` | How much of the start of the output is kept inline when the rest is saved as an artifact. The start and the end together stay within the Artifact Threshold. 0: keep only the end. |
 | `tools.outputMaxColumns` | Output Column Cap | number | `768` | Per-line byte cap for streaming tool outputs (bash, ssh, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables. |
 | `tools.artifactTailLines` | Artifact Tail Lines | number | `500` | Maximum lines of the tail kept inline when a tool's output is saved as an artifact. |
+| `tools.artifactMaxBytes` | Artifact File Cap (MB) | number | `16` | Maximum size of the artifact file saved for streaming tool output (bash, python, js eval). Larger output keeps its beginning (up to 3 MB) and its most recent remainder, with a truncation notice between them. 0 = unlimited. |
 | `tools.inlineOutputFloor` | Inline Output Floor | number | `0.25` | Smallest share of the inline output budget a tool result early in the conversation may use before the rest is saved as an artifact. A lower value saves output to an artifact sooner and costs fewer context tokens. 1: every result gets the full budget. Applies to every tool that streams output: bash, eval, ssh, the interactive shell, search and the browser. Shown under the tab's Advanced fold. |
 
 ### Execution
@@ -905,4 +906,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-361 settings in /settings, 118 configuration-file keys, 479 in all.
+362 settings in /settings, 118 configuration-file keys, 480 in all.
