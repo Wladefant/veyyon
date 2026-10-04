@@ -4,9 +4,16 @@
 
 ### Changed
 
+- Added the `providers.githubCopilot.oauthClientId` setting; `/usage` shows Copilot premium requests as unknown because GitHub bills Copilot in credits ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
+
+### Changed
+
+- Clicking an agent's row in the anchored Agents block focuses that agent while scroll isolation holds the mouse ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- On Windows the daemon broker and `launch` daemons no longer open a visible console window for each git, gh, Python or Node child they run: they start with a hidden console that children inherit, not `DETACHED_PROCESS` ([super-board#446](https://github.com/Wladefant/super-board/issues/446)).
+- Eval display migration preserves complete objects that resemble legacy previews, including every field in oversized recovery artifacts ([PR 451](https://github.com/Wladefant/veyyon/pull/451)).
 - Capped artifacts no longer claim to contain full output. Interactive bash honors the configured cap, negative caps are rejected, and short background results and job snapshots keep artifact capture warnings ([PR 432](https://github.com/Wladefant/veyyon/pull/432)).
 - A cancelled eval call now names a failed artifact capture in its abort message, and job cards show the capture warning whenever the visible preview lacks it ([PR 432](https://github.com/Wladefant/veyyon/pull/432)).
 - Fixed `OutputSink.dump()` skipping artifact writer cleanup when a throttled `onChunk` preview flush threw: the writer now ends once and the original error still propagates ([Refs #446](https://github.com/Wladefant/veyyon/issues/446)).

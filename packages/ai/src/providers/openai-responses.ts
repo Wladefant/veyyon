@@ -498,7 +498,6 @@ interface OpenAIResponsesAttempt {
 /** Request facts fixed before the first attempt. */
 interface OpenAIResponsesRequestPlan {
 	headers: Record<string, string>;
-	premiumRequests: number | undefined;
 	sessionState: OpenAIResponsesProviderSessionState | undefined;
 	strictToolsScope: OpenAIStrictToolsScope;
 	/** The session's rejected `tool_choice` forms, or this call's own when there is no session. */
@@ -581,7 +580,7 @@ class OpenAIResponsesStreamRun {
 		const routingSessionId = getOpenAIResponsesRoutingSessionId(options);
 		const promptCacheSessionId = getOpenAIPromptCacheKey(options);
 		const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-		const { headers, copilotPremiumRequests, baseUrl } = resolveOpenAIRequestSetup(model, {
+		const { headers, baseUrl } = resolveOpenAIRequestSetup(model, {
 			apiKey,
 			extraHeaders: options?.headers,
 			initiatorOverride: options?.initiatorOverride,
@@ -615,7 +614,6 @@ class OpenAIResponsesStreamRun {
 		};
 		return {
 			headers,
-			premiumRequests: copilotPremiumRequests,
 			sessionState,
 			strictToolsScope,
 			toolChoiceState,
@@ -842,7 +840,7 @@ class OpenAIResponsesStreamRun {
 		return { body: wireBodyJson };
 	}
 
-	#resetOutputForRetry(plan: OpenAIResponsesRequestPlan): void {
+	#resetOutputForRetry(): void {
 		const o = this.#output;
 		const initial = createInitialResponsesAssistantMessage(this.model.api, this.model.provider, this.model.id);
 		o.content.length = 0;
@@ -857,7 +855,6 @@ class OpenAIResponsesStreamRun {
 			o.ttft =
 				undefined;
 		o.usage = initial.usage;
-		if (plan.premiumRequests !== undefined) o.usage.premiumRequests = plan.premiumRequests;
 		o.stopReason = "stop";
 		this.#firstTokenTime = undefined;
 	}
@@ -869,7 +866,6 @@ class OpenAIResponsesStreamRun {
 		const { model, options, stream } = this;
 		const output = this.#output;
 		const abortTracker = this.#abortTracker;
-		if (plan.premiumRequests !== undefined) output.usage.premiumRequests = plan.premiumRequests;
 		stream.push({ type: "start", partial: output });
 
 		let retryAttempt = 0;
@@ -919,7 +915,7 @@ class OpenAIResponsesStreamRun {
 					attempt: retryAttempt,
 					error: errorMessage(failure),
 				});
-				this.#resetOutputForRetry(plan);
+				this.#resetOutputForRetry();
 				if (options?.providerRetryWait) {
 					await options.providerRetryWait(OPENAI_RESPONSES_TRANSIENT_STREAM_RETRY_DELAY_MS, options.signal);
 				} else {

@@ -65,15 +65,27 @@ export function restoreToolResultEntries(entries: readonly FileEntry[]): void {
 	}
 }
 
+/** Read-only loads can inspect this without allocating artifacts or replacing payloads. */
+export function hasPendingToolResultMigrations(entries: readonly FileEntry[]): boolean {
+	return entries.some(entry => {
+		const coded = codedResult(entry);
+		return coded?.codec.needsMigration?.(coded.message.details) === true;
+	});
+}
+
 /** Apply domain-owned payload migrations without teaching the kernel tool details. */
 export async function migrateToolResultEntries(
 	entries: readonly FileEntry[],
 	context: ToolResultMigrationContext,
 ): Promise<boolean> {
-	let migrated = false;
+	const staged: { message: ToolResultMessage; details: unknown }[] = [];
 	for (const entry of entries) {
 		const coded = codedResult(entry);
-		if (coded?.codec.migrate && (await coded.codec.migrate(coded.message.details, context))) migrated = true;
+		if (!coded?.codec.migrate) continue;
+		if (coded.codec.needsMigration?.(coded.message.details) === false) continue;
+		const details = structuredClone(coded.message.details);
+		if (await coded.codec.migrate(details, context)) staged.push({ message: coded.message, details });
 	}
-	return migrated;
+	for (const { message, details } of staged) message.details = details;
+	return staged.length > 0;
 }

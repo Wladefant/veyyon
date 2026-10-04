@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- GitHub Copilot requests now send `User-Agent: veyyon/<version>` instead of another client's name. `/login github-copilot` needs your own OAuth app Client ID (`VEYYON_GITHUB_COPILOT_CLIENT_ID` or `providers.githubCopilot.oauthClientId`) and fails with registration steps when none is set; stored logins keep working. `/login github-copilot` refuses an OAuth app that issues expiring tokens (Veyyon cannot refresh them). Copilot no longer derives `premiumRequests` from `X-Initiator`, which is still sent ([Fixes https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
+
 ### Added
 
 - Added raw decoded WebSocket event stream for provider-native Codex compaction ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -42,6 +46,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Redacted the credential from usage backend errors, logs, check results and persisted usage reports in every spelling (short, URL-encoded, as a property name, in a resolved completion probe), kept `Authorization: Bearer` tokens from surviving redaction, dropped usage cache rows written before the fix, and keyed usage cache rows by a digest of the account identity instead of the raw account id, email and org id ([Refs #445](https://github.com/Wladefant/veyyon/issues/445)).
 - Prevented malformed function-call errors from bypassing replay-unsafe turn checks after earlier output or tool execution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 9733d138).
 - Fixed the type errors in credential redaction of Codex replayed assistant items and outbound messages that turned the root tools type check red (no runtime change) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Saved /login API key and OAuth credentials take precedence over literal, environment, and command-backed fallback API keys registered by extensions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1f2a57a1759bd17b2c6c0b0fa0f8017c585917be, 2714c7a1b0a3c5758fb61fd2233e569673d73b74).

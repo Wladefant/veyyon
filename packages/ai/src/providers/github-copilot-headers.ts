@@ -1,15 +1,17 @@
-import { getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "@veyyon/catalog/wire/github-copilot";
+import {
+	COPILOT_IDENTITY_HEADERS,
+	getGitHubCopilotBaseUrl,
+	parseGitHubCopilotApiKey,
+} from "@veyyon/catalog/wire/github-copilot";
 import type { Message } from "../types";
 /**
  * Infer whether the current request to Copilot is user-initiated or agent-initiated.
  * Accepts `unknown[]` because providers may pass pre-converted message shapes.
  */
 export type CopilotInitiator = "user" | "agent";
-export type CopilotPremiumRequests = number;
 export type CopilotDynamicHeaders = {
 	headers: Record<string, string>;
 	initiator: CopilotInitiator;
-	premiumRequests: CopilotPremiumRequests;
 };
 export function resolveGitHubCopilotBaseUrl(
 	baseUrl: string | undefined,
@@ -83,44 +85,26 @@ export function getCopilotInitiatorOverride(headers: Record<string, string> | un
 	return override;
 }
 
-export type CopilotPlanTier = "free" | "paid";
-
-function normalizeCopilotPlanTier(planTier: string | undefined): CopilotPlanTier {
-	if (planTier === "paid") return "paid";
-	return "free";
-}
-export function getCopilotPremiumMultiplier(premiumMultiplier: number | undefined, planTier?: string): number {
-	const normalizedMultiplier = premiumMultiplier ?? 1;
-	if (normalizeCopilotPlanTier(planTier) === "free" && normalizedMultiplier === 0) {
-		return 1;
-	}
-	return normalizedMultiplier;
-}
-
-export function getCopilotPremiumRequests(params: {
-	initiator: CopilotInitiator;
-	premiumMultiplier?: number;
-	planTier?: string;
-}): CopilotPremiumRequests {
-	if (params.initiator === "agent") return 0;
-	return getCopilotPremiumMultiplier(params.premiumMultiplier, params.planTier);
-}
-
 /**
  * Build dynamic Copilot headers that vary per-request.
- * Static headers (User-Agent, Editor-Version, etc.) come from model.headers.
+ * Static headers (Editor-Version, API version, etc.) come from model.headers; the User-Agent is the
+ * honest Veyyon identity and is always set here, so a stale value baked into an older catalog or
+ * session cannot name another client.
+ *
+ * `X-Initiator` is sent because Copilot clients send it. Veyyon derives NO usage figure from it: since
+ * 2026-06-01 GitHub bills Copilot in credits, so "agent turn => 0 premium requests" is not a usage
+ * count. The authoritative figure is the account's own usage report (`/usage`).
  */
 export function buildCopilotDynamicHeaders(params: {
 	messages: unknown[];
 	hasImages: boolean;
-	premiumMultiplier?: number;
 	headers?: Record<string, string>;
 	initiatorOverride?: CopilotInitiator;
-	planTier?: string;
 }): CopilotDynamicHeaders {
 	const initiator =
 		params.initiatorOverride ?? getCopilotInitiatorOverride(params.headers) ?? inferCopilotInitiator(params.messages);
 	const headers: Record<string, string> = {
+		...COPILOT_IDENTITY_HEADERS,
 		"X-Initiator": initiator,
 		"Openai-Intent": "conversation-edits",
 	};
@@ -129,13 +113,18 @@ export function buildCopilotDynamicHeaders(params: {
 		headers["Copilot-Vision-Request"] = "true";
 	}
 
-	return {
-		headers,
-		initiator,
-		premiumRequests: getCopilotPremiumRequests({
-			initiator,
-			premiumMultiplier: params.premiumMultiplier,
-			planTier: params.planTier,
-		}),
-	};
+	return { headers, initiator };
+}
+
+/**
+ * Apply Copilot's dynamic headers onto `target`, replacing any entry whose name matches
+ * case-insensitively. A stale `user-agent` from a catalog or session would otherwise survive next to
+ * `User-Agent`, and `new Headers(...)` folds the two into one comma-joined value naming another client.
+ */
+export function applyCopilotHeaders(target: Record<string, string>, copilotHeaders: Record<string, string>): void {
+	const incoming = new Set(Object.keys(copilotHeaders).map(name => name.toLowerCase()));
+	for (const name of Object.keys(target)) {
+		if (incoming.has(name.toLowerCase())) delete target[name];
+	}
+	Object.assign(target, copilotHeaders);
 }

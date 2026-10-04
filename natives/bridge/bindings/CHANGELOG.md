@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Windows embedded `kill` refuses real signals to the host and its observed ancestors, treats signal zero as a non-delivering probe, and rejects younger processes that reuse ancestor PIDs ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - On Windows, embedded utilities accept MSYS and WSL drive aliases, preserving Unicode path components in file, script and in-place-edit operands ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - On Windows, embedded `fd` and `find` print and match forward-slash paths while filesystem actions still use the original paths ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Shell and PTY command output on Windows falls back from UTF-8 to the system ANSI code page (for example GBK on Chinese locales) instead of emitting replacement characters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6d628ff863415f75004f992733f33daeb29b6a2b).

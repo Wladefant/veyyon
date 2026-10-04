@@ -107,3 +107,33 @@ export function routeFooterMouse(
 	}
 	return false;
 }
+
+/**
+ * Route a click above the pinned footer to the root child drawn at `frameRow`.
+ *
+ * Opt-in: only a child that reports `wantsPointer() === true` receives it. The
+ * transcript containers above the footer hold components that implement
+ * `routeMouse` for the overlays they double as, and none of them was written to
+ * take a click from the scrolling transcript. A child that declares live click
+ * targets (the anchored Agents block) is the only one that asked.
+ *
+ * `frameRow` is a composed-frame row, so the caller converts only while it
+ * follows the live tail, where screen row `r` is frame row `windowTop + r`.
+ */
+export function routeContentMouse(
+	segments: readonly FrameSegment[],
+	pinnedFooterChildCount: number,
+	event: SgrMouseEvent,
+	frameRow: number,
+): boolean {
+	const lastContentIndex = segments.length - Math.max(0, pinnedFooterChildCount);
+	for (let i = 0; i < lastContentIndex; i++) {
+		const segment = segments[i]!;
+		if (frameRow < segment.start || frameRow >= segment.start + segment.rowCount) continue;
+		const component: Component & Partial<MouseRoutable> = segment.component;
+		if (component.wantsPointer?.() !== true || typeof component.routeMouse !== "function") return false;
+		component.routeMouse(event, frameRow - segment.start, event.col);
+		return true;
+	}
+	return false;
+}

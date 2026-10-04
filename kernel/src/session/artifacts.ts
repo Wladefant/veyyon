@@ -4,9 +4,11 @@
  * Artifacts are stored in a directory alongside the session file,
  * accessible via artifact:// URLs.
  */
+
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { atomicWriteFileWith } from "@veyyon/utils/atomic-write";
+import { atomicWriteFileSync, atomicWriteFileWith } from "@veyyon/utils/atomic-write";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -65,6 +67,12 @@ export async function writeArtifactAtomically(path: string, content: string): Pr
 	return expectedBytes;
 }
 
+export function writeArtifactAtomicallySync(path: string, content: string): number {
+	const expectedBytes = Buffer.byteLength(content);
+	atomicWriteFileSync(path, content);
+	return expectedBytes;
+}
+
 /**
  * Manages artifact storage for a session.
  *
@@ -80,6 +88,7 @@ export class ArtifactManager {
 	readonly #dir: string;
 	#dirCreated = false;
 	#initPromise: Promise<void> | null = null;
+	#idsInitialized = false;
 
 	/**
 	 * @param dir Directory that will hold artifact files. Created lazily on first save.
@@ -106,6 +115,41 @@ export class ArtifactManager {
 		// the readdir yield in #scanExistingIds (which would hand duplicate ids).
 		this.#initPromise ??= this.#scanExistingIds();
 		await this.#initPromise;
+		this.#idsInitialized = true;
+	}
+
+	#ensureDirSync(): void {
+		if (!this.#dirCreated) {
+			fsSync.mkdirSync(this.#dir, { recursive: true });
+			this.#dirCreated = true;
+		}
+		if (!this.#idsInitialized) {
+			this.#scanExistingIdsSync();
+			this.#idsInitialized = true;
+			this.#initPromise ??= Promise.resolve();
+		}
+	}
+
+	#scanExistingIdsSync(): void {
+		let maxId = -1;
+		try {
+			const files = fsSync.readdirSync(this.#dir);
+			for (const file of files) {
+				const match = file.match(/^(\d+)\..*\.log$/);
+				if (match) {
+					const id = parseInt(match[1], 10);
+					if (id > maxId) maxId = id;
+				}
+			}
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Artifact directory could not be read; truncated tool outputs are unreachable", {
+					dir: this.#dir,
+					error: errorMessage(err),
+				});
+			}
+		}
+		this.#nextId = Math.max(this.#nextId, maxId + 1);
 	}
 
 	/**
@@ -123,15 +167,25 @@ export class ArtifactManager {
 				if (id > maxId) maxId = id;
 			}
 		}
-		this.#nextId = maxId + 1;
+		this.#nextId = Math.max(this.#nextId, maxId + 1);
 	}
 
 	/**
-	 * Atomically allocate next artifact ID.
-	 * IDs are sequential within the session.
+	 * Claim a sequential ID across managers and processes. Keep the hidden
+	 * reservation after publication: a failed save must not recycle its ID.
 	 */
 	allocateId(): number {
-		return this.#nextId++;
+		fsSync.mkdirSync(this.#dir, { recursive: true });
+		for (;;) {
+			const id = this.#nextId++;
+			try {
+				fsSync.mkdirSync(path.join(this.#dir, `.artifact-id-${id}`));
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+				throw error;
+			}
+			return id;
+		}
 	}
 
 	/**
@@ -160,6 +214,25 @@ export class ArtifactManager {
 	}
 
 	/**
+	 * Synchronously allocate a new artifact path and ID without writing content.
+	 */
+	allocatePathSync(toolType: string): { id: string; path: string } {
+		this.#ensureDirSync();
+		const id = String(this.allocateId());
+		const filename = `${id}.${sanitizeToolType(toolType)}.log`;
+		return { id, path: path.join(this.#dir, filename) };
+	}
+
+	/**
+	 * Synchronously save content as an artifact and return the artifact ID.
+	 */
+	saveSync(content: string, toolType: string): string {
+		const { id, path: targetPath } = this.allocatePathSync(toolType);
+		writeArtifactAtomicallySync(targetPath, content);
+		return id;
+	}
+
+	/**
 	 * Check if an artifact exists.
 	 * @param id Artifact ID (numeric string)
 	 */
@@ -178,7 +251,7 @@ export class ArtifactManager {
 	 */
 	async listFiles(): Promise<string[]> {
 		try {
-			return await fs.readdir(this.#dir);
+			return (await fs.readdir(this.#dir)).filter(file => !file.startsWith(".artifact-id-"));
 		} catch (err) {
 			if (!isEnoent(err)) {
 				logger.warn("Artifact directory could not be read; truncated tool outputs are unreachable", {

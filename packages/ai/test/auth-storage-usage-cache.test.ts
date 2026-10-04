@@ -23,6 +23,7 @@ import {
 	type StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
 import { AUTH_HTTP_CONCURRENCY_LIMIT } from "@veyyon/ai/auth-storage/http-concurrency";
+import { buildUsageReportCacheKey, buildUsageRequest } from "@veyyon/ai/auth-storage/usage-requests";
 import type { UsageLimit, UsageReport } from "@veyyon/ai/usage";
 import * as claudeUsage from "@veyyon/ai/usage/claude";
 
@@ -667,9 +668,9 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		// is in the past (so `get()` misses) but the entry is still reachable via
 		// `getStale()`. Mirrors what the prior poll would have written.
 		const lastGood = makeReport("a@example.com");
-		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-1|email:a@example.com";
+		const cacheKey = `usage_cache:${buildUsageReportCacheKey(buildUsageRequest("anthropic", { type: "oauth", accountId: "account-1", email: "a@example.com" }))}`;
 		cache.set(cacheKey, {
-			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
+			value: JSON.stringify({ v: 2, value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
 		});
 
@@ -745,9 +746,9 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		};
 
 		const lastGood = makeReport("b@example.com");
-		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-2|email:b@example.com";
+		const cacheKey = `usage_cache:${buildUsageReportCacheKey(buildUsageRequest("anthropic", { type: "oauth", accountId: "account-2", email: "b@example.com" }))}`;
 		cache.set(cacheKey, {
-			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
+			value: JSON.stringify({ v: 2, value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
 		});
 
@@ -805,7 +806,7 @@ describe("AuthStorage usage cache: org-only identity stability", () => {
 			const first = anthropicReports(await storage.fetchUsageReports());
 			expect(first).toHaveLength(1);
 			expect(calls).toBe(1);
-			const reportKeysBefore = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:report:")).sort();
+			const reportKeysBefore = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:reportv2:")).sort();
 			expect(reportKeysBefore).toHaveLength(1);
 
 			// An OAuth refresh rotates both tokens. The rotated credential must
@@ -816,10 +817,10 @@ describe("AuthStorage usage cache: org-only identity stability", () => {
 			const second = anthropicReports(await storage.fetchUsageReports());
 			expect(second).toHaveLength(1);
 			expect(calls).toBe(1);
-			const reportKeysAfter = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:report:")).sort();
+			const reportKeysAfter = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:reportv2:")).sort();
 			expect(reportKeysAfter).toEqual(reportKeysBefore);
 			for (const key of reportKeysAfter) {
-				expect(key).toContain("org:org-team-1111");
+				expect(key).not.toContain("org-team-1111");
 				expect(key).not.toContain("secret:");
 			}
 		} finally {

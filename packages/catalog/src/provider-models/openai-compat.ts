@@ -38,6 +38,7 @@ import { CODEX_BASE_URL } from "../wire/codex";
 import { coreWeaveProjectHeaders } from "../wire/coreweave";
 import {
 	COPILOT_API_HEADERS,
+	COPILOT_IDENTITY_HEADERS,
 	getGitHubCopilotBaseUrl,
 	isPersonalGitHubCopilotBaseUrl,
 	PERSONAL_GITHUB_COPILOT_BASE_URL,
@@ -5312,7 +5313,7 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 					provider: "github-copilot",
 					baseUrl,
 					apiKey,
-					headers: COPILOT_API_HEADERS,
+					headers: { ...COPILOT_IDENTITY_HEADERS, ...COPILOT_API_HEADERS },
 					mapModel: (
 						entry: OpenAICompatibleModelRecord,
 						defaults: ModelSpec<Api>,

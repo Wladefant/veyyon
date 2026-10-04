@@ -4922,3 +4922,6 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 
 #[cfg(all(test, unix))]
 mod a_signal_never_reaches_the_host_or_its_ancestors;
+
+#[cfg(all(test, windows))]
+mod a_windows_signal_preserves_its_host_and_ancestry;

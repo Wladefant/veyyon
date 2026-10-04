@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { configureGitHubCopilotOAuthClientId, GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE } from "@veyyon/ai/github-copilot-client-id";
 import { getOAuthApiKey } from "@veyyon/ai/registry/oauth";
 import { loginGitHubCopilot } from "@veyyon/ai/registry/oauth/github-copilot";
+import { COPILOT_USER_AGENT } from "@veyyon/catalog/wire/github-copilot";
 
 const FAST_POLL_OPTIONS = { pollIntervalFloorMs: 0, pollIntervalScaleMs: 1 } as const;
 
+beforeEach(() => {
+	configureGitHubCopilotOAuthClientId("test-client-id");
+});
+
 afterEach(() => {
 	vi.restoreAllMocks();
+	configureGitHubCopilotOAuthClientId(undefined);
 });
 
 function mockOnPrompt(value: string) {
@@ -70,6 +77,47 @@ describe("loginGitHubCopilot", () => {
 		expect(credentials.expires).toBeGreaterThan(Date.now());
 		expect(credentials.enterpriseUrl).toBeUndefined();
 		expect(pollCount).toBeGreaterThanOrEqual(1);
+	});
+
+	it("sends the Veyyon User-Agent on every request, model-policy calls included", async () => {
+		const seen: { url: string; ua: string | null }[] = [];
+		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			seen.push({ url, ua: new Headers(init?.headers).get("User-Agent") });
+			if (url === "https://github.com/login/device/code") return Response.json(deviceCodeResponse());
+			if (url === "https://github.com/login/oauth/access_token") return Response.json(accessTokenResponse());
+			if (url.includes("/models/") && url.includes("/policy")) return modelPolicyOk();
+			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+		});
+		await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
+			onAuth: vi.fn(),
+			onPrompt: mockOnPrompt(""),
+		});
+		expect(seen.some(request => request.url.includes("/policy"))).toBe(true);
+		for (const request of seen) expect(request.ua, request.url).toBe(COPILOT_USER_AGENT);
+	});
+
+	it("refuses an OAuth app that issues expiring tokens instead of storing a 10-year expiry", async () => {
+		const fetchMock = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://github.com/login/device/code") return Response.json(deviceCodeResponse());
+			if (url === "https://github.com/login/oauth/access_token") {
+				return Response.json({ ...accessTokenResponse(), expires_in: 28800, refresh_token: "ghr_x" });
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+		const failure = await loginGitHubCopilot({
+			...FAST_POLL_OPTIONS,
+			fetch: fetchMock as unknown as typeof fetch,
+			onAuth: vi.fn(),
+			onPrompt: mockOnPrompt(""),
+		}).then(
+			() => undefined,
+			(error: unknown) => error as Error,
+		);
+		expect(failure?.message).toBe(GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE);
 	});
 
 	it("stores business API endpoint and enables models against it", async () => {

@@ -61,8 +61,13 @@ export interface ProviderSecretFamily {
 	readonly redact: (text: string) => string;
 }
 
-/** `Authorization: <value>`, and the same header echoed with `=`. */
-const LABELLED_CREDENTIAL = /((?:authorization|proxy-authorization|cookie)\s*[:=]\s*)(?:["']?)([^\s"',;]+)/gi;
+/**
+ * `Authorization: <value>`, and the same header echoed with `=`. An auth scheme word (`Bearer`, `Basic`)
+ * stays in the label so the credential after it is the part redacted, not the scheme. The scheme must
+ * share the label's line, or a bare `Bearer` would swallow the first word of the next line.
+ */
+const LABELLED_CREDENTIAL =
+	/((?:authorization|proxy-authorization|cookie)\s*[:=]\s*(?:["']?)(?:(?:bearer|basic|digest|negotiate|token)[ \t]+)?)([^\s"',;]+)/gi;
 /** `x-api-key`, `api_key`, `access-token`, `auth-token`, however the echo spells it. */
 const LABELLED_KEY =
 	/((?:x-)?(?:api[-_]?key|access[-_]?token|auth[-_]?token|refresh[-_]?token|client[-_]?secret)\s*[:=]\s*)(?:["']?)([^\s"',;]+)/gi;

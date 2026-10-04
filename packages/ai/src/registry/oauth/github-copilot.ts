@@ -1,26 +1,32 @@
 /**
- * GitHub Copilot OAuth flow (opencode OAuth app)
+ * GitHub Copilot OAuth flow (device code, with the operator's own GitHub OAuth app; see
+ * `../../github-copilot-client-id.ts`)
  */
 import { scheduler } from "node:timers/promises";
 import { getBundledModels } from "@veyyon/catalog/models";
 import {
 	COPILOT_API_HEADERS,
+	COPILOT_IDENTITY_HEADERS,
 	getGitHubCopilotBaseUrl,
 	isPublicGitHubHost,
 	normalizeDomain,
 	normalizeGitHubCopilotApiEndpoint,
 	normalizeGitHubCopilotEnterpriseDomain,
-	OPENCODE_HEADERS,
 } from "@veyyon/catalog/wire/github-copilot";
 import { batched } from "@veyyon/utils/array";
 import { DAY_MS } from "@veyyon/utils/time";
 import * as AIError from "../../error";
+import {
+	GITHUB_COPILOT_CLIENT_ID_MISSING_MESSAGE,
+	GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE,
+	resolveGitHubCopilotOAuthClientId,
+} from "../../github-copilot-client-id";
 import type { FetchImpl } from "../../types";
 import { fetchGitHubCopilotJson } from "../../utils/github-copilot-http";
 import { emitOAuthSuccessPage } from "./success-page";
 import type { OAuthCredentials } from "./types";
 
-const CLIENT_ID = "Ov23li8tweQw6odWQebz";
+// No client ID is bundled: it comes from `resolveGitHubCopilotOAuthClientId()` at login time.
 
 const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
@@ -52,6 +58,8 @@ type DeviceTokenSuccessResponse = {
 	access_token: string;
 	token_type?: string;
 	scope?: string;
+	expires_in?: number;
+	refresh_token?: string;
 };
 
 type DeviceTokenErrorResponse = {
@@ -70,17 +78,17 @@ function getUrls(domain: string): {
 	};
 }
 
-async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<DeviceCodeResponse> {
+async function startDeviceFlow(domain: string, clientId: string, fetchImpl: FetchImpl): Promise<DeviceCodeResponse> {
 	const urls = getUrls(domain);
 	const data = await fetchGitHubCopilotJson(fetchImpl, urls.deviceCodeUrl, {
 		method: "POST",
 		headers: {
 			Accept: "application/json",
 			"Content-Type": "application/json",
-			...OPENCODE_HEADERS,
+			...COPILOT_IDENTITY_HEADERS,
 		},
 		body: JSON.stringify({
-			client_id: CLIENT_ID,
+			client_id: clientId,
 			scope: "read:user",
 		}),
 	});
@@ -119,6 +127,7 @@ async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<De
 
 async function pollForGitHubAccessToken(
 	domain: string,
+	clientId: string,
 	deviceCode: string,
 	intervalSeconds: number,
 	expiresIn: number,
@@ -151,17 +160,27 @@ async function pollForGitHubAccessToken(
 			headers: {
 				Accept: "application/json",
 				"Content-Type": "application/json",
-				...OPENCODE_HEADERS,
+				...COPILOT_IDENTITY_HEADERS,
 			},
 			body: JSON.stringify({
-				client_id: CLIENT_ID,
+				client_id: clientId,
 				device_code: deviceCode,
 				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
 			}),
 		});
 
 		if (raw && typeof raw === "object" && typeof (raw as DeviceTokenSuccessResponse).access_token === "string") {
-			return (raw as DeviceTokenSuccessResponse).access_token;
+			const success = raw as DeviceTokenSuccessResponse;
+			// Veyyon stores the access token as its own refresh credential and never calls GitHub's refresh
+			// endpoint. An expiring token (8 h, with a separate refresh_token) would be stored with a 10-year
+			// expiry and silently stop working, so it is refused instead of kept.
+			if (typeof success.refresh_token === "string" || typeof success.expires_in === "number") {
+				throw new AIError.OAuthError(GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE, {
+					kind: "validation",
+					provider: "github-copilot",
+				});
+			}
+			return success.access_token;
 		}
 
 		if (raw && typeof raw === "object" && typeof (raw as DeviceTokenErrorResponse).error === "string") {
@@ -203,7 +222,8 @@ const FAR_FUTURE_MS = Date.now() + 10 * 365.25 * DAY_MS;
 
 /**
  * Refresh GitHub Copilot token.
- * With the opencode OAuth flow, the GitHub token is used directly — no JWT exchange needed.
+ * The GitHub token from the device flow is used directly — no JWT exchange needed, and no client ID is
+ * involved, so logins made with any OAuth app (including earlier Veyyon releases) keep working.
  */
 export function refreshGitHubCopilotToken(
 	refreshToken: string,
@@ -225,7 +245,7 @@ async function discoverGitHubCopilotApiEndpoint(token: string, fetchImpl: FetchI
 			headers: {
 				Accept: "application/json",
 				Authorization: `token ${token}`,
-				...OPENCODE_HEADERS,
+				...COPILOT_IDENTITY_HEADERS,
 			},
 		});
 		if (!data || typeof data !== "object") return undefined;
@@ -260,6 +280,7 @@ async function enableGitHubCopilotModel(
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${token}`,
 				...COPILOT_API_HEADERS,
+				...COPILOT_IDENTITY_HEADERS,
 				"openai-intent": "chat-policy",
 				"x-interaction-type": "chat-policy",
 			},
@@ -310,6 +331,13 @@ async function enableAllGitHubCopilotModels(
  * @param options.signal - Optional AbortSignal for cancellation
  */
 export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Promise<OAuthCredentials> {
+	const clientId = resolveGitHubCopilotOAuthClientId();
+	if (!clientId) {
+		throw new AIError.OAuthError(GITHUB_COPILOT_CLIENT_ID_MISSING_MESSAGE, {
+			kind: "validation",
+			provider: "github-copilot",
+		});
+	}
 	const fetchImpl = options.fetch ?? fetch;
 	const input = await options.onPrompt({
 		message: "GitHub Enterprise URL/domain (blank for github.com)",
@@ -335,11 +363,12 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 	const domain =
 		normalizedDomain && isPublicGitHubHost(normalizedDomain) ? "github.com" : (normalizedDomain ?? "github.com");
 
-	const device = await startDeviceFlow(domain, fetchImpl);
+	const device = await startDeviceFlow(domain, clientId, fetchImpl);
 	options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`);
 
 	const githubAccessToken = await pollForGitHubAccessToken(
 		domain,
+		clientId,
 		device.device_code,
 		device.interval,
 		device.expires_in,
@@ -351,7 +380,7 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 
 	const apiEndpoint = await discoverGitHubCopilotApiEndpoint(githubAccessToken, fetchImpl);
 
-	// With opencode OAuth, the GitHub token is used directly for all API requests
+	// The GitHub token is used directly for all API requests
 	const credentials: OAuthCredentials = {
 		refresh: githubAccessToken,
 		access: githubAccessToken,
