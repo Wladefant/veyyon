@@ -188,4 +188,33 @@ describe("a click on an agent HUD row focuses that agent", () => {
 		await Promise.resolve();
 		expect(shown).toHaveBeenCalledWith(`Agent "${id}" was terminated`);
 	});
+
+	it("keeps one drawn row per mapped line after the terminal narrows", async () => {
+		const ids = await spawn(3);
+		const focus = vi.spyOn(mode, "focusAgentSession").mockResolvedValue();
+		const wide = drawn();
+		// A width far narrower than the rows the block was built for.
+		const narrow = Bun.stripANSI(mode.agentContainer.render(24).join("\n")).split("\n");
+		expect(narrow).toHaveLength(wide.length);
+
+		const focusedByLine = narrow.map((_, line) => {
+			focus.mockClear();
+			mode.agentContainer.routeMouse(LEFT_PRESS, line, 4);
+			return focus.mock.calls.map(call => call[0]);
+		});
+		const expected = wide.map(line => {
+			const id = ids.find(candidate => line.includes(candidate));
+			return id === undefined ? [] : [id];
+		});
+		expect(focusedByLine).toEqual(expected);
+	});
+
+	it("ignores the right and middle buttons", async () => {
+		const [id] = await spawn(1);
+		const focus = vi.spyOn(mode, "focusAgentSession").mockResolvedValue();
+		const line = drawn().findIndex(row => row.includes(id!));
+		mode.agentContainer.routeMouse(sgr("\x1b[<2;5;1M"), line, 4);
+		mode.agentContainer.routeMouse(sgr("\x1b[<1;5;1M"), line, 4);
+		expect(focus).not.toHaveBeenCalled();
+	});
 });

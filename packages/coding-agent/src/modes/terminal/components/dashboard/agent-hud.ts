@@ -18,7 +18,7 @@
  * stood still.
  */
 
-import { Text } from "@veyyon/tui";
+import type { Component } from "@veyyon/tui";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { visibleWidth } from "@veyyon/utils/width";
 import { formatTaskId } from "../../../../task/task-id";
@@ -186,8 +186,10 @@ export function agentHudRowAgentIds(
  * block stays plain text and drag-select works on it. There is no hover paint:
  * the engine tracks press and release only, so no motion report ever arrives.
  */
-export class AgentHudBlock extends Text implements MouseRoutable {
+export class AgentHudBlock implements Component, MouseRoutable {
+	readonly #lines: readonly string[];
 	readonly #rowAgentIds: readonly (string | undefined)[];
+	readonly #paddingX: number;
 	readonly #onFocusAgent: (id: string) => void;
 
 	constructor(
@@ -196,9 +198,27 @@ export class AgentHudBlock extends Text implements MouseRoutable {
 		paddingX: number,
 		onFocusAgent: (id: string) => void,
 	) {
-		super(lines.join("\n"), paddingX, 0);
+		this.#lines = lines;
 		this.#rowAgentIds = rowAgentIds;
+		this.#paddingX = paddingX;
 		this.#onFocusAgent = onFocusAgent;
+	}
+
+	invalidate(): void {}
+
+	/**
+	 * One drawn row per source line, at any width. The click map is indexed by source
+	 * line, so a line that wrapped after a resize would push every row below it onto
+	 * the wrong agent. Truncating keeps the map true to what is drawn.
+	 */
+	render(width: number): readonly string[] {
+		const contentWidth = Math.max(0, width - this.#paddingX * 2);
+		const left = " ".repeat(Math.min(this.#paddingX, width));
+		return this.#lines.map(line => {
+			const cut = truncateToWidth(line, contentWidth);
+			const used = this.#paddingX + visibleWidth(cut);
+			return left + cut + " ".repeat(Math.max(0, width - used));
+		});
 	}
 
 	wantsPointer(): boolean {

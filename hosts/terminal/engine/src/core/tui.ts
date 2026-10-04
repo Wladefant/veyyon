@@ -2352,11 +2352,14 @@ export class TUI extends Container {
 					}
 				}
 				// A click above the footer reaches the root child drawn there when that
-				// child declares click targets. Only while following the live tail: a
-				// frozen scroll view draws scroll-space rows, not composed-frame rows.
+				// child declares click targets. Only while following the live tail (a
+				// frozen scroll view draws scroll-space rows, not composed-frame rows) and
+				// only with no visible overlay: a modal covers the content, so a click must
+				// not fall through to a row drawn underneath it.
 				if (
 					event.leftClick &&
 					this.#virtualScrollTop === null &&
+					this.#overlays.topmostVisible() === undefined &&
 					event.row >= 0 &&
 					event.row < footerTop &&
 					event.row <= contentBottom &&

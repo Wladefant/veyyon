@@ -156,4 +156,44 @@ describe("a click above the footer reaches only a child that asked", () => {
 			tui.stop();
 		}
 	});
+
+	it("routes nothing while an overlay covers the transcript, and routes again once it closes", async () => {
+		const target = new Target(["agents", "row-a", "row-b"], true);
+		const { term, tui, scheduler } = await rig([new Rows(["turn-1"]), target]);
+		try {
+			const row = screenRowOf(term, "row-b");
+			const handle = tui.showOverlay(new Rows(["modal"]), {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				aboveFooter: true,
+			});
+			await scheduler.drain(term);
+			for (let r = 0; r < HEIGHT - 2; r++) term.sendInput(leftClickAt(r, 1));
+			expect(target.clicks).toEqual([]);
+
+			handle.hide();
+			await scheduler.drain(term);
+			term.sendInput(leftClickAt(screenRowOf(term, "row-b"), 1));
+			expect(target.clicks).toEqual([{ line: 2, col: 1 }]);
+			expect(row).toBeGreaterThanOrEqual(0);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("ignores a click that is not the left button", async () => {
+		const target = new Target(["agents", "row-a"], true);
+		const { term, tui } = await rig([target]);
+		try {
+			const row = screenRowOf(term, "row-a");
+			// Button 2 is the right button, button 1 the middle one.
+			term.sendInput(`\x1b[<2;2;${row + 1}M`);
+			term.sendInput(`\x1b[<1;2;${row + 1}M`);
+			expect(target.clicks).toEqual([]);
+		} finally {
+			tui.stop();
+		}
+	});
 });
