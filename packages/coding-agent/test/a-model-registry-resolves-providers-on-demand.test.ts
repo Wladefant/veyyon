@@ -137,6 +137,29 @@ describe("a model registry resolves providers on demand", () => {
 		expect(registry.getError()).toBeUndefined();
 		for (const descriptor of PROVIDER_DESCRIPTORS) {
 			const model = registry.find(descriptor.providerId, "cached-namespace-record");
+			// A session picks among chat models only (the kind filter in the registry's
+			// provider resolution, added in d789b0c361). Providers whose records are
+			// search or judge runners (web, typesafe) are persisted and loaded but never
+			// offered to a session, so the cache must exist yet `find` must not return it.
+			const kind = buildModel({
+				id: "cached-namespace-record",
+				name: "Cached namespace record",
+				provider: descriptor.providerId,
+				api: "openai-completions",
+				baseUrl: "https://cached.example.test/v1",
+				contextWindow: 31_000,
+				maxTokens: 4_000,
+				input: ["text"],
+				reasoning: false,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			}).kind;
+			if (kind !== undefined) {
+				expect({ provider: descriptor.providerId, found: model }).toEqual({
+					provider: descriptor.providerId,
+					found: undefined,
+				});
+				continue;
+			}
 			expect({
 				provider: model?.provider,
 				contextWindow: model?.contextWindow,
