@@ -165,4 +165,55 @@ describe("registered eval display persistence migration", () => {
 		await migrateToCurrentVersion(entries, { saveArtifact: async () => "recovered" });
 		expect((detailsOf(entries[1]).jsonOutputs[0] as { artifactId: string }).artifactId).toBe("recovered");
 	});
+
+	it("never downgrades a future session version without a saver", async () => {
+		const entries = entriesFor(root, [{ payload: "x".repeat(12000) }]);
+		const header = entries[0];
+		if (header?.type !== "session") throw new Error("Expected header");
+		header.version = 5;
+		const original = structuredClone(entries);
+		expect(await migrateToCurrentVersion(entries)).toBe(false);
+		expect(entries).toEqual(original);
+	});
+
+	it("never downgrades or rewrites a future session version with a saver", async () => {
+		const entries = entriesFor(root, [{ payload: "x".repeat(12000) }]);
+		const header = entries[0];
+		if (header?.type !== "session") throw new Error("Expected header");
+		header.version = 5;
+		const original = structuredClone(entries);
+		let saves = 0;
+		const migrated = await migrateToCurrentVersion(entries, {
+			saveArtifact: async () => {
+				saves++;
+				return "unexpected";
+			},
+		});
+		expect(migrated).toBe(false);
+		expect(saves).toBe(0);
+		expect(entries).toEqual(original);
+	});
+
+	it("keeps a future version header at v5 on disk after open, append and flush", async () => {
+		const text = (await persist([{ ok: true }])).replace('"version":3', '"version":5');
+		await fs.writeFile(file, text);
+		const session = await SessionManager.open(file, root);
+		session.appendCustomEntry("note", { n: 1 });
+		await session.flush();
+		const header = (await loadEntriesFromFile(file))[0];
+		if (header?.type !== "session") throw new Error("Expected header");
+		expect(header.version).toBe(5);
+	});
+
+	it("still migrates pending eval payloads in a current-version file", async () => {
+		const entries = entriesFor(root, [{ payload: "x".repeat(12000) }]);
+		const header = entries[0];
+		if (header?.type !== "session") throw new Error("Expected header");
+		header.version = 4;
+		expect(
+			await migrateToCurrentVersion(entries, { saveArtifact: async () => "saved" }),
+		).toBe(true);
+		expect((detailsOf(entries[1]).jsonOutputs[0] as { artifactId: string }).artifactId).toBe("saved");
+		expect(header.version).toBe(4);
+	});
 });

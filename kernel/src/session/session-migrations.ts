@@ -63,6 +63,8 @@ export async function migrateToCurrentVersion(
 ): Promise<boolean> {
 	const header = entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 	const version = header?.version ?? 1;
+	// A file written by a newer release is never rewritten or downgraded.
+	if (version > CURRENT_SESSION_VERSION) return false;
 	migrateSessionEntries(entries);
 	const migrated = context ? await migrateToolResultEntries(entries, context) : false;
 	if (header && !hasPendingToolResultMigrations(entries)) header.version = CURRENT_SESSION_VERSION;

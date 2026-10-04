@@ -43,7 +43,7 @@
 
 ### Changed
 
-- Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#406](https://github.com/Wladefant/veyyon/pull/406)).
+- Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Eval display migration uses the registered result codec. Read-only history and resume loads do not write artifacts; writable flush stores complete recovery values before publishing the migrated session version ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - The bundled `/review` command fetches a pull request diff through the GitHub fetch module directly, so a launch no longer loads the `github` tool and its push guards ([#178](https://github.com/Wladefant/veyyon/pull/178)).
 - Extracted the `agent.maxConcurrency` reload and spawn semaphore resize logic from `AgentSession` into `MaxConcurrencyRuntime`; no user-facing change.

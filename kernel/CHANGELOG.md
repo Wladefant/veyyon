@@ -13,7 +13,7 @@
 
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
-- Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#406](https://github.com/Wladefant/veyyon/pull/406)).
+- Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Restore blob-backed display values before migration, publish the new session version only after all saves succeed, and reserve artifact IDs across independent writers and synchronous allocations. The registered eval-result codec owns display migration; read-only loads retain full values without writing, and writable flush saves recovery artifacts ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 
 ### Fixed
