@@ -20,6 +20,7 @@ import { displayArguments } from "./display-arguments";
 import { toReadEntryView } from "./read-group";
 import { ToolCallPreview, type ToolCallPreviewListener } from "./tool-call-preview";
 import { buildGenericDisplay, getTextOutput, NO_CARD_VIEWS, renderToolCardViews } from "./tool-card-views";
+import { serializeToolInput, type ToolInputMemo, withLazyInput } from "./tool-input";
 
 export type DisplaceableToolName = "job" | "todo";
 
@@ -255,14 +256,9 @@ function resolveToolExecutionPolicies(params: ToolExecutionBuildParams): ToolExe
 
 /**
  * What a producer keeps from one build of its block to the next. A card rebuilds its block for a
- * spinner frame or an expansion with the same arguments, and a long write's arguments serialize to
- * the whole file.
+ * spinner frame or an expansion with the same arguments.
  */
-export interface ToolExecutionBuildMemo {
-	/** The arguments `input` was serialized from. */
-	inputArgs: unknown;
-	/** The serialized arguments, reused while the arguments are the same object. */
-	input: string | undefined;
+export interface ToolExecutionBuildMemo extends ToolInputMemo {
 	/** Whether a view renderer of the last build read the spinner frame. */
 	frameRead: boolean;
 }
@@ -366,17 +362,6 @@ export function toolExecutionStatus(params: ToolExecutionBuildParams): ToolStatu
 	return result === undefined ? "pending" : "succeeded";
 }
 
-/** The arguments as a block states them: a string as it is, anything else as indented JSON. */
-function serializeToolInput(args: unknown): string {
-	if (typeof args === "string") return args;
-	if (args === undefined) return "";
-	try {
-		return typeof args === "object" && args !== null ? JSON.stringify(args, null, 2) : JSON.stringify(args);
-	} catch {
-		return "[unserializable]";
-	}
-}
-
 export function buildToolExecutionBlock(
 	params: ToolExecutionBuildParams,
 	memo?: ToolExecutionBuildMemo,
@@ -412,52 +397,23 @@ export function buildToolExecutionBlock(
 			display,
 		};
 	}
-	// A producer builds a block for each step a streaming call reveals, each with new arguments, and
-	// the card drawing it reads the arguments rather than their serialized form. A long write's
-	// arguments serialize to the whole file, so `input` is serialized when it is read.
-	const block = {
-		kind: "tool-execution",
-		id,
-		toolCallId,
-		toolName,
-		status,
-		output: blockOutput,
-		error: blockError,
-		durationMs: params.durationMs,
-		timestamp,
-		display,
-	} satisfies Omit<ToolExecutionBlock, "input">;
-	Object.defineProperty(block, INPUT_ARGS, { value: args });
-	Object.defineProperty(block, INPUT_MEMO, { value: memo });
-	return Object.defineProperty(block, "input", LAZY_INPUT) as ToolExecutionBlock;
+	return withLazyInput(
+		{
+			kind: "tool-execution",
+			id,
+			toolCallId,
+			toolName,
+			status,
+			output: blockOutput,
+			error: blockError,
+			durationMs: params.durationMs,
+			timestamp,
+			display,
+		} satisfies Omit<ToolExecutionBlock, "input">,
+		args,
+		memo,
+	);
 }
-
-/** Where a block built for a producer holds the arguments its `input` is serialized from. */
-const INPUT_ARGS: unique symbol = Symbol("tool input arguments");
-/** Where a block built for a producer holds that producer's memo. */
-const INPUT_MEMO: unique symbol = Symbol("tool input memo");
-
-interface LazyInputSource {
-	readonly [INPUT_ARGS]: unknown;
-	readonly [INPUT_MEMO]: ToolExecutionBuildMemo;
-}
-
-/**
- * `input` of a block built for a producer. One function serves every block, so a transcript that keeps
- * a block keeps no closure, and no scope, of its own for it. Its sources sit in non-enumerable symbol
- * slots, which spreading, `JSON.stringify` and `structuredClone` skip.
- */
-function lazyBlockInput(this: LazyInputSource): string {
-	const args = this[INPUT_ARGS];
-	const memo = this[INPUT_MEMO];
-	if (memo.input === undefined || memo.inputArgs !== args) {
-		memo.input = serializeToolInput(args);
-		memo.inputArgs = args;
-	}
-	return memo.input;
-}
-
-const LAZY_INPUT: PropertyDescriptor = { get: lazyBlockInput, enumerable: true, configurable: true };
 
 export interface ToolExecutionProducerParams {
 	toolName: string;
