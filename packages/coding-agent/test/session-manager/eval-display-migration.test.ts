@@ -210,9 +210,7 @@ describe("registered eval display persistence migration", () => {
 		const header = entries[0];
 		if (header?.type !== "session") throw new Error("Expected header");
 		header.version = 4;
-		expect(
-			await migrateToCurrentVersion(entries, { saveArtifact: async () => "saved" }),
-		).toBe(true);
+		expect(await migrateToCurrentVersion(entries, { saveArtifact: async () => "saved" })).toBe(true);
 		expect((detailsOf(entries[1]).jsonOutputs[0] as { artifactId: string }).artifactId).toBe("saved");
 		expect(header.version).toBe(4);
 	});
