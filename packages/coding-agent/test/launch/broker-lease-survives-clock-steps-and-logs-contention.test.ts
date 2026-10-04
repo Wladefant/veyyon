@@ -224,6 +224,37 @@ it("reclaims an inconclusive legacy lease once it is older than the maximum age,
 	}
 });
 
+it("keeps an authenticated live owner even when a forward clock step makes its record look older than boot", async () => {
+	const dir = await runtime();
+	const child = await liveChild();
+	try {
+		const mtimeMs = justBeforeStart(child.startedAt);
+		const { leasePath, record } = await legacyLease(dir, child.pid, mtimeMs);
+		const close = await listen(dir, brokerPing(child.pid));
+		try {
+			// The wall clock jumped: boot time derived from it lands an hour after the record.
+			expect(await acquireBrokerLease(dir, { bootTimeMs: () => mtimeMs + 60 * 60 * 1_000 })).toBeNull();
+			expect(await fs.readFile(leasePath, "utf8")).toBe(record);
+		} finally {
+			await close();
+		}
+	} finally {
+		child.kill();
+	}
+});
+
+it("reclaims an inconclusive legacy lease older than the maximum age even when the start time fits the record", async () => {
+	const dir = await runtime();
+	const child = await liveChild();
+	try {
+		const mtimeMs = child.startedAt + 1_000;
+		await legacyLease(dir, child.pid, mtimeMs);
+		await expectReclaimed(dir, { ...NEVER_REBOOTED, now: () => mtimeMs + 25 * 60 * 60 * 1_000 });
+	} finally {
+		child.kill();
+	}
+});
+
 it("logs why a start exits when the lease lock is contended", async () => {
 	const dir = await runtime();
 	const leasePath = daemonBrokerLeasePath(dir);
