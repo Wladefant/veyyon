@@ -32,40 +32,68 @@ function countGraphemes(text: string): number {
 	if (text.length === 0) return 0;
 	const cached = graphemeCountCache.get(text);
 	if (cached !== undefined) return cached;
-	let count = 0;
-	for (const _segment of getSegmenter().segment(text)) {
-		count += 1;
-	}
+	const count = walkGraphemes(text, 0, Number.POSITIVE_INFINITY).count;
 	graphemeCountCache.set(text, count);
 	return count;
 }
 
-/** Count graphemes of `text` from code-unit offset `start`, also reporting the
- *  start offset of the final grapheme (where an append could extend a cluster). */
-function countGraphemesFrom(text: string, start: number): { count: number; tailStart: number } {
-	let count = 0;
-	let tailStart = start;
-	for (const seg of getSegmenter().segment(start === 0 ? text : text.slice(start))) {
-		count += 1;
-		tailStart = start + seg.index;
-	}
-	return { count, tailStart };
+/** Clusters walked by {@link walkGraphemes}: how many, where the last one starts, and where it ends. */
+interface GraphemeWalk {
+	count: number;
+	lastStart: number;
+	end: number;
 }
-/** Segment `text` from code-unit offset `start`, walking up to `clusters`
- *  graphemes. Returns the code-unit END of the final cluster walked, its START
- *  (`lastStart`), and how many clusters were found (`count` may be less than
- *  `clusters` if the suffix is shorter than requested). */
-function segmentFrom(text: string, start: number, clusters: number): { end: number; lastStart: number; count: number } {
+
+/** Whether a cluster boundary falls between code units `at - 1` and `at`: two ASCII units always
+ *  break apart except CR LF. Every unit an earlier character can join onto (a combining mark, a
+ *  joiner, a variation selector) and every Prepend character is outside ASCII. */
+function asciiBoundaryAt(text: string, at: number): boolean {
+	const before = text.charCodeAt(at - 1);
+	const after = text.charCodeAt(at);
+	return before < 0x80 && after < 0x80 && !(before === 0x0d && after === 0x0a);
+}
+
+/**
+ * Walk up to `limit` grapheme clusters of `text` from code-unit offset `start`, which must be a
+ * cluster boundary. A run of ASCII is one cluster per unit and is walked without the segmenter;
+ * the segmenter reads only the stretches around non-ASCII units, each cut at a boundary
+ * {@link asciiBoundaryAt} proves, so every cluster comes out as a segmentation of the whole text
+ * would draw it. Streamed prose is mostly ASCII, and segmenting all of it cost a reveal tick
+ * 0.1ms per 3,000 characters.
+ */
+function walkGraphemes(text: string, start: number, limit: number): GraphemeWalk {
+	const length = text.length;
 	let count = 0;
 	let lastStart = start;
 	let end = start;
-	for (const seg of getSegmenter().segment(start === 0 ? text : text.slice(start))) {
-		count += 1;
-		lastStart = start + seg.index;
-		end = start + seg.index + seg.segment.length;
-		if (count >= clusters) break;
+	let at = start;
+	while (at < length && count < limit) {
+		const unit = text.charCodeAt(at);
+		if (unit < 0x80 && (at + 1 === length || asciiBoundaryAt(text, at + 1))) {
+			count += 1;
+			lastStart = at;
+			at += 1;
+			end = at;
+			continue;
+		}
+		if (unit === 0x0d && text.charCodeAt(at + 1) === 0x0a && (at + 2 === length || asciiBoundaryAt(text, at + 2))) {
+			count += 1;
+			lastStart = at;
+			at += 2;
+			end = at;
+			continue;
+		}
+		let stop = at + 1;
+		while (stop < length && !asciiBoundaryAt(text, stop)) stop += 1;
+		for (const seg of getSegmenter().segment(text.slice(at, stop))) {
+			count += 1;
+			lastStart = at + seg.index;
+			end = lastStart + seg.segment.length;
+			if (count >= limit) return { count, lastStart, end };
+		}
+		at = stop;
 	}
-	return { end, lastStart, count };
+	return { count, lastStart, end };
 }
 
 /** Memoizes per-block grapheme counts across reveal ticks. Streaming blocks only
@@ -73,7 +101,7 @@ function segmentFrom(text: string, start: number, clusters: number): { end: numb
  *  the previous text, so only the suffix from that cluster needs re-segmenting. */
 export class BlockUnitCounter {
 	/** `base` is the text this entry extended, verified as its prefix when the entry was stored. */
-	#entries = new Map<number, { text: string; count: number; tailStart: number; base: string | undefined }>();
+	#entries = new Map<number, { text: string; count: number; lastStart: number; base: string | undefined }>();
 	#sliceEntries = new Map<number, { text: string; units: number; end: number; lastStart: number }>();
 
 	count(index: number, text: string): number {
@@ -81,14 +109,14 @@ export class BlockUnitCounter {
 		if (entry !== undefined) {
 			if (entry.text === text) return entry.count;
 			if (entry.count > 0 && text.length > entry.text.length && text.startsWith(entry.text)) {
-				const tail = countGraphemesFrom(text, entry.tailStart);
-				const next = { text, count: entry.count - 1 + tail.count, tailStart: tail.tailStart, base: entry.text };
+				const tail = walkGraphemes(text, entry.lastStart, Number.POSITIVE_INFINITY);
+				const next = { text, count: entry.count - 1 + tail.count, lastStart: tail.lastStart, base: entry.text };
 				this.#entries.set(index, next);
 				return next.count;
 			}
 		}
-		const full = countGraphemesFrom(text, 0);
-		this.#entries.set(index, { text, count: full.count, tailStart: full.tailStart, base: undefined });
+		const full = walkGraphemes(text, 0, Number.POSITIVE_INFINITY);
+		this.#entries.set(index, { text, count: full.count, lastStart: full.lastStart, base: undefined });
 		return full.count;
 	}
 
@@ -110,11 +138,11 @@ export class BlockUnitCounter {
 		}
 		if (entry !== undefined && units >= entry.units && this.#extends(index, entry.text, text)) {
 			const extra = units - entry.units + 1;
-			const seg = segmentFrom(text, entry.lastStart, extra);
+			const seg = walkGraphemes(text, entry.lastStart, extra);
 			this.#sliceEntries.set(index, { text, units, end: seg.end, lastStart: seg.lastStart });
 			return seg.end >= text.length ? text : text.slice(0, seg.end);
 		}
-		const seg = segmentFrom(text, 0, units);
+		const seg = walkGraphemes(text, 0, units);
 		this.#sliceEntries.set(index, { text, units, end: seg.end, lastStart: seg.lastStart });
 		return seg.end >= text.length ? text : text.slice(0, seg.end);
 	}
@@ -131,15 +159,8 @@ export class BlockUnitCounter {
 
 function sliceGraphemes(text: string, units: number): string {
 	if (units <= 0 || text.length === 0) return "";
-	let count = 0;
-	for (const { index, segment } of getSegmenter().segment(text)) {
-		count += 1;
-		if (count >= units) {
-			const end = index + segment.length;
-			return end >= text.length ? text : text.slice(0, end);
-		}
-	}
-	return text;
+	const end = walkGraphemes(text, 0, units).end;
+	return end >= text.length ? text : text.slice(0, end);
 }
 
 export function visibleUnits(message: AssistantMessageView, hideThinking: boolean, proseOnly = true): number {
