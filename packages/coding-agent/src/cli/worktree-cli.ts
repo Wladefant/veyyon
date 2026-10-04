@@ -22,7 +22,7 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, formatCount, getWorktreesDir, isEnoent, isProcessInstanceAlive } from "@veyyon/utils";
 import chalk from "chalk";
 import {
-	findLinkedWorktreeRepos,
+	findLinkedWorktreeAdminDirs,
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
 	isAbandonedEmptyReservation,
@@ -33,7 +33,7 @@ import {
 	readRetainedMountBackend,
 	tryWithIsolationLifecycleLock,
 } from "../task/isolation-ownership";
-import { isTaskIsolationDir, pruneLinkedWorktreeRepos } from "../task/worktree";
+import { isTaskIsolationDir, removeLinkedWorktreeRegistrations } from "../task/worktree";
 import * as git from "../utils/git";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
@@ -195,7 +195,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					const initialStat = stat.found;
 					const initialToken = owner?.token;
 
-					const linkedRepos = await findLinkedWorktreeRepos(target.path);
+					const linkedAdminDirs = await findLinkedWorktreeAdminDirs(target.path);
 					await stopRetainedMount(target.path);
 
 					const currentStat = await statPath(target.path);
@@ -219,7 +219,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					}
 
 					await fs.rm(target.path, { recursive: true, force: true });
-					await pruneLinkedWorktreeRepos(linkedRepos);
+					await removeLinkedWorktreeRegistrations(linkedAdminDirs);
 				});
 
 				if (!lockResult.acquired) {

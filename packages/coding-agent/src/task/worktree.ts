@@ -8,7 +8,7 @@ import * as git from "../utils/git";
 import * as jj from "../utils/jj";
 import {
 	claimIsolationSlot,
-	findLinkedWorktreeRepos,
+	findLinkedWorktreeAdminDirs,
 	type IsolationOwnerRecord,
 	isAbandonedEmptyReservation,
 	readIsolationOwner,
@@ -586,16 +586,17 @@ export async function ensureIsolation(
 }
 
 /**
- * Drop the linked-worktree registrations a removed isolation slot left in its source
- * repositories. Best effort: a repo that is gone or locked has nothing to prune.
+ * Delete the linked-worktree registrations a removed isolation slot left in its source
+ * repositories, naming exactly the directories {@link findLinkedWorktreeAdminDirs} found.
+ * Best effort: a registration that is already gone needs nothing.
  */
-export async function pruneLinkedWorktreeRepos(repos: readonly string[]): Promise<void> {
-	for (const repo of repos) {
+export async function removeLinkedWorktreeRegistrations(adminDirs: readonly string[]): Promise<void> {
+	for (const adminDir of adminDirs) {
 		try {
-			await git.worktree.prune(repo);
+			await fs.rm(adminDir, { recursive: true, force: true });
 		} catch (err) {
-			logger.warn("could not prune worktree registrations after isolation removal", {
-				repo,
+			logger.warn("could not remove worktree registration after isolation removal", {
+				adminDir,
 				error: errorMessage(err),
 			});
 		}
@@ -620,7 +621,7 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 				return;
 			}
 		}
-		const repos = await findLinkedWorktreeRepos(baseDir);
+		const adminDirs = await findLinkedWorktreeAdminDirs(baseDir);
 		try {
 			try {
 				await natives.isoStop(handle.backend, handle.mergedDir);
@@ -633,7 +634,7 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 			}
 		} finally {
 			await fs.rm(baseDir, { recursive: true, force: true });
-			await pruneLinkedWorktreeRepos(repos);
+			await removeLinkedWorktreeRegistrations(adminDirs);
 		}
 	});
 }

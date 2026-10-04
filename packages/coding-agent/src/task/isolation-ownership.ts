@@ -132,14 +132,16 @@ export async function writeIsolationOwner(
 }
 
 /**
- * Source repositories that hold a linked-worktree registration for a checkout inside an
- * isolation slot. A copy backend such as Rcopy materialises `git worktree add` checkouts, so
- * deleting the slot with `fs.rm` alone leaves the repo listing a missing worktree, and the next
- * `ensureIsolation` for the same id fails with "missing but already registered". Callers collect
- * these before removal and run `git worktree prune` in each afterwards. Looks at the slot and
- * one level below it, which covers the mount dir of a plain slot and of a retained one.
+ * Registration directories (`<repo>/.git/worktrees/<name>`) of the linked-worktree checkouts
+ * inside an isolation slot. A copy backend such as Rcopy materialises `git worktree add`
+ * checkouts, so deleting the slot with `fs.rm` alone leaves the source repo listing a missing
+ * worktree, and the next `ensureIsolation` for the same id fails with "missing but already
+ * registered". Callers collect these before removal and delete exactly these directories
+ * afterwards. Targeted on purpose: a repo-wide `git worktree prune` would also drop the
+ * registration of another task whose checkout is mid-move during its own retention. Looks at
+ * the slot and one level below it, which covers the mount dir of a plain and of a retained slot.
  */
-export async function findLinkedWorktreeRepos(baseDir: string): Promise<string[]> {
+export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<string[]> {
 	const candidates = [baseDir];
 	try {
 		for (const entry of await fs.readdir(baseDir, { withFileTypes: true })) {
@@ -148,20 +150,20 @@ export async function findLinkedWorktreeRepos(baseDir: string): Promise<string[]
 	} catch {
 		return [];
 	}
-	const repos = new Set<string>();
+	const adminDirs: string[] = [];
 	for (const dir of candidates) {
 		try {
 			const pointer = await fs.readFile(path.join(dir, ".git"), "utf8");
 			const match = /^gitdir:\s*(.+?)\s*$/m.exec(pointer);
 			if (!match) continue;
-			// <repo>/.git/worktrees/<name> -> <repo>/.git -> <repo>
-			const commonDir = path.dirname(path.dirname(path.resolve(dir, match[1])));
-			repos.add(path.basename(commonDir) === ".git" ? path.dirname(commonDir) : commonDir);
+			const adminDir = path.resolve(dir, match[1]);
+			// Only a genuine registration: <repo>/.git/worktrees/<name>.
+			if (path.basename(path.dirname(adminDir)) === "worktrees") adminDirs.push(adminDir);
 		} catch {
 			/* not a linked worktree */
 		}
 	}
-	return [...repos];
+	return adminDirs;
 }
 
 /**

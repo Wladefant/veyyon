@@ -73,7 +73,11 @@ async function createGitRepo(): Promise<{ baseBranch: string; repo: string }> {
 	};
 }
 
+// `clearWorktrees` sets a failing exit code when it refuses a slot; keep that out of the runner's exit status.
+const initialExitCode = process.exitCode;
+
 afterEach(async () => {
+	process.exitCode = initialExitCode;
 	vi.restoreAllMocks();
 	jj.repo.clearRootCache();
 	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
@@ -316,6 +320,36 @@ describe("worktree isolation helpers", () => {
 			const again = await ensureIsolation(repo, "crash-registered");
 			expect((await fs.stat(again.mergedDir)).isDirectory()).toBe(true);
 			await cleanupIsolation(again);
+		});
+
+		it("removes only its own worktree registration, never another slot's of the same repo", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+				await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
+			});
+			const a = await ensureIsolation(repo, "registration-a");
+			const b = await ensureIsolation(repo, "registration-b");
+			// B is mid-retention: its checkout has moved but the registration is not repaired yet.
+			const moved = `${b.mergedDir}-moved`;
+			await fs.rename(b.mergedDir, moved);
+			const registrations = path.join(repo, ".git", "worktrees");
+			const before = await fs.readdir(registrations);
+			expect(before).toHaveLength(2);
+
+			await cleanupIsolation(a);
+
+			// A's teardown removes A's registration only. A repo-wide `git worktree prune` would also
+			// drop B's, because its recorded path is missing, and B's repair would then fail.
+			const after = await fs.readdir(registrations);
+			expect(after).toHaveLength(1);
+			await runGit(repo, ["worktree", "repair", moved]);
+			expect(await runGit(moved, ["rev-parse", "--is-inside-work-tree"])).toBe("true");
+			await fs.rm(path.dirname(b.mergedDir), { recursive: true, force: true });
 		});
 
 		it("refuses to clear a slot whose owner record cannot be read", async () => {
