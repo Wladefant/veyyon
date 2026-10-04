@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEexist, isEnoent, postmortem } from "@veyyon/utils";
+import { isEexist, isEnoent, postmortem, ptree } from "@veyyon/utils";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonBrokerTokenPath, daemonRuntimeDir } from "./paths";
@@ -237,7 +237,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			stdin: "ignore",
 			stdout: "ignore",
 			stderr: "ignore",
-			detached: true,
+			...ptree.detachedSpawnOptions(),
 		});
 		this.#adoptSpawnedPid?.(child.pid);
 		child.unref();

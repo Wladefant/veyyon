@@ -12,6 +12,7 @@ import {
 	isEnoent,
 	logger,
 	postmortem,
+	ptree,
 	sanitizeText,
 } from "@veyyon/utils";
 import { processHandle } from "@veyyon/utils/native-process";
@@ -652,7 +653,7 @@ export class DaemonBroker {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
-			detached: true,
+			...ptree.detachedSpawnOptions(),
 		});
 		record.process = process;
 		record.input = process.stdin;
@@ -673,7 +674,7 @@ export class DaemonBroker {
 				cwd: record.spec.cwd,
 				env: workerEnvFromParent(record.spec.env),
 				stdio: ["ignore", output.fd, output.fd],
-				detached: true,
+				...ptree.detachedSpawnOptions(),
 			});
 			record.process = process;
 			record.snapshot.pid = process.pid;

@@ -395,15 +395,33 @@ type ChildSpawnOptions<In extends InMask = InMask> = Omit<
 	onSpawnPid?: (pid: number) => void;
 };
 
+/**
+ * Spawn options for a child that must leave the parent's session or process group.
+ *
+ * On POSIX that is `detached: true` (setsid). On Windows Bun maps `detached: true` to
+ * `DETACHED_PROCESS`, which gives the child NO console, so every console-subsystem
+ * grandchild (git, gh, cmd, python subprocess.run, ...) allocates its own conhost and
+ * flashes a visible window. `windowsHide: true` maps to `CREATE_NO_WINDOW` instead: the
+ * child owns one hidden console that its grandchildren inherit, and it is independent of
+ * the parent's console, so it still survives the parent exiting.
+ */
+export function detachedSpawnOptions(platform: NodeJS.Platform = process.platform): {
+	detached: boolean;
+	windowsHide: true;
+} {
+	return { detached: platform !== "win32", windowsHide: true };
+}
+
 /** Spawn a child process with piped stdout/stderr. */
 export function spawn<In extends InMask = InMask>(cmd: string[], opts?: ChildSpawnOptions<In>): ChildProcess<In> {
-	const { timeout = -1, signal, stderr, onSpawnPid, ...rest } = opts ?? {};
+	const { timeout = -1, signal, stderr, onSpawnPid, detached, ...rest } = opts ?? {};
 	const child = Bun.spawn(cmd, {
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
 		windowsHide: true,
 		...rest,
+		...(detached ? detachedSpawnOptions() : {}),
 	});
 	onSpawnPid?.(child.pid);
 	const cp = new ChildProcess(child, stderr === "full");
