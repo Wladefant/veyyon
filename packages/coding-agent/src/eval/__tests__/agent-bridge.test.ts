@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import { TempDir } from "@veyyon/utils";
@@ -20,7 +21,7 @@ import * as isolationRunner from "../../task/isolation-runner";
 import { AgentOutputManager } from "../../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
 import type { ToolSession } from "../../tools";
-import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
+import { buildIsolationRecoveryHint, EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
@@ -1186,7 +1187,10 @@ describe("runEvalAgent isolation", () => {
 		vi.restoreAllMocks();
 	});
 
-	function isolatedSession(overrides: Partial<Parameters<typeof Settings.isolated>[0]> = {}): ToolSession {
+	function isolatedSession(
+		overrides: Partial<Parameters<typeof Settings.isolated>[0]> = {},
+		sessionOverrides: SessionOptions = {},
+	): ToolSession {
 		return makeSession({
 			settings: Settings.isolated({
 				"async.enabled": false,
@@ -1194,6 +1198,7 @@ describe("runEvalAgent isolation", () => {
 				"agent.isolation.merge": "patch",
 				...overrides,
 			}),
+			...sessionOverrides,
 		});
 	}
 
@@ -1296,6 +1301,71 @@ describe("runEvalAgent isolation", () => {
 		expect(isolatedCall.context.repoRoot).toBe(repoRoot);
 		expect(result.details.patchPath).toMatch(/\.patch$/);
 		expect(result.text).toContain("Applied patches: yes");
+	});
+
+	it("names the nested patches, not an empty root patch, when apply=false captured only nested work", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const nestedPath = "/artifacts/a.nested-0-inner.patch";
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "isolated-run",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				hasRootChanges: false,
+				nestedPatches: [{ relativePath: "inner", patch: "diff --git a/f b/f\n" }],
+				nestedPatchPaths: [nestedPath],
+			}),
+		);
+
+		const result = await runEvalAgent(
+			{ prompt: "nested only", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
+
+		expect(result.text).toContain(nestedPath);
+		expect(result.text).not.toMatch(/changes captured at `[^`]*\/[^`]*\.patch` \(apply=false\)/);
+		expect(result.details.patchPath).toBeUndefined();
+		expect(result.details.nestedPatchPaths).toEqual([nestedPath]);
+	});
+
+	it("reports no changes when apply=false captured an empty root patch and nothing nested", async () => {
+		mockAgents();
+		mockIsolationContext();
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "isolated-run",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				hasRootChanges: false,
+			}),
+		);
+
+		const result = await runEvalAgent(
+			{ prompt: "nothing", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
+
+		expect(result.text).toContain("Isolation: no changes captured.");
+		expect(result.details.patchPath).toBeUndefined();
+	});
+
+	it("still names the root patch when apply=false captured root changes", async () => {
+		mockAgents();
+		mockIsolationContext();
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "isolated-run",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				hasRootChanges: true,
+			}),
+		);
+
+		const result = await runEvalAgent(
+			{ prompt: "root", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
+
+		expect(result.text).toMatch(/changes captured at `[^`]*\.patch` \(apply=false\)/);
+		expect(result.details.patchPath).toMatch(/\.patch$/);
 	});
 
 	it("keeps the timeout paused through isolation merge/apply so the cell can't abort mid-cherry-pick", async () => {
@@ -1564,6 +1634,33 @@ describe("runEvalAgent isolation", () => {
 		).rejects.toThrow(
 			/nested patch apply failed.*Some nested repository patches failed to apply.*nested-0-sub_nested\.patch/s,
 		);
+	});
+
+	it("names the failure when nested patches cannot be written as a fallback", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-eval-unwritable-"));
+		const artifactsDir = path.join(parent, "artifacts");
+		await fs.writeFile(artifactsDir, "");
+		const completed: SingleResult = {
+			index: 0,
+			id: "unwritable",
+			agent: "worker",
+			agentSource: "bundled",
+			task: "work",
+			exitCode: 1,
+			output: "",
+			stderr: "",
+			truncated: false,
+			durationMs: 0,
+			tokens: 0,
+			requests: 0,
+			nestedPatches: [{ relativePath: "sub/nested", patch: "diff --git a/f b/f\n" }],
+		};
+
+		const hint = await buildIsolationRecoveryHint(completed, artifactsDir);
+
+		expect(hint).toMatch(/Nested patches could not be written: .*(ENOTDIR|EEXIST|TRIPWIRE|refusing)/);
+		expect(hint).not.toContain("Captured nested patch preserved");
+		await fs.rm(parent, { recursive: true, force: true });
 	});
 
 	it("skips the merge phase when apply=false and surfaces the patch artifact instead", async () => {

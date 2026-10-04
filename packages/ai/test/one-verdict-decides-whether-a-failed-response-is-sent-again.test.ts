@@ -52,7 +52,7 @@ describe("the verdict is the registry's, not the ladder's", () => {
 		// Pinned by exact equality: a new domain that retries at the transport stage lands here and reds
 		// this line, because "one more attempt against the same endpoint" is a decision someone records
 		// rather than a default a family inherits.
-		expect(retried).toEqual(["transport", "timeout"]);
+		expect(retried).toEqual(["empty-response", "transport", "timeout"]);
 	});
 
 	it("leaves no family that claims a flag without saying what to do about it", () => {

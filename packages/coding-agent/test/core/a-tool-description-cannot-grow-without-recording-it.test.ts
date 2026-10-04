@@ -46,17 +46,20 @@ import { estimateTokensFromText } from "@veyyon/utils";
  * prevent: the description nobody counted is the one that grows.
  */
 const RECORDED_TOKENS: Record<string, number> = {
-	"hashline/prompt": 2013,
+	// 2013 -> 1460: the condensed line and block editing instructions (port/107-hashline-prompt-clarity).
+	"hashline/prompt": 1460,
 	"tools/apply-patch": 726,
 	"tools/ask": 285,
 	"tools/ast-edit": 375,
 	"tools/async-result": 105,
 	"tools/bash": 1564,
-	"tools/browser": 1440,
+	// 1440 -> 1575: the `context` and `storage_state` parameters, the `save_state` action and the signed-in-session example.
+	"tools/browser": 1575,
 	"tools/checkpoint": 166,
 	"tools/debug": 414,
 	"tools/eval": 2007,
-	"tools/github": 410,
+	// 410 -> 469: image and binary file support for github file-read.
+	"tools/github": 469,
 	"tools/goal": 162,
 	"tools/search": 703,
 	"tools/image-attachment-describe": 142,
@@ -65,6 +68,8 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/inspect-image": 255,
 	"tools/inspect-image-system": 192,
 	"tools/irc": 681,
+	"tools/isolation-recovery-hint": 83,
+	"tools/isolation-summary": 589,
 	"tools/job": 413,
 	"tools/launch": 722,
 	"tools/learn": 198,
@@ -76,7 +81,8 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/read": 1288,
 	"tools/recall": 164,
 	"tools/reflect": 98,
-	"tools/replace": 318,
+	// 318 -> 323: the single-replace parameters beside the internal batch contract.
+	"tools/replace": 323,
 	"tools/resolve": 104,
 	"tools/retain": 103,
 	"tools/rewind": 181,
@@ -99,7 +105,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 21674;
+const RECORDED_TOTAL = 21992;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),

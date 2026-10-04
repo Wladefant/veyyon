@@ -171,17 +171,85 @@ fn cache_key(root: &Path, mut options: WalkOptions) -> CacheKey {
 }
 
 /// Normalize a filesystem path to a forward-slash string on Windows.
+///
+/// Verbatim (`\\?\`) and device (`\\.\`) paths are returned unchanged: Windows
+/// only honors those prefixes with backslash separators.
 pub fn normalize_path(path: &Path) -> Cow<'_, str> {
 	if cfg!(windows) {
-		let path = path.to_string_lossy();
-		if path.contains('\\') {
-			Cow::Owned(path.replace('\\', "/"))
+		let text = path.to_string_lossy();
+		if text.contains('\\') && !has_literal_prefix(path) {
+			Cow::Owned(text.replace('\\', "/"))
 		} else {
-			path
+			text
 		}
 	} else {
 		path.to_string_lossy()
 	}
+}
+
+/// Normalize a filesystem path string using Windows path normalization rules.
+///
+/// Verbatim (`\\?\`) and device (`\\.\`) paths are returned unchanged: Windows
+/// only honors those prefixes with backslash separators.
+pub fn normalize_windows_path_str(text: &str) -> Cow<'_, str> {
+	if text.contains('\\') && !has_literal_prefix_str(text) {
+		Cow::Owned(text.replace('\\', "/"))
+	} else {
+		Cow::Borrowed(text)
+	}
+}
+
+/// Return whether a path string starts with a Windows verbatim (`\\?\`) or
+/// device (`\\.\`) prefix.
+pub fn has_literal_prefix_str(text: &str) -> bool {
+	text.starts_with(r"\\?\") || text.starts_with(r"\\.\")
+}
+
+/// Return whether a filesystem path starts with a Windows verbatim (`\\?\`) or
+/// device (`\\.\`) prefix.
+pub fn has_literal_prefix(path: &Path) -> bool {
+	has_literal_prefix_str(&path.to_string_lossy())
+}
+
+/// Directory paths at or past this many bytes get the extended-length prefix
+/// before Win32 opens them: `MAX_PATH` is 260 including the terminator, and
+/// Win32 reserves 12 characters of that for a file name under a directory.
+/// Bytes over-count UTF-16 units, which only prefixes a path a little early.
+const WIN32_DIRECTORY_PATH_LIMIT: usize = 248;
+
+/// Return the form of a Windows path that Win32 can open past `MAX_PATH`.
+///
+/// A long absolute drive or UNC path gains the verbatim (`\\?\`, `\\?\UNC\`)
+/// prefix with backslash separators. Everything else comes back borrowed: short
+/// paths, paths that already carry a literal prefix, relative paths, and paths
+/// with an empty, `.` or `..` component, because a verbatim path is never
+/// normalized and would read those components literally.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn extended_length_path_str(text: &str) -> Cow<'_, str> {
+	if text.len() < WIN32_DIRECTORY_PATH_LIMIT || has_literal_prefix_str(text) {
+		return Cow::Borrowed(text);
+	}
+	let is_separator = |byte: u8| byte == b'\\' || byte == b'/';
+	let bytes = text.as_bytes();
+	let (prefix, body) = if bytes.len() > 3
+		&& bytes[0].is_ascii_alphabetic()
+		&& bytes[1] == b':'
+		&& is_separator(bytes[2])
+	{
+		(r"\\?\", text)
+	} else if bytes.len() > 2 && is_separator(bytes[0]) && is_separator(bytes[1]) {
+		(r"\\?\UNC\", &text[2..])
+	} else {
+		return Cow::Borrowed(text);
+	};
+	let body = body.trim_end_matches(['\\', '/']);
+	if body
+		.split(['\\', '/'])
+		.any(|part| part.is_empty() || part == "." || part == "..")
+	{
+		return Cow::Borrowed(text);
+	}
+	Cow::Owned(format!("{prefix}{}", body.replace('/', "\\")))
 }
 
 /// Normalize a filesystem path to a forward-slash relative string.
@@ -870,5 +938,80 @@ mod tests {
 		super::ensure_readable_dir(guard.path()).expect("an empty readable directory passes");
 		fs::write(guard.path().join("file.txt"), b"x").expect("seed a file");
 		super::ensure_readable_dir(guard.path()).expect("a populated readable directory passes");
+	}
+	#[test]
+	fn normalize_windows_path_preserves_verbatim_and_device_prefixes() {
+		assert!(super::has_literal_prefix_str(r"\\?\C:\Users\foo\bar"));
+		assert!(super::has_literal_prefix_str(r"\\.\COM1"));
+		assert!(!super::has_literal_prefix_str(r"C:\Users\foo\bar"));
+		assert!(!super::has_literal_prefix_str(r"foo\bar\baz"));
+
+		assert_eq!(
+			super::normalize_windows_path_str(r"\\?\C:\Users\foo\bar"),
+			r"\\?\C:\Users\foo\bar"
+		);
+		assert_eq!(super::normalize_windows_path_str(r"\\.\COM1"), r"\\.\COM1");
+		assert_eq!(super::normalize_windows_path_str(r"C:\Users\foo\bar"), "C:/Users/foo/bar");
+		assert_eq!(super::normalize_windows_path_str(r"foo\bar\baz"), "foo/bar/baz");
+	}
+
+	#[test]
+	fn normalize_path_respects_host_os_contract() {
+		use std::path::Path;
+		#[cfg(windows)]
+		{
+			assert_eq!(
+				super::normalize_path(Path::new(r"\\?\C:\Users\foo\bar")),
+				r"\\?\C:\Users\foo\bar"
+			);
+			assert_eq!(super::normalize_path(Path::new(r"\\.\COM1")), r"\\.\COM1");
+			assert_eq!(super::normalize_path(Path::new(r"C:\Users\foo\bar")), "C:/Users/foo/bar");
+			assert_eq!(super::normalize_path(Path::new(r"foo\bar\baz")), "foo/bar/baz");
+		}
+		#[cfg(not(windows))]
+		{
+			assert_eq!(super::normalize_path(Path::new("/tmp/foo/bar")), "/tmp/foo/bar");
+		}
+	}
+
+	/// A path past `MAX_PATH` is what makes Win32 refuse a directory open, so
+	/// the helper must prefix exactly those and leave every other shape alone.
+	#[test]
+	fn a_long_windows_path_gains_the_extended_length_prefix_and_nothing_else_does() {
+		let long_tail = ["a0123456789"; 24].join(r"\");
+		let drive = format!(r"C:\root\{long_tail}");
+		assert!(drive.len() >= super::WIN32_DIRECTORY_PATH_LIMIT);
+
+		assert_eq!(super::extended_length_path_str(&drive), format!(r"\\?\{drive}"));
+		assert_eq!(
+			super::extended_length_path_str(&drive.replace('\\', "/")),
+			format!(r"\\?\{drive}"),
+			"forward slashes become backslashes, which verbatim paths require"
+		);
+		assert_eq!(
+			super::extended_length_path_str(&format!(r"\\host\share\{long_tail}")),
+			format!(r"\\?\UNC\host\share\{long_tail}")
+		);
+		assert_eq!(
+			super::extended_length_path_str(&format!(r"{drive}\")),
+			format!(r"\\?\{drive}"),
+			"a trailing separator is dropped, which verbatim paths reject"
+		);
+
+		assert_eq!(super::extended_length_path_str(r"C:\short\path"), r"C:\short\path");
+		let verbatim = format!(r"\\?\{drive}");
+		assert_eq!(super::extended_length_path_str(&verbatim), verbatim);
+		let device = format!(r"\\.\{long_tail}");
+		assert_eq!(super::extended_length_path_str(&device), device);
+		let relative = format!(r"rel\{long_tail}");
+		assert_eq!(super::extended_length_path_str(&relative), relative);
+		let dotted = format!(r"C:\root\..\{long_tail}");
+		assert_eq!(
+			super::extended_length_path_str(&dotted),
+			dotted,
+			"a verbatim path is never normalized, so `..` must not be prefixed"
+		);
+		let doubled = format!(r"C:\root\\{long_tail}");
+		assert_eq!(super::extended_length_path_str(&doubled), doubled);
 	}
 }

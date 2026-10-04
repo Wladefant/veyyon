@@ -10,7 +10,7 @@ import {
 	truncateHead,
 	truncationSummary,
 } from "../../session/streaming-output";
-import { isTimeoutError, scopedTimeoutSignal } from "../../utils/fetch-timeout";
+import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import type { ToolSession } from "..";
 import { applyListLimit } from "../core/list-limit";
 import { inlineBudgetFor, saveOutputArtifact } from "../core/output-artifact";
@@ -468,11 +468,7 @@ export async function executeFileSearch(
 				// thrown. `!signal?.aborted` is still required: an operator
 				// interrupt that lands in the same window is a cancellation even
 				// though the scoped signal also shows a timeout reason.
-				const nativeAbort =
-					isTimeoutError(error) ||
-					isCancellation(error) ||
-					(error instanceof Error &&
-						(error.name === "AbortError" || error.name === "TimeoutError" || error.message.includes("Aborted:")));
+				const nativeAbort = isCancellation(error) || (error instanceof Error && error.message.includes("Aborted:"));
 				if (nativeAbort) {
 					if (scopedTimeout.signal.aborted && !signal?.aborted) {
 						timedOut = true;

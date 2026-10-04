@@ -1,7 +1,9 @@
 // The owning module, not the `internal-urls` barrel: the barrel re-exports every protocol
 // handler and reaches hundreds of modules.
 import { buildEvalUrlRoots, type LocalProtocolOptions } from "../internal-urls/local-protocol";
+import type { OutputArtifactError } from "../session/streaming-output";
 import type { ToolSession } from "../tools";
+import type { BackendProbeOptions } from "./probe";
 import type { EvalDisplayOutput, EvalLanguage, EvalStatusEvent } from "./types";
 
 /** Per-cell execute() options. */
@@ -39,6 +41,8 @@ export interface ExecutorBackendResult {
 	cancelled: boolean;
 	truncated: boolean;
 	artifactId: string | undefined;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
@@ -53,7 +57,7 @@ export interface ExecutorBackend {
 	/** Source language identifier passed to the syntax highlighter (e.g. "python", "javascript"). */
 	readonly highlightLang: string;
 	/** Cheap availability check. Used by fallback resolution. */
-	isAvailable(session: ToolSession): Promise<boolean>;
+	isAvailable(session: ToolSession, probeOptions?: BackendProbeOptions): Promise<boolean>;
 	/** Execute one cell. Caller invokes once per cell and aggregates results. */
 	execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult>;
 }

@@ -156,6 +156,7 @@ export * from "./tools/shell/bash";
 export * from "./tools/shell/debug";
 export * from "./tools/shell/eval";
 export * from "./tools/shell/eval-backends";
+export * from "./tools/shell/eval-display";
 export * from "./tools/shell/job";
 export * from "./tools/shell/launch";
 export * from "./tools/shell/ssh";

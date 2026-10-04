@@ -397,7 +397,7 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(flowPrompt?.prompt_template.system).toContain(
 			"veyyon system instructions: preserve the local tool bridge.",
 		);
-		expect(flowPrompt?.prompt_template.system).toContain(patToken);
+		expect(flowPrompt?.prompt_template.system).toContain("[gitlab_token_redacted]");
 		// This goal IS a multi-turn ChatML transcript, so the system slot appends the
 		// history-note telling the model the `<|im_start|>`/`<ran …>` markers are a past
 		// record, not a tool-call syntax to emit.

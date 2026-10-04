@@ -298,7 +298,19 @@ function buildSlashCommandCompletions(
 
 			const isSkillCommand = name.startsWith("skill:");
 			const nameScore =
-				lowerPrefix.length === 0 && isSkillCommand ? 950 : scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
+				lowerPrefix.length === 0 && isSkillCommand
+					? 950
+					: isSkillCommand
+						? Math.max(
+								scoreCommandTextMatch(lowerPrefix, name.toLowerCase()),
+								// Capped below a prefix (900) and an exact (1000) command-name match so a project
+								// command named like a skill segment keeps winning Enter-applies-first-match.
+								Math.min(
+									skillBareNameBreakoutTier(lowerPrefix, name.slice(SKILL_NAMESPACE.length).toLowerCase()),
+									899,
+								),
+							)
+						: scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
 			const lowerDesc = staticDesc.toLowerCase();
 			const descScore =
 				lowerDesc && isSubsequenceMatch(lowerPrefix, lowerDesc)
@@ -369,6 +381,36 @@ function hasPromptTextBeforeSlash(
 const SKILL_NAMESPACE = "skill:";
 
 /**
+ * Match a bare skill name from the beginning of any hyphen-delimited segment.
+ * This stays allocation-free on the hot path: it scans segment boundaries
+ * in-place and never materializes split/slice arrays.
+ */
+function skillBareNameBreakoutTier(lowerPrefix: string, lowerBareName: string): number {
+	if (lowerPrefix.length === 0) return 0;
+	if (lowerPrefix === lowerBareName) return 1000;
+	if (lowerBareName.startsWith(lowerPrefix)) return 900;
+
+	let segmentStart = 0;
+	while (segmentStart < lowerBareName.length) {
+		while (segmentStart < lowerBareName.length && lowerBareName.charCodeAt(segmentStart) !== 45) {
+			segmentStart += 1;
+		}
+		segmentStart += 1;
+		if (segmentStart >= lowerBareName.length) break;
+
+		if (lowerBareName.startsWith(lowerPrefix, segmentStart)) {
+			let segmentEnd = segmentStart;
+			while (segmentEnd < lowerBareName.length && lowerBareName.charCodeAt(segmentEnd) !== 45) {
+				segmentEnd += 1;
+			}
+			return lowerPrefix.length === segmentEnd - segmentStart ? 1000 : 900;
+		}
+	}
+
+	return 0;
+}
+
+/**
  * Whether a mid-prompt slash token (`prose … /tok`) is skill-shaped enough to
  * surface `name` in the skill popup. Deliberately stricter than submitted
  * slash-command matching: a stray `/word` in running prose must not keep the
@@ -388,7 +430,10 @@ export function midPromptSkillTokenMatches(lowerToken: string, name: string, des
 		if (scoreCommandTextMatch(lowerToken, lowerName) > 0) return true;
 		return !!description && scoreCommandTextMatch(lowerToken, description.toLowerCase()) > 0;
 	}
-	return lowerName.startsWith(SKILL_NAMESPACE) && lowerName.slice(SKILL_NAMESPACE.length).startsWith(lowerToken);
+	return (
+		lowerName.startsWith(SKILL_NAMESPACE) &&
+		skillBareNameBreakoutTier(lowerToken, lowerName.slice(SKILL_NAMESPACE.length)) > 0
+	);
 }
 
 function buildMidPromptSkillCompletions(commands: CommandEntry[], lowerPrefix: string): AutocompleteItem[] {

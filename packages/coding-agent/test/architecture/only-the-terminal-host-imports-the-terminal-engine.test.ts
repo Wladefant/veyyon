@@ -82,6 +82,7 @@ const ENGINE_IMPORTERS = [
 	"extensibility/legacy-pi-coding-agent-shim.ts",
 	"extensibility/legacy-pi-tui-shim.ts",
 	"index.ts",
+	"theme/color.ts",
 	"theme/theme-class.ts",
 	"theme/theme.ts",
 ];
@@ -107,6 +108,7 @@ const RUNTIME_ENGINE_IMPORTERS = [
 	"extensibility/legacy-pi-coding-agent-shim.ts",
 	"extensibility/legacy-pi-tui-shim.ts",
 	"index.ts",
+	"theme/color.ts",
 	"theme/theme-class.ts",
 	"theme/theme.ts",
 ];

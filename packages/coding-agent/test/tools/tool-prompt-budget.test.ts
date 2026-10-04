@@ -59,7 +59,8 @@ import { BASE_SETTINGS, HOST_DEPENDENT_TOOL_NAMES } from "./tool-loading-differe
  * renamed.
  */
 const TOOL_PROMPT_CEILINGS: Record<string, number> = {
-	edit: 8030,
+	// 8030 -> 5754: the condensed hashline editing instructions.
+	edit: 5754,
 	eval: 6019,
 	read: 4900,
 	bash: 3932,

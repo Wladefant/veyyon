@@ -66,7 +66,7 @@ describe("Anthropic stable system-prefix caching", () => {
 
 		expect(payload.system).toEqual([
 			{ type: "text", text: "stable harness", cache_control: { type: "ephemeral" } },
-			{ type: "text", text: "agent-specific assignment" },
+			{ type: "text", text: "agent-specific assignment", cache_control: { type: "ephemeral" } },
 			{ type: "text", text: "changing handle table", cache_control: { type: "ephemeral" } },
 		]);
 	});

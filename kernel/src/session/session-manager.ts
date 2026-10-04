@@ -11,6 +11,7 @@ import {
 	getSessionsDir,
 	isEnoent,
 	logger,
+	pathIsWithin,
 	stringifyJson,
 	toError,
 } from "@veyyon/utils";
@@ -77,6 +78,7 @@ import {
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
+	hasPositiveMovedProjectEvidence,
 	readTerminalBreadcrumbEntry,
 	resolveManagedSessionRoot,
 	writeTerminalBreadcrumb,
@@ -93,6 +95,7 @@ import {
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 import { assertNotTerminalOwned } from "./terminal-ownership";
+import { migrateToolResultEntries } from "./tool-result-codecs";
 
 const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
@@ -281,7 +284,7 @@ export interface SessionManagerNoticeOptions {
 	instrumentation?: InstrumentationLevel;
 }
 
-interface SessionManagerStateSnapshot {
+export interface SessionManagerStateSnapshot {
 	cwd: string;
 	sessionDir: string;
 	sessionId: string;
@@ -1748,6 +1751,14 @@ export class SessionManager {
 					operatorNotices: this.#operatorNotices,
 				},
 			);
+			const migrationArtifacts = new ArtifactManager(sessionFileStem(resolvedSessionFile));
+			if (
+				await migrateToolResultEntries(fileEntries, {
+					saveArtifact: (content, toolName) => migrationArtifacts.save(content, toolName),
+				})
+			) {
+				migrated = true;
+			}
 			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
@@ -1756,8 +1767,8 @@ export class SessionManager {
 			}
 		}
 
-		// Everything above is read-only preparation. Commit the identity switch
-		// only after the target has loaded and validated successfully, so a failed
+		// Prepare and preserve payloads before committing the identity switch.
+		// The target must load and validate first, so a failed
 		// switch cannot append a terminal lifecycle record to the current file.
 		this.#endLifecycle("session_switched");
 		await this.#drainAndCloseWriter();
@@ -2028,7 +2039,7 @@ export class SessionManager {
 		// A flush is a request to make the file match memory, so a latched fault takes
 		// its attempt here instead of being rethrown at a caller who asked for the
 		// opposite of a refusal.
-		if (this.#retryPersistenceAfterFailure()) await this.#rewriteAtomically();
+		if (this.#retryPersistenceAfterFailure() || this.#rewriteRequired) await this.#rewriteAtomically();
 		await this.#scheduleDiskWork(async () => {
 			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});
@@ -3247,7 +3258,11 @@ export class SessionManager {
 			// findMostRecentSession(), which would resurrect the pre-`/new`
 			// transcript. A materialized (or genuinely stale/deleted) crumb reports
 			// exists=false only when fresh, so this never masks a real stale crumb.
-			if (breadcrumb.fresh && !breadcrumb.exists) {
+			if (
+				breadcrumb.fresh &&
+				!breadcrumb.exists &&
+				(!sessionDir || pathIsWithin(dir, path.dirname(breadcrumb.sessionFile)))
+			) {
 				const manager = new SessionManager(
 					cwd,
 					dir,
@@ -3266,7 +3281,9 @@ export class SessionManager {
 			breadcrumb.sessionFile = resolveBreadcrumbToInteractiveRoot(breadcrumb.sessionFile);
 			const breadcrumbCwd = path.resolve(breadcrumb.cwd);
 			if (breadcrumbCwd === resolvedCwd) {
-				chosenSession = breadcrumb.sessionFile;
+				if (!sessionDir || pathIsWithin(dir, breadcrumb.sessionFile)) {
+					chosenSession = breadcrumb.sessionFile;
+				}
 			} else {
 				// The terminal's last session started in a different cwd. If that cwd is
 				// gone (worktree move/rename) and this location has no sessions of its
@@ -3298,11 +3315,16 @@ export class SessionManager {
 					}
 				}
 
-				const looksLikeMovedProject =
+				const candidateForMove =
 					breadcrumbCwdMissing &&
 					(newestInTargetDir === null || (newestIsBreadcrumb && !currentProjectAlreadyHasSession));
+				// Absence of the recorded cwd is not a move: deleted, unmounted, and
+				// offline paths also fail existsSync. Only re-root when the continue
+				// cwd is the same directory inode the breadcrumb recorded — a rename.
+				const looksLikeMovedProject =
+					candidateForMove && hasPositiveMovedProjectEvidence(breadcrumb.cwdIdentity, resolvedCwd);
 				if (looksLikeMovedProject) {
-					logger.info("Re-rooting moved session", { from: breadcrumbCwd, to: resolvedCwd });
+					logger.warn("Re-rooting moved session", { from: breadcrumbCwd, to: resolvedCwd });
 					// Anchor at the gone breadcrumb cwd so the moveTo below relocates the
 					// session: open() now falls back to the launch cwd for a missing
 					// recorded cwd, which would no-op moveTo when it equals `cwd`.
@@ -3313,6 +3335,12 @@ export class SessionManager {
 					});
 					await manager.moveTo(cwd, sessionDir);
 					return manager;
+				}
+				if (candidateForMove) {
+					logger.warn(
+						"Not relocating session: project directory is unavailable and there is no evidence it moved here",
+						{ from: breadcrumbCwd, to: resolvedCwd },
+					);
 				}
 
 				chosenSession = newestInTargetDir;

@@ -227,7 +227,7 @@ describe("normalizeSchemaForGoogle", () => {
 			}),
 		).toEqual({
 			type: "object",
-			default: { enum: [1], type: "number", value: 2 },
+			default: { enum: [1], value: 2 },
 			properties: {},
 		});
 	});

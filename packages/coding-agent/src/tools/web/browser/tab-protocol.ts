@@ -51,12 +51,17 @@ export type WorkerInitPayload =
 			url?: string;
 			waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 			timeoutMs: number;
+			/** The isolated context to open the page in, by CDP id; the browser's default context when absent. */
+			browserContextId?: string;
 	  }
 	| {
 			mode: "attach";
 			browserWSEndpoint: string;
 			targetId: string;
 			dialogs?: "accept" | "dismiss";
+			url?: string;
+			waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
+			timeoutMs: number;
 			/**
 			 * Post-timeout recycle: before adopting the page, dismiss any open JS dialog and
 			 * stop a pending navigation so a blocked target cannot stall worker init (which
@@ -64,7 +69,6 @@ export type WorkerInitPayload =
 			 */
 			recover?: boolean;
 	  };
-
 export type ToolReply = { ok: true; value: unknown } | { ok: false; error: TabRunErrorPayload };
 
 export type TabWorkerInbound =
@@ -115,6 +119,23 @@ export interface BrowserRunError extends Error {
 }
 
 export type TabWorkerOutbound =
+	| {
+			/**
+			 * Puppeteer loaded, browser connected. Sent before page acquisition so the supervisor's cold-start budget
+			 * bounds only the realm setup (cold import + connect); page creation and the first navigation run under the
+			 * ready wait.
+			 */
+			type: "setup";
+	  }
+	| {
+			/**
+			 * The headless page was created (before the potentially slow post-creation CDP work such as stealth and
+			 * viewport). Lets the supervisor close exactly this target if it kills the worker during init — a killed
+			 * worker can't clean up after itself.
+			 */
+			type: "page-created";
+			targetId: string;
+	  }
 	| { type: "ready"; info: ReadyInfo }
 	| { type: "init-failed"; error: TabRunErrorPayload }
 	| { type: "result"; id: string; ok: true; payload: RunResultOk }

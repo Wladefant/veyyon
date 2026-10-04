@@ -12,6 +12,11 @@
 
 ### Fixed
 
+- Fixed Shift+Enter and Ctrl+Enter arriving as plain Enter or a bare line feed in Windows Terminal 1.24 and earlier, by requesting win32-input-mode on native Windows consoles and decoding its key records ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed a bracketed paste on the Windows console leaking its marker tails and submitting a partial prompt at each pasted newline, because decoded win32 key records skipped paste handling ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed the terminal flickering when leaving a fullscreen overlay (such as settings) on terminals that re-report their size when the alternate screen buffer toggles: the resize fast path now keeps height-only resizes on the normal buffer ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- A fullscreen overlay rewrites only the rows that changed while its geometry is stable, so keystrokes in a modal rewrite a line or two instead of the whole screen ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added regression coverage that the hardware caret hides and returns without a row repaint when the composer marker toggles under the alternate-screen scroll transport; no user-visible change ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed AltGr characters (such as `[`, `]`, `{`, `}` on Hungarian and other international layouts) being dropped in Windows Terminal with the kitty keyboard protocol, where they instead triggered Alt shortcuts like word movement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a deadlock on Windows when a terminal pane closes by exiting immediately without waiting for stdout to drain when the terminal disconnects ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - A ConPTY host keeps the alternate-screen borrow through a resize instead of repainting a grid it owns itself ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -23,9 +28,12 @@
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
 - `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
+- `TUIOptions.activity` sets the `ActivitySignal` the TUI attaches to between `start()` and `stop()`; the default is `processActivity`.
+- A full-width overlay that is not fullscreen, such as the `/autoresearch status` run screen, replaces the rows of an inline Kitty image drawn with Unicode placeholders instead of letting the image cover it; a narrower overlay still leaves those rows untouched ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 
+- The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
 - 23 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
 - The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.

@@ -3,6 +3,8 @@
  * index modules): session-id namespacing, settings access, and projection of
  * executor results into the ExecutorBackend result shape.
  */
+
+import type { OutputArtifactError } from "../session/streaming-output";
 import type { ToolSession } from "../tools";
 import {
 	type ExecutorBackend,
@@ -11,6 +13,7 @@ import {
 	resolveEvalUrlRoots,
 } from "./backend";
 import type { KernelExecutionResult, KernelExecutorBaseOptions, KernelMode } from "./executor-base";
+import type { BackendProbeOptions } from "./probe";
 import type { EvalDisplayOutput, EvalLanguage } from "./types";
 
 export function namespaceSessionId(sessionId: string, prefix: string): string {
@@ -33,6 +36,8 @@ export function toExecutorBackendResult(result: {
 	cancelled: boolean;
 	truncated: boolean;
 	artifactId?: string | undefined;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
@@ -45,6 +50,8 @@ export function toExecutorBackendResult(result: {
 		cancelled: result.cancelled,
 		truncated: result.truncated,
 		artifactId: result.artifactId,
+		artifactElidedBytes: result.artifactElidedBytes,
+		artifactError: result.artifactError,
 		totalLines: result.totalLines,
 		totalBytes: result.totalBytes,
 		outputLines: result.outputLines,
@@ -59,7 +66,11 @@ export interface CreateKernelBackendOptions<TOptions extends KernelExecutorBaseO
 	highlightLang?: string;
 	settingPrefix?: string;
 	sessionPrefix?: string;
-	checkAvailability: (cwd: string, interpreter?: string) => Promise<{ ok: boolean }>;
+	checkAvailability: (
+		cwd: string,
+		interpreter?: string,
+		probeOptions?: BackendProbeOptions,
+	) => Promise<{ ok: boolean }>;
 	execute: (code: string, options: TOptions) => Promise<KernelExecutionResult>;
 }
 
@@ -76,9 +87,9 @@ export function createKernelBackend<TOptions extends KernelExecutorBaseOptions>(
 		id,
 		label,
 		highlightLang,
-		async isAvailable(session: ToolSession): Promise<boolean> {
+		async isAvailable(session: ToolSession, probeOptions?: BackendProbeOptions): Promise<boolean> {
 			const interpreter = readInterpreterSetting(session, `${settingPrefix}.interpreter`);
-			const availability = await checkAvailability(session.cwd, interpreter);
+			const availability = await checkAvailability(session.cwd, interpreter, probeOptions);
 			return availability.ok;
 		},
 		async execute(code: string, opts: ExecutorBackendExecOptions): Promise<ExecutorBackendResult> {

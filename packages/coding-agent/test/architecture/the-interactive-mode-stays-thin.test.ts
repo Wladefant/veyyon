@@ -39,7 +39,8 @@ const CONTROLLERS = `${TERMINAL}/controllers`;
  * ten percent so an ordinary edit does not fail the gate and a new subsystem
  * written inline does.
  */
-const INTERACTIVE_MODE_CEILING = 4900;
+// 4900 -> 5383: the 2026-10 upstream port wave (#219) re-measured.
+const INTERACTIVE_MODE_CEILING = 5383;
 
 /**
  * Per-controller ceiling. MEASURED 2026-08-28: the largest controller carved out

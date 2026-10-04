@@ -224,7 +224,10 @@ describe("UiHelpers.renderInitialMessages — transcript source", () => {
 
 		expect(transcriptSpy).toHaveBeenCalledWith({ collapseCompactedHistory: true });
 		expect(llmContextSpy).not.toHaveBeenCalled();
-		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, { updateFooter: true });
+		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, {
+			updateFooter: true,
+			populateHistory: true,
+		});
 	});
 });
 
@@ -251,7 +254,7 @@ describe("UiHelpers.renderInitialMessages — prompt history", () => {
 			new UiHelpers(ctx).renderInitialMessages();
 			editor.handleInput("\x1b[A");
 
-			expect(editor.getText()).toBe("");
+			expect(editor.getText()).toBe("now the changelog");
 		} finally {
 			setKeybindings(previousKeybindings);
 		}

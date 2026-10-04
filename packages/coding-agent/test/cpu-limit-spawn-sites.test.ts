@@ -238,6 +238,15 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"`veyyon --smoke-test` runs `profile new --json` once in a throwaway profile to prove the worker entry boots; a CI probe, before any session exists",
 	},
+	"packages/coding-agent/src/cli/supervisor/dumps.ts": {
+		wired: false,
+		reason:
+			"Windows Error Reporting dump configuration via reg.exe; host maintenance infrastructure outside any session",
+	},
+	"packages/coding-agent/src/cli/supervisor/process.ts": {
+		wired: false,
+		reason: "out-of-process crash supervisor; spawns the main veyyon process itself, outside any session budget",
+	},
 	"packages/coding-agent/src/config/model-registry.ts": {
 		wired: false,
 		reason: "execSync provider probes at CLI/model discovery time, before the first session registers",
@@ -245,6 +254,11 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	"packages/coding-agent/src/modes/terminal/interactive-mode.ts": {
 		wired: false,
 		reason: "process relaunch; the new process replaces the harness, and the harness is never in the budget",
+	},
+	"packages/coding-agent/src/modes/terminal/herdr-reporter.ts": {
+		wired: false,
+		reason:
+			"reports pane state to the operator's desktop Herdr supervisor via the herdr CLI; harness reporting, not agent compute",
 	},
 	"packages/coding-agent/src/task/topic-replenishment.ts": {
 		wired: false,
@@ -267,6 +281,10 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	"packages/coding-agent/src/eval/js/context-manager.ts": {
 		wired: false,
 		reason: "Bun Worker threads are in-process; the subprocess fallback goes through worker-client (wired)",
+	},
+	"packages/coding-agent/src/eval/probe.ts": {
+		wired: false,
+		reason: "pre-session interpreter availability probe with bounded timeout, run before the eval runtime starts",
 	},
 	"packages/coding-agent/src/utils/clipboard.ts": {
 		wired: false,

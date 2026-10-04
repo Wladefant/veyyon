@@ -171,10 +171,10 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				"modes/terminal/autocomplete/prompt-action-autocomplete.ts:item",
 				"sdk.ts:taskTool",
 				"session/agent-session.ts:loaded.command",
-				"session/agent-session.ts:target",
-				"session/agent-session.ts:target",
-				"session/agent-session.ts:target",
 				"session/factory-tools.ts:tool",
+				"session/runtime/session-approvals.ts:target",
+				"session/runtime/session-approvals.ts:target",
+				"session/runtime/session-approvals.ts:target",
 				"task/executor.ts:source",
 				"tools/core/execution-registry.ts:tool",
 				"tools/fs/read.ts:this",
@@ -196,7 +196,14 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			)
 			.sort();
 		expect(installations).toEqual(
-			["sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "session/agent-session.ts"].map(
+			[
+				"cursor-bridge-tools.ts",
+				"sdk.ts",
+				"sdk.ts",
+				"sdk.ts",
+				"session/agent-session.ts",
+				"session/factory-tools.ts",
+			].map(
 				site => `packages/coding-agent/src/${site}`,
 			),
 		);

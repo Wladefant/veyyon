@@ -122,8 +122,9 @@ const PRUNING_CEILING = 195;
  * and no subtree.
  */
 // RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
-const COMPACTION_ENGINE_CEILING = 327;
-const REMOTE_SUMMARIZER_CEILING = 225;
+// RE-MEASURED 2026-10-04 after the upstream port wave (#219): 327 -> 333 and 225 -> 227, provider definitions the `@veyyon/ai` barrel reaches.
+const COMPACTION_ENGINE_CEILING = 333;
+const REMOTE_SUMMARIZER_CEILING = 227;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {

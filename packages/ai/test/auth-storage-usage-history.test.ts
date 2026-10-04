@@ -188,70 +188,72 @@ describe("AuthStorage usage history recording", () => {
 	});
 });
 
-describe("OpenCode Go usage from observed request costs", () => {
-	let store: SqliteAuthCredentialStore;
-	let storage: AuthStorage;
+describe("OpenCode Go usage via the upstream endpoint", () => {
+	afterEach(() => {
+		setSystemTime();
+	});
 
-	beforeEach(async () => {
-		store = new SqliteAuthCredentialStore(new Database(":memory:"));
-		storage = new AuthStorage(store, {
+	const WINDOWS = {
+		rolling: { status: "ok", percent: 12, resetsAt: "2026-08-12T15:09:04.847Z" },
+		weekly: { status: "ok", percent: 8, resetsAt: "2026-08-17T00:00:00.847Z" },
+		monthly: { status: "ok", percent: 10, resetsAt: "2026-08-19T00:31:53.847Z" },
+	};
+
+	function json(body: unknown, status = 200): Response {
+		return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+	}
+
+	async function storageFor(respond: () => Response): Promise<AuthStorage> {
+		const storage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")), {
 			usageProviderResolver: provider =>
 				provider === "opencode-go" ? opencodeGoUsage.opencodeGoUsageProvider : undefined,
+			usageFetch: (async () => respond()) as unknown as typeof fetch,
 		});
 		await storage.reload();
 		await storage.set("opencode-go", { type: "api_key", key: "opencode-go-key" });
+		return storage;
+	}
+
+	it("drops the last-good report when the key turns definitively unauthorized", async () => {
+		// Transient failures serve the cached report; a 401/403 must not, or a revoked key
+		// keeps rendering and ranking from stale quota until the process restarts.
+		let unauthorized = false;
+		const storage = await storageFor(() =>
+			unauthorized ? json({ type: "error", error: { message: "Unauthorized" } }, 401) : json({ usage: WINDOWS }),
+		);
+		try {
+			const nowMs = Date.now();
+			setSystemTime(new Date(nowMs));
+			const fresh = await storage.fetchUsageReports();
+			expect(fresh?.some(report => report.provider === "opencode-go")).toBe(true);
+
+			unauthorized = true;
+			setSystemTime(new Date(nowMs + 10 * 60_000));
+			const after = await storage.fetchUsageReports();
+			expect(after?.some(report => report.provider === "opencode-go")).toBe(false);
+		} finally {
+			storage.close();
+		}
 	});
 
-	afterEach(() => {
-		setSystemTime();
-		storage.close();
-		vi.restoreAllMocks();
-	});
+	it("retains the last-good report through a partial payload", async () => {
+		let partial = false;
+		const storage = await storageFor(() =>
+			json({ usage: { ...WINDOWS, rolling: partial ? { status: "ok", percent: "abc" } : WINDOWS.rolling } }),
+		);
+		try {
+			const nowMs = Date.now();
+			setSystemTime(new Date(nowMs));
+			const fresh = await storage.fetchUsageReports();
+			expect(fresh?.find(report => report.provider === "opencode-go")?.limits).toHaveLength(3);
 
-	it("returns zero-dollar OpenCode Go limits for a fresh key", async () => {
-		const reports = await storage.fetchUsageReports();
-
-		const report = reports?.find(candidate => candidate.provider === "opencode-go");
-		expect(report?.limits.map(limit => [limit.id, limit.amount.used, limit.amount.limit])).toEqual([
-			["rolling-5h", 0, 12],
-			["weekly", 0, 30],
-			["monthly", 0, 60],
-		]);
-	});
-
-	it("refreshes cached OpenCode Go limits after recording new observed spend", async () => {
-		const nowMs = Date.parse("2026-06-18T12:00:00Z");
-		setSystemTime(new Date(nowMs));
-
-		const initialReports = await storage.fetchUsageReports();
-		const initial = initialReports?.find(candidate => candidate.provider === "opencode-go");
-		expect(initial?.limits.find(limit => limit.id === "rolling-5h")?.amount.used).toBe(0);
-
-		storage.recordUsageCost("opencode-go", 3, { recordedAt: nowMs });
-
-		const refreshedReports = await storage.fetchUsageReports();
-		const refreshed = refreshedReports?.find(candidate => candidate.provider === "opencode-go");
-		expect(refreshed?.limits.find(limit => limit.id === "rolling-5h")?.amount.used).toBe(3);
-	});
-
-	it("aggregates one key's observed spend into OpenCode Go cap windows", async () => {
-		const nowMs = Date.parse("2026-06-18T12:00:00Z");
-		setSystemTime(new Date(nowMs));
-		storage.recordUsageCost("opencode-go", 4, { recordedAt: nowMs - HOUR });
-		storage.recordUsageCost("opencode-go", 7, { recordedAt: nowMs - 6 * HOUR });
-		storage.recordUsageCost("opencode-go", 11, { recordedAt: nowMs - 10 * 24 * HOUR });
-		storage.recordUsageCost("opencode-go", 13, { recordedAt: nowMs - 31 * 24 * HOUR });
-
-		const reports = await storage.fetchUsageReports();
-		const report = reports?.find(candidate => candidate.provider === "opencode-go");
-		if (!report) throw new Error("expected opencode-go usage report");
-
-		const usedByLimit = new Map(report.limits.map(limit => [limit.id, limit.amount.used]));
-		expect(usedByLimit.get("rolling-5h")).toBe(4);
-		expect(usedByLimit.get("weekly")).toBe(11);
-		expect(usedByLimit.get("monthly")).toBe(22);
-
-		const fiveHour = report.limits.find(limit => limit.id === "rolling-5h");
-		expect(fiveHour?.window?.resetsAt).toBe(nowMs - HOUR + 5 * HOUR);
+			partial = true;
+			setSystemTime(new Date(nowMs + 10 * 60_000));
+			const after = await storage.fetchUsageReports();
+			const retained = after?.find(report => report.provider === "opencode-go");
+			expect(retained?.limits.map(limit => limit.id)).toEqual(["rolling-5h", "weekly", "monthly"]);
+		} finally {
+			storage.close();
+		}
 	});
 });

@@ -374,7 +374,7 @@ describe("generated model policies", () => {
 		expect(models[7]?.contextPromotionTarget).toBe("amazon-bedrock/openai.gpt-5.4");
 	});
 
-	it("sets freeform apply_patch metadata for first-party GPT-5 Responses models", () => {
+	it("sets freeform apply_patch metadata for first-party GPT-5 and GPT-6 Responses models", () => {
 		const models: ModelSpec<Api>[] = [
 			createSpec({ id: "gpt-5.4", api: "openai-responses", provider: "openai" }),
 			createSpec({ id: "gpt-5.3-codex-spark", api: "openai-codex-responses", provider: "openai-codex" }),
@@ -390,15 +390,15 @@ describe("generated model policies", () => {
 				provider: "litellm",
 				applyPatchToolType: "freeform",
 			}),
-			// Codex discovery declared it for a GPT-6 SKU the version rule does not reach.
+			// Codex discovery declared it for a GPT-7 SKU the version rule does not reach.
 			createSpec({
-				id: "gpt-6-astra",
+				id: "gpt-7",
 				api: "openai-codex-responses",
 				provider: "openai-codex",
 				applyPatchToolType: "freeform",
 			}),
-			// Undeclared GPT-6 on Codex: the version rule still says nothing.
-			createSpec({ id: "gpt-6-astra", api: "openai-codex-responses", provider: "openai-codex" }),
+			// Undeclared GPT-7 on Codex: the version rule still says nothing.
+			createSpec({ id: "gpt-7", api: "openai-codex-responses", provider: "openai-codex" }),
 		];
 
 		applyGeneratedModelPolicies(models);
@@ -410,7 +410,7 @@ describe("generated model policies", () => {
 		expect(models[4]?.applyPatchToolType).toBe("freeform");
 		expect(models[5]?.applyPatchToolType).toBeUndefined();
 	});
-	it("corrects GPT-5.6 luna/sol/terra Codex context windows without overwriting Daybreak aliases", () => {
+	it("floors GPT-5.6 luna/sol/terra Codex context windows to 1M without overwriting Daybreak aliases", () => {
 		const models: ModelSpec<Api>[] = [
 			createSpec({
 				id: "gpt-5.6-luna",
@@ -444,9 +444,9 @@ describe("generated model policies", () => {
 
 		applyGeneratedModelPolicies(models);
 
-		expect(models[0]?.contextWindow).toBe(372000);
-		expect(models[1]?.contextWindow).toBe(372000);
-		expect(models[2]?.contextWindow).toBe(372000);
+		expect(models[0]?.contextWindow).toBe(1_000_000);
+		expect(models[1]?.contextWindow).toBe(1_000_000);
+		expect(models[2]?.contextWindow).toBe(1_000_000);
 		expect(models[3]?.contextWindow).toBe(1050000);
 		expect(models[4]?.contextWindow).toBe(272000);
 	});
