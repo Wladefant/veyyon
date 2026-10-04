@@ -265,8 +265,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  *   `eval` and `eval-result-codec`), `utils/activity-signal`, `utils/rearming-timeout`.
  * - `prompts/tools/isolation-summary.md` and `isolation-recovery-hint.md`, the rows of `prompts/tools/rows.ts`.
  * - `hosts/terminal/engine/src/windows-input-mode`, a leaf of the terminal engine.
+ *
+ * 1665 to 1668, re-measured 2026-10-04 in the sandbox (Refs #472):
+ * The 3 modules added since 12356a91d4 are justified leaves required at startup:
+ * - `packages/ai/src/auth-storage/usage-redaction.ts` (PR #449): credential redaction for usage
+ *   reporting and probes, imported by `auth-storage.ts` so credentials never leak into logs or errors.
+ * - `packages/ai/src/github-copilot-client-id.ts` (PR #470): zero-import leaf configuring the GitHub
+ *   Copilot OAuth client ID setter for `providers.githubCopilot.oauthClientId` in `config/settings.ts`.
+ * - `packages/coding-agent/src/prompts/tools/isolation-error.md` (PR #408): error prompt row for task
+ *   isolation failures in `prompts/tools/rows.ts`, alongside `isolation-summary.md` and
+ *   `isolation-recovery-hint.md`.
  */
-const LAUNCH_REACH_CEILING = 1665;
+const LAUNCH_REACH_CEILING = 1668;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -328,5 +338,11 @@ describe("a launch does not build every prompt registry", () => {
 		const listing = reached(path.join(SRC, "cli", "prompt-cli.ts"));
 
 		expect(listing).toContain(path.relative(REPO_ROOT, AGGREGATE));
+	});
+
+	it("reaches the isolation error prompt row alongside its siblings", () => {
+		const files = reached(LAUNCH);
+
+		expect(files).toContain(path.relative(REPO_ROOT, path.join(SRC, "prompts", "tools", "isolation-error.md")));
 	});
 });
