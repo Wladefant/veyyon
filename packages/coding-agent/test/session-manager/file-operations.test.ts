@@ -211,9 +211,11 @@ describe("SessionManager temp cwd session dirs", () => {
 		if (!sessionFile) throw new Error("Expected session file path");
 
 		const expectedDir = path.join(getSessionsDir(), expectedTempSessionDirName(tempCwd));
-		expect(fs.existsSync(legacyDir)).toBe(false);
+		expect(fs.existsSync(legacyDir)).toBe(true);
+		expect(fs.readFileSync(markerFile, "utf-8")).toBe("marker\n");
 		expect(path.dirname(sessionFile)).toBe(expectedDir);
 		expect(fs.existsSync(path.join(expectedDir, "carried.jsonl"))).toBe(true);
+		expect(fs.readFileSync(path.join(expectedDir, "carried.jsonl"), "utf-8")).toBe("marker\n");
 	});
 });
 
@@ -295,7 +297,7 @@ describe("SessionManager legacy session migration persistence", () => {
 		if (!header) throw new Error("Expected session header");
 
 		expect(fs.statSync(sessionFile).mtimeMs).toBeGreaterThan(initialMtimeMs);
-		expect(header.version).toBe(3);
+		expect(header.version).toBe(4);
 		expect(persistedEntries).toHaveLength(4);
 		for (const entry of persistedEntries.filter(entry => entry.type !== "session")) {
 			expect(entry.id).toBeDefined();
@@ -326,7 +328,7 @@ describe("SessionManager legacy session migration persistence", () => {
 		if (!header) throw new Error("Expected session header");
 
 		expect(fs.statSync(sessionFile).mtimeMs).toBeGreaterThan(initialMtimeMs);
-		expect(header.version).toBe(3);
+		expect(header.version).toBe(4);
 		expect(persistedEntries).toHaveLength(2);
 		expect(persistedEntries[1]?.type).toBe("message");
 		if (persistedEntries[1]?.type !== "message") throw new Error("Expected message entry");
@@ -358,7 +360,7 @@ describe("SessionManager legacy session migration persistence", () => {
 		if (!header) throw new Error("Expected session header");
 
 		expect(fs.statSync(sessionFile).mtimeMs).toBeGreaterThan(initialMtimeMs);
-		expect(header.version).toBe(3);
+		expect(header.version).toBe(4);
 		expect(persistedEntries).toHaveLength(2);
 		expect(persistedEntries[1]?.type).toBe("message");
 		if (persistedEntries[1]?.type !== "message") throw new Error("Expected message entry");

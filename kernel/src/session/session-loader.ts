@@ -823,8 +823,8 @@ export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore)
 export async function loadSessionMessagesReadOnly(filePath: string): Promise<AgentMessage[]> {
 	const entries = await loadEntriesFromFile(filePath);
 	if (entries.length === 0) return [];
-	migrateToCurrentVersion(entries);
 	await resolveBlobRefsInEntries(entries, new BlobStore(blobsDirForSessionDir(path.dirname(filePath))));
+	await migrateToCurrentVersion(entries);
 	const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
 	return buildSessionContext(sessionEntries).messages;
 }

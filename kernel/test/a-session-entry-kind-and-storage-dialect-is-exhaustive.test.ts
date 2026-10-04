@@ -25,7 +25,7 @@ describe("a session entry kind and storage dialect is exhaustive", () => {
 	});
 
 	it("preserves core session version and title slot constants", () => {
-		expect(CURRENT_SESSION_VERSION).toBe(3);
+		expect(CURRENT_SESSION_VERSION).toBe(4);
 		expect(SESSION_TITLE_SLOT_ENTRY_TYPE).toBe("title");
 		expect(TITLE_CHANGE_ENTRY_TYPE).toBe("title_change");
 	});

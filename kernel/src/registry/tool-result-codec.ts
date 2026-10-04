@@ -20,7 +20,7 @@ import type { ToolResultMessage } from "@veyyon/ai";
 
 /** Durable storage offered while a domain migrates an older result representation. */
 export interface ToolResultMigrationContext {
-	saveArtifact(content: string, toolName: string): Promise<string>;
+	saveArtifact(content: string, toolName: string): Promise<string> | string;
 }
 
 export interface ToolResultCodec {
@@ -37,6 +37,8 @@ export interface ToolResultCodec {
 	 * written with. Leaves details that were written whole unchanged.
 	 */
 	restore(details: unknown, content: ToolResultMessage["content"]): void;
+	/** Whether a result still needs its domain-owned persistence migration. */
+	needsMigration?(details: unknown): boolean;
 	/**
 	 * Migrate a stale details representation only after preserving any displaced
 	 * payload through durable storage. Return true when persistence must rewrite.

@@ -15,8 +15,8 @@ async function readHistory(file: string): Promise<{ header: SessionHeader; entri
 	const loaded = await loadEntriesFromFile(file, sessionStorage);
 	const header = loaded[0];
 	if (header?.type !== "session") throw new Error(`Session '${file}' has no readable session header`);
-	migrateToCurrentVersion(loaded);
 	await resolveBlobRefsInEntries(loaded, new BlobStore(getBlobsDir()));
+	await migrateToCurrentVersion(loaded);
 	return { header, entries: loaded.filter((entry): entry is SessionEntry => entry.type !== "session") };
 }
 
