@@ -55,9 +55,11 @@ function addColumnIfMissing(db: Database, table: string, column: string, definit
 }
 
 export function openMemoryDb(dbPath: string): Database {
-	// Threads, stage-1 outputs and job state are derived from the session rollouts and re-derived on the next
-	// run, so a corrupt file is quarantined (backup kept) and recreated.
-	return openSqliteDatabaseSync(dbPath, initializeMemoryDb, { recoverCorruption: true });
+	// The memory tables live in agent.db, which also holds settings and credentials. Quarantining that
+	// file to rebuild the derived memory rows would discard the durable data, so it fails closed.
+	return openSqliteDatabaseSync(dbPath, initializeMemoryDb, {
+		failClosedReason: "agent.db also holds settings and credentials that cannot be rebuilt; restore it from a backup",
+	});
 }
 
 function initializeMemoryDb(db: Database): Database {

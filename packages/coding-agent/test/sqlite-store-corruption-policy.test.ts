@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { buildModel } from "@veyyon/catalog/build";
 import { readModelCache, writeModelCache } from "@veyyon/catalog/model-cache";
 import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
+import { openMemoryDb } from "../src/memory/storage";
 import { TempDir } from "@veyyon/utils";
 
 /**
@@ -60,5 +61,15 @@ describe("durable store: prompt history", () => {
 		expect(() => HistoryStorage.open(dbPath)).toThrow(/not auto-recovered/);
 		expect(fs.readFileSync(dbPath, "utf8")).toBe(GARBAGE);
 		expect(fs.readdirSync(tempDir!.path())).toEqual(["history.db"]);
+	});
+});
+
+describe("shared durable file: memory tables in agent.db", () => {
+	it("fails closed instead of quarantining credentials that share the file", () => {
+		const dbPath = tempDir!.join("agent.db");
+		fs.writeFileSync(dbPath, GARBAGE);
+		expect(() => openMemoryDb(dbPath)).toThrow(/not auto-recovered/);
+		expect(fs.readFileSync(dbPath, "utf8")).toBe(GARBAGE);
+		expect(fs.readdirSync(tempDir!.path())).toEqual(["agent.db"]);
 	});
 });
