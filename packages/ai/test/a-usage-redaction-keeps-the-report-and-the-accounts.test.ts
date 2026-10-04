@@ -137,6 +137,8 @@ describe("a short credential does not damage the public report shape", () => {
 			const checks = await r.storage.checkCredentials();
 			expect(checks[0]?.ok).toBe(true);
 			expect(checks[0]?.provider).toBe(PROVIDER);
+			// The check result's report is sanitized once: a second pass would turn "percent" into text.
+			expect(checks[0]?.report?.limits[0]?.amount.unit).toBe("percent");
 			expect(r.storage.listUsageHistory()[0]?.status).toBe("ok");
 		});
 	}
@@ -255,5 +257,91 @@ describe("usage history", () => {
 		await again.reload();
 		expect(again.listUsageHistory()).toHaveLength(1);
 		seed.close();
+	});
+});
+
+describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () => {
+	it("removes the whole base64 of a short accepted key from the log, the check reason, the metadata and the cache", async () => {
+		const key = "short445";
+		const encoded = Buffer.from(key).toString("base64");
+		expect(encoded).toBe("c2hvcnQ0NDU=");
+		const backend: UsageProvider = {
+			id: PROVIDER,
+			async fetchUsage(_params, ctx): Promise<UsageReport> {
+				ctx.logger?.debug("sent", { header: `Basic ${encoded}` });
+				return {
+					provider: PROVIDER,
+					fetchedAt: Date.now(),
+					limits: [limit("five")],
+					metadata: { echoed: encoded, unpadded: encoded.replace(/=+$/, "") },
+				};
+			},
+		};
+		const failing: UsageProvider = {
+			id: "fake-failing-backend",
+			async fetchUsage() {
+				throw new Error(`rejected ${encoded}`);
+			},
+		};
+		const r = rig(backend);
+		await r.storage.reload();
+		await r.storage.set(PROVIDER, { type: "api_key", key });
+		const reports = await r.storage.fetchUsageReports();
+		const checks = await r.storage.checkCredentials();
+		const text = everything(r, { reports, checks });
+		expect(text).not.toContain(encoded);
+		expect(text).not.toContain(encoded.replace(/=+$/, ""));
+		expect(reports).toHaveLength(1);
+
+		const r2 = rig(failing);
+		await r2.storage.reload();
+		await r2.storage.set("fake-failing-backend", { type: "api_key", key });
+		await r2.storage.fetchUsageReports();
+		const checks2 = await r2.storage.checkCredentials();
+		expect(everything(r2, checks2)).not.toContain(encoded);
+	});
+
+	it("does not trust a completion callback's extra property names or its provider/type/status values", async () => {
+		const key = "completion-secret-445-abcdef";
+		const backend: UsageProvider = {
+			id: PROVIDER,
+			async fetchUsage(): Promise<UsageReport> {
+				return { provider: PROVIDER, fetchedAt: Date.now(), limits: [limit("five")] };
+			},
+		};
+		const r = rig(backend);
+		await r.storage.reload();
+		await r.storage.set(PROVIDER, { type: "api_key", key });
+		const checks = await r.storage.checkCredentials({
+			completionProbe: async () =>
+				({ ok: true, [key]: "x", provider: key, type: key, status: key, nested: { status: key } }) as never,
+		});
+		expect(JSON.stringify(checks)).not.toContain(key);
+		expect(checks[0]?.provider).toBe(PROVIDER);
+		expect(checks[0]?.type).toBe("api_key");
+		expect(checks[0]?.ok).toBe(true);
+	});
+
+	it("keeps a report whose payload has data keys named like Object.prototype members", async () => {
+		const backend: UsageProvider = {
+			id: PROVIDER,
+			async fetchUsage(): Promise<UsageReport> {
+				return {
+					provider: PROVIDER,
+					fetchedAt: Date.now(),
+					toString: "x",
+					valueOf: "y",
+					limits: [{ ...limit("five"), constructor: "z", hasOwnProperty: "w" }],
+				} as unknown as UsageReport;
+			},
+		};
+		const r = rig(backend);
+		await r.storage.reload();
+		await r.storage.set(PROVIDER, { type: "api_key", key: "any-key-445" });
+		const reports = await r.storage.fetchUsageReports();
+		expect(reports).toHaveLength(1);
+		expect(reports?.[0]?.limits).toHaveLength(1);
+		const checks = await r.storage.checkCredentials();
+		expect(checks[0]?.ok).toBe(true);
 	});
 });

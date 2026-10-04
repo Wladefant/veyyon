@@ -64,10 +64,31 @@ function secretForms(secrets: readonly string[]): SecretForm[] {
 		const whole = encodeURI(secret);
 		add(whole, whole !== secret, secret);
 		add(JSON.stringify(secret).slice(1, -1), false, secret);
+		for (const spelling of wholeBase64Spellings(secret)) add(spelling, false, secret);
 	}
 	const result = [...forms.values()].sort((a, b) => b.pattern.length - a.pattern.length);
 	formsBySecrets.set(secrets, result);
 	return result;
+}
+
+/**
+ * The whole-secret base64 spellings (standard and URL-safe, padded and unpadded) removed whatever the
+ * secret's length, because a short accepted key is exactly as leaked when it is logged as `c2hvcnQ=`.
+ * The unpadded spelling of a very short secret is a common word fragment, so it is removed only from
+ * {@link MIN_UNPADDED_BASE64_FORM} characters up; the padded spelling ends in `=` and is always removed.
+ */
+const MIN_UNPADDED_BASE64_FORM = 6;
+
+function wholeBase64Spellings(secret: string): string[] {
+	const padded = Buffer.from(secret, "utf8").toString("base64");
+	const urlSafe = padded.replace(/\+/g, "-").replace(/\//g, "_");
+	const spellings: string[] = [];
+	for (const form of [padded, urlSafe]) {
+		if (form.endsWith("=")) spellings.push(form);
+		const unpadded = form.replace(/=+$/, "");
+		if (unpadded.length >= MIN_UNPADDED_BASE64_FORM) spellings.push(unpadded);
+	}
+	return spellings;
 }
 
 function escapeRegExp(text: string): string {
@@ -204,9 +225,28 @@ export function redactUsageValue<T>(value: T, secrets: readonly string[]): T {
  * and `scope` and make a valid report unreadable. Anything else (an unknown property, every property of
  * the free-form `metadata` and `raw`) is untrusted payload and is redacted by name and by value.
  */
-type ShapeKind = "report" | "limit" | "scope" | "window" | "amount" | "display" | "resetCredits" | "credit";
+type ShapeKind =
+	| "report"
+	| "limit"
+	| "scope"
+	| "window"
+	| "amount"
+	| "display"
+	| "resetCredits"
+	| "credit"
+	| "result"
+	| "completion"
+	| "historyEntry";
 
-const SHAPES: Record<ShapeKind, Record<string, ShapeKind | "list:limit" | "list:credit" | "leaf">> = {
+/**
+ * What a property's value is: `leaf` is redacted by value, `keep` is a primitive this code built itself
+ * (a store row id, a provider id from the store, a digest) and is copied as written, `skip` is a value
+ * this module already sanitized and must not be redacted a second time, and anything else names the
+ * nested kind or list of kinds.
+ */
+type Spec = ShapeKind | `list:${ShapeKind}` | "leaf" | "keep" | "skip";
+
+const SHAPES: Record<ShapeKind, Record<string, Spec>> = {
 	report: {
 		provider: "leaf",
 		fetchedAt: "leaf",
@@ -248,24 +288,58 @@ const SHAPES: Record<ShapeKind, Record<string, ShapeKind | "list:limit" | "list:
 	display: { remaining: "leaf", inapplicable: "leaf" },
 	resetCredits: { availableCount: "leaf", credits: "list:credit" },
 	credit: { id: "leaf", title: "leaf", grantedAt: "leaf", expiresAt: "leaf", status: "leaf", clears: "leaf" },
+	// A credential check result: only its own fields have fixed names. `report` was sanitized by
+	// `redactUsageReport` and is not redacted again (a second pass would rewrite a unit such as "percent"
+	// when the key is a letter in it). `completion` comes from a caller's callback, so it is a kind of its own.
+	result: {
+		id: "keep",
+		provider: "keep",
+		type: "leaf",
+		email: "leaf",
+		accountId: "leaf",
+		orgId: "leaf",
+		orgName: "leaf",
+		remoteRefresh: "leaf",
+		ok: "leaf",
+		reason: "leaf",
+		report: "skip",
+		completion: "completion",
+	},
+	completion: { ok: "leaf", reason: "leaf", modelId: "leaf" },
+	historyEntry: {
+		recordedAt: "keep",
+		provider: "keep",
+		accountKey: "keep",
+		email: "leaf",
+		accountId: "leaf",
+		limitId: "leaf",
+		label: "leaf",
+		windowLabel: "leaf",
+		usedFraction: "leaf",
+		status: "leaf",
+		resetsAt: "leaf",
+	},
 };
 
 /** The fixed vocabulary of the two enum-valued report properties; a value outside it is untrusted text. */
 const ENUM_VALUES: Partial<Record<ShapeKind, Record<string, ReadonlySet<string>>>> = {
 	limit: { status: new Set(["ok", "warning", "exhausted", "unknown"]) },
 	amount: { unit: new Set(["percent", "tokens", "requests", "usd", "minutes", "bytes", "unknown"]) },
+	result: { type: new Set(["oauth", "api_key"]) },
+	historyEntry: { status: new Set(["ok", "warning", "exhausted", "unknown"]) },
 };
 
-type Ctx = { kind: ShapeKind } | { list: "limit" | "credit" } | { record: ReadonlySet<string> } | undefined;
+type Ctx = { kind: ShapeKind } | { list: ShapeKind } | undefined;
 
 /**
- * Redact the string values of a record this code built itself (a credential check result, a history
- * entry). Its property names are fixed by the code that built it, so they are never rewritten, and the
- * values of the named fixed-vocabulary properties (`provider`, `status`, `type`) are kept as written.
- * Everything else, at any depth, is redacted by value.
+ * Redact a value this code built (a credential check result, the history entries of one fetch) by its
+ * schema: its own property names are never rewritten, only its string values are, and an unknown
+ * property (for instance an extra field a completion callback returned) is redacted by name and value.
+ * `list` names the kind of each element when the root is an array.
  */
-export function redactUsageRecord<T>(record: T, secrets: readonly string[], fixedValueKeys: readonly string[]): T {
-	return redactNode(record, secrets, new Set(), new Map(), { record: new Set(fixedValueKeys) }) as T;
+export function redactUsageShape<T>(value: T, secrets: readonly string[], shape: ShapeKind | `list:${ShapeKind}`): T {
+	const ctx: Ctx = shape.startsWith("list:") ? { list: shape.slice(5) as ShapeKind } : { kind: shape as ShapeKind };
+	return redactNode(value, secrets, new Set(), new Map(), ctx) as T;
 }
 
 function redactNode(
@@ -321,8 +395,7 @@ function snapshotObject(
 		const length = ownDataValue(value, "length");
 		const items: unknown[] = [];
 		for (let index = 0; typeof length === "number" && index < length; index++) {
-			const itemCtx: Ctx =
-				ctx === undefined ? undefined : "list" in ctx ? { kind: ctx.list } : "record" in ctx ? ctx : undefined;
+			const itemCtx: Ctx = ctx !== undefined && "list" in ctx ? { kind: ctx.list } : undefined;
 			items.push(redactNode(ownDataValue(value, index), secrets, ancestors, done, itemCtx));
 		}
 		return items;
@@ -331,30 +404,35 @@ function snapshotObject(
 	for (const key of Object.keys(value)) {
 		const descriptor = Object.getOwnPropertyDescriptor(value, key);
 		if (descriptor === undefined || !("value" in descriptor)) continue;
-		if (ctx !== undefined && "record" in ctx) {
-			const fixed = ctx.record.has(key) && typeof descriptor.value === "string";
-			entries.push([key, fixed ? descriptor.value : redactNode(descriptor.value, secrets, ancestors, done, ctx)]);
-			continue;
-		}
 		const kind = ctx !== undefined && "kind" in ctx ? ctx.kind : undefined;
-		const child = kind === undefined ? undefined : SHAPES[kind][key];
-		if (child === undefined) {
+		// Own-property lookups only: a data key named `toString` or `constructor` is untrusted payload.
+		const child = kind !== undefined && Object.hasOwn(SHAPES[kind], key) ? SHAPES[kind][key] : undefined;
+		if (kind === undefined || child === undefined) {
 			entries.push([
 				redactUsageText(key, secrets),
 				redactNode(descriptor.value, secrets, ancestors, done, undefined),
 			]);
 			continue;
 		}
-		const allowed = kind === undefined ? undefined : ENUM_VALUES[kind]?.[key];
+		if (child === "skip") {
+			entries.push([key, descriptor.value]);
+			continue;
+		}
+		if (child === "keep" && isPrimitiveData(descriptor.value)) {
+			entries.push([key, descriptor.value]);
+			continue;
+		}
+		const enumValues = ENUM_VALUES[kind];
+		const allowed = enumValues !== undefined && Object.hasOwn(enumValues, key) ? enumValues[key] : undefined;
 		if (allowed !== undefined && typeof descriptor.value === "string" && allowed.has(descriptor.value)) {
 			entries.push([key, descriptor.value]);
 			continue;
 		}
 		const childCtx: Ctx =
-			child === "leaf"
+			child === "leaf" || child === "keep"
 				? undefined
 				: child.startsWith("list:")
-					? { list: child.slice(5) as "limit" | "credit" }
+					? { list: child.slice(5) as ShapeKind }
 					: { kind: child as ShapeKind };
 		entries.push([key, redactNode(descriptor.value, secrets, ancestors, done, childCtx)]);
 	}
@@ -378,6 +456,10 @@ export function redactUsageReport(report: UsageReport, secrets: readonly string[
 			(limit): limit is UsageLimit => isRecord(limit) && isRecord(limit.amount) && isRecord(limit.scope),
 		),
 	};
+}
+
+function isPrimitiveData(value: unknown): value is string | number | boolean | null {
+	return value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -137,8 +137,8 @@ import {
 import {
 	redactingUsageLogger,
 	redactUsageError,
-	redactUsageRecord,
 	redactUsageReport,
+	redactUsageShape,
 	redactUsageValue,
 	usageCredentialSecrets,
 	usageErrorStatus,
@@ -2906,11 +2906,12 @@ export class AuthStorage {
 			resetsAt: limit.window?.resetsAt,
 		}));
 		// Durable history is a persisted channel too: accountKey, email, accountId and the labels are built
-		// from stored identity and a backend's report, and any of them can hold the credential. Redaction is
-		// deterministic, so an account keeps one stable key and its rows keep grouping.
+		// from stored identity and a backend's report, and any of them can hold the credential. The account key
+		// is a digest of the identity, so distinct accounts never collapse onto one redacted key; the other
+		// fields are redacted by value and the property names are never rewritten.
 		const secrets = usageCredentialSecrets(request.credential);
 		try {
-			record.call(this.#store, redactUsageRecord(entries, secrets, ["provider", "status"]));
+			record.call(this.#store, redactUsageShape(entries, secrets, "list:historyEntry"));
 		} catch (error) {
 			this.#usageLogger?.debug("usage history record failed", {
 				provider: request.provider,
@@ -3474,7 +3475,7 @@ export class AuthStorage {
 				this.#authDeadCredentials.add(row.id);
 				// Refresh failed → the access token is unusable. Skip both probes;
 				// they would only re-surface the same upstream failure.
-				results.push(redactUsageRecord(base, probeSecrets, ["provider", "type", "status"]));
+				results.push(redactUsageShape(base, probeSecrets, "result"));
 				continue;
 			}
 
@@ -3550,7 +3551,7 @@ export class AuthStorage {
 				}
 			}
 
-			results.push(redactUsageRecord(base, probeSecrets, ["provider", "type", "status"]));
+			results.push(redactUsageShape(base, probeSecrets, "result"));
 		}
 
 		return results;
