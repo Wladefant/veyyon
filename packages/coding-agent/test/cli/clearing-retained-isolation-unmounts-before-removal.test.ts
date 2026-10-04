@@ -371,7 +371,7 @@ describe("retained isolation cleanup", () => {
 		const releaseRead = Promise.withResolvers<void>();
 		const originalReadFile = fs.readFile;
 		let heldRead = false;
-		vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+		vi.spyOn(fs, "readFile").mockImplementation((async (...args: Parameters<typeof fs.readFile>) => {
 			const contents = await originalReadFile(...args);
 			if (!heldRead && String(args[0]) === path.join(canonicalDir, RETAINED_BACKEND_FILE)) {
 				heldRead = true;
@@ -379,7 +379,7 @@ describe("retained isolation cleanup", () => {
 				await releaseRead.promise;
 			}
 			return contents;
-		});
+		}) as unknown as typeof fs.readFile);
 		vi.spyOn(natives, "isoResolve").mockReturnValue({
 			kind: natives.IsoBackendKind.Rcopy,
 			candidates: [natives.IsoBackendKind.Rcopy],
