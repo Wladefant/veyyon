@@ -18,6 +18,7 @@
 
 ### Changed
 
+- `getRecentSessions` and `findMostRecentSession` scan session files newest first by mtime and stop once they hold the requested rows, instead of listing the whole directory through `.session-list-index.json` and rewriting it, cutting the welcome shortlist over 1,495 sessions from 37.8 ms to 17.1 ms in a fresh process and from 19.9 ms and 6.3 MiB of heap to 4.0 ms and 0.6 MiB warm (medians of 11 and 8 alternating runs).
 - 13 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
 - Session storage and the session retry policy take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
