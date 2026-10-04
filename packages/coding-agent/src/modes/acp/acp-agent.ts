@@ -70,6 +70,12 @@ import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../../plan-mode/plan-path";
 import type { AgentSession } from "../../session/agent-session";
 import type { AgentSessionEvent } from "../../session/agent-session-types";
+import {
+	type BackgroundHandoff,
+	BackgroundSessions,
+	backgroundHandoff,
+	type KeptSession,
+} from "../../session/background-sessions";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
@@ -184,6 +190,21 @@ type ManagedSessionRecord = {
 	closedError: PromptLifecycleError | undefined;
 	promptEventHandlers: Set<Promise<void>>;
 	extensionUserMessageTasks: Set<Promise<void>>;
+	/**
+	 * The handoff that moved this session to the background, while no client
+	 * view shows it. Its turn keeps running and the pending `session/prompt`
+	 * resolves when the turn ends, but no `session/update` is sent until a
+	 * load or resume re-attaches it.
+	 */
+	background: KeptSession | undefined;
+};
+
+/** A session an ACP connection moved to the background. */
+type BackgroundRecord = {
+	record: ManagedSessionRecord;
+	kept: KeptSession;
+	/** Settles once the record is released after its turn ended; a reclaim leaves it nothing to release. */
+	released: Promise<void>;
 };
 
 type ReplayableMessage = {
@@ -463,6 +484,8 @@ export class AcpAgent implements Agent {
 	#initialSession: AgentSession | undefined;
 	#createSession: CreateAcpSession;
 	#sessions = new Map<string, ManagedSessionRecord>();
+	/** Sessions this connection moved to the background, by ACP session id, until reclaimed or ended. */
+	#backgrounded = new Map<string, BackgroundRecord>();
 	#disposePromise: Promise<void> | undefined;
 	#cleanupRegistered = false;
 	#clientCapabilities: ClientCapabilities | undefined;
@@ -946,6 +969,21 @@ export class AcpAgent implements Agent {
 				enableProvider(providerId);
 				return { enabled: true };
 			}
+			case "_veyyon/sessions/background": {
+				const sessionId = params.sessionId;
+				if (typeof sessionId !== "string") throw new Error("sessionId required");
+				return { background: this.#moveToBackground(sessionId) ?? null };
+			}
+			case "_veyyon/sessions/background/list":
+				return { sessions: BackgroundSessions.global().list() };
+			case "_veyyon/sessions/background/cancel": {
+				const sessionId = params.sessionId;
+				if (typeof sessionId !== "string") throw new Error("sessionId required");
+				if (!(await BackgroundSessions.global().cancel(sessionId, USER_INTERRUPT_LABEL))) {
+					throw new Error(`No background conversation ${sessionId}`);
+				}
+				return { sessionId };
+			}
 			default:
 				throw new Error(`Unknown ACP ext method: ${method}`);
 		}
@@ -987,12 +1025,15 @@ export class AcpAgent implements Agent {
 	}
 
 	async #loadManagedSession(sessionId: string, cwd: string, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
-		const existing = this.#sessions.get(sessionId);
+		const existing = this.#sessions.get(sessionId) ?? this.#reclaimBackgrounded(sessionId, cwd);
 		if (existing) {
 			assertMatchingCwd(existing.session, cwd);
 			await this.#configureMcpServers(existing, mcpServers);
 			return existing;
 		}
+		// Its turn ended while the claim was being made: wait until its record is
+		// released and its transcript closed, then open it from disk like any stored session.
+		await this.#backgrounded.get(sessionId)?.released;
 
 		const storedSession = await this.#findStoredSession(sessionId, cwd);
 		if (!storedSession) {
@@ -1072,9 +1113,62 @@ export class AcpAgent implements Agent {
 	#getSessionRecord(sessionId: string): ManagedSessionRecord {
 		const record = this.#sessions.get(sessionId);
 		if (!record) {
+			if (this.#backgrounded.has(sessionId)) {
+				throw new Error(`ACP session ${sessionId} is running in the background; load or resume it first`);
+			}
 			throw new Error(`Unsupported ACP session: ${sessionId}`);
 		}
 		return record;
+	}
+
+	/**
+	 * Stop showing `sessionId` to the client and let its running turn finish.
+	 * Resolves `undefined`, moving nothing, when the session is not streaming.
+	 */
+	#moveToBackground(sessionId: string): BackgroundHandoff | undefined {
+		const record = this.#getSessionRecord(sessionId);
+		if (!record.session.isStreaming) return undefined;
+		const limit = record.session.settings.get("session.backgroundLimit");
+		// Registered before the record detaches: an invalid limit throws while the client still drives it.
+		const kept = BackgroundSessions.global().keep(record.session, limit);
+		this.#sessions.delete(sessionId);
+		record.background = kept;
+		record.lifetimeUnsubscribe?.();
+		record.lifetimeUnsubscribe = undefined;
+		this.#backgrounded.set(sessionId, {
+			record,
+			kept,
+			released: kept.settled.then(() => this.#releaseBackgrounded(sessionId, kept)),
+		});
+		return backgroundHandoff(kept, limit);
+	}
+
+	/** The background record for `sessionId`, attached again; `undefined` when none is still running. */
+	#reclaimBackgrounded(sessionId: string, cwd: string): ManagedSessionRecord | undefined {
+		const entry = this.#backgrounded.get(sessionId);
+		if (!entry) return undefined;
+		const { record, kept } = entry;
+		// Checked before the reclaim, so a load for the wrong directory leaves it running in the background.
+		assertMatchingCwd(record.session, cwd);
+		if (!BackgroundSessions.global().reclaim(kept)) return undefined;
+		this.#backgrounded.delete(sessionId);
+		record.background = undefined;
+		this.#sessions.set(sessionId, record);
+		return record;
+	}
+
+	/** Release the record `kept` belongs to once its turn ended, unless a load reclaimed it first. */
+	async #releaseBackgrounded(sessionId: string, kept: KeptSession): Promise<void> {
+		const entry = this.#backgrounded.get(sessionId);
+		if (entry?.kept !== kept) return;
+		this.#backgrounded.delete(sessionId);
+		const { record } = entry;
+		record.closedError ??= createPromptLifecycleError("ACP session ended in the background");
+		// The `agent_end` handler answers the pending prompt with the turn's stop
+		// reason. A stop at disposal can end the turn without one: answer it here.
+		await waitForPromptEventHandlers(record);
+		finishPrompt(record, { stopReason: "cancelled" });
+		await disposeSessionRecord(record);
 	}
 
 	async #resolveForkSourceSessionPath(sessionId: string): Promise<string> {
@@ -1122,13 +1216,18 @@ export class AcpAgent implements Agent {
 			event.type === "message_update" &&
 			event.message.role === "assistant" &&
 			event.assistantMessageEvent.type === "error";
-		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
-			getMessageId: message => getLiveMessageId(record, message),
-			getMessageProgress: message => getLiveMessageProgress(record, message),
-			getToolArgs: toolCallId => record.toolArgsById.get(toolCallId),
-			cwd: record.session.sessionManager.getCwd(),
-			resolveImageData: resolveImageDataForAcp,
-		})) {
+		// A session in the background has no client view: its turn state is kept
+		// current, and delivery resumes from the next event once it is reclaimed.
+		const notifications = record.background
+			? []
+			: mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
+					getMessageId: message => getLiveMessageId(record, message),
+					getMessageProgress: message => getLiveMessageProgress(record, message),
+					getToolArgs: toolCallId => record.toolArgsById.get(toolCallId),
+					cwd: record.session.sessionManager.getCwd(),
+					resolveImageData: resolveImageDataForAcp,
+				});
+		for (const notification of notifications) {
 			const delivery = this.#connection.sessionUpdate(notification);
 			if (streamedAssistantError) {
 				// Resolves true only once the error chunk actually reached the
@@ -1148,9 +1247,11 @@ export class AcpAgent implements Agent {
 		clearLiveAssistantMessageAfterEvent(record, event);
 
 		if (event.type === "agent_end") {
-			await this.#flushMissedFinalAssistantText(record, event);
-			await this.#flushUnreportedTurnError(record, event);
-			await this.#emitEndOfTurnUpdates(record);
+			if (!record.background) {
+				await this.#flushMissedFinalAssistantText(record, event);
+				await this.#flushUnreportedTurnError(record, event);
+				await this.#emitEndOfTurnUpdates(record);
+			}
 			await waitForAcpPromptIdle(record);
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
@@ -2014,6 +2115,14 @@ export class AcpAgent implements Agent {
 					}
 				}),
 			);
+			// The client that could reclaim them is gone: stop the turns it moved to
+			// the background and wait for each record to be released.
+			await Promise.all(
+				Array.from(this.#backgrounded.values(), async ({ kept, released }) => {
+					await BackgroundSessions.global().cancel(kept.sessionId, USER_INTERRUPT_LABEL);
+					await released;
+				}),
+			);
 
 			const initialSession = this.#initialSession;
 			this.#initialSession = undefined;
@@ -2105,6 +2214,7 @@ function createManagedSessionRecord(session: AgentSession): ManagedSessionRecord
 		promptEventHandlers: new Set(),
 		extensionUserMessageTasks: new Set(),
 		lifetimeUnsubscribe: undefined,
+		background: undefined,
 	};
 }
 

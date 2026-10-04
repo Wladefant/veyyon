@@ -15,7 +15,9 @@
 
 ### Added
 
-- `session.backgroundLimit` (default 3, range 1-20) caps how many conversations `/new` keeps running in the background; a `/new` past it stops the oldest background conversation and names it in the `/new` message.
+- `session.backgroundLimit` (default 3, range 1-20) caps how many conversations run in the background at once, whether `/new`, RPC or ACP moved them there; a handoff past it stops the oldest background conversation and names it in the handoff message.
+- RPC `new_session` with `background: true` keeps a streaming session's turn running in the background and attaches the client to a new session, `switch_session` to a background conversation's transcript re-attaches the live session, `get_background_sessions` lists background conversations, `cancel_background_session` stops one, and the `data.background` handoff reports `streaming: false` for a session that moved with no turn running.
+- ACP `_veyyon/sessions/background` moves a streaming session to the background, where its pending `session/prompt` resolves when the turn ends and no `session/update` is sent; `session/load` or `session/resume` re-attaches it live, `_veyyon/sessions/background/list` lists background conversations, `_veyyon/sessions/background/cancel` stops one, and closing the connection stops every conversation it moved there.
 - `/resume` marks conversations running off-screen as `running`, and `ctrl+x` stops the selected one without resuming it.
 - A bash approval card offers `Approve "<pattern>" for session`, which allows later calls reporting the same pattern (`git status *` for `git status -s`) without prompting; a call with quoting, expansion, a pipe, a redirect, an environment variable, a working directory, or a guard flag offers no pattern row, and a program that runs another command (`sudo`, `xargs`, `env`) is granted only its exact command.
 - The `lsp` tool's `incoming_calls` and `outgoing_calls` actions list the functions that call the symbol at the cursor, or that it calls, with each call site, as the language server resolved them.

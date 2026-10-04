@@ -82,11 +82,12 @@ import {
 } from "./discovery/helpers";
 import { injectVeyyonExtensionCliRoots } from "./discovery/veyyon-extension-roots";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
-import type { ExtensionUIContext, LoadExtensionsResult } from "./extensibility/extensions/types";
+import type { LoadExtensionsResult } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import type { PrintModeOptions } from "./modes/print-mode";
+import type { RpcModeOptions } from "./modes/rpc/rpc-mode";
 import { CURRENT_SETUP_VERSION, resolveOnboardingGeneration } from "./modes/setup-version";
 import { setLaunchTip, updateInstalledTip } from "./modes/terminal/components/dialogs/launch-tip";
 import type * as firstFrameModule from "./modes/terminal/first-frame";
@@ -97,7 +98,7 @@ import type { SubmittedUserInput } from "./modes/terminal/types";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { createAgentSession, discoverAuthStorage } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
-import type { InteractiveSessionFactory } from "./session/background-sessions";
+import type { AttachableSession, NextSessionFactory } from "./session/background-sessions";
 import { rootBudgetGroupOwnerId, sessionCpuExecHooks } from "./session/cpu-limit";
 import { loadSessionExtensions } from "./session/factory-extensions";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "./session/factory-options";
@@ -113,11 +114,7 @@ import { EventBus } from "./utils/event-bus";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
 type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<void>;
-type RunRpcMode = (
-	session: AgentSession,
-	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
-	eventBus?: EventBus,
-) => Promise<never>;
+type RunRpcMode = (attached: AttachableSession, options: RpcModeOptions) => Promise<never>;
 
 export function writeStartupNotice(parsedArgs: Pick<Args, "mode">, text: string): void {
 	(parsedArgs.mode === "json" ? process.stderr : process.stdout).write(text);
@@ -2160,13 +2157,14 @@ function installPersistedAgentReviver(
 }
 
 /**
- * `/new` while a turn is in flight moves the UI here instead of aborting.
- * Overridden against the launch options: a fresh SessionManager so the
- * running turn keeps writing its own transcript, and no inherited
- * provider state, which `AgentSession.newSession` also drops when it
- * resets in place. `mcpManager` is passed so the new session reuses the
- * connected servers rather than re-discovering them; each session holds the
- * manager, and the last one disposed disconnects it.
+ * A handoff to the background attaches the host to a session built here
+ * instead of aborting the turn in flight: the terminal's `/new`, an RPC
+ * `new_session` with `background: true`. Overridden against the launch
+ * options: a fresh SessionManager so the running turn keeps writing its own
+ * transcript, and no inherited provider state, which `AgentSession.newSession`
+ * also drops when it resets in place. `mcpManager` is passed so the new session
+ * reuses the connected servers rather than re-discovering them; each session
+ * holds the manager, and the last one disposed disconnects it.
  */
 function nextSessionFactory(
 	sessionOptions: CreateAgentSessionOptions,
@@ -2174,11 +2172,11 @@ function nextSessionFactory(
 	sessionDir: string | undefined,
 	mcpManager: MCPManager | undefined,
 	createSession: LaunchSessionCreator,
-): InteractiveSessionFactory {
+): NextSessionFactory {
 	return async () => {
 		const activeCwd = getProjectDir();
 		const nextSessionManager = SessionManager.create(activeCwd, sessionDir);
-		const { session: next } = await createSession({
+		return await createSession({
 			...sessionOptions,
 			cwd: activeCwd,
 			...shared,
@@ -2188,7 +2186,6 @@ function nextSessionFactory(
 			providerPromptCacheKey: undefined,
 			providerPromptCacheKeySource: undefined,
 		});
-		return next;
 	};
 }
 
@@ -2229,7 +2226,7 @@ interface StartedLaunch {
 	readonly eventBus: EventBus;
 	readonly initialArgs: Args;
 	readonly prompt: InitialMessageResult;
-	readonly createNextSession: InteractiveSessionFactory;
+	readonly createNextSession: NextSessionFactory;
 }
 
 async function runRpcLaunch(mode: "rpc" | "rpc-ui", started: StartedLaunch): Promise<void> {
@@ -2237,7 +2234,11 @@ async function runRpcLaunch(mode: "rpc" | "rpc-ui", started: StartedLaunch): Pro
 	const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 	stopStartupWatchdog();
 	const { created } = started;
-	await runRpcMode(created.session, mode === "rpc-ui" ? created.setToolUIContext : undefined, started.eventBus);
+	await runRpcMode(created, {
+		ui: mode === "rpc-ui",
+		eventBus: started.eventBus,
+		createNextSession: started.createNextSession,
+	});
 }
 
 async function runInteractiveLaunch(launch: RootLaunch, started: StartedLaunch): Promise<void> {

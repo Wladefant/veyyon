@@ -36,8 +36,8 @@ import type * as hindsightModule from "../../../memory/hindsight";
 import type { HindsightApi, HindsightSessionState } from "../../../memory/hindsight";
 import { compactionActionLabel, resolveCompactionKind } from "../../../presentation/summary-builder";
 import { formatProviderName } from "../../../session/account-format";
-import type { AgentSession } from "../../../session/agent-session";
 import type { AsyncJobSnapshotItem } from "../../../session/agent-session-types";
+import { type AttachableSession, backgroundHandoff } from "../../../session/background-sessions";
 import { computeContextBreakdown } from "../../../session/context-usage";
 import type { OutputSummary } from "../../../session/streaming-output";
 import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
@@ -62,7 +62,7 @@ import { buildHotkeysMarkdown } from "../utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../utils/tools-markdown";
 import { showMarkdownPanel } from "./command-controller-shared";
 /**
- * The slice of the interactive context this controller uses: 33 members of the
+ * The slice of the interactive context this controller uses: 37 members of the
  * 215 `InteractiveModeContext` requires. See `CollabHostContext` for why the
  * full interface cannot be used as a parameter type: nothing but the real TUI
  * can satisfy it, so every test has to cast a stub into place unchecked.
@@ -80,6 +80,7 @@ export type CommandControllerContext = Pick<
 	| "editorContainer"
 	| "flushCompactionQueue"
 	| "focusActiveEditorArea"
+	| "initHooksAndCustomTools"
 	| "keybindings"
 	| "lspServers"
 	| "mcpManager"
@@ -879,7 +880,7 @@ export class CommandController {
 		const createNextSession = this.ctx.createNextSession;
 		if (!createNextSession || options || !this.ctx.session.isStreaming) return false;
 		if (!this.ctx.settings.get("session.newKeepsBackground")) return false;
-		let next: AgentSession;
+		let next: AttachableSession;
 		try {
 			next = await createNextSession();
 		} catch (error) {
@@ -888,7 +889,7 @@ export class CommandController {
 			logger.warn("Falling back to an in-place new session", { error: errorMessage(error) });
 			return false;
 		}
-		const kept = this.ctx.attachMainSession(next);
+		const kept = this.ctx.attachMainSession(next.session, next);
 		this.ctx.resetObserverRegistry();
 		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 		this.ctx.statusLine.invalidate();
@@ -896,21 +897,14 @@ export class CommandController {
 		this.ctx.updateEditorBorderColor();
 		this.ctx.clearTransientSessionUi();
 		this.ctx.resetTranscript();
-		const displaced =
-			kept.displaced.length > 0
-				? `; stopped ${kept.displaced.join(", ")} (background limit ${this.ctx.settings.get("session.backgroundLimit")})`
-				: "";
+		const handoff = backgroundHandoff(kept, this.ctx.settings.get("session.backgroundLimit"));
 		this.ctx.present([
 			new Spacer(1),
-			new Text(
-				theme.fg(
-					"accent",
-					`${theme.status.success} New session started — ${kept.sessionId} keeps running${displaced}`,
-				),
-				1,
-				1,
-			),
+			new Text(theme.fg("accent", `${theme.status.success} New session started — ${handoff.message}`), 1, 1),
 		]);
+		// The new session has not been displayed before: install this screen's
+		// dialogs, notifier and extension UI on it, as launch does for the first.
+		await this.ctx.initHooksAndCustomTools();
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender(true, { clearScrollback: true });
 		return true;

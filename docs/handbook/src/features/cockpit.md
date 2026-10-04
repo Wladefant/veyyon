@@ -151,11 +151,14 @@ A process runs more than one conversation at a time. `/new` stops the previous o
 unless `session.newKeepsBackground` is on, and an ACP client keeps every
 open session in the same process. Changing `session.newKeepsBackground` takes
 effect on the next launch; the running session keeps the value it started with
-([#928](https://github.com/santhreal/veyyon/issues/928)).
+([#928](https://github.com/santhreal/veyyon/issues/928)). An RPC client moves a streaming session to
+the background with `new_session` and `background: true`, and an ACP client with
+`_veyyon/sessions/background`; see [The RPC surface](../reference/rpc.md#background-conversations)
+and [The ACP server](../reference/acp.md#background-sessions).
 
 At most `session.backgroundLimit` conversations (default 3, range 1-20) run in the
-background at once. A `/new` past the limit stops the oldest background conversation,
-closes its provider stream, flushes its transcript, and names it in the `/new` message.
+background at once. A handoff past the limit stops the oldest background conversation,
+closes its provider stream, flushes its transcript, and names it in the handoff message.
 
 Each conversation runs background jobs of its own. After `/new`, the new session
 runs background bash, the `job` tool and daemon exit watches, and a job reports to

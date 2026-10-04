@@ -110,8 +110,9 @@ import type { AgentSession } from "../../session/agent-session";
 import { type ResolvedRoleModel, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../../session/agent-session-types";
 import {
 	BackgroundSessions,
-	type InteractiveSessionFactory,
 	type KeptSession,
+	type NextSessionFactory,
+	type SessionHostBindings,
 } from "../../session/background-sessions";
 import { setImageDisplayProbe } from "../../session/image-visibility";
 import { isAtRestReadingDeferred, takeHeldAtRestReading } from "../../session/non-message-tokens";
@@ -317,7 +318,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Set by the interactive host at startup. Its absence is what makes `/new`
 	 * reset the current session in place instead of handing it off.
 	 */
-	createNextSession?: InteractiveSessionFactory;
+	createNextSession?: NextSessionFactory;
 
 	ui: TUI;
 	readonly presentation: TerminalPresentationDriver;
@@ -486,8 +487,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planReviewCancel: (() => void) | undefined;
 	readonly lspServers: LspStartupServerInfo[] | undefined = undefined;
 	mcpManager?: MCPManager;
-	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
-	readonly #toolNotifierSetter: (notify: HostNotifier) => void;
+	/**
+	 * The host bindings of every session this screen has displayed. A session
+	 * reclaimed from the background was displayed here before, so attaching it
+	 * again finds its bindings without the caller holding them.
+	 */
+	readonly #hostBindings = new WeakMap<AgentSession, SessionHostBindings>();
 
 	readonly #btwController: BtwController;
 	readonly #omfgController: OmfgController;
@@ -641,8 +646,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.keybindings = this.#firstFrame?.keybindings ?? KeybindingsManager.inMemory();
 		this.agent = session.agent;
 		this.#version = version;
-		this.#toolUiContextSetter = setToolUIContext;
-		this.#toolNotifierSetter = setToolNotifier;
+		this.#hostBindings.set(session, { setToolUIContext, setToolNotifier });
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
 		this.#eventBus = eventBus;
@@ -3671,7 +3675,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void {
-		this.#toolUiContextSetter(uiContext, hasUI);
+		this.#displayedBindings().setToolUIContext(uiContext, hasUI);
 	}
 
 	/**
@@ -3682,7 +3686,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * reported as absent rather than accepted and dropped.
 	 */
 	setToolNotifier(notify: HostNotifier): void {
-		this.#toolNotifierSetter(notify);
+		this.#displayedBindings().setToolNotifier(notify);
+	}
+
+	#displayedBindings(): SessionHostBindings {
+		const bindings = this.#hostBindings.get(this.session);
+		if (!bindings) {
+			throw new Error(`Session ${this.sessionManager.getSessionId()} was attached without its host bindings`);
+		}
+		return bindings;
 	}
 
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void {
@@ -4626,6 +4638,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * background keeper, so a turn in flight runs to completion instead of
 	 * being aborted.
 	 *
+	 * `bindings` are required for a session this screen has not displayed
+	 * before, and the caller installs this screen's dialogs and extensions
+	 * through them afterwards (`initHooksAndCustomTools`). A session reclaimed
+	 * from the background keeps the bindings and the UI it was displayed with.
+	 *
 	 * Every controller reads `ctx.session` dynamically and none caches its own
 	 * reference, so reassigning the four session-derived fields re-points the
 	 * whole UI at once. The two event subscriptions and the status line are the
@@ -4635,15 +4652,19 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * handed off earlier looks like — so the turn state a missed `agent_start`
 	 * would have armed is armed here instead.
 	 */
-	attachMainSession(next: AgentSession): KeptSession {
+	attachMainSession(next: AgentSession, bindings?: SessionHostBindings): KeptSession {
 		const previous = this.session;
 		// Re-attaching the displayed session hands nothing over, so it must not enter
 		// the background set: that set is what the status line counts, and a visible
 		// conversation counted there reports off-screen spend to someone watching it.
 		if (next === previous) return BackgroundSessions.global().describeAttached(previous);
+		if (!bindings && !this.#hostBindings.has(next)) {
+			throw new Error(`Session ${next.sessionManager.getSessionId()} was attached without its host bindings`);
+		}
 		// Registered before the screen moves: an invalid `session.backgroundLimit` throws here and
 		// leaves the displayed session where it was, instead of detaching it unregistered.
 		const kept = BackgroundSessions.global().keep(previous, previous.settings.get("session.backgroundLimit"));
+		if (bindings) this.#hostBindings.set(next, bindings);
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.#goalMode.unsubscribeFromSession();

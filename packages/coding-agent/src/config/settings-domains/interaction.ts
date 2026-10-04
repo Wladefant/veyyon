@@ -487,8 +487,7 @@ export const INTERACTION_SETTINGS = {
 			group: "Session",
 			label: "Background Session Limit",
 			description:
-				"Most conversations /new keeps running in the background at once (1-20). A /new past the limit stops the oldest background conversation and closes its provider stream.",
-			condition: "newKeepsBackgroundEnabled",
+				"Most conversations this process keeps running in the background at once (1-20), whether /new, an RPC new_session with background, or the ACP _veyyon/sessions/background method moved them there. A handoff past the limit stops the oldest background conversation and closes its provider stream.",
 			min: 1,
 			max: 20,
 			options: [
