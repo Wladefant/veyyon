@@ -1300,22 +1300,32 @@ export class SessionManager {
 		}
 		const path = this.#activePath();
 		const liveFrom = compactedHistoryEnd(path);
-		// Undefined when the whole file is the live branch: then only record-only entries go cold.
+		const { base, baseLength, appended, entryOffsets } = lines;
+		// A session that never branched has the whole file as its branch, in file order: an entry's
+		// index in the file is its index on the branch, and no set of the live entries is needed.
+		let inFileOrder = path.length === entryOffsets.length;
+		for (let i = 0; inFileOrder && i < path.length; i++) {
+			inFileOrder = path[i] === (i < baseLength ? base[i] : appended[i - baseLength]);
+		}
+		// Undefined when the branch is the file in file order, or the whole file is live: then only
+		// record-only entries and entries before `liveFrom` go cold.
 		let live: Set<SessionEntry> | undefined;
-		if (liveFrom > 0 || path.length !== this.#entries.length) {
+		if (!inFileOrder && (liveFrom > 0 || path.length !== this.#entries.length)) {
 			live = new Set<SessionEntry>();
 			for (let i = 0; i < path.length; i++) {
 				const entry = path[i]!;
 				if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
 			}
 		}
-		const { base, baseLength, appended, entryOffsets } = lines;
 		const identity = state.identity;
 		const blobs = this.#blobs;
 		let pinned = false;
 		for (let i = 0; i < entryOffsets.length; i++) {
 			const entry = i < baseLength ? base[i]! : appended[i - baseLength]!;
-			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type) && (live === undefined || live.has(entry))) continue;
+			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type)) {
+				if (live !== undefined ? live.has(entry) : i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type))
+					continue;
+			}
 			const offset = entryOffsets[i]!;
 			const end = i + 1 < entryOffsets.length ? entryOffsets[i + 1]! : state.size;
 			if (!pinned) {
