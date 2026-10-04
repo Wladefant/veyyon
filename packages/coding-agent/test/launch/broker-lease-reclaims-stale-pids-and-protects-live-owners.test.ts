@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getProcessStartIdentity, getProcessStartTime } from "@veyyon/utils/process-liveness";
 import { acquireBrokerLease, releaseBrokerLease } from "../../src/launch/broker-lease";
-import { createDaemonBrokerClient } from "../../src/launch/client";
 import { daemonBrokerLeasePath } from "../../src/launch/paths";
 import { hasLiveDaemonProjectPresence, pruneDeadDaemonRuntimeDirs } from "../../src/launch/presence";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
@@ -75,7 +74,7 @@ it("preserves unverifiable legacy live owners instead of stealing their lease", 
 	expect(await acquireBrokerLease(dir)).toBeNull();
 });
 
-it("recovers legacy PID-only leases and presence when the live process started after the record", async () => {
+it("prunes legacy presence and keeps the broker lease of a live process that started after the record", async () => {
 	const dir = await runtime();
 	expect(getProcessStartTime(process.pid)).not.toBeNull();
 	const leasePath = daemonBrokerLeasePath(dir);
@@ -88,9 +87,9 @@ it("recovers legacy PID-only leases and presence when the live process started a
 	await fs.utimes(presencePath, 1, 1);
 	expect(await hasLiveDaemonProjectPresence(dir)).toBe(false);
 	expect(await fs.readdir(clients)).toEqual([]);
-	const lease = await acquireBrokerLease(dir);
-	expect(lease).not.toBeNull();
-	if (lease) await releaseBrokerLease(lease);
+	// The start time alone cannot tell PID reuse from a clock step, and nothing answers as the owner:
+	// a live PID is never taken over on that evidence (see broker-lease-survives-clock-steps-...).
+	expect(await acquireBrokerLease(dir)).toBeNull();
 });
 
 it("two independent processes cannot both retire and acquire the same stale lease", async () => {
@@ -147,20 +146,6 @@ for await (const chunk of Bun.stdin.stream()) {
 		for (const child of children) if (child.exitCode === null) child.kill();
 		await Promise.all(children.map(child => child.exited));
 		cleanup();
-	}
-}, 15_000);
-
-it("starts a responsive broker over a stale legacy lease whose PID is an unrelated live process", async () => {
-	const dir = await runtime();
-	const leasePath = daemonBrokerLeasePath(dir);
-	await fs.writeFile(leasePath, JSON.stringify({ pid: process.pid }));
-	await fs.utimes(leasePath, 1, 1);
-	const client = await createDaemonBrokerClient(dir, { runtimeDir: dir, idleGraceMs: 100 });
-	try {
-		expect(await client.request({ op: "ping" })).toEqual({ op: "ping", projectDir: dir });
-		await client.request({ op: "shutdown" });
-	} finally {
-		client.close();
 	}
 }, 15_000);
 

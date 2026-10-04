@@ -444,7 +444,7 @@ export class DaemonBroker {
 	async #dispatch(operation: DaemonOperation): Promise<DaemonRpcResult> {
 		switch (operation.op) {
 			case "ping":
-				return { op: "ping", projectDir: this.#projectDir };
+				return { op: "ping", projectDir: this.#projectDir, pid: process.pid };
 			case "start":
 				return this.#start(operation.spec, operation.owner);
 			case "list": {

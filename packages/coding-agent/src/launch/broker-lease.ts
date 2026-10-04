@@ -3,7 +3,7 @@ import * as net from "node:net";
 import { atomicWriteFile, isEnoent, logger } from "@veyyon/utils";
 import { tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
 import { getProcessStartIdentity, getProcessStartTime, isProcessInstanceAlive } from "@veyyon/utils/process-liveness";
-import { daemonBrokerEndpoint, daemonBrokerLeasePath } from "./paths";
+import { daemonBrokerEndpoint, daemonBrokerLeasePath, daemonBrokerTokenPath } from "./paths";
 
 export interface BrokerLease {
 	path: string;
@@ -39,17 +39,58 @@ export function daemonOwnerIsAlive(raw: unknown, recordMtimeMs?: number): boolea
 
 const ENDPOINT_PROBE_TIMEOUT_MS = 1_000;
 
-/** Whether something is accepting connections on the broker endpoint. Sends nothing. */
-function endpointAcceptsConnections(endpoint: string): Promise<boolean> {
-	const { promise, resolve } = Promise.withResolvers<boolean>();
-	const socket = net.connect(endpoint);
-	const settle = (accepted: boolean) => {
+/**
+ * `owner`: the endpoint answered an authenticated ping as the recorded PID.
+ * `impostor`: something answered, and it is provably not that broker.
+ * `unknown`: no listener, a refused or timed-out connection, or an unreadable token. A live PID with an
+ * ambiguous start time is never taken over on `unknown`; only an `impostor` disproves the owner.
+ */
+type EndpointWitness = "owner" | "impostor" | "unknown";
+
+async function brokerEndpointWitness(runtimeDir: string, ownerPid: number): Promise<EndpointWitness> {
+	let token: string;
+	try {
+		token = (await fs.readFile(daemonBrokerTokenPath(runtimeDir), "utf8")).trim();
+	} catch {
+		return "unknown";
+	}
+	if (token.length === 0) return "unknown";
+	const { promise, resolve } = Promise.withResolvers<EndpointWitness>();
+	const socket = net.connect(daemonBrokerEndpoint(runtimeDir));
+	const requestId = crypto.randomUUID();
+	let buffered = "";
+	const settle = (witness: EndpointWitness) => {
 		socket.destroy();
-		resolve(accepted);
+		resolve(witness);
 	};
-	socket.setTimeout(ENDPOINT_PROBE_TIMEOUT_MS, () => settle(false));
-	socket.once("connect", () => settle(true));
-	socket.once("error", () => settle(false));
+	socket.setEncoding("utf8");
+	socket.setTimeout(ENDPOINT_PROBE_TIMEOUT_MS, () => settle("unknown"));
+	socket.once("connect", () => {
+		socket.write(`${JSON.stringify({ id: requestId, token, operation: { op: "ping" } })}\n`);
+	});
+	socket.once("error", () => settle("unknown"));
+	socket.once("close", () => settle("impostor"));
+	socket.on("data", (chunk: string) => {
+		buffered += chunk;
+		const newline = buffered.indexOf("\n");
+		if (newline < 0) return;
+		try {
+			const reply: unknown = JSON.parse(buffered.slice(0, newline));
+			if (typeof reply !== "object" || reply === null || !("id" in reply) || reply.id !== requestId) {
+				return settle("impostor");
+			}
+			if (!("ok" in reply) || reply.ok !== true || !("result" in reply)) return settle("impostor");
+			const result = reply.result;
+			if (typeof result !== "object" || result === null || !("op" in result) || result.op !== "ping") {
+				return settle("impostor");
+			}
+			// A broker built before the ping carried its PID proves only that it holds this runtime's token.
+			const pid = "pid" in result && typeof result.pid === "number" ? result.pid : ownerPid;
+			settle(pid === ownerPid ? "owner" : "impostor");
+		} catch {
+			settle("impostor");
+		}
+	});
 	return promise;
 }
 
@@ -71,11 +112,16 @@ export async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLeas
 				logger.debug("Broker lease is held by a live owner; not starting a broker", { leasePath });
 				return null;
 			}
-			if (verdict === "legacy-reused" && (await endpointAcceptsConnections(daemonBrokerEndpoint(runtimeDir)))) {
-				logger.warn("Legacy broker lease looks like PID reuse by start time, but its endpoint accepts connections; keeping the owner", {
-					leasePath,
-				});
-				return null;
+			if (verdict === "legacy-reused") {
+				const record = raw as { pid: number };
+				const witness = await brokerEndpointWitness(runtimeDir, record.pid);
+				if (witness !== "impostor") {
+					logger.warn(
+						"Legacy broker lease looks like PID reuse by start time, but its owner is alive and not disproved; keeping the owner",
+						{ leasePath, witness },
+					);
+					return null;
+				}
 			}
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
