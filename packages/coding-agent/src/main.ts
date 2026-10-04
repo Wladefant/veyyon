@@ -2259,8 +2259,13 @@ async function runInteractiveLaunch(launch: RootLaunch, started: StartedLaunch):
 	}
 
 	if ($env.VEYYON_TIMING) {
+		const exitAfterTimings = logger.shouldExitAfterTimings();
+		// The launch card's terminal routes stderr into the log while it holds the screen, so a run that
+		// exits here stops it first and the tree reaches the stderr it was requested on. A run that goes
+		// on into the TUI keeps the routing: its tree is appended to the log.
+		if (exitAfterTimings) (await loadFirstFrame()).takeFirstFrame()?.ui.stop();
 		logger.printTimings();
-		if (logger.shouldExitAfterTimings()) {
+		if (exitAfterTimings) {
 			process.exit(EXIT_OK);
 		}
 	}
