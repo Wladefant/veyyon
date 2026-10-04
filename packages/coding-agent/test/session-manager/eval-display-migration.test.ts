@@ -167,7 +167,7 @@ describe("registered eval display persistence migration", () => {
 	});
 
 	it("never downgrades a future session version without a saver", async () => {
-		const entries = entriesFor(root, [{ payload: "x".repeat(12000) }]);
+		const entries = entriesFor(root, [{ ok: true }], EVAL_DISPLAY_VERSION);
 		const header = entries[0];
 		if (header?.type !== "session") throw new Error("Expected header");
 		header.version = 5;
