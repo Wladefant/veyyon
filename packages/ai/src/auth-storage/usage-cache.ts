@@ -42,8 +42,23 @@ function parseUsageCacheEntry<T>(raw: string): UsageCacheEntry<T> | undefined {
 	}
 }
 
+/**
+ * Prefixes of report rows written before keys carried an identity digest. Their keys hold the raw
+ * accountId, email and orgId, and their values predate redaction, so they are deleted rather than
+ * left to age out: nothing reads them any more.
+ */
+const LEGACY_USAGE_CACHE_PREFIXES = [`${USAGE_CACHE_PREFIX}report:`];
+
 export class AuthStorageUsageCache implements UsageCache {
-	constructor(private store: AuthCredentialStore) {}
+	constructor(private store: AuthCredentialStore) {
+		for (const prefix of LEGACY_USAGE_CACHE_PREFIXES) {
+			try {
+				this.store.deleteCachePrefix?.(prefix);
+			} catch {
+				// The rows are unreadable under the new keys either way; a failed purge only delays it.
+			}
+		}
+	}
 
 	get<T>(key: string): UsageCacheEntry<T> | undefined {
 		const raw = this.store.getCache(`${USAGE_CACHE_PREFIX}${key}`);

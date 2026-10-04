@@ -20,6 +20,7 @@
  * The public types, the sqlite store and the row predicates are re-exported from this module.
  */
 
+import { types } from "node:util";
 import * as logger from "@veyyon/utils/logger";
 import { clamp } from "@veyyon/utils/math";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
@@ -2767,7 +2768,9 @@ export class AuthStorage {
 			// value returned here is the one that is cached and persisted.
 			return report ? (redactUsageReport(report, fetchSecrets) ?? null) : null;
 		} catch (error) {
+			// A Proxy is not asked what it is: `instanceof` runs its getPrototypeOf trap.
 			if (
+				!types.isProxy(error) &&
 				error instanceof AIError.ProviderHttpError &&
 				(error.status === 401 || error.status === 403)
 			) {

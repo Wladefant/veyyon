@@ -446,4 +446,70 @@ describe("the usage credential boundary", () => {
 		expect(out.reports[0]?.limits[1]?.scope).toEqual({ provider: "anthropic" });
 		expect(out.reports[0]?.metadata).toEqual({ a: { note: "plain" }, b: { note: "plain" } });
 	});
+
+	describe("the cache row key", () => {
+		const oauth = {
+			type: "oauth",
+			access: "access-token-placeholder",
+			refresh: "refresh-token-placeholder",
+			expires: Date.now() + 3_600_000,
+			accountId: KEY,
+			email: `${KEY}@example.test`,
+		} as StoredCredential;
+
+		it("carries a digest of the account identity, never the identity", async () => {
+			const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })), KEY, oauth);
+			await r.storage.fetchUsageReports();
+			expect(usageRows(r.db)).toContain("clean");
+			expectClean({ persistedUsageRows: usageRows(r.db) }, [KEY]);
+		});
+
+		it("keeps one row per account across repeated fetches", async () => {
+			const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })), KEY, oauth);
+			await r.storage.fetchUsageReports();
+			await r.storage.fetchUsageReports();
+			const rows = r.db.query("SELECT key FROM cache WHERE key LIKE 'usage_cache:%'").all();
+			expect(rows).toHaveLength(1);
+		});
+
+		it("deletes a raw-identity row left by an earlier version instead of serving it", async () => {
+			const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })));
+			const legacyKey = `usage_cache:report:2:${PROVIDER}:default:oauth|account:${KEY}|email:${KEY}@example.test`;
+			const payload = JSON.stringify({
+				v: 2,
+				value: { provider: PROVIDER, fetchedAt: Date.now(), limits: [], metadata: { echo: "stale" } },
+				expiresAt: Date.now() + 3_600_000,
+			});
+			const exp = Math.floor((Date.now() + 86_400_000) / 1000);
+			r.db.query("INSERT INTO cache (key, value, expires_at) VALUES (?, ?, ?)").run(legacyKey, payload, exp);
+			const reopened = new SqliteAuthCredentialStore(r.db);
+			cleanups.push(() => reopened.close());
+			const next = new AuthStorage(reopened, { usageProviderResolver: () => undefined });
+			await next.reload();
+			expectClean({ persistedUsageRows: usageRows(r.db) }, [KEY]);
+		});
+	});
+
+	it("does not run a trap on a proxied Error thrown by a backend", async () => {
+		let traps = 0;
+		const proxied = new Proxy(new Error(`rejected ${KEY}`), {
+			getPrototypeOf(target) {
+				traps++;
+				return Reflect.getPrototypeOf(target);
+			},
+			get(target, prop) {
+				traps++;
+				return Reflect.get(target, prop);
+			},
+		});
+		const r = await rig({
+			id: PROVIDER,
+			async fetchUsage() {
+				throw proxied;
+			},
+		} as UsageProvider);
+		const out = await drive(r);
+		expect(traps).toBe(0);
+		expectClean(observe(r, out), [KEY]);
+	});
 });

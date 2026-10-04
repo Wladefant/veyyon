@@ -202,7 +202,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * gives a fixed placeholder. Use it instead of `String(error)` wherever the error came from a backend.
  */
 export function redactUsageError(error: unknown, secrets: readonly string[]): string {
-	if (error instanceof Error && !types.isProxy(error)) {
+	if (types.isProxy(error)) return UNREADABLE;
+	if (error instanceof Error) {
 		const message = ownDataValue(error, "message");
 		if (typeof message === "string") return redactUsageText(message, secrets);
 	}
