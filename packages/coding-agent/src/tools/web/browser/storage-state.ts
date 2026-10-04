@@ -114,6 +114,9 @@ export async function readStorageStateFile(file: string): Promise<StorageState> 
  * when `file` is readable with looser permissions than 0600.
  */
 export async function writeStorageStateFile(file: string, state: StorageState): Promise<void> {
+	// Fast-fail unformatted stringify first: Bun/JSC's indented stringifier spends
+	// seconds doing recursive indentation before detecting a cyclic reference.
+	JSON.stringify(state);
 	await atomicWriteFile(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 

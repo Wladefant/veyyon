@@ -94,7 +94,13 @@ async function captureBody(
 	let fetchCalls = 0;
 	const fetchMock: FetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
 		fetchCalls += 1;
-		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+		const raw =
+			init?.body instanceof Uint8Array
+				? new TextDecoder().decode(Bun.zstdDecompressSync(init.body))
+				: typeof init?.body === "string"
+					? init.body
+					: "{}";
+		body = JSON.parse(raw) as Record<string, unknown>;
 		return model.api === "google-generative-ai" ? googleSse() : codexSse();
 	}) as FetchImpl;
 	const isCodex = model.api === "openai-codex-responses";

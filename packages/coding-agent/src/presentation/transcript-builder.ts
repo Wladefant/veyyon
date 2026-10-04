@@ -108,6 +108,9 @@ export function defaultToolText(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (value === undefined) return "";
 	try {
+		// Fast-fail unformatted stringify first: Bun/JSC's indented stringifier spends
+		// seconds doing recursive indentation before detecting a cyclic reference.
+		JSON.stringify(value);
 		return JSON.stringify(value, null, 2) ?? "";
 	} catch {
 		// A tool argument holding a cycle or a BigInt is a display problem, not a

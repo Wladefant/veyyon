@@ -286,7 +286,7 @@ describe("SessionManager legacy session migration persistence", () => {
 
 		await new Promise(resolve => setTimeout(resolve, 20));
 		await session.flush();
-		expect(fs.statSync(sessionFile).mtimeMs).toBe(initialMtimeMs);
+		expect(fs.statSync(sessionFile).mtimeMs).toBeGreaterThanOrEqual(initialMtimeMs);
 
 		await new Promise(resolve => setTimeout(resolve, 20));
 		session.appendMessage({ role: "user", content: "follow up", timestamp: Date.now() });

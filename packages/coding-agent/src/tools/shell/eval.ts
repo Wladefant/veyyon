@@ -22,7 +22,12 @@ import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
+import {
+	formatArtifactErrorNotice,
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../core/output-meta";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice, TOOL_TIMEOUTS } from "../core/tool-timeouts";
@@ -522,7 +527,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 		let outputDumped = false;
 		const finalizeOutput = async (): Promise<OutputSummary | undefined> => {
 			if (outputDumped || !outputSink) return outputSummary;
-			outputSummary = await outputSink.dump();
+			outputSummary = await outputSink.dumpWithArtifactStatus();
 			outputDumped = true;
 			return outputSummary;
 		};
@@ -605,6 +610,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				session.assertEvalExecutionAllowed?.();
 				outputSink = new OutputSink({
 					artifactPath,
+					artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(session.settings),
 					artifactId,
 					// eval is the single largest producer of tool-result bytes, and its
 					// largest tenth of results carried two thirds of them. Price the
@@ -818,7 +824,8 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					// They asked for the stop, and telling them their cell timed out when
 					// they cancelled it is the same conflation in the other direction.
 					if (signal?.aborted || sessionAbortController.signal.aborted) {
-						await finalizeOutput();
+						const finalSummary = await finalizeOutput();
+						const artifactError = finalSummary?.artifactError ?? result.artifactError;
 						// `result.output` is empty for an interrupted cell, so the streamed
 						// text is the only surviving record of how far the work got, and it
 						// is what the operator needs to decide whether to re-run.
@@ -828,6 +835,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 								`Eval cancelled: ${describeEvalCell(cell)} started and did NOT finish`,
 								"any state it had already mutated is still in the kernel",
 								partial ? `output so far:\n${partial}` : "it produced no output before the cancellation",
+								...(artifactError ? [formatArtifactErrorNotice(artifactError)] : []),
 							].join("; "),
 							{ cause: signal?.reason ?? sessionAbortController.signal.reason },
 						);
@@ -909,5 +917,7 @@ async function summarizeFinal(
 		outputLines,
 		outputBytes,
 		artifactId: rawSummary.artifactId,
+		artifactElidedBytes: rawSummary.artifactElidedBytes,
+		artifactError: rawSummary.artifactError,
 	};
 }

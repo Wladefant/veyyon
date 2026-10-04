@@ -26,6 +26,7 @@ import type {
 	ViewTone,
 } from "@veyyon/view";
 import { stripTaskResultEnvelope } from "@veyyon/wire/task-result";
+import { formatArtifactErrorNotice } from "../core/output-meta";
 import {
 	Ellipsis,
 	extractResultText,
@@ -177,12 +178,18 @@ function jobLines(job: JobSnapshot, context: ToolViewContext): ViewLine[] {
 	const preview = flattenStructuredPreview(
 		stripTaskResultEnvelope(job.errorText?.trim() || job.resultText?.trim() || ""),
 	);
+	const captureWarning = job.meta?.artifactError ? formatArtifactErrorNotice(job.meta.artifactError) : undefined;
+	let warningShown = false;
 	if (preview) {
 		const maxLines = context.expanded ? PREVIEW_LINES_EXPANDED : PREVIEW_LINES_COLLAPSED;
 		const tone: ViewTone = job.errorText ? "error" : "dim";
 		for (const line of getPreviewLines(preview, maxLines, PREVIEW_LINE_WIDTH, Ellipsis.Unicode)) {
 			lines.push([{ text: ROW_BODY_INDENT }, { text: line, tone }]);
+			if (captureWarning && line.includes(captureWarning)) warningShown = true;
 		}
+	}
+	if (captureWarning && !warningShown) {
+		lines.push([{ text: ROW_BODY_INDENT }, { text: `[${captureWarning}]`, tone: "warning" }]);
 	}
 	return lines;
 }

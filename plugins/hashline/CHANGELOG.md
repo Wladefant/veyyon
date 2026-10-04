@@ -28,6 +28,90 @@
 
 - A plain `INS.POST` anchored on the trailing phantom line of a newline-terminated file appends the body as new terminated lines, like `INS.TAIL`; the rebuild emitted the phantom sentinel as an empty line and left the new last line without its newline.
 
+## [1.3.0] - 2026-08-28
+
+### Fixed
+
+- A numeric-keyed body whose values are `true`, `false` or `null` keeps its `N:` keys instead of being stripped as read-tool output.
+- A wide line clipped in the unseen-line reveal is cut at a code point rather than a UTF-16 code unit, so an emoji or rare CJK character sitting at the column limit is no longer split into an invalid lone surrogate.
+
+## [1.2.0] - 2026-08-23
+
+### Breaking Changes
+
+- The minimum supported Bun runtime is now 1.4.0.
+
+### Added
+
+- `Snapshot.clippedLines` and `SnapshotStore.recordClippedLines` record the lines a producer showed only a prefix of, so the patcher can tell a clipped line from one that was never rendered at all. A store implemented outside this package must add the method.
+- `editRewritesItsAnchor` and `collectRewrittenAnchorLines` answer whether an edit replaces the bytes of the lines it anchors on, beside `collectEditAnchorLines`, which already owned which lines an edit set anchors against.
+
+### Changed
+
+- Applying a patch no longer builds a per-line origin table nothing read, cutting the cost of a single edit by 36% on a 100,000-line file and 22% on a 1,000,000-line one. Output is byte-identical.
+
+### Fixed
+
+- A pure insertion may anchor a line a producer displayed but clipped at its per-line column cap. Such a line is deliberately kept out of the seen-line set, because an edit that rewrites bytes nobody read is the mistake the set exists to stop — but the guard refused `INS.PRE` and `INS.POST` there too, and those leave the anchored line byte-identical and use it only as a position, which is what the content tag certifies. Adding one line beside a multi-kilobyte row therefore required reading that whole row back with `:raw` first. Every destructive form (`SWAP`, `DEL`, and the `.BLK` variants) on a clipped line is still refused, and a line never rendered at all — an elided body, a folded summary row, a line outside the read range — is still refused for every form including an insertion, since without even a prefix there is nothing to identify.
+
+## [1.0.47] - 2026-08-13
+
+### Fixed
+
+- An unseen-line rejection names a re-read that can actually clear it. The reveal reported one `truncated` flag for two unrelated causes, and the message spelled a ranged re-read for both. When the blocker was a line too wide to print rather than too many lines, that ranged read applied the same column cap, clipped the line again, and the retry was rejected identically, so the loop had no exit unless you already knew about the `:raw` selector. The reveal now distinguishes `overCap` from `columnClipped`, scans every unseen line for width rather than only the ones inside the reveal cap, and prints `:raw` whenever any of them is too wide.
+- `@veyyon/utils` is declared as a dependency rather than a dev dependency. `prompts/registry` is a published subpath and imports `definePromptRegistry` from it, so an installer outside this workspace got a module that could not resolve its own import. It now takes that one function from `@veyyon/utils/prompt-registry`, the leaf that owns it, rather than from the barrel. (This entry was written into the released `16.5.0` section by mistake; released sections are immutable, so it is restored here.)
+
+## [1.0.38] - 2026-07-31
+
+### Added
+
+- `HASHLINE_PROMPTS` in `src/prompts/registry.ts` registers the patch language description, and `requireHashlinePrompt` looks it up by an id held in a variable. The description is what teaches a model to write a hashline edit, and it was reachable only as the published `@veyyon/hashline/prompt.md` asset, so `veyyon prompt --prompts` had no row for it: every other tool's description was listable and the edit tool's was not. The raw subpath is unchanged and still published, for anyone embedding hashline in their own agent who would rather import the file than a row.
+
+### Fixed
+
+- A patch to a file reached through a chain of symlinks now lands on the real file. The write followed one hop, so with `entry.ts` linking to `middle.ts` linking to the real file, it replaced `middle.ts` with a regular file: the link was destroyed and the file you keep never received the edit. Both halves were silent, because reading back through `entry.ts` returned the new bytes. The whole chain is followed now and every link survives.
+- `NodeFilesystem` refuses to write over a path that is not a regular file. The write ends in a rename, and a rename pointed at a named pipe destroys it and leaves a regular file behind, breaking whatever process was reading the other end; sockets and device nodes went the same way. The refusal names the path and what it actually is. A directory now reports that instead of a bare `EISDIR`.
+- A write is flushed to disk before it is published. The rename already prevented a truncated file, but the contents were not fsynced, so power loss could leave the file present and empty. The write handle and the directory entry are both flushed now.
+- A write that fails names the file you asked to write. The failure came from the temporary sibling the write stages into, so a read-only directory reported `EACCES` on `.mod.ts.4711.1.tmp` — a path that never existed as far as you are concerned and changes every attempt. The reason and the error code are kept, the real target is named, and the original travels as `cause`.
+- Writing to a path whose parent directory does not exist creates the directory instead of failing. A patch that creates `src/new/mod.ts` is an ordinary create. Parents are never created for a symlink, where a missing target directory means the link is dangling.
+
+## [1.0.37] - 2026-07-24
+
+### Fixed
+
+- `REM` no longer deletes a file whose content drifted from the section tag. A whole-file delete is now the strictest op about the content tag (it was the most lenient: empty edits took the position-stable path and deleted through drift with only a soft warning), so a stale or fabricated tag can no longer discard edits the model never saw. The delete is refused with a mismatch error that forces a re-read, matching how an anchored edit on a drifted file behaves.
+- `MV DEST` no longer silently overwrites an existing destination file. A move onto a different existing file is refused during prepare (aborting the whole batch before any write), so a wrong or hallucinated destination can no longer destroy the user's work. A rename that only respells one file (case-only on a case-insensitive volume, or through a symlink) is still allowed, matched by device+inode identity rather than by path string.
+
+## [1.0.33] - 2026-07-24
+
+### Fixed
+
+- `NodeFilesystem` (the shipped disk-backed default) now writes crash-atomically. `writeText` and the content form of `move` stream into a sibling temp file and rename it over the target, so a process death mid-write (SIGINT, OOM kill, full disk, power loss) leaves the user's source file whole rather than truncated. An existing file's permission bits and a symlinked target are preserved.
+
+## [1.0.25] - 2026-07-24
+
+### Added
+
+- Exported `hasUtf8Bom(bytes)`, the canonical byte-level UTF-8 BOM check, next to `stripBom`. A text reader silently drops a leading BOM, so callers that need to round-trip the BOM must sniff the raw bytes; this gives them one shared detector instead of re-open-coding the `EF BB BF` check.
+
+## [1.0.24] - 2026-07-24
+
+### Performance
+
+- Applying a large-range edit is now O(n) instead of O(n^2), and the O(n^2) scale suites are bounded, so a big single edit no longer degrades quadratically with file size.
+
+## [1.0.23] - 2026-07-24
+
+### Fixed
+
+- Fixed `Filesystem.move(from, to, content)` deleting the file when `from` and `to` were the same underlying file: a case-only rename on a case-insensitive volume, or a destination reached through a symlink. The content-move wrote the destination and then removed the source, which on a case-insensitive or symlinked path was the file it had just written. `NodeFilesystem` now compares device + inode and `InMemoryFilesystem` compares the map key, so a move never destroys the bytes it just wrote. Exposed `sameExistingFile` for backends that implement their own move.
+
+## [1.0.19] - 2026-07-23
+
+### Fixed
+
+- Applying a large-range edit (a `DEL` or `SWAP` spanning thousands of lines) is now linear in the file size instead of quadratic. A range delete over 30000 lines of a 60000-line file dropped from ~160ms to ~21ms; the output is unchanged.
+
 ## [16.5.0] - 2026-07-13
 
 ### Fixed
@@ -392,86 +476,3 @@ All notable changes to this package will be documented in this file.
 - Fixed multi-section patching to preflight write policies and reject duplicate canonical targets before any section is committed
 - Fixed mixed line-ending restoration to preserve the first newline style instead of rewriting ties to LF
 
-## [1.3.0] - 2026-08-28
-
-### Fixed
-
-- A numeric-keyed body whose values are `true`, `false` or `null` keeps its `N:` keys instead of being stripped as read-tool output.
-- A wide line clipped in the unseen-line reveal is cut at a code point rather than a UTF-16 code unit, so an emoji or rare CJK character sitting at the column limit is no longer split into an invalid lone surrogate.
-
-## [1.2.0] - 2026-08-23
-
-### Breaking Changes
-
-- The minimum supported Bun runtime is now 1.4.0.
-
-### Added
-
-- `Snapshot.clippedLines` and `SnapshotStore.recordClippedLines` record the lines a producer showed only a prefix of, so the patcher can tell a clipped line from one that was never rendered at all. A store implemented outside this package must add the method.
-- `editRewritesItsAnchor` and `collectRewrittenAnchorLines` answer whether an edit replaces the bytes of the lines it anchors on, beside `collectEditAnchorLines`, which already owned which lines an edit set anchors against.
-
-### Changed
-
-- Applying a patch no longer builds a per-line origin table nothing read, cutting the cost of a single edit by 36% on a 100,000-line file and 22% on a 1,000,000-line one. Output is byte-identical.
-
-### Fixed
-
-- A pure insertion may anchor a line a producer displayed but clipped at its per-line column cap. Such a line is deliberately kept out of the seen-line set, because an edit that rewrites bytes nobody read is the mistake the set exists to stop — but the guard refused `INS.PRE` and `INS.POST` there too, and those leave the anchored line byte-identical and use it only as a position, which is what the content tag certifies. Adding one line beside a multi-kilobyte row therefore required reading that whole row back with `:raw` first. Every destructive form (`SWAP`, `DEL`, and the `.BLK` variants) on a clipped line is still refused, and a line never rendered at all — an elided body, a folded summary row, a line outside the read range — is still refused for every form including an insertion, since without even a prefix there is nothing to identify.
-
-## [1.0.47] - 2026-08-13
-
-### Fixed
-
-- An unseen-line rejection names a re-read that can actually clear it. The reveal reported one `truncated` flag for two unrelated causes, and the message spelled a ranged re-read for both. When the blocker was a line too wide to print rather than too many lines, that ranged read applied the same column cap, clipped the line again, and the retry was rejected identically, so the loop had no exit unless you already knew about the `:raw` selector. The reveal now distinguishes `overCap` from `columnClipped`, scans every unseen line for width rather than only the ones inside the reveal cap, and prints `:raw` whenever any of them is too wide.
-- `@veyyon/utils` is declared as a dependency rather than a dev dependency. `prompts/registry` is a published subpath and imports `definePromptRegistry` from it, so an installer outside this workspace got a module that could not resolve its own import. It now takes that one function from `@veyyon/utils/prompt-registry`, the leaf that owns it, rather than from the barrel. (This entry was written into the released `16.5.0` section by mistake; released sections are immutable, so it is restored here.)
-
-## [1.0.38] - 2026-07-31
-
-### Added
-
-- `HASHLINE_PROMPTS` in `src/prompts/registry.ts` registers the patch language description, and `requireHashlinePrompt` looks it up by an id held in a variable. The description is what teaches a model to write a hashline edit, and it was reachable only as the published `@veyyon/hashline/prompt.md` asset, so `veyyon prompt --prompts` had no row for it: every other tool's description was listable and the edit tool's was not. The raw subpath is unchanged and still published, for anyone embedding hashline in their own agent who would rather import the file than a row.
-
-### Fixed
-
-- A patch to a file reached through a chain of symlinks now lands on the real file. The write followed one hop, so with `entry.ts` linking to `middle.ts` linking to the real file, it replaced `middle.ts` with a regular file: the link was destroyed and the file you keep never received the edit. Both halves were silent, because reading back through `entry.ts` returned the new bytes. The whole chain is followed now and every link survives.
-- `NodeFilesystem` refuses to write over a path that is not a regular file. The write ends in a rename, and a rename pointed at a named pipe destroys it and leaves a regular file behind, breaking whatever process was reading the other end; sockets and device nodes went the same way. The refusal names the path and what it actually is. A directory now reports that instead of a bare `EISDIR`.
-- A write is flushed to disk before it is published. The rename already prevented a truncated file, but the contents were not fsynced, so power loss could leave the file present and empty. The write handle and the directory entry are both flushed now.
-- A write that fails names the file you asked to write. The failure came from the temporary sibling the write stages into, so a read-only directory reported `EACCES` on `.mod.ts.4711.1.tmp` — a path that never existed as far as you are concerned and changes every attempt. The reason and the error code are kept, the real target is named, and the original travels as `cause`.
-- Writing to a path whose parent directory does not exist creates the directory instead of failing. A patch that creates `src/new/mod.ts` is an ordinary create. Parents are never created for a symlink, where a missing target directory means the link is dangling.
-
-## [1.0.37] - 2026-07-24
-
-### Fixed
-
-- `REM` no longer deletes a file whose content drifted from the section tag. A whole-file delete is now the strictest op about the content tag (it was the most lenient: empty edits took the position-stable path and deleted through drift with only a soft warning), so a stale or fabricated tag can no longer discard edits the model never saw. The delete is refused with a mismatch error that forces a re-read, matching how an anchored edit on a drifted file behaves.
-- `MV DEST` no longer silently overwrites an existing destination file. A move onto a different existing file is refused during prepare (aborting the whole batch before any write), so a wrong or hallucinated destination can no longer destroy the user's work. A rename that only respells one file (case-only on a case-insensitive volume, or through a symlink) is still allowed, matched by device+inode identity rather than by path string.
-
-## [1.0.33] - 2026-07-24
-
-### Fixed
-
-- `NodeFilesystem` (the shipped disk-backed default) now writes crash-atomically. `writeText` and the content form of `move` stream into a sibling temp file and rename it over the target, so a process death mid-write (SIGINT, OOM kill, full disk, power loss) leaves the user's source file whole rather than truncated. An existing file's permission bits and a symlinked target are preserved.
-
-## [1.0.25] - 2026-07-24
-
-### Added
-
-- Exported `hasUtf8Bom(bytes)`, the canonical byte-level UTF-8 BOM check, next to `stripBom`. A text reader silently drops a leading BOM, so callers that need to round-trip the BOM must sniff the raw bytes; this gives them one shared detector instead of re-open-coding the `EF BB BF` check.
-
-## [1.0.24] - 2026-07-24
-
-### Performance
-
-- Applying a large-range edit is now O(n) instead of O(n^2), and the O(n^2) scale suites are bounded, so a big single edit no longer degrades quadratically with file size.
-
-## [1.0.23] - 2026-07-24
-
-### Fixed
-
-- Fixed `Filesystem.move(from, to, content)` deleting the file when `from` and `to` were the same underlying file: a case-only rename on a case-insensitive volume, or a destination reached through a symlink. The content-move wrote the destination and then removed the source, which on a case-insensitive or symlinked path was the file it had just written. `NodeFilesystem` now compares device + inode and `InMemoryFilesystem` compares the map key, so a move never destroys the bytes it just wrote. Exposed `sameExistingFile` for backends that implement their own move.
-
-## [1.0.19] - 2026-07-23
-
-### Fixed
-
-- Applying a large-range edit (a `DEL` or `SWAP` spanning thousands of lines) is now linear in the file size instead of quadratic. A range delete over 30000 lines of a 60000-line file dropped from ~160ms to ~21ms; the output is unchanged.

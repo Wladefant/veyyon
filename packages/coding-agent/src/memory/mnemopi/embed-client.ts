@@ -3,11 +3,11 @@ import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { DEFAULT_EMBED_IDLE_UNLOAD_MS, MAX_EMBED_IDLE_UNLOAD_MS } from "../../config/settings-domains/shared";
 import {
-	createUnavailableWorker,
 	createWorkerHandle,
 	createWorkerSubprocess,
 	logWorkerMessage,
 	type RefCountedWorkerHandle,
+	refCountedUnavailableWorker,
 	resolveWorkerSpawnCmd,
 	SMOKE_TEST_TIMEOUT_MS,
 	type SpawnedSubprocess,
@@ -99,11 +99,7 @@ export function wrapSubprocess(spawned: SpawnedSubprocess<MnemopiEmbedWorkerOutb
 }
 
 function createUnavailableMnemopiEmbedWorker(error: unknown): MnemopiEmbedWorkerHandle {
-	return {
-		...createUnavailableWorker<MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound>(error),
-		ref() {},
-		unref() {},
-	};
+	return refCountedUnavailableWorker<MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound>(error);
 }
 
 function spawnMnemopiEmbedWorker(): MnemopiEmbedWorkerHandle {

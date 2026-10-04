@@ -63,7 +63,8 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * additions (the `agent.maxConcurrency` resize wiring, the unsupported-input guard, the session
  * liveness records and the terminal-ownership checks), which the collaborators above do not yet carry.
  */
-const RUNTIME_CEILING = 10_430;
+// 10_430 -> 10_451: the 2026-10 upstream port wave (advisor roster and retry-runtime work, #219).
+const RUNTIME_CEILING = 10_451;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -108,7 +109,8 @@ const COLLABORATORS = [
 ] as const;
 
 /** MEASURED: the largest collaborator is `retry-runtime.ts` at 959 lines. */
-const COLLABORATOR_CEILING = 1_000;
+/** RE-MEASURED 2026-10-04: `retry-runtime.ts` at 1028 lines and `advisor-roster.ts` at 1003 after the upstream port wave (#219). */
+const COLLABORATOR_CEILING = 1_028;
 
 /** MEASURED: the largest sibling is `agent-session-types.ts` at 782 lines. */
 const SIBLING_CEILING = 900;
