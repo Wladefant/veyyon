@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	applyCopilotHeaders,
 	buildCopilotDynamicHeaders,
 	getCopilotInitiatorOverride,
 	hasCopilotVisionInput,
@@ -214,5 +215,13 @@ describe("buildCopilotDynamicHeaders", () => {
 		expect(headers["X-Initiator"]).toBe("user");
 		expect(headers["Openai-Intent"]).toBe("conversation-edits");
 		expect(headers["Copilot-Vision-Request"]).toBe("true");
+	});
+
+	it("applyCopilotHeaders replaces a stale lowercase user-agent instead of leaving both", () => {
+		const headers: Record<string, string> = { "user-agent": "opencode/1.3.15", "x-initiator": "user", Other: "kept" };
+		applyCopilotHeaders(headers, buildCopilotDynamicHeaders({ messages: [], hasImages: false }).headers);
+		expect(new Headers(headers).get("User-Agent")).toBe(`veyyon/${VERSION}`);
+		expect(Object.keys(headers).filter(name => name.toLowerCase() === "user-agent")).toEqual(["User-Agent"]);
+		expect(headers.Other).toBe("kept");
 	});
 });

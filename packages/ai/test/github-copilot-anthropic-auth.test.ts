@@ -3,7 +3,7 @@ import { buildAnthropicClientOptions, streamAnthropic } from "@veyyon/ai/provide
 import type { Context, Model } from "@veyyon/ai/types";
 import { buildAnthropicUrl } from "@veyyon/ai/utils/anthropic-auth";
 import { buildModel } from "@veyyon/catalog/build";
-import { COPILOT_IDENTITY_HEADERS } from "@veyyon/catalog/wire/github-copilot";
+import { COPILOT_IDENTITY_HEADERS, COPILOT_USER_AGENT } from "@veyyon/catalog/wire/github-copilot";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -161,7 +161,8 @@ describe("Anthropic Copilot auth config", () => {
 			dynamicHeaders: {},
 		});
 
-		expect(options.defaultHeaders["User-Agent"]).toContain("opencode");
+		expect(options.defaultHeaders["User-Agent"]).toBe(COPILOT_USER_AGENT);
+		expect(options.defaultHeaders["User-Agent"]).not.toContain("opencode");
 	});
 
 	it("includes interleaved-thinking beta header when enabled", () => {

@@ -115,3 +115,16 @@ export function buildCopilotDynamicHeaders(params: {
 
 	return { headers, initiator };
 }
+
+/**
+ * Apply Copilot's dynamic headers onto `target`, replacing any entry whose name matches
+ * case-insensitively. A stale `user-agent` from a catalog or session would otherwise survive next to
+ * `User-Agent`, and `new Headers(...)` folds the two into one comma-joined value naming another client.
+ */
+export function applyCopilotHeaders(target: Record<string, string>, copilotHeaders: Record<string, string>): void {
+	const incoming = new Set(Object.keys(copilotHeaders).map(name => name.toLowerCase()));
+	for (const name of Object.keys(target)) {
+		if (incoming.has(name.toLowerCase())) delete target[name];
+	}
+	Object.assign(target, copilotHeaders);
+}

@@ -18,6 +18,7 @@ import { DAY_MS } from "@veyyon/utils/time";
 import * as AIError from "../../error";
 import {
 	GITHUB_COPILOT_CLIENT_ID_MISSING_MESSAGE,
+	GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE,
 	resolveGitHubCopilotOAuthClientId,
 } from "../../github-copilot-client-id";
 import type { FetchImpl } from "../../types";
@@ -57,6 +58,8 @@ type DeviceTokenSuccessResponse = {
 	access_token: string;
 	token_type?: string;
 	scope?: string;
+	expires_in?: number;
+	refresh_token?: string;
 };
 
 type DeviceTokenErrorResponse = {
@@ -167,7 +170,17 @@ async function pollForGitHubAccessToken(
 		});
 
 		if (raw && typeof raw === "object" && typeof (raw as DeviceTokenSuccessResponse).access_token === "string") {
-			return (raw as DeviceTokenSuccessResponse).access_token;
+			const success = raw as DeviceTokenSuccessResponse;
+			// Veyyon stores the access token as its own refresh credential and never calls GitHub's refresh
+			// endpoint. An expiring token (8 h, with a separate refresh_token) would be stored with a 10-year
+			// expiry and silently stop working, so it is refused instead of kept.
+			if (typeof success.refresh_token === "string" || typeof success.expires_in === "number") {
+				throw new AIError.OAuthError(GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE, {
+					kind: "validation",
+					provider: "github-copilot",
+				});
+			}
+			return success.access_token;
 		}
 
 		if (raw && typeof raw === "object" && typeof (raw as DeviceTokenErrorResponse).error === "string") {
@@ -267,6 +280,7 @@ async function enableGitHubCopilotModel(
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${token}`,
 				...COPILOT_API_HEADERS,
+				...COPILOT_IDENTITY_HEADERS,
 				"openai-intent": "chat-policy",
 				"x-interaction-type": "chat-policy",
 			},

@@ -38,3 +38,9 @@ export const GITHUB_COPILOT_CLIENT_ID_MISSING_MESSAGE =
 	'for GitHub Enterprise use the same page on your enterprise host), enable "Enable Device Flow", ' +
 	`then set the app's Client ID in the \`providers.githubCopilot.oauthClientId\` setting or in ${GITHUB_COPILOT_CLIENT_ID_ENV}, ` +
 	"and run /login github-copilot again. Existing Copilot logins keep working without it.";
+
+/** The message login fails with when the OAuth app issues expiring tokens, which Veyyon cannot refresh. */
+export const GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE =
+	"Your GitHub OAuth app issues expiring user tokens (8 hours), and Veyyon cannot refresh them. " +
+	"Open the app at https://github.com/settings/developers, turn off \"Expire user authorization tokens\", " +
+	"and run /login github-copilot again. Changing the Client ID does not migrate an existing login.";

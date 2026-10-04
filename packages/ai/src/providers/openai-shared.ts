@@ -75,6 +75,7 @@ import { getOpenRouterHeaders } from "../utils/openrouter-headers";
 import { isForcedToolChoice } from "../utils/tool-choice";
 import { VERCEL_AI_GATEWAY_REFERER, VERCEL_AI_GATEWAY_TITLE } from "../utils/vercel-headers";
 import {
+	applyCopilotHeaders,
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
 	resolveGitHubCopilotBaseUrl,
@@ -278,7 +279,7 @@ export function resolveOpenAIRequestSetup(
 			headers,
 			initiatorOverride: options.initiatorOverride,
 		});
-		Object.assign(headers, copilot.headers);
+		applyCopilotHeaders(headers, copilot.headers);
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
 
