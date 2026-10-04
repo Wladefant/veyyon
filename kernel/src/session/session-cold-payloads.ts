@@ -87,25 +87,22 @@ interface ColdStub {
 /** Parse one session line and restore what persistence moved out of it. */
 export type ColdLineRestore = (line: string) => SessionEntry;
 
+/** A node of the trie key lists are shared through: one edge per field name, in the record's key order. */
+interface KeyListNode {
+	/** The field names on the path from the root to this node, one list shared by every record. */
+	readonly keys: readonly string[];
+	next: Map<string, KeyListNode> | undefined;
+}
+
 /**
- * The fields of `record` outside `resident` whose values are objects, long strings or blob
- * references. A reference is short, but the load restores it to the payload it names, so an entry
- * cooled before that restore keeps none in memory.
+ * Whether a field value outside the resident set moves out of memory: an object, a long string or
+ * a blob reference. A reference is short, but the load restores it to the payload it names, so an
+ * entry cooled before that restore keeps none in memory.
  */
-function largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>): string[] {
-	const keys: string[] = [];
-	for (const key of Object.keys(record)) {
-		if (resident.has(key)) continue;
-		const value = record[key];
-		if (
-			typeof value === "string"
-				? value.length >= MIN_COLD_STRING_LENGTH || isTextBlobRef(value) || isBlobRef(value)
-				: typeof value === "object" && value !== null
-		) {
-			keys.push(key);
-		}
-	}
-	return keys;
+function isLarge(value: unknown): boolean {
+	return typeof value === "string"
+		? value.length >= MIN_COLD_STRING_LENGTH || isTextBlobRef(value) || isBlobRef(value)
+		: typeof value === "object" && value !== null;
 }
 
 function defineValue(target: Record<string, unknown>, key: string, value: unknown): void {
@@ -155,8 +152,8 @@ export function coldFieldsOf(target: object): readonly string[] | undefined {
 export class ColdEntryPayloads {
 	/** One accessor pair per field name, shared by every entry cooled on that field. */
 	readonly #accessors = new Map<string, PropertyDescriptor>();
-	/** Key lists shared by every entry with the same cooled fields. */
-	readonly #keySets = new Map<string, readonly string[]>();
+	/** Key lists shared by every record with the same cooled fields, walked as each record is scanned. */
+	readonly #keyLists: KeyListNode = { keys: NO_FIELDS, next: undefined };
 	/** The file object new cold entries are recorded against. */
 	#current: ColdFile | undefined;
 	/** The accessor pair every cold message entry's `message` is replaced by, built on first use. */
@@ -224,22 +221,28 @@ export class ColdEntryPayloads {
 		const record = entry as unknown as Record<string, unknown>;
 		const original = entry.type === "message" ? record.message : undefined;
 		const nested = isRecord(original) ? original : undefined;
-		const keys = largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
-		const movedFromMessage = nested === undefined ? NO_FIELDS : largeKeys(nested, NO_KEYS);
+		const keys = this.#largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
+		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#largeKeys(nested, NO_KEYS);
 		if (keys.length === 0 && movedFromMessage.length === 0) return false;
 		let message: Record<string, unknown> | undefined;
 		if (nested !== undefined && movedFromMessage.length > 0) {
-			// Built in the original's key order, so the entry serializes as it did.
+			// Built in the original's key order, so the entry serializes as it did. `movedFromMessage`
+			// lists its keys in that order, so one cursor marks each moved key as the walk reaches it.
+			// `for...in` reads the key list cached on the object's structure instead of copying one;
+			// `Object.hasOwn` drops a key an enumerable prototype property adds to that walk.
 			message = {};
-			for (const key of Object.keys(nested)) {
-				if (movedFromMessage.includes(key)) Object.defineProperty(message, key, this.#accessor(key));
-				else message[key] = nested[key];
+			let moved = 0;
+			for (const key in nested) {
+				if (!Object.hasOwn(nested, key)) continue;
+				if (key === movedFromMessage[moved]) {
+					Object.defineProperty(message, key, this.#accessor(key));
+					moved += 1;
+				} else message[key] = nested[key];
 			}
 		}
-		const shared = keys.length === 0 ? NO_FIELDS : this.#sharedKeys(keys);
-		const messageKeys = message === undefined ? NO_FIELDS : this.#sharedKeys(movedFromMessage);
-		for (const key of shared) Object.defineProperty(record, key, this.#accessor(key));
-		const stub: ColdStub = { file, offset, length, entry, keys: shared, message, messageKeys };
+		const messageKeys = message === undefined ? NO_FIELDS : movedFromMessage;
+		for (const key of keys) Object.defineProperty(record, key, this.#accessor(key));
+		const stub: ColdStub = { file, offset, length, entry, keys, message, messageKeys };
 		ColdSlot.set(entry, stub);
 		if (message !== undefined) {
 			Object.defineProperty(record, "message", this.#messageAccessor());
@@ -325,12 +328,25 @@ export class ColdEntryPayloads {
 		file.reader.close();
 	}
 
-	#sharedKeys(keys: readonly string[]): readonly string[] {
-		const name = keys.join("\0");
-		const known = this.#keySets.get(name);
-		if (known !== undefined) return known;
-		this.#keySets.set(name, keys);
-		return keys;
+	/**
+	 * The fields of `record` outside `resident` that {@link isLarge} moves, as the list every record
+	 * with those fields shares. The walk follows the trie as it finds each field, so a record whose
+	 * list exists allocates no list and builds no lookup key; `for...in` with `Object.hasOwn` reads
+	 * the own keys in `Object.keys` order without copying them into an array.
+	 */
+	#largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>): readonly string[] {
+		let node = this.#keyLists;
+		for (const key in record) {
+			if (resident.has(key) || !isLarge(record[key]) || !Object.hasOwn(record, key)) continue;
+			let next = node.next?.get(key);
+			if (next === undefined) {
+				next = { keys: [...node.keys, key], next: undefined };
+				node.next ??= new Map();
+				node.next.set(key, next);
+			}
+			node = next;
+		}
+		return node.keys;
 	}
 
 	/**

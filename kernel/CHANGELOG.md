@@ -52,6 +52,7 @@
 - `SessionEntryIndex` keys entries by id in a null-prototype object instead of a `Map`, which cut the settled heap of an opened 312 MB, 108,163-entry synthetic session from 58.9 MiB to 56.1 MiB and its settled RSS from 162 MiB to 159 MiB (median of 5 alternating runs).
 - `SessionManager` records where its entry lines sit in the published file against the entry list itself instead of a copy of it, which cut the settled heap of an opened 312 MB, 108,163-entry synthetic session from 56.1 MiB to 55.3 MiB (3 runs each, identical).
 - A session load looks a record's parent up by id only when the parent is not the record in front of it, so the orphan check and the streamed load's compaction walk build no index of every id for a session appended turn by turn, which cut opening a 312 MB, 108,163-entry synthetic session from 595 ms to 570 ms and from a 249 MiB to a 241 MiB peak RSS (median of 7 alternating runs).
+- Cooling an entry finds its shared list of moved fields by walking a trie of field names over the entry's own keys instead of copying the keys into arrays and joining them into a lookup string, which cut cooling the 71,909 large entries of a 312 MB, 108,163-entry synthetic session from 34.3 ms to 22.0 ms and opening it from 546 ms to 527 ms (median of 4 alternating runs of 9 opens each).
 
 ### Fixed
 
