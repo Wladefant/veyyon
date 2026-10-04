@@ -917,7 +917,7 @@ class OpenAIResponsesStreamRun {
 					provider: model.provider,
 					model: model.id,
 					attempt: retryAttempt,
-					error: failure instanceof Error ? failure.message : String(failure),
+					error: errorMessage(failure),
 				});
 				this.#resetOutputForRetry(plan);
 				if (options?.providerRetryWait) {

@@ -427,6 +427,12 @@ const JUSTIFIED_TEMP_RENAMES: ReadonlyMap<string, string> = new Map([
 			"swapped parent directory. Both writers take a lexical path and rename unconditionally, so " +
 			"calling one would drop the CAS, the rollback and the directory pin at once.",
 	],
+	[
+		"utils/src/sqlite.ts",
+		"stages a corrupt-database backup directory tree (database and its WAL/SHM sidecars) " +
+			"and renames the directory, so half-moved corrupt state is never visible under the final " +
+			"backup path. The writers replace one file and cannot express directory moves.",
+	],
 ]);
 
 describe("the source tree", () => {

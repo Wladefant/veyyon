@@ -236,8 +236,8 @@ describe("EvalTool display() text surfacing", () => {
 			...makeSession(),
 			allocateOutputArtifact: async () => ({ id: "failed", path: tempDir.join("absent", "eval.log") }),
 		});
-		await expect(
-			tool.execute("call-failed-storage", { language: "js", code: "display(large_value);" }),
-		).rejects.toThrow("ENOENT");
+		const result = await tool.execute("call-failed-storage", { language: "js", code: "display(large_value);" });
+		expect(result.details?.meta?.artifactError).toMatch(/^(open|write|flush|end)$/);
+		expect(result.details?.meta?.truncation?.artifactId).toBeUndefined();
 	});
 });
