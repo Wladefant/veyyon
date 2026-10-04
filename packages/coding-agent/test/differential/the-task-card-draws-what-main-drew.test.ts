@@ -67,6 +67,8 @@ interface TaskCardResult {
 	details?: TaskToolDetails;
 	isError?: boolean;
 }
+/** A foreground opened and overridden by the next one before any glyph, which paints nothing. */
+const OVERRIDDEN_OPEN = /\u001b\[(?:38;[0-9;]+|3[0-7]|9[0-7])m(?=\u001b\[(?:38;[0-9;]+|3[0-7]|9[0-7])m)/g;
 /** The run the host wraps a meta separator in, including one the row's right margin cut. */
 const VIEW_DOT = /\u001b\[(?!39m)[0-9;]+m( ·(?: |(?=\u001b\[49m)|$))(?:\u001b\[39m)?/g;
 /** A colour opened with nothing in it, which draws as though it had never been opened. */
@@ -83,6 +85,7 @@ const TRAILING_PAD = / +(?=(?:\u001b\[[0-9;]*m)*$)/;
 /** A row with the pinned styling differences reduced, and everything else left as it was drawn. */
 const sameRow = (row: string): string =>
 	row
+		.replace(OVERRIDDEN_OPEN, "")
 		.replace(VIEW_DOT, "$1")
 		.replace(CONNECTOR, "$1")
 		.replace(EMPTY_RUN, "")

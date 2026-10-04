@@ -107,6 +107,30 @@ describe("usage status-line segment", () => {
 		expect(content).toContain("8%");
 	});
 
+	it("keeps Antigravity's weekly window as the seven-day reading", async () => {
+		const now = Date.now();
+		const producer = new StatusPresentationProducer({
+			...statusLineSessionParts({ contextWindow: 1000, contextUsage: undefined }),
+			fetchUsageReports: async () => [
+				{
+					limits: [
+						{
+							scope: { windowId: "weekly" },
+							window: { resetsAt: now + 141 * 3_600_000 },
+							amount: { usedFraction: 0.42 },
+						},
+					],
+				},
+			],
+			modelRegistry: { authStorage: { listStoredCredentials: () => [] } },
+		} as unknown as AgentSession);
+
+		const usage = await producer.fetchUsage(new AbortController().signal);
+
+		expect(usage?.sevenDay?.percent).toBeCloseTo(42);
+		expect(usage?.fiveHour).toBeUndefined();
+	});
+
 	it("prefers untiered windows and labels the displayed tiered window", async () => {
 		const component = makeComponent([
 			{

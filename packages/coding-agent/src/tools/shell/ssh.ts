@@ -14,7 +14,7 @@ import { executeSSH } from "../../ssh/ssh-executor";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import { inlineBudgetFor } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
+import { formatOutputNotice, type OutputMeta } from "../core/output-meta";
 import { ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
@@ -219,22 +219,22 @@ export class SshTool implements AgentTool<typeof sshSchema.value, SSHToolDetails
 			onChunk: streamTailUpdates(tailBuffer, onUpdate),
 		});
 
-		if (result.cancelled) {
-			throw new ToolError(result.output || "Command aborted");
-		}
-
-		const commandOutput = result.output || "(no output)";
+		const commandOutput = result.output || (result.cancelled ? "Command aborted" : "(no output)");
 		// The notice rides on the result text so it reaches the agent on every
 		// path: the success return, and the non-zero-exit throw below.
 		const outputText = clampNotice ? `${clampNotice}\n\n${commandOutput}` : commandOutput;
 		const details: SSHToolDetails = {};
-		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
+		const response = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" }).done();
 
-		if (result.exitCode !== 0 && result.exitCode !== undefined) {
-			throw new ToolError(`${outputText}\n\n${formatExitCodeNotice(result.exitCode)}`);
+		if (result.cancelled || (result.exitCode !== 0 && result.exitCode !== undefined)) {
+			const notice = formatOutputNotice(details.meta);
+			const errorOutput = notice ? `${outputText}\n\n${notice}` : outputText;
+			throw new ToolError(
+				result.cancelled ? errorOutput : `${errorOutput}\n\n${formatExitCodeNotice(result.exitCode!)}`,
+			);
 		}
 
-		return resultBuilder.done();
+		return response;
 	}
 }
 

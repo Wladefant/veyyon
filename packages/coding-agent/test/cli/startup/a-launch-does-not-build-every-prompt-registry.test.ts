@@ -249,8 +249,24 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
+ *
+ * 1641 to 1665, re-measured 2026-10-04 in the sandbox. Measured against 6692675b17:
+ * `cursor-bridge-tools.ts` lazy-loads `./edit` on first use so the whole `edit/` tree is avoided.
+ * The 24 modules that remain are justified, each reached through a module already on the graph:
+ * - `cursor-bridge-tools.ts` itself, the file `sdk.ts` imports for the Cursor bridge.
+ * - Providers ported from upstream and added to the registry the launch reads: `registry/abliteration`,
+ *   `deepinfra`, `gmi-cloud`, `local`, `meta`, `muse-code`, `oauth/muse-code`, `stepfun`, `typesafe`,
+ *   `web`; `utils/vercel-headers`; `catalog/discovery/typesafe`, `catalog/provider-models/codex-subscription`,
+ *   `catalog/provider-models/models-dev-policies`; `catalog/context-window` (imported by
+ *   `config/model-registry`).
+ * - `ai/utils/credential-redaction`, the leaf that `utils.ts` and `providers/transform-messages.ts` import.
+ * - `launch/broker-lease` (imported by `launch/broker` and `launch/presence`), `config/launch-facts`.
+ * - `async/auto-background` (imported by `tools/shell/bash`), `tools/shell/eval-display` (imported by
+ *   `eval` and `eval-result-codec`), `utils/activity-signal`, `utils/rearming-timeout`.
+ * - `prompts/tools/isolation-summary.md` and `isolation-recovery-hint.md`, the rows of `prompts/tools/rows.ts`.
+ * - `hosts/terminal/engine/src/windows-input-mode`, a leaf of the terminal engine.
  */
-const LAUNCH_REACH_CEILING = 1641;
+const LAUNCH_REACH_CEILING = 1665;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -260,8 +276,13 @@ const LAUNCH_REACH_CEILING = 1641;
  * 520 to 521: `catalog/catalog-spans.ts`, the zero-import leaf that indexes each provider's and each
  * model's byte span of `models.json`. `catalog/models.ts`, already here, reads one span through it
  * instead of parsing the whole catalog.
+ *
+ * 524 to 536, re-measured 2026-10-04 in the sandbox: upstream commit 2f93ecc added terminal
+ * capability detection to theme/color.ts (7 modules: terminal-capabilities, terminal-emulator,
+ * window-focus, desktop-notify, tmux, kitty-graphics, color-format), and catalog added 5 modules
+ * (types, model, discovery/typesafe, codex-subscription, models-dev-policies).
  */
-const ASSEMBLER_REACH_CEILING = 524;
+const ASSEMBLER_REACH_CEILING = 536;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

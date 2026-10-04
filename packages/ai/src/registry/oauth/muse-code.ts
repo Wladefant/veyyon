@@ -1,3 +1,5 @@
+import { isCancellation } from "@veyyon/utils/abortable";
+import { withTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
@@ -44,8 +46,7 @@ export interface MuseCodeKeyResponse {
 }
 
 function requestSignal(signal?: AbortSignal): AbortSignal {
-	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-	return signal ? AbortSignal.any([signal, timeout]) : timeout;
+	return withTimeoutSignal(REQUEST_TIMEOUT_MS, signal);
 }
 
 export function parseMuseCodeCredential(value: string): MuseCodeCredential {
@@ -125,10 +126,7 @@ function isTransientKeyExchangeFailure(error: unknown, signal?: AbortSignal): bo
 	if (error instanceof AIError.OAuthError) {
 		return AIError.isTransientStatus(error.status) || error.status === 401 || error.status === 403;
 	}
-	return (
-		error instanceof TypeError ||
-		(error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError"))
-	);
+	return error instanceof TypeError || isCancellation(error);
 }
 
 /** Exchange Meta account access for the Model API key authorized by a Muse subscription. */

@@ -1,5 +1,6 @@
 import type { FetchImpl, Model, Usage } from "@veyyon/catalog/types";
 import { parseImageMetadata, VERSION } from "@veyyon/utils";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
 import type { GeneratedImage } from "./types";
 
@@ -34,14 +35,11 @@ export function usageFromWire(value: unknown): Usage {
 }
 
 export function imageBaseUrl(model: Model): string {
-	if (!model.baseUrl)
-		throw new AIError.ValidationError(
-			`Image model ${model.provider}/${model.id} has no base URL`,
-		);
-	return model.baseUrl.replace(/\/+$/, "");
+	if (!model.baseUrl) throw new AIError.ValidationError(`Image model ${model.provider}/${model.id} has no base URL`);
+	return trimTrailingSlashes(model.baseUrl);
 }
 
-export function errorMessage(rawText: string): string {
+export function extractImageErrorMessage(rawText: string): string {
 	try {
 		const parsed = JSON.parse(rawText);
 		if (parsed && typeof parsed === "object") {
@@ -59,30 +57,19 @@ export function errorMessage(rawText: string): string {
 	}
 }
 
-export async function imageFromUrl(
-	url: string,
-	fetch: FetchImpl,
-	signal?: AbortSignal,
-): Promise<GeneratedImage> {
+export async function imageFromUrl(url: string, fetch: FetchImpl, signal?: AbortSignal): Promise<GeneratedImage> {
 	const response = await fetch(url, { signal });
 	if (!response.ok) {
 		const text = await response.text();
-		throw new ImageApiError(
-			`Image download failed (${response.status}): ${text}`,
-			response.status,
-			{
-				headers: response.headers,
-			},
-		);
+		throw new ImageApiError(`Image download failed (${response.status}): ${text}`, response.status, {
+			headers: response.headers,
+		});
 	}
 	const mimeType = response.headers.get("content-type")?.split(";")[0];
 	if (!mimeType?.startsWith("image/")) {
-		throw new AIError.ProviderResponseError(
-			`Image URL returned unsupported content type: ${mimeType ?? "missing"}`,
-			{
-				kind: "envelope",
-			},
-		);
+		throw new AIError.ProviderResponseError(`Image URL returned unsupported content type: ${mimeType ?? "missing"}`, {
+			kind: "envelope",
+		});
 	}
 	const bytes = new Uint8Array(await response.arrayBuffer());
 	return { data: Buffer.from(bytes).toString("base64"), mimeType };
@@ -94,17 +81,11 @@ export async function decodeImageResponse(
 	signal?: AbortSignal,
 ): Promise<{ images: GeneratedImage[]; usage: Usage }> {
 	if (value === null || typeof value !== "object") {
-		throw new AIError.ProviderResponseError(
-			"Image API returned a malformed response",
-			{ kind: "envelope" },
-		);
+		throw new AIError.ProviderResponseError("Image API returned a malformed response", { kind: "envelope" });
 	}
 	const data = Reflect.get(value, "data");
 	if (!Array.isArray(data)) {
-		throw new AIError.ProviderResponseError(
-			"Image API response is missing data",
-			{ kind: "envelope" },
-		);
+		throw new AIError.ProviderResponseError("Image API response is missing data", { kind: "envelope" });
 	}
 	const images: GeneratedImage[] = [];
 	for (const item of data) {
@@ -115,9 +96,7 @@ export async function decodeImageResponse(
 		if (typeof b64Json === "string" && b64Json.length > 0) {
 			const bytes = Buffer.from(b64Json, "base64");
 			const mimeType =
-				typeof mediaType === "string"
-					? mediaType
-					: (parseImageMetadata(bytes)?.mimeType ?? "image/png");
+				typeof mediaType === "string" ? mediaType : (parseImageMetadata(bytes)?.mimeType ?? "image/png");
 			images.push({ data: b64Json, mimeType });
 		} else if (typeof url === "string" && url.length > 0) {
 			images.push(await imageFromUrl(url, fetch, signal));
@@ -131,10 +110,7 @@ export function toDataUrl(image: GeneratedImage): string {
 	return `data:${image.mimeType};base64,${image.data}`;
 }
 
-export function resolveOpenAIImageSize(
-	aspectRatio?: string,
-	imageSize?: string,
-): string | undefined {
+export function resolveOpenAIImageSize(aspectRatio?: string, imageSize?: string): string | undefined {
 	if (imageSize) return imageSize;
 	if (aspectRatio === "1:1") return "1024x1024";
 	if (aspectRatio === "3:4" || aspectRatio === "9:16") return "1024x1536";

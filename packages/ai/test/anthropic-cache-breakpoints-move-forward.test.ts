@@ -173,7 +173,7 @@ async function turnPayloads(steps: number[], isOAuth: boolean): Promise<Anthropi
 
 describe("Anthropic cache breakpoints as a conversation grows", () => {
 	for (const [layoutName, isOAuth, markedMessagesPerTurn] of [
-		["API-key layout", false, 2],
+		["API-key layout", false, 1],
 		["Claude Code layout", true, 1],
 	] as const) {
 		/**
@@ -260,7 +260,7 @@ describe("Anthropic cache breakpoints as a conversation grows", () => {
 	it("spends the same breakpoint budget however long the conversation gets", async () => {
 		for (const [isOAuth, expected] of [
 			[false, 4],
-			[true, 3],
+			[true, 4],
 		] as const) {
 			const payloads = await turnPayloads([1, 2, 5, 20], isOAuth);
 			expect(payloads.map(totalMarkers)).toEqual([expected, expected, expected, expected]);

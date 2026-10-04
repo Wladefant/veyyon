@@ -6,7 +6,7 @@ import { type CodexTokenIdentity, OPENAI_HEADER_VALUES, readCodexTokenIdentity }
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
-import { isRecord } from "../../utils";
+import { isRecord } from "@veyyon/utils/type-guards";
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { OAuthController, OAuthCredentials } from "./types";

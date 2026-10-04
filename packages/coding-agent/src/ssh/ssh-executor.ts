@@ -1,7 +1,7 @@
 import { logger, ptree } from "@veyyon/utils";
 import { Settings } from "../config/settings";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
-import { OutputSink } from "../session/streaming-output";
+import { OutputSink, type OutputSummary } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/core/output-meta";
 import { buildRemoteCommand, ensureConnection, ensureHostInfo, type SSHConnectionTarget } from "./connection-manager";
 import { hasSshfs, mountRemote } from "./sshfs-mount";
@@ -29,25 +29,11 @@ export interface SSHExecutorOptions {
 	spillThreshold?: number;
 }
 
-export interface SSHResult {
-	/** Combined stdout + stderr output (sanitized, possibly truncated) */
-	output: string;
+export interface SSHResult extends OutputSummary {
 	/** Process exit code (undefined if killed/cancelled) */
 	exitCode: number | undefined;
 	/** Whether the command was cancelled via signal */
 	cancelled: boolean;
-	/** Whether the output was truncated */
-	truncated: boolean;
-	/** Total number of lines in the output stream */
-	totalLines: number;
-	/** Total number of bytes in the output stream */
-	totalBytes: number;
-	/** Number of lines included in the output text */
-	outputLines: number;
-	/** Number of bytes included in the output text */
-	outputBytes: number;
-	/** Artifact ID if full output was saved to artifact storage */
-	artifactId?: string;
 }
 
 type SSHExitEvent = { kind: "exit"; exitCode: number } | { kind: "error"; error: unknown };
@@ -152,7 +138,7 @@ export async function executeSSH(
 		return {
 			exitCode: event.exitCode,
 			cancelled: false,
-			...(await sink.dump()),
+			...(await sink.dumpWithArtifactStatus()),
 		};
 	} catch (err) {
 		if (!streamAbort.signal.aborted) {
@@ -164,20 +150,20 @@ export async function executeSSH(
 				return {
 					exitCode: undefined,
 					cancelled: true,
-					...(await sink.dump(`SSH: ${err.message}`)),
+					...(await sink.dumpWithArtifactStatus(`SSH: ${err.message}`)),
 				};
 			}
 			if (err.aborted) {
 				return {
 					exitCode: undefined,
 					cancelled: true,
-					...(await sink.dump(`Command aborted: ${err.message}`)),
+					...(await sink.dumpWithArtifactStatus(`Command aborted: ${err.message}`)),
 				};
 			}
 			return {
 				exitCode: err.exitCode,
 				cancelled: false,
-				...(await sink.dump(`Unexpected error: ${err.message}`)),
+				...(await sink.dumpWithArtifactStatus(`Unexpected error: ${err.message}`)),
 			};
 		}
 		throw err;
