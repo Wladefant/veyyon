@@ -158,15 +158,23 @@ function emitDroppedRecordNotice(options: SessionLoadOptions, issues: readonly S
  */
 function stitchOrphanedEntries(entries: readonly FileEntry[]): number {
 	if (entries.length < 2) return 0;
-	const ids = new Set<string>();
-	for (const entry of entries) ids.add(entry.id);
+	// Every id in the file, built at the first parent that is not the record in front, which a
+	// file appended turn by turn never has.
+	let ids: Set<string> | undefined;
 	let stitched = 0;
 	for (let i = 1; i < entries.length; i++) {
 		const entry = entries[i];
 		if (!("parentId" in entry)) continue;
-		if (entry.parentId === null || entry.parentId === undefined) continue;
-		if (ids.has(entry.parentId)) continue;
-		entry.parentId = entries[i - 1].id;
+		const parentId = entry.parentId;
+		if (parentId === null || parentId === undefined) continue;
+		const previous = entries[i - 1].id;
+		if (parentId === previous) continue;
+		if (ids === undefined) {
+			ids = new Set<string>();
+			for (const each of entries) ids.add(each.id);
+		}
+		if (ids.has(parentId)) continue;
+		entry.parentId = previous;
 		stitched += 1;
 	}
 	return stitched;

@@ -112,8 +112,12 @@ export class SessionEntryIndex {
 	#link(entry: SessionEntry): void {
 		// The new leaf's path is the old leaf's path plus this entry exactly when
 		// it hangs off the old leaf and does not shadow an id already in the index.
+		// A rebuild holds no path, so it looks no id up twice.
 		const leafPath =
-			this.#leaf !== null && entry.parentId === this.#leaf && this.#entriesById[entry.id] === undefined
+			this.#leafPath !== undefined &&
+			entry.parentId === this.#leaf &&
+			this.#leaf !== null &&
+			this.#entriesById[entry.id] === undefined
 				? this.#leafPath
 				: undefined;
 		this.#entriesById[entry.id] = entry;

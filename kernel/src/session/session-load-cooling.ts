@@ -48,7 +48,13 @@ export class LoadCooling {
 	readonly #entries: SessionEntry[] = [];
 	readonly #offsets: number[] = [];
 	readonly #lengths: number[] = [];
+	/**
+	 * Index of each record by id, filled with every record taken so far only when a parent walk
+	 * meets a parent other than the record in front, which a file appended turn by turn never has.
+	 */
 	readonly #indexById = new Map<string, number>();
+	/** How many records, from the first, {@link #indexById} holds. */
+	#indexed = 0;
 	/** 1 at each record a compaction's walk passed, where the next walk stops. */
 	#walked = new Uint8Array(1024);
 
@@ -75,7 +81,6 @@ export class LoadCooling {
 		this.#entries.push(record);
 		this.#offsets.push(offset);
 		this.#lengths.push(length);
-		this.#indexById.set(record.id, index);
 		if (index >= this.#walked.length) {
 			const grown = new Uint8Array(this.#walked.length * 2);
 			grown.set(this.#walked);
@@ -125,10 +130,14 @@ export class LoadCooling {
 	 * always an earlier record, so a walk over parents ends even on a file whose ids repeat.
 	 */
 	#parentIndex(index: number): number {
-		const parentId = this.#entries[index]!.parentId;
+		const entries = this.#entries;
+		const parentId = entries[index]!.parentId;
 		if (parentId === null) return -1;
-		if (index > 0 && this.#entries[index - 1]!.id === parentId) return index - 1;
-		const found = this.#indexById.get(parentId);
+		if (index > 0 && entries[index - 1]!.id === parentId) return index - 1;
+		const byId = this.#indexById;
+		for (let at = this.#indexed; at < entries.length; at++) byId.set(entries[at]!.id, at);
+		this.#indexed = entries.length;
+		const found = byId.get(parentId);
 		return found !== undefined && found < index ? found : -1;
 	}
 

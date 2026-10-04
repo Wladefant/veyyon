@@ -51,6 +51,7 @@
 - Opening a session file of 8 MiB or more parses each record after the header from the line's bytes instead of decoding the line to a string first, which cut opening a 312 MB, 108,163-entry synthetic session from a 318 MiB to a 256 MiB peak RSS and from 667 ms to 598 ms (median of 5 runs each).
 - `SessionEntryIndex` keys entries by id in a null-prototype object instead of a `Map`, which cut the settled heap of an opened 312 MB, 108,163-entry synthetic session from 58.9 MiB to 56.1 MiB and its settled RSS from 162 MiB to 159 MiB (median of 5 alternating runs).
 - `SessionManager` records where its entry lines sit in the published file against the entry list itself instead of a copy of it, which cut the settled heap of an opened 312 MB, 108,163-entry synthetic session from 56.1 MiB to 55.3 MiB (3 runs each, identical).
+- A session load looks a record's parent up by id only when the parent is not the record in front of it, so the orphan check and the streamed load's compaction walk build no index of every id for a session appended turn by turn, which cut opening a 312 MB, 108,163-entry synthetic session from 595 ms to 570 ms and from a 249 MiB to a 241 MiB peak RSS (median of 7 alternating runs).
 
 ### Fixed
 
