@@ -53,7 +53,7 @@ export const toolCallDomain: ErrorDomain = {
 export const streamDomain: ErrorDomain = {
 	id: "stream",
 	why: "The stream ended without saying what failed, or referred to server-side state that is gone.",
-	recovers: [Flag.ProviderFinishError, Flag.StaleResponsesItem, Flag.EmptyResponse],
+	recovers: [Flag.ProviderFinishError, Flag.StaleResponsesItem],
 	recovery: {
 		transport: { action: "surface" },
 		credential: { action: "surface" },
@@ -73,6 +73,25 @@ export const streamDomain: ErrorDomain = {
 			structural: signal => signal.api === "openai-responses" || signal.api === "openai-codex-responses",
 			text: isStaleResponsesText,
 		},
+	],
+};
+
+/**
+ * A completion that carried nothing actionable. Unlike a finish error, this is a hiccup of the
+ * connection or the model rather than a verdict on the turn, so the provider's own ladder retries
+ * it against the same credential as well as the turn loop; a retry against a different credential
+ * would not change an empty body, so that stage surfaces.
+ */
+export const emptyResponseDomain: ErrorDomain = {
+	id: "empty-response",
+	why: "The provider completed without actionable output, so another attempt at the same request may deliver it.",
+	recovers: [Flag.EmptyResponse],
+	recovery: {
+		transport: { action: "retry" },
+		credential: { action: "surface" },
+		turn: { action: "retry" },
+	},
+	rules: [
 		{
 			flags: Flag.EmptyResponse,
 			name: "empty-response",
