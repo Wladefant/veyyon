@@ -4,8 +4,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
 import {
+	RETAINED_BACKEND_FILE,
+	readRetainedMountBackend,
+	stampLinkedWorktreeRegistration,
+	writeIsolationOwner,
+} from "@veyyon/coding-agent/task/isolation-ownership";
+import {
 	applyEligibleNestedPatches,
 	mergeIsolatedChanges,
+	retainIsolationWorkspace,
 	runIsolatedSubprocess,
 } from "@veyyon/coding-agent/task/isolation-runner";
 import type { SingleResult } from "@veyyon/coding-agent/task/types";
@@ -426,6 +433,165 @@ describe("runIsolatedSubprocess", () => {
 		expect(outcome.nestedPatchPaths).toBeUndefined();
 		expect(await Bun.file(path.join(tmp, `${id}.nested-0-first.patch`)).exists()).toBe(false);
 		expect(await Bun.file(path.join(tmp, `${id}.nested-1-second.patch`)).exists()).toBe(false);
+	});
+
+	it("reports missing mount metadata in error when sidecar cannot be written", async () => {
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-iso-sidecar-"));
+		tempRoots.push(tmp);
+		const baseDir = path.join(tmp, "wt_fail");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+
+		vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
+			mergedDir: isolationDir,
+			backend: natives.IsoBackendKind.Overlayfs,
+			fellBack: false,
+			fallbackReason: null,
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result({ id: "SidecarFail" }));
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockRejectedValue(new Error("disk full"));
+		vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+
+		const originalWriteFile = fs.writeFile.bind(fs);
+		vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+			if (typeof file === "string" && file.endsWith(RETAINED_BACKEND_FILE)) {
+				throw new Error("ENOSPC");
+			}
+			return originalWriteFile(file, data, options);
+		});
+
+		const outcome = await runIsolatedSubprocess({
+			baseOptions: { cwd: "/repo", agent: { name: "task" } as never, task: "w", index: 0, id: "SidecarFail" },
+			context: { repoRoot: "/repo", baseline: { root: { headCommit: "b" } } as never },
+			preferredBackend: undefined,
+			agentId: "SidecarFail",
+			mergeMode: "patch",
+			artifactsDir: tmp,
+			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+		});
+
+		expect(outcome.error).toContain("Its mount metadata is missing, so unmount");
+		expect(outcome.error).toContain("manually before clearing.");
+	});
+});
+
+describe("retainIsolationWorkspace", () => {
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await Promise.all(tempRoots.splice(0).map(tempRoot => fs.rm(tempRoot, { force: true, recursive: true })));
+	});
+
+	it("moves the workspace to a unique sibling out of the deterministic slot", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-"));
+		tempRoots.push(parent);
+		const baseDir = path.join(parent, "wt_abc123");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+		await Bun.write(path.join(isolationDir, "work.txt"), "unrecovered");
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Overlayfs);
+
+		expect(retained).toEqual({ dir: expect.any(String), sidecarOk: true });
+		expect(retained.dir).not.toBe(isolationDir);
+		expect(path.dirname(retained.dir)).toContain(".retained-");
+		expect(await Bun.file(path.join(retained.dir, "work.txt")).text()).toBe("unrecovered");
+		expect(await Bun.file(baseDir).exists()).toBe(false);
+		const sidecar = await Bun.file(path.join(path.dirname(retained.dir), RETAINED_BACKEND_FILE)).json();
+		expect(sidecar.backend).toBe(natives.IsoBackendKind.Overlayfs);
+		tempRoots.push(path.dirname(retained.dir));
+	});
+
+	it("preserves the original projected root and records its backend for safe cleanup refusal", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-projfs-"));
+		tempRoots.push(parent);
+		const baseDir = path.join(parent, "projection");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+		await fs.writeFile(path.join(isolationDir, "work.txt"), "unrecovered projected changes");
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Projfs);
+
+		expect(retained).toEqual({ dir: isolationDir, sidecarOk: true });
+		expect(await fs.readFile(path.join(isolationDir, "work.txt"), "utf8")).toBe("unrecovered projected changes");
+		expect(await readRetainedMountBackend(baseDir)).toBe(natives.IsoBackendKind.Projfs);
+	});
+
+	it("records copy backends so cleanup can distinguish them from unknown mounts", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-rcopy-"));
+		tempRoots.push(parent);
+		const isolationDir = path.join(parent, "wt_abc123", "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Rcopy);
+
+		expect(retained.sidecarOk).toBe(true);
+		expect(await readRetainedMountBackend(path.dirname(retained.dir))).toBeUndefined();
+		const metadata = JSON.parse(
+			await fs.readFile(path.join(path.dirname(retained.dir), RETAINED_BACKEND_FILE), "utf8"),
+		);
+		expect(metadata.backend).toBe(natives.IsoBackendKind.Rcopy);
+		tempRoots.push(path.dirname(retained.dir));
+	});
+
+	it("re-links a linked git worktree to its retained location", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-linked-"));
+		tempRoots.push(parent);
+		const repo = path.join(parent, "repo");
+		await fs.mkdir(repo);
+		await git(repo, "init");
+		await git(repo, "config", "user.email", "t@example.com");
+		await git(repo, "config", "user.name", "T");
+		await Bun.write(path.join(repo, "a.txt"), "a\n");
+		await git(repo, "add", "a.txt");
+		await git(repo, "commit", "-m", "base");
+		const baseDir = path.join(parent, "wt_linked");
+		const isolationDir = path.join(baseDir, "m");
+		await fs.mkdir(baseDir);
+		await git(repo, "worktree", "add", "--detach", isolationDir);
+		await stampLinkedWorktreeRegistration(isolationDir, (await writeIsolationOwner(baseDir)).token);
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Rcopy);
+
+		expect(retained.dir).not.toBe(isolationDir);
+		tempRoots.push(path.dirname(retained.dir));
+		// The moved checkout must still be a working worktree of the source repository.
+		expect((await git(retained.dir, "rev-parse", "--show-toplevel")).trim()).toBe(await fs.realpath(retained.dir));
+		const listed = await git(repo, "worktree", "list", "--porcelain");
+		expect(listed).toContain(await fs.realpath(retained.dir));
+		expect(listed).not.toContain(`worktree ${isolationDir}\n`);
+		expect(listed).not.toContain("prunable");
+	});
+
+	it("reports the original dir when the move fails", async () => {
+		const missingParent = path.join(os.tmpdir(), `veyyon-isolation-retain-missing-${Date.now()}`);
+		const isolationDir = path.join(missingParent, "wt_abc123", "m");
+
+		await expect(retainIsolationWorkspace(isolationDir)).resolves.toEqual({
+			dir: isolationDir,
+			sidecarOk: true,
+		});
+		await expect(fs.stat(missingParent)).rejects.toThrow();
+	});
+
+	it("reports missing metadata when the sidecar cannot be written", async () => {
+		const parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-retain-sidecar-"));
+		tempRoots.push(parent);
+		const isolationDir = path.join(parent, "wt_abc123", "m");
+		await fs.mkdir(isolationDir, { recursive: true });
+		await Bun.write(path.join(isolationDir, "work.txt"), "unrecovered");
+		const originalWriteFile = fs.writeFile.bind(fs);
+		vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+			if (typeof file === "string" && file.endsWith(RETAINED_BACKEND_FILE)) {
+				throw new Error("EACCES: permission denied");
+			}
+			return originalWriteFile(file, data, options);
+		});
+
+		const retained = await retainIsolationWorkspace(isolationDir, natives.IsoBackendKind.Overlayfs);
+
+		expect(retained.sidecarOk).toBe(false);
+		expect(retained.dir).not.toBe(isolationDir);
+		tempRoots.push(path.dirname(retained.dir));
 	});
 });
 
