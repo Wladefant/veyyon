@@ -37,6 +37,11 @@ describe("artifact publication is whole-or-nothing", () => {
 		for (const dir of dirs.splice(0)) await removeWithRetries(dir);
 	});
 
+	/** Directory entries other than the hidden id reservations, which outlive a failed save on purpose. */
+	async function listPublished(dir: string): Promise<string[]> {
+		return (await fs.readdir(dir)).filter(name => !name.startsWith(".artifact-id-"));
+	}
+
 	/** Model a short write faithfully: partial bytes land, and the count reports short. */
 	function shortWrite(keep: number): void {
 		const realWrite = Bun.write.bind(Bun);
@@ -58,7 +63,7 @@ describe("artifact publication is whole-or-nothing", () => {
 
 		// Neither the artifact nor a leftover staging sibling may survive, or the
 		// directory scan resolves a truncated payload as a finished result.
-		expect(await fs.readdir(dir)).toEqual([]);
+		expect(await listPublished(dir)).toEqual([]);
 		expect(await manager.getPath(id)).toBeNull();
 		expect(await manager.exists(id)).toBe(false);
 	});
@@ -91,7 +96,7 @@ describe("artifact publication is whole-or-nothing", () => {
 		expect(resolved).not.toBeNull();
 		expect(await Bun.file(resolved as string).text()).toBe(body);
 		// Exactly the artifact, with no staging sibling left next to it.
-		expect(await fs.readdir(dir)).toEqual([path.basename(resolved as string)]);
+		expect(await listPublished(dir)).toEqual([path.basename(resolved as string)]);
 	});
 
 	it("assigns the next id past whatever the directory already holds", async () => {
