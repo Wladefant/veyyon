@@ -259,7 +259,32 @@ class SessionRecordLoop {
 			this.skip(byteLength);
 			return;
 		}
+		this.#take(value, text, byteLength);
+	}
 
+	/**
+	 * {@link push} for the line held in `bytes[start, end)`, parsed from the bytes. A line decoded
+	 * to a string first is a copy of the line that stays allocated until the next collection: opening
+	 * a 312 MB, 108,163-entry session peaked at a median 318 MiB resident in 667 ms that way, and at
+	 * 256 MiB in 598 ms parsing the bytes.
+	 * A line the byte parse does not take as exactly one JSON value, and the header record, whose
+	 * text the layout keeps, go through {@link push}, which skips a blank line and records and logs a
+	 * malformed one.
+	 */
+	pushBytes(bytes: Buffer, start: number, end: number): void {
+		if (this.entries.length > 0) {
+			// `JSON.parse` takes only a string; `Bun.JSONL` is the one parser of UTF-8 bytes.
+			const parsed = Bun.JSONL.parseChunk(bytes, start, end);
+			if (parsed.done && parsed.values.length === 1) {
+				this.#take(parsed.values[0], undefined, end - start);
+				return;
+			}
+		}
+		this.push(decodeLine(bytes, start, end), end - start);
+	}
+
+	/** Keep the parsed `value` of a line when it has an entry's shape. `text` is the line, for the header. */
+	#take(value: unknown, text: string | undefined, byteLength: number): void {
 		const shape = checkSessionEntryShape(value);
 		if (shape.ok) {
 			if (this.entries.length === 0) this.#headerLine = text;
@@ -350,17 +375,18 @@ function decodeLine(bytes: Buffer, start: number, end: number): string {
 }
 
 /**
- * Hand each line of the file open at `handle` to `onLine`, with its byte length, reading
- * {@link STREAM_READ_BYTES} at a time. A line is the bytes before a line feed, or the bytes after
- * the last one when the file does not end with one; an empty line is a line. A line longer than
- * the stream frame bound fails with `StreamFrameLimitError`, as every line reader does.
+ * Hand each line of the file open at `handle` to `onLine` as the window `bytes[start, end)`,
+ * reading {@link STREAM_READ_BYTES} at a time. The window is valid only during the call. A line is
+ * the bytes before a line feed, or the bytes after the last one when the file does not end with
+ * one; an empty line is a line. A line longer than the stream frame bound fails with
+ * `StreamFrameLimitError`, as every line reader does.
  *
  * Each read is split synchronously: an async iterator over lines cost one promise per line, and
  * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
  */
 async function forEachFileLine(
 	handle: fs.promises.FileHandle,
-	onLine: (text: string, byteLength: number) => void,
+	onLine: (bytes: Buffer, start: number, end: number) => void,
 ): Promise<void> {
 	const limit = streamFrameCeiling();
 	let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
@@ -377,13 +403,13 @@ async function forEachFileLine(
 		let start = 0;
 		for (let end = filled.indexOf(LINE_FEED, carried); end !== -1; end = filled.indexOf(LINE_FEED, start)) {
 			if (end - start > limit) throw new StreamFrameLimitError("line", end - start, limit);
-			onLine(decodeLine(filled, start, end), end - start);
+			onLine(filled, start, end);
 			start = end + 1;
 		}
 		carried = filled.length - start;
 		if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
 		if (bytesRead === 0) {
-			if (carried > 0) onLine(decodeLine(filled, start, filled.length), carried);
+			if (carried > 0) onLine(filled, start, filled.length);
 			return;
 		}
 		filled.copyWithin(0, start);
@@ -441,19 +467,22 @@ export async function loadEntriesFromFileStream(
 			cooling,
 		});
 		let first = true;
-		await forEachFileLine(handle, (text, byteLength) => {
+		await forEachFileLine(handle, (bytes, start, end) => {
 			if (first) {
 				first = false;
 				// The slot is a fixed-size first line, not a record, so it never reaches the
 				// shape check; the cursor still has to step over its bytes.
+				const text = decodeLine(bytes, start, end);
 				const slot = parseTitleSlotLine(text.trim());
 				if (slot) {
 					titleSlot = titleUpdateFromSlot(slot);
-					loop.skipTitleSlot(byteLength);
+					loop.skipTitleSlot(end - start);
 					return;
 				}
+				loop.push(text, end - start);
+				return;
 			}
-			loop.push(text, byteLength);
+			loop.pushBytes(bytes, start, end);
 		});
 		const entries = foldTitleSlot(loop.finish(), titleSlot);
 		const cold = cooling?.finish();
