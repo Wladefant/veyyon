@@ -89,6 +89,23 @@ function expectClean(channels: Record<string, string>, needles: readonly string[
 	}
 }
 
+/**
+ * No channel may hold the secret's bytes in any numeric spelling: a JSON array of byte values, or an
+ * object keyed by index. Both utf8 and latin1 decodings are checked.
+ */
+function expectNoBytesOf(channels: Record<string, string>, secret: string): void {
+	for (const [channel, text] of Object.entries(channels)) {
+		const spellings = [text.match(/\d+/g) ?? [], [...text.matchAll(/:(\d+)/g)].map(match => match[1])];
+		for (const numbers of spellings) {
+			const joined = `,${numbers.join(",")},`;
+			for (const encoding of ["utf8", "latin1"] as const) {
+				const bytes = `,${Array.from(Buffer.from(secret, encoding)).join(",")},`;
+				expect({ channel, encoding, found: joined.includes(bytes) }).toEqual({ channel, encoding, found: false });
+			}
+		}
+	}
+}
+
 async function drive(
 	r: Rig,
 	completionProbe?: CompletionProbe,
@@ -152,14 +169,15 @@ describe("the usage credential boundary", () => {
 	});
 
 	it("keeps the key's bytes out of a report that carries a Buffer or a typed array", async () => {
-		const bytes = Array.from(Buffer.from(KEY)).join(",");
 		const r = await rig(
 			reporting(() => ({
 				metadata: { blob: Buffer.from(KEY), view: new Uint8Array(Buffer.from(KEY)), keep: "plain-value" },
 			})),
 		);
 		const out = await drive(r);
-		expectClean(observe(r, out), [KEY, bytes]);
+		const channels = observe(r, out);
+		expectClean(channels, [KEY]);
+		expectNoBytesOf(channels, KEY);
 		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
 	});
 
@@ -187,11 +205,21 @@ describe("the usage credential boundary", () => {
 		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
 	});
 
-	it("replaces a value that throws on inspection with a fixed placeholder, never the error text", async () => {
+	it("never reflects on a Proxy, and shows a fixed placeholder for it", async () => {
+		const traps = { ownKeys: 0, getOwnPropertyDescriptor: 0, get: 0 };
 		const hostile = new Proxy(
 			{},
 			{
 				ownKeys() {
+					traps.ownKeys++;
+					throw new Error(KEY);
+				},
+				getOwnPropertyDescriptor() {
+					traps.getOwnPropertyDescriptor++;
+					throw new Error(KEY);
+				},
+				get() {
+					traps.get++;
 					throw new Error(KEY);
 				},
 			},
@@ -200,7 +228,60 @@ describe("the usage credential boundary", () => {
 		const out = await drive(r);
 		expect(out.checks[0]?.ok).toBe(true);
 		expectClean(observe(r, out), [KEY]);
+		expect(out.reports[0]?.metadata?.hostile).toBe("[unreadable]");
 		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
+		expect(traps).toEqual({ ownKeys: 0, getOwnPropertyDescriptor: 0, get: 0 });
+	});
+
+	it("shows a placeholder for a value that throws on inspection, never the error text", async () => {
+		const fakeDate = Object.create(Date.prototype) as Date;
+		const r = await rig(reporting(() => ({ metadata: { fakeDate, keep: "plain-value" } })));
+		const out = await drive(r);
+		expect(out.reports[0]?.metadata?.fakeDate).toBe("[unreadable]");
+		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
+	});
+
+	const unreadableRoots: Array<[string, () => unknown]> = [
+		[
+			"a Proxy",
+			() =>
+				new Proxy(
+					{},
+					{
+						ownKeys() {
+							throw new Error(KEY);
+						},
+					},
+				),
+		],
+		["a string", () => KEY],
+		["a number", () => 42],
+		["undefined", () => undefined],
+		["an array", () => []],
+		["an object with no limits", () => ({ provider: PROVIDER, fetchedAt: 1 })],
+		["an object whose limits is a getter", () => ({ provider: PROVIDER, fetchedAt: 1, get limits() { return []; } })],
+		["an object without a provider", () => ({ fetchedAt: 1, limits: [] })],
+		["an object without fetchedAt", () => ({ provider: PROVIDER, limits: [] })],
+		["an object whose limits is a Proxy", () => ({ provider: PROVIDER, fetchedAt: 1, limits: new Proxy([], {}) })],
+	];
+	for (const [name, root] of unreadableRoots) {
+		it(`fails closed when the report is ${name}`, async () => {
+			const backend = { id: PROVIDER, fetchUsage: async () => root() } as unknown as UsageProvider;
+			const r = await rig(backend);
+			const out = await drive(r);
+			expect(out.reports).toEqual([]);
+			expect(out.checks[0]?.ok).toBe(false);
+			expect(out.checks[0]?.report).toBeUndefined();
+			expect(out.checks[0]?.reason).toBe("usage probe returned a report that could not be read");
+			expectClean(observe(r, out), [KEY]);
+		});
+	}
+
+	it("drops a limit that is not an object instead of crashing the reader", async () => {
+		const limits = [() => 1, undefined, "text", { id: "kept", label: "Kept", scope: { provider: "anthropic" }, amount: { unit: "percent", used: 1, limit: 100 } }];
+		const r = await rig(reporting(() => ({ limits: limits as unknown as UsageLimit[] })));
+		const out = await drive(r);
+		expect(out.reports[0]?.limits.map(limit => limit.id)).toEqual(["kept"]);
 	});
 
 	it("redacts a key used as an object property name in a report and in logger metadata", async () => {

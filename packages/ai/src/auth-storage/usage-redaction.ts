@@ -13,8 +13,9 @@
  *    that is not the one in hand (a refreshed token, a header from a redirect).
  */
 
+import { types } from "node:util";
 import { redactProviderSecrets } from "../error/error-body";
-import type { UsageCredential, UsageLogger } from "../usage";
+import type { UsageCredential, UsageLimit, UsageLogger, UsageReport } from "../usage";
 
 /**
  * A credential is removed whatever its length: a short key can only be a test key or a misconfiguration,
@@ -120,6 +121,8 @@ function redactNode(
 	if (typeof value === "string") return redactUsageText(value, secrets);
 	if (typeof value === "function" || typeof value === "symbol") return undefined;
 	if (value === null || typeof value !== "object") return value;
+	// A Proxy runs its traps on every reflective read, so it is never reflected on.
+	if (types.isProxy(value)) return UNREADABLE;
 	if (ancestors.has(value)) return undefined;
 	if (done.has(value)) return done.get(value);
 	ancestors.add(value);
@@ -168,6 +171,29 @@ function snapshotObject(
 		entries.push([redactUsageText(key, secrets), redactNode(descriptor.value, secrets, ancestors, done)]);
 	}
 	return Object.fromEntries(entries);
+}
+
+/**
+ * The redacted snapshot of a usage report, or undefined when what came back is not a report: not a plain
+ * object, or missing `provider`, `fetchedAt` or a `limits` array once snapshotted (an unreadable root
+ * becomes a placeholder string, a getter is not read). A limit without an `amount` and a `scope` object is
+ * dropped, so a reader may take `limit.scope` and `limit.amount` unguarded.
+ */
+export function redactUsageReport(report: UsageReport, secrets: readonly string[]): UsageReport | undefined {
+	const snapshot = redactUsageValue<unknown>(report, secrets);
+	if (!isRecord(snapshot)) return undefined;
+	if (typeof snapshot.provider !== "string" || typeof snapshot.fetchedAt !== "number") return undefined;
+	if (!Array.isArray(snapshot.limits)) return undefined;
+	return {
+		...(snapshot as unknown as UsageReport),
+		limits: snapshot.limits.filter(
+			(limit): limit is UsageLimit => isRecord(limit) && isRecord(limit.amount) && isRecord(limit.scope),
+		),
+	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** A logger that redacts the message and every string in the metadata before the wrapped logger sees it. */

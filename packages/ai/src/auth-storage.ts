@@ -136,6 +136,7 @@ import {
 } from "./auth-storage/usage-ranking";
 import {
 	redactingUsageLogger,
+	redactUsageReport,
 	redactUsageText,
 	redactUsageValue,
 	usageCredentialSecrets,
@@ -2721,10 +2722,16 @@ export class AuthStorage {
 			]),
 		];
 		try {
-			const report = await providerImpl.fetchUsage(params, {
+			const fetched = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
 				logger: redactingUsageLogger(this.#usageLogger, fetchSecrets),
 			});
+			// Everything below reads the redacted snapshot, never the backend's own object.
+			const report = fetched === null ? null : redactUsageReport(fetched, fetchSecrets);
+			if (fetched !== null && report === undefined) {
+				logger.debug("AuthStorage usage fetch returned an unreadable report", { provider: request.provider });
+				return null;
+			}
 			// Attribute the report to the credential's organization. The orgId and
 			// orgName fallbacks apply independently: Claude's usage endpoint stamps
 			// orgId from the `anthropic-organization-id` response header but never
@@ -2748,7 +2755,7 @@ export class AuthStorage {
 					};
 				}
 			}
-			return redactUsageValue(report, fetchSecrets);
+			return report ?? null;
 		} catch (error) {
 			if (
 				error instanceof AIError.ProviderHttpError &&
@@ -2765,7 +2772,7 @@ export class AuthStorage {
 			}
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
-				error: redactUsageText(String(error), fetchSecrets),
+				error: redactUsageValue(error, fetchSecrets),
 			});
 			return null;
 		}
@@ -3412,9 +3419,12 @@ export class AuthStorage {
 					});
 					// Read the report only through the redacted snapshot: no getter or method the
 					// backend put on it runs, and nothing below can copy the key out of it.
-					const report = rawReport === null ? null : redactUsageValue(rawReport, probeSecrets);
+					const report = rawReport === null ? null : redactUsageReport(rawReport, probeSecrets);
 					if (report === null) {
 						base.reason = "usage probe returned no data for this credential";
+					} else if (report === undefined) {
+						base.ok = false;
+						base.reason = "usage probe returned a report that could not be read";
 					} else {
 						base.ok = true;
 						const accountId = getUsageReportMetadataValue(report, "accountId");
