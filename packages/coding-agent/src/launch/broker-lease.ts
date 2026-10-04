@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
+import * as os from "node:os";
 import { atomicWriteFile, isEnoent, logger } from "@veyyon/utils";
 import { tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
 import { getProcessStartIdentity, getProcessStartTime, isProcessInstanceAlive } from "@veyyon/utils/process-liveness";
@@ -37,39 +38,51 @@ export function daemonOwnerIsAlive(raw: unknown, recordMtimeMs?: number): boolea
 	return classifyDaemonOwner(raw, recordMtimeMs) === "alive";
 }
 
-const ENDPOINT_PROBE_TIMEOUT_MS = 1_000;
+/** One absolute deadline for the whole ping exchange, not an inactivity timer: a trickling peer cannot extend it. */
+const ENDPOINT_PROBE_DEADLINE_MS = 1_000;
+/**
+ * A legacy record carries no identity, so a live PID with an ambiguous start time is kept unless something
+ * positive disproves it. When the endpoint stays inconclusive the record is reclaimed once it is this old:
+ * a legacy broker that has answered nothing for a day is not serving anyone.
+ */
+const LEGACY_LEASE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+/**
+ * Wall-clock boot time is itself derived from the (steppable) clock, so a record must predate it by a wide
+ * margin before that counts as proof the PID belongs to an earlier boot.
+ */
+const LEGACY_BOOT_MARGIN_MS = 10 * 60 * 1_000;
 
 /**
- * `owner`: the endpoint answered an authenticated ping as the recorded PID.
- * `impostor`: something answered, and it is provably not that broker.
- * `unknown`: no listener, a refused or timed-out connection, or an unreadable token. A live PID with an
- * ambiguous start time is never taken over on `unknown`; only an `impostor` disproves the owner.
+ * `owner`: an authenticated ping answered as the recorded PID.
+ * `other-pid`: an authenticated ping answered as a different PID, which disproves the owner.
+ * `inconclusive`: no listener, refusal, EOF, timeout, garbage, or an unreadable token.
  */
-type EndpointWitness = "owner" | "impostor" | "unknown";
+type EndpointWitness = "owner" | "other-pid" | "inconclusive";
 
 async function brokerEndpointWitness(runtimeDir: string, ownerPid: number): Promise<EndpointWitness> {
 	let token: string;
 	try {
 		token = (await fs.readFile(daemonBrokerTokenPath(runtimeDir), "utf8")).trim();
 	} catch {
-		return "unknown";
+		return "inconclusive";
 	}
-	if (token.length === 0) return "unknown";
+	if (token.length === 0) return "inconclusive";
 	const { promise, resolve } = Promise.withResolvers<EndpointWitness>();
 	const socket = net.connect(daemonBrokerEndpoint(runtimeDir));
 	const requestId = crypto.randomUUID();
 	let buffered = "";
-	const settle = (witness: EndpointWitness) => {
+	const deadline = setTimeout(() => settle("inconclusive"), ENDPOINT_PROBE_DEADLINE_MS);
+	function settle(witness: EndpointWitness) {
+		clearTimeout(deadline);
 		socket.destroy();
 		resolve(witness);
-	};
+	}
 	socket.setEncoding("utf8");
-	socket.setTimeout(ENDPOINT_PROBE_TIMEOUT_MS, () => settle("unknown"));
 	socket.once("connect", () => {
 		socket.write(`${JSON.stringify({ id: requestId, token, operation: { op: "ping" } })}\n`);
 	});
-	socket.once("error", () => settle("unknown"));
-	socket.once("close", () => settle("impostor"));
+	socket.once("error", () => settle("inconclusive"));
+	socket.once("close", () => settle("inconclusive"));
 	socket.on("data", (chunk: string) => {
 		buffered += chunk;
 		const newline = buffered.indexOf("\n");
@@ -77,24 +90,35 @@ async function brokerEndpointWitness(runtimeDir: string, ownerPid: number): Prom
 		try {
 			const reply: unknown = JSON.parse(buffered.slice(0, newline));
 			if (typeof reply !== "object" || reply === null || !("id" in reply) || reply.id !== requestId) {
-				return settle("impostor");
+				return settle("inconclusive");
 			}
-			if (!("ok" in reply) || reply.ok !== true || !("result" in reply)) return settle("impostor");
+			if (!("ok" in reply) || reply.ok !== true || !("result" in reply)) return settle("inconclusive");
 			const result = reply.result;
 			if (typeof result !== "object" || result === null || !("op" in result) || result.op !== "ping") {
-				return settle("impostor");
+				return settle("inconclusive");
 			}
 			// A broker built before the ping carried its PID proves only that it holds this runtime's token.
 			const pid = "pid" in result && typeof result.pid === "number" ? result.pid : ownerPid;
-			settle(pid === ownerPid ? "owner" : "impostor");
+			settle(pid === ownerPid ? "owner" : "other-pid");
 		} catch {
-			settle("impostor");
+			settle("inconclusive");
 		}
 	});
 	return promise;
 }
 
-export async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLease | null> {
+/** Injectable time sources; both default to the real system clock. */
+export interface BrokerLeaseClock {
+	now?: () => number;
+	bootTimeMs?: () => number;
+}
+
+export async function acquireBrokerLease(
+	runtimeDir: string,
+	clock: BrokerLeaseClock = {},
+): Promise<BrokerLease | null> {
+	const now = clock.now ?? Date.now;
+	const bootTimeMs = clock.bootTimeMs ?? (() => Date.now() - os.uptime() * 1_000);
 	const leasePath = daemonBrokerLeasePath(runtimeDir);
 	// Serialize observation, stale retirement and publication. A bare wx retry can
 	// delete a winner's freshly published lease when two starters observe a corpse.
@@ -107,18 +131,27 @@ export async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLeas
 			} catch {
 				// No writer using this transition lock can still be publishing.
 			}
-			const verdict = classifyDaemonOwner(raw, (await fs.stat(leasePath)).mtimeMs);
+			const recordMtimeMs = (await fs.stat(leasePath)).mtimeMs;
+			const verdict = classifyDaemonOwner(raw, recordMtimeMs);
 			if (verdict === "alive") {
 				logger.debug("Broker lease is held by a live owner; not starting a broker", { leasePath });
 				return null;
 			}
 			if (verdict === "legacy-reused") {
 				const record = raw as { pid: number };
-				const witness = await brokerEndpointWitness(runtimeDir, record.pid);
-				if (witness !== "impostor") {
+				const ageMs = now() - recordMtimeMs;
+				// Positive evidence only: the record predates this boot (so its PID belongs to an earlier boot), or an
+				// authenticated reply names a different PID. EOF, refusal, timeout and an absent endpoint prove nothing.
+				const predatesBoot = recordMtimeMs < bootTimeMs() - LEGACY_BOOT_MARGIN_MS;
+				const witness = predatesBoot ? "predates-boot" : await brokerEndpointWitness(runtimeDir, record.pid);
+				const reclaim =
+					witness === "predates-boot" ||
+					witness === "other-pid" ||
+					(witness === "inconclusive" && ageMs > LEGACY_LEASE_MAX_AGE_MS);
+				if (!reclaim) {
 					logger.warn(
 						"Legacy broker lease looks like PID reuse by start time, but its owner is alive and not disproved; keeping the owner",
-						{ leasePath, witness },
+						{ leasePath, witness, ageMs },
 					);
 					return null;
 				}
