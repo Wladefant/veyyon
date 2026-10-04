@@ -27,6 +27,7 @@ settle 4
 # recorder (the composer kept "/loop" for 30 s), while the pty carriage return
 # submits it.
 t "/loop"
+# needle-source: › /loop -- the prompt prefix and typed slash command in the composer
 expect_screen "› /loop" 90 typed
 pause 1
 kitty @ --to "${KITTY_SOCKET}" send-text -- $'\r'
