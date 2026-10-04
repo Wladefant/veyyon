@@ -377,7 +377,10 @@ export class AutoresearchStorage {
 				}
 				return db;
 			},
-			{ failClosedReason: "the autoresearch log holds experiment history that cannot be rebuilt; restore it from a backup" },
+			{
+				failClosedReason:
+					"the autoresearch log holds experiment history that cannot be rebuilt; restore it from a backup",
+			},
 		);
 	}
 

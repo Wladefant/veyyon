@@ -162,7 +162,10 @@ export class AgentStorage {
 					this.#initializeSchema();
 					return db;
 				},
-				{ failClosedReason: "agent.db holds settings and credentials that cannot be rebuilt; restore it from a backup" },
+				{
+					failClosedReason:
+						"agent.db holds settings and credentials that cannot be rebuilt; restore it from a backup",
+				},
 			);
 		} catch (err) {
 			const dir = path.dirname(dbPath);
