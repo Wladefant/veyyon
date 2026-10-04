@@ -1316,3 +1316,77 @@ test("regression: transient corruption surfaces error without quarantine and clo
 	expect(syncMemoryPreserved).toBe(0);
 	expect(() => syncMemoryDb?.query("SELECT 1").all()).toThrow(/closed database/i);
 });
+
+test("a non-corruption initializer failure on a store failing quick_check is recovered with the original error as cause", async () => {
+	await using dir = await TempDir.create("@omp-corrupt-hidden-");
+	const dbPath = dir.join("store.db");
+	const damaged = await corruptSchema(dbPath);
+	// Bun drops a mid-script SQLITE_CORRUPT and a later statement reports "no such table" (oven-sh/bun#37415).
+	const initFailure = new Error("no such table: hint_usage");
+	let attempts = 0;
+	let preserved: unknown;
+
+	const db = await openSqliteDatabase(
+		dbPath,
+		handle => {
+			if (attempts++ === 0) throw initFailure;
+			handle.run("CREATE TABLE t (v TEXT)");
+			return handle;
+		},
+		{ recoverCorruption: true, onCorruptionPreserved: (_backupPath, error) => (preserved = error) },
+	);
+	db.close();
+
+	expect(attempts).toBe(2);
+	expect(isSqliteCorruptionError(preserved)).toBe(true);
+	expect((preserved as Error).cause).toBe(initFailure);
+	expect((preserved as Error).message).toContain("no such table: hint_usage");
+	const backups = (await corruptBackups(dir.path())).filter(f => !f.endsWith(".tmp"));
+	expect(backups).toHaveLength(1);
+	expect(await fs.readFile(path.join(dir.path(), backups[0]!, "store.db"))).toEqual(damaged);
+});
+
+test("synchronous non-corruption initializer failure on a store failing quick_check is recovered", async () => {
+	await using dir = await TempDir.create("@omp-corrupt-hidden-sync-");
+	const dbPath = dir.join("store.db");
+	await corruptSchema(dbPath);
+	const initFailure = new Error("no such table: hint_usage");
+	let attempts = 0;
+	let preserved: unknown;
+
+	openSqliteDatabaseSync(
+		dbPath,
+		handle => {
+			if (attempts++ === 0) throw initFailure;
+			handle.close();
+		},
+		{ recoverCorruption: true, onCorruptionPreserved: (_backupPath, error) => (preserved = error) },
+	);
+
+	expect(attempts).toBe(2);
+	expect((preserved as Error).cause).toBe(initFailure);
+	expect(await corruptBackups(dir.path())).not.toHaveLength(0);
+});
+
+test("a non-corruption initializer failure on a healthy store is not probed into recovery", async () => {
+	await using dir = await TempDir.create("@omp-corrupt-hidden-healthy-");
+	const dbPath = dir.join("store.db");
+	const seed = new Database(dbPath);
+	seed.run("CREATE TABLE t (v TEXT)");
+	seed.close();
+	let preserved = 0;
+
+	const failure = await openSqliteDatabase(
+		dbPath,
+		() => {
+			throw new Error("boom");
+		},
+		{ recoverCorruption: true, onCorruptionPreserved: () => preserved++ },
+	).catch(e => e);
+
+	expect(failure).toBeInstanceOf(Error);
+	expect(failure.message).toContain("boom");
+	expect(isSqliteCorruptionError(failure)).toBe(false);
+	expect(preserved).toBe(0);
+	expect(await corruptBackups(dir.path())).toHaveLength(0);
+});

@@ -195,15 +195,44 @@ export interface SqliteOpenOptions {
 	onCorruptionPreserved?: (backupPath: string, error: unknown) => void;
 }
 
+/**
+ * Bun's multi-statement `db.run()` reports only the final statement's step
+ * error (oven-sh/bun#37415), so a corrupt page hit mid-script can resurface as
+ * an unrelated failure such as "no such table". When an initializer fails for
+ * any other reason, a `quick_check` on the still-open handle decides whether
+ * the store itself is damaged. Runs only on the failure path; the original
+ * failure stays attached as `cause`.
+ */
+function revealHiddenCorruption(db: Database | undefined, error: unknown): unknown {
+	if (!db || isSqliteCorruptionError(error) || isSqliteBusyError(error)) return error;
+	let detail: string;
+	let code: unknown = "SQLITE_CORRUPT";
+	let errno: unknown = 11;
+	try {
+		const rows = db.query<{ quick_check: string }, []>("PRAGMA quick_check(1)").all();
+		if (rows[0]?.quick_check === "ok") return error;
+		detail = `database disk image is malformed (${rows[0]?.quick_check})`;
+	} catch (probeError) {
+		if (!isSqliteCorruptionError(probeError)) return error;
+		detail = probeError instanceof Error ? probeError.message : String(probeError);
+		({ code, errno } = probeError as { code: unknown; errno?: unknown });
+	}
+	return Object.assign(new Error(`${detail}; initialization failed: ${errorMessage(error)}`, { cause: error }), {
+		code,
+		errno,
+	});
+}
+
 function handleOpenError(
 	db: Database | undefined,
-	error: unknown,
+	caught: unknown,
 	identity: SqliteFileIdentity,
 	recover?: boolean,
 ): never {
+	const error = recover ? revealHiddenCorruption(db, caught) : caught;
 	if (recover && isSqliteCorruptionError(error)) throw new SqliteAttemptFailure(error, identity, { db });
-	closeFailedDatabase(db, error, identity);
-	throw new SqliteAttemptFailure(error, identity);
+	closeFailedDatabase(db, caught, identity);
+	throw new SqliteAttemptFailure(caught, identity);
 }
 
 async function openWithBusyRetries<T>(
