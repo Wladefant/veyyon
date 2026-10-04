@@ -37,9 +37,10 @@ describe("artifact publication is whole-or-nothing", () => {
 		for (const dir of dirs.splice(0)) await removeWithRetries(dir);
 	});
 
-	/** Directory entries other than the hidden id reservations, which outlive a failed save on purpose. */
-	async function listPublished(dir: string): Promise<string[]> {
-		return (await fs.readdir(dir)).filter(name => !name.startsWith(".artifact-id-"));
+	/** Directory entries other than the exact hidden id reservations, which outlive a failed save on purpose. */
+	async function listPublished(dir: string, reservedIds: (string | number)[] = []): Promise<string[]> {
+		const expectedReservations = new Set(reservedIds.map(id => `.artifact-id-${id}`));
+		return (await fs.readdir(dir)).filter(name => !expectedReservations.has(name));
 	}
 
 	/** Model a short write faithfully: partial bytes land, and the count reports short. */
@@ -63,7 +64,9 @@ describe("artifact publication is whole-or-nothing", () => {
 
 		// Neither the artifact nor a leftover staging sibling may survive, or the
 		// directory scan resolves a truncated payload as a finished result.
-		expect(await listPublished(dir)).toEqual([]);
+		// Exactly the reservation directory survived.
+		expect(await fs.readdir(dir)).toEqual([`.artifact-id-${id}`]);
+		expect(await listPublished(dir, [id])).toEqual([]);
 		expect(await manager.getPath(id)).toBeNull();
 		expect(await manager.exists(id)).toBe(false);
 	});
@@ -82,6 +85,7 @@ describe("artifact publication is whole-or-nothing", () => {
 		// One file: the staging sibling was removed, and the backup a Windows
 		// replacement would own is not left behind either.
 		expect(await fs.readdir(dir)).toEqual(["0.task.log"]);
+		expect(await listPublished(dir)).toEqual(["0.task.log"]);
 	});
 
 	it("resolves the exact bytes a completed save wrote", async () => {
@@ -95,8 +99,9 @@ describe("artifact publication is whole-or-nothing", () => {
 		const resolved = await manager.getPath(id);
 		expect(resolved).not.toBeNull();
 		expect(await Bun.file(resolved as string).text()).toBe(body);
-		// Exactly the artifact, with no staging sibling left next to it.
-		expect(await listPublished(dir)).toEqual([path.basename(resolved as string)]);
+		// Exactly the artifact and the reservation directory, with no staging sibling left next to it.
+		expect((await fs.readdir(dir)).sort()).toEqual([`.artifact-id-${id}`, path.basename(resolved as string)].sort());
+		expect(await listPublished(dir, [id])).toEqual([path.basename(resolved as string)]);
 	});
 
 	it("assigns the next id past whatever the directory already holds", async () => {
@@ -108,5 +113,7 @@ describe("artifact publication is whole-or-nothing", () => {
 
 		expect(id).toBe("8");
 		expect((await manager.listFiles()).sort()).toEqual(["7.task.log", "8.task.log"]);
+		expect((await fs.readdir(dir)).sort()).toEqual([`.artifact-id-${id}`, "7.task.log", "8.task.log"].sort());
+		expect((await listPublished(dir, [id])).sort()).toEqual(["7.task.log", "8.task.log"]);
 	});
 });

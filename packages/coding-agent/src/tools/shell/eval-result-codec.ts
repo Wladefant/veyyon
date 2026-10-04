@@ -57,7 +57,12 @@ function slimCells(cells: unknown[], body: string): unknown[] {
 }
 
 /** The keys a pre-version-1 bounded preview carried. Any other key means the value is user data. */
-const LEGACY_PREVIEW_KEYS: Record<string, true> = { preview: true, truncated: true, totalBytes: true, artifactId: true };
+const LEGACY_PREVIEW_KEYS: Record<string, true> = {
+	preview: true,
+	truncated: true,
+	totalBytes: true,
+	artifactId: true,
+};
 
 /**
  * True only for an exact legacy preview envelope. A complete value that merely shares some of its

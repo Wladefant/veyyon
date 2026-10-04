@@ -117,6 +117,72 @@ describe("registered eval display persistence migration", () => {
 		await expect(fs.stat(sessionFileStem(file))).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
+	it("preserves complete values resembling legacy previews on flush and reopen", async () => {
+		const smallComplete = {
+			preview: "hello\n[…100ch elided…]",
+			truncated: true,
+			totalBytes: 12000,
+			extraPayload: "secret-complete-data",
+		};
+		const largeSecret = "LARGE-SECRET-PAYLOAD-".repeat(1000);
+		const misleadingArtifactId = "dangling-artifact-id-9999";
+		const largeComplete = {
+			preview: "hello\n[…100ch elided…]",
+			truncated: true,
+			totalBytes: 12000,
+			extraPayload: largeSecret,
+			artifactId: misleadingArtifactId,
+		};
+
+		await persist([smallComplete, largeComplete]);
+		const session = await SessionManager.open(file, root);
+		expect(detailsOf(session.getEntries()[0]).jsonOutputs).toEqual([smallComplete, largeComplete]);
+
+		await session.flush();
+
+		const flushedDetails = detailsOf(session.getEntries()[0]);
+		expect(flushedDetails.displayVersion).toBe(EVAL_DISPLAY_VERSION);
+		expect(flushedDetails.jsonOutputs[0]).toEqual(smallComplete);
+
+		const largeMigrated = flushedDetails.jsonOutputs[1] as {
+			version: number;
+			preview: string;
+			truncated: boolean;
+			totalBytes: number;
+			artifactId: string;
+		};
+		expect(largeMigrated.version).toBe(EVAL_DISPLAY_VERSION);
+		expect(largeMigrated.truncated).toBe(true);
+		expect(largeMigrated.artifactId).not.toBe(misleadingArtifactId);
+
+		const artifactPath = await session.getArtifactPath(largeMigrated.artifactId);
+		if (!artifactPath) throw new Error("Expected complete artifact for large value");
+		const artifactJson = await fs.readFile(artifactPath, "utf8");
+		expect(artifactJson).toBe(JSON.stringify(largeComplete, null, 2));
+		expect(JSON.parse(artifactJson)).toEqual(largeComplete);
+
+		const reopened = await SessionManager.open(file, root);
+		const reopenedDetails = detailsOf(reopened.getEntries()[0]);
+		expect(reopenedDetails.displayVersion).toBe(EVAL_DISPLAY_VERSION);
+		expect(reopenedDetails.jsonOutputs[0]).toEqual(smallComplete);
+		expect(reopenedDetails.jsonOutputs[1]).toEqual(largeMigrated);
+
+		const reopenedArtifactPath = await reopened.getArtifactPath(largeMigrated.artifactId);
+		if (!reopenedArtifactPath) throw new Error("Expected complete artifact on reopen");
+		expect(await fs.readFile(reopenedArtifactPath, "utf8")).toBe(JSON.stringify(largeComplete, null, 2));
+
+		const stemDir = sessionFileStem(file);
+		const artifactsBefore = await fs.readdir(stemDir);
+		const diskTextBefore = await fs.readFile(file, "utf8");
+
+		await reopened.flush();
+
+		expect(await fs.readdir(stemDir)).toEqual(artifactsBefore);
+		expect(await fs.readFile(file, "utf8")).toBe(diskTextBefore);
+		expect(detailsOf(reopened.getEntries()[0]).jsonOutputs[0]).toEqual(smallComplete);
+		expect(detailsOf(reopened.getEntries()[0]).jsonOutputs[1]).toEqual(largeMigrated);
+	});
+
 	it("keeps recovery complete and details bounded after a second reopen", async () => {
 		const large = { payload: "recovery-".repeat(2000) };
 		await persist([large]);

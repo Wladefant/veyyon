@@ -295,6 +295,7 @@ export interface SessionManagerStateSnapshot {
 	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
+	deferredLegacyRewrite?: boolean;
 	draftOnlySessionCleanupArmed: boolean;
 	nextSequence: number;
 	lifecycleStarted: boolean;
@@ -380,6 +381,8 @@ export class SessionManager {
 	#fileIsCurrent = false;
 	/** In-memory entries diverged from disk (load-migration/sanitize) → next persist must full-rewrite. */
 	#rewriteRequired = false;
+	/** Structural load migrations wait for a writable publish; ordinary dirty state does not. */
+	#deferredLegacyRewrite = false;
 	/** Lazy gate crossed (ensureOnDisk / loaded file): every entry must persist from now on. */
 	#forceFileCreation = false;
 	/**
@@ -1677,6 +1680,7 @@ export class SessionManager {
 			sessionFile: this.#sessionFile,
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
+			deferredLegacyRewrite: this.#deferredLegacyRewrite,
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			nextSequence: this.#nextSequence,
 			lifecycleStarted: this.#lifecycleStarted,
@@ -1700,6 +1704,7 @@ export class SessionManager {
 		this.#sessionFile = snapshot.sessionFile;
 		this.#fileIsCurrent = snapshot.onDisk;
 		this.#rewriteRequired = snapshot.needsRewrite;
+		this.#deferredLegacyRewrite = snapshot.deferredLegacyRewrite ?? false;
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
@@ -1793,11 +1798,15 @@ export class SessionManager {
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
 		this.#rewriteRequired = migrated;
+		this.#deferredLegacyRewrite = migrated;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 
-		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
+		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) {
+			this.#rewriteRequired = true;
+			this.#deferredLegacyRewrite = false;
+		}
 		if (layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(layout);
 		this.#startLifecycle("resumed");
 		this.#coolUnreachablePayloads();
@@ -2040,7 +2049,12 @@ export class SessionManager {
 			});
 			this.#rewriteRequired = true;
 		}
-		if (this.#retryPersistenceAfterFailure() || pendingMigration) await this.#rewriteAtomically();
+		const retry = this.#retryPersistenceAfterFailure();
+		const dirty = this.#rewriteRequired && (!this.#deferredLegacyRewrite || !this.#fileIsCurrent);
+		if (retry || pendingMigration || dirty) {
+			await this.#rewriteAtomically();
+			this.#deferredLegacyRewrite = false;
+		}
 		await this.#scheduleDiskWork(async () => {
 			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});

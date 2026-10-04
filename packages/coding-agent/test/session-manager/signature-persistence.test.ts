@@ -196,7 +196,7 @@ describe("SessionManager signature persistence", () => {
 		expect((reloadedToolEntry.message.details as { images?: ImageContent[] }).images).toEqual([detailImage]);
 	});
 
-	it("rehydrates assistant replay metadata in memory without rewriting the session file", async () => {
+	it("sanitizes stale Copilot replay metadata on load and persists it on flush", async () => {
 		using tempDir = TempDir.createSync("@pi-session-rehydrate-persistence-");
 		const session = SessionManager.create(tempDir.path(), tempDir.path());
 		const providerPayload = {
@@ -256,6 +256,18 @@ describe("SessionManager signature persistence", () => {
 		expect(thinking.thinkingSignature).toBeUndefined();
 		expect(await fs.readFile(sessionFile, "utf8")).toBe(persistedBefore);
 		expect((await fs.stat(sessionFile)).mtimeMs).toBe(initialMtimeMs);
+		expect(reloaded.captureState().needsRewrite).toBe(true);
+		await reloaded.flush();
+		expect(reloaded.captureState().needsRewrite).toBe(false);
+		const persistedAfter = await fs.readFile(sessionFile, "utf8");
+		expect(persistedAfter).not.toContain("enc_stale");
+		expect(persistedAfter).not.toContain("msg_stale_snapshot");
+		const reopened = await SessionManager.open(sessionFile);
+		expect(getAssistantMessage(reopened)).toEqual(assistant);
+		expect(reopened.captureState().needsRewrite).toBe(false);
+		await reopened.flush();
+		expect(await fs.readFile(sessionFile, "utf8")).toBe(persistedAfter);
+		await reopened.close();
 		await reloaded.close();
 	}, 15_000);
 
