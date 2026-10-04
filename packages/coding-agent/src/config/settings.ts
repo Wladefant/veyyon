@@ -19,6 +19,7 @@ import * as path from "node:path";
 // The caps' own module, not the streaming engine that reads them. `@veyyon/ai/stream` re-exports
 // this setter and importing it there cost 285 modules for one function; ~530 test files import
 // `Settings`, so this file's graph is the most leveraged one in the package.
+import { configureGitHubCopilotOAuthClientId } from "@veyyon/ai/github-copilot-client-id";
 import { configureProviderMaxInFlightRequests } from "@veyyon/ai/provider-inflight-limits";
 import { clearSettingSignals } from "@veyyon/kernel/settings/signal";
 import {
@@ -749,6 +750,10 @@ const SETTING_HOOKS: { [P in SettingPath]?: SettingHook<P> } = {
 	"providers.maxInFlightRequests": value => {
 		configureProviderMaxInFlightRequests(validateProviderMaxInFlightRequests(value));
 	},
+	"providers.githubCopilot.oauthClientId": value => {
+		// Always call so an unset/empty value clears a previously-applied ID.
+		configureGitHubCopilotOAuthClientId(typeof value === "string" ? value : undefined);
+	},
 	"hindsight.bankId": () => hindsightScopeSignal.fire(),
 	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
 	"hindsight.scoping": () => hindsightScopeSignal.fire(),
@@ -804,6 +809,7 @@ export function resetSettingsForTest(): void {
 	setSettingsInstance(null);
 	setSettingsInstancePromise(null);
 	configureProviderMaxInFlightRequests(undefined);
+	configureGitHubCopilotOAuthClientId(undefined);
 	clearSettingSignals();
 	runSettingsTestResetHooks();
 }

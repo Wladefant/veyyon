@@ -1263,7 +1263,7 @@ const streamOpenAICompletionsOnce = (
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			const { copilotPremiumRequests, baseUrl, headers, query, requestHeaders } = createRequestSetup(
+			const { baseUrl, headers, query, requestHeaders } = createRequestSetup(
 				model,
 				context,
 				apiKey,
@@ -1272,7 +1272,6 @@ const streamOpenAICompletionsOnce = (
 				getOpenAIPromptCacheKey(options),
 				conversationIdForOpenCode(options),
 			);
-			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
 				model,
 				baseUrl,
@@ -1311,9 +1310,6 @@ const streamOpenAICompletionsOnce = (
 			disableStrictTools = connectionResult.disableStrictTools;
 			await notifyProviderResponse(options, openaiHandle.response, model, openaiHandle.requestId);
 			const openaiStream = openaiHandle.events;
-			if (premiumRequestsTotal !== undefined) {
-				output.usage.premiumRequests = premiumRequestsTotal;
-			}
 			stream.push({ type: "start", partial: output });
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
 			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
@@ -1572,7 +1568,7 @@ const streamOpenAICompletionsOnce = (
 			let sawUsagePayload = false;
 			let awaitTrailingUsageDetails = false;
 			const applyUsagePayload = (rawUsage: object): void => {
-				output.usage = parseChunkUsage(rawUsage, model, premiumRequestsTotal);
+				output.usage = parseChunkUsage(rawUsage, model, undefined);
 				sawUsagePayload = true;
 				awaitTrailingUsageDetails = !hasPositiveCacheReadTokenField(rawUsage);
 			};

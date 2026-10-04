@@ -136,7 +136,6 @@ export interface OpenAIToolChoiceState {
 
 export interface OpenAIRequestSetupModel extends OpenAIModelIdentity {
 	headers?: Record<string, string>;
-	premiumMultiplier?: number;
 	compat?: Pick<ResolvedOpenAISharedCompat, "promptCacheSessionHeader">;
 }
 
@@ -171,7 +170,6 @@ export interface OpenAIRequestSetupOptions {
 }
 
 export interface OpenAIRequestSetup {
-	copilotPremiumRequests: number | undefined;
 	baseUrl: string | undefined;
 	headers: Record<string, string>;
 	query: Record<string, string> | undefined;
@@ -255,7 +253,6 @@ export function resolveOpenAIRequestSetup(
 		headers = { ...options.prependHeaders(), ...headers };
 	}
 
-	let copilotPremiumRequests: number | undefined;
 	let baseUrl = model.baseUrl;
 	if (model.provider === "moonshot") {
 		// Bundled `moonshot` catalog models hardcode the international endpoint
@@ -278,12 +275,10 @@ export function resolveOpenAIRequestSetup(
 		const copilot = buildCopilotDynamicHeaders({
 			messages: options.messages,
 			hasImages: hasCopilotVisionInput(options.messages),
-			premiumMultiplier: model.premiumMultiplier,
 			headers,
 			initiatorOverride: options.initiatorOverride,
 		});
 		Object.assign(headers, copilot.headers);
-		copilotPremiumRequests = copilot.premiumRequests;
 		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
 	}
 
@@ -322,7 +317,7 @@ export function resolveOpenAIRequestSetup(
 	}
 	const requestHeaders = { ...headers };
 	headers.Authorization ??= `Bearer ${apiKey}`;
-	return { copilotPremiumRequests, baseUrl, headers, query, requestHeaders };
+	return { baseUrl, headers, query, requestHeaders };
 }
 
 export function applyOpenAIServiceTier(

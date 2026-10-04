@@ -511,6 +511,18 @@ export const PROVIDERS_SETTINGS = {
 		},
 	},
 
+	"providers.githubCopilot.oauthClientId": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			group: "Protocol",
+			label: "GitHub Copilot OAuth Client ID",
+			description:
+				"Client ID of your own GitHub OAuth app (device flow enabled) for /login github-copilot. Veyyon ships no client ID. VEYYON_GITHUB_COPILOT_CLIENT_ID overrides it. Existing logins do not need it.",
+		},
+	},
+
 	"providers.openaiWebsockets": {
 		type: "enum",
 		values: ["auto", "off", "on"] as const,
