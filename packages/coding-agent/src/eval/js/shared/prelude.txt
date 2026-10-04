@@ -79,18 +79,13 @@ if (!globalThis.__veyyon_js_prelude_loaded__) {
 	// than this list came from user code.
 	const formatDefValue = value => {
 		try {
-			if (typeof value === "function") {
-				const head = String(value).split("\n", 1)[0];
-				return head.length <= 80 ? head : `${head.slice(0, 77)}...`;
-			}
+			if (typeof value === "function") return "function";
 			if (value === null) return "null";
 			if (Array.isArray(value)) return `Array(${value.length})`;
 			if (typeof value === "object") {
-				const kind = value.constructor && value.constructor.name !== "Object" ? value.constructor.name : "object";
-				return `${kind}(${Object.keys(value).length} keys)`;
+				return `object(${Object.keys(value).length} keys)`;
 			}
-			const text = String(value);
-			return `${typeof value} ${text.length <= 60 ? text : `${text.slice(0, 57)}...`}`;
+			return typeof value;
 		} catch {
 			return typeof value;
 		}
@@ -100,7 +95,8 @@ if (!globalThis.__veyyon_js_prelude_loaded__) {
 		const entries = [];
 		for (const key of Object.keys(globalThis)) {
 			if (baseline.has(key) || key.startsWith("__veyyon")) continue;
-			entries.push(`${key}: ${formatDefValue(globalThis[key])}`);
+			const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+			entries.push(`${key}: ${descriptor && "value" in descriptor ? formatDefValue(descriptor.value) : "accessor"}`);
 		}
 		entries.sort();
 		return entries.slice(0, 200);

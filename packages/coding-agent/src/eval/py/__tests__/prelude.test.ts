@@ -5,7 +5,7 @@ const pythonPath = Bun.env.PYTHON ?? "python3";
 
 async function runPrelude(
 	code: string,
-	env: Record<string, string>,
+	env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	const prelude = PYTHON_PRELUDE.replace(
 		"from __future__ import annotations",
@@ -100,5 +100,125 @@ describe("python prelude", () => {
 		expect(PYTHON_PRELUDE).toContain('("nestedPatches", "nested_patches")');
 		expect(PYTHON_PRELUDE).toContain('("changesApplied", "changes_applied")');
 		expect(PYTHON_PRELUDE).toContain('("isolationSummary", "isolation_summary")');
+	});
+
+	it("defs() lists variable names and type/shape only without leaking secret values or representations", async () => {
+		const pythonCode = `
+# Seeded arbitrary opaque secret strings
+secret_token = "secret-token-opaque-xyz-98765"
+api_key = "bearer-secret-token-key-4321"
+empty_str = ""
+
+# Nested collections containing secrets
+nested_list = [
+    "secret-list-item-alpha",
+    {"secret-nested-dict-key": "secret-nested-dict-val"},
+    ["secret-deep-item-1", "secret-deep-item-2"],
+]
+nested_dict = {
+    "secret_key_1": "secret_val_1",
+    "secret_key_2": ["secret_inner_val"],
+}
+secret_set = {"secret-set-item-alpha", "secret-set-item-beta"}
+secret_tuple = ("secret-tuple-item-1", "secret-tuple-item-2", "secret-tuple-item-3")
+empty_list = []
+empty_dict = {}
+empty_set = set()
+empty_tuple = ()
+
+# Function bodies containing secrets
+def secret_worker():
+    inner_secret = "secret-inside-function-body-999"
+    return inner_secret
+
+secret_lambda = lambda: "secret-inside-lambda-body-888"
+
+# Objects with hostile repr / property hooks
+class HostileReprLeak:
+    def __repr__(self):
+        return "SECRET-LEAK-VIA-REPR-12345"
+
+class HostileReprError:
+    def __repr__(self):
+        raise RuntimeError("hostile __repr__ must not be executed")
+
+class HostilePropertyHook:
+    @property
+    def dangerous_prop(self):
+        raise RuntimeError("hostile property getter must not be executed")
+
+hostile_leak = HostileReprLeak()
+hostile_error = HostileReprError()
+hostile_prop = HostilePropertyHook()
+
+# Regular scalar types
+scalar_int = 42
+scalar_float = 3.14
+scalar_bool = True
+scalar_none = None
+
+import json
+print("__DEFS_JSON__=" + json.dumps(defs()))
+`;
+
+		const result = await runPrelude(pythonCode, {});
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+
+		const marker = "__DEFS_JSON__=";
+		const jsonLine = result.stdout.split("\n").find(line => line.startsWith(marker));
+		expect(jsonLine).toBeDefined();
+
+		const entries = JSON.parse(jsonLine!.slice(marker.length)) as string[];
+
+		// Assert output contains no secret substrings
+		const secretSubstrings = [
+			"secret-token-opaque-xyz-98765",
+			"bearer-secret-token-key-4321",
+			"secret-list-item-alpha",
+			"secret-nested-dict-key",
+			"secret-nested-dict-val",
+			"secret-deep-item-1",
+			"secret-deep-item-2",
+			"secret_val_1",
+			"secret_inner_val",
+			"secret-set-item-alpha",
+			"secret-set-item-beta",
+			"secret-tuple-item-1",
+			"secret-tuple-item-2",
+			"secret-tuple-item-3",
+			"secret-inside-function-body-999",
+			"secret-inside-lambda-body-888",
+			"SECRET-LEAK-VIA-REPR-12345",
+		];
+
+		const serializedOutput = JSON.stringify(entries);
+		for (const secret of secretSubstrings) {
+			expect(serializedOutput).not.toContain(secret);
+			expect(result.stdout).not.toContain(secret);
+		}
+
+		// Assert output lists variable names and types/shapes only according to the contract:
+		// Python _format_def will return type name, built-in collection lengths as type(n), function as function (no qualname).
+		expect(entries).toContain("secret_token: str");
+		expect(entries).toContain("api_key: str");
+		expect(entries).toContain("empty_str: str");
+		expect(entries).toContain("nested_list: list(3)");
+		expect(entries).toContain("nested_dict: dict(2)");
+		expect(entries).toContain("secret_set: set(2)");
+		expect(entries).toContain("secret_tuple: tuple(3)");
+		expect(entries).toContain("empty_list: list(0)");
+		expect(entries).toContain("empty_dict: dict(0)");
+		expect(entries).toContain("empty_set: set(0)");
+		expect(entries).toContain("empty_tuple: tuple(0)");
+		expect(entries).toContain("secret_worker: function");
+		expect(entries).toContain("secret_lambda: function");
+		expect(entries).toContain("hostile_leak: HostileReprLeak");
+		expect(entries).toContain("hostile_error: HostileReprError");
+		expect(entries).toContain("hostile_prop: HostilePropertyHook");
+		expect(entries).toContain("scalar_int: int");
+		expect(entries).toContain("scalar_float: float");
+		expect(entries).toContain("scalar_bool: bool");
+		expect(entries).toContain("scalar_none: NoneType");
 	});
 });
