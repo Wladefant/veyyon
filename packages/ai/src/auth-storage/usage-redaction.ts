@@ -218,7 +218,7 @@ export function redactUsageError(error: unknown, secrets: readonly string[]): st
 				return String(error);
 			default:
 		}
-		if (error === null) return "null";
+		if (error === null || error === undefined) return String(error);
 		// Before any typeof branch: a callable Proxy is a function, and every reflective read of a Proxy
 		// (or of a value whose prototype is one) runs its traps.
 		if (isOrInheritsFromProxy(error)) return UNREADABLE;
