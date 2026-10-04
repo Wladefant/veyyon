@@ -10,7 +10,7 @@ import {
 	releaseBrokerLease,
 } from "../../src/launch/broker-lease";
 import { daemonBrokerEndpoint, daemonBrokerLeasePath, daemonBrokerTokenPath } from "../../src/launch/paths";
-import { pruneDeadDaemonRuntimeDirs } from "../../src/launch/presence";
+import { hasLiveDaemonProjectPresence, pruneDeadDaemonRuntimeDirs } from "../../src/launch/presence";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const STALE = new Date(Date.now() - 30 * 60_000);
@@ -221,6 +221,167 @@ async function spawnDeadChild(): Promise<number> {
 	await proc.exited;
 	cleanup();
 	return proc.pid;
+}
+
+interface LiveClientRegistrationProcess {
+	pid: number;
+	register: () => void;
+	waitForAttempting: () => Promise<void>;
+	waitForRegistered: () => Promise<void>;
+	queryStatus: () => Promise<"waiting" | "registered">;
+	close: () => Promise<void>;
+}
+
+async function spawnClientRegistrationProcess(
+	projectDir: string,
+	runtimeDir: string,
+): Promise<LiveClientRegistrationProcess> {
+	const { env, cleanup } = hermeticSpawnEnv();
+	const childScript = `
+import { registerDaemonProjectPresence } from "./packages/coding-agent/src/launch/presence";
+import { daemonBrokerLeasePath } from "./packages/coding-agent/src/launch/paths";
+import { tryWithFileLock } from "@veyyon/utils/file-lock";
+
+let presenceHandle = null;
+const projectDir = ${JSON.stringify(projectDir)};
+const runtimeDir = ${JSON.stringify(runtimeDir)};
+process.stdin.on("data", async (chunk) => {
+	if (chunk.includes("register")) {
+		process.stdout.write("attempting\\n");
+		try {
+			presenceHandle = await registerDaemonProjectPresence(projectDir, runtimeDir);
+			const probe = await tryWithFileLock(daemonBrokerLeasePath(runtimeDir), async () => true);
+			if (!probe.acquired) {
+				process.stdout.write("contention_violation:completed_while_lock_held\\n");
+			} else {
+				process.stdout.write("registered\\n");
+			}
+		} catch (err) {
+			process.stdout.write("error:" + String(err) + "\\n");
+		}
+	}
+	if (chunk.includes("status")) {
+		process.stdout.write(presenceHandle !== null ? "status:registered\\n" : "status:waiting\\n");
+	}
+	if (chunk.includes("close")) {
+		try {
+			if (presenceHandle) {
+				await presenceHandle.close();
+				presenceHandle = null;
+			}
+		} catch {}
+		process.stdout.write("closed\\n");
+		process.exit(0);
+	}
+});
+
+process.stdout.write("ready\\n");
+`;
+
+	const child = Bun.spawn([process.execPath, "-e", childScript], {
+		env: {
+			...env,
+			CHILD_PROJECT_DIR: projectDir,
+			CHILD_RUNTIME_DIR: runtimeDir,
+		},
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "ignore",
+	});
+
+	const reader = child.stdout.getReader();
+	let streamBuf = "";
+	const readUntil = async (target: string): Promise<void> => {
+		while (!streamBuf.includes(target)) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			streamBuf += new TextDecoder().decode(value);
+		}
+		const idx = streamBuf.indexOf(target);
+		if (idx >= 0) {
+			streamBuf = streamBuf.slice(idx + target.length);
+		}
+	};
+
+	await readUntil("ready\n");
+
+	const register = (): void => {
+		child.stdin.write("register\n");
+		child.stdin.flush();
+	};
+
+	const waitForAttempting = async (): Promise<void> => {
+		await readUntil("attempting\n");
+	};
+
+	const waitForRegistered = async (): Promise<void> => {
+		while (
+			!streamBuf.includes("registered\n") &&
+			!streamBuf.includes("contention_violation:") &&
+			!streamBuf.includes("error:")
+		) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			streamBuf += new TextDecoder().decode(value);
+		}
+		if (streamBuf.includes("error:")) {
+			throw new Error("Child process registration failed: " + streamBuf);
+		}
+		if (streamBuf.includes("contention_violation:")) {
+			throw new Error(
+				"Client registration did not participate in broker transition lock (completed while lock held)",
+			);
+		}
+		if (!streamBuf.includes("registered\n")) {
+			throw new Error("Child process exited without registering: " + streamBuf);
+		}
+		const idx = streamBuf.indexOf("registered\n");
+		streamBuf = streamBuf.slice(idx + "registered\n".length);
+	};
+
+	const queryStatus = async (): Promise<"waiting" | "registered"> => {
+		child.stdin.write("status\n");
+		child.stdin.flush();
+		while (!streamBuf.includes("status:waiting\n") && !streamBuf.includes("status:registered\n")) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			streamBuf += new TextDecoder().decode(value);
+		}
+		if (streamBuf.includes("status:waiting\n")) {
+			const idx = streamBuf.indexOf("status:waiting\n");
+			streamBuf = streamBuf.slice(idx + "status:waiting\n".length);
+			return "waiting";
+		}
+		if (streamBuf.includes("status:registered\n")) {
+			const idx = streamBuf.indexOf("status:registered\n");
+			streamBuf = streamBuf.slice(idx + "status:registered\n".length);
+			return "registered";
+		}
+		throw new Error("Unexpected status response: " + streamBuf);
+	};
+
+	const close = async (): Promise<void> => {
+		try {
+			child.stdin.write("close\n");
+			child.stdin.flush();
+			child.stdin.end();
+		} catch {}
+		try {
+			child.kill("SIGTERM");
+			await child.exited;
+		} catch {}
+		reader.releaseLock();
+		cleanup();
+	};
+
+	return {
+		pid: child.pid,
+		register,
+		waitForAttempting,
+		waitForRegistered,
+		queryStatus,
+		close,
+	};
 }
 
 describe("pruneDeadDaemonRuntimeDirs", () => {
@@ -587,6 +748,57 @@ describe("pruneDeadDaemonRuntimeDirs", () => {
 			expect(await fs.exists(targetScope)).toBe(false);
 		} finally {
 			await child.close();
+		}
+	});
+
+	it("live client registration during ping contends under prune lock and succeeds after prune", async () => {
+		using tempDir = TempDir.createSync("@veyyon-daemon-prune-client-contention-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		await fs.mkdir(daemons, { recursive: true });
+		const current = path.join(daemons, "current000000000");
+		await fs.mkdir(current, { recursive: true });
+
+		const targetScope = path.join(daemons, "444455556666cccc");
+		await fs.mkdir(path.join(targetScope, "clients"), { recursive: true });
+		const projectDir = path.join(tempDir.path(), "project-c");
+		await fs.mkdir(projectDir, { recursive: true });
+
+		const sleeper = await spawnLiveChild();
+		const child = await spawnChildEndpointListener(targetScope, { gatePing: true });
+		const leasePath = daemonBrokerLeasePath(targetScope);
+		const clientProc = await spawnClientRegistrationProcess(projectDir, targetScope);
+
+		try {
+			const raw = { pid: sleeper.pid };
+			await fs.writeFile(leasePath, JSON.stringify(raw));
+			await fs.writeFile(daemonBrokerTokenPath(targetScope), "test-token");
+			await fs.utimes(targetScope, STALE, STALE);
+
+			const prunePromise = pruneDeadDaemonRuntimeDirs(current);
+			await child.waitForPing();
+
+			// Prune holds the transition lock. Trigger registration from a real process.
+			clientProc.register();
+			await clientProc.waitForAttempting();
+
+			// While prune holds the lock, registration must be serialized and waiting.
+			// Unblock prune and let it finish.
+			child.proceedPing();
+			await prunePromise;
+
+			// After prune releases the lock, registration completes without lock violation.
+			await clientProc.waitForRegistered();
+
+			const clientsDir = path.join(targetScope, "clients");
+			const finalEntries = await fs.readdir(clientsDir);
+			expect(finalEntries.length).toBe(1);
+			expect(await hasLiveDaemonProjectPresence(targetScope)).toBe(true);
+			const statusAfterPrune = await clientProc.queryStatus();
+			expect(statusAfterPrune).toBe("registered");
+		} finally {
+			await clientProc.close();
+			await child.close();
+			await sleeper.close();
 		}
 	});
 });
