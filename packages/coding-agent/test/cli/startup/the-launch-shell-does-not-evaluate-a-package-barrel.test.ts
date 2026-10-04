@@ -80,7 +80,8 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * RE-MEASURED 2026-10-04 at 359, from 355: usage tracking additions for Antigravity account windows
  * and launch-facts reorganization. The ceiling keeps the one leaf of margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 361;
+// 361 -> 363 (exclusive ceiling, measured 362): re-measured 2026-10-04 after the upstream port wave (#219).
+const SHELL_GRAPH_MODULE_CEILING = 363;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });

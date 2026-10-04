@@ -239,7 +239,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/ai/src/error/connect.ts",
 
 	"packages/ai/src/providers/grammar.ts",
-	"packages/ai/src/registry/abliteration.ts",
 	"packages/ai/src/registry/api-key-login.ts",
 	"packages/ai/src/registry/baseten.ts",
 	"packages/ai/src/registry/gmi-cloud.ts",
@@ -277,7 +276,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/ai/src/utils/schema/strict-tool-validation.ts",
 	"packages/ai/src/utils/schema/zod-decontaminate.ts",
 	"packages/ai/src/utils/sdk-stream-timeout.ts",
-	"packages/ai/src/utils/vercel-headers.ts",
 	"packages/catalog/src/discovery/devin-gen/buf/validate/validate_pb.ts",
 	"packages/catalog/src/discovery/devin-gen/exa/analytics_pb/analytics_pb.ts",
 	"packages/catalog/src/discovery/devin-gen/exa/auto_cascade_common_pb/auto_cascade_common_pb.ts",

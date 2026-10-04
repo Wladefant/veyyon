@@ -5272,7 +5272,7 @@ function createCopilotLongContextVariant(
 	};
 }
 
-export function githubCopilotModelManagerOptions(config?: GithubCopilotModelManagerConfig): ModelManagerOptions<Api> {
+function resolveGithubCopilotEndpoint(config?: GithubCopilotModelManagerConfig): { apiKey?: string; baseUrl: string } {
 	const rawApiKey = config?.apiKey;
 	const configuredBaseUrl = config?.baseUrl ?? "https://api.githubcopilot.com";
 	const parsedApiKey = rawApiKey ? parseGitHubCopilotApiKey(rawApiKey) : undefined;
@@ -5283,12 +5283,26 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 			: parsedApiKey?.enterpriseUrl && configuredBaseUrl.includes("githubcopilot.com")
 				? getGitHubCopilotBaseUrl(parsedApiKey.enterpriseUrl)
 				: configuredBaseUrl;
+	return { apiKey, baseUrl };
+}
+
+/**
+ * The credential/endpoint-scoped namespace the Copilot catalog is cached under. The registry reads the
+ * cache through the descriptor, so the descriptor and the manager must derive it from this one function.
+ */
+export function resolveGithubCopilotCacheProviderId(config?: GithubCopilotModelManagerConfig): string {
+	const { apiKey, baseUrl } = resolveGithubCopilotEndpoint(config);
+	// Version the namespace so stale cross-provider routing rows are never restored.
+	return `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`;
+}
+
+export function githubCopilotModelManagerOptions(config?: GithubCopilotModelManagerConfig): ModelManagerOptions<Api> {
+	const { apiKey, baseUrl } = resolveGithubCopilotEndpoint(config);
 	const providerRefs = createBundledReferenceMap<Api>("github-copilot");
 	const resolveReference = createReferenceResolver(providerRefs);
 	return {
 		providerId: "github-copilot",
-		// Version the credential/endpoint-scoped namespace so stale cross-provider routing rows are never restored.
-		cacheProviderId: `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`,
+		cacheProviderId: resolveGithubCopilotCacheProviderId(config),
 		...(apiKey && {
 			fetchDynamicModels: async hooks => {
 				const longContextVariants: ModelSpec<Api>[] = [];
