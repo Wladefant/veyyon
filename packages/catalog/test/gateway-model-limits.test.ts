@@ -672,6 +672,7 @@ const NOT_A_GATEWAY: Record<string, string> = {
 	"gemini.ts": "first-party Google: a model host that publishes its own limits",
 	"index.ts": "barrel",
 	"openai-compatible.ts": "generic OpenAI-compatible discovery against an endpoint that publishes its own limits",
+	"typesafe.ts": "first-party TypeSafe: a judge model host with no proxying",
 };
 
 /**

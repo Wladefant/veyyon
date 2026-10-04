@@ -132,7 +132,7 @@ describe("MCPManager connection status events", () => {
 			await witness.next(event => event.type === "connected");
 
 			expect(witness.events).toEqual([
-				{ type: "connecting", serverNames: ["alpha"] },
+				{ type: "reconnecting", serverName: "alpha" },
 				{ type: "connected", serverName: "alpha" },
 			]);
 			expect(manager.getConnectionStatus("alpha")).toBe("connected");

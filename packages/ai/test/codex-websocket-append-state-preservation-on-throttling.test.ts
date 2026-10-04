@@ -106,9 +106,11 @@ describe("codex websocket append state preservation on throttling", () => {
 		"preserves append continuation when rejected with %s",
 		async (code, emitPartialResponse) => {
 			const sentRequests: Array<Record<string, unknown>> = [];
-			const fetchMock = vi.fn(async () => {
+			let sseFallbacks = 0;
+			const fetchMock = async () => {
+				sseFallbacks += 1;
 				throw new Error("SSE fallback should not be called");
-			});
+			};
 
 			class ThrottledWebSocket extends MockWebSocket {
 				override send(data: string): void {
@@ -167,7 +169,7 @@ describe("codex websocket append state preservation on throttling", () => {
 				options,
 			).result();
 			expect(retried.stopReason).toBe("stop");
-			expect(fetchMock).not.toHaveBeenCalled();
+			expect(sseFallbacks).toBe(0);
 			expect(sentRequests).toHaveLength(3);
 			expect(sentRequests[2]?.previous_response_id).toBe("resp_1");
 		},

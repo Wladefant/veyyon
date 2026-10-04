@@ -2,7 +2,7 @@ import type { FetchImpl, Model } from "@veyyon/catalog/types";
 import type { ApiKey } from "../auth-retry";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
-import { errorMessage, ImageApiError, USER_AGENT } from "./format";
+import { extractImageErrorMessage, ImageApiError, USER_AGENT } from "./format";
 
 export async function modelHeaders(
 	model: Model,
@@ -44,7 +44,7 @@ async function parseImageApiResponse(
 ): Promise<unknown> {
 	const text = await response.text();
 	if (!response.ok) {
-		const sanitized = redactKey(errorMessage(text), key);
+		const sanitized = redactKey(extractImageErrorMessage(text), key);
 		throw new ImageApiError(
 			`${model.provider}/${model.id} image request failed (${response.status}): ${sanitized}`,
 			response.status,

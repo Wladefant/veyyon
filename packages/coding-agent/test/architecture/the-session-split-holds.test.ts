@@ -62,8 +62,12 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-09-30 at 10412 after the santhreal merge: upstream's 10173 plus the fork's own
  * additions (the `agent.maxConcurrency` resize wiring, the unsupported-input guard, the session
  * liveness records and the terminal-ownership checks), which the collaborators above do not yet carry.
+ *
+ * RE-MEASURED 2026-10-04 at 10451 after the btw ports of 2026-10-02 (`cc82a21bd7` replay routing and
+ * relocation guards, `ff525599cd` headless advisor drain, `f6e7d990e8` real OpenCode Go usage), which
+ * add session wiring the collaborators do not yet carry.
  */
-const RUNTIME_CEILING = 10_430;
+const RUNTIME_CEILING = 10_470;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -107,8 +111,12 @@ const COLLABORATORS = [
 	"yield-tracker.ts",
 ] as const;
 
-/** MEASURED: the largest collaborator is `retry-runtime.ts` at 959 lines. */
-const COLLABORATOR_CEILING = 1_000;
+/**
+ * MEASURED: the largest collaborator is `retry-runtime.ts` at 1028 lines (`56e8aa89da` closes the retry
+ * saga on a local continuation failure and strips the recreated failed tail); `advisor-roster.ts` is
+ * 1003 after the headless drain (`ff525599cd`).
+ */
+const COLLABORATOR_CEILING = 1_040;
 
 /** MEASURED: the largest sibling is `agent-session-types.ts` at 782 lines. */
 const SIBLING_CEILING = 900;

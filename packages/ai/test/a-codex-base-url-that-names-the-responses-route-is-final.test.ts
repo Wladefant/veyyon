@@ -613,7 +613,13 @@ describe("a Codex base URL that already names the responses route is used verbat
 		const sentBodies: Record<string, unknown>[] = [];
 		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
 			requestedUrls.push(typeof input === "string" ? input : input.toString());
-			sentBodies.push(asRecord(JSON.parse(String(init?.body))) ?? {});
+			const rawBody =
+				typeof init?.body === "string"
+					? init.body
+					: init?.body instanceof Uint8Array || ArrayBuffer.isView(init?.body)
+						? new TextDecoder().decode(Bun.zstdDecompressSync(init.body as Uint8Array))
+						: "{}";
+			sentBodies.push(asRecord(JSON.parse(rawBody)) ?? {});
 			return new Response(COMPLETED_SSE, { status: 200, headers: { "content-type": "text/event-stream" } });
 		});
 		try {

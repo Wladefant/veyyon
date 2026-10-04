@@ -1,4 +1,5 @@
 import { lazy } from "@veyyon/utils/abortable";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { type CodexModelDiscoveryResult, fetchCodexModels } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
 import { fetchTypeSafeModels, TYPESAFE_DEFAULT_BASE_URL } from "../discovery/typesafe";
@@ -310,7 +311,7 @@ export interface TypeSafeModelManagerConfig {
 export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig = {}): ModelManagerOptions<"typesafe"> {
 	const { apiKey } = config;
 	const envBaseUrl = Bun.env.TYPESAFE_BASE_URL?.trim();
-	const baseUrl = (config.baseUrl ?? (envBaseUrl || TYPESAFE_DEFAULT_BASE_URL)).replace(/\/+$/, "");
+	const baseUrl = trimTrailingSlashes((config.baseUrl ?? (envBaseUrl || TYPESAFE_DEFAULT_BASE_URL)));
 	const staticModels = TYPESAFE_STATIC_MODELS.map(model => ({ ...model, baseUrl }));
 	return {
 		providerId: "typesafe",

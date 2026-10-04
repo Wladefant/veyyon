@@ -81,7 +81,7 @@ describe("OpenAI Responses prepared request cache", () => {
 		await collect(s);
 		const result = await s.result();
 		expect(result.stopReason).toBe("stop");
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(sent).toHaveLength(2);
 		expect(onPayloadCount).toBe(1);
 		expect((sent[0]?.reasoning as Record<string, unknown> | undefined)?.effort ?? sent[0]?.reasoning_effort).toBe(
 			"high",
@@ -120,7 +120,6 @@ describe("OpenAI Responses prepared request cache", () => {
 			await collect(s);
 			const result = await s.result();
 			expect(result.stopReason).toBe("error");
-			expect(finalizeSpy).toHaveBeenCalled();
 			const finalizeOpts = finalizeSpy.mock.calls.at(-1)?.[1];
 			expect(finalizeOpts?.rawRequestDump?.body).toMatchObject({ custom_field: "mutated_400" });
 			const dumpPayload = buildHttp400DumpPayload(finalizeOpts!.rawRequestDump!, new Error("400"), "test");
@@ -152,7 +151,7 @@ describe("OpenAI Responses prepared request cache", () => {
 		await collect(s);
 		const result = await s.result();
 		expect(result.stopReason).toBe("stop");
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(sent).toHaveLength(2);
 		expect(onPayloadCount).toBe(1);
 		expect(sent[0]?.custom_retry_token).toBe("tag_123");
 		expect(sent[1]).toEqual(sent[0]);

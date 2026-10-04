@@ -132,6 +132,8 @@ describe("a pending MCP tool refuses until its server connects", () => {
 	it("adopts a discovered Exa key only when the environment has none", () => {
 		const exaKey = (): string | undefined => Bun.env.EXA_API_KEY;
 		const previous = exaKey();
+		// Adopting a key records it in `VEYYON_DOTENV_ORIGIN`; restoring the key alone leaves that record behind.
+		const previousOrigin = Bun.env.VEYYON_DOTENV_ORIGIN;
 		try {
 			delete Bun.env.EXA_API_KEY;
 			applyMCPEnvironment({ exaApiKeys: ["from-mcp", "second"] });
@@ -146,6 +148,8 @@ describe("a pending MCP tool refuses until its server connects", () => {
 		} finally {
 			if (previous === undefined) delete Bun.env.EXA_API_KEY;
 			else Bun.env.EXA_API_KEY = previous;
+			if (previousOrigin === undefined) delete Bun.env.VEYYON_DOTENV_ORIGIN;
+			else Bun.env.VEYYON_DOTENV_ORIGIN = previousOrigin;
 		}
 	});
 });

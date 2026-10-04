@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { FetchImpl, ModelSpec } from "../types";
 import { discoveryFetch, isRecord } from "../utils";
 
@@ -19,10 +20,10 @@ export interface FetchTypeSafeModelsOptions {
 	signal?: AbortSignal;
 }
 
-function normalizeBaseUrl(value: string): string | null {
+function normalizeTypeSafeBaseUrl(value: string): string | null {
 	try {
 		const url = new URL(value);
-		return url.toString().replace(/\/+$/, "");
+		return trimTrailingSlashes(url.toString());
 	} catch {
 		return null;
 	}
@@ -72,7 +73,7 @@ export function parseTypeSafeModelCards(
 export async function fetchTypeSafeModels(
 	options: FetchTypeSafeModelsOptions,
 ): Promise<ModelSpec<"typesafe">[] | null> {
-	const baseUrl = normalizeBaseUrl(
+	const baseUrl = normalizeTypeSafeBaseUrl(
 		options.baseUrl ?? TYPESAFE_DEFAULT_BASE_URL,
 	);
 	if (baseUrl === null) return null;
@@ -114,6 +115,7 @@ export async function fetchTypeSafeModels(
 			input: ["text"],
 			supportsTools: false,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			pricing: "unknown",
 			contextWindow: null,
 			maxTokens: null,
 		});

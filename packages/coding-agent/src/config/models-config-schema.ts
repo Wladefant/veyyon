@@ -130,6 +130,7 @@ function buildModelsConfigSchemas() {
 		"supportsImageDetailOriginal?": "boolean",
 		"reasoningDeltasMayBeCumulative?": "boolean",
 		"supportsServerCompaction?": "boolean",
+		"supportsConfigurationUpdate?": "boolean",
 		"stripDeepseekSpecialTokens?": "boolean",
 		"streamMarkupHealingPattern?": '"kimi" | "dsml" | "thinking"',
 		"emptyLengthFinishIsContextError?": "boolean",

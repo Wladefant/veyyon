@@ -13,9 +13,11 @@
  * Gap: the loop watchdog the terminal engine starts ticks at rest by design and is held off here;
  * `an-idle-process-samples-its-stack-ten-times-less-often.test.ts` and the watchdog suites cover
  * it. The idle trim and the stall sampler are started by the CLI entry and are not constructed
- * here.
+ * here. The AgentSession's own session heartbeat also ticks at rest by design; the resting
+ * assertions compare against the timers the session holds before the mode exists.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { Agent } from "@veyyon/agent-core";
@@ -37,6 +39,9 @@ describe("the working clock ticks only while the agent works", () => {
 	let session: AgentSession;
 	let tempDir: TempDir;
 	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+	// Timers the AgentSession itself holds (its session heartbeat ticks at rest by design). The
+	// mode's own init path must add none that outlive its one-shots.
+	let sessionTimers = 0;
 
 	beforeAll(() => {
 		initTheme();
@@ -71,9 +76,21 @@ describe("the working clock ticks only while the agent works", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
+		sessionTimers = vi.getTimerCount();
 		mode = new InteractiveMode(session, "test", () => {}, [], undefined, new EventBus());
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
-		await mode.init();
+		// Init opens the terminal-control socket, whose listen callback is queued behind the faked
+		// clock. A fake `Bun.sleep` never returns, so yield to the real event loop with a filesystem
+		// round trip while advancing the fake clock until init resolves.
+		let initialized = false;
+		const initializing = mode.init().finally(() => {
+			initialized = true;
+		});
+		for (let pumps = 0; !initialized && pumps < 600; pumps++) {
+			vi.advanceTimersByTime(1);
+			await fsp.stat(tempDir.path());
+		}
+		await initializing;
 	});
 
 	afterEach(async () => {
@@ -113,7 +130,7 @@ describe("the working clock ticks only while the agent works", () => {
 
 	it("holds no timer once a freshly started session has rested", () => {
 		vi.advanceTimersByTime(600_000);
-		expect(vi.getTimerCount()).toBe(0);
+		expect(vi.getTimerCount()).toBe(sessionTimers);
 	});
 
 	it("holds no timer once the agent stops working and the session has rested", () => {
@@ -121,7 +138,7 @@ describe("the working clock ticks only while the agent works", () => {
 		vi.advanceTimersByTime(3_000);
 		mode.clearWorkingLoader();
 		vi.advanceTimersByTime(600_000);
-		expect(vi.getTimerCount()).toBe(0);
+		expect(vi.getTimerCount()).toBe(sessionTimers);
 	});
 
 	it("ticks again when the next run mounts the working loader after a rest", () => {

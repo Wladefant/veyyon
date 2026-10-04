@@ -35,8 +35,6 @@
 - Keep terminal text readable on painted surfaces by emitting explicit contrasting ANSI foregrounds for empty theme tokens ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 3634ec23229951ed4902dae6ca9a2b021b65392e).
 - Nested patch persistence removes only newly created patch files on write failure and preserves existing destination data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1c01111697356e0c2d7bf41fb93ac97807943604).
 
-## [18.1.11] - 2026-09-05
-
 ### Added
 
 - Added `STEPFUN_API_KEY` to the additional LLM provider help output ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

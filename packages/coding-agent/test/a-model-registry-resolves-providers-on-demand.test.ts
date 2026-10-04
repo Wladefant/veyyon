@@ -42,9 +42,19 @@ describe("a model registry resolves providers on demand", () => {
 	});
 
 	it.each([
-		{ apiKey: "TEST_KEY", gitlab: "gitlab-duo-agent:m0mmx94chno3", openCode: "t2cb2b50op0d" },
-		{ apiKey: "", gitlab: "gitlab-duo-agent", openCode: "37p50ys9v9fy9" },
-	])("retains persisted cache namespaces for credential '$apiKey'", ({ apiKey, gitlab, openCode }) => {
+		{
+			apiKey: "TEST_KEY",
+			copilot: "github-copilot:models-v2:2fbcvq4blgsl0",
+			gitlab: "gitlab-duo-agent:m0mmx94chno3",
+			openCode: "t2cb2b50op0d",
+		},
+		{
+			apiKey: "",
+			copilot: "github-copilot:models-v2:1w95264bf79ma",
+			gitlab: "gitlab-duo-agent",
+			openCode: "37p50ys9v9fy9",
+		},
+	])("retains persisted cache namespaces for credential '$apiKey'", ({ apiKey, copilot, gitlab, openCode }) => {
 		const config = {
 			baseUrl: "https://cache.example.test/v1/",
 			apiKey,
@@ -62,6 +72,7 @@ describe("a model registry resolves providers on demand", () => {
 		// implementation. A newly scoped provider requires an explicit fixture.
 		expect(cacheIds).toEqual({
 			cursor: "cursor:max-mode-v3",
+			"github-copilot": copilot,
 			"gitlab-duo-agent": gitlab,
 			litellm: "litellm:rich-v4:3camfxhbrhi2i",
 			"opencode-go": `opencode-go:models-v1:${openCode}`,
@@ -126,6 +137,29 @@ describe("a model registry resolves providers on demand", () => {
 		expect(registry.getError()).toBeUndefined();
 		for (const descriptor of PROVIDER_DESCRIPTORS) {
 			const model = registry.find(descriptor.providerId, "cached-namespace-record");
+			// A session picks among chat models only (the kind filter in the registry's
+			// provider resolution, added in d789b0c361). Providers whose records are
+			// search or judge runners (web, typesafe) are persisted and loaded but never
+			// offered to a session, so the cache must exist yet `find` must not return it.
+			const kind = buildModel({
+				id: "cached-namespace-record",
+				name: "Cached namespace record",
+				provider: descriptor.providerId,
+				api: "openai-completions",
+				baseUrl: "https://cached.example.test/v1",
+				contextWindow: 31_000,
+				maxTokens: 4_000,
+				input: ["text"],
+				reasoning: false,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			}).kind;
+			if (kind !== undefined) {
+				expect({ provider: descriptor.providerId, found: model }).toEqual({
+					provider: descriptor.providerId,
+					found: undefined,
+				});
+				continue;
+			}
 			expect({
 				provider: model?.provider,
 				contextWindow: model?.contextWindow,

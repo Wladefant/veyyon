@@ -379,9 +379,12 @@ describe("OpenAI Responses function argument streaming accumulator", () => {
 			// Verify that every bundled provider using Responses APIs was detected and matches expected set
 			const bundledResponsesList = Array.from(responsesProvidersFound).sort();
 			expect(bundledResponsesList).toEqual([
+				"abliteration",
 				"azure",
 				"github-copilot",
 				"gitlab-duo",
+				"meta",
+				"muse-code",
 				"openai",
 				"openai-codex",
 				"opencode",
@@ -389,6 +392,7 @@ describe("OpenAI Responses function argument streaming accumulator", () => {
 				"opencode-zen",
 				"openrouter",
 				"sakana",
+				"xai",
 				"xai-oauth",
 			]);
 		});
@@ -431,12 +435,15 @@ describe("OpenAI Responses function argument streaming accumulator", () => {
 				"azure",
 				"github-copilot",
 				"gitlab-duo",
+				"meta",
+				"muse-code",
 				"ollama",
 				"opencode",
 				"opencode-go",
 				"opencode-zen",
 				"openrouter",
 				"sakana",
+				"xai",
 				"xai-oauth",
 			];
 
