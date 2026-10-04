@@ -703,6 +703,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `providers.kimiApiFormat` | Kimi API Format | enum | `anthropic` | API format for Kimi Code provider. Values: `openai`, `anthropic`. |
+| `providers.githubCopilot.oauthClientId` | GitHub Copilot OAuth Client ID | string | _(unset)_ | Client ID of your own GitHub OAuth app (device flow enabled) for /login github-copilot. Veyyon ships no client ID. VEYYON_GITHUB_COPILOT_CLIENT_ID overrides it. Existing logins do not need it. |
 | `providers.openaiWebsockets` | OpenAI WebSockets | enum | `auto` | Websocket policy for OpenAI Codex models (auto uses model defaults, on forces, off disables). Values: `auto`, `off`, `on`. |
 | `providers.openrouterVariant` | OpenRouter Routing | enum | `default` | Default routing-variant suffix appended to OpenRouter model IDs (overridden when the selector already names a variant). Values: `default`, `nitro`, `floor`, `online`, `exacto`. |
 | `provider.appendOnlyContext` | Append-Only Context | enum | `auto` | Cache system prompt + tool specs and keep an append-only message log so provider prefix caches (DeepSeek, Xiaomi/SGLang, Anthropic) hit at maximum rate. Auto enables for known prefix-cache providers. Values: `auto`, `on`, `off`. |
@@ -906,4 +907,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-362 settings in /settings, 118 configuration-file keys, 480 in all.
+363 settings in /settings, 118 configuration-file keys, 481 in all.

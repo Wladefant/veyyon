@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- GitHub Copilot requests now send `User-Agent: veyyon/<version>` instead of another client's name. `/login github-copilot` needs your own OAuth app Client ID (`VEYYON_GITHUB_COPILOT_CLIENT_ID` or `providers.githubCopilot.oauthClientId`) and fails with registration steps when none is set; stored logins keep working. `/login github-copilot` refuses an OAuth app that issues expiring tokens (Veyyon cannot refresh them). Copilot no longer derives `premiumRequests` from `X-Initiator`, which is still sent ([Fixes https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
+
 ### Added
 
 - Added raw decoded WebSocket event stream for provider-native Codex compaction ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

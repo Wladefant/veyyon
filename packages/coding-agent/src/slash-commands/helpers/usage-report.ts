@@ -179,7 +179,9 @@ export async function buildUsageReportText(runtime: SlashCommandRuntime): Promis
 		`Cache write tokens: ${stats.cacheWrite}`,
 		`Total tokens: ${stats.totalTokens}`,
 		...(orchestrationTokens > 0 ? [`Orchestration tokens: ${orchestrationTokens}`] : []),
-		`Premium requests: ${stats.premiumRequests}`,
+		// GitHub bills Copilot in credits since 2026-06-01 and Veyyon derives no count from request headers,
+		// so a Copilot session has no honest premium-request figure to print.
+		`Premium requests: ${runtime.session.model?.provider === "github-copilot" ? "unknown (Copilot bills in credits; see your GitHub usage page)" : stats.premiumRequests}`,
 		`Cost: $${stats.cost.toFixed(6)}`,
 	].join("\n");
 }

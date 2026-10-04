@@ -3,11 +3,17 @@
  * derivation shared by catalog discovery and the pi-ai OAuth flow. The device
  * login / token refresh flow lives in `@veyyon/ai`'s registry.
  */
+import { VERSION } from "@veyyon/utils";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 
-export const COPILOT_USER_AGENT = "opencode/1.3.15" as const;
+/**
+ * The honest client identity Veyyon sends to GitHub and the Copilot API. It names this product and its
+ * version, and nothing else: Veyyon does not present itself as opencode, VS Code or any other client.
+ */
+export const COPILOT_USER_AGENT = `veyyon/${VERSION}`;
 
-export const OPENCODE_HEADERS = {
+/** Identity headers for every request Veyyon makes to GitHub or the Copilot API on a user's behalf. */
+export const COPILOT_IDENTITY_HEADERS = {
 	"User-Agent": COPILOT_USER_AGENT,
 } as const;
 
@@ -22,9 +28,12 @@ export const OPENCODE_HEADERS = {
  */
 export const COPILOT_API_VERSION = "2026-06-01" as const;
 
-/** Headers for `api.githubcopilot.com` (capi) requests: discovery, chat, policy. */
+/**
+ * Static, version-pinned headers for `api.githubcopilot.com` (capi) requests. The User-Agent is NOT
+ * here: it carries the running Veyyon version, so it is added per request from
+ * {@link COPILOT_IDENTITY_HEADERS} and never baked into the generated model catalog.
+ */
 export const COPILOT_API_HEADERS = {
-	...OPENCODE_HEADERS,
 	"X-GitHub-Api-Version": COPILOT_API_VERSION,
 } as const;
 

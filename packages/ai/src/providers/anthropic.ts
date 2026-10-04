@@ -1714,10 +1714,8 @@ function unwrapAnthropicThinkingEnvelope(text: string): string | undefined {
 	return stripped ? current : undefined;
 }
 
-function createEmptyUsage(premiumRequests?: number): Usage {
-	const usage = emptyUsage();
-	if (premiumRequests !== undefined) usage.premiumRequests = premiumRequests;
-	return usage;
+function createEmptyUsage(): Usage {
+	return emptyUsage();
 }
 
 /**
@@ -1729,18 +1727,14 @@ function createEmptyUsage(premiumRequests?: number): Usage {
  * as far as `message_start` was billed for the whole prompt, cache write
  * included. One owner means a fifth reason to retry cannot forget it.
  */
-function discardAnthropicAttempt(
-	model: Model<"anthropic-messages">,
-	output: AssistantMessage,
-	premiumRequests?: number,
-): void {
+function discardAnthropicAttempt(model: Model<"anthropic-messages">, output: AssistantMessage): void {
 	output.content.length = 0;
 	output.model = model.id;
 	output.responseId = undefined;
 	output.errorMessage = undefined;
 	output.stopDetails = undefined;
 	output.providerPayload = undefined;
-	output.usage = discardAttemptUsage(model, output.usage, createEmptyUsage(premiumRequests));
+	output.usage = discardAttemptUsage(model, output.usage, createEmptyUsage());
 	output.stopReason = "stop";
 }
 
@@ -2902,14 +2896,10 @@ const streamAnthropicOnce = (
 					? buildCopilotDynamicHeaders({
 							messages: context.messages,
 							hasImages: hasCopilotVisionInput(context.messages),
-							premiumMultiplier: model.premiumMultiplier,
 							headers: { ...(model.headers ?? {}), ...(options?.headers ?? {}) },
 							initiatorOverride: options?.initiatorOverride,
 						})
 					: undefined;
-			if (copilotDynamicHeaders?.premiumRequests !== undefined) {
-				output.usage.premiumRequests = copilotDynamicHeaders.premiumRequests;
-			}
 			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 			const baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? ANTHROPIC_API_ENDPOINT;
 			const providerSessionState = getAnthropicProviderSessionState(
@@ -3118,7 +3108,7 @@ const streamAnthropicOnce = (
 							({ params, body } = await prepareParams());
 							retryCtx.providerRetryAttempt = 0;
 						}
-						discardAnthropicAttempt(model, output, copilotDynamicHeaders?.premiumRequests);
+						discardAnthropicAttempt(model, output);
 						firstTokenTime = undefined;
 					}
 				}

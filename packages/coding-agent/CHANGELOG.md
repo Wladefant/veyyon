@@ -4,6 +4,10 @@
 
 ### Changed
 
+- Added the `providers.githubCopilot.oauthClientId` setting; `/usage` shows Copilot premium requests as unknown because GitHub bills Copilot in credits ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
+
+### Changed
+
 - Clicking an agent's row in the anchored Agents block focuses that agent while scroll isolation holds the mouse ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
