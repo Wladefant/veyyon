@@ -61,7 +61,8 @@ export async function registerDaemonProjectPresence(
 	// Share the broker transition lock with publication and whole-scope pruning.
 	// Prune may detach the parent while we are waiting to acquire its lock.
 	// Retry only that pre-publication race, not a failed presence publication.
-	for (;;) {
+	// A permanently missing ancestor must still reject rather than spin forever.
+	for (let attempt = 0; ; attempt++) {
 		let entered = false;
 		let observed: Stats | undefined;
 		try {
@@ -88,7 +89,7 @@ export async function registerDaemonProjectPresence(
 			});
 			break;
 		} catch (error) {
-			if (entered) throw error;
+			if (entered || attempt >= 9) throw error;
 			if (isEnoent(error)) continue;
 			const current = await fs.stat(runtimeDir).catch((statError: unknown) => {
 				if (isEnoent(statError)) return null;

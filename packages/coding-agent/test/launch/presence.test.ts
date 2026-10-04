@@ -507,3 +507,74 @@ try {
 		expect(await Bun.file(presencePath).exists()).toBe(true);
 	});
 });
+
+describe("registerDaemonProjectPresence", () => {
+	it("registration rejects with original ENOENT when ancestor symlink dangles rather than spinning forever", async () => {
+		const tempDir = await tempRuntimeDir();
+		const brokenAncestor = path.join(tempDir, "dangling-ancestor");
+		const nonExistent = path.join(tempDir, "nonexistent-target");
+		await fs.symlink(nonExistent, brokenAncestor, "dir");
+		const runtimeOverride = path.join(brokenAncestor, "runtime");
+		const projectDir = path.join(tempDir, "project");
+		await fs.mkdir(projectDir, { recursive: true });
+
+		const { env, cleanup } = hermeticSpawnEnv();
+		const childScript = `
+import { registerDaemonProjectPresence } from "./packages/coding-agent/src/launch/presence";
+
+try {
+	await registerDaemonProjectPresence(process.env.TEST_PROJECT_DIR!, process.env.TEST_RUNTIME_DIR!);
+	process.stdout.write("RESOLVED_UNEXPECTEDLY\\n");
+	process.exit(1);
+} catch (err: unknown) {
+	const code = (err && typeof err === "object" && "code" in err && typeof err.code === "string") ? err.code : undefined;
+	const message = err instanceof Error ? err.message : String(err);
+	if (code === "ENOENT" || message.includes("ENOENT")) {
+		process.stdout.write("REJECTED_ENOENT\\n");
+		process.exit(0);
+	}
+	process.stderr.write("UNEXPECTED_ERROR:" + code + ":" + message + "\\n");
+	process.exit(2);
+}
+`;
+		const child = Bun.spawn([process.execPath, "-e", childScript], {
+			env: {
+				...env,
+				TEST_RUNTIME_DIR: runtimeOverride,
+				TEST_PROJECT_DIR: projectDir,
+			},
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+
+		// Real child process out-of-process execution requires wall-clock bound to detect infinite CPU retry loop regression.
+		const DEADLINE_MS = 2500;
+		let timer: NodeJS.Timeout | undefined;
+		const timeoutPromise = new Promise<{ kind: "TIMEOUT" }>(resolve => {
+			timer = setTimeout(() => resolve({ kind: "TIMEOUT" }), DEADLINE_MS);
+		});
+
+		let outcome: { kind: "EXITED"; code: number } | { kind: "TIMEOUT" };
+		try {
+			outcome = await Promise.race([child.exited.then(code => ({ kind: "EXITED" as const, code })), timeoutPromise]);
+		} finally {
+			clearTimeout(timer);
+		}
+
+		if (outcome.kind === "TIMEOUT") {
+			child.kill("SIGKILL");
+			await child.exited;
+		}
+
+		cleanup();
+		await fs.rm(tempDir, { recursive: true, force: true });
+
+		expect(outcome.kind).toBe("EXITED");
+		if (outcome.kind === "EXITED") {
+			const stdout = await new Response(child.stdout).text();
+			expect(stdout).toContain("REJECTED_ENOENT");
+			expect(outcome.code).toBe(0);
+		}
+	});
+});
