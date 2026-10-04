@@ -6,10 +6,12 @@ import { SessionEntryIndex } from "@veyyon/kernel/session/session-entry-index";
 /**
  * WHY: `SessionEntryIndex` keeps the active branch (root to leaf) cached and extends it in place when
  * an entry is appended to the leaf, because every startup reader walks that branch and a walk of a
- * long session costs tens of milliseconds. A cache that is extended when it should have been dropped
- * serves a branch the entries no longer form: an insert that hangs off another entry, an insert that
- * reuses an id already on the map, a leaf move, a rebuild or a clear. The session then resumes on,
- * compacts, or prompts with the wrong conversation, and nothing reports it.
+ * long session costs tens of milliseconds. A rebuild starts from the empty branch and extends it the
+ * same way, so a session that never branched loads holding its branch. A cache that is extended
+ * when it should have been dropped serves a branch the entries no longer form: an insert that hangs
+ * off another entry, an insert that reuses an id already on the map, an empty id, a leaf move, a
+ * rebuild of a log that branches or a clear. The session then resumes on, compacts, or prompts with
+ * the wrong conversation, and nothing reports it.
  *
  * The class this closes: after any sequence of the index's mutating calls, `leafPath()` and
  * `pathTo()` equal an uncached walk of the current entries from the current leaf, and `pathTo()`
@@ -72,6 +74,7 @@ const MUTATIONS: Record<string, (walk: Walk) => string> = {
 		const reused = pick(walk, walk.log)?.id ?? freshId(walk);
 		return insert(walk, entry(reused, walk.index.leafId()));
 	},
+	"insert on the leaf with an empty id": walk => insert(walk, entry("", walk.index.leafId())),
 	"move the leaf to an entry": walk => {
 		const target = pick(walk, walk.log)?.id ?? null;
 		walk.index.setLeaf(target);
@@ -92,6 +95,21 @@ const MUTATIONS: Record<string, (walk: Walk) => string> = {
 	rebuild: walk => {
 		walk.index.rebuild(walk.log);
 		return `${walk.log.length} entries`;
+	},
+	"rebuild one unbranched chain": walk => {
+		// The shape a load of a session that never branched rebuilds from, now and then with an id
+		// the chain already holds, an empty id, or a parent that is not the entry before it.
+		const chain: SessionEntry[] = [];
+		const length = 1 + Math.floor(walk.random() * 40);
+		for (let i = 0; i < length; i++) {
+			const roll = walk.random();
+			const id = roll < 0.03 ? "" : roll < 0.06 ? (pick(walk, chain)?.id ?? freshId(walk)) : freshId(walk);
+			const parent = walk.random() < 0.03 ? (pick(walk, chain)?.id ?? null) : (chain.at(-1)?.id ?? null);
+			chain.push(entry(id, parent));
+		}
+		walk.index.rebuild(chain);
+		walk.log = chain;
+		return `${chain.length} entries`;
 	},
 	clear: walk => {
 		walk.index.clear();
@@ -133,7 +151,8 @@ function expectBranchIsFresh(walk: Walk, step: string): void {
 
 	const other = pick(walk, walk.log);
 	if (other) {
-		const expectedOther = ids(walkBranchPath(index, index.get(other.id)));
+		// An empty id names no entry to the index, as an empty parent id ends a walk.
+		const expectedOther = ids(walkBranchPath(index, other.id === "" ? undefined : index.get(other.id)));
 		expect({ step, pathToOther: ids(index.pathTo(other.id)) }).toEqual({ step, pathToOther: expectedOther });
 	}
 }

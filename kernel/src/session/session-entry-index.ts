@@ -76,19 +76,20 @@ export class SessionEntryIndex {
 	#leaf: string | null = null;
 	#usage = emptyUsageStatistics();
 	/**
-	 * Root→leaf path of `#leaf`, or undefined until a reader asks for it. An
-	 * append to the leaf extends it in place; anything else that can change the
-	 * walk (a leaf move, a rebuild, an insert off the leaf) drops it. Every
-	 * startup reader walks the active branch, and on a session of hundreds of
-	 * thousands of entries each walk costs tens of milliseconds.
+	 * Root→leaf path of `#leaf`, or undefined until a reader asks for it. An empty index holds the
+	 * empty path, so a rebuild of a session that never branches ends holding its whole path. An
+	 * append to the leaf extends it in place; anything else that can change the walk (a leaf move,
+	 * an insert off the leaf, a shadowed id) drops it. Every startup reader walks the active branch,
+	 * and the walk of the 108,163 entries of a resumed session cost 18 ms, nearly all of it the
+	 * lookup of each parent id.
 	 */
-	#leafPath: SessionEntry[] | undefined;
+	#leafPath: SessionEntry[] | undefined = [];
 
 	clear(): void {
 		this.#entriesById = Object.create(null);
 		this.#labels.clear();
 		this.#leaf = null;
-		this.#leafPath = undefined;
+		this.#leafPath = [];
 		this.#usage = emptyUsageStatistics();
 	}
 
@@ -110,13 +111,13 @@ export class SessionEntryIndex {
 	}
 
 	#link(entry: SessionEntry): void {
-		// The new leaf's path is the old leaf's path plus this entry exactly when
-		// it hangs off the old leaf and does not shadow an id already in the index.
-		// A rebuild holds no path, so it looks no id up twice.
+		// The new leaf's path is the old leaf's path plus this entry exactly when it hangs off the
+		// old leaf, null included, and does not shadow an id already in the index. An empty id is
+		// never extended onto: a walk from the empty leaf finds no entry.
 		const leafPath =
 			this.#leafPath !== undefined &&
 			entry.parentId === this.#leaf &&
-			this.#leaf !== null &&
+			entry.id !== "" &&
 			this.#entriesById[entry.id] === undefined
 				? this.#leafPath
 				: undefined;
