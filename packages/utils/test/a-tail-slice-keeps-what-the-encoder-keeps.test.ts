@@ -40,7 +40,10 @@ describe("sliceTailBytes", () => {
 
 	it("keeps a lone surrogate as it is, counting the three bytes of the U+FFFD it encodes to", () => {
 		for (const lone of ["\uD800", "\uDC00"]) {
-			expect({ lone, kept: sliceTailBytes(`ab${lone}c`, 4) }).toEqual({ lone, kept: { text: `${lone}c`, bytes: 4 } });
+			expect({ lone, kept: sliceTailBytes(`ab${lone}c`, 4) }).toEqual({
+				lone,
+				kept: { text: `${lone}c`, bytes: 4 },
+			});
 			expect({ lone, kept: sliceTailBytes(`ab${lone}c`, 3) }).toEqual({ lone, kept: { text: "c", bytes: 1 } });
 		}
 		// Two low surrogates are two characters, and so is the last character below the surrogates
