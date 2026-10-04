@@ -620,4 +620,59 @@ describe("the usage credential boundary", () => {
 			});
 		}
 	});
+
+	describe("a usage backend's supports() throwing", () => {
+		function unsupportedBy(): UsageProvider {
+			return {
+				id: PROVIDER,
+				supports(params: { credential: { apiKey?: string } }): boolean {
+					throw new Error(`unsupported credential: ${params.credential.apiKey}`);
+				},
+				async fetchUsage(): Promise<UsageReport> {
+					throw new Error("never reached");
+				},
+			} as unknown as UsageProvider;
+		}
+
+		it("is redacted and does not escape fetchUsageReports", async () => {
+			const r = await rig(unsupportedBy());
+			const reports = await r.storage.fetchUsageReports();
+			expect(reports ?? []).toEqual([]);
+			expectClean(observe(r, { reports: reports ?? [] }), [KEY]);
+		});
+
+		it("is redacted and does not escape checkCredentials", async () => {
+			const r = await rig(unsupportedBy());
+			const checks = await r.storage.checkCredentials();
+			expect(checks.map(check => check.ok)).toEqual([false]);
+			expectClean(observe(r, { checks }), [KEY]);
+		});
+
+		it("fails closed for that provider only and leaves the others running", async () => {
+			const OTHER = "fake-usage-backend-ok";
+			const working: UsageProvider = {
+				id: OTHER,
+				async fetchUsage(params): Promise<UsageReport> {
+					return { provider: params.provider, fetchedAt: Date.now(), limits: [], metadata: { echo: "other-ok" } };
+				},
+			} as UsageProvider;
+			const db = new Database(":memory:");
+			const store = new SqliteAuthCredentialStore(db);
+			cleanups.push(() => store.close());
+			const storage = new AuthStorage(store, {
+				usageProviderResolver: id => (id === PROVIDER ? unsupportedBy() : id === OTHER ? working : undefined),
+			});
+			await storage.reload();
+			await storage.set(PROVIDER, { type: "api_key", key: KEY });
+			await storage.set(OTHER, { type: "api_key", key: "other-key-456" });
+			const reports = await storage.fetchUsageReports();
+			expect(JSON.stringify(reports)).toContain("other-ok");
+			const checks = await storage.checkCredentials();
+			expect(checks.map(check => [check.provider, check.ok]).sort()).toEqual([
+				[PROVIDER, false],
+				[OTHER, true],
+			]);
+			expect(JSON.stringify({ reports, checks })).not.toContain(KEY);
+		});
+	});
 });

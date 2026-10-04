@@ -2718,7 +2718,7 @@ export class AuthStorage {
 			}
 		}
 
-		if (providerImpl.supports && !providerImpl.supports(params)) return null;
+		if (!this.#usageProviderSupports(providerImpl, params).supported) return null;
 
 		const fetchSecrets = [
 			...new Set([
@@ -2994,6 +2994,29 @@ export class AuthStorage {
 		return true;
 	}
 
+	/**
+	 * Asks a usage backend whether it handles `request`, inside the redaction boundary. A `supports` that
+	 * throws (its message may quote the credential it was handed) fails closed for that request alone: it
+	 * is reported through the redacting logger, never rethrown, so the other providers still run.
+	 */
+	#usageProviderSupports(
+		providerImpl: UsageProvider,
+		request: UsageRequestDescriptor,
+	): { supported: boolean; failure?: string } {
+		if (!providerImpl.supports) return { supported: true };
+		try {
+			return { supported: providerImpl.supports(request) };
+		} catch (error) {
+			const secrets = usageCredentialSecrets(request.credential);
+			const failure = redactUsageError(error, secrets);
+			redactingUsageLogger(this.#usageLogger, secrets)?.debug(
+				"Usage provider support check failed",
+				{ provider: request.provider, error: failure },
+			);
+			return { supported: false, failure };
+		}
+	}
+
 	#collectUsageRequests(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 	}): UsageRequestDescriptor[] {
@@ -3037,7 +3060,7 @@ export class AuthStorage {
 					{ type: "api_key", apiKey },
 					options?.baseUrlResolver?.(provider),
 				);
-				if (providerImpl.supports && !providerImpl.supports(request)) continue;
+				if (!this.#usageProviderSupports(providerImpl, request).supported) continue;
 				requests.push(request);
 				continue;
 			}
@@ -3053,7 +3076,7 @@ export class AuthStorage {
 								baseUrl,
 							)
 						: buildUsageRequestForOauth(provider, credential, baseUrl);
-				if (providerImpl.supports && !providerImpl.supports(request)) continue;
+				if (!this.#usageProviderSupports(providerImpl, request).supported) continue;
 				requests.push(request);
 			}
 		}
@@ -3409,13 +3432,18 @@ export class AuthStorage {
 			}
 
 			const providerImpl = resolver?.(row.provider as Provider);
+			const supportCheck = providerImpl
+				? this.#usageProviderSupports(providerImpl, initialRequest)
+				: { supported: false };
 			if (!providerImpl) {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
-			} else if (
-				providerImpl.supports &&
-				!providerImpl.supports(initialRequest)
-			) {
-				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+			} else if (!supportCheck.supported) {
+				if (supportCheck.failure !== undefined) {
+					base.ok = false;
+					base.reason = supportCheck.failure;
+				} else {
+					base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+				}
 			} else if (providerImpl.validatesCredentials === false) {
 				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
