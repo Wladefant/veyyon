@@ -1390,3 +1390,42 @@ test("a non-corruption initializer failure on a healthy store is not probed into
 	expect(preserved).toBe(0);
 	expect(await corruptBackups(dir.path())).toHaveLength(0);
 });
+
+test("concurrent openers holding failed handles on one hidden-corrupt store both recover and quarantine once", async () => {
+	await using dir = await TempDir.create("@omp-corrupt-hidden-concurrent-");
+	const dbPath = dir.join("store.db");
+	const damaged = await corruptSchema(dbPath);
+	const opened = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+	const preserved: unknown[] = [];
+	const attempts = [0, 0];
+
+	// Each opener keeps its failed handle open until the peer's handle is open too, so on
+	// Windows the winner of the recovery lock must close the peer's handle to unlink the store.
+	const open = (index: number) =>
+		openSqliteDatabase(
+			dbPath,
+			async handle => {
+				if (attempts[index]!++ === 0) {
+					opened[index]!.resolve();
+					await opened[1 - index]!.promise;
+					throw new Error("no such table: hint_usage");
+				}
+				handle.run("CREATE TABLE IF NOT EXISTS t (v TEXT)");
+				return handle;
+			},
+			{ recoverCorruption: true, onCorruptionPreserved: (_backupPath, error) => preserved.push(error) },
+		);
+
+	const [first, second] = await Promise.all([open(0), open(1)]);
+	first.run("INSERT INTO t VALUES ('a')");
+	second.run("INSERT INTO t VALUES ('b')");
+	expect(first.query("SELECT count(*) AS n FROM t").get()).toEqual({ n: 2 });
+	first.close();
+	second.close();
+
+	expect(attempts).toEqual([2, 2]);
+	expect(preserved).toHaveLength(1);
+	const backups = (await corruptBackups(dir.path())).filter(f => !f.endsWith(".tmp"));
+	expect(backups).toHaveLength(1);
+	expect(await fs.readFile(path.join(dir.path(), backups[0]!, "store.db"))).toEqual(damaged);
+});
