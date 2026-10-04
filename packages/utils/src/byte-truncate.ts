@@ -94,20 +94,31 @@ export function truncateTailBytes(data: string | Uint8Array, maxBytes: number): 
 	return truncateBytesWindowed(data, maxBytes, "tail");
 }
 
+/** Where the text a {@link dropFrontBytes} walk keeps starts, and its UTF-8 length. */
+export interface FrontByteCut {
+	/** Index of the first UTF-16 unit kept. */
+	start: number;
+	/** UTF-8 length of the kept text. */
+	bytes: number;
+}
+
 /**
- * Keep the tail of `text` that fits `maxBytes`, never splitting a character, by walking whole
- * characters off its front. After one byte count of `text` the cost is the characters dropped, where
- * {@link truncateTailBytes} encodes and decodes the whole window. A lone surrogate counts the three
- * bytes of the U+FFFD it encodes to and is kept as it is.
- *
- * The result is a substring of `text` and shares its storage: a caller that keeps the tail keeps
- * all of `text`. It suits a buffer that replaces both on its next cut, not a value stored for later.
+ * Walk whole characters off the front of `text`, from index `start`, while `bytes` exceeds
+ * `maxBytes`, never splitting a character and never dropping one that starts at or past index
+ * `end`. `bytes` is the UTF-8 length of what is kept: `text` from `start`, and whatever the caller
+ * holds after it. The walk costs the characters it drops, where {@link truncateTailBytes} encodes and
+ * decodes the whole window. A lone surrogate counts the three bytes of the U+FFFD it encodes to, and
+ * a high surrogate pairs with the unit after it, so a caller whose text continues past the end of
+ * `text` passes an `end` short of its last unit, which that continuation could complete.
  */
-export function sliceTailBytes(text: string, maxBytes: number): ByteTruncationResult {
-	if (maxBytes <= 0) return { text: "", bytes: 0 };
-	let bytes = Buffer.byteLength(text, "utf-8");
-	let start = 0;
-	while (bytes > maxBytes) {
+export function dropFrontBytes(
+	text: string,
+	start: number,
+	end: number,
+	bytes: number,
+	maxBytes: number,
+): FrontByteCut {
+	while (bytes > maxBytes && start < end) {
 		const unit = text.charCodeAt(start);
 		if (unit < 0x80) {
 			bytes -= 1;
@@ -121,7 +132,7 @@ export function sliceTailBytes(text: string, maxBytes: number): ByteTruncationRe
 		}
 		start++;
 	}
-	return { text: start === 0 ? text : text.substring(start), bytes };
+	return { start, bytes };
 }
 
 /**
