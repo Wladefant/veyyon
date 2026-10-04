@@ -831,6 +831,49 @@ exit 64
 		expect(result.output.trim()).toBe("from_snapshot");
 	});
 
+	describe("settles when setup never reaches the spawn (#465)", () => {
+		function stallSnapshot(): void {
+			// A bash-named shell so the executor asks for a snapshot, which then never resolves:
+			// the stand-in for a wedged wsl.exe / rc file / native call before any child exists.
+			vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+				shell: "bash",
+				args: ["-c"],
+				env: { PATH: Bun.env.PATH ?? "", HOME: tempDir },
+				prefix: undefined,
+			});
+			vi.spyOn(shellSnapshot, "getOrCreateSnapshot").mockReturnValue(new Promise<string | null>(() => {}));
+		}
+
+		it("times out instead of staying pending when no child is ever spawned", async () => {
+			stallSnapshot();
+			const started = Date.now();
+			const result = await Promise.race([
+				executeBash("echo never", { cwd: tempDir, timeout: 1_000, sessionKey: "stall-timeout" }),
+				Bun.sleep(5_000).then(() => "still-pending" as const),
+			]);
+			expect(result).not.toBe("still-pending");
+			if (result === "still-pending") return;
+			expect(result.cancelled).toBe(true);
+			expect(result.timedOut).toBe(true);
+			expect(result.output).toContain("Command timed out after 1 seconds");
+			expect(Date.now() - started).toBeLessThan(4_000);
+		}, 10_000);
+
+		it("honours an abort signal while setup is stalled", async () => {
+			stallSnapshot();
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 100);
+			const result = await Promise.race([
+				executeBash("echo never", { cwd: tempDir, timeout: 60_000, signal: controller.signal, sessionKey: "stall-abort" }),
+				Bun.sleep(5_000).then(() => "still-pending" as const),
+			]);
+			expect(result).not.toBe("still-pending");
+			if (result === "still-pending") return;
+			expect(result.cancelled).toBe(true);
+			expect(result.timedOut).toBe(false);
+		}, 10_000);
+	});
+
 	it("sources large bash functions without base64 eval wrappers", async () => {
 		if (process.platform === "win32") {
 			return;
