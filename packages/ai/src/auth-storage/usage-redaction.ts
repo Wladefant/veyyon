@@ -119,7 +119,9 @@ function redactNode(
 	done: Map<object, unknown>,
 ): unknown {
 	if (typeof value === "string") return redactUsageText(value, secrets);
-	if (typeof value === "function" || typeof value === "symbol") return undefined;
+	if (typeof value === "bigint") return redactUsageText(`${value}`, secrets);
+	if (typeof value === "symbol") return undefined;
+	if (typeof value === "function") return isOrInheritsFromProxy(value) ? UNREADABLE : undefined;
 	if (value === null || typeof value !== "object") return value;
 	// A Proxy runs its traps on every reflective read, so it is never reflected on.
 	if (isOrInheritsFromProxy(value)) return UNREADABLE;
@@ -202,13 +204,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * gives a fixed placeholder. Use it instead of `String(error)` wherever the error came from a backend.
  */
 export function redactUsageError(error: unknown, secrets: readonly string[]): string {
-	if (typeof error === "object" && error !== null && isOrInheritsFromProxy(error)) return UNREADABLE;
-	if (error instanceof Error) {
-		const message = ownDataValue(error, "message");
-		if (typeof message === "string") return redactUsageText(message, secrets);
+	try {
+		switch (typeof error) {
+			case "string":
+				return redactUsageText(error, secrets);
+			case "bigint":
+				return redactUsageText(`${error}`, secrets);
+			case "symbol":
+				return "[symbol]";
+			case "undefined":
+			case "number":
+			case "boolean":
+				return String(error);
+			default:
+		}
+		if (error === null) return "null";
+		// Before any typeof branch: a callable Proxy is a function, and every reflective read of a Proxy
+		// (or of a value whose prototype is one) runs its traps.
+		if (isOrInheritsFromProxy(error)) return UNREADABLE;
+		if (typeof error === "function") return "[function]";
+		if (error instanceof Error) {
+			const message = ownDataValue(error, "message");
+			if (typeof message === "string") return redactUsageText(message, secrets);
+		}
+		const snapshot = redactUsageValue(error, secrets);
+		return typeof snapshot === "string" ? snapshot : (JSON.stringify(snapshot) ?? String(snapshot));
+	} catch {
+		return UNREADABLE;
 	}
-	const snapshot = redactUsageValue(error, secrets);
-	return typeof snapshot === "string" ? snapshot : (JSON.stringify(snapshot) ?? String(snapshot));
 }
 
 /** A logger that redacts the message and every string in the metadata before the wrapped logger sees it. */

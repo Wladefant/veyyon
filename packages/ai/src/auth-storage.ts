@@ -2881,7 +2881,7 @@ export class AuthStorage {
 		} catch (error) {
 			this.#usageLogger?.debug("usage history record failed", {
 				provider: request.provider,
-				error: String(error),
+				error: redactUsageError(error, usageCredentialSecrets(request.credential)),
 			});
 		}
 	}
@@ -2910,11 +2910,23 @@ export class AuthStorage {
 		);
 		if (!credential) return false;
 
-		const cacheKey = buildUsageReportCacheKey(
-			buildUsageRequestForOauth(provider, credential, options?.baseUrl),
-		);
+		const ingestRequest = buildUsageRequestForOauth(provider, credential, options?.baseUrl);
+		const cacheKey = buildUsageReportCacheKey(ingestRequest);
+		const secrets = usageCredentialSecrets(ingestRequest.credential);
 		const now = Date.now();
-		const parsedReport = parseHeaders(headers, now);
+		// The parser is a backend callback: a throw is redacted and ends this ingest, and what it returns
+		// is read only through the redacted snapshot, so it cannot reach the cache or the store raw.
+		let parsedReport: UsageReport | null | undefined;
+		try {
+			const parsedRaw = parseHeaders(headers, now);
+			parsedReport = parsedRaw ? redactUsageReport(parsedRaw, secrets) : null;
+		} catch (error) {
+			redactingUsageLogger(this.#usageLogger, secrets)?.debug("Usage header parse failed", {
+				provider,
+				error: redactUsageError(error, secrets),
+			});
+			return false;
+		}
 		if (!parsedReport) return false;
 		// Throttled to one ingest per interval — except when a window reads
 		// exhausted: that snapshot must land immediately so the next getApiKey
@@ -2942,7 +2954,9 @@ export class AuthStorage {
 			metadata.orgId = credential.orgId;
 		if (credential.orgName && metadata.orgName === undefined)
 			metadata.orgName = credential.orgName;
-		const report: UsageReport = { ...parsedReport, metadata };
+		// Redact last: the stored identity fields copied in above are credential-controlled too.
+		const report = redactUsageReport({ ...parsedReport, metadata }, secrets);
+		if (!report) return false;
 
 		const storeIngest = this.#store.ingestUsageReport?.bind(this.#store);
 		if (storeIngest) {
@@ -3228,7 +3242,7 @@ export class AuthStorage {
 
 		const promise = (async () => {
 			for (const request of requests) {
-				this.#usageLogger?.debug("Usage fetch queued", {
+				redactingUsageLogger(this.#usageLogger, usageCredentialSecrets(request.credential))?.debug("Usage fetch queued", {
 					provider: request.provider,
 					credentialType: request.credential.type,
 					baseUrl: request.baseUrl,

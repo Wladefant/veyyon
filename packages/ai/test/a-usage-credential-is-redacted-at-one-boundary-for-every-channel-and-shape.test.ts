@@ -20,6 +20,7 @@ import {
 	SqliteAuthCredentialStore,
 } from "@veyyon/ai/auth-storage";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { redactUsageError } from "@veyyon/ai/auth-storage/usage-redaction";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import type { UsageLimit, UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import * as logger from "@veyyon/utils/logger";
@@ -462,7 +463,7 @@ describe("the usage credential boundary", () => {
 	describe("the cache row key", () => {
 		const oauth = {
 			type: "oauth",
-			access: "access-token-placeholder",
+			access: KEY,
 			refresh: "refresh-token-placeholder",
 			expires: Date.now() + 3_600_000,
 			accountId: KEY,
@@ -473,7 +474,7 @@ describe("the usage credential boundary", () => {
 			const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })), KEY, oauth);
 			await r.storage.fetchUsageReports();
 			expect(usageRows(r.db)).toContain("clean");
-			expectClean({ persistedUsageRows: usageRows(r.db) }, [KEY]);
+			expectClean(observe(r, {}), [KEY]);
 		});
 
 		it("keeps one row per account across repeated fetches", async () => {
@@ -674,5 +675,229 @@ describe("the usage credential boundary", () => {
 			]);
 			expect(JSON.stringify({ reports, checks })).not.toContain(KEY);
 		});
+	});
+
+	describe("every hostile value through every entry point", () => {
+		const boom = (): never => {
+			throw new Error(KEY);
+		};
+		/** Values a backend may throw or return. Reading any of them the ordinary way throws the key. */
+		const hostile: Array<[string, () => unknown]> = [
+			[
+				"an Error whose message getter throws the key",
+				() => Object.defineProperty(new Error("x"), "message", { get: boom }),
+			],
+			["an object whose Symbol.toPrimitive and toString throw the key", () => ({ [Symbol.toPrimitive]: boom, toString: boom })],
+			[
+				"an Error with a Proxy prototype",
+				() =>
+					Object.setPrototypeOf(
+						new Error(`rejected ${KEY}`),
+						new Proxy(Error.prototype, { get: boom, getPrototypeOf: boom, getOwnPropertyDescriptor: boom }),
+					),
+			],
+			[
+				"a callable Proxy",
+				() =>
+					new Proxy(() => undefined, {
+						get: boom,
+						apply: boom,
+						ownKeys: boom,
+						getPrototypeOf: boom,
+						getOwnPropertyDescriptor: boom,
+					}),
+			],
+			["a bigint", () => 10n ** 30n],
+			["a symbol described by the key", () => Symbol(KEY)],
+			["undefined", () => undefined],
+			["null", () => null],
+			["a number", () => 42],
+			["a string holding the key", () => `bad ${KEY}`],
+			["an Error whose cause holds the key", () => new Error("outer", { cause: new Error(KEY) })],
+			["an object keyed and valued by the key", () => ({ [KEY]: KEY })],
+		];
+		const oauth = {
+			type: "oauth",
+			access: KEY,
+			refresh: "refresh-token-placeholder",
+			expires: Date.now() + 3_600_000,
+			accountId: "account-placeholder",
+			email: "person@example.test",
+		} as StoredCredential;
+		const okReport = (provider: UsageReport["provider"], extra: Partial<UsageReport> = {}): UsageReport =>
+			({ provider, fetchedAt: Date.now(), limits: [], ...extra }) as UsageReport;
+
+		type Entry = (value: () => unknown) => UsageProvider & { parseRateLimitHeaders?: unknown };
+		const entries: Array<[string, Entry, { ingest?: boolean; completionThrows?: boolean }]> = [
+			[
+				"a fetchUsage that throws it",
+				value => ({
+					id: PROVIDER,
+					async fetchUsage() {
+						throw value();
+					},
+				}) as UsageProvider,
+				{},
+			],
+			[
+				"a supports() that throws it",
+				value => ({
+					id: PROVIDER,
+					supports() {
+						throw value();
+					},
+					async fetchUsage() {
+						return okReport("anthropic");
+					},
+				}) as unknown as UsageProvider,
+				{},
+			],
+			[
+				"a fetchUsage that returns it in metadata",
+				value => ({
+					id: PROVIDER,
+					async fetchUsage(params: { provider: UsageReport["provider"] }) {
+						return okReport(params.provider, { metadata: { value: value() } });
+					},
+				}) as unknown as UsageProvider,
+				{},
+			],
+			[
+				"a completion probe that throws it",
+				() => ({
+					id: PROVIDER,
+					async fetchUsage(params: { provider: UsageReport["provider"] }) {
+						return okReport(params.provider);
+					},
+				}) as unknown as UsageProvider,
+				{ completionThrows: true },
+			],
+			[
+				"a header parser that throws it",
+				value => ({
+					id: PROVIDER,
+					async fetchUsage(params: { provider: UsageReport["provider"] }) {
+						return okReport(params.provider);
+					},
+					parseRateLimitHeaders() {
+						throw value();
+					},
+				}) as unknown as UsageProvider,
+				{ ingest: true },
+			],
+			[
+				"a header parser that returns a report whose limits getter throws it",
+				value => ({
+					id: PROVIDER,
+					async fetchUsage(params: { provider: UsageReport["provider"] }) {
+						return okReport(params.provider);
+					},
+					parseRateLimitHeaders() {
+						return Object.defineProperty(okReport("anthropic"), "limits", {
+							get() {
+								value();
+							},
+						});
+					},
+				}) as unknown as UsageProvider,
+				{ ingest: true },
+			],
+			[
+				"a header parser that returns it in metadata",
+				value => ({
+					id: PROVIDER,
+					async fetchUsage(params: { provider: UsageReport["provider"] }) {
+						return okReport(params.provider);
+					},
+					parseRateLimitHeaders() {
+						return okReport("anthropic", { metadata: { value: value() } });
+					},
+				}) as unknown as UsageProvider,
+				{ ingest: true },
+			],
+		];
+
+		for (const [entryLabel, build, mode] of entries) {
+			for (const [valueLabel, value] of hostile) {
+				it(`keeps the key out of every channel: ${entryLabel}, ${valueLabel}`, async () => {
+					const r = await rig(build(value), KEY, oauth);
+					if (mode.ingest) {
+						expect(() => r.storage.ingestUsageHeaders(PROVIDER, {}, {})).not.toThrow();
+					}
+					const probe = mode.completionThrows
+						? async () => {
+								throw value();
+							}
+						: undefined;
+					const out = await drive(r, probe);
+					expectClean(observe(r, out), [KEY]);
+				});
+			}
+		}
+	});
+
+	it("redacts a store failure while recording usage history", async () => {
+		vi.spyOn(SqliteAuthCredentialStore.prototype, "recordUsageSnapshots").mockImplementation(() => {
+			throw new Error(`history store rejected ${KEY}`);
+		});
+		const limit = {
+			id: "history",
+			label: "History",
+			scope: { provider: "anthropic" },
+			amount: { unit: "percent", used: 1, limit: 100 },
+		} as UsageLimit;
+		const r = await rig(reporting(() => ({ limits: [limit] })));
+		const out = await drive(r);
+		expect(out.reports).toHaveLength(1);
+		expectClean(observe(r, out), [KEY]);
+	});
+
+	it("redacts stored identity copied into ingested header metadata", async () => {
+		const backend = {
+			id: PROVIDER,
+			async fetchUsage(params: { provider: UsageReport["provider"] }): Promise<UsageReport> {
+				return { provider: params.provider, fetchedAt: Date.now(), limits: [] };
+			},
+			parseRateLimitHeaders(): UsageReport {
+				return { provider: "anthropic", fetchedAt: Date.now(), limits: [] } as UsageReport;
+			},
+		} as unknown as UsageProvider;
+		const r = await rig(backend, KEY, {
+			type: "oauth",
+			access: KEY,
+			refresh: "refresh-token-placeholder",
+			expires: Date.now() + 3_600_000,
+			orgId: "org-placeholder",
+			orgName: `Team ${KEY}`,
+		} as StoredCredential);
+		expect(r.storage.ingestUsageHeaders(PROVIDER, {}, {})).toBe(true);
+		const out = await drive(r);
+		expectClean(observe(r, out), [KEY]);
+	});
+
+	it("formats every kind of thrown value without throwing and without the key", () => {
+		const boom = (): never => {
+			throw new Error(KEY);
+		};
+		const values: unknown[] = [
+			10n ** 30n,
+			Symbol(KEY),
+			undefined,
+			null,
+			42,
+			true,
+			`bad ${KEY}`,
+			() => KEY,
+			new Proxy(() => undefined, { get: boom, apply: boom, getPrototypeOf: boom }),
+			new Proxy({}, { get: boom, ownKeys: boom, getPrototypeOf: boom }),
+			Object.defineProperty(new Error("x"), "message", { get: boom }),
+			{ [Symbol.toPrimitive]: boom, toString: boom, [KEY]: KEY },
+			new Error("outer", { cause: new Error(KEY) }),
+		];
+		for (const value of values) {
+			const text = redactUsageError(value, [KEY]);
+			expect(typeof text).toBe("string");
+			expect(text).not.toContain(KEY);
+		}
 	});
 });
