@@ -344,4 +344,48 @@ describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () =>
 		const checks = await r.storage.checkCredentials();
 		expect(checks[0]?.ok).toBe(true);
 	});
+
+	it("removes the base64 of a three-character key where it stands alone, and keeps ordinary text intact", async () => {
+		const key = "abc";
+		const encoded = Buffer.from(key).toString("base64");
+		expect(encoded).toBe("YWJj");
+		const backend: UsageProvider = {
+			id: PROVIDER,
+			async fetchUsage(_params, ctx): Promise<UsageReport> {
+				ctx.logger?.debug("sent", { header: `Basic ${encoded}`, note: "alphabet and cab and YWJjZGVm stay" });
+				return {
+					provider: PROVIDER,
+					fetchedAt: Date.now(),
+					limits: [limit("five")],
+					metadata: { echoed: encoded, sentence: "a cab ride" },
+				};
+			},
+		};
+		const r = rig(backend);
+		await r.storage.reload();
+		await r.storage.set(PROVIDER, { type: "api_key", key });
+		const reports = await r.storage.fetchUsageReports();
+		const checks = await r.storage.checkCredentials();
+		const text = everything(r, { reports, checks });
+		expect(text).not.toMatch(/(?<![A-Za-z0-9+/_=-])YWJj(?![A-Za-z0-9+/_=-])/);
+		expect(reports).toHaveLength(1);
+		expect(reports?.[0]?.limits[0]?.amount.unit).toBe("percent");
+		expect(checks[0]?.ok).toBe(true);
+	});
+
+	it("keeps the declared latencyMs of a completion probe result", async () => {
+		const backend: UsageProvider = {
+			id: PROVIDER,
+			async fetchUsage(): Promise<UsageReport> {
+				return { provider: PROVIDER, fetchedAt: Date.now(), limits: [limit("five")] };
+			},
+		};
+		const r = rig(backend);
+		await r.storage.reload();
+		await r.storage.set(PROVIDER, { type: "api_key", key: "latency-key-445" });
+		const checks = await r.storage.checkCredentials({
+			completionProbe: async () => ({ ok: true, modelId: "m1", latencyMs: 42 }),
+		});
+		expect(checks[0]?.completion).toEqual({ ok: true, modelId: "m1", latencyMs: 42 });
+	});
 });

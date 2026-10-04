@@ -39,6 +39,11 @@ interface SecretForm {
 	percentEncoded: boolean;
 	/** The length of the credential this is a form of, which is what the replacement states. */
 	secretLength: number;
+	/**
+	 * Matched only as a whole token (not inside a longer run of base64 or word characters). Used for the
+	 * unpadded base64 of a very short key, whose few characters would otherwise mangle ordinary text.
+	 */
+	bounded?: boolean;
 }
 
 const formsBySecrets = new WeakMap<readonly string[], SecretForm[]>();
@@ -51,9 +56,9 @@ function secretForms(secrets: readonly string[]): SecretForm[] {
 	const cached = formsBySecrets.get(secrets);
 	if (cached) return cached;
 	const forms = new Map<string, SecretForm>();
-	const add = (pattern: string, percentEncoded: boolean, secret: string): void => {
+	const add = (pattern: string, percentEncoded: boolean, secret: string, bounded = false): void => {
 		if (pattern.length > 0 && !forms.has(pattern)) {
-			forms.set(pattern, { pattern, percentEncoded, secretLength: secret.length });
+			forms.set(pattern, { pattern, percentEncoded, secretLength: secret.length, bounded });
 		}
 	};
 	for (const secret of secrets) {
@@ -64,7 +69,7 @@ function secretForms(secrets: readonly string[]): SecretForm[] {
 		const whole = encodeURI(secret);
 		add(whole, whole !== secret, secret);
 		add(JSON.stringify(secret).slice(1, -1), false, secret);
-		for (const spelling of wholeBase64Spellings(secret)) add(spelling, false, secret);
+		for (const spelling of wholeBase64Spellings(secret)) add(spelling.text, false, secret, spelling.bounded);
 	}
 	const result = [...forms.values()].sort((a, b) => b.pattern.length - a.pattern.length);
 	formsBySecrets.set(secrets, result);
@@ -72,21 +77,25 @@ function secretForms(secrets: readonly string[]): SecretForm[] {
 }
 
 /**
- * The whole-secret base64 spellings (standard and URL-safe, padded and unpadded) removed whatever the
- * secret's length, because a short accepted key is exactly as leaked when it is logged as `c2hvcnQ=`.
- * The unpadded spelling of a very short secret is a common word fragment, so it is removed only from
- * {@link MIN_UNPADDED_BASE64_FORM} characters up; the padded spelling ends in `=` and is always removed.
+ * The whole-secret base64 spellings (standard and URL-safe, padded and unpadded) of every secret, whatever
+ * its length, because a short accepted key is exactly as leaked when it is logged as `c2hvcnQ=`.
+ *
+ * The threshold, stated once: a padded spelling ends in `=` and is removed anywhere. An unpadded spelling
+ * of {@link MIN_UNPADDED_BASE64_FORM} characters or more (a secret of 4 bytes or more) is removed anywhere.
+ * A shorter unpadded spelling (`YWJj` for `abc`) is removed only as a whole token, with no base64 or word
+ * character on either side: removed wherever it is logged on its own, never from inside another word.
+ * No other 1-5 character substring is ever removed.
  */
 const MIN_UNPADDED_BASE64_FORM = 6;
 
-function wholeBase64Spellings(secret: string): string[] {
+function wholeBase64Spellings(secret: string): Array<{ text: string; bounded: boolean }> {
 	const padded = Buffer.from(secret, "utf8").toString("base64");
 	const urlSafe = padded.replace(/\+/g, "-").replace(/\//g, "_");
-	const spellings: string[] = [];
+	const spellings: Array<{ text: string; bounded: boolean }> = [];
 	for (const form of [padded, urlSafe]) {
-		if (form.endsWith("=")) spellings.push(form);
+		if (form.endsWith("=")) spellings.push({ text: form, bounded: false });
 		const unpadded = form.replace(/=+$/, "");
-		if (unpadded.length >= MIN_UNPADDED_BASE64_FORM) spellings.push(unpadded);
+		if (unpadded.length > 0) spellings.push({ text: unpadded, bounded: unpadded.length < MIN_UNPADDED_BASE64_FORM });
 	}
 	return spellings;
 }
@@ -184,6 +193,11 @@ export function redactUsageText(text: string, secrets: readonly string[]): strin
 	let result = text;
 	for (const form of secretForms(secrets)) {
 		const replacement = `<redacted ${form.secretLength} chars>`;
+		if (form.bounded) {
+			const token = new RegExp(`(?<![A-Za-z0-9+/_=-])${escapeRegExp(form.pattern)}(?![A-Za-z0-9+/_=-])`, "g");
+			result = result.replace(token, replacement);
+			continue;
+		}
 		result = form.percentEncoded
 			? result.replace(new RegExp(escapeRegExp(form.pattern), "gi"), replacement)
 			: result.split(form.pattern).join(replacement);
@@ -305,7 +319,7 @@ const SHAPES: Record<ShapeKind, Record<string, Spec>> = {
 		report: "skip",
 		completion: "completion",
 	},
-	completion: { ok: "leaf", reason: "leaf", modelId: "leaf" },
+	completion: { ok: "leaf", reason: "leaf", modelId: "leaf", latencyMs: "leaf" },
 	historyEntry: {
 		recordedAt: "keep",
 		provider: "keep",
