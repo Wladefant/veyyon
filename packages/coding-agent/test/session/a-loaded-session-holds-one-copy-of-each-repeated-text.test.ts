@@ -7,9 +7,11 @@ import {
 	externalizeImageDataUrlSync,
 	externalizeTextSync,
 } from "@veyyon/kernel/session/blob-store";
-import type { FileEntry } from "@veyyon/kernel/session/session-entries";
+import { coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
+import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
 import {
 	loadEntriesFromFile,
+	loadEntriesFromFileStream,
 	MAX_SHORT_VALUES_PER_KEY,
 	resolveBlobRefsInEntries,
 } from "@veyyon/kernel/session/session-loader";
@@ -36,6 +38,9 @@ import { TempDir } from "@veyyon/utils";
  * loads, counting the cells under the field's key, with a text longer than the strings the engine's
  * own parse shares, so an unpooled load reaches N. A key that holds more distinct short strings
  * than the pool's bound stops pooling, which the bound row proves by loading every value twice.
+ * A compacted entry that a streamed load moves to disk keeps its message's short strings in memory
+ * on a stand-in, which the walk reaches through its own path: the cold row loads it that way, and
+ * proves the entries it counts were moved.
  *
  * What it does NOT catch: a new slot kind added to the load walk without a row here, since the
  * walk's slot kinds are a private union no test can enumerate; an equal short string under two
@@ -211,8 +216,8 @@ function writeSession(dir: string, store: BlobStore, slot: Slot, texts: readonly
 const NODE_FIELDS = 4;
 const EDGE_FIELDS = 4;
 
-/** What a heap snapshot starts its walk from: each entry list under a property name no other object has. */
-const snapshotRoots: Record<string, FileEntry[]> = {};
+/** What a heap snapshot starts its walk from: each root list under a property name no other object has. */
+const snapshotRoots: Record<string, readonly object[]> = {};
 let snapshots = 0;
 
 /**
@@ -233,15 +238,15 @@ interface StringCell {
 const isPayload = (cell: StringCell): boolean => cell.size >= TEXT_CHARS;
 
 /**
- * How many distinct string cells `entries` reaches that `counted` selects. Slots sharing one string
+ * How many distinct string cells `roots` reaches that `counted` selects. Slots sharing one string
  * reach one cell and each copy is another, so this counts copies rather than bytes, and no
  * collection timing moves it. The walk follows property and index edges only, so it never leaves the
  * entries for a structure, a prototype or a scope. `Bun.generateHeapSnapshot` because the V8-format
  * snapshot `node:v8` offers is Bun's translation of these cells, without their class indices.
  */
-function stringCellsReached(entries: FileEntry[], counted: (cell: StringCell) => boolean): number {
+function stringCellsReached(roots: readonly object[], counted: (cell: StringCell) => boolean): number {
 	const marker = `loadedSessionEntries${++snapshots}`;
-	snapshotRoots[marker] = entries;
+	snapshotRoots[marker] = roots;
 	try {
 		const snapshot = Bun.generateHeapSnapshot();
 		const string = snapshot.nodeClassNames.indexOf("string");
@@ -309,6 +314,83 @@ async function load(slot: Slot, texts: readonly string[], counted: (cell: String
 	}
 }
 
+/**
+ * Load a session of one tool result per text, `text` its tool name, ahead of a compaction that
+ * summarized every one, the way a streamed open loads it: each result moves to disk as the load
+ * reads the compaction, and its message stand-in keeps the tool name in memory. Counts the cells
+ * the stand-ins reach under `toolName`; a cold entry's `message` getter returns its stand-in
+ * without reading the line back.
+ */
+async function loadCold(texts: readonly string[]): Promise<Loaded & { cold: boolean[] }> {
+	const dir = TempDir.createSync("@pi-string-pool-cold-");
+	try {
+		const file = path.join(dir.path(), "session.jsonl");
+		const timestamp = "2026-01-01T00:00:00.000Z";
+		const lines: object[] = [
+			{
+				type: "session",
+				version: CURRENT_SESSION_VERSION,
+				id: "019f0000-0000-7000-8000-000000000001",
+				timestamp,
+				cwd: dir.path(),
+			},
+		];
+		texts.forEach((text, index) => {
+			lines.push({
+				type: "message",
+				id: `e${index}`,
+				parentId: index === 0 ? null : `e${index - 1}`,
+				timestamp,
+				message: {
+					role: "toolResult",
+					toolCallId: `call-${index}`,
+					toolName: text,
+					content: [{ type: "text", text: textPayload(index) }],
+					isError: false,
+					timestamp: 0,
+				},
+			});
+		});
+		const kept = `e${texts.length}`;
+		lines.push(
+			{
+				type: "message",
+				id: kept,
+				parentId: `e${texts.length - 1}`,
+				timestamp,
+				message: { role: "user", content: "kept", timestamp: 0 },
+			},
+			{
+				type: "compaction",
+				id: `e${texts.length + 1}`,
+				parentId: kept,
+				timestamp,
+				summary: "summary",
+				firstKeptEntryId: kept,
+				tokensBefore: 1,
+			},
+		);
+		fs.writeFileSync(file, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+		const { entries } = await loadEntriesFromFileStream(file, { coolCompactedHistory: true });
+		expect(await resolveBlobRefsInEntries(entries, new BlobStore(path.join(dir.path(), "blobs")))).toBe(0);
+		const messages = (entries.slice(1, 1 + texts.length) as unknown as { message: Record<string, unknown> }[]).map(
+			entry => entry.message,
+		);
+		const loaded = {
+			cells: stringCellsReached(messages, cell => cell.key === "toolName"),
+			matches: messages.map((message, index) => message.toolName === texts[index]),
+			cold: messages.map(message => coldFieldsOf(message) !== undefined),
+		};
+		// Reading each content back closes the handle the cold entries hold on the file before it is removed.
+		expect(messages.map(message => (firstContent(message) as { text: string }).text)).toEqual(
+			texts.map((_, index) => textPayload(index)),
+		);
+		return loaded;
+	} finally {
+		await dir.remove();
+	}
+}
+
 describe("a loaded session", () => {
 	for (const [name, { payload, slot }] of Object.entries(SLOTS)) {
 		it(
@@ -363,6 +445,23 @@ describe("a loaded session", () => {
 			SNAPSHOT_ROW_TIMEOUT_MS,
 		);
 	}
+
+	it(
+		"holds one copy of a short string repeated in a compacted entry's message the load moved to disk",
+		async () => {
+			const repeated = await loadCold(Array.from({ length: COPIES }, () => shortText(0)));
+			const distinct = await loadCold(Array.from({ length: COPIES }, (_, index) => shortText(index + 1)));
+
+			const allTrue = Array.from({ length: COPIES }, () => true);
+			expect(repeated.cold).toEqual(allTrue);
+			expect(distinct.cold).toEqual(allTrue);
+			expect(repeated.matches).toEqual(allTrue);
+			expect(distinct.matches).toEqual(allTrue);
+			expect(distinct.cells).toBe(COPIES);
+			expect(repeated.cells).toBe(1);
+		},
+		SNAPSHOT_ROW_TIMEOUT_MS,
+	);
 
 	it(
 		"stops pooling the short strings of a key that holds more distinct ones than the bound",

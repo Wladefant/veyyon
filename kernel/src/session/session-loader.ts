@@ -690,19 +690,24 @@ class StringPool {
 	}
 
 	/**
-	 * The pooled string equal to `value`, pooling `value` when it is the first of its text. A string
+	 * The earlier pooled string equal to `value`, or undefined when `value` stays where it is: it is
+	 * the first of its text, which the pool now holds, or a string the pool does not pool. A string
 	 * shorter than {@link MIN_POOLED_LENGTH} is pooled with the strings under the same `key`, and a
-	 * string of one character, which the engine holds once already, is returned as it is.
+	 * string of one character, which the engine holds once already, is not pooled. A caller writes
+	 * only a returned string back, so the walk stores nothing for an id, a timestamp or the first
+	 * copy of a text.
 	 */
-	intern(value: string, key?: string): string {
+	intern(value: string, key?: string): string | undefined {
 		if (value.length < MIN_POOLED_LENGTH) {
 			const byKey = this.#shortByKey;
-			return value.length < 2 || key === undefined || byKey === undefined ? value : internShort(byKey, value, key);
+			return value.length < 2 || key === undefined || byKey === undefined
+				? undefined
+				: internShort(byKey, value, key);
 		}
 		const known = this.#strings.get(value);
 		if (known !== undefined) return known;
 		this.#strings.set(value, value);
-		return value;
+		return undefined;
 	}
 
 	/** Drop every pooled string, so a pool the engine keeps reachable holds no text. */
@@ -713,21 +718,18 @@ class StringPool {
 }
 
 /** {@link StringPool.intern} for a string shorter than {@link MIN_POOLED_LENGTH} under `key`. */
-function internShort(byKey: Map<string, Map<string, string> | null>, value: string, key: string): string {
+function internShort(byKey: Map<string, Map<string, string> | null>, value: string, key: string): string | undefined {
 	let values = byKey.get(key);
-	if (values === null) return value;
+	if (values === null) return undefined;
 	if (values === undefined) {
 		values = new Map();
 		byKey.set(key, values);
 	}
 	const known = values.get(value);
 	if (known !== undefined) return known;
-	if (values.size >= MAX_SHORT_VALUES_PER_KEY) {
-		byKey.set(key, null);
-		return value;
-	}
-	values.set(value, value);
-	return value;
+	if (values.size >= MAX_SHORT_VALUES_PER_KEY) byKey.set(key, null);
+	else values.set(value, value);
+	return undefined;
 }
 
 /** What the one walk over the loaded entries gathers. */
@@ -760,10 +762,11 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 			// the string by value and cannot rewrite the slot it lives in.
 			if (typeof item === "string") {
 				if (isTextBlobRef(item)) scan.sites.push({ kind: "text-item", owner: value, index });
-				else value[index] = scan.strings.intern(item, key);
-				continue;
-			}
-			scanEntryValue(item, scan, key);
+				else {
+					const pooled = scan.strings.intern(item, key);
+					if (pooled !== undefined) value[index] = pooled;
+				}
+			} else if (typeof item === "object" && item !== null) scanEntryValue(item, scan, key);
 		}
 		return;
 	}
@@ -779,24 +782,31 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 		// string value at an arbitrary key; restore the full content in place.
 		if (typeof item === "string") {
 			if (isTextBlobRef(item)) scan.sites.push({ kind: "text", owner: target, key: childKey });
-			else target[childKey] = scan.strings.intern(item, childKey);
-			continue;
-		}
-		scanEntryValue(item, scan, childKey);
+			else {
+				const pooled = scan.strings.intern(item, childKey);
+				if (pooled !== undefined) target[childKey] = pooled;
+			}
+		} else if (typeof item === "object" && item !== null) scanEntryValue(item, scan, childKey);
 	}
 }
 
 /**
  * {@link scanEntryValue} over a cold entry or a cold message stand-in: every resident string is
  * pooled, and the fields in `cold` stay on disk. A cold field is restored when its entry reads the
- * line back, through {@link restoreColdLine}.
+ * line back, through {@link restoreColdLine}. `cold` lists its keys in the target's key order, so
+ * one cursor marks each cold key as the walk reaches it.
  */
 function scanResidentValues(target: Record<string, unknown>, cold: readonly string[], scan: EntryScan): void {
+	let moved = 0;
 	for (const key of Object.keys(target)) {
-		if (cold.includes(key)) continue;
+		if (key === cold[moved]) {
+			moved += 1;
+			continue;
+		}
 		const item = target[key];
 		if (typeof item === "string") {
-			target[key] = scan.strings.intern(item, key);
+			const pooled = scan.strings.intern(item, key);
+			if (pooled !== undefined) target[key] = pooled;
 			continue;
 		}
 		if (typeof item !== "object" || item === null) continue;
@@ -847,7 +857,7 @@ function settleBlobSite(
 	// Each resolver returns the reference unchanged when the blob is gone, and it is
 	// only called on a value that IS a reference, so an unchanged value is a loss.
 	if (resolved === reference) lost.count += 1;
-	const value = strings.intern(resolved);
+	const value = strings.intern(resolved) ?? resolved;
 	switch (site.kind) {
 		case "image-data":
 			site.owner.data = value;
