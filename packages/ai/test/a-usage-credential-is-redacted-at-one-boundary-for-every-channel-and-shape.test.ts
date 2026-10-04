@@ -39,7 +39,9 @@ interface Rig {
 	globalLog: string[];
 }
 
-async function rig(backend: UsageProvider, key: string = KEY): Promise<Rig> {
+type StoredCredential = Parameters<AuthStorage["set"]>[1];
+
+async function rig(backend: UsageProvider, key: string = KEY, credential?: StoredCredential): Promise<Rig> {
 	const globalLog: string[] = [];
 	for (const level of ["debug", "warn", "error", "info"] as const) {
 		vi.spyOn(logger, level).mockImplementation((message: string, meta?: unknown) => {
@@ -57,7 +59,7 @@ async function rig(backend: UsageProvider, key: string = KEY): Promise<Rig> {
 		usageLogger,
 	});
 	await storage.reload();
-	await storage.set(PROVIDER, { type: "api_key", key });
+	await storage.set(PROVIDER, credential ?? { type: "api_key", key });
 	return { db, storage, usageLog, globalLog };
 }
 
@@ -239,6 +241,47 @@ describe("the usage credential boundary", () => {
 		const out = await drive(r);
 		expect(out.reports[0]?.metadata?.fakeDate).toBe("[unreadable]");
 		expect(out.reports[0]?.metadata?.keep).toBe("plain-value");
+	});
+
+	it("redacts the credential bytes the org fallback copies into a report (orgName holding the access token) after the backend returned it", async () => {
+		const credential: StoredCredential = {
+			type: "oauth",
+			access: KEY,
+			refresh: "fake-refresh-token-456",
+			expires: Date.now() + 3_600_000,
+			orgId: "org-1",
+			orgName: KEY,
+		};
+		const r = await rig(reporting(() => ({ metadata: {} })), KEY, credential);
+		const out = await drive(r);
+		expect(out.reports.length).toBeGreaterThan(0);
+		expectClean(observe(r, out), [KEY]);
+	});
+
+	it("does not let an error whose message getter throws escape checkCredentials with the key", async () => {
+		const hostileError = (): Error => {
+			const error = new Error("placeholder");
+			Object.defineProperty(error, "message", {
+				get() {
+					throw new Error(KEY);
+				},
+			});
+			return error;
+		};
+		const backend = {
+			id: PROVIDER,
+			fetchUsage: async () => {
+				throw hostileError();
+			},
+		} as unknown as UsageProvider;
+		const r = await rig(backend);
+		const probe: CompletionProbe = async () => {
+			throw hostileError();
+		};
+		const out = await drive(r, probe);
+		expect(out.checks[0]?.ok).toBe(false);
+		expect(out.checks[0]?.completion?.ok).toBe(false);
+		expectClean(observe(r, out), [KEY]);
 	});
 
 	const unreadableRoots: Array<[string, () => unknown]> = [

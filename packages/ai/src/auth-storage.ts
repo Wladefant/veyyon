@@ -136,6 +136,7 @@ import {
 } from "./auth-storage/usage-ranking";
 import {
 	redactingUsageLogger,
+	redactUsageError,
 	redactUsageReport,
 	redactUsageText,
 	redactUsageValue,
@@ -2755,7 +2756,9 @@ export class AuthStorage {
 					};
 				}
 			}
-			return report ?? null;
+			// Redact last: the org fallback above filled fields from the stored credential, and the
+			// value returned here is the one that is cached and persisted.
+			return report ? (redactUsageReport(report, fetchSecrets) ?? null) : null;
 		} catch (error) {
 			if (
 				error instanceof AIError.ProviderHttpError &&
@@ -3370,7 +3373,7 @@ export class AuthStorage {
 							accountKey: buildUsageCacheIdentity(refreshedCredential),
 						};
 					} catch (error) {
-						refreshError = `oauth refresh failed: ${errorMessage(error)}`;
+						refreshError = `oauth refresh failed: ${redactUsageError(error, [])}`;
 					}
 				}
 			}
@@ -3436,7 +3439,7 @@ export class AuthStorage {
 					}
 				} catch (error) {
 					base.ok = false;
-					base.reason = errorMessage(error);
+					base.reason = redactUsageError(error, probeSecrets);
 				}
 			}
 			probeTimeout.cancel();
@@ -3461,7 +3464,7 @@ export class AuthStorage {
 							signal: completionTimeout.signal,
 						});
 					} catch (error) {
-						base.completion = { ok: false, reason: errorMessage(error) };
+						base.completion = { ok: false, reason: redactUsageError(error, probeSecrets) };
 					} finally {
 						completionTimeout.cancel();
 					}

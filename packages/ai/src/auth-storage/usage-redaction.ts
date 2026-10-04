@@ -196,6 +196,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Redacted text for a caught value, taken from the same no-user-code snapshot as a report: an Error
+ * keeps its own message (its name when it has none), an accessor or a Proxy is never run, and a throw while reading
+ * gives a fixed placeholder. Use it instead of `String(error)` wherever the error came from a backend.
+ */
+export function redactUsageError(error: unknown, secrets: readonly string[]): string {
+	if (error instanceof Error && !types.isProxy(error)) {
+		const message = ownDataValue(error, "message");
+		if (typeof message === "string") return redactUsageText(message, secrets);
+	}
+	const snapshot = redactUsageValue(error, secrets);
+	return typeof snapshot === "string" ? snapshot : (JSON.stringify(snapshot) ?? String(snapshot));
+}
+
 /** A logger that redacts the message and every string in the metadata before the wrapped logger sees it. */
 export function redactingUsageLogger(
 	logger: UsageLogger | undefined,
