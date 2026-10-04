@@ -111,6 +111,7 @@ export async function fetchTypeSafeModels(
 			input: ["text"],
 			supportsTools: false,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			pricing: "unknown",
 			contextWindow: null,
 			maxTokens: null,
 		});

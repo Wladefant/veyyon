@@ -41,6 +41,7 @@ packages/coding-agent/src/cli/runtime-stages.ts
 packages/coding-agent/src/cli/stats-cli.ts
 packages/coding-agent/src/cli/ttsr-cli.ts
 packages/coding-agent/src/commands/launch.ts
+packages/coding-agent/src/cursor-bridge-tools.ts
 packages/coding-agent/src/debug/profiler.ts
 packages/coding-agent/src/eval/agent-bridge.ts
 packages/coding-agent/src/eval/js/shared/local-module-loader.ts

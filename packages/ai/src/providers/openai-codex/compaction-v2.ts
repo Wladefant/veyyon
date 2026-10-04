@@ -347,12 +347,12 @@ export class CodexCompactionV2Accumulator {
 		}
 		if (this.#malformedCompactionItems > 0 && this.#validCompactionCount === 0) {
 			throw new Error(
-				`Codex compaction returned ${this.malformedCompactionItems} compaction items with no encrypted_content. The history was NOT compacted; the caller falls back to local compaction.`,
+				`Codex compaction returned ${this.#malformedCompactionItems} compaction items with no encrypted_content. The history was NOT compacted; the caller falls back to local compaction.`,
 			);
 		}
 		if (this.#validCompactionCount !== 1 || !this.#compactionItem) {
 			throw new Error(
-				`Codex compaction returned ${this.validCompactionCount} compaction items among ${this.outputItemCount} output items, expected exactly one. The history was NOT compacted; the caller falls back to local compaction.`,
+				`Codex compaction returned ${this.#validCompactionCount} compaction items among ${this.outputItemCount} output items, expected exactly one. The history was NOT compacted; the caller falls back to local compaction.`,
 			);
 		}
 		return { compactionItem: this.#compactionItem, usage: this.usage };

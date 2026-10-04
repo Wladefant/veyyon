@@ -267,7 +267,7 @@ describe("the transport stage answers with what its family declares", () => {
 			.filter(domain => domain.recovery?.transport.action === "retry")
 			.map(domain => domain.id);
 
-		expect(retrying).toEqual(["transport", "timeout"]);
+		expect(retrying).toEqual(["empty-response", "transport", "timeout"]);
 	});
 
 	it.each(withRecovery.map(domain => [domain.id, domain] as const))(

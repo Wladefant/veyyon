@@ -10,6 +10,7 @@
 // assertion is now the flag the turn domain actually reads, and the string it
 // checks is the one the owner mints.
 import { describe, expect, it } from "bun:test";
+import * as AIError from "@veyyon/ai/error";
 import { Flag } from "@veyyon/ai/error/flag";
 import { classify } from "@veyyon/ai/error/flags";
 import { providerFinishErrorMessage } from "@veyyon/ai/error/provider";
@@ -234,15 +235,25 @@ describe("in-band SSE error envelope", () => {
 	}, 10_000);
 });
 describe("premature stream closure", () => {
-	// The connection dies mid-generation without any `finish_reason` chunk
-	// (DeepSeek insufficient-system-resource interruption, flaky gateway).
-	// Before the guard, the partial message finalized as a clean `stop` and
-	// the agent loop treated the truncated turn as complete — the silent
-	// mid-sentence halt. Now it must surface as an error turn.
-	it("fails the turn instead of silently stopping", async () => {
+	// The connection dies without any `finish_reason` chunk (DeepSeek
+	// insufficient-system-resource interruption, flaky gateway). A transport EOF
+	// is judged by what arrived (`stopReasonForTerminallessEof`, the same rule on
+	// every dialect; `openai-stream-terminal-close.test.ts` owns the full table):
+	// visible text stands as a turn, while nothing at all, or a cut tool call, is a
+	// truncation that surfaces as an error turn instead of a silent halt.
+	it("fails the turn on a cut tool call instead of silently stopping", async () => {
 		const fetchMock = createSseFetch([
-			completionChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "Hel" } }] }),
-			completionChunk({ choices: [{ index: 0, delta: { content: "lo" } }] }),
+			completionChunk({
+				choices: [
+					{
+						index: 0,
+						delta: {
+							role: "assistant",
+							tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "weather", arguments: '{"city":"Pa' } }],
+						},
+					},
+				],
+			}),
 		]);
 
 		const eventTypes: string[] = [];
@@ -255,49 +266,25 @@ describe("premature stream closure", () => {
 			if (event.type === "error") errorMessage = event.error.errorMessage;
 		}
 
-		expect(eventTypes).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "error"]);
-		expect(errorMessage).toContain("finish_reason");
+		expect(eventTypes.at(-1)).toBe("error");
+		expect(eventTypes).not.toContain("done");
+		expect(errorMessage).toContain("closed before a terminal finish reason");
 	}, 10_000);
 
-	it("still retries a genuinely empty close via the empty-completion path", async () => {
-		// Zero content + no finish_reason is the flaky-gateway empty completion:
-		// it stays a clean `stop` so withEmptyCompletionRetry can re-sample
-		// instead of failing outright.
-		let attempts = 0;
-		async function fetchMock(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
-			attempts++;
-			const events =
-				attempts === 1
-					? []
-					: [
-							completionChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "Hi" } }] }),
-							completionChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }),
-							"[DONE]",
-						];
-			const encoder = new TextEncoder();
-			const stream = new ReadableStream<Uint8Array>({
-				start(controller) {
-					for (const event of events) {
-						const data = typeof event === "string" ? event : JSON.stringify(event);
-						controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-					}
-					controller.close();
-				},
-			});
-			return new Response(stream, {
-				status: 200,
-				headers: { "content-type": "text/event-stream" },
-			});
-		}
-
+	it("surfaces a genuinely empty close as a transient error for the retry ladder", async () => {
+		// Zero content + no finish_reason is the flaky-gateway empty completion. It is
+		// an error turn flagged as the empty-response family, which the provider ladder
+		// (transport stage) and the turn loop both retry; a clean `stop` here would be
+		// persisted as a blank answer.
 		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
 			apiKey: "test-key",
-			fetch: fetchMock as typeof fetch,
+			fetch: createSseFetch([]),
 		}).result();
 
-		expect(attempts).toBeGreaterThan(1);
-		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "Hi" }]);
+		expect(result.stopReason).toBe("error");
+		expect(result.content).toEqual([]);
+		expect(result.errorMessage).toContain("closed before a terminal finish reason");
+		expect(AIError.is(result.errorId, AIError.Flag.Transient)).toBe(true);
 	}, 10_000);
 });
 
