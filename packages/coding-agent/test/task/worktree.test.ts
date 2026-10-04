@@ -223,8 +223,12 @@ describe("worktree isolation helpers", () => {
 			expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
 			const left = await fs.readdir(path.dirname(handle.mergedDir));
 			// Setup records the backend (unretained) so a crashed owner's slot stays reclaimable.
-			expect(left.sort()).toEqual([ISOLATION_OWNER_FILE, RETAINED_BACKEND_FILE, path.basename(handle.mergedDir)].sort());
-			const setupRecord = JSON.parse(await fs.readFile(path.join(path.dirname(handle.mergedDir), RETAINED_BACKEND_FILE), "utf8"));
+			expect(left.sort()).toEqual(
+				[ISOLATION_OWNER_FILE, RETAINED_BACKEND_FILE, path.basename(handle.mergedDir)].sort(),
+			);
+			const setupRecord = JSON.parse(
+				await fs.readFile(path.join(path.dirname(handle.mergedDir), RETAINED_BACKEND_FILE), "utf8"),
+			);
 			expect(setupRecord).toEqual({ backend: natives.IsoBackendKind.Rcopy });
 			expect(left).not.toContain(ISOLATION_CLAIM_FILE);
 			await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });

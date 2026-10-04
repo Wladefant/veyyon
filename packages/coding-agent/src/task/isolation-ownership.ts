@@ -56,8 +56,7 @@ export async function writeRetainedBackend(
 	backend: natives.IsoBackendKind,
 	options: { retained?: boolean } = {},
 ): Promise<void> {
-	const record =
-		options.retained === false ? { backend } : { backend, retainedAt: new Date().toISOString() };
+	const record = options.retained === false ? { backend } : { backend, retainedAt: new Date().toISOString() };
 	await fs.writeFile(path.join(baseDir, RETAINED_BACKEND_FILE), JSON.stringify(record), "utf8");
 }
 

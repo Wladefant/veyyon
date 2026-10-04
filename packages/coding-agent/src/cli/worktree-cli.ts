@@ -26,8 +26,8 @@ import {
 	ISOLATION_OWNER_FILE,
 	isAbandonedEmptyReservation,
 	isolationClaimIsLive,
-	RETAINED_BACKEND_FILE,
 	isRetainedWorkspace,
+	RETAINED_BACKEND_FILE,
 	readIsolationOwner,
 	readRetainedMountBackend,
 	tryWithIsolationLifecycleLock,
@@ -181,8 +181,14 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 						}
 						throw new Error(`Missing retained backend metadata in ${target.path}; refusing removal`);
 					}
-					if (owner && isProcessInstanceAlive(owner.pid, owner.startIdentity) && !(await isRetainedWorkspace(target.path))) {
-						throw new Error(`Isolation workspace ${target.path} is in use by live owner PID ${owner.pid}; refusing removal`);
+					if (
+						owner &&
+						isProcessInstanceAlive(owner.pid, owner.startIdentity) &&
+						!(await isRetainedWorkspace(target.path))
+					) {
+						throw new Error(
+							`Isolation workspace ${target.path} is in use by live owner PID ${owner.pid}; refusing removal`,
+						);
 					}
 					const initialStat = stat.found;
 					const initialToken = owner?.token;
