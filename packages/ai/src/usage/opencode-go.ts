@@ -1,6 +1,7 @@
 import { getInstallId } from "@veyyon/utils/dirs";
 import { DAY_MS, HOUR_MS } from "@veyyon/utils/time";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { normalizeBaseUrl } from "@veyyon/utils/url";
 import { ProviderHttpError } from "../error/classes";
 import type {
 	CredentialRankingStrategy,
@@ -36,13 +37,12 @@ const OPENCODE_GO_WINDOWS = [
 	{ key: "monthly", limitId: "monthly", windowId: "monthly", label: "Monthly", durationMs: undefined },
 ] as const;
 
-function normalizeBaseUrl(baseUrl?: string): string {
-	if (!baseUrl?.trim()) return DEFAULT_ENDPOINT;
+function resolveOpencodeGoBaseUrl(baseUrl?: string): string {
+	const normalized = normalizeBaseUrl(baseUrl, DEFAULT_ENDPOINT);
 	// Strip a trailing `/v1` (the catalog carries both `zen/go` and `zen/go/v1`
 	// base URLs) so the usage path doesn't double it, while preserving any
 	// path-mounted gateway prefix.
-	const withoutTrailingSlash = baseUrl.trim().replace(/\/+$/, "");
-	return withoutTrailingSlash.replace(/\/v1$/i, "") || DEFAULT_ENDPOINT;
+	return normalized.replace(/\/v1$/i, "") || DEFAULT_ENDPOINT;
 }
 
 function resolveStatus(windowStatus: "ok" | "rate-limited", usedFraction: number): UsageStatus {
@@ -102,7 +102,7 @@ async function fetchOpenCodeGoUsage(params: UsageFetchParams, ctx: UsageFetchCon
 	const credential = params.credential;
 	if (credential.type !== "api_key" || !credential.apiKey) return null;
 
-	const url = `${normalizeBaseUrl(params.baseUrl)}${USAGE_PATH}`;
+	const url = `${resolveOpencodeGoBaseUrl(params.baseUrl)}${USAGE_PATH}`;
 	let payload: unknown;
 	try {
 		const response = await ctx.fetch(url, {
