@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Clicking an agent's row in the anchored Agents block focuses that agent while scroll isolation holds the mouse ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed

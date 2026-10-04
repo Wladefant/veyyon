@@ -63,6 +63,7 @@ import type {
 	SlashCommand,
 } from "@veyyon/utils/autocomplete";
 import { matchesKey } from "@veyyon/utils/keys";
+import type { MouseRoutable } from "@veyyon/utils/mouse";
 import { planPaintGround } from "@veyyon/utils/paint-ground";
 import { getPaddingX, setTuiTight } from "@veyyon/utils/tight-mode";
 import { isTerminalTodoStatus, isTodoListDone } from "@veyyon/wire";
@@ -223,7 +224,7 @@ import {
 	ComposerShortcutsBar,
 } from "./components/composer/composer-shortcuts";
 import { CustomEditor } from "./components/composer/custom-editor";
-import { renderAgentHudLines } from "./components/dashboard/agent-hud";
+import { AgentHudBlock, agentHudRowAgentIds, renderAgentHudLines } from "./components/dashboard/agent-hud";
 import {
 	renderTodoBoardLines,
 	TODO_BOARD_FRAME_DIVISOR,
@@ -349,6 +350,14 @@ class AnchoredLiveContainer
 {
 	getNativeScrollbackLiveRegionStart(): number | undefined {
 		return this.children.length > 0 ? 0 : undefined;
+	}
+
+	/** Click targets of a child (the Agents block's rows) make the container one. */
+	wantsPointer(): boolean {
+		return this.children.some(child => {
+			const routable: Component & Partial<MouseRoutable> = child;
+			return routable.wantsPointer?.() === true;
+		});
 	}
 }
 
@@ -2567,7 +2576,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				)
 			: lines;
 		this.agentContainer.addChild(
-			new Text(painted.join("\n"), ANCHORED_BLOCK_PADDING_X, 0),
+			new AgentHudBlock(painted, agentHudRowAgentIds(sessions, lines), ANCHORED_BLOCK_PADDING_X, id => {
+				this.focusAgentSession(id).catch((error: unknown) => this.showError(errorMessage(error)));
+			}),
 		);
 	}
 
