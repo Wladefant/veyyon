@@ -169,7 +169,9 @@ describe("collapseProgressRuns", () => {
 		);
 		const rows = collapseProgressRuns(lines);
 		expect(rows).toEqual(
-			collapses ? [{ text: lines.at(-1), hidden: lines.length - 1 }] : lines.map(text => ({ text, hidden: 0 })),
+			collapses
+				? [{ text: lines[lines.length - 1]!, hidden: lines.length - 1 }]
+				: lines.map(text => ({ text, hidden: 0 })),
 		);
 	});
 
