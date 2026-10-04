@@ -23,7 +23,10 @@
 
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { formatBytes, pluralize } from "@veyyon/utils/format";
+import type { OutputArtifactError } from "../../session/streaming-output";
 import { formatGroupedDiagnosticMessages } from "./grouped-file-output";
+
+export type { OutputArtifactError };
 
 /**
  * Truncation metadata for the output notice.
@@ -47,6 +50,8 @@ export interface TruncationMeta {
 	elidedLines?: number;
 	/** Artifact ID if full output was saved */
 	artifactId?: string;
+	/** Bytes the artifact cap dropped from the middle of the saved file. When set, artifactId holds a sample, not full output. */
+	artifactElidedBytes?: number;
 	/** Next offset for pagination (head truncation only) */
 	nextOffset?: number;
 	/**
@@ -77,7 +82,9 @@ export interface TruncationMeta {
 export type SourceMeta =
 	| { type: "path"; value: string }
 	| { type: "url"; value: string }
-	| { type: "internal"; value: string };
+	| { type: "internal"; value: string }
+	/** A complete aggregate report, whose entries may contain incomplete source captures. */
+	| { type: "report"; value: string };
 
 /**
  * LSP diagnostic info (for edit/write tools).
@@ -113,13 +120,25 @@ export interface LimitsMeta {
  */
 export interface OutputMeta {
 	truncation?: TruncationMeta;
+	/** Artifact capture failed independently of command execution or inline truncation. */
+	artifactError?: OutputArtifactError;
+	/** Bytes elided from the artifact file when capped (holds a sample, not full output). */
+	artifactElidedBytes?: number;
 	source?: SourceMeta;
 	diagnostics?: DiagnosticMeta;
 	limits?: LimitsMeta;
 }
 
+export function formatArtifactErrorNotice(error: OutputArtifactError): string {
+	return `Full output was not saved completely (artifact ${error} failed)`;
+}
+
 export function formatFullOutputReference(artifactId: string): string {
 	return `Read artifact://${artifactId} for full output`;
+}
+
+export function formatArtifactReference(artifactId: string, capped = false): string {
+	return capped ? `Read artifact://${artifactId}` : formatFullOutputReference(artifactId);
 }
 
 type ResultTextContent = ReadonlyArray<{ type?: string; text?: string } | string> | string | undefined;
@@ -248,8 +267,17 @@ export function stripGeneratedOutputNotice(text: string): string {
 	return trimmed.slice(0, lineStart === -1 ? 0 : lineStart).trimEnd();
 }
 
-export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
+export function formatTruncationMetaNotice(truncation: TruncationMeta, source?: SourceMeta): string {
 	let notice: string;
+	const isCapped = Boolean(truncation.artifactElidedBytes && truncation.artifactElidedBytes > 0);
+	const artifactReference =
+		truncation.artifactId == null
+			? undefined
+			: source?.type === "report"
+				? isCapped
+					? `Read artifact://${truncation.artifactId} for report (${source.value})`
+					: `Read artifact://${truncation.artifactId} for full report (${source.value})`
+				: formatArtifactReference(truncation.artifactId, isCapped);
 
 	if (truncation.direction === "middle") {
 		const head = truncation.headRange;
@@ -264,8 +292,8 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 		} else {
 			notice = `Showing ${truncation.outputLines} of ${totalLines} lines; middle elided`;
 		}
-		if (truncation.artifactId != null) {
-			notice += `. ${formatFullOutputReference(truncation.artifactId)}`;
+		if (artifactReference) {
+			notice += `. ${artifactReference}`;
 		}
 		return notice;
 	}
@@ -279,8 +307,8 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 		// rides on output the agent already paid for, but not so compact that the
 		// fact is gone.
 		notice = `Truncated upstream: ${formatBytes(truncation.outputBytes)} kept, elided amount not reported`;
-		if (truncation.artifactId != null) {
-			notice += `. ${formatFullOutputReference(truncation.artifactId)}`;
+		if (artifactReference) {
+			notice += `. ${artifactReference}`;
 		}
 		return notice;
 	}
@@ -305,8 +333,8 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 		notice += `. Use :${truncation.nextOffset} to continue`;
 	}
 
-	if (truncation.artifactId != null) {
-		notice += `. ${formatFullOutputReference(truncation.artifactId)}`;
+	if (artifactReference) {
+		notice += `. ${artifactReference}`;
 	}
 
 	return notice;
@@ -325,7 +353,17 @@ export function formatColumnTruncatedNotice(meta: OutputMeta): string | undefine
 	const notice = `Some lines truncated to ${c.maxColumn} ${c.unit ?? "chars"}`;
 	// The window notice already names the same capture when the output was also window-truncated.
 	if (c.artifactId != null && c.artifactId !== meta.truncation?.artifactId) {
-		return `${notice}. ${formatFullOutputReference(c.artifactId)}`;
+		const isCapped = Boolean(
+			(meta.artifactElidedBytes && meta.artifactElidedBytes > 0) ||
+				(meta.truncation?.artifactElidedBytes && meta.truncation.artifactElidedBytes > 0),
+		);
+		const ref =
+			meta.source?.type === "report"
+				? isCapped
+					? `Read artifact://${c.artifactId} for report (${meta.source.value})`
+					: `Read artifact://${c.artifactId} for full report (${meta.source.value})`
+				: formatArtifactReference(c.artifactId, isCapped);
+		return `${notice}. ${ref}`;
 	}
 	return notice;
 }
@@ -337,7 +375,11 @@ export function formatOutputNotice(meta: OutputMeta | undefined): string {
 
 	// Truncation notice
 	if (meta.truncation) {
-		parts.push(formatTruncationMetaNotice(meta.truncation));
+		parts.push(formatTruncationMetaNotice(meta.truncation, meta.source));
+	}
+
+	if (meta.artifactError) {
+		parts.push(formatArtifactErrorNotice(meta.artifactError));
 	}
 
 	// Limit notices
@@ -405,7 +447,7 @@ function outputNoticeVariants(meta: OutputMeta | undefined): string[] {
 	const current = formatOutputNotice(meta);
 	if (!current || !meta?.truncation) return current ? [current] : [];
 	const variants = [current];
-	const currentTruncation = formatTruncationMetaNotice(meta.truncation);
+	const currentTruncation = formatTruncationMetaNotice(meta.truncation, meta.source);
 	for (const retired of RETIRED_TRUNCATION_NOTICES) {
 		const text = retired(meta.truncation);
 		if (text && text !== currentTruncation) variants.push(current.replace(currentTruncation, text));
@@ -424,19 +466,27 @@ function outputNoticeVariants(meta: OutputMeta | undefined): string[] {
  * (e.g. during streaming, before {@link wrappedExecute} runs).
  */
 export function stripOutputNotice(text: string, meta: OutputMeta | undefined): string {
+	let stripped = text;
+	if (meta?.artifactError) {
+		const notice = `[${formatArtifactErrorNotice(meta.artifactError)}]`;
+		const idx = stripped.lastIndexOf(notice);
+		if (idx !== -1) {
+			stripped = (stripped.slice(0, idx) + stripped.slice(idx + notice.length)).trimEnd();
+		}
+	}
 	const variants = outputNoticeVariants(meta);
-	if (variants.length === 0) return text;
-	// Trim trailing whitespace from `text` and from the notice itself so we
+	if (variants.length === 0) return stripped;
+	// Trim trailing whitespace from `stripped` and from the notice itself so we
 	// match regardless of whether: (a) the caller already trimEnd()'d, (b)
 	// extra blank lines slipped in after the notice (diagnostics blocks add
 	// `\n\n` between sections, OutputSink may pad), or (c) neither. Returns
 	// the prefix before the notice so the caller can re-trim as needed.
-	const trimmedText = text.trimEnd();
+	const trimmedText = stripped.trimEnd();
 	for (const variant of variants) {
 		const trimmedNotice = variant.trimEnd();
 		if (trimmedText.endsWith(trimmedNotice)) {
 			return trimmedText.slice(0, -trimmedNotice.length);
 		}
 	}
-	return text;
+	return stripped;
 }

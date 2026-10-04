@@ -2,7 +2,12 @@ import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/core/output-meta";
+import {
+	type OutputArtifactError,
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../../tools/core/output-meta";
 import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
@@ -45,6 +50,8 @@ export interface JsResult {
 	cancelled: boolean;
 	truncated: boolean;
 	artifactId?: string;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
@@ -74,6 +81,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 	const outputSink = new OutputSink({
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings),
 		spillThreshold: inlineBudgetFor(options.session),
 		headBytes: resolveOutputSinkHeadBytes(options.session.settings),
 		maxColumns: resolveOutputMaxColumns(options.session.settings),
@@ -90,13 +98,15 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 	// and never derive a competing fixed timer from it.
 	const acquireBudgetMs = legacyTimeoutMs ?? options.idleTimeoutMs;
 	const finish = async (exitCode: number | undefined, cancelled: boolean): Promise<JsResult> => {
-		const summary = await outputSink.dump();
+		const summary = await outputSink.dumpWithArtifactStatus();
 		return {
 			output: summary.output,
 			exitCode,
 			cancelled,
 			truncated: summary.truncated,
 			artifactId: summary.artifactId,
+			artifactElidedBytes: summary.artifactElidedBytes,
+			artifactError: summary.artifactError,
 			totalLines: summary.totalLines,
 			totalBytes: summary.totalBytes,
 			outputLines: summary.outputLines,

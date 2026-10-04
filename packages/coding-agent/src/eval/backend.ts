@@ -1,6 +1,7 @@
 // The owning module, not the `internal-urls` barrel: the barrel re-exports every protocol
 // handler and reaches hundreds of modules.
 import { buildEvalUrlRoots, type LocalProtocolOptions } from "../internal-urls/local-protocol";
+import type { OutputArtifactError } from "../session/streaming-output";
 import type { ToolSession } from "../tools";
 import type { BackendProbeOptions } from "./probe";
 import type { EvalDisplayOutput, EvalLanguage, EvalStatusEvent } from "./types";
@@ -40,6 +41,8 @@ export interface ExecutorBackendResult {
 	cancelled: boolean;
 	truncated: boolean;
 	artifactId: string | undefined;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;

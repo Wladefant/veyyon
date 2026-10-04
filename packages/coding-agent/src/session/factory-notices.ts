@@ -10,6 +10,7 @@ import type { AsyncJobType } from "../async";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { vaultKeyPath } from "../secrets/vault-crypto";
 import type { DeferredDiagnosticsEntry } from "../tools";
+import type { OutputMeta } from "../tools/core/output-meta";
 import type { AsyncResultEntry } from "./agent-session-types";
 import { type CustomMessage, LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE } from "./messages";
 
@@ -18,10 +19,12 @@ export type AsyncResultJobDetails = {
 	type?: AsyncJobType;
 	label?: string;
 	durationMs?: number;
+	meta?: OutputMeta;
 };
 
 export type AsyncResultDetails = {
 	jobs: AsyncResultJobDetails[];
+	meta?: OutputMeta;
 };
 
 export type McpNotificationEntry = {
@@ -61,6 +64,7 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 		type: entry.job?.type,
 		label: entry.job?.label,
 		durationMs: entry.durationMs,
+		meta: (entry.job?.latestDetails as { meta?: OutputMeta } | undefined)?.meta,
 	}));
 	const details: AsyncResultDetails = {
 		jobs: jobs.map(job => ({
@@ -68,7 +72,9 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			type: job.type,
 			label: job.label,
 			durationMs: job.durationMs,
+			meta: job.meta,
 		})),
+		meta: { source: { type: "report", value: "background job delivery" } },
 	};
 	return {
 		role: "custom",
