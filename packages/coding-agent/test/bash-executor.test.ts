@@ -864,7 +864,12 @@ exit 64
 			const controller = new AbortController();
 			setTimeout(() => controller.abort(), 100);
 			const result = await Promise.race([
-				executeBash("echo never", { cwd: tempDir, timeout: 60_000, signal: controller.signal, sessionKey: "stall-abort" }),
+				executeBash("echo never", {
+					cwd: tempDir,
+					timeout: 60_000,
+					signal: controller.signal,
+					sessionKey: "stall-abort",
+				}),
 				Bun.sleep(5_000).then(() => "still-pending" as const),
 			]);
 			expect(result).not.toBe("still-pending");

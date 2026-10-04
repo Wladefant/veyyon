@@ -334,10 +334,12 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			timedOut && deadlineTimeoutMs !== undefined
 				? `Command timed out after ${Math.round(deadlineTimeoutMs / 1000)} seconds`
 				: "Command cancelled";
-		void new OutputSink().dumpWithArtifactStatus(notice).then(
-			summary => setupSettled.resolve({ exitCode: undefined, cancelled: true, timedOut, ...summary }),
-			setupSettled.reject,
-		);
+		void new OutputSink()
+			.dumpWithArtifactStatus(notice)
+			.then(
+				summary => setupSettled.resolve({ exitCode: undefined, cancelled: true, timedOut, ...summary }),
+				setupSettled.reject,
+			);
 	};
 	const onUserAbort = () => settleSetup(false);
 	const setupTimer =
@@ -354,7 +356,11 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	}
 }
 
-async function runBash(command: string, options: BashExecutorOptions | undefined, gate: SetupGate): Promise<BashResult> {
+async function runBash(
+	command: string,
+	options: BashExecutorOptions | undefined,
+	gate: SetupGate,
+): Promise<BashResult> {
 	const settings = await Settings.init();
 	const baseShellConfig = settings.getShellConfig();
 	const shellConfig =
