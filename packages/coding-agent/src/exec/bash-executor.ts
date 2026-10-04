@@ -307,6 +307,8 @@ function resolveUserShellConfig(settings: Settings, baseConfig: ShellConfig): Sh
 interface SetupGate {
 	armed: boolean;
 	readonly controller: AbortController;
+	/** `performance.now()` at entry: the deadline counts from here, not from the spawn. */
+	readonly startedAt: number;
 }
 
 /**
@@ -322,10 +324,10 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		requestedTimeoutMs === 0 ? undefined : Math.max(1_000, requestedTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
 	const userSignal = options?.signal;
 	if (deadlineTimeoutMs === undefined && !userSignal) {
-		return runBash(command, options, { armed: false, controller: new AbortController() });
+		return runBash(command, options, { armed: false, controller: new AbortController(), startedAt: performance.now() });
 	}
 
-	const gate: SetupGate = { armed: false, controller: new AbortController() };
+	const gate: SetupGate = { armed: false, controller: new AbortController(), startedAt: performance.now() };
 	const setupSettled = Promise.withResolvers<BashResult>();
 	const settleSetup = (timedOut: boolean): void => {
 		if (gate.armed || gate.controller.signal.aborted) return;
@@ -345,6 +347,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const setupTimer =
 		deadlineTimeoutMs === undefined ? undefined : setTimeout(() => settleSetup(true), deadlineTimeoutMs);
 	userSignal?.addEventListener("abort", onUserAbort, { once: true });
+	// An already-aborted signal never fires its event, and the run only looks at it after setup.
+	if (userSignal?.aborted) settleSetup(false);
 	const run = runBash(command, options, gate);
 	try {
 		return await Promise.race([run, setupSettled.promise]);
@@ -485,7 +489,12 @@ async function runBash(
 	const requestedTimeoutMs = options?.timeout;
 	const deadlineTimeoutMs =
 		requestedTimeoutMs === 0 ? undefined : Math.max(1_000, requestedTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
-	const nativeTimeoutMs = requestedTimeoutMs !== undefined && requestedTimeoutMs > 0 ? requestedTimeoutMs : undefined;
+	// The deadline is absolute from the call's entry: time spent in setup is already spent.
+	const setupElapsedMs = performance.now() - gate.startedAt;
+	const nativeTimeoutMs =
+		requestedTimeoutMs !== undefined && requestedTimeoutMs > 0
+			? Math.max(1, requestedTimeoutMs - setupElapsedMs)
+			: undefined;
 	const nativeOwnsTimeout = nativeTimeoutMs !== undefined;
 	if (deadlineTimeoutMs !== undefined) {
 		timeoutTimer = setTimeout(() => {
@@ -497,7 +506,7 @@ async function runBash(
 				abortCurrentExecution();
 			}
 			timeoutDeferred.resolve("timeout");
-		}, deadlineTimeoutMs);
+		}, Math.max(1, deadlineTimeoutMs - setupElapsedMs));
 	}
 
 	let resetSession = false;

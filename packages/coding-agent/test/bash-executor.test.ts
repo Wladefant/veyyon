@@ -877,6 +877,43 @@ exit 64
 			expect(result.cancelled).toBe(true);
 			expect(result.timedOut).toBe(false);
 		}, 10_000);
+
+		it("settles an already-aborted signal even with no timeout while setup is stalled", async () => {
+			stallSnapshot();
+			const controller = new AbortController();
+			controller.abort();
+			const result = await Promise.race([
+				executeBash("echo never", { cwd: tempDir, timeout: 0, signal: controller.signal, sessionKey: "stall-preabort" }),
+				Bun.sleep(5_000).then(() => "still-pending" as const),
+			]);
+			expect(result).not.toBe("still-pending");
+			if (result === "still-pending") return;
+			expect(result.cancelled).toBe(true);
+			expect(result.timedOut).toBe(false);
+		}, 10_000);
+
+		it("counts setup time against the deadline instead of restarting it at the spawn", async () => {
+			vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+				shell: "bash",
+				args: ["-c"],
+				env: { PATH: Bun.env.PATH ?? "", HOME: tempDir },
+				prefix: undefined,
+			});
+			// Setup finishes 600ms into a 1s deadline; the spawned run must get the ~400ms that are left.
+			vi.spyOn(shellSnapshot, "getOrCreateSnapshot").mockImplementation(() => Bun.sleep(600).then(() => null));
+			let nativeTimeoutMs: number | undefined;
+			vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(options => {
+				nativeTimeoutMs = options.timeoutMs;
+				return new Promise<ShellRunResult>(() => {});
+			});
+			vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+			const started = Date.now();
+			const result = await executeBash("sleep 60", { cwd: tempDir, timeout: 1_000, sessionKey: "stall-absolute" });
+			expect(result.timedOut).toBe(true);
+			expect(Date.now() - started).toBeLessThan(1_500);
+			expect(nativeTimeoutMs).toBeDefined();
+			expect(nativeTimeoutMs!).toBeLessThan(600);
+		}, 10_000);
 	});
 
 	it("sources large bash functions without base64 eval wrappers", async () => {
