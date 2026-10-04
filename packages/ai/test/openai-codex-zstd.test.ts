@@ -4,35 +4,27 @@ import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { __resetProxyCache } from "@veyyon/ai/utils/proxy";
 import { buildModel } from "@veyyon/catalog/build";
 import * as piUtils from "@veyyon/utils";
+import {
+	captureDirOverrides,
+	type DirOverridesSnapshot,
+	restoreDirOverrides,
+	setAgentDir,
+} from "@veyyon/utils/dirs";
 import { withEnv } from "./helpers";
 
-const { getAgentDir, setAgentDir, TempDir } = piUtils;
-
-const originalAgentDir = getAgentDir();
-// `setAgentDir` WRITES `VEYYON_CODING_AGENT_DIR` and clears the active profile, so
-// `setAgentDir(originalAgentDir)` alone cannot undo either; see openai-codex-stream.test.ts.
-const originalAgentDirEnv = process.env.VEYYON_CODING_AGENT_DIR;
-const originalProfileEnv = process.env.VEYYON_PROFILE;
-
-function restoreEnv(name: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete process.env[name];
-		return;
-	}
-	process.env[name] = value;
-}
+const { TempDir } = piUtils;
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
 
+let dirOverrides: DirOverridesSnapshot;
+
 beforeEach(() => {
+	dirOverrides = captureDirOverrides();
 	__resetProxyCache();
 	vi.spyOn(piUtils, "getInstallId").mockReturnValue(TEST_INSTALLATION_ID);
 });
 
 afterEach(() => {
-	setAgentDir(originalAgentDir);
-	restoreEnv("VEYYON_CODING_AGENT_DIR", originalAgentDirEnv);
-	restoreEnv("VEYYON_PROFILE", originalProfileEnv);
-	piUtils.__resetDirsFromEnvForTests();
+	restoreDirOverrides(dirOverrides);
 	__resetProxyCache();
 	vi.restoreAllMocks();
 });
