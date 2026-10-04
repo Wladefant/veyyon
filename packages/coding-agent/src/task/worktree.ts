@@ -626,6 +626,7 @@ export async function removeLinkedWorktreeRegistrations(
 				logger.warn("left a worktree registration that is no longer this isolation's", { adminDir });
 				continue;
 			}
+			// Residual risk, accepted: an external `git worktree add` with a hand-picked basename equal to this token, landing after the checks above, could still be removed.
 			await fs.rm(adminDir, { recursive: true, force: true });
 		} catch (err) {
 			if (isEnoent(err)) continue;
