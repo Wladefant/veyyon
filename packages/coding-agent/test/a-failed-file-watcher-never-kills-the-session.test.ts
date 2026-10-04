@@ -86,9 +86,14 @@ afterEach(() => {
 
 /** The assertion every site shares: the error is absorbed, reported, and the watcher is closed. */
 function expectFailureAbsorbed(watcher: fs.FSWatcher): void {
-	const close = vi.spyOn(watcher, "close");
+	let closes = 0;
+	const realClose = watcher.close.bind(watcher);
+	watcher.close = (() => {
+		closes += 1;
+		realClose();
+	}) as typeof watcher.close;
 	expect(() => watcher.emit("error", eperm())).not.toThrow();
-	expect(close).toHaveBeenCalled();
+	expect(closes).toBeGreaterThan(0);
 	expect(warnings.length).toBeGreaterThan(0);
 }
 

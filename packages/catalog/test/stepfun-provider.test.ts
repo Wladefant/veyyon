@@ -75,20 +75,25 @@ describe("StepFun provider support", () => {
 	});
 
 	test("discovery keeps chat models and drops the audio/image SKUs StepFun interleaves in /v1/models", async () => {
-		const fetchMock: FetchImpl = vi.fn(
-			async () =>
-				new Response(
-					JSON.stringify({
-						data: [
-							{ id: "step-5-preview", owned_by: "stepai", max_input_tokens: 1024000 },
-							{ id: "stepaudio-3-tts", owned_by: "stepai" },
-							{ id: "stepaudio-2.5-asr", owned_by: "stepai" },
-							{ id: "step-image-edit-2", owned_by: "stepai" },
-						],
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				),
-		) as unknown as FetchImpl;
+		const requests: Array<{ url: string; method?: string; authorization?: string }> = [];
+		const fetchMock = (async (url: string | URL | Request, init?: RequestInit) => {
+			requests.push({
+				url: String(url),
+				method: init?.method,
+				authorization: (init?.headers as Record<string, string> | undefined)?.Authorization,
+			});
+			return new Response(
+				JSON.stringify({
+					data: [
+						{ id: "step-5-preview", owned_by: "stepai", max_input_tokens: 1024000 },
+						{ id: "stepaudio-3-tts", owned_by: "stepai" },
+						{ id: "stepaudio-2.5-asr", owned_by: "stepai" },
+						{ id: "step-image-edit-2", owned_by: "stepai" },
+					],
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		}) as unknown as FetchImpl;
 
 		const models = await stepfunModelManagerOptions({
 			apiKey: "stepfun-key",
@@ -96,13 +101,9 @@ describe("StepFun provider support", () => {
 		}).fetchDynamicModels?.();
 
 		expect(models?.map(model => model.id)).toEqual(["step-5-preview"]);
-		expect(fetchMock).toHaveBeenCalledWith(
-			"https://api.stepfun.ai/v1/models",
-			expect.objectContaining({
-				method: "GET",
-				headers: expect.objectContaining({ Authorization: "Bearer stepfun-key" }),
-			}),
-		);
+		expect(requests).toEqual([
+			{ url: "https://api.stepfun.ai/v1/models", method: "GET", authorization: "Bearer stepfun-key" },
+		]);
 
 		const discovered = models?.[0];
 		expect(discovered?.reasoning).toBe(true);

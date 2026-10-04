@@ -221,4 +221,4 @@ Session migrations still run on load:
 
 Current runtime behavior is version-3 tree semantics after migration.
 
-*Verified against `946d75b873` on 2026-09-04.*
+*Verified against `b9b70d477d` on 2026-10-04.*

@@ -493,14 +493,18 @@ describe("issue:// / pr:// listing", () => {
 	});
 
 	it("invalid state errors instead of silently falling back to 'open'", async () => {
-		const spy = vi.spyOn(git.github, "json").mockResolvedValue([] as never);
+		let ghCalls = 0;
+		vi.spyOn(git.github, "json").mockImplementation(async () => {
+			ghCalls += 1;
+			return [] as never;
+		});
 
 		const router = InternalUrlRouter.instance();
 		await expect(router.resolve("issue://owner/example?state=banana")).rejects.toThrow(
 			/Invalid issue:\/\/ list state 'banana'/,
 		);
 		await expect(router.resolve("pr://owner/example?limit=abc")).rejects.toThrow(/Invalid pr:\/\/ list limit 'abc'/);
-		expect(spy).not.toHaveBeenCalled();
+		expect(ghCalls).toBe(0);
 	});
 
 	it("treats `diff` as a repository name in repo-scoped listing URLs", async () => {

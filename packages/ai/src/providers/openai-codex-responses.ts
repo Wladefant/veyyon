@@ -4020,7 +4020,7 @@ class CodexWebSocketConnection {
 		} catch (error) {
 			CODEX_DEBUG &&
 				logger.debug("[codex] codex websocket close failed", {
-					error: error instanceof Error ? error.message : String(error),
+					error: errorMessage(error),
 					reason,
 				});
 		}
@@ -4586,7 +4586,7 @@ function compressCodexRequestBody(bodyJson: string, baseUrl: string): Uint8Array
 	} catch (error) {
 		CODEX_DEBUG &&
 			logger.debug("[codex] codex request body compression failed", {
-				error: error instanceof Error ? error.message : String(error),
+				error: errorMessage(error),
 			});
 		return undefined;
 	}

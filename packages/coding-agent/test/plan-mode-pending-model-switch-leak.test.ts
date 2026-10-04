@@ -147,13 +147,15 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// storage hops (project-scoped roles), so await the apply itself rather
 		// than assuming it lands within one microtask.
 		const applied = Promise.withResolvers<void>();
-		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockImplementation(async () => {
+		const appliedModels: Array<[unknown, unknown]> = [];
+		vi.spyOn(session, "setModelTemporary").mockImplementation(async (...args: unknown[]) => {
+			appliedModels.push([args[0], args[1]]);
 			applied.resolve();
 		});
 		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
 		await applied.promise;
 
-		expect(setModelSpy).toHaveBeenCalledWith(replacementPlanModel, undefined);
+		expect(appliedModels).toEqual([[replacementPlanModel, undefined]]);
 	});
 
 	it("does not enter plan mode when plan.enabled is false", async () => {

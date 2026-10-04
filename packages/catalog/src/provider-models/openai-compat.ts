@@ -3057,7 +3057,7 @@ export const OPENCODE_ZEN_API_ID_OVERRIDES: Readonly<Record<string, Api>> = {
 // deepseek-v4-flash is the inverse case: it falls through to
 // openai-completions by default, but the Go gateway's
 // /zen/go/v1/chat/completions route does not work for this model while
-// /zen/go/v1/responses does (user-verified against the live gateway,
+// /zen/go/v1/responses does (verified against the live gateway,
 // 2026-08-08; Flash only — deepseek-v4-pro serves fine on chat completions).
 //
 // muse-spark-1.2 / muse-spark-1.2-contributor are the same inverse case, but
@@ -4682,7 +4682,7 @@ const ABLITERATION_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
 
 function normalizeAbliterationBaseUrl(baseUrl: string | undefined): string {
 	const value = baseUrl?.trim() || ABLITERATION_DEFAULT_BASE_URL;
-	const normalized = value.replace(/\/+$/, "");
+	const normalized = trimTrailingSlashes(value);
 	return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }
 

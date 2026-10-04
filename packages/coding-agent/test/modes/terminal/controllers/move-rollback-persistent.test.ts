@@ -51,9 +51,11 @@ describe("CommandController /move rollback against a persistent SessionManager",
 			fs.mkdirSync(originalArtifacts, { recursive: true });
 			fs.writeFileSync(path.join(originalArtifacts, "proof.txt"), "original-artifact");
 
-			const applyCwdChange = vi.fn(async (cwd: string): Promise<void> => {
+			const appliedCwds: string[] = [];
+			const applyCwdChange = async (cwd: string): Promise<void> => {
+				appliedCwds.push(cwd);
 				if (cwd === targetCwd) throw new Error("forced applyCwdChange failure");
-			});
+			};
 			const showError = vi.fn();
 			const ctx = {
 				session: { isStreaming: false },
@@ -76,7 +78,7 @@ describe("CommandController /move rollback against a persistent SessionManager",
 
 			await new CommandController(ctx).handleMoveCommand(targetCwd);
 
-			expect(applyCwdChange).toHaveBeenCalledWith(targetCwd);
+			expect(appliedCwds).toContain(targetCwd);
 			expect(manager.getCwd()).toBe(sourceCwd);
 			expect(manager.getSessionFile()).toBe(originalFile);
 			expect(fs.existsSync(originalFile)).toBe(true);

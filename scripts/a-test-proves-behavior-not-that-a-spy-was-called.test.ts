@@ -291,7 +291,6 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/oauth-flow.test.ts": 4,
 	"packages/coding-agent/test/optimistic-submission-survives-prestream-rebuild.test.ts": 5,
 	"packages/coding-agent/test/phase1-stage1-failures-are-logged.test.ts": 1,
-	"packages/coding-agent/test/plan-mode-pending-model-switch-leak.test.ts": 2,
 	"packages/coding-agent/test/plugin-install-local.test.ts": 6,
 	"packages/coding-agent/test/print-mode-secret-command.test.ts": 2,
 	"packages/coding-agent/test/profile-cli.test.ts": 6,

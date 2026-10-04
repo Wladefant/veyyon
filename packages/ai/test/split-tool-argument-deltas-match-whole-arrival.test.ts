@@ -379,6 +379,7 @@ describe("OpenAI Responses function argument streaming accumulator", () => {
 			// Verify that every bundled provider using Responses APIs was detected and matches expected set
 			const bundledResponsesList = Array.from(responsesProvidersFound).sort();
 			expect(bundledResponsesList).toEqual([
+				"abliteration",
 				"azure",
 				"github-copilot",
 				"gitlab-duo",
