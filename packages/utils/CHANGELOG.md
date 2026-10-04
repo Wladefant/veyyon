@@ -13,6 +13,7 @@
 
 - `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.
 - `@veyyon/utils/rearming-timeout` exports `rearmingTimeout`, a schedule for a callback that arms its own next run, which re-arms one `setTimeout` with `refresh()` instead of creating a timeout per call.
+- `@veyyon/utils/byte-truncate` exports `sliceTailBytes`, which keeps the tail of a string under a byte budget as a substring of it without encoding the string.
 - `@veyyon/utils/activity-signal` exports `ActivitySignal` and the process-wide `processActivity`: a host attaches with `attachHost()` and calls `report()` on its work, and a sampler that found the process quiet calls `park(wake)` to arm no timer until the next report.
 - `LoopWatchdog` accepts `parkAfterMs` (default 10,000) and `activity`, and `IdleTrim` accepts `activity`.
 - `IdleTrim` accepts `release`, which runs on the first quiet sampling window after a busy one and again after each trim; a `release` that throws is not called again and the trim continues.

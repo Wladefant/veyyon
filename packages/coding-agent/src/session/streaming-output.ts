@@ -1,6 +1,6 @@
 import type { AgentToolUpdateCallback } from "@veyyon/agent-core";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
-import { capTextBytes, truncateHeadBytes, truncateTailBytes } from "@veyyon/utils/byte-truncate";
+import { capTextBytes, sliceTailBytes, truncateHeadBytes, truncateTailBytes } from "@veyyon/utils/byte-truncate";
 import { clampLow } from "@veyyon/utils/math";
 import { sanitizeText, splitTrailingPartialEscape } from "@veyyon/utils/sanitize-text";
 
@@ -735,8 +735,11 @@ export class TailBuffer {
 		}
 		if (this.#pos <= max) return;
 
-		const joined = this.#flush();
-		const { text, bytes } = truncateTailBytes(joined, max);
+		// `text()` trims on every streamed chunk once the buffer is full, by about the bytes the chunk
+		// added. Counting the tail's bytes and walking the dropped characters off its front allocates
+		// only the kept substring, where a byte window encodes the whole tail into a buffer and decodes
+		// it back. The tail shares the joined string's storage until the next trim joins it into a new one.
+		const { text, bytes } = sliceTailBytes(this.#flush(), max);
 		this.#pos = bytes;
 		this.#pending[0] = text;
 		this.#pending.length = 1;

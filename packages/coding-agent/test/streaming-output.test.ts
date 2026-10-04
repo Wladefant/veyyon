@@ -182,6 +182,34 @@ describe("TailBuffer", () => {
 		expect(tail.text()).toBe("x");
 		expect(tail.bytes()).toBe(1);
 	});
+
+	// The buffer cuts its tail by walking characters off the front of what it holds. Every UTF-8 width
+	// is swept, a two-unit pair included, under every budget up to past the widest character, read
+	// after each chunk and read rarely enough that the buffer trims on its own in between.
+	test("keeps the tail a byte cut of everything appended keeps, for every character width", () => {
+		const alphabet = ["a", "é", "✓", "😀", "\n"];
+		for (const readEvery of [1, 7]) {
+			for (let max = 1; max <= 13; max++) {
+				const tail = new TailBuffer(max);
+				let stream = "";
+				for (let step = 0; step < 60; step++) {
+					const chunk = Array.from(
+						{ length: 1 + (step % 4) },
+						(_, i) => alphabet[(step * 3 + i) % alphabet.length],
+					).join("");
+					tail.append(chunk);
+					stream += chunk;
+					if (step % readEvery !== 0) continue;
+					expect({ readEvery, max, step, text: tail.text(), bytes: tail.bytes() }).toEqual({
+						readEvery,
+						max,
+						step,
+						...truncateTailBytes(stream, max),
+					});
+				}
+			}
+		}
+	});
 });
 
 describe("OutputSink", () => {

@@ -95,6 +95,36 @@ export function truncateTailBytes(data: string | Uint8Array, maxBytes: number): 
 }
 
 /**
+ * Keep the tail of `text` that fits `maxBytes`, never splitting a character, by walking whole
+ * characters off its front. After one byte count of `text` the cost is the characters dropped, where
+ * {@link truncateTailBytes} encodes and decodes the whole window. A lone surrogate counts the three
+ * bytes of the U+FFFD it encodes to and is kept as it is.
+ *
+ * The result is a substring of `text` and shares its storage: a caller that keeps the tail keeps
+ * all of `text`. It suits a buffer that replaces both on its next cut, not a value stored for later.
+ */
+export function sliceTailBytes(text: string, maxBytes: number): ByteTruncationResult {
+	if (maxBytes <= 0) return { text: "", bytes: 0 };
+	let bytes = Buffer.byteLength(text, "utf-8");
+	let start = 0;
+	while (bytes > maxBytes) {
+		const unit = text.charCodeAt(start);
+		if (unit < 0x80) {
+			bytes -= 1;
+		} else if (unit < 0x800) {
+			bytes -= 2;
+		} else if (unit >= 0xd800 && unit < 0xdc00 && (text.charCodeAt(start + 1) & 0xfc00) === 0xdc00) {
+			bytes -= 4;
+			start++;
+		} else {
+			bytes -= 3;
+		}
+		start++;
+	}
+	return { text: start === 0 ? text : text.substring(start), bytes };
+}
+
+/**
  * Truncate to a byte limit keeping the head, never splitting a UTF-8 sequence.
  */
 export function truncateHeadBytes(data: string | Uint8Array, maxBytes: number): ByteTruncationResult {
