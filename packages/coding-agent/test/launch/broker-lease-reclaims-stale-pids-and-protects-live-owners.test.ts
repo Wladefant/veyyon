@@ -88,8 +88,8 @@ it("prunes legacy presence and keeps the broker lease of a live process that sta
 	expect(await hasLiveDaemonProjectPresence(dir)).toBe(false);
 	expect(await fs.readdir(clients)).toEqual([]);
 	// The start time alone cannot tell PID reuse from a clock step, and nothing answers as the owner:
-	// a live PID is never taken over on that evidence (see broker-lease-survives-clock-steps-...).
-	expect(await acquireBrokerLease(dir)).toBeNull();
+	// with no boot evidence a live PID is never taken over (see broker-lease-survives-clock-steps-...).
+	expect(await acquireBrokerLease(dir, { bootTimeMs: () => 0 })).toBeNull();
 });
 
 it("two independent processes cannot both retire and acquire the same stale lease", async () => {
