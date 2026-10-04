@@ -190,20 +190,97 @@ function closeFailedDatabase(db: Database | undefined, error: unknown, identity:
 	}
 }
 
+/**
+ * Failed handles held open by in-process openers awaiting recovery, keyed by
+ * canonical store path. Windows refuses to unlink a file any handle still holds,
+ * so the opener that quarantines the store closes its peers' dead handles too.
+ */
+const pendingCorruptHandles = new Map<string, Set<Database>>();
+
+function registerCorruptHandle(dbPath: string, db: Database | undefined): void {
+	if (!db || isTransientSqliteStore(dbPath)) return;
+	const key = canonicalSqlitePath(dbPath);
+	let handles = pendingCorruptHandles.get(key);
+	if (!handles) {
+		handles = new Set();
+		pendingCorruptHandles.set(key, handles);
+	}
+	handles.add(db);
+}
+
+function unregisterCorruptHandle(dbPath: string, db: Database | undefined): void {
+	if (!db || isTransientSqliteStore(dbPath)) return;
+	const key = canonicalSqlitePath(dbPath);
+	const handles = pendingCorruptHandles.get(key);
+	if (!handles) return;
+	handles.delete(db);
+	if (handles.size === 0) pendingCorruptHandles.delete(key);
+}
+
+/** Closes peers' failed handles on the store; each peer still closes (idempotently) and adopts on its own path. */
+function closePeerCorruptHandles(dbPath: string, own: Database | undefined): void {
+	const handles = pendingCorruptHandles.get(canonicalSqlitePath(dbPath));
+	if (!handles) return;
+	for (const peer of handles) {
+		if (peer === own) continue;
+		try {
+			peer.close();
+		} catch (error) {
+			logger.warn("Failed to close a peer's corrupt SQLite handle before quarantine", {
+				path: dbPath,
+				error: errorMessage(error),
+			});
+		}
+	}
+}
+
 export interface SqliteOpenOptions {
 	recoverCorruption?: boolean;
 	onCorruptionPreserved?: (backupPath: string, error: unknown) => void;
 }
 
+/**
+ * Bun's multi-statement `db.run()` reports only the final statement's step
+ * error (oven-sh/bun#37415), so a corrupt page hit mid-script can resurface as
+ * an unrelated failure such as "no such table". When an initializer fails for
+ * any other reason, a `quick_check` on the still-open handle decides whether
+ * the store itself is damaged. Runs only on the failure path; the original
+ * failure stays attached as `cause`.
+ */
+function revealHiddenCorruption(db: Database | undefined, error: unknown): unknown {
+	if (!db || isSqliteCorruptionError(error) || isSqliteBusyError(error)) return error;
+	let detail: string;
+	let code: unknown = "SQLITE_CORRUPT";
+	let errno: unknown = 11;
+	try {
+		const rows = db.query<{ quick_check: string }, []>("PRAGMA quick_check(1)").all();
+		if (rows[0]?.quick_check === "ok") return error;
+		detail = `database disk image is malformed (${rows[0]?.quick_check})`;
+	} catch (probeError) {
+		if (!isSqliteCorruptionError(probeError)) return error;
+		detail = probeError instanceof Error ? probeError.message : String(probeError);
+		({ code, errno } = probeError as { code: unknown; errno?: unknown });
+	}
+	return Object.assign(new Error(`${detail}; initialization failed: ${errorMessage(error)}`, { cause: error }), {
+		code,
+		errno,
+	});
+}
+
 function handleOpenError(
+	dbPath: string,
 	db: Database | undefined,
-	error: unknown,
+	caught: unknown,
 	identity: SqliteFileIdentity,
 	recover?: boolean,
 ): never {
-	if (recover && isSqliteCorruptionError(error)) throw new SqliteAttemptFailure(error, identity, { db });
-	closeFailedDatabase(db, error, identity);
-	throw new SqliteAttemptFailure(error, identity);
+	const error = recover ? revealHiddenCorruption(db, caught) : caught;
+	if (recover && isSqliteCorruptionError(error)) {
+		registerCorruptHandle(dbPath, db);
+		throw new SqliteAttemptFailure(error, identity, { db });
+	}
+	closeFailedDatabase(db, caught, identity);
+	throw new SqliteAttemptFailure(caught, identity);
 }
 
 async function openWithBusyRetries<T>(
@@ -220,7 +297,7 @@ async function openWithBusyRetries<T>(
 			return await initialize(db);
 		} catch (error) {
 			if (!isSqliteBusyError(error) || attempt + 1 >= BUSY_MAX_ATTEMPTS) {
-				handleOpenError(db, error, identity, options.recoverCorruption);
+				handleOpenError(dbPath, db, error, identity, options.recoverCorruption);
 			}
 			closeFailedDatabase(db, error, identity);
 			await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: BUSY_BASE_DELAY_MS, jitter: 0 }));
@@ -236,7 +313,7 @@ function openOnce<T>(dbPath: string, initialize: (db: Database) => T, options: S
 		db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 		return initialize(db);
 	} catch (error) {
-		handleOpenError(db, error, identity, options.recoverCorruption);
+		handleOpenError(dbPath, db, error, identity, options.recoverCorruption);
 	}
 }
 
@@ -300,6 +377,11 @@ function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined):
 	// The opener also honors legacy/operator markers at the exact database path.
 	const marker = path.resolve(`${stem}.quarantine-pending`);
 	atomicWriteFileSync(marker, JSON.stringify({ backupPath, suffixes: preserved }));
+	// Only Windows refuses to unlink a file another handle still holds. Elsewhere
+	// each peer keeps its own handle until it closes it after adopting the
+	// replacement; closing it here races the peer's recovery on POSIX
+	// (SQLITE_IOERR_SHORT_READ), so the close is Windows-only.
+	if (process.platform === "win32") closePeerCorruptHandles(dbPath, db);
 	db?.close();
 	// If interrupted, every opener refuses the partial store. The complete
 	// backup and durable marker remain available for explicit repair.
@@ -393,7 +475,11 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 				return quarantineCorruptSqliteStore(dbPath, failure.db);
 			});
 		} finally {
-			closeFailedDatabase(failure.db, failure.original, failure.identity);
+			try {
+				closeFailedDatabase(failure.db, failure.original, failure.identity);
+			} finally {
+				unregisterCorruptHandle(dbPath, failure.db);
+			}
 		}
 	} catch (preservationError) {
 		const annotated = annotateSqliteError(failure.original, dbPath);

@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- SQLite stores opened with `recoverCorruption` are now preserved and recreated when corruption surfaces as a different initializer error such as `no such table`: a failed initializer runs `PRAGMA quick_check` on the open handle, and the synthesized corruption error keeps the initializer failure as `cause` (oh-my-pi fada34bd8d4d88a3beff116bc487304a8e6c183b and 32cc8395f128d823ce01569947e143bb8ae6de69, [#428](https://github.com/Wladefant/veyyon/issues/428)).
 - Fixed Mermaid ASCII state diagram pseudostate markers and preserved transition labels above connector strokes (oh-my-pi a42868f5501841f065216a568b23e18b51c5e8a3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Mermaid `direction BT` diagrams draw rounded state boxes and the start pseudostate with their rounded corners the right way up ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the SQLite corruption test fixtures (`Buffer` comparison, `openSync` mock signature) to type-check ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
