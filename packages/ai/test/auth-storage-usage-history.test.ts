@@ -179,7 +179,8 @@ describe("AuthStorage usage history recording", () => {
 		expect(fiveHour?.resetsAt).toBe(fetchedAt + 5 * HOUR);
 		expect(fiveHour?.recordedAt).toBe(fetchedAt);
 		// Stable identity key derived from the credential, not the report.
-		expect(fiveHour?.accountKey).toContain("email:a@example.com");
+		expect(fiveHour?.accountKey).toMatch(/^[0-9a-f]{32}$/);
+		expect(fiveHour?.accountKey).not.toContain("a@example.com");
 
 		// used/limit fallback resolves a fraction even without usedFraction.
 		const sevenDay = rows.find(row => row.limitId === "anthropic:7d");

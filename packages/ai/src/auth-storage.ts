@@ -137,8 +137,8 @@ import {
 import {
 	redactingUsageLogger,
 	redactUsageError,
+	redactUsageRecord,
 	redactUsageReport,
-	redactUsageText,
 	redactUsageValue,
 	usageCredentialSecrets,
 	usageErrorStatus,
@@ -158,6 +158,7 @@ import type { UsageRequestDescriptor } from "./auth-storage/usage-requests";
 import {
 	buildRefreshableOauthCredential,
 	buildUsageCacheIdentity,
+	buildUsageHistoryAccountKey,
 	buildUsageCredential,
 	buildUsageReportCacheKey,
 	buildUsageReportsCacheKey,
@@ -291,6 +292,11 @@ const defaultBackoffMs = 60_000;
  * Reads from storage on reload(), manages round-robin credential selection,
  * usage limit tracking, and OAuth token refresh.
  */
+/** Bump when what usage history may hold changes and rows written before must be dropped. */
+const USAGE_HISTORY_PURGE_MARKER = "usage_history:purged";
+const USAGE_HISTORY_PURGE_VERSION = "1";
+const USAGE_HISTORY_PURGE_MARKER_TTL_SEC = 10 * 365 * 24 * 60 * 60;
+
 export class AuthStorage {
 	// Default backoff when no reset time available
 
@@ -382,6 +388,7 @@ export class AuthStorage {
 			this.onUsageLimitWithheld(options.onUsageLimitWithheld);
 		}
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
+		this.#purgeLegacyUsageHistory();
 		this.#routing = new CredentialRouting(this.#store, (provider) =>
 			this.#getStoredCredentials(provider),
 		);
@@ -2842,6 +2849,28 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Usage history written before redaction holds raw account identities and whatever a backend put in
+	 * its labels, and its account keys are not the digests written now, so those series are orphaned
+	 * anyway. Drop it once per store: the marker is written only after the delete succeeded, so a failed
+	 * purge is retried on the next start. Credentials, names, blocks and the usage cache are untouched.
+	 */
+	#purgeLegacyUsageHistory(): void {
+		const purge = this.#store.purgeUsageHistory;
+		if (!purge) return;
+		try {
+			if (this.#store.getCache(USAGE_HISTORY_PURGE_MARKER) === USAGE_HISTORY_PURGE_VERSION) return;
+			purge.call(this.#store);
+			this.#store.setCache(
+				USAGE_HISTORY_PURGE_MARKER,
+				USAGE_HISTORY_PURGE_VERSION,
+				Math.floor(Date.now() / 1000) + USAGE_HISTORY_PURGE_MARKER_TTL_SEC,
+			);
+		} catch (error) {
+			this.#usageLogger?.debug("usage history purge failed", { error: redactUsageError(error, []) });
+		}
+	}
+
+	/**
 	 * Append a freshly fetched report to durable usage history (when the store
 	 * supports it). The usage cache is latest-snapshot-only — these rows are
 	 * the only place limit utilization is kept over time.
@@ -2856,7 +2885,7 @@ export class AuthStorage {
 			Number.isFinite(report.fetchedAt) && report.fetchedAt > 0
 				? report.fetchedAt
 				: Date.now();
-		const accountKey = buildUsageCacheIdentity(request.credential);
+		const accountKey = buildUsageHistoryAccountKey(request.credential);
 		const metadata = report.metadata ?? {};
 		const metaEmail =
 			typeof metadata.email === "string" ? metadata.email : undefined;
@@ -2881,7 +2910,7 @@ export class AuthStorage {
 		// deterministic, so an account keeps one stable key and its rows keep grouping.
 		const secrets = usageCredentialSecrets(request.credential);
 		try {
-			record.call(this.#store, redactUsageValue(entries, secrets));
+			record.call(this.#store, redactUsageRecord(entries, secrets, ["provider", "status"]));
 		} catch (error) {
 			this.#usageLogger?.debug("usage history record failed", {
 				provider: request.provider,
@@ -3445,7 +3474,7 @@ export class AuthStorage {
 				this.#authDeadCredentials.add(row.id);
 				// Refresh failed → the access token is unusable. Skip both probes;
 				// they would only re-surface the same upstream failure.
-				results.push(redactUsageValue(base, probeSecrets));
+				results.push(redactUsageRecord(base, probeSecrets, ["provider", "type", "status"]));
 				continue;
 			}
 
@@ -3521,7 +3550,7 @@ export class AuthStorage {
 				}
 			}
 
-			results.push(redactUsageValue(base, probeSecrets));
+			results.push(redactUsageRecord(base, probeSecrets, ["provider", "type", "status"]));
 		}
 
 		return results;

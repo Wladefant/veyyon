@@ -92,6 +92,15 @@ function usageIdentityDigest(identity: string): string {
 	return createHash("sha256").update(identity).digest("hex").slice(0, 32);
 }
 
+/**
+ * The account key usage history is grouped under: a digest of the account identity, never the identity
+ * itself, because the identity embeds the stored accountId, email and orgId and any of them can hold a
+ * credential. Distinct accounts keep distinct keys and one account keeps one key across token refreshes.
+ */
+export function buildUsageHistoryAccountKey(credential: UsageCredential): string {
+	return usageIdentityDigest(buildUsageCacheIdentity(credential));
+}
+
 /** Cache-key namespace for report rows. Rows under any other `report` prefix predate digest keys. */
 export const USAGE_REPORT_CACHE_NAMESPACE = "reportv2";
 

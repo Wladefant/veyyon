@@ -74,7 +74,91 @@ function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Remove the given secrets in every spelling, then every credential-shaped run, from `text`. */
+/**
+ * The shortest run of a secret that is still redacted when an echo cut the credential short. A run
+ * shorter than this is too common in ordinary words and numbers to name a credential; a secret shorter
+ * than this is redacted only whole.
+ */
+const MIN_PARTIAL_RUN = 12;
+
+const partialFormsBySecrets = new WeakMap<readonly string[], string[]>();
+
+/**
+ * The base64 spellings of each secret an echo can carry (an Authorization header of the wrong scheme, a
+ * debug dump of the encoded value): standard and URL-safe, unpadded, at each of the three alignments a
+ * secret can sit in a longer encoded string. Only the characters fully determined by the secret's own
+ * bytes are kept, so the spelling matches wherever the secret was embedded.
+ */
+function base64Spellings(secret: string): string[] {
+	const bytes = Buffer.from(secret, "utf8");
+	const spellings: string[] = [];
+	for (let lead = 0; lead < 3; lead++) {
+		const encoded = Buffer.concat([Buffer.alloc(lead, 0x78), bytes])
+			.toString("base64")
+			.replace(/=+$/, "");
+		const from = lead === 0 ? 0 : lead + 1;
+		const to = Math.floor(((lead + bytes.length) * 8) / 6);
+		const middle = encoded.slice(from, to);
+		if (middle.length === 0) continue;
+		spellings.push(middle, middle.replace(/\+/g, "-").replace(/\//g, "_"));
+	}
+	return spellings;
+}
+
+/** Every plain spelling whose runs are redacted even when only part of it appears in the text. */
+function partialForms(secrets: readonly string[]): string[] {
+	const cached = partialFormsBySecrets.get(secrets);
+	if (cached) return cached;
+	const forms = new Set<string>();
+	for (const secret of secrets) {
+		if (secret.length >= MIN_PARTIAL_RUN) forms.add(secret);
+		for (const spelling of base64Spellings(secret)) {
+			if (spelling.length >= MIN_PARTIAL_RUN) forms.add(spelling);
+		}
+	}
+	const result = [...forms];
+	partialFormsBySecrets.set(secrets, result);
+	return result;
+}
+
+/** Replace every run of `form` at least {@link MIN_PARTIAL_RUN} long, however much of `form` it covers. */
+function redactRunsOf(text: string, form: string): string {
+	if (text.length < MIN_PARTIAL_RUN) return text;
+	const ranges: Array<[number, number]> = [];
+	for (let start = 0; start + MIN_PARTIAL_RUN <= form.length; start++) {
+		const probe = form.slice(start, start + MIN_PARTIAL_RUN);
+		for (let at = text.indexOf(probe); at !== -1; at = text.indexOf(probe, at + 1)) {
+			let from = at;
+			let formFrom = start;
+			while (from > 0 && formFrom > 0 && text[from - 1] === form[formFrom - 1]) {
+				from--;
+				formFrom--;
+			}
+			let to = at + MIN_PARTIAL_RUN;
+			let formTo = start + MIN_PARTIAL_RUN;
+			while (to < text.length && formTo < form.length && text[to] === form[formTo]) {
+				to++;
+				formTo++;
+			}
+			ranges.push([from, to]);
+		}
+	}
+	if (ranges.length === 0) return text;
+	ranges.sort((a, b) => a[0] - b[0]);
+	let out = "";
+	let cursor = 0;
+	for (const [from, to] of ranges) {
+		if (to <= cursor) continue;
+		out += `${text.slice(cursor, Math.max(from, cursor))}<redacted credential>`;
+		cursor = to;
+	}
+	return out + text.slice(cursor);
+}
+
+/**
+ * Remove the given secrets in every spelling, any run of one that an echo cut short, then every
+ * credential-shaped run, from `text`.
+ */
 export function redactUsageText(text: string, secrets: readonly string[]): string {
 	let result = text;
 	for (const form of secretForms(secrets)) {
@@ -83,6 +167,7 @@ export function redactUsageText(text: string, secrets: readonly string[]): strin
 			? result.replace(new RegExp(escapeRegExp(form.pattern), "gi"), replacement)
 			: result.split(form.pattern).join(replacement);
 	}
+	for (const form of partialForms(secrets)) result = redactRunsOf(result, form);
 	return redactProviderSecrets(result);
 }
 
@@ -109,7 +194,78 @@ function ownDataValue(object: object, key: PropertyKey): unknown {
  * reachable twice without looping is copied once and reused.
  */
 export function redactUsageValue<T>(value: T, secrets: readonly string[]): T {
-	return redactNode(value, secrets, new Set(), new Map()) as T;
+	return redactNode(value, secrets, new Set(), new Map(), undefined) as T;
+}
+
+/**
+ * The public shape of a usage report: for each object kind, the property names the schema defines, and
+ * the kind each property's value has. Those names are fixed by this codebase, never by the backend, so
+ * they are kept as written: a one-character credential such as `e` would otherwise rename `provider`
+ * and `scope` and make a valid report unreadable. Anything else (an unknown property, every property of
+ * the free-form `metadata` and `raw`) is untrusted payload and is redacted by name and by value.
+ */
+type ShapeKind = "report" | "limit" | "scope" | "window" | "amount" | "display" | "resetCredits" | "credit";
+
+const SHAPES: Record<ShapeKind, Record<string, ShapeKind | "list:limit" | "list:credit" | "leaf">> = {
+	report: {
+		provider: "leaf",
+		fetchedAt: "leaf",
+		limits: "list:limit",
+		resetCredits: "resetCredits",
+		notes: "leaf",
+		metadata: "leaf",
+		raw: "leaf",
+	},
+	limit: {
+		id: "leaf",
+		label: "leaf",
+		scope: "scope",
+		window: "window",
+		amount: "amount",
+		status: "leaf",
+		notes: "leaf",
+		display: "display",
+	},
+	scope: {
+		provider: "leaf",
+		accountId: "leaf",
+		projectId: "leaf",
+		orgId: "leaf",
+		modelId: "leaf",
+		tier: "leaf",
+		windowId: "leaf",
+		shared: "leaf",
+	},
+	window: { id: "leaf", label: "leaf", durationMs: "leaf", resetsAt: "leaf" },
+	amount: {
+		used: "leaf",
+		limit: "leaf",
+		remaining: "leaf",
+		usedFraction: "leaf",
+		remainingFraction: "leaf",
+		unit: "leaf",
+	},
+	display: { remaining: "leaf", inapplicable: "leaf" },
+	resetCredits: { availableCount: "leaf", credits: "list:credit" },
+	credit: { id: "leaf", title: "leaf", grantedAt: "leaf", expiresAt: "leaf", status: "leaf", clears: "leaf" },
+};
+
+/** The fixed vocabulary of the two enum-valued report properties; a value outside it is untrusted text. */
+const ENUM_VALUES: Partial<Record<ShapeKind, Record<string, ReadonlySet<string>>>> = {
+	limit: { status: new Set(["ok", "warning", "exhausted", "unknown"]) },
+	amount: { unit: new Set(["percent", "tokens", "requests", "usd", "minutes", "bytes", "unknown"]) },
+};
+
+type Ctx = { kind: ShapeKind } | { list: "limit" | "credit" } | { record: ReadonlySet<string> } | undefined;
+
+/**
+ * Redact the string values of a record this code built itself (a credential check result, a history
+ * entry). Its property names are fixed by the code that built it, so they are never rewritten, and the
+ * values of the named fixed-vocabulary properties (`provider`, `status`, `type`) are kept as written.
+ * Everything else, at any depth, is redacted by value.
+ */
+export function redactUsageRecord<T>(record: T, secrets: readonly string[], fixedValueKeys: readonly string[]): T {
+	return redactNode(record, secrets, new Set(), new Map(), { record: new Set(fixedValueKeys) }) as T;
 }
 
 function redactNode(
@@ -117,6 +273,7 @@ function redactNode(
 	secrets: readonly string[],
 	ancestors: Set<object>,
 	done: Map<object, unknown>,
+	ctx: Ctx,
 ): unknown {
 	if (typeof value === "string") return redactUsageText(value, secrets);
 	if (typeof value === "bigint") return redactUsageText(`${value}`, secrets);
@@ -126,11 +283,12 @@ function redactNode(
 	// A Proxy runs its traps on every reflective read, so it is never reflected on.
 	if (isOrInheritsFromProxy(value)) return UNREADABLE;
 	if (ancestors.has(value)) return undefined;
-	if (done.has(value)) return done.get(value);
+	// A node reached under a schema kind is not shared with the same node reached as free-form payload.
+	if (ctx === undefined && done.has(value)) return done.get(value);
 	ancestors.add(value);
 	try {
-		const copy = snapshotObject(value, secrets, ancestors, done);
-		done.set(value, copy);
+		const copy = snapshotObject(value, secrets, ancestors, done, ctx);
+		if (ctx === undefined) done.set(value, copy);
 		return copy;
 	} catch {
 		return UNREADABLE;
@@ -144,6 +302,7 @@ function snapshotObject(
 	secrets: readonly string[],
 	ancestors: Set<object>,
 	done: Map<object, unknown>,
+	ctx: Ctx,
 ): unknown {
 	if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof SharedArrayBuffer) {
 		return "[binary data]";
@@ -162,7 +321,9 @@ function snapshotObject(
 		const length = ownDataValue(value, "length");
 		const items: unknown[] = [];
 		for (let index = 0; typeof length === "number" && index < length; index++) {
-			items.push(redactNode(ownDataValue(value, index), secrets, ancestors, done));
+			const itemCtx: Ctx =
+				ctx === undefined ? undefined : "list" in ctx ? { kind: ctx.list } : "record" in ctx ? ctx : undefined;
+			items.push(redactNode(ownDataValue(value, index), secrets, ancestors, done, itemCtx));
 		}
 		return items;
 	}
@@ -170,7 +331,32 @@ function snapshotObject(
 	for (const key of Object.keys(value)) {
 		const descriptor = Object.getOwnPropertyDescriptor(value, key);
 		if (descriptor === undefined || !("value" in descriptor)) continue;
-		entries.push([redactUsageText(key, secrets), redactNode(descriptor.value, secrets, ancestors, done)]);
+		if (ctx !== undefined && "record" in ctx) {
+			const fixed = ctx.record.has(key) && typeof descriptor.value === "string";
+			entries.push([key, fixed ? descriptor.value : redactNode(descriptor.value, secrets, ancestors, done, ctx)]);
+			continue;
+		}
+		const kind = ctx !== undefined && "kind" in ctx ? ctx.kind : undefined;
+		const child = kind === undefined ? undefined : SHAPES[kind][key];
+		if (child === undefined) {
+			entries.push([
+				redactUsageText(key, secrets),
+				redactNode(descriptor.value, secrets, ancestors, done, undefined),
+			]);
+			continue;
+		}
+		const allowed = kind === undefined ? undefined : ENUM_VALUES[kind]?.[key];
+		if (allowed !== undefined && typeof descriptor.value === "string" && allowed.has(descriptor.value)) {
+			entries.push([key, descriptor.value]);
+			continue;
+		}
+		const childCtx: Ctx =
+			child === "leaf"
+				? undefined
+				: child.startsWith("list:")
+					? { list: child.slice(5) as "limit" | "credit" }
+					: { kind: child as ShapeKind };
+		entries.push([key, redactNode(descriptor.value, secrets, ancestors, done, childCtx)]);
 	}
 	return Object.fromEntries(entries);
 }
@@ -182,7 +368,7 @@ function snapshotObject(
  * dropped, so a reader may take `limit.scope` and `limit.amount` unguarded.
  */
 export function redactUsageReport(report: UsageReport, secrets: readonly string[]): UsageReport | undefined {
-	const snapshot = redactUsageValue<unknown>(report, secrets);
+	const snapshot = redactNode(report, secrets, new Set(), new Map(), { kind: "report" });
 	if (!isRecord(snapshot)) return undefined;
 	if (typeof snapshot.provider !== "string" || typeof snapshot.fetchedAt !== "number") return undefined;
 	if (!Array.isArray(snapshot.limits)) return undefined;

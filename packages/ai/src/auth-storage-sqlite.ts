@@ -107,6 +107,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#deleteProviderSelectionStmt: Statement;
 	#lastUsageHistoryStmt: Statement;
 	#listUsageHistoryStmt: Statement;
+	#purgeUsageHistoryStmt: Statement;
 	#updateUsageHistoryStmt: Statement;
 	#closed = false;
 
@@ -247,6 +248,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#updateUsageHistoryStmt = this.#db.prepare(
 			"UPDATE usage_history SET recorded_at = ?, email = ?, account_id = ?, label = ?, window_label = ?, used_fraction = ?, status = ?, resets_at = ? WHERE id = ?",
 		);
+		this.#purgeUsageHistoryStmt = this.#db.prepare("DELETE FROM usage_history");
 		this.#listUsageHistoryStmt = this.#db.prepare(
 			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
 		);
@@ -1399,6 +1401,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	purgeUsageHistory(): void {
+		this.#purgeUsageHistoryStmt.run();
+	}
+
 	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
 		try {
 			const provider = query?.provider ?? null;
@@ -1546,6 +1552,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#insertUsageHistoryStmt.finalize();
 		this.#lastUsageHistoryStmt.finalize();
 		this.#listUsageHistoryStmt.finalize();
+		this.#purgeUsageHistoryStmt.finalize();
 		this.#updateUsageHistoryStmt.finalize();
 		this.#getAccountNameStmt.finalize();
 		this.#listAccountNamesStmt.finalize();
