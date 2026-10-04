@@ -2,8 +2,9 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile, errorMessage, isEnoent, logger, postmortem } from "@veyyon/utils";
+import { tryWithFileLock } from "@veyyon/utils/file-lock";
 import { getProcessStartIdentity } from "@veyyon/utils/process-liveness";
-import { type BrokerLeaseClock, daemonOwnerCanBeRetired, daemonOwnerIsAlive } from "./broker-lease";
+import { type BrokerLeaseClock, daemonOwnerIsAlive, daemonOwnerRetirement } from "./broker-lease";
 import {
 	canonicalProjectDir,
 	daemonBrokerLeasePath,
@@ -103,25 +104,21 @@ export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<
 	return live;
 }
 
-/** Whether the broker lacks sufficient evidence for retirement. */
-async function hasLiveDaemonBroker(runtimeDir: string, clock: BrokerLeaseClock): Promise<boolean> {
+/** Retire only the stale record when an authenticated replacement serves this scope. */
+async function retireDaemonBroker(runtimeDir: string, clock: BrokerLeaseClock): Promise<boolean> {
+	const leasePath = daemonBrokerLeasePath(runtimeDir);
 	let raw: unknown;
+	let mtimeMs = (clock.now ?? Date.now)();
 	try {
-		raw = await Bun.file(daemonBrokerLeasePath(runtimeDir)).json();
-	} catch {
-		return false; // Missing or malformed broker.pid => no owning broker.
+		const text = await fs.readFile(leasePath, "utf8");
+		mtimeMs = (await fs.stat(leasePath)).mtimeMs;
+		raw = JSON.parse(text);
+	} catch (error) {
+		if (!isEnoent(error) && !(error instanceof SyntaxError)) throw error;
 	}
-	if (typeof raw !== "object" || raw === null || !("pid" in raw) || typeof raw.pid !== "number") {
-		return false;
-	}
-	return !(await daemonOwnerCanBeRetired(
-		runtimeDir,
-		raw,
-		(
-			await fs.stat(daemonBrokerLeasePath(runtimeDir))
-		).mtimeMs,
-		clock,
-	));
+	const retirement = await daemonOwnerRetirement(runtimeDir, raw, mtimeMs, clock);
+	if (retirement === "retire-record") await fs.rm(leasePath, { force: true });
+	return retirement === "retire-scope";
 }
 
 /**
@@ -164,9 +161,20 @@ export async function pruneDeadDaemonRuntimeDirs(
 		try {
 			const stat = await fs.stat(dir);
 			if (now - stat.mtimeMs < DAEMON_RUNTIME_STALE_GRACE_MS) continue;
-			if (await hasLiveDaemonBroker(dir, clock)) continue;
-			if (await hasLiveDaemonProjectPresence(dir)) continue;
-			await fs.rm(dir, { recursive: true, force: true });
+			// Serialize the probe and retirement against broker lease publication.
+			// Detach before releasing the lock so a starter can safely recreate the path.
+			const retired = await tryWithFileLock(daemonBrokerLeasePath(dir), async () => {
+				const observed = await fs.stat(dir);
+				if (observed.dev !== stat.dev || observed.ino !== stat.ino) return null;
+				if (!(await retireDaemonBroker(dir, clock))) return null;
+				if (await hasLiveDaemonProjectPresence(dir)) return null;
+				const tombstone = path.join(root, `.retired-${entry.name}-${crypto.randomUUID()}`);
+				await fs.rename(dir, tombstone);
+				return tombstone;
+			});
+			if (retired.acquired && retired.value !== null) {
+				await fs.rm(retired.value, { recursive: true, force: true });
+			}
 		} catch (error) {
 			if (isEnoent(error)) continue;
 			logger.warn("Failed to prune dead daemon runtime dir", {
