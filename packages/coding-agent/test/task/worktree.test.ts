@@ -3,12 +3,17 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearWorktrees } from "@veyyon/coding-agent/cli/worktree-cli";
-import { ISOLATION_CLAIM_FILE, ISOLATION_OWNER_FILE } from "@veyyon/coding-agent/task/isolation-ownership";
+import {
+	ISOLATION_CLAIM_FILE,
+	ISOLATION_OWNER_FILE,
+	RETAINED_BACKEND_FILE,
+} from "@veyyon/coding-agent/task/isolation-ownership";
 import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
 	applyNestedPatches,
 	captureBaseline,
 	captureDeltaPatch,
+	cleanupIsolation,
 	cleanupTaskBranches,
 	commitToBranch,
 	ensureIsolation,
@@ -217,9 +222,65 @@ describe("worktree isolation helpers", () => {
 			const handle = await first;
 			expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
 			const left = await fs.readdir(path.dirname(handle.mergedDir));
-			expect(left.sort()).toEqual([ISOLATION_OWNER_FILE, path.basename(handle.mergedDir)].sort());
+			// Setup records the backend (unretained) so a crashed owner's slot stays reclaimable.
+			expect(left.sort()).toEqual([ISOLATION_OWNER_FILE, RETAINED_BACKEND_FILE, path.basename(handle.mergedDir)].sort());
+			const setupRecord = JSON.parse(await fs.readFile(path.join(path.dirname(handle.mergedDir), RETAINED_BACKEND_FILE), "utf8"));
+			expect(setupRecord).toEqual({ backend: natives.IsoBackendKind.Rcopy });
 			expect(left).not.toContain(ISOLATION_CLAIM_FILE);
 			await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });
+		});
+
+		it("does not let a stale handle remove a slot that now belongs to another owner", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+				await fs.mkdir(mergedDir, { recursive: true });
+			});
+			const handle = await ensureIsolation(repo, "stale-handle-token");
+			const baseDir = path.dirname(handle.mergedDir);
+			// Another task took the slot after this handle was preempted.
+			await fs.writeFile(
+				path.join(baseDir, ISOLATION_OWNER_FILE),
+				JSON.stringify({ pid: process.pid, startIdentity: null, token: "someone-else", createdAt: "now" }),
+			);
+
+			await cleanupIsolation(handle);
+
+			expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
+			await fs.rm(baseDir, { recursive: true, force: true });
+		});
+
+		it("lets clear reclaim a slot whose owner crashed after setup, but not one with a live owner", async () => {
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+				await fs.mkdir(mergedDir, { recursive: true });
+			});
+			vi.spyOn(console, "log").mockImplementation(() => {});
+			const live = await ensureIsolation(repo, "crash-live-owner");
+			const crashed = await ensureIsolation(repo, "crash-dead-owner");
+			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+			await gone.exited;
+			const crashedBase = path.dirname(crashed.mergedDir);
+			const owner = JSON.parse(await fs.readFile(path.join(crashedBase, ISOLATION_OWNER_FILE), "utf8"));
+			await fs.writeFile(
+				path.join(crashedBase, ISOLATION_OWNER_FILE),
+				JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
+			);
+
+			await clearWorktrees({ all: true, dryRun: false, json: true });
+
+			await expect(fs.stat(crashedBase)).rejects.toThrow();
+			expect((await fs.stat(live.mergedDir)).isDirectory()).toBe(true);
+			await fs.rm(path.dirname(live.mergedDir), { recursive: true, force: true });
 		});
 
 		it("clears a claim whose process is gone", async () => {
