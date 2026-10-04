@@ -9,7 +9,12 @@ import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { sessionCpuLimit } from "../session/cpu-limit";
 import { OutputSink } from "../session/streaming-output";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/core/output-meta";
+import {
+	type OutputArtifactError,
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../tools/core/output-meta";
 import { TOOL_TIMEOUTS } from "../tools/core/tool-timeouts";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { buildNonInteractiveEnv } from "./non-interactive-env";
@@ -80,12 +85,15 @@ export interface BashResult {
 	 */
 	signal?: number;
 	cancelled: boolean;
+	timedOut?: boolean;
 	truncated: boolean;
 	totalLines: number;
 	totalBytes: number;
 	outputLines: number;
 	outputBytes: number;
 	artifactId?: string;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
 	workingDir?: string;
 }
 
@@ -314,6 +322,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
@@ -332,7 +341,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		return {
 			exitCode: undefined,
 			cancelled: true,
-			...(await sink.dump("Command cancelled")),
+			...(await sink.dumpWithArtifactStatus("Command cancelled")),
 		};
 	}
 
@@ -461,7 +470,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump(
+				timedOut: winner.kind === "timeout",
+				...(await sink.dumpWithArtifactStatus(
 					winner.kind === "timeout" && deadlineTimeoutMs !== undefined
 						? `Command timed out after ${Math.round(deadlineTimeoutMs / 1000)} seconds`
 						: "Command cancelled",
@@ -485,7 +495,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump(annotation)),
+				timedOut: true,
+				...(await sink.dumpWithArtifactStatus(annotation)),
 			};
 		}
 
@@ -498,7 +509,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump("Command cancelled")),
+				...(await sink.dumpWithArtifactStatus("Command cancelled")),
 			};
 		}
 
@@ -528,7 +539,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			signal: winner.result.signal,
 			cancelled: false,
 			workingDir: winner.result.workingDir,
-			...(await sink.dump()),
+			...(await sink.dumpWithArtifactStatus()),
 		};
 	} catch (err) {
 		resetSession = true;
