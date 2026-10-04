@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import { type Env, enhancedRecallEnabled } from "../config";
 import { jaccardWordSimilarity } from "../util/text-similarity";
 import { cosineSimilarity, decodeEmbeddingJson, encodeEmbeddingJson } from "./vector-math";
@@ -83,20 +84,28 @@ export class QueryCache {
 
 	#initDb(dbPath: string): void {
 		if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
-		const db = new Database(dbPath, { create: true, readwrite: true, strict: true });
+		const databaseOptions = { create: true, readwrite: true, strict: true };
+		const prepare = (db: Database): Database => {
+			if (dbPath !== ":memory:") db.exec("PRAGMA journal_mode=WAL");
+			db.exec(`
+				CREATE TABLE IF NOT EXISTS query_cache (
+					normalized TEXT PRIMARY KEY,
+					embedding_json TEXT,
+					results_json TEXT,
+					hit_count INTEGER DEFAULT 0,
+					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+					last_hit TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				);
+				CREATE INDEX IF NOT EXISTS idx_cache_hits ON query_cache(hit_count DESC);
+			`);
+			return db;
+		};
+		// Cached answers are recomputed on a miss, so a corrupt file is quarantined (backup kept) and recreated.
+		const db =
+			dbPath === ":memory:"
+				? prepare(new Database(dbPath, databaseOptions))
+				: openSqliteDatabaseSync(dbPath, prepare, { databaseOptions, recoverCorruption: true });
 		this.#conn = db;
-		if (dbPath !== ":memory:") db.exec("PRAGMA journal_mode=WAL");
-		db.exec(`
-			CREATE TABLE IF NOT EXISTS query_cache (
-				normalized TEXT PRIMARY KEY,
-				embedding_json TEXT,
-				results_json TEXT,
-				hit_count INTEGER DEFAULT 0,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				last_hit TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			);
-			CREATE INDEX IF NOT EXISTS idx_cache_hits ON query_cache(hit_count DESC);
-		`);
 
 		try {
 			const rows = db

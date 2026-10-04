@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 
 export interface MemoryThread {
 	id: string;
@@ -54,7 +55,14 @@ function addColumnIfMissing(db: Database, table: string, column: string, definit
 }
 
 export function openMemoryDb(dbPath: string): Database {
-	const db = new Database(dbPath);
+	// The memory tables live in agent.db, which also holds settings and credentials. Quarantining that
+	// file to rebuild the derived memory rows would discard the durable data, so it fails closed.
+	return openSqliteDatabaseSync(dbPath, initializeMemoryDb, {
+		failClosedReason: "agent.db also holds settings and credentials that cannot be rebuilt; restore it from a backup",
+	});
+}
+
+function initializeMemoryDb(db: Database): Database {
 	// Install the busy handler BEFORE any lock-taking statement. See #2421.
 	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec(`

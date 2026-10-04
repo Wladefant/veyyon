@@ -1,8 +1,8 @@
-import { Database, type Statement } from "bun:sqlite";
+import type { Database, Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AsyncDrain, getDbBusyTimeoutMs, getHistoryDbPath, logger, NON_ALNUM_RUN_RE } from "@veyyon/utils";
-import { escapeLike, SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
+import { escapeLike, openSqliteDatabaseSync, SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
 
 export interface HistoryEntry {
 	id: number;
@@ -41,8 +41,33 @@ export class HistoryStorage {
 	private constructor(dbPath: string) {
 		ensureDir(dbPath);
 
-		this.#db = new Database(dbPath);
+		// history.db holds the user's prompt history, which cannot be rebuilt: a corrupt file is left untouched
+		// and reported rather than quarantined and recreated.
+		this.#db = openSqliteDatabaseSync(
+			dbPath,
+			db => {
+				this.#db = db;
+				this.#initializeSchema();
+				return db;
+			},
+			{ failClosedReason: "history.db holds prompt history that cannot be rebuilt; restore it from a backup" },
+		);
 
+		this.#recentStmt = this.#db.prepare(
+			"SELECT id, prompt, created_at, cwd, session_id FROM history ORDER BY created_at DESC, id DESC LIMIT ?",
+		);
+		this.#searchStmt = this.#db.prepare(
+			"SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ORDER BY h.created_at DESC, h.id DESC LIMIT ?",
+		);
+		this.#lastPromptStmt = this.#db.prepare("SELECT prompt FROM history ORDER BY id DESC LIMIT 1");
+
+		this.#insertRowStmt = this.#db.prepare("INSERT INTO history (prompt, cwd, session_id) VALUES (?, ?, ?)");
+
+		const last = this.#lastPromptStmt.get() as { prompt?: string } | undefined;
+		this.#lastPromptCache = last?.prompt ?? null;
+	}
+
+	#initializeSchema(): void {
 		// Install the busy handler BEFORE any lock-taking statement. See #2421.
 		// Headless hosts bound the wait so lock contention cannot freeze the
 		// protocol loop for the full interactive timeout.
@@ -84,19 +109,6 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 				logger.warn("HistoryStorage FTS rebuild failed", { error: String(error) });
 			}
 		}
-
-		this.#recentStmt = this.#db.prepare(
-			"SELECT id, prompt, created_at, cwd, session_id FROM history ORDER BY created_at DESC, id DESC LIMIT ?",
-		);
-		this.#searchStmt = this.#db.prepare(
-			"SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ORDER BY h.created_at DESC, h.id DESC LIMIT ?",
-		);
-		this.#lastPromptStmt = this.#db.prepare("SELECT prompt FROM history ORDER BY id DESC LIMIT 1");
-
-		this.#insertRowStmt = this.#db.prepare("INSERT INTO history (prompt, cwd, session_id) VALUES (?, ?, ?)");
-
-		const last = this.#lastPromptStmt.get() as { prompt?: string } | undefined;
-		this.#lastPromptCache = last?.prompt ?? null;
 	}
 
 	static open(dbPath: string = getHistoryDbPath()): HistoryStorage {

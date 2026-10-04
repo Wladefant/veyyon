@@ -16,7 +16,7 @@ import { getAgentDbPath, getStatsDbPath } from "@veyyon/utils/dirs";
 import { getDbBusyTimeoutMs } from "@veyyon/utils/env";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
-import { SQLITE_NOW_EPOCH } from "@veyyon/utils/sqlite";
+import { openSqliteDatabaseSync, SQLITE_NOW_EPOCH } from "@veyyon/utils/sqlite";
 import { DAY_MS } from "@veyyon/utils/time";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 
@@ -152,7 +152,21 @@ export class AgentStorage {
 		this.#autoPerfBackfill = dbPath === getAgentDbPath();
 		ensureDir(dbPath);
 		try {
-			this.#db = new Database(dbPath);
+			// agent.db holds settings and the auth credentials, which cannot be rebuilt: a corrupt file is left
+			// untouched and reported, never quarantined and recreated here. Credential-store recovery is a
+			// separate opt-in owned by the auth store.
+			this.#db = openSqliteDatabaseSync(
+				dbPath,
+				db => {
+					this.#db = db;
+					this.#initializeSchema();
+					return db;
+				},
+				{
+					failClosedReason:
+						"agent.db holds settings and credentials that cannot be rebuilt; restore it from a backup",
+				},
+			);
 		} catch (err) {
 			const dir = path.dirname(dbPath);
 			const dirExists = fs.existsSync(dir);
@@ -161,10 +175,9 @@ export class AgentStorage {
 				`Failed to open agent database at '${dbPath}': ${errMsg}\n` +
 					`Directory '${dir}' exists: ${dirExists}\n` +
 					`Ensure the directory is writable and not corrupted.`,
+				{ cause: err },
 			);
 		}
-
-		this.#initializeSchema();
 		hardenPermissions(dbPath);
 
 		// Create AuthCredentialStore with our open database

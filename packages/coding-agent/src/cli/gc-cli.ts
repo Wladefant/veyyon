@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -21,7 +21,7 @@ import {
 	statIfPresentOrThrow,
 } from "@veyyon/utils";
 import { SESSION_BACKUP_EXTENSION, SESSION_FILE_EXTENSION } from "@veyyon/utils/session-file";
-import { tableExists } from "@veyyon/utils/sqlite";
+import { openSqliteDatabaseSync, tableExists } from "@veyyon/utils/sqlite";
 import { Settings } from "../config/settings";
 import { getDefault } from "../config/settings-schema";
 
@@ -550,6 +550,13 @@ async function moveSessionWithArtifacts(candidate: ArchiveCandidate): Promise<vo
 	}
 }
 
+/** gc rewrites a store another component owns, so a corrupt file fails closed here instead of being quarantined as a side effect. */
+function openMaintenanceDb(dbPath: string): Database {
+	return openSqliteDatabaseSync(dbPath, db => db, {
+		failClosedReason: "gc never quarantines a store; repair or restore it with its owner",
+	});
+}
+
 function sqliteNumber(value: number | bigint | null | undefined): number {
 	if (typeof value === "bigint") return Number(value);
 	if (typeof value === "number") return value;
@@ -563,7 +570,7 @@ function historyHasSessionId(db: Database): boolean {
 
 function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { deleted: number; ftsRebuilt: boolean } {
 	if (sessionIds.length === 0) return { deleted: 0, ftsRebuilt: false };
-	const db = new Database(dbPath);
+	const db = openMaintenanceDb(dbPath);
 	try {
 		db.run("PRAGMA busy_timeout = 5000");
 		if (!tableExists(db, "history")) return { deleted: 0, ftsRebuilt: false };
@@ -709,7 +716,7 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 	};
 	if (!apply || !(await pathExistsOrThrow(dbPath))) return result;
 
-	const db = new Database(dbPath);
+	const db = openMaintenanceDb(dbPath);
 	let checkpointAttempted = false;
 	try {
 		db.run("PRAGMA busy_timeout = 5000");

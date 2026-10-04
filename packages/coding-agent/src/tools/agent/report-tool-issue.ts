@@ -12,7 +12,7 @@
  * headless override, and `veyyon grievances push` remains the explicit
  * one-shot command. Tool execution never blocks on the network and never throws.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import type { AgentTool } from "@veyyon/agent-core";
 import type { FetchImpl } from "@veyyon/ai";
 import {
@@ -25,7 +25,7 @@ import {
 	scopedTimeoutSignal,
 	VERSION,
 } from "@veyyon/utils";
-import { sqlPlaceholders } from "@veyyon/utils/sqlite";
+import { openSqliteDatabaseSync, sqlPlaceholders } from "@veyyon/utils/sqlite";
 import { type Type, type } from "arktype";
 import type { Settings } from "../..";
 import type { ToolSession } from "../index";
@@ -85,33 +85,41 @@ let cachedDb: Database | null = null;
 export function openAutoQaDb(): Database | null {
 	if (cachedDb) return cachedDb;
 	try {
-		const db = new Database(getAutoQaDbDir());
-		// Install the busy handler BEFORE any lock-taking statement. See #2421.
-		db.run("PRAGMA busy_timeout = 5000");
-		db.run(`
-			PRAGMA journal_mode=WAL;
-			PRAGMA synchronous=NORMAL;
-			CREATE TABLE IF NOT EXISTS grievances (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				model TEXT NOT NULL,
-				version TEXT NOT NULL,
-				tool TEXT NOT NULL,
-				report TEXT NOT NULL,
-				pushed INTEGER NOT NULL DEFAULT 0
-			);
-		`);
-		// Migration: pre-`pushed` databases get the column tacked on. Existing
-		// rows default to `0` (unpushed), so legacy grievances from before the
-		// consent + push pipeline went live get swept up by the next flush —
-		// exactly the behaviour we want for users who just granted consent.
-		const cols = db.prepare("PRAGMA table_info(grievances)").all() as Array<{ name: string }>;
-		if (!cols.some(c => c.name === "pushed")) {
-			db.run("ALTER TABLE grievances ADD COLUMN pushed INTEGER NOT NULL DEFAULT 0");
-		}
-		// Speed up the per-batch `WHERE pushed = 0` scan that drives the flush
-		// loop. Without the index every batch becomes a full table scan once
-		// pushed rows dominate the table.
-		db.run("CREATE INDEX IF NOT EXISTS grievances_pushed_idx ON grievances(pushed, id)");
+		// Unpushed reports exist nowhere else, so a corrupt file is left untouched and reported (the warning
+		// below names the reason) rather than quarantined and recreated empty.
+		const db = openSqliteDatabaseSync(
+			getAutoQaDbDir(),
+			db => {
+				// Install the busy handler BEFORE any lock-taking statement. See #2421.
+				db.run("PRAGMA busy_timeout = 5000");
+				db.run(`
+					PRAGMA journal_mode=WAL;
+					PRAGMA synchronous=NORMAL;
+					CREATE TABLE IF NOT EXISTS grievances (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						model TEXT NOT NULL,
+						version TEXT NOT NULL,
+						tool TEXT NOT NULL,
+						report TEXT NOT NULL,
+						pushed INTEGER NOT NULL DEFAULT 0
+					);
+				`);
+				// Migration: pre-`pushed` databases get the column tacked on. Existing
+				// rows default to `0` (unpushed), so legacy grievances from before the
+				// consent + push pipeline went live get swept up by the next flush —
+				// exactly the behaviour we want for users who just granted consent.
+				const cols = db.prepare("PRAGMA table_info(grievances)").all() as Array<{ name: string }>;
+				if (!cols.some(c => c.name === "pushed")) {
+					db.run("ALTER TABLE grievances ADD COLUMN pushed INTEGER NOT NULL DEFAULT 0");
+				}
+				// Speed up the per-batch `WHERE pushed = 0` scan that drives the flush
+				// loop. Without the index every batch becomes a full table scan once
+				// pushed rows dominate the table.
+				db.run("CREATE INDEX IF NOT EXISTS grievances_pushed_idx ON grievances(pushed, id)");
+				return db;
+			},
+			{ failClosedReason: "unpushed tool issue reports exist only in this file; restore it from a backup" },
+		);
 		cachedDb = db;
 		return db;
 	} catch (error) {

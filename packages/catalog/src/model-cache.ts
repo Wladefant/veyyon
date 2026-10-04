@@ -2,9 +2,10 @@
  * SQLite-backed model cache for atomic cross-process access.
  * Replaces per-provider JSON files with a single cache.db.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { DAY_MS, getModelDbPath } from "@veyyon/utils";
+import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
@@ -69,24 +70,30 @@ let sharedDb: Database | null = null;
 let sharedDbPath: string | null = null;
 
 function openDb(resolvedPath: string): Database {
-	const db = new Database(resolvedPath, { create: true });
-	// Install the busy handler BEFORE any lock-taking statement.
-	db.run("PRAGMA busy_timeout = 3000");
-	db.run("PRAGMA journal_mode = WAL");
-	db.run(`
-		CREATE TABLE IF NOT EXISTS model_cache (
-			provider_id TEXT PRIMARY KEY,
-			version INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			authoritative INTEGER NOT NULL DEFAULT 0,
-			static_fingerprint TEXT NOT NULL DEFAULT '',
-			content_fingerprint TEXT NOT NULL DEFAULT '',
-			models TEXT NOT NULL
-		)
-	`);
-	migrateCacheSchema(db);
-	installCacheRevisionTracking(db);
-	return db;
+	// Every row is re-fetched from the providers, so a corrupt cache.db is quarantined (backup kept) and recreated.
+	return openSqliteDatabaseSync(
+		resolvedPath,
+		db => {
+			// Install the busy handler BEFORE any lock-taking statement.
+			db.run("PRAGMA busy_timeout = 3000");
+			db.run("PRAGMA journal_mode = WAL");
+			db.run(`
+				CREATE TABLE IF NOT EXISTS model_cache (
+					provider_id TEXT PRIMARY KEY,
+					version INTEGER NOT NULL,
+					updated_at INTEGER NOT NULL,
+					authoritative INTEGER NOT NULL DEFAULT 0,
+					static_fingerprint TEXT NOT NULL DEFAULT '',
+					content_fingerprint TEXT NOT NULL DEFAULT '',
+					models TEXT NOT NULL
+				)
+			`);
+			migrateCacheSchema(db);
+			installCacheRevisionTracking(db);
+			return db;
+		},
+		{ recoverCorruption: true },
+	);
 }
 
 function getSharedDb(): Database {

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import { dbPath } from "./config";
 
 export type DatabasePath = string | ":memory:";
@@ -24,14 +25,25 @@ type ExtensionDatabase = Database & { loadExtension(path: string): void };
 
 export function openDatabase(path: DatabasePath = dbPath(), options: OpenDatabaseOptions = {}): Database {
 	if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-	const db = new Database(path, {
+	const databaseOptions = {
 		create: options.create ?? true,
 		readwrite: options.readwrite ?? true,
 		strict: options.strict ?? true,
+	};
+	const initialize = (db: Database): Database => {
+		if (options.pragmas !== false) enablePragmas(db, path);
+		if (options.loadExtension !== undefined) loadExtensions(db, options.loadExtension);
+		return db;
+	};
+	// An in-memory store has nothing on disk to damage, and a read-only open (an export, migration or
+	// recovery source) must never rename or recreate the file it reads, so both stay direct.
+	if (path === ":memory:" || !databaseOptions.readwrite) return initialize(new Database(path, databaseOptions));
+	// The memory store holds memories, triples and embeddings that cannot be rebuilt: a corrupt file is left
+	// untouched and reported rather than quarantined and recreated empty.
+	return openSqliteDatabaseSync(path, initialize, {
+		databaseOptions,
+		failClosedReason: "the mnemopi database holds memories that cannot be rebuilt; restore it from a backup",
 	});
-	if (options.pragmas !== false) enablePragmas(db, path);
-	if (options.loadExtension !== undefined) loadExtensions(db, options.loadExtension);
-	return db;
 }
 
 export function enablePragmas(db: Database, path?: DatabasePath): void {
