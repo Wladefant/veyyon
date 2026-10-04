@@ -1062,6 +1062,10 @@ export class Markdown implements Component {
 	// re-deriving the same string knows the prefix still is one without comparing
 	// the whole transcript again.
 	#streamPrefixSource?: string;
+	// The frozen prefix the current one was cut to extend, proven a prefix of the text both were
+	// cut from. A row cache or an exposure recorded against it is therefore a prefix of the
+	// current frozen text without comparing the transcript again.
+	#streamPrefixBase?: string;
 	// Leading whole lines of #text that need no render normalization, so a frame
 	// scans only what arrived after them (see #normalizeForRender).
 	#normalizedCleanHead?: string;
@@ -1147,6 +1151,7 @@ export class Markdown implements Component {
 		this.#streamPrefixTokens = undefined;
 		this.#streamPrefixLineCache = undefined;
 		this.#streamPrefixSource = undefined;
+		this.#streamPrefixBase = undefined;
 	}
 
 	// Every field derived from #text that the next render rebuilds: a full lex
@@ -1294,6 +1299,7 @@ export class Markdown implements Component {
 				if (existingText === undefined || frozenEnd > existingText.length) {
 					this.#streamPrefixText = text.slice(0, frozenEnd);
 					this.#streamPrefixTokens = tokens.slice(0, frozenCount);
+					this.#streamPrefixBase = existingText;
 				}
 				return;
 			}
@@ -1436,7 +1442,7 @@ export class Markdown implements Component {
 		// that accumulator back into the cache copied every settled row twice per
 		// frame, and `push(...rows)` puts one argument on the stack per row,
 		// which a long transcript is eventually large enough to overflow.
-		const reusablePrefix = this.#matchingStreamPrefixLineCache(normalizedText, frozenText, signature);
+		const reusablePrefix = this.#matchingStreamPrefixLineCache(frozenText, signature);
 		let frozenLines: readonly string[];
 		if (reusablePrefix && reusablePrefix.tokenCount === frozenTokenCount) {
 			frozenLines = reusablePrefix.lines;
@@ -1467,7 +1473,12 @@ export class Markdown implements Component {
 		// the rewritten lineage.
 		if (frozenLines.length > 0) {
 			const exposed = this.#settledExposedText;
-			if (exposed === undefined || exposed === frozenText || frozenText.startsWith(exposed)) {
+			if (
+				exposed === undefined ||
+				exposed === frozenText ||
+				exposed === this.#streamPrefixBase ||
+				frozenText.startsWith(exposed)
+			) {
 				this.#settledExposedText = frozenText;
 				this.#lastRenderSettledRows = signature.paddingY + frozenLines.length;
 			} else {
@@ -1482,26 +1493,19 @@ export class Markdown implements Component {
 		return frozenLines.slice();
 	}
 
-	// `frozenText` is already known to be a prefix of `normalizedText`. When the
-	// entry was written for that same string — the common case, since the frozen
-	// text is reused by reference while nothing new freezes — both prefix
-	// questions are already answered and comparing the transcript again answers
-	// nothing.
-	#matchingStreamPrefixLineCache(
-		normalizedText: string,
-		frozenText: string,
-		signature: RenderSignature,
-	): StreamPrefixLineCache | undefined {
+	// `frozenText` is already known to be a prefix of `normalizedText`, so an entry
+	// whose text is a prefix of `frozenText` is a prefix of both. When the entry
+	// was written for that same string — the common case, since the frozen text is
+	// reused by reference while nothing new freezes — or for the prefix the frozen
+	// text was cut to extend, which is the case on the frame a new block freezes,
+	// that is already proven and comparing the transcript again answers nothing.
+	#matchingStreamPrefixLineCache(frozenText: string, signature: RenderSignature): StreamPrefixLineCache | undefined {
 		const cache = this.#streamPrefixLineCache;
-		if (!cache) return undefined;
-		if (
-			(cache.text !== frozenText &&
-				(!normalizedText.startsWith(cache.text) || !frozenText.startsWith(cache.text))) ||
-			!sameRenderSignature(cache, signature)
-		) {
-			return undefined;
+		if (!cache || !sameRenderSignature(cache, signature)) return undefined;
+		if (cache.text === frozenText || cache.text === this.#streamPrefixBase || frozenText.startsWith(cache.text)) {
+			return cache;
 		}
-		return cache;
+		return undefined;
 	}
 
 	#renderContentLines(

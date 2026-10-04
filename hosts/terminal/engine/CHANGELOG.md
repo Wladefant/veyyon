@@ -29,6 +29,7 @@
 - A `Markdown` render with no background style ends each row, and each blank padding row, at its ink instead of padding it with spaces to the render width, so writing a resumed 38 MB transcript's first frame sends 7.05M characters instead of 8.11M and the frame holds 133.0 MiB of heap instead of 135.0 MiB.
 - The prepared-frame cache keeps each composed row's fitted string and its source in two arrays instead of one `{ raw, width, line }` record per row, so a resumed 600-turn session holds 31,652 fewer objects and 105.4 MiB of heap instead of 107.0 MiB.
 - The scroll tape records scrolled-off rows only while `tui.scrollIsolation` is on and counts them otherwise, and turning scroll isolation on after the first paint replays the history into the tape, so a session with scroll isolation off holds none of the up to 20,000 row strings the tape kept.
+- A streaming `Markdown` render checks that its text still extends the frozen prefix by reference against the text the prefix was frozen from before comparing characters, and a `Container` with one child that draws rows returns that child's rows instead of copying them, so rendering each delta of a 1,000,000-character reply costs 49.8 ms in total instead of 70.4 ms and of a 400,000-character reply 14.1 ms instead of 19.0 ms (median of four).
 
 ### Fixed
 
