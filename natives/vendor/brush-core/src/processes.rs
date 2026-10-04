@@ -379,8 +379,9 @@ fn ancestors_from_snapshot(
 	}
 	let mut cursor = host;
 	let mut born = creation_time(cursor);
-	let mut seen = std::collections::HashSet::new();
-	while cursor != 0 && seen.insert(cursor) {
+	let mut visited = std::collections::HashSet::new();
+	let mut protected = std::collections::HashSet::from([host]);
+	while cursor != 0 && visited.insert(cursor) {
 		let Some(parent) = parents.get(&cursor) else {
 			break;
 		};
@@ -388,14 +389,19 @@ fn ancestors_from_snapshot(
 			break;
 		}
 		let parent_born = creation_time(*parent);
-		// A younger owner of a recorded parent PID is unrelated to the host.
+		// A younger owner of a recorded parent PID is not the ancestor, so that PID is not
+		// protected. The snapshot cannot tell a PID recycled before capture from one recycled
+		// after it, and in the second case the recorded link above it still names a live
+		// ancestor. Keep walking and protect that link rather than drop it.
 		if born.zip(parent_born).is_some_and(|(child, parent)| parent > child) {
-			break;
+			cursor = *parent;
+			continue;
 		}
+		protected.insert(*parent);
 		born = parent_born;
 		cursor = *parent;
 	}
-	Some(seen)
+	Some(protected)
 }
 
 #[cfg(windows)]
@@ -461,7 +467,9 @@ mod ancestry_tests {
 		let parents = HashMap::from([(42, 41), (41, 40), (40, 0)]);
 		for (births, expected) in [
 			([(42, 300), (41, 200), (40, 100)], HashSet::from([42, 41, 40])),
-			([(42, 300), (41, 400), (40, 100)], HashSet::from([42])),
+			// 41 is younger than the host, so its PID is not protected; the link it recorded to 40 is
+			// kept, because 41 may have been recycled after the snapshot and 40 still be a live ancestor.
+			([(42, 300), (41, 400), (40, 100)], HashSet::from([42, 40])),
 			([(42, 300), (41, 200), (40, 400)], HashSet::from([42, 41])),
 		] {
 			let births = HashMap::from(births);
