@@ -122,12 +122,10 @@ function mount(cwd = "/repo") {
 	const component = new StatusLineComponent(new StatusPresentationProducer(parts as unknown as AgentSession));
 	component.updateSettings(gitRow);
 	const rows: (string | null)[] = [];
-	const repainted = Promise.withResolvers<void>();
 	component.watchGitState(() => {
 		rows.push(component.renderQuietLine(120));
-		repainted.resolve();
 	});
-	return { component, repaints: () => rows, repainted: repainted.promise };
+	return { component, repaints: () => rows };
 }
 
 describe("the dirty marker on a row that renders every frame", () => {
@@ -194,16 +192,32 @@ describe("the dirty marker on a row that renders every frame", () => {
 		fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
 		const head = path.join(repo, ".git", "HEAD");
 		fs.writeFileSync(head, "ref: refs/heads/feature\n");
-		const at = lookups(answer(CLEAN), answer(DIRTY), answer(DIRTY), answer(DIRTY));
-		const { component, repainted } = mount(repo);
-		component.renderQuietLine(120);
-		await settle();
+		const lookedAgain = Promise.withResolvers<void>();
+		const at = lookups(
+			answer(CLEAN),
+			async () => {
+				lookedAgain.resolve();
+				return DIRTY;
+			},
+			answer(DIRTY),
+			answer(DIRTY),
+		);
+		// The branch's pull request lookup answers at once and asks for a repaint of its own, so a repaint
+		// lands before the watcher reports the write. Only a refresh starts a lookup on a frozen clock.
+		vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 1, stdout: "", stderr: "" });
+		vi.spyOn(git.branch, "default").mockResolvedValue(null);
+		const { component } = mount(repo);
+		try {
+			component.renderQuietLine(120);
+			await settle();
 
-		fs.writeFileSync(head, "ref: refs/heads/other\n");
-		await repainted;
+			fs.writeFileSync(head, "ref: refs/heads/other\n");
+			await lookedAgain.promise;
 
-		expect(at.slice(0, 2)).toEqual([T0, T0]);
-		component.dispose();
+			expect(at.slice(0, 2)).toEqual([T0, T0]);
+		} finally {
+			component.dispose();
+		}
 	});
 });
 
