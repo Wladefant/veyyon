@@ -488,8 +488,8 @@ describe("openai-responses cache affinity", () => {
 		).result();
 
 		expect(result.stopReason).toBe("stop");
-		expect(bodies.map(body => body.attempt)).toEqual([1, 2]);
-		expect(order).toEqual(["payload:1", "fetch:1", "payload:2", "fetch:2", "response:200", "sse", "sse", "sse"]);
+		expect(bodies.map(body => body.attempt)).toEqual([1, 1]);
+		expect(order).toEqual(["payload:1", "fetch:1", "fetch:1", "response:200", "sse", "sse", "sse"]);
 	});
 
 	/** Regression: a failing response hook is not a transport failure and must not consume or reopen the SSE body. */

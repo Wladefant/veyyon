@@ -64,7 +64,7 @@ export class HerdrReporter {
 	#session?: AgentSession;
 	#released = false;
 	#reported?: string;
-	#timer?: ReturnType<typeof setInterval>;
+	#timer?: NodeJS.Timeout;
 
 	constructor(
 		private readonly env: NodeJS.ProcessEnv = process.env,

@@ -31,7 +31,9 @@ async function scope(
 describe("pruneDeadDaemonRuntimeDirs", () => {
 	beforeAll(async () => {
 		// A definitely-dead PID: spawn a short-lived process and reap it.
-		const proc = Bun.spawn([process.execPath, "-e", "process.exit(0)"]);
+		const proc = Bun.spawn([process.execPath, "-e", "process.exit(0)"], {
+			env: { ...process.env, HOME: "/dev/null" },
+		});
 		await proc.exited;
 		deadPid = proc.pid;
 	});

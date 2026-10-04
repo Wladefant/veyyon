@@ -248,7 +248,8 @@ const GRAPH_SIZE_CEILINGS = [
 	// Measured 2026-07-26 at 145. The engine legitimately owns the theme JSON.
 	["theme/theme", "theme/theme.ts", 160],
 	// Measured 2026-07-26 at 65.
-	["tools/index", "tools/index.ts", 80],
+	// Re-measured 2026-10-04 at 82 (was 80): two modules from the upstream port wave (#219).
+	["tools/index", "tools/index.ts", 82],
 	// Measured 2026-07-26 at 49.
 	["config/model-registry", "config/model-registry.ts", 60],
 	// Measured 2026-07-26 at 110.

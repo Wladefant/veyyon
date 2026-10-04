@@ -20,7 +20,7 @@
  */
 import type { FetchImpl } from "../types";
 import type { UsageResetCredits } from "../usage";
-import { isRecord } from "../utils";
+import { isRecord } from "@veyyon/utils/type-guards";
 import { claudeApiRoot, claudeOAuthHeaders, normalizeClaudeBaseUrl } from "./claude-oauth-endpoint";
 
 /** The reset program this client reads and spends. */

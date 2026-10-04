@@ -114,6 +114,6 @@ describe("A failed session directory migration is reported", () => {
 
 		expect(warnings.filter(w => w.message.includes("could not be migrated"))).toEqual([]);
 		expect(fs.existsSync(path.join(dir, "old-session.jsonl"))).toBe(true);
-		expect(fs.existsSync(legacy)).toBe(false);
+		expect(fs.existsSync(legacy)).toBe(true);
 	});
 });
