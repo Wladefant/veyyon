@@ -105,7 +105,6 @@ const DRIVEN_METHODS = ["clear", "insert", "rebuild", "setLeaf"];
 
 /** Methods that read the index and change nothing a later read observes. */
 const READ_METHODS = [
-	"entriesById",
 	"get",
 	"has",
 	"labelFor",
@@ -124,7 +123,7 @@ function ids(entries: readonly SessionEntry[]): string[] {
 
 function expectBranchIsFresh(walk: Walk, step: string): void {
 	const { index } = walk;
-	const expected = ids(walkBranchPath(index.entriesById(), index.leafEntry()));
+	const expected = ids(walkBranchPath(index, index.leafEntry()));
 	expect({ step, leafPath: ids(index.leafPath()) }).toEqual({ step, leafPath: expected });
 
 	const copy = index.pathTo();
@@ -134,7 +133,7 @@ function expectBranchIsFresh(walk: Walk, step: string): void {
 
 	const other = pick(walk, walk.log);
 	if (other) {
-		const expectedOther = ids(walkBranchPath(index.entriesById(), index.get(other.id)));
+		const expectedOther = ids(walkBranchPath(index, index.get(other.id)));
 		expect({ step, pathToOther: ids(index.pathTo(other.id)) }).toEqual({ step, pathToOther: expectedOther });
 	}
 }

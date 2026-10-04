@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `SessionEntryIndex.entriesById()` is removed; `walkBranchPath`, `resolveContextLeaf` and `buildSessionContext` take any `SessionEntryLookup`, which `SessionEntryIndex` and a `Map<string, SessionEntry>` both satisfy.
+
 ### Added
 
 - A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
@@ -45,6 +49,7 @@
 - Opening a session file of 8 MiB or more moves the history each compaction summarized out of memory as the load reads that compaction instead of once the whole file is loaded, and counts the session's usage as it reads, which cut opening a 153.8 MB, 53,817-entry synthetic session from a 325.8 MiB to a 190.0 MiB peak RSS and from a 149.1 MiB to a 52.6 MiB peak heap sampled every 5 ms, with an open time of 358 ms against 371 ms (median of 13 alternating runs each).
 - A session file's header line no longer holds a copy of the title the title slot holds, and a title change records where its entry landed instead of discarding the file's line offsets, so the first history rewrite after a rename or after resuming a renamed session writes the lines from its earliest update instead of the whole file, which cut that rewrite on a 45 MB, 20,000-entry session from 44.9 MB serialized in 90.8 ms to 20.8 KB in 14.1 ms (median of 3 runs).
 - Opening a session file of 8 MiB or more parses each record after the header from the line's bytes instead of decoding the line to a string first, which cut opening a 312 MB, 108,163-entry synthetic session from a 318 MiB to a 256 MiB peak RSS and from 667 ms to 598 ms (median of 5 runs each).
+- `SessionEntryIndex` keys entries by id in a null-prototype object instead of a `Map`, which cut the settled heap of an opened 312 MB, 108,163-entry synthetic session from 58.9 MiB to 56.1 MiB and its settled RSS from 162 MiB to 159 MiB (median of 5 alternating runs).
 
 ### Fixed
 

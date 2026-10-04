@@ -1342,8 +1342,7 @@ export class SessionManager {
 	/** The active branch, root first: the index's cached path when the leaf resolves. */
 	#activePath(): readonly SessionEntry[] {
 		if (this.#index.leafEntry()) return this.#index.leafPath();
-		const byId = this.#index.entriesById();
-		return walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
+		return walkBranchPath(this.#index, resolveContextLeaf(this.#entries, this.#index.leafId(), this.#index));
 	}
 
 	async #persistTitleChangeEntry(entry: TitleChangeEntry, update: SessionTitleUpdate): Promise<void> {
@@ -2746,7 +2745,7 @@ export class SessionManager {
 		// A leaf that resolves reads the index's cached branch. A null leaf and one
 		// naming a missing entry take the free function's empty / tail fallbacks.
 		if (!this.#index.leafEntry()) {
-			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
+			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index, options);
 		}
 		return buildSessionContextFromPath(this.#index.leafPath(), options);
 	}
