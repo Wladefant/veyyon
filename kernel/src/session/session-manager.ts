@@ -660,6 +660,17 @@ export class SessionManager {
 		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs)) ?? "null"}\n`;
 	}
 
+	/**
+	 * The header's line, without the title and its source. The title slot written ahead of the header
+	 * holds them and a load reads them from there, so a header line carrying them is a second copy that
+	 * no reader uses, and a rename that changed it would stop every later rewrite keeping the lines
+	 * that follow the header.
+	 */
+	#headerLine(): string {
+		const { title: _title, titleSource: _titleSource, ...header } = this.#header;
+		return this.#lineFor(header);
+	}
+
 	#titleSlotLine(): string {
 		return serializeTitleSlot({
 			title: this.#sessionName,
@@ -695,7 +706,7 @@ export class SessionManager {
 	*#fileLines(): Generator<string> {
 		this.#lastBodyBytes = 0;
 		this.#lastBodyLines = undefined;
-		const header = this.#lineFor(this.#header);
+		const header = this.#headerLine();
 		const foreign = this.#foreignLines;
 		const lines: PublishedLines = { header, entries: [], entryOffsets: [] };
 		yield this.#titleSlotLine();
@@ -753,7 +764,7 @@ export class SessionManager {
 		const state = this.#publishedFileState;
 		const lines = state?.lines;
 		if (!state || !lines || !this.#storage.rewriteTailAtomic || this.#foreignLines.length > 0) return undefined;
-		if (lines.header !== this.#lineFor(this.#header) || !this.#fileIsExactlyAsPublished()) return undefined;
+		if (lines.header !== this.#headerLine() || !this.#fileIsExactlyAsPublished()) return undefined;
 		const entries = this.#entries;
 		let keep = Math.min(updatedFrom, lines.entries.length, entries.length);
 		for (let i = 0; i < keep; i++) {
@@ -1145,18 +1156,26 @@ export class SessionManager {
 			void this.#appendWriter()
 				.append(line)
 				.catch(err => this.#noteDiskFailure(err));
-			const state = this.#publishedFileState;
-			if (state !== null) {
-				const offset = state.size;
-				const length = Buffer.byteLength(line, "utf-8");
-				state.lines?.entries.push(entry);
-				state.lines?.entryOffsets.push(offset);
-				state.size += length;
-				if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
-			}
+			this.#notePublishedAppend(entry, line);
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
+	}
+
+	/**
+	 * Record a line just handed to the append writer as the last line of the published file. Call in
+	 * the same synchronous step as `append`: file and memory writers write in-body and indexed writers
+	 * queue in call order, so the line starts where the file ended when `append` was called.
+	 */
+	#notePublishedAppend(entry: SessionEntry, line: string): void {
+		const state = this.#publishedFileState;
+		if (state === null) return;
+		const offset = state.size;
+		const length = Buffer.byteLength(line, "utf-8");
+		state.lines?.entries.push(entry);
+		state.lines?.entryOffsets.push(offset);
+		state.size += length;
+		if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
 	}
 
 	/**
@@ -1374,13 +1393,12 @@ export class SessionManager {
 				const sessionFile = this.#sessionFile;
 				if (!sessionFile || this.#publishedFileState !== published) return;
 				try {
-					await this.#appendWriter().append(line);
-					if (this.#publishedFileState !== null) {
-						this.#publishedFileState.size += Buffer.byteLength(line, "utf-8");
-						// Written off the disk chain's order with the synchronous appends, so where
-						// this line landed among them is not known.
-						this.#publishedFileState.lines = undefined;
-					}
+					const appended = this.#appendWriter().append(line);
+					// A synchronous append that ran since the entry joined `#entries` is ahead of it in
+					// the file, so the file order differs from the log's there and a rewrite plan ends
+					// its kept run at that entry.
+					this.#notePublishedAppend(entry, line);
+					await appended;
 					await this.#storage.updateSessionTitle(sessionFile, update);
 					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {

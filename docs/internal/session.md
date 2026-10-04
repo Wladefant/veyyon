@@ -142,7 +142,7 @@ Breadcrumb content is two lines: original cwd, then session file path. `continue
 Session files are JSONL: one JSON object per line.
 
 - Physical line 1 of newly written files is a **fixed-width title slot** (`SESSION_TITLE_SLOT_BYTES = 256` bytes): `{"type":"title","v":1,"title":...,"source":"auto"|"user","updatedAt":...,"pad":"..."}` padded to exactly 256 bytes so the mutable current title can be overwritten in place (`storage.updateSessionTitle` writes the slot at offset 0) without rewriting the file. Titles too long for the slot are code-point-truncated to fit (`session-title-slot.ts`). Legacy files without a slot still load (`readTitleSlotFromFile` returns `undefined`); the slot is added on the next full rewrite.
-- The session header (`type: "session"`) is the first *logical* entry: line 2 of slot-bearing files, line 1 of legacy files. Loaders strip the slot before entry parsing.
+- The session header (`type: "session"`) is the first *logical* entry: line 2 of slot-bearing files, line 1 of legacy files. Loaders strip the slot before entry parsing and copy its title and source into the header's `title` and `titleSource`. A publish writes the header line without `title` and `titleSource`, since the slot holds them; a legacy slotless file holds them on its header line.
 - Remaining lines are `SessionEntry` values.
 - Entries are append-only at runtime; branch navigation moves a pointer (`leafId`) rather than mutating existing entries.
 
@@ -155,7 +155,7 @@ Session files are JSONL: one JSON object per line.
   "id": "019c4fa2-17ab-7000-8000-123456789abc",
   "timestamp": "2026-02-16T10:20:30.000Z",
   "cwd": "/work/pi",
-  "title": "optional session title",
+  "title": "optional session title (header line of legacy slotless files only)",
   "titleSource": "auto",
   "parentSession": "optional lineage marker",
   "providerPromptCacheKey": "optional inherited provider cache identity"
@@ -374,7 +374,7 @@ Extension-provided message that does participate in LLM context. `content` can b
 
 ### `title_change`
 
-Append-only audit record of a session title change (`setSessionName`). The mutable *current* title lives in the fixed-width title slot / header; this entry preserves the history.
+Append-only audit record of a session title change (`setSessionName`). The mutable *current* title lives in the fixed-width title slot; this entry preserves the history.
 
 ```json
 {
@@ -845,7 +845,7 @@ Rationale in code: avoid persisting sessions that never produced an assistant re
 
 - `flush()` drains the async disk chain, the open writer's queued appends, and storage-level backing writes (no `fsync`). `flushSync()` checks latched errors and performs a synchronous full rewrite only when in-memory state is divergent or the file is not current; otherwise it returns without rewriting.
 - Atomic rewrites (`#rewriteAtomically`) delegate to `storage.writeTextAtomic`: temp-write then rename over the target (with an EPERM-safe move-aside fallback).
-- `rewriteEntries(updated)` takes the entries a caller changed in place (prune, supersede, shake, image drop, recovered retry marker, compaction tail elision, dead-end warning stamp). `#tailRewritePlan` keeps the file's bytes before the earliest of them and publishes through `storage.rewriteTailAtomic`, which copies that prefix into the temp file, writes the title slot line over its start and the serialized lines from the earliest updated entry on after it, then renames the same way. The byte offsets come from the last publish plus every hot append since (`#publishedFileState.lines`); an entry replaced, dropped or reordered since that publish ends the kept prefix. The whole body is written instead when the file is not exactly as published (size or identity changed), it holds a foreign line, the header line changed, a title change dropped the offsets, the backend has no `rewriteTailAtomic`, or an updated entry is not in the session. `rewriteEntries()` with no list writes the whole body; move and fork do the same.
+- `rewriteEntries(updated)` takes the entries a caller changed in place (prune, supersede, shake, image drop, recovered retry marker, compaction tail elision, dead-end warning stamp). `#tailRewritePlan` keeps the file's bytes before the earliest of them and publishes through `storage.rewriteTailAtomic`, which copies that prefix into the temp file, writes the title slot line over its start and the serialized lines from the earliest updated entry on after it, then renames the same way. The byte offsets come from the last publish plus every append since, hot appends and `title_change` appends alike, each recorded in file order when it is handed to the writer (`#publishedFileState.lines`); an entry replaced, dropped or reordered since that publish ends the kept prefix. A rename changes only the slot and appends an entry, so the next rewrite keeps the lines before its update. The whole body is written instead when the file is not exactly as published (size or identity changed), it holds a foreign line, the header line changed, the backend has no `rewriteTailAtomic`, or an updated entry is not in the session. `rewriteEntries()` with no list writes the whole body; move and fork do the same.
 - `setSessionName` instead appends a `title_change` entry and overwrites the fixed-width title slot in place, falling back to a fenced atomic rewrite on failure or when the file has no slot yet. Load-time migrations and other in-memory divergence (`#rewriteRequired`) instead trigger a synchronous full rewrite (`#rewriteSynchronously`) on the next persist.
 
 ### Error behavior
