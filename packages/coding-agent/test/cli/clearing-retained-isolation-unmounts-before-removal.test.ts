@@ -600,7 +600,7 @@ try {
 		await clearWorktrees({ all: false, dryRun: false, json: true });
 		const result = JSON.parse(stdout);
 		expect(result).toMatchObject({ removed: 0, failed: 1 });
-		expect(result.results[0].error).toContain("Missing retained backend metadata");
+		expect(result.results[0].error).toContain("Invalid isolation owner record");
 		expect(await exists(canonicalDir)).toBe(true);
 
 		vi.spyOn(natives, "isoResolve").mockReturnValue({
