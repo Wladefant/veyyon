@@ -556,7 +556,7 @@ export function drawFramedBlock(
 		...(contentPaddingLeft === undefined ? {} : { contentPaddingLeft }),
 		header: header === undefined ? undefined : drawFittedHeader(header, theme, width, frameNow(spinnerFrame)),
 		sections: [
-			...sections.map(section => {
+			...sections.map((section, index) => {
 				const contentWidth = outputBlockContentWidth(width, contentPaddingLeft);
 				const drawn =
 					section.markdown !== undefined
@@ -587,7 +587,7 @@ export function drawFramedBlock(
 							)
 						: drawn;
 				const windowed =
-					section.tail === undefined ? content : drawTailWindow(content, section.tail, theme, contentWidth);
+					section.tail === undefined ? content : drawTailWindow(content, section.tail, theme, contentWidth, index);
 				const rows = section.note === undefined ? windowed : [...windowed, section.note];
 				return {
 					label: section.label,
@@ -962,9 +962,15 @@ function drawTreeLines(lines: readonly ViewLine[], tree: ViewTreeLines, theme: T
  * A clipped section arrives already cut to one row per line, so the wrap below returns each of those
  * lines unchanged and the count is the same either way. It is not measured separately.
  */
-function drawTailWindow(lines: readonly string[], window: ViewTailWindow, theme: Theme, width: number): string[] {
+function drawTailWindow(
+	lines: readonly string[],
+	window: ViewTailWindow,
+	theme: Theme,
+	width: number,
+	slot: number,
+): string[] {
 	const rows: string[] = [];
-	for (const wrapped of wrapLines(lines, width)) {
+	for (const wrapped of wrapLines(lines, width, slot)) {
 		for (const row of wrapped) rows.push(row);
 	}
 	const viewport = Math.max(1, previewWindowRows() - (window.reserve ?? 0));
@@ -974,30 +980,60 @@ function drawTailWindow(lines: readonly string[], window: ViewTailWindow, theme:
 }
 
 /**
- * The lines the last tail window wrapped, each with the rows it wrapped to.
+ * The lines each tail window last wrapped, each with the rows it wrapped to, by the index of the
+ * window's section in its card.
  *
  * A card streaming a file redraws on every delta with the lines it drew last and more after them,
  * and the window counts the rows of every line to say how many it cut, so wrapping all of them
  * again on each redraw is quadratic in the file: a 1,500-line write spent 56% of its streaming time
- * here. One slot, for the reason `codeMemo` keeps one: the card being redrawn is the one that drew
- * last. A line is reused where the same text sits at the same index at the same width.
+ * here. The card being redrawn is the one that drew last, for the reason `codeMemo` keeps one slot,
+ * but one card can window several sections: a shell card windows its command and its output, and a
+ * single slot held the one-line command when the output was drawn after it.
  */
-const tailWrapMemo: { width: number; lines: readonly string[]; wrapped: readonly (readonly string[])[] } = {
-	width: 0,
-	lines: [],
-	wrapped: [],
-};
+const tailWrapMemos: { width: number; lines: readonly string[]; wrapped: readonly (readonly string[])[] }[] = [];
 
-function wrapLines(lines: readonly string[], width: number): readonly (readonly string[])[] {
-	const previous = tailWrapMemo.width === width ? tailWrapMemo : undefined;
-	const wrapped = lines.map((line, index) =>
-		previous !== undefined && previous.lines[index] === line
-			? (previous.wrapped[index] as readonly string[])
-			: wrapTextWithAnsi(line.trimEnd(), width),
-	);
-	tailWrapMemo.width = width;
-	tailWrapMemo.lines = lines;
-	tailWrapMemo.wrapped = wrapped;
+/**
+ * The searches one wrap may make of the previous window. A command's output arrives through a tail
+ * buffer that drops its front as it grows, which moves every line it keeps up by the same count: the
+ * first line that missed finds the new offset, and the lines after it are compared at that offset.
+ * Its first line can be a fragment the buffer cut, and its last lines new, so three searches cover
+ * the shift and bound a window that changed throughout to three passes over the previous one.
+ */
+const TAIL_WRAP_REALIGNS = 3;
+
+function wrapLines(lines: readonly string[], width: number, slot: number): readonly (readonly string[])[] {
+	let memo = tailWrapMemos[slot];
+	if (memo === undefined) {
+		memo = { width: 0, lines: [], wrapped: [] };
+		tailWrapMemos[slot] = memo;
+	}
+	const previous = memo.width === width ? memo.lines : [];
+	const previousWrapped = memo.wrapped;
+	let shift = 0;
+	let realigns = previous.length === 0 ? 0 : TAIL_WRAP_REALIGNS;
+	const wrapped = lines.map((line, index) => {
+		let at = index + shift;
+		if (previous[at] !== line && realigns > 0) {
+			realigns--;
+			// A search is anchored on the line after it as well, so a blank or a repeated line does not
+			// align the window on another copy of itself.
+			const next = lines[index + 1];
+			let found = previous.indexOf(line);
+			while (found >= 0 && next !== undefined && found + 1 < previous.length && previous[found + 1] !== next) {
+				found = previous.indexOf(line, found + 1);
+			}
+			if (found >= 0) {
+				shift = found - index;
+				at = found;
+			}
+		}
+		return previous[at] === line
+			? (previousWrapped[at] as readonly string[])
+			: wrapTextWithAnsi(line.trimEnd(), width);
+	});
+	memo.width = width;
+	memo.lines = lines;
+	memo.wrapped = wrapped;
 	return wrapped;
 }
 
@@ -1020,7 +1056,7 @@ export function drawHeadedBlock(view: HeadedBlockView, theme: Theme, spinnerFram
 		const body = lines.map(line => drawRowToWidth(line, theme, Math.max(1, width - INDENT), spinnerFrame));
 		// A window is measured on the rows the lines occupy at the width the body has, which is the
 		// width minus the indent every one of them is drawn at.
-		const windowed = tail === undefined ? body : drawTailWindow(body, tail, theme, Math.max(1, width - INDENT));
+		const windowed = tail === undefined ? body : drawTailWindow(body, tail, theme, Math.max(1, width - INDENT), 0);
 		for (const row of windowed) rows.push(`  ${row}`);
 		const note = hidden === undefined ? undefined : drawHiddenNote(hidden, theme);
 		if (note !== undefined) rows.push(truncateToWidth(`  ${note}`, width, Ellipsis.Omit));
