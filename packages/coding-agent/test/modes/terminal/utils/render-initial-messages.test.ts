@@ -224,15 +224,12 @@ describe("UiHelpers.renderInitialMessages — transcript source", () => {
 
 		expect(transcriptSpy).toHaveBeenCalledWith({ collapseCompactedHistory: true });
 		expect(llmContextSpy).not.toHaveBeenCalled();
-		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, {
-			updateFooter: true,
-			populateHistory: true,
-		});
+		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, { updateFooter: true });
 	});
 });
 
 describe("UiHelpers.renderInitialMessages — prompt history", () => {
-	it("seeds the composer's up-arrow in-memory history when replaying a transcript", () => {
+	it("leaves the composer's up-arrow history alone when replaying a transcript", () => {
 		// Regression (upstream 1111d6a82d48): every replayed user prompt was pushed
 		// into the editor's persistent prompt history, so resuming a session
 		// duplicated the whole list (and rewrote it to the history store) and Up
@@ -254,7 +251,7 @@ describe("UiHelpers.renderInitialMessages — prompt history", () => {
 			new UiHelpers(ctx).renderInitialMessages();
 			editor.handleInput("\x1b[A");
 
-			expect(editor.getText()).toBe("now the changelog");
+			expect(editor.getText()).toBe("");
 		} finally {
 			setKeybindings(previousKeybindings);
 		}

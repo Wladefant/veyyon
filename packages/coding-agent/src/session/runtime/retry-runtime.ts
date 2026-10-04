@@ -777,7 +777,7 @@ export class RetryRuntime {
 		if (this.#attempt === 0) return;
 		const attempt = this.#attempt;
 		this.#attempt = 0;
-		const localError = errorMessage(error);
+		const localError = error instanceof Error ? error.message : String(error);
 		await this.#host.persistLifecycleErrorMessage(message);
 		await this.#host.emitSessionEvent({
 			type: "auto_retry_end",

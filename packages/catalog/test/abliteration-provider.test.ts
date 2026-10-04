@@ -92,18 +92,13 @@ describe("Abliteration provider support", () => {
 	});
 
 	test("discovers models from the Abliteration Models API with normalized base URL", async () => {
-		const requests: Array<{ url: string; method?: string; authorization?: string }> = [];
-		const fetchMock = (async (url: string | URL | Request, init?: RequestInit) => {
-			requests.push({
-				url: String(url),
-				method: init?.method,
-				authorization: (init?.headers as Record<string, string> | undefined)?.Authorization,
-			});
-			return new Response(JSON.stringify({ data: [{ id: "abliterated-model" }, { id: "abliterated-model-next" }] }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		}) as unknown as FetchImpl;
+		const fetchMock: FetchImpl = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ data: [{ id: "abliterated-model" }, { id: "abliterated-model-next" }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+		) as unknown as FetchImpl;
 
 		const options = abliterationModelManagerOptions({
 			apiKey: "ak_test",
@@ -113,9 +108,13 @@ describe("Abliteration provider support", () => {
 		expect(options.dynamicModelsAuthoritative).toBe(true);
 		const models = await options.fetchDynamicModels?.();
 
-		expect(requests).toEqual([
-			{ url: "https://gateway.abliteration.test/v1/models", method: "GET", authorization: "Bearer ak_test" },
-		]);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://gateway.abliteration.test/v1/models",
+			expect.objectContaining({
+				method: "GET",
+				headers: expect.objectContaining({ Authorization: "Bearer ak_test" }),
+			}),
+		);
 		expect(models?.map(model => model.id).sort()).toEqual(["abliterated-model", "abliterated-model-next"]);
 
 		// Discovered rows for documented ids keep their curated ladder; unknown

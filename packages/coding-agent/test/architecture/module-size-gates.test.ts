@@ -48,14 +48,12 @@ import { isDirectory, lineCount, repoPath, repoRelative, typeScriptFiles } from 
  * with a test that names it" gate counts these as named. `core/component-types.ts`
  * RE-MEASURED 2026-09-30 at 328, after `Component.releaseRenderCache()` and the
  * empty child set of a compacting frame joined the contract it declares.
- * `core/tui.ts` (3946) and `core/renderer.ts` (708) are RE-MEASURED 2026-10-03: the santhreal merge put
- * the fork's edits on top of upstream's 3821 and 697, and the engine ports of 2026-10-03 (the height-only
- * resize fast path `bd5ea5487d`, changed-rows-only overlay rewrite `50046076a4`, alt-caret hide when the
- * cursor marker disappears `e4afb0301b`) added about 85 more lines to `tui.ts`. The ceilings keep a few
- * lines of margin over the measured size.
+ * `core/tui.ts` (3861) and `core/renderer.ts` (708) are RE-MEASURED 2026-09-30 after
+ * the santhreal merge: the fork's own edits to both files sit on top of upstream's
+ * 3821 and 697, and the ceilings keep a few lines of margin over the sum.
  */
 const CORE_CEILINGS: Record<string, number> = {
-	"core/tui.ts": 3960,
+	"core/tui.ts": 3885,
 	"core/renderer.ts": 715,
 	"core/overlay.ts": 560,
 	"core/image-budget.ts": 330,

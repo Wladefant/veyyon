@@ -1,5 +1,3 @@
-import { isAbortError, isTimeoutError } from "@veyyon/utils/abortable";
-import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
@@ -45,6 +43,10 @@ export interface MuseCodeKeyResponse {
 	} | null;
 }
 
+function requestSignal(signal?: AbortSignal): AbortSignal {
+	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+	return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 export function parseMuseCodeCredential(value: string): MuseCodeCredential {
 	let payload: unknown;
@@ -77,20 +79,18 @@ export async function requestMuseCodeKey(
 	accessToken: string,
 	options: MuseCodeKeyRequestOptions = {},
 ): Promise<MuseCodeKeyResponse> {
-	const { signal, cancel } = scopedTimeoutSignal(REQUEST_TIMEOUT_MS, options.signal);
-	try {
-		const response = await (options.fetch ?? fetch)(MUSE_KEY_URL, {
-			method: "POST",
-			headers: {
-				Accept: "application/json",
-				Authorization: `Bearer ${accessToken}`,
-				"Content-Type": "application/json",
-				"x-api-version": API_VERSION,
-			},
-			body: JSON.stringify(options.onboard ? { onboard: true } : {}),
-			redirect: "error",
-			signal,
-		});
+	const response = await (options.fetch ?? fetch)(MUSE_KEY_URL, {
+		method: "POST",
+		headers: {
+			Accept: "application/json",
+			Authorization: `Bearer ${accessToken}`,
+			"Content-Type": "application/json",
+			"x-api-version": API_VERSION,
+		},
+		body: JSON.stringify(options.onboard ? { onboard: true } : {}),
+		redirect: "error",
+		signal: requestSignal(options.signal),
+	});
 	const text = await response.text();
 	if (!response.ok) {
 		const excerpt = text.trim() ? ` ${text.slice(0, 500).trim()}` : "";
@@ -117,10 +117,7 @@ export async function requestMuseCodeKey(
 			provider: PROVIDER,
 		});
 	}
-		return payload as MuseCodeKeyResponse;
-	} finally {
-		cancel();
-	}
+	return payload as MuseCodeKeyResponse;
 }
 
 function isTransientKeyExchangeFailure(error: unknown, signal?: AbortSignal): boolean {
@@ -130,8 +127,7 @@ function isTransientKeyExchangeFailure(error: unknown, signal?: AbortSignal): bo
 	}
 	return (
 		error instanceof TypeError ||
-		isTimeoutError(error) ||
-		isAbortError(error)
+		(error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError"))
 	);
 }
 

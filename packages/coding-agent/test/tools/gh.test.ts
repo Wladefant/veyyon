@@ -1469,17 +1469,13 @@ exec ${JSON.stringify(realGit)} "$@"
 		const targetRepo = "cagedbird043/cxf";
 		const cwd = `/tmp/run-watch-explicit-repo-no-git-${Date.now()}`;
 		vi.spyOn(git.github, "text").mockRejectedValue(new Error("not a git repository"));
-		const apiRequests: unknown[][] = [];
-		vi.spyOn(git.github, "json").mockImplementation((async (...args: unknown[]) => {
-			apiRequests.push(args);
-			throw new Error("unexpected API request");
-		}) as unknown as typeof git.github.json);
+		const jsonSpy = vi.spyOn(git.github, "json");
 
 		const tool = new GithubTool(createSession(cwd));
 		await expect(tool.execute("run-watch", { op: "run_watch", repo: targetRepo })).rejects.toThrow(
 			`Cannot infer the watched commit for ${targetRepo}: current checkout is not a GitHub repository. Pass \`branch\` or \`run\` to scope the watch.`,
 		);
-		expect(apiRequests).toEqual([]);
+		expect(jsonSpy).not.toHaveBeenCalled();
 	});
 
 	it("treats explicit `repo` and the cwd repo as matching when only casing differs (PR #1951)", async () => {

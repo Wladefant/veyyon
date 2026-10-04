@@ -71,6 +71,9 @@ describe("AIError.classify — structural provider errors", () => {
 	});
 
 	it("classifies an empty provider response as transient + empty-response + retryable", () => {
+		// Regression: "Cloud Code Assist API returned an empty response" matched no
+		// text pattern and empty-body carried no flag, so retry/model-fallback
+		// chains never engaged and the turn hard-failed.
 		const err = new AIError.ProviderResponseError("Cloud Code Assist API returned an empty response", {
 			provider: "google-antigravity",
 			kind: "empty-body",

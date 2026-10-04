@@ -3,6 +3,7 @@
 // Owned here per the theme boundary split; theme.ts re-exports the public
 // surface so external imports are unchanged.
 
+import { getTerminalInfo } from "@veyyon/tui/terminal-capabilities";
 import { SGR_BG_RESET, SGR_FG_RESET } from "@veyyon/utils/ansi";
 import { colorLuma } from "@veyyon/utils/color";
 import { detectTerminalId } from "@veyyon/utils/terminal-emulator";
@@ -351,8 +352,8 @@ export type ColorMode = "truecolor" | "256color";
 export function detectColorMode(env: NodeJS.ProcessEnv = Bun.env): ColorMode {
 	// Windows Terminal supports truecolor but sets no COLORTERM or TERM_PROGRAM.
 	if (env.WT_SESSION) return "truecolor";
-	const terminalId = detectTerminalId(env);
-	return terminalId !== "base" ? "truecolor" : "256color";
+	const terminal = getTerminalInfo(detectTerminalId(env), process.platform, env);
+	return terminal.trueColor ? "truecolor" : "256color";
 }
 
 export function colorToAnsi(color: string, mode: ColorMode): string {

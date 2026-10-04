@@ -1,6 +1,5 @@
 import type { AgentTool } from "@veyyon/agent-core";
-// `EditTool` is loaded on first use, like every other tool class (`tools/index.ts`): the Cursor bridge
-// is reached from `sdk.ts`, so a static import would put the whole edit tree on every launch.
+import { EditTool } from "./edit";
 import type { ExtensionRunner } from "./extensibility/extensions";
 import { ExtensionToolWrapper } from "./extensibility/extensions";
 import type { Tool, ToolSession } from "./tools";
@@ -72,8 +71,7 @@ export function cursorMcpPrefersReplaceEdit(name: string, args: Record<string, u
 /**
  * Build the `replace`-mode `edit` the bridge answers `pi_edit` / StrReplace with.
  */
-export async function createBridgeEditTool(session: ToolSession, extensionRunner?: ExtensionRunner): Promise<AgentTool> {
-	const { EditTool } = await import("./edit");
+export function createBridgeEditTool(session: ToolSession, extensionRunner?: ExtensionRunner): AgentTool {
 	const editTool: Tool = new EditTool(session, "replace");
 	return extensionRunner
 		? (new ExtensionToolWrapper(editTool, extensionRunner) as unknown as AgentTool)
@@ -84,6 +82,6 @@ export function createBridgeEditToolProvider(
 	tools: ReadonlyMap<string, AgentTool>,
 	session: ToolSession,
 	extensionRunner?: ExtensionRunner,
-): () => Promise<AgentTool> | undefined {
+): () => AgentTool | undefined {
 	return () => (tools.has("edit") ? createBridgeEditTool(session, extensionRunner) : undefined);
 }

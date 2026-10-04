@@ -81,7 +81,7 @@ describe("Theme <-> PresentationTheme canonical snapshot round-trip", () => {
 		};
 
 		const instance = createThemeFromPresentationTheme(snapshot, { mode: "truecolor" });
-		expect(instance.getFgAnsi("text")).toBe("\x1b[38;2;229;229;231m");
+		expect(instance.getFgAnsi("text")).toBe("\x1b[39m");
 		expect(instance.getBgAnsi("composerBg")).toBe("\x1b[49m");
 
 		// Round-trip back to snapshot

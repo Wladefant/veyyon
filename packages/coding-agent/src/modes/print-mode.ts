@@ -12,7 +12,6 @@ import { EXIT_FAILURE, EXIT_INTERRUPTED } from "../cli/exit-codes";
 import { awaitStdoutDrain } from "../cli/stdout-drain";
 import type { ResolvedModelRoleValue } from "../config/model-resolver";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
-import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
 import { transformProviderPayload } from "../provider-boundary";
 import { SECRET_SPEND_NOTICE_SOURCE } from "../secrets/notices";
 import type { AgentSession } from "../session/agent-session";
@@ -247,7 +246,7 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 	) {
 		const planFilePath =
 			(typeof session.getPlanReferencePath === "function" ? session.getPlanReferencePath() : "") ||
-			DEFAULT_PLAN_FILE_URL;
+			"local://PLAN.md";
 		const previousTools = typeof session.getActiveToolNames === "function" ? session.getActiveToolNames() : [];
 		const planAugmentations = ["resolve"];
 		if (typeof session.hasBuiltInTool === "function" && session.hasBuiltInTool("write")) {

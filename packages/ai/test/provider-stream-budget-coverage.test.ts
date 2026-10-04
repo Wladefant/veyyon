@@ -86,9 +86,7 @@ const WATCHDOG_DECISIONS: Record<string, WatchdogDecision> = {
 	streamCursor: "provider-owned-idle",
 	streamDevin: "shared-widened-budget",
 	streamGoogle: "shared-generic-defaults",
-	// 64c0d22a68 raised the global first-event default to the 300s this provider used to widen to, so it
-	// now runs the generic numbers and its own limits row was removed as a no-op.
-	streamGoogleGeminiCli: "shared-generic-defaults",
+	streamGoogleGeminiCli: "shared-widened-budget",
 	streamGoogleVertex: "shared-generic-defaults",
 	streamOllama: "shared-openai-env-precedence",
 	streamOpenAICodexResponses: "provider-owned",
@@ -425,10 +423,8 @@ describe("lazy provider stream budget coverage", () => {
 					// provider that probes its transport still cannot prove a stream
 					// that never opened.
 					const armedFirstEvent = typeof first === "number" && first > 0;
-					// Not narrower than the generic budget. It was `>` until 64c0d22a68 raised the global
-					// first-event default to 300s, the value cursor-agent was widened to.
 					const widenedFirstEvent =
-						armedFirstEvent && generic.firstItemTimeoutMs !== undefined && first >= generic.firstItemTimeoutMs;
+						armedFirstEvent && generic.firstItemTimeoutMs !== undefined && first > generic.firstItemTimeoutMs;
 					if (registration.limits?.providerHandlesIdleTimeout !== true) mismatched.push(detail);
 					else if (idle !== undefined || !widenedFirstEvent) mismatched.push(detail);
 					break;

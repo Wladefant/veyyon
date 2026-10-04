@@ -3296,7 +3296,7 @@ export function buildAnthropicSystemBlocks(
 		for (const prompt of sanitizedPrompts) {
 			blocks.push({ type: "text", text: prompt });
 		}
-		cacheSystemPrefixBreakpoints(blocks, cacheControl, 2, firstCacheableSystemIndex(blocks));
+		cacheSystemPrefixBreakpoints(blocks, cacheControl, 3, firstCacheableSystemIndex(blocks));
 
 		return blocks;
 	}
@@ -3601,10 +3601,7 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		isCCLayout =
 			params.system.length >= 3 &&
 			(params.system[0] as { text?: string }).text?.startsWith(CLAUDE_BILLING_HEADER_PREFIX) === true;
-		const markedSystemBlocks = (params.system as AnthropicSystemBlock[]).filter(
-			block => block.cache_control != null,
-		).length;
-		const maxSystemBreakpoints = Math.min(2 - markedSystemBlocks, MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed);
+		const maxSystemBreakpoints = Math.min(3, MAX_CACHE_BREAKPOINTS - cacheBreakpointsUsed);
 		cacheBreakpointsUsed += cacheSystemPrefixBreakpoints(
 			params.system as AnthropicSystemBlock[],
 			cacheControl,

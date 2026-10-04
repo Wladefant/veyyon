@@ -1,6 +1,5 @@
 import type { FetchImpl, Model, Usage } from "@veyyon/catalog/types";
 import { parseImageMetadata, VERSION } from "@veyyon/utils";
-import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
 import type { GeneratedImage } from "./types";
 
@@ -39,10 +38,10 @@ export function imageBaseUrl(model: Model): string {
 		throw new AIError.ValidationError(
 			`Image model ${model.provider}/${model.id} has no base URL`,
 		);
-	return trimTrailingSlashes(model.baseUrl);
+	return model.baseUrl.replace(/\/+$/, "");
 }
 
-export function extractImageErrorMessage(rawText: string): string {
+export function errorMessage(rawText: string): string {
 	try {
 		const parsed = JSON.parse(rawText);
 		if (parsed && typeof parsed === "object") {

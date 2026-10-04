@@ -8,7 +8,6 @@ import { exponentialBackoffDelay } from "./backoff";
 import { getDbBusyTimeoutMs } from "./env";
 import { withFileLockSync } from "./file-lock";
 import { isEnoent } from "./fs-error";
-import { errorMessage } from "./type-guards";
 import * as logger from "./logger";
 /**
  * True when a queryable object named `table` exists in the database, whether it
@@ -86,7 +85,7 @@ class SqliteAttemptFailure extends Error {
 		readonly identity: SqliteFileIdentity,
 		options: { canRecover?: boolean; db?: Database } = {},
 	) {
-		super(errorMessage(original));
+		super(original instanceof Error ? original.message : String(original));
 		this.canRecover = options.canRecover ?? true;
 		this.db = options.db;
 	}
@@ -185,7 +184,7 @@ function closeFailedDatabase(db: Database | undefined, error: unknown, identity:
 		db?.close();
 	} catch (closeError) {
 		const orig = error instanceof Error ? error : new Error(String(error));
-		orig.message += `; failed to close the SQLite handle: ${errorMessage(closeError)}`;
+		orig.message += `; failed to close the SQLite handle: ${closeError instanceof Error ? closeError.message : String(closeError)}`;
 		throw new SqliteAttemptFailure(orig, identity, { canRecover: false });
 	}
 }
@@ -397,7 +396,7 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 		}
 	} catch (preservationError) {
 		const annotated = annotateSqliteError(failure.original, dbPath);
-		annotated.message += `; failed to preserve the corrupt database: ${errorMessage(preservationError)}`;
+		annotated.message += `; failed to preserve the corrupt database: ${preservationError instanceof Error ? preservationError.message : String(preservationError)}`;
 		throw annotated;
 	}
 	if (backupPath === null) return;

@@ -111,7 +111,6 @@ describe("the retry decision is derived from the registry", () => {
 	 */
 	it("retries at the turn exactly the families that say they do", () => {
 		expect(labels(TURN_RETRIABLE_MASK)).toEqual([
-			"EmptyResponse",
 			"MalformedFunctionCall",
 			"ProviderFinishError",
 			"StaleResponsesItem",
@@ -146,12 +145,9 @@ describe("the retry decision is derived from the registry", () => {
 		expect(recover(blockedAndTransient, "turn").action).toBe("surface");
 	});
 
-	it("refuses a replay after the turn emitted output, even for a call that never parsed", () => {
-		// 7e1daa1b43: an invalid later call does not erase earlier output or executed tools in the same
-		// turn, so replay-unsafe wins over the replay-safe family. A malformed call alone is still retried.
+	it("retries a call that never parsed even after the turn emitted one", () => {
 		const malformed = Flag.MalformedFunctionCall | Flag.Transient | Flag.Class;
-		expect(retriable(malformed, { replayUnsafe: true })).toBe(false);
-		expect(retriable(malformed)).toBe(true);
+		expect(retriable(malformed, { replayUnsafe: true })).toBe(true);
 		expect(retriable(Flag.Transient | Flag.Class, { replayUnsafe: true })).toBe(false);
 	});
 

@@ -48,7 +48,6 @@ import {
 } from "./domains/request";
 import {
 	contentDomain,
-	emptyResponseDomain,
 	gatewayCancellationIdentityRule,
 	gatewayCancellationWordingRule,
 	interruptDomain,
@@ -80,7 +79,6 @@ export const ERROR_DOMAINS: readonly ErrorDomain[] = [
 	toolChoiceDomain,
 	toolCallDomain,
 	streamDomain,
-	emptyResponseDomain,
 	thinkingLoopDomain,
 	refusalDomain,
 	transportDomain,

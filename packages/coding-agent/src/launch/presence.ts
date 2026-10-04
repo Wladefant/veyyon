@@ -1,7 +1,7 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { atomicWriteFile, errorMessage, isEnoent, logger, postmortem } from "@veyyon/utils";
+import { atomicWriteFile, isEnoent, logger, postmortem } from "@veyyon/utils";
 import { getProcessStartIdentity } from "@veyyon/utils/process-liveness";
 import { daemonOwnerIsAlive } from "./broker-lease";
 import {
@@ -141,7 +141,7 @@ export async function pruneDeadDaemonRuntimeDirs(currentRuntimeDir: string): Pro
 		if (!isEnoent(error)) {
 			logger.warn("Failed to scan daemon runtime root for pruning", {
 				root,
-				error: errorMessage(error),
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 		return;
@@ -161,7 +161,7 @@ export async function pruneDeadDaemonRuntimeDirs(currentRuntimeDir: string): Pro
 			if (isEnoent(error)) continue;
 			logger.warn("Failed to prune dead daemon runtime dir", {
 				dir,
-				error: errorMessage(error),
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}

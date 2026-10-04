@@ -64,18 +64,11 @@ describe("bash shortcut command", () => {
 	});
 
 	it("rejects persistent cd commands while streaming", async () => {
-		let executions = 0;
-		const warnings: string[] = [];
+		const executeBash = vi.fn();
+		const showWarning = vi.fn();
 		const ctx = {
-			session: {
-				isStreaming: true,
-				executeBash: async () => {
-					executions++;
-				},
-			},
-			showWarning: (message: string) => {
-				warnings.push(message);
-			},
+			session: { isStreaming: true, executeBash },
+			showWarning,
 			refreshComposerShortcuts: vi.fn(),
 			dismissWelcome: vi.fn(),
 		} as unknown as InteractiveModeContext;
@@ -83,31 +76,24 @@ describe("bash shortcut command", () => {
 
 		await controller.handleBashCommand("cd /tmp");
 
-		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain("Wait for the current response");
-		expect(executions).toBe(0);
+		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("Wait for the current response"));
+		expect(executeBash).not.toHaveBeenCalled();
 	});
 
 	it("guards persistent cd commands with withBtwSessionMove", async () => {
-		let executions = 0;
-		let gateEntries = 0;
-		const executeBash = async () => {
-			executions++;
-			return {
-				output: "",
-				exitCode: 0,
-				cancelled: false,
-				truncated: false,
-				totalLines: 0,
-				totalBytes: 0,
-				outputLines: 0,
-				outputBytes: 0,
-			};
-		};
-		const withBtwSessionMove = async (operation: () => Promise<boolean>) => {
-			gateEntries++;
+		const executeBash = vi.fn().mockResolvedValue({
+			output: "",
+			exitCode: 0,
+			cancelled: false,
+			truncated: false,
+			totalLines: 0,
+			totalBytes: 0,
+			outputLines: 0,
+			outputBytes: 0,
+		});
+		const withBtwSessionMove = vi.fn(async (operation: () => Promise<boolean>) => {
 			return operation();
-		};
+		});
 		const ctx = {
 			session: { isStreaming: false, executeBash },
 			settings: { flush: vi.fn(async () => {}) },
@@ -125,8 +111,8 @@ describe("bash shortcut command", () => {
 
 		await controller.handleBashCommand("cd /tmp");
 
-		expect(gateEntries).toBe(1);
-		expect(executions).toBe(1);
+		expect(withBtwSessionMove).toHaveBeenCalledTimes(1);
+		expect(executeBash).toHaveBeenCalled();
 	});
 });
 

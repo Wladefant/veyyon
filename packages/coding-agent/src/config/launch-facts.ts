@@ -37,7 +37,6 @@ import { atomicWriteJson } from "@veyyon/utils/atomic-write";
 import { getLaunchFactsCachePath, getProjectDir, VERSION } from "@veyyon/utils/dirs";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
-import { clampLow } from "@veyyon/utils/math";
 import { detectTerminalId } from "@veyyon/utils/terminal-emulator";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking/constants";
@@ -261,7 +260,7 @@ function modelRole(): string {
 
 /** Hold a percentage inside the band the gauge can draw, since the bar derives its cells from it. */
 function clampPercent(percent: number): number {
-	return clampLow(percent, 0, 100);
+	return Math.max(0, Math.min(100, percent));
 }
 
 /**

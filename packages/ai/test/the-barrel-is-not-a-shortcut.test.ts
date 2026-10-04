@@ -282,8 +282,7 @@ describe("the modules that were repointed stay cut", () => {
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
 		// RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
-		// RE-MEASURED 2026-10-03: 215 -> 226 (+11 from upstream catalog models, wire headers, and utils added to stream.ts closure).
-		["coding-agent/src/commit/shared-llm.ts", 226],
+		["coding-agent/src/commit/shared-llm.ts", 215],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

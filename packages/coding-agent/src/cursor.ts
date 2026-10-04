@@ -22,7 +22,7 @@ export interface CursorExecBridgeOptions {
 	tools: Map<string, AnyAgentTool>;
 	getToolContext?: () => AgentToolContext | undefined;
 	emitEvent?: (event: AgentEvent) => void;
-	getEditReplaceTool?: () => AnyAgentTool | undefined | Promise<AnyAgentTool | undefined>;
+	getEditReplaceTool?: () => AnyAgentTool | undefined;
 }
 
 function createToolResultMessage(
@@ -333,7 +333,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		const toolCallId = decodeToolCallId(call.toolCallId);
 		const args = Object.keys(call.args ?? {}).length > 0 ? call.args : decodeMcpArgs(call.rawArgs ?? {});
 		if (cursorMcpPrefersReplaceEdit(toolName, args)) {
-			const replaceTool = await this.options.getEditReplaceTool?.();
+			const replaceTool = this.options.getEditReplaceTool?.();
 			if (!replaceTool) {
 				const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
 				const message = formatMcpToolErrorMessage(toolName, availableTools);

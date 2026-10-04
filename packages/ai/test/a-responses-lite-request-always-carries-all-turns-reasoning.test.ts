@@ -116,15 +116,7 @@ function createCodexFetchMock(sse: string, onRequest: (captured: CapturedCodexRe
 		if (url.endsWith("/responses") || url.endsWith("/compact")) {
 			onRequest({
 				headers: init?.headers instanceof Headers ? init.headers : new Headers(init?.headers),
-				body: (() => {
-					const raw =
-						typeof init?.body === "string"
-							? init.body
-							: init?.body instanceof Uint8Array || ArrayBuffer.isView(init?.body)
-								? new TextDecoder().decode(Bun.zstdDecompressSync(init.body as Uint8Array))
-								: "{}";
-					return JSON.parse(raw) as Record<string, unknown>;
-				})(),
+				body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {},
 			});
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		}

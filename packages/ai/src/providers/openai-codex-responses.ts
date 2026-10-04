@@ -161,8 +161,12 @@ import {
 	type SequentialCutoffSummaryState,
 	type ToolCallArgumentsDeltaShape,
 } from "./openai-shared";
-import { redactJsonFunctionCallArguments, redactSensitiveCredentials, redactSensitiveInObject } from "../utils/credential-redaction";
-import { transformMessages } from "./transform-messages";
+import {
+	redactJsonFunctionCallArguments,
+	redactSensitiveCredentials,
+	redactSensitiveInObject,
+	transformMessages,
+} from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -4020,7 +4024,7 @@ class CodexWebSocketConnection {
 		} catch (error) {
 			CODEX_DEBUG &&
 				logger.debug("[codex] codex websocket close failed", {
-					error: errorMessage(error),
+					error: error instanceof Error ? error.message : String(error),
 					reason,
 				});
 		}
@@ -4586,7 +4590,7 @@ function compressCodexRequestBody(bodyJson: string, baseUrl: string): Uint8Array
 	} catch (error) {
 		CODEX_DEBUG &&
 			logger.debug("[codex] codex request body compression failed", {
-				error: errorMessage(error),
+				error: error instanceof Error ? error.message : String(error),
 			});
 		return undefined;
 	}

@@ -57,7 +57,6 @@ describe("a provider response kind has one retry verdict", () => {
 		expect(verdicts).toEqual({
 			"incomplete-stream": { turn: true, provider: true, expected: true },
 			"empty-body": { turn: true, provider: true, expected: true },
-			"empty-output": { turn: true, provider: true, expected: true },
 			envelope: { turn: false, provider: false, expected: false },
 			output: { turn: false, provider: false, expected: false },
 			"content-blocked": { turn: false, provider: false, expected: false },

@@ -247,11 +247,8 @@ const GRAPH_SIZE_CEILINGS = [
 	["config/settings", "config/settings.ts", 45],
 	// Measured 2026-07-26 at 145. The engine legitimately owns the theme JSON.
 	["theme/theme", "theme/theme.ts", 160],
-	// Measured 2026-07-26 at 65; 82 at 2026-10-04. The two modules over the old 80 are the eval tool's
-	// own leaves: `eval/probe.ts` (`31eaf2ed41`, bounded interpreter availability probes) and
-	// `tools/shell/eval-display.ts` (`2b1ee91a4d`, async artifact write failures), both imported by
-	// the eval tool this barrel registers.
-	["tools/index", "tools/index.ts", 84],
+	// Measured 2026-07-26 at 65.
+	["tools/index", "tools/index.ts", 80],
 	// Measured 2026-07-26 at 49.
 	["config/model-registry", "config/model-registry.ts", 60],
 	// Measured 2026-07-26 at 110.

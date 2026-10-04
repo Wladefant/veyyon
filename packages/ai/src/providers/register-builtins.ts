@@ -115,6 +115,18 @@ export interface LazyStreamLimits {
 	 */
 	providerHandlesIdleTimeout?: boolean;
 }
+/**
+ * Cloud Code Assist (google-gemini-cli / google-antigravity) routinely takes
+ * longer than the global 100s default to emit its first SSE event when serving
+ * the heavier Gemini 3.x Pro tiers at high thinking levels. Bump the first-event
+ * floor to five minutes so callers stop seeing spurious "stream timed out while
+ * waiting for the first event" aborts on legitimate cold reasoning starts.
+ * The steady-state idle watchdog stays on the global default since the upstream
+ * emits thinking tokens frequently once it gets going.
+ */
+const GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS: LazyStreamLimits = {
+	defaultFirstEventTimeoutMs: 300_000,
+};
 
 const PROVIDER_HANDLED_STREAM_TIMEOUTS: LazyStreamLimits = {
 	providerHandlesStreamTimeouts: true,
@@ -330,8 +342,10 @@ export const streamAzureOpenAIResponses = createLazyStream(
 export const streamGoogle = createLazyStream("google-generative-ai", () =>
 	import("./google").then(module => ({ stream: module.streamGoogle })),
 );
-export const streamGoogleGeminiCli = createLazyStream("google-gemini-cli", () =>
-	import("./google-gemini-cli").then(module => ({ stream: module.streamGoogleGeminiCli })),
+export const streamGoogleGeminiCli = createLazyStream(
+	"google-gemini-cli",
+	() => import("./google-gemini-cli").then(module => ({ stream: module.streamGoogleGeminiCli })),
+	GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS,
 );
 export const streamGoogleVertex = createLazyStream("google-vertex", () =>
 	import("./google-vertex").then(module => ({ stream: module.streamGoogleVertex })),

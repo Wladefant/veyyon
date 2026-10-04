@@ -22,7 +22,7 @@ const xaiModel = {
 	baseUrl: "https://api.x.ai/v1",
 } as unknown as Model<Api>;
 
-describe("speech adapters and router (speech/openai-speech, speech/xai-tts)", () => {
+describe("speech adapters and router", () => {
 	it("synthesizeOpenAiSpeech builds valid payload with default voice and rejects sampleRate/bitRate", async () => {
 		let captured: { url: string; body: Record<string, unknown> } | undefined;
 		const fetchImpl: FetchImpl = async (input, init) => {

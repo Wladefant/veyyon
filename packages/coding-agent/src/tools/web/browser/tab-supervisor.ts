@@ -2,7 +2,6 @@ import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-reso
 import { errorMessage, isCancellation, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 // The owner, not the barrel: this module reaches the two discard contracts and nothing else.
 import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
-import { clampLow } from "@veyyon/utils/math";
 import type { BrowserContext } from "puppeteer-core";
 import { callSessionTool } from "../../../eval/js/tool-bridge";
 import { logWorkerMessage } from "../../../subprocess/worker-log";
@@ -1290,7 +1289,7 @@ async function initializeTabWorker(
 	// the caller's abort signal remains the hard backstop for the overshoot.
 	const remainingMs = timeoutMs - Math.round(performance.now() - deadlineStart);
 	// Cold-start guard: min(10s, remaining/3), floor 2s (see SETUP_BUDGET_*).
-	const setupBudgetMs = clampLow(Math.floor(remainingMs / 3), SETUP_BUDGET_FLOOR_MS, SETUP_BUDGET_CAP_MS);
+	const setupBudgetMs = Math.max(SETUP_BUDGET_FLOOR_MS, Math.min(SETUP_BUDGET_CAP_MS, Math.floor(remainingMs / 3)));
 	const setup = Promise.withResolvers<void>();
 	const ready = Promise.withResolvers<ReadyInfo>();
 	let setupDone = false;

@@ -169,15 +169,10 @@ describe("github tool differential", () => {
 	 * escape off the drawn line; a block's rows carry their own escapes and close where they end. A
 	 * close at the end of a line paints nothing either way — the next line opens the rail's colour
 	 * before any text — so both arms drop it and the columns are still compared byte for byte.
-	 *
-	 * The same wrap, cutting a row at a narrow width, reopens the body colour at the head of the next
-	 * line and the row then opens its own colour straight away. A colour opened and overridden before
-	 * any text is drawn paints nothing, so both arms drop that opener too.
 	 */
 	function lineEndClose(lines: readonly string[]): string[] {
 		const close = "\u001b[39m";
-		const overriddenOpen = /\u001b\[38;2;\d+;\d+;\d+m(?=\u001b\[38;2;\d+;\d+;\d+m)/g;
-		return lines.map(line => (line.endsWith(close) ? line.slice(0, -close.length) : line).replace(overriddenOpen, ""));
+		return lines.map(line => (line.endsWith(close) ? line.slice(0, -close.length) : line));
 	}
 
 	/** The two columns a headed block indents its lines by, which main's rows did not carry. */

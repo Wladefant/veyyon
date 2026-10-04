@@ -35,11 +35,11 @@ const INTERACTIVE_MODE = `${TERMINAL}/interactive-mode.ts`;
 const CONTROLLERS = `${TERMINAL}/controllers`;
 
 /**
- * MEASURED 2026-10-04 at 5383 lines, with headroom of roughly
+ * MEASURED 2026-08-28 at 4495 lines, down from 5605, with headroom of roughly
  * ten percent so an ordinary edit does not fail the gate and a new subsystem
  * written inline does.
  */
-const INTERACTIVE_MODE_CEILING = 5900;
+const INTERACTIVE_MODE_CEILING = 4900;
 
 /**
  * Per-controller ceiling. MEASURED 2026-08-28: the largest controller carved out

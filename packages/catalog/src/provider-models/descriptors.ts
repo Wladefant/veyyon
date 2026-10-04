@@ -53,7 +53,6 @@ import {
 	openrouterModelManagerOptions,
 	qianfanModelManagerOptions,
 	qwenPortalModelManagerOptions,
-	resolveGithubCopilotCacheProviderId,
 	resolveLitellmCacheProviderId,
 	resolveOpencodeGoCacheProviderId,
 	resolveOpencodeZenCacheProviderId,
@@ -251,7 +250,6 @@ export const CATALOG_PROVIDERS = [
 		envVars: ["COPILOT_GITHUB_TOKEN"],
 		createModelManagerOptions: (config: ModelManagerConfig) =>
 			githubCopilotModelManagerOptions(config),
-		resolveCacheProviderId: resolveGithubCopilotCacheProviderId,
 	},
 	{
 		id: "gitlab-duo",

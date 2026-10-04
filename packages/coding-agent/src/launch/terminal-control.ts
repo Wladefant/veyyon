@@ -39,44 +39,6 @@ export async function serveTerminalControl(
 	const subscribers = new Set<net.Socket>();
 	let closed = false;
 	let publishedSessionId = target.identity().sessionId;
-	let unsubscribe: (() => void) | undefined;
-	let refresh: NodeJS.Timeout | undefined;
-	let refreshing = false;
-	// No timer stays armed while no client is connected: a resting terminal wakes for no one. The
-	// owner poll runs only while a socket is open, the journal poll only while one is subscribed.
-	const reconcile = (): void => {
-		if (closed || refreshing || publishedSessionId === target.identity().sessionId) return;
-		refreshing = true;
-		for (const socket of sockets) socket.destroy();
-		void publish()
-			.finally(() => {
-				refreshing = false;
-			})
-			.catch(() => close());
-	};
-	const armRefresh = (): void => {
-		if (refresh || closed) return;
-		refresh = setInterval(reconcile, 250);
-		refresh.unref();
-	};
-	const disarmRefresh = (): void => {
-		clearInterval(refresh);
-		refresh = undefined;
-	};
-	const startEvents = (): void => {
-		if (unsubscribe || closed) return;
-		unsubscribe = target.subscribe(event => {
-			if (publishedSessionId !== target.identity().sessionId) {
-				for (const socket of sockets) socket.destroy();
-				return;
-			}
-			for (const socket of subscribers) send(socket, { event });
-		});
-	};
-	const stopEvents = (): void => {
-		unsubscribe?.();
-		unsubscribe = undefined;
-	};
 	const send = (socket: net.Socket, frame: unknown): void => {
 		if (socket.destroyed) return;
 		if (socket.writableLength > 1024 * 1024) {
@@ -87,7 +49,6 @@ export async function serveTerminalControl(
 	};
 	const server = net.createServer(socket => {
 		sockets.add(socket);
-		armRefresh();
 		socket.setEncoding("utf8");
 		let buffer = "";
 		let queue = Promise.resolve();
@@ -97,8 +58,6 @@ export async function serveTerminalControl(
 			clearTimeout(authDeadline);
 			sockets.delete(socket);
 			subscribers.delete(socket);
-			if (!sockets.size) disarmRefresh();
-			if (!subscribers.size) stopEvents();
 		});
 		socket.on("data", chunk => {
 			buffer += chunk;
@@ -132,7 +91,6 @@ export async function serveTerminalControl(
 						switch (request.op) {
 							case "subscribe":
 								subscribers.add(socket);
-								startEvents();
 								send(socket, {
 									event: { kind: "history", sessionId: publishedSessionId, entries: target.history() },
 								});
@@ -185,11 +143,30 @@ export async function serveTerminalControl(
 		server.close();
 		throw error;
 	}
+	const unsubscribe = target.subscribe(event => {
+		if (publishedSessionId !== target.identity().sessionId) {
+			for (const socket of sockets) socket.destroy();
+			return;
+		}
+		for (const socket of subscribers) send(socket, { event });
+	});
+	let refreshing = false;
+	const refresh = setInterval(() => {
+		if (closed || refreshing || publishedSessionId === target.identity().sessionId) return;
+		refreshing = true;
+		for (const socket of sockets) socket.destroy();
+		void publish()
+			.finally(() => {
+				refreshing = false;
+			})
+			.catch(() => close());
+	}, 250);
+	refresh.unref();
 	const close = (): void => {
 		if (closed) return;
 		closed = true;
-		disarmRefresh();
-		stopEvents();
+		clearInterval(refresh);
+		unsubscribe();
 		cancelCleanup();
 		for (const socket of sockets) socket.destroy();
 		server.close();

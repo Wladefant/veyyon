@@ -783,7 +783,6 @@ class OpenAIResponsesStreamRun {
 						? undefined
 						: setTimeout(() => abortTracker.abortLocally(this.#firstEventTimeoutAbortError), requestTimeoutMs);
 				try {
-				let prepared = false;
 					const headers = { ...plan.headers };
 					if (requestTimeoutMs !== undefined) {
 						headers["X-Stainless-Timeout"] = Math.floor(requestTimeoutMs / 1000).toString();
@@ -797,14 +796,7 @@ class OpenAIResponsesStreamRun {
 						body: undefined,
 						signal: abortTracker.requestSignal,
 						fetch: options?.fetch,
-						// A stream-level reopen reuses the prepared request (it is the same logical attempt),
-						// but each physical retry inside this one POST is a new wire attempt and gets a fresh
-						// baseline and its own onPayload callback.
-						prepareInit: () => {
-							if (prepared) this.#preparedRequests.delete(requestParams);
-							prepared = true;
-							return this.#prepareRequest(plan, requestParams);
-						},
+						prepareInit: () => this.#prepareRequest(plan, requestParams),
 						maxRetryDelayMs: options?.maxRetryDelayMs,
 						onSseEvent: this.#rawSseObserver,
 					});
@@ -925,7 +917,7 @@ class OpenAIResponsesStreamRun {
 					provider: model.provider,
 					model: model.id,
 					attempt: retryAttempt,
-					error: errorMessage(failure),
+					error: failure instanceof Error ? failure.message : String(failure),
 				});
 				this.#resetOutputForRetry(plan);
 				if (options?.providerRetryWait) {

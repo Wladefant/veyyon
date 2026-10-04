@@ -4,7 +4,7 @@ import type { FetchImpl, Model } from "@veyyon/catalog/types";
 import * as AIError from "../src/error";
 import {
 	decodeImageResponse,
-	extractImageErrorMessage,
+	errorMessage,
 	imageBaseUrl,
 	resolveOpenAIImageSize,
 	toDataUrl,
@@ -61,11 +61,11 @@ describe("image response formatting and helper utilities", () => {
 	});
 
 	it("extracts error messages from JSON payload or returns raw text", () => {
-		expect(extractImageErrorMessage('{"detail":"quota exceeded"}')).toBe("quota exceeded");
-		expect(extractImageErrorMessage('{"error":{"message":"bad request"}}')).toBe(
+		expect(errorMessage('{"detail":"quota exceeded"}')).toBe("quota exceeded");
+		expect(errorMessage('{"error":{"message":"bad request"}}')).toBe(
 			"bad request",
 		);
-		expect(extractImageErrorMessage("gateway timeout")).toBe("gateway timeout");
+		expect(errorMessage("gateway timeout")).toBe("gateway timeout");
 	});
 
 	it("decodes base64 images and downloads URL images into inline base64 bytes", async () => {

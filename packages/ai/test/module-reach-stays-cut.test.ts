@@ -115,19 +115,8 @@ function runtimeImportsOf(relative: string): string[] {
  * cost is exactly the one module. The two cuts this file exists to hold are asserted by name below and
  * both still pass, and `env-api-key.ts` (68) and `usage/registry.ts` (20) do not reach the barrel and
  * did not move.
- *
- * RAISED BY SIXTEEN, from 230 to 246 on 2026-10-04, measured against the tree at 6692675b17 (where the
- * walk is exactly 230). Fifteen are growth on edges that were already here and one is a new leaf:
- * ten provider registry entries (`registry/{abliteration,deepinfra,gmi-cloud,local,meta,muse-code,stepfun,
- * web,typesafe}.ts` and `registry/oauth/muse-code.ts`), each a descriptor `registry/index.ts` already
- * enumerated for login; five catalog/contract leaves (`contracts/model/src/model.ts`, `catalog/types.ts`,
- * `catalog/discovery/typesafe.ts`, `catalog/provider-models/{codex-subscription,models-dev-policies}.ts`);
- * and `utils/credential-redaction.ts`, the leaf that `normalizeSystemPrompts` reaches for credential
- * redaction. That last one used to be an import of `providers/transform-messages` (72c092e5e1), which put
- * the dialect and schema machinery (another 62 modules) on the credential store's path; extracting it into
- * a zero-import leaf is what holds the number at 246 rather than 308. `stream.ts` is still unreachable.
  */
-const AUTH_STORAGE_CEILING = 246;
+const AUTH_STORAGE_CEILING = 230;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc
@@ -187,14 +176,8 @@ const AUTH_STORAGE_CEILING = 246;
  * 83 since 2026-09-29, measured: `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`.
  * `catalog/build.ts`, already in this closure, returns each model's resolved compat record through it,
  * so it adds one module and no subtree.
- *
- * 92 since 2026-10-04, measured, +5 and all of it catalog and contract growth that the table already
- * reached: `contracts/model/src/model.ts`, `catalog/types.ts`, `catalog/discovery/typesafe.ts`,
- * `catalog/provider-models/codex-subscription.ts` and `catalog/provider-models/models-dev-policies.ts`
- * (compared against the tree at 6692675b17, where this leaf measured 87). No new edge out of this module:
- * its import list is still asserted exactly below.
  */
-const ENV_API_KEY_CEILING = 92;
+const ENV_API_KEY_CEILING = 87;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;
@@ -414,15 +397,7 @@ describe("the walk really happened", () => {
 		// FOR: the provider streams and the store does not, so the provider reaches strictly
 		// more, and both numbers are read from the same walk rather than from a constant
 		// that has to be renegotiated every time something is cut.
-		// Re-stated 2026-10-04. The count comparison `reach(anthropic) > reach(auth-storage)` held only by a
-		// margin of three (233 against 230) and stopped holding (239 against 246) when the provider registry
-		// gained ten login descriptors that the store enumerates and the Anthropic provider does not. The
-		// store legitimately reaches things the provider does not, so the count says nothing about the
-		// engine. What a control for the engine must show is that the provider reaches engine modules the
-		// store does not, which is read from the same two walks.
-		const storeReached = new Set(reachedNames("auth-storage.ts"));
-		const engineOnlyReached = reached.filter(file => !storeReached.has(file));
-		expect(engineOnlyReached.some(file => file.endsWith("packages/ai/src/stream.ts"))).toBe(true);
+		expect(reach("providers/anthropic.ts")).toBeGreaterThan(reach("auth-storage.ts"));
 	});
 
 	/**

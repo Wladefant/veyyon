@@ -137,15 +137,6 @@ const DOMAIN_DECISIONS: Record<string, DomainSpec> = {
 			turn: { action: "retry" },
 		},
 	},
-	"empty-response": {
-		buildFixture: () => new Error("Cloud Code Assist API returned an empty response"),
-		expectedFlags: Flag.EmptyResponse,
-		expectedRecovery: {
-			transport: { action: "retry" },
-			credential: { action: "surface" },
-			turn: { action: "retry" },
-		},
-	},
 	"thinking-loop": {
 		buildFixture: () => ({ errorId: Flag.ThinkingLoop | Flag.Class }),
 		expectedFlags: Flag.ThinkingLoop,

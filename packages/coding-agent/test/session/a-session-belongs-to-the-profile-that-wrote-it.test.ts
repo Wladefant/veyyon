@@ -46,14 +46,12 @@ import {
 	captureDirOverrides,
 	type DirOverridesSnapshot,
 	getAgentDir,
-	getProjectDir,
 	getSessionsDir,
 	getTerminalSessionsDir,
 	listProfiles,
 	pathIsWithin,
 	restoreDirOverrides,
 	setProfile,
-	setProjectDir,
 } from "@veyyon/utils/dirs";
 import { getTerminalId } from "@veyyon/utils/ttyid";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
@@ -74,7 +72,6 @@ interface SeededSession {
 let isolated: IsolatedConfigRoot;
 let snapshot: DirOverridesSnapshot;
 let launchCwd: string;
-let originalProjectDir: string;
 const seeded = new Map<ProfileName, SeededSession>();
 
 function activate(profile: ProfileName): void {
@@ -95,7 +92,6 @@ function crossProfilePairs(): { owner: ProfileName; active: ProfileName }[] {
 for (const layout of LAYOUTS) {
 	describe(`sessions stored under ${layout === "home" ? "the profile's agent dir" : "XDG_DATA_HOME"}`, () => {
 		beforeEach(async () => {
-			originalProjectDir = getProjectDir();
 			snapshot = captureDirOverrides();
 			isolated = enterIsolatedConfigRoot("session-profile-ownership", { defaultProfile: true });
 			launchCwd = path.join(isolated.root, "launch");
@@ -139,7 +135,6 @@ for (const layout of LAYOUTS) {
 
 		afterEach(() => {
 			vi.restoreAllMocks();
-			setProjectDir(originalProjectDir);
 			isolated.restore();
 			restoreDirOverrides(snapshot);
 		});
@@ -366,7 +361,6 @@ for (const layout of LAYOUTS) {
 				} finally {
 					await session.dispose();
 					authStorage.close();
-					setProjectDir(launchCwd);
 				}
 			}
 

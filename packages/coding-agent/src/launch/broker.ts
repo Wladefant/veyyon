@@ -1378,7 +1378,7 @@ export async function startDaemonBrokerFromEnvironment(): Promise<void> {
 	// Detached and non-throwing so it never delays clients connecting to us.
 	void pruneDeadDaemonRuntimeDirs(runtimeDir).catch(error => {
 		logger.warn("Daemon runtime prune failed", {
-			error: errorMessage(error),
+			error: error instanceof Error ? error.message : String(error),
 		});
 	});
 	try {

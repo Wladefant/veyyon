@@ -391,7 +391,7 @@ function inferGeneratedApplyPatchToolType(
 	model: ModelSpec<Api>,
 	parsedModel: ParsedModel,
 ): ModelSpec<Api>["applyPatchToolType"] {
-	if (parsedModel.family !== "openai" || parsedModel.version.major !== 5) {
+	if (parsedModel.family !== "openai" || parsedModel.version.major < 5 || parsedModel.version.major >= 7) {
 		return undefined;
 	}
 	if (model.provider === "openai" && model.api === "openai-responses") {

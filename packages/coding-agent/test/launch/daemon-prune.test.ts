@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
 import { pruneDeadDaemonRuntimeDirs } from "../../src/launch/presence";
-import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const STALE = new Date(Date.now() - 30 * 60_000);
 let deadPid = 0;
@@ -31,16 +30,10 @@ async function scope(
 
 describe("pruneDeadDaemonRuntimeDirs", () => {
 	beforeAll(async () => {
-		// A definitely-dead PID: spawn a short-lived process and reap it. The probe runs under a
-		// hermetic HOME so a bare `-e` child never resolves the developer's real config tree.
-		const { env, cleanup } = hermeticSpawnEnv();
-		try {
-			const proc = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { env });
-			await proc.exited;
-			deadPid = proc.pid;
-		} finally {
-			cleanup();
-		}
+		// A definitely-dead PID: spawn a short-lived process and reap it.
+		const proc = Bun.spawn([process.execPath, "-e", "process.exit(0)"]);
+		await proc.exited;
+		deadPid = proc.pid;
 	});
 
 	it("removes only scopes with a dead broker, no live clients, and past the stale grace", async () => {

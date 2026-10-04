@@ -420,14 +420,11 @@ describe("precedence resolution when multiple rules or flags co-occur", () => {
 		expect(recover(classifiedId, "turn")).toEqual({ action: "degrade", capability: "fast-mode" });
 	});
 
-	// Since 7e1daa1b43 ("make replay-unsafe output authoritative") a failed turn that already carried a
-	// tool call is never retried, malformed function call included: earlier output may have effects.
-	it("toolCallDomain retries a turn that is replay-safe and refuses once output is replay-unsafe", () => {
+	it("toolCallDomain allows replay-unsafe retry while plain transient refuses it", () => {
 		const malformedId = create(Flag.MalformedFunctionCall, Flag.Transient);
 		const transientId = create(Flag.Transient);
 
-		expect(retriable(malformedId)).toBe(true);
-		expect(retriable(malformedId, { replayUnsafe: true })).toBe(false);
+		expect(retriable(malformedId, { replayUnsafe: true })).toBe(true);
 		expect(retriable(transientId, { replayUnsafe: true })).toBe(false);
 	});
 

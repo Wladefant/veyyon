@@ -92,19 +92,12 @@ describe("issue #9433 — [DONE]-terminated completions without finish_reason", 
 		expect(msg.content.some(block => block.type === "toolCall")).toBe(true);
 	});
 
-	// A genuine truncation (no [DONE], no finish_reason, and nothing that can stand as a turn)
-	// is still incomplete-stream. Text that simply ends the body is a complete answer on
-	// compatible hosts that omit the terminal marker (7030b9c10d, terminalless-eof.ts), so the
-	// truncation exercised here is a tool call whose arguments are cut off mid-JSON.
 	it("still surfaces incomplete-stream on a genuine EOF (no [DONE], no finish_reason)", async () => {
 		const result = await run([
-			{
-				choices: [
-					{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "foo", arguments: '{"a":' } }] } },
-				],
-			},
+			{ choices: [{ delta: { content: "Hel" } }] },
+			{ choices: [{ delta: { content: "lo" } }] },
 		]);
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toBe("OpenAI completions stream closed before a terminal finish reason was received");
+		expect(result.errorMessage).toBe("OpenAI completions stream closed before a finish_reason was received");
 	});
 });

@@ -8,16 +8,6 @@ import {
 } from "../src/providers/openai-codex-responses";
 import type { FetchImpl, Model, ProviderSessionState } from "../src/types";
 
-/** A fetch that counts the requests it served; the count is the observed behavior. */
-function countingFetch(impl: () => Promise<Response>) {
-	const fetchImpl = (async () => {
-		fetchImpl.calls += 1;
-		return impl();
-	}) as FetchImpl & { calls: number };
-	fetchImpl.calls = 0;
-	return fetchImpl;
-}
-
 const origWs = global.WebSocket;
 afterEach(() => {
 	global.WebSocket = origWs;
@@ -233,17 +223,17 @@ describe("openCodexCompactionEventStream", () => {
 	test("negative control: caller abort never retries via SSE", async () => {
 		const abort = new AbortController();
 		abort.abort();
-		const fetchSpy = countingFetch(async () => new Response("ok"));
+		const fetchSpy = vi.fn(async () => new Response("ok"));
 		await expect(
 			openCodexCompactionEventStream(model, body, {
 				apiKey: token,
 				sessionId: "s4",
 				preferWebsockets: true,
 				signal: abort.signal,
-				fetch: fetchSpy,
+				fetch: fetchSpy as unknown as FetchImpl,
 			}),
 		).rejects.toThrow();
-		expect(fetchSpy.calls).toBe(0);
+		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
 	test("semantic rejection on WS: missing compaction item rejects and preserves prior state", async () => {
@@ -647,7 +637,7 @@ describe("openCodexCompactionEventStream", () => {
 			}
 		}
 		global.WebSocket = ExactLimitWs as unknown as typeof WebSocket;
-		const fetchSpy = countingFetch(async () => new Response("fallback should not be called", { status: 500 }));
+		const fetchSpy = vi.fn(async () => new Response("fallback should not be called", { status: 500 }));
 
 		const pState = new Map<string, ProviderSessionState>();
 		const stream = await openCodexCompactionEventStream(model, body, {
@@ -655,12 +645,12 @@ describe("openCodexCompactionEventStream", () => {
 			sessionId: "s_allowed_bound",
 			providerSessionState: pState,
 			preferWebsockets: true,
-			fetch: fetchSpy,
+			fetch: fetchSpy as unknown as FetchImpl,
 		});
 
 		const result = await collectCodexCompactionV2Events(stream, undefined, t => t);
 		expect(result.compactionItem.encrypted_content).toBe("ws_exact_bound_blob");
-		expect(fetchSpy.calls).toBe(0);
+		expect(fetchSpy).not.toHaveBeenCalled();
 		expect(getSessionTurnState(pState, "s_allowed_bound")).toBe("ws_ok_ts");
 		expect(getSessionModelsEtag(pState)).toBe("ws_ok_etag");
 	});
@@ -681,7 +671,7 @@ describe("openCodexCompactionEventStream", () => {
 			}
 		}
 		global.WebSocket = StreamingWs as unknown as typeof WebSocket;
-		const fetchSpy = countingFetch(async () => new Response("fallback should not be called", { status: 500 }));
+		const fetchSpy = vi.fn(async () => new Response("fallback should not be called", { status: 500 }));
 
 		const pState = new Map<string, ProviderSessionState>();
 		const stream = await openCodexCompactionEventStream(model, body, {
@@ -690,13 +680,13 @@ describe("openCodexCompactionEventStream", () => {
 			providerSessionState: pState,
 			preferWebsockets: true,
 			signal: abort.signal,
-			fetch: fetchSpy,
+			fetch: fetchSpy as unknown as FetchImpl,
 		});
 
 		const consumptionPromise = collectCodexCompactionV2Events(stream, abort.signal, t => t);
 		abort.abort(new Error("caller cancelled mid-stream"));
 		await expect(consumptionPromise).rejects.toThrow("aborted");
-		expect(fetchSpy.calls).toBe(0);
+		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
 	test("valid SSE body commits HTTP response metadata", async () => {
@@ -834,7 +824,7 @@ describe("openCodexCompactionEventStream", () => {
 			let constructors = 0;
 			let requests = 0;
 			let closes = 0;
-			const fetchSpy = countingFetch(async () => new Response("unexpected SSE", { status: 400 }));
+			const fetchSpy = vi.fn(async () => new Response("unexpected SSE", { status: 400 }));
 			class SharedWs extends BaseMockWs {
 				constructor(url?: string, opts?: unknown) {
 					super(url, opts);
@@ -862,7 +852,7 @@ describe("openCodexCompactionEventStream", () => {
 				providerSessionState: pState,
 				responsesLite: false,
 				preferWebsockets: true,
-				fetch: fetchSpy,
+				fetch: fetchSpy as unknown as FetchImpl,
 			};
 			const active = await openCodexCompactionEventStream(model, body, options);
 			const first = active.next();
@@ -889,7 +879,7 @@ describe("openCodexCompactionEventStream", () => {
 			if (!completeBeforeReturn) await completeActive();
 			expect(constructors).toBe(1);
 			expect(requests).toBe(1);
-			expect(fetchSpy.calls).toBe(0);
+			expect(fetchSpy).not.toHaveBeenCalled();
 			expect(getSessionTurnState(pState, sessionId)).toBe("active_ts");
 			expect(getSessionModelsEtag(pState)).toBe("active_etag");
 			socket!.close();

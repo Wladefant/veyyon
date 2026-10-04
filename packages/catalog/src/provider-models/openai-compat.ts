@@ -3057,7 +3057,7 @@ export const OPENCODE_ZEN_API_ID_OVERRIDES: Readonly<Record<string, Api>> = {
 // deepseek-v4-flash is the inverse case: it falls through to
 // openai-completions by default, but the Go gateway's
 // /zen/go/v1/chat/completions route does not work for this model while
-// /zen/go/v1/responses does (verified against the live gateway,
+// /zen/go/v1/responses does (user-verified against the live gateway,
 // 2026-08-08; Flash only — deepseek-v4-pro serves fine on chat completions).
 //
 // muse-spark-1.2 / muse-spark-1.2-contributor are the same inverse case, but
@@ -4682,7 +4682,7 @@ const ABLITERATION_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
 
 function normalizeAbliterationBaseUrl(baseUrl: string | undefined): string {
 	const value = baseUrl?.trim() || ABLITERATION_DEFAULT_BASE_URL;
-	const normalized = trimTrailingSlashes(value);
+	const normalized = value.replace(/\/+$/, "");
 	return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }
 
@@ -6009,25 +6009,6 @@ function createCopilotLongContextVariant(
 	};
 }
 
-export function resolveGithubCopilotCacheProviderId(
-	config?: GithubCopilotModelManagerConfig,
-): string {
-	const rawApiKey = config?.apiKey;
-	const configuredBaseUrl = config?.baseUrl ?? "https://api.githubcopilot.com";
-	const parsedApiKey = rawApiKey
-		? parseGitHubCopilotApiKey(rawApiKey)
-		: undefined;
-	const apiKey = parsedApiKey?.accessToken;
-	const baseUrl =
-		parsedApiKey?.apiEndpoint && configuredBaseUrl.includes("githubcopilot.com")
-			? parsedApiKey.apiEndpoint
-			: parsedApiKey?.enterpriseUrl &&
-					configuredBaseUrl.includes("githubcopilot.com")
-				? getGitHubCopilotBaseUrl(parsedApiKey.enterpriseUrl)
-				: configuredBaseUrl;
-	return `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`;
-}
-
 export function githubCopilotModelManagerOptions(
 	config?: GithubCopilotModelManagerConfig,
 ): ModelManagerOptions<Api> {
@@ -6049,7 +6030,7 @@ export function githubCopilotModelManagerOptions(
 	return {
 		providerId: "github-copilot",
 		// Version the credential/endpoint-scoped namespace so stale cross-provider routing rows are never restored.
-		cacheProviderId: resolveGithubCopilotCacheProviderId(config),
+		cacheProviderId: `github-copilot:models-v2:${Bun.hash(`${apiKey ?? ""}\u0000${baseUrl}`).toString(36)}`,
 		...(apiKey && {
 			fetchDynamicModels: async (hooks) => {
 				const longContextVariants: ModelSpec<Api>[] = [];

@@ -71,8 +71,6 @@ interface TaskCardResult {
 const VIEW_DOT = /\u001b\[(?!39m)[0-9;]+m( ·(?: |(?=\u001b\[49m)|$))(?:\u001b\[39m)?/g;
 /** A colour opened with nothing in it, which draws as though it had never been opened. */
 const EMPTY_RUN = /\u001b\[(?!39m)[0-9;]+m(?=\u001b\[39m)/g;
-/** A foreground opened and overridden by the next one before any glyph, which paints nothing. */
-const OVERRIDDEN_OPEN = /\u001b\[(?:38;[0-9;]+|3[0-7]|9[0-7])m(?=\u001b\[(?:38;[0-9;]+|3[0-7]|9[0-7])m)/g;
 /** A reset in front of the next colour, which the colour after it does anyway. */
 const RESET_BEFORE_COLOR = /\u001b\[39m(?=\u001b\[(?!39m)[0-9;]+m)/g;
 /** A reset written more than once in a row, which draws as one. */
@@ -88,7 +86,6 @@ const sameRow = (row: string): string =>
 		.replace(VIEW_DOT, "$1")
 		.replace(CONNECTOR, "$1")
 		.replace(EMPTY_RUN, "")
-		.replace(OVERRIDDEN_OPEN, "")
 		.replace(RESET_BEFORE_COLOR, "")
 		.replace(REPEATED_RESET, "\u001b[39m")
 		.replace(TRAILING_PAD, "");

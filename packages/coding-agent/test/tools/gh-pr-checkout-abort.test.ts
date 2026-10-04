@@ -126,7 +126,6 @@ describe("classifying which github ops may be abandoned on abort", () => {
 		const ops = [...(properties.op?.enum ?? [])].sort();
 
 		expect(ops).toEqual([
-			"file_read",
 			"pr_checkout",
 			"pr_create",
 			"pr_push",

@@ -1,17 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import type { AssistantMessageEventStream, Context, FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-/** A fetch that counts the requests it served; the count is the observed behavior. */
-function countingFetch(impl: (input: unknown, init?: RequestInit) => Promise<Response>) {
-	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
-		fetchImpl.calls += 1;
-		return impl(input, init);
-	}) as FetchImpl & { calls: number };
-	fetchImpl.calls = 0;
-	return fetchImpl;
-}
 
 const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 const u1 = { role: "user" as const, content: "read", timestamp: 1 };
@@ -96,10 +86,10 @@ describe("OpenAI Responses transient stream retry", () => {
 	it("retries a truncated pending tool call with a fresh request and clean state", async () => {
 		const sent: Array<Record<string, unknown>> = [];
 		let a = 0;
-		const fetchMock = countingFetch(async (_i: unknown, init?: RequestInit) => {
+		const fetchMock = vi.fn(async (_i: unknown, init?: RequestInit) => {
 			sent.push(body(init));
 			return ++a === 1 ? truncTool() : a === 2 ? toolResp() : textResp("Follow-up", "resp_f");
-		});
+		}) as FetchImpl;
 		const opts = {
 			apiKey: "k",
 			fetch: fetchMock,
@@ -111,7 +101,7 @@ describe("OpenAI Responses transient stream retry", () => {
 		const s = streamOpenAIResponses(model, context, opts);
 		const events = await collect(s);
 		const result = await s.result();
-		expect(fetchMock.calls).toBe(2);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(sent[1]).toEqual(sent[0]);
 		expect(result.stopReason).toBe("toolUse");
 		expect(JSON.parse(JSON.stringify(result.content))).toEqual([
@@ -129,7 +119,7 @@ describe("OpenAI Responses transient stream retry", () => {
 
 	it("falls back to full transcript when a fresh stream retry finds a stale chain baseline", async () => {
 		const sent: Array<Record<string, unknown>> = [];
-		const fetchMock = countingFetch(async (_i: unknown, init?: RequestInit) => {
+		const fetchMock = vi.fn(async (_i: unknown, init?: RequestInit) => {
 			sent.push(body(init));
 			switch (sent.length) {
 				case 1:
@@ -153,7 +143,7 @@ describe("OpenAI Responses transient stream retry", () => {
 				default:
 					return textResp("Follow-up", "resp_f");
 			}
-		});
+		}) as FetchImpl;
 		const opts = {
 			apiKey: "k",
 			fetch: fetchMock,
@@ -170,7 +160,7 @@ describe("OpenAI Responses transient stream retry", () => {
 		);
 		const events = await collect(s);
 		const recovered = await s.result();
-		expect(fetchMock.calls).toBe(4);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 		expect(sent[1]?.previous_response_id).toBe("resp_base");
 		expect(sent[2]).toEqual(sent[1]);
 		expect(sent[3]?.previous_response_id).toBeUndefined();
@@ -191,7 +181,7 @@ describe("OpenAI Responses transient stream retry", () => {
 			opts,
 		).result();
 		expect(followup.stopReason).toBe("stop");
-		expect(fetchMock.calls).toBe(5);
+		expect(fetchMock).toHaveBeenCalledTimes(5);
 		expect(sent[4]?.previous_response_id).toBe("resp_rec");
 	});
 
@@ -212,30 +202,30 @@ describe("OpenAI Responses transient stream retry", () => {
 			},
 			{ type: "response.function_call_arguments.delta", output_index: 0, item_id: "fc_p", delta: '{"path":"a"}' },
 		]);
-		const fetchMock = countingFetch(async () => sseWithDelta);
+		const fetchMock = vi.fn(async () => sseWithDelta) as FetchImpl;
 		const result = await streamOpenAIResponses(model, context, {
 			apiKey: "k",
 			fetch: fetchMock,
 			providerRetryWait: async () => {},
 		}).result();
-		expect(fetchMock.calls).toBe(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result.stopReason).toBe("error");
 	});
 
 	it("bounds repeated pre-output stream corruption to one retry", async () => {
-		const fetchMock = countingFetch(async () => truncTool());
+		const fetchMock = vi.fn(async () => truncTool()) as FetchImpl;
 		const result = await streamOpenAIResponses(model, context, {
 			apiKey: "k",
 			fetch: fetchMock,
 			providerRetryWait: async () => {},
 		}).result();
-		expect(fetchMock.calls).toBe(2);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(result.stopReason).toBe("error");
 	});
 
 	it("honors caller abort during the retry wait", async () => {
 		const c = new AbortController();
-		const fetchMock = countingFetch(async () => truncTool());
+		const fetchMock = vi.fn(async () => truncTool()) as FetchImpl;
 		const s = streamOpenAIResponses(model, context, {
 			apiKey: "k",
 			fetch: fetchMock,
@@ -244,26 +234,26 @@ describe("OpenAI Responses transient stream retry", () => {
 		});
 		const events = await collect(s);
 		const result = await s.result();
-		expect(fetchMock.calls).toBe(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result.stopReason).toBe("aborted");
 		expect(events.map(e => e.type)).toEqual(["start", "error"]);
 	});
 
 	it("does not retry terminal failure", async () => {
-		const fetchMock = countingFetch(async () =>
+		const fetchMock = vi.fn(async () =>
 			sse([
 				{
 					type: "response.failed",
 					response: { id: "f", status: "failed", error: { code: "invalid_request_error", message: "invalid" } },
 				},
 			]),
-		);
+		) as FetchImpl;
 		const result = await streamOpenAIResponses(model, context, {
 			apiKey: "k",
 			fetch: fetchMock,
 			providerRetryWait: async () => {},
 		}).result();
-		expect(fetchMock.calls).toBe(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result.stopReason).toBe("error");
 	});
 });

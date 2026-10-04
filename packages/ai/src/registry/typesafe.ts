@@ -1,4 +1,3 @@
-import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
@@ -8,7 +7,7 @@ const DEFAULT_BASE_URL = "https://api.typesafe.ai";
 
 /** The models-endpoint check honours `TYPESAFE_BASE_URL`, like discovery and System One requests. */
 export function loginTypeSafe(callbacks: OAuthLoginCallbacks): Promise<string> {
-	const baseUrl = trimTrailingSlashes((process.env.TYPESAFE_BASE_URL?.trim() || DEFAULT_BASE_URL));
+	const baseUrl = (process.env.TYPESAFE_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
 	return createApiKeyLogin({
 		providerLabel: "TypeSafe",
 		authUrl: AUTH_URL,

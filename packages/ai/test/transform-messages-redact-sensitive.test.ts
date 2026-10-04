@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { transformMessages } from "@veyyon/ai/providers/transform-messages";
-import { redactJsonFunctionCallArguments } from "@veyyon/ai/utils/credential-redaction";
+import { redactJsonFunctionCallArguments, transformMessages } from "@veyyon/ai/providers/transform-messages";
 import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage } from "@veyyon/ai/types";
 import { normalizeSystemPrompts } from "@veyyon/ai/utils";
 

@@ -471,7 +471,8 @@ export async function executeFileSearch(
 				const nativeAbort =
 					isTimeoutError(error) ||
 					isCancellation(error) ||
-					(error instanceof Error && error.message.includes("Aborted:"));
+					(error instanceof Error &&
+						(error.name === "AbortError" || error.name === "TimeoutError" || error.message.includes("Aborted:")));
 				if (nativeAbort) {
 					if (scopedTimeout.signal.aborted && !signal?.aborted) {
 						timedOut = true;

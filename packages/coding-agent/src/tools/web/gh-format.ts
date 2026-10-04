@@ -9,13 +9,12 @@
  * (banned), in the tool (which would put the tool's 352-module graph on the protocol handlers' path), or
  * here. This module already owned `formatShortSha` for the same reason.
  *
- * `ToolError` is the one import from this package, for `requireNonEmpty`: an empty `--repo` or issue identifier is a
+ * `ToolError` is the one import, for `requireNonEmpty`: an empty `--repo` or issue identifier is a
  * caller mistake and has to surface as the same error class every other tool argument failure uses.
  * `tools/core/tool-errors.ts` is itself a leaf, so this module reaches two, and a single import here is paid
  * by every GitHub surface. Keep it that way.
  */
 
-import { hasUrlScheme } from "@veyyon/utils/url";
 import { ToolError } from "../core/tool-errors";
 
 /**
@@ -65,7 +64,7 @@ export function appendRepoFlag(args: string[], repo: string | undefined, identif
 	// A full URL identifier already names host, repo, and number; `gh` derives
 	// all three from it and rejects a competing `--repo`. That host is the one
 	// `gh` will talk to, so it is checked here, before the call.
-	if (identifier && hasUrlScheme(identifier)) {
+	if (identifier && URL_SCHEME_PATTERN.test(identifier)) {
 		assertAllowedGhHost(hostOfUrl(identifier));
 	}
 	if (!repo || identifier?.startsWith("https://")) {
@@ -79,6 +78,8 @@ export function appendRepoFlag(args: string[], repo: string | undefined, identif
 
 /** The host `gh` assumes when a ref names none and `GH_HOST` is unset. */
 export const GITHUB_HOST = "github.com";
+
+const URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 function hostOfUrl(value: string): string {
 	try {

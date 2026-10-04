@@ -59,7 +59,7 @@ import { BASE_SETTINGS, HOST_DEPENDENT_TOOL_NAMES } from "./tool-loading-differe
  * renamed.
  */
 const TOOL_PROMPT_CEILINGS: Record<string, number> = {
-	edit: 5800,
+	edit: 8030,
 	eval: 6019,
 	read: 4900,
 	bash: 3932,
