@@ -324,7 +324,11 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		requestedTimeoutMs === 0 ? undefined : Math.max(1_000, requestedTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
 	const userSignal = options?.signal;
 	if (deadlineTimeoutMs === undefined && !userSignal) {
-		return runBash(command, options, { armed: false, controller: new AbortController(), startedAt: performance.now() });
+		return runBash(command, options, {
+			armed: false,
+			controller: new AbortController(),
+			startedAt: performance.now(),
+		});
 	}
 
 	const gate: SetupGate = { armed: false, controller: new AbortController(), startedAt: performance.now() };
@@ -497,16 +501,19 @@ async function runBash(
 			: undefined;
 	const nativeOwnsTimeout = nativeTimeoutMs !== undefined;
 	if (deadlineTimeoutMs !== undefined) {
-		timeoutTimer = setTimeout(() => {
-			// Explicit timeouts are already enforced inside veyyon-natives via
-			// `timeoutMs`. Do not also abort the JS AbortSignal here: on Windows,
-			// aborting that signal while a piped command is still forwarding output
-			// can terminate the Bun host before the native timeout result resolves.
-			if (!nativeOwnsTimeout) {
-				abortCurrentExecution();
-			}
-			timeoutDeferred.resolve("timeout");
-		}, Math.max(1, deadlineTimeoutMs - setupElapsedMs));
+		timeoutTimer = setTimeout(
+			() => {
+				// Explicit timeouts are already enforced inside veyyon-natives via
+				// `timeoutMs`. Do not also abort the JS AbortSignal here: on Windows,
+				// aborting that signal while a piped command is still forwarding output
+				// can terminate the Bun host before the native timeout result resolves.
+				if (!nativeOwnsTimeout) {
+					abortCurrentExecution();
+				}
+				timeoutDeferred.resolve("timeout");
+			},
+			Math.max(1, deadlineTimeoutMs - setupElapsedMs),
+		);
 	}
 
 	let resetSession = false;
