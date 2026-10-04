@@ -6,7 +6,14 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, getWorktreeDir, isEnoent, logger, Snowflake } from "@veyyon/utils";
 import * as git from "../utils/git";
 import * as jj from "../utils/jj";
-import { claimIsolationSlot, releaseIsolationClaim } from "./isolation-ownership";
+import {
+	claimIsolationSlot,
+	isAbandonedEmptyReservation,
+	releaseIsolationClaim,
+	tryWithIsolationLifecycleLock,
+	withIsolationLifecycleLock,
+	writeIsolationOwner,
+} from "./isolation-ownership";
 import { mapWithConcurrencyLimit } from "./parallel";
 
 const { IsoBackendKind } = natives;
@@ -480,7 +487,7 @@ export interface IsolationHandle {
  * `fallbackReason`.
  */
 
-function getTaskIsolationSegment(repoRoot: string, id: string): string {
+export function getTaskIsolationSegment(repoRoot: string, id: string): string {
 	const key = `${path.resolve(repoRoot)}\0${id}`;
 	const digest = Bun.hash(key).toString(16).padStart(16, "0").slice(-TASK_ISOLATION_DIR_DIGEST_CHARS);
 	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
@@ -502,58 +509,83 @@ export async function ensureIsolation(
 	// retained live projection, even when writing its backend metadata failed.
 	await fs.mkdir(path.dirname(baseDir), { recursive: true });
 
-	for (const candidate of candidates) {
+	const lockResult = await tryWithIsolationLifecycleLock(baseDir, async () => {
+		let exists = false;
 		try {
-			await claimIsolationSlot(baseDir);
-		} catch (error) {
-			throw new Error(`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement`, {
-				cause: error,
-			});
-		}
-		try {
-			await natives.isoStart(candidate, repoRoot, mergedDir);
-			// A marker that cannot be dropped only keeps the slot protected while this
-			// process lives; it must never tear down a started mount.
-			await releaseIsolationClaim(baseDir).catch(error =>
-				logger.warn("isolation claim marker left in place", { baseDir, error: errorMessage(error) }),
-			);
-			const fellBack = candidate !== resolution.kind || resolution.fellBack;
-			return {
-				mergedDir,
-				backend: candidate,
-				fellBack,
-				fallbackReason: fellBack ? fallbackReason : null,
-			};
+			await fs.stat(baseDir);
+			exists = true;
 		} catch (err) {
-			await fs.rm(baseDir, { recursive: true, force: true });
-			const message = errorMessage(err);
-			if (!natives.isoIsUnavailableError(message)) {
-				throw err;
-			}
-			fallbackReason ??= message;
+			if (!isEnoent(err)) throw err;
 		}
+
+		if (exists) {
+			if (await isAbandonedEmptyReservation(baseDir)) {
+				await fs.rm(baseDir, { recursive: true, force: true });
+			} else {
+				throw new Error(`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement`);
+			}
+		}
+
+		for (const candidate of candidates) {
+			try {
+				await claimIsolationSlot(baseDir);
+			} catch (error) {
+				throw new Error(`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement`, {
+					cause: error,
+				});
+			}
+			await writeIsolationOwner(baseDir);
+
+			try {
+				await natives.isoStart(candidate, repoRoot, mergedDir);
+				await releaseIsolationClaim(baseDir).catch(error =>
+					logger.warn("isolation claim marker left in place", { baseDir, error: errorMessage(error) }),
+				);
+				const fellBack = candidate !== resolution.kind || resolution.fellBack;
+				return {
+					mergedDir,
+					backend: candidate,
+					fellBack,
+					fallbackReason: fellBack ? fallbackReason : null,
+				};
+			} catch (err) {
+				await fs.rm(baseDir, { recursive: true, force: true });
+				const message = errorMessage(err);
+				if (!natives.isoIsUnavailableError(message)) {
+					throw err;
+				}
+				fallbackReason ??= message;
+			}
+		}
+
+		throw new Error(fallbackReason ?? "No isolation backend is available.");
+	});
+
+	if (!lockResult.acquired) {
+		throw new Error(`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement`);
 	}
 
-	throw new Error(fallbackReason ?? "No isolation backend is available.");
+	return lockResult.value;
 }
 
 /** Tear down a handle returned by {@link ensureIsolation}. */
 export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
-	try {
+	const baseDir = path.dirname(handle.mergedDir);
+	await withIsolationLifecycleLock(baseDir, async () => {
 		try {
-			await natives.isoStop(handle.backend, handle.mergedDir);
-		} catch (err) {
-			logger.warn("isolation backend stop failed during cleanup", {
-				backend: handle.backend,
-				mergedDir: handle.mergedDir,
-				error: errorMessage(err),
-			});
+			try {
+				await natives.isoStop(handle.backend, handle.mergedDir);
+			} catch (err) {
+				logger.warn("isolation backend stop failed during cleanup", {
+					backend: handle.backend,
+					mergedDir: handle.mergedDir,
+					error: errorMessage(err),
+				});
+			}
+		} finally {
+			await fs.rm(baseDir, { recursive: true, force: true });
 		}
-	} finally {
-		// baseDir is the parent of the merged directory
-		const baseDir = path.dirname(handle.mergedDir);
-		await fs.rm(baseDir, { recursive: true, force: true });
-	}
+	});
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

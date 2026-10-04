@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearWorktrees } from "@veyyon/coding-agent/cli/worktree-cli";
-import { ISOLATION_CLAIM_FILE, writeRetainedBackend } from "@veyyon/coding-agent/task/isolation-ownership";
+import {
+	ISOLATION_CLAIM_FILE,
+	ISOLATION_OWNER_FILE,
+	writeRetainedBackend,
+} from "@veyyon/coding-agent/task/isolation-ownership";
 import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
 	applyNestedPatches,
@@ -164,6 +168,7 @@ describe("worktree isolation helpers", () => {
 				expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe(
 					"unrecovered projection",
 				);
+				await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });
 			});
 		}
 		// WHY: a slot claimed by ensureIsolation holds no mount directory until the
@@ -243,7 +248,7 @@ describe("worktree isolation helpers", () => {
 				const handle = await first;
 				expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
 				const left = await fs.readdir(path.dirname(handle.mergedDir));
-				expect(left).toEqual([path.basename(handle.mergedDir)]);
+				expect(left.sort()).toEqual([ISOLATION_OWNER_FILE, path.basename(handle.mergedDir)].sort());
 			});
 
 			it("clears a claim whose process is gone", async () => {

@@ -12,9 +12,16 @@ import * as path from "node:path";
 import * as natives from "@veyyon/natives";
 import * as utils from "@veyyon/utils";
 import { clearWorktrees } from "../../src/cli/worktree-cli";
-import { RETAINED_BACKEND_FILE, writeRetainedBackend } from "../../src/task/isolation-ownership";
+import {
+	ISOLATION_CLAIM_FILE,
+	ISOLATION_OWNER_FILE,
+	type IsolationOwnerRecord,
+	RETAINED_BACKEND_FILE,
+	readIsolationOwner,
+	writeRetainedBackend,
+} from "../../src/task/isolation-ownership";
 import { retainIsolationWorkspace } from "../../src/task/isolation-runner";
-import { ensureIsolation } from "../../src/task/worktree";
+import { ensureIsolation, getRepoRoot, getTaskIsolationSegment } from "../../src/task/worktree";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirs("retained-isolation-clear-");
@@ -244,6 +251,7 @@ describe("retained isolation cleanup", () => {
 			const workspace = path.dirname(handle.mergedDir);
 			expect(path.basename(workspace)).toMatch(/^t[0-9a-f]{9}$/);
 			await fs.rm(handle.mergedDir, { recursive: true });
+			await fs.rm(path.join(workspace, ISOLATION_OWNER_FILE));
 			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
 			await gone.exited;
 			await fs.writeFile(path.join(workspace, ".veyyon-isolation-claim.json"), JSON.stringify({ pid: gone.pid }));
@@ -406,18 +414,19 @@ describe("retained isolation cleanup", () => {
 		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
 
-		// Real ordinary clear: clearWorktrees({ all: false, dryRun: false, json: true })
+		// Real ordinary clear: live claims are omitted from ordinary clear
+		await clearWorktrees({ all: false, dryRun: true, json: true });
+		expect(stdout).not.toContain("would remove");
 		await clearWorktrees({ all: false, dryRun: false, json: true });
 		const ordinaryResult = JSON.parse(stdout);
 		expect(ordinaryResult).toMatchObject({ removed: 0, kept: 1 });
 		expect(await exists(claimedBaseDir)).toBe(true);
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
-
 		// Real --all clear: clearWorktrees({ all: true, dryRun: false, json: true })
 		await clearWorktrees({ all: true, dryRun: false, json: true });
 		const allResult = JSON.parse(stdout);
 		expect(allResult).toMatchObject({ removed: 0, failed: 1 });
-		expect(allResult.results[0].error).toContain("Live isolation claim");
+		expect(allResult.results[0].error).toContain("workspace in use");
 		expect(await exists(claimedBaseDir)).toBe(true);
 		expect(await fs.readFile(sentinel, "utf8")).toBe("in-flight-claim-sentinel");
 
@@ -443,5 +452,302 @@ describe("retained isolation cleanup", () => {
 		const retainedClearResult = JSON.parse(stdout);
 		expect(retainedClearResult).toMatchObject({ removed: 1, failed: 0 });
 		expect(await exists(retained.dir)).toBe(false);
+	});
+
+	it("P1 ABA regression: stale clear authorization does not delete new claim instance at same path", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo, { recursive: true });
+		child_process.execFileSync("git", ["init", "-q", repo]);
+
+		const id = "p1-aba-clear-race";
+		const repoRootDir = await getRepoRoot(repo);
+		const segment = getTaskIsolationSegment(repoRootDir, id);
+		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
+
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+
+		vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+			await fs.mkdir(mergedDir, { recursive: true });
+			await fs.writeFile(path.join(mergedDir, "old-changes.txt"), "old-changes");
+		});
+
+		const setupHandle = await ensureIsolation(repo, id);
+		expect(await exists(canonicalDir)).toBe(true);
+
+		const originalRename = fs.rename;
+		let renameFailures = 0;
+		vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+			if (oldPath === canonicalDir) {
+				renameFailures++;
+				throw new Error("EBUSY: simulated locked file during rename");
+			}
+			return originalRename(oldPath, newPath);
+		});
+
+		const retained = await retainIsolationWorkspace(setupHandle.mergedDir, setupHandle.backend);
+		vi.restoreAllMocks();
+		vi.spyOn(utils, "getWorktreesDir").mockReturnValue(path.join(root, "workspaces"));
+		vi.spyOn(console, "log").mockImplementation(line => {
+			stdout = String(line);
+		});
+
+		const oldSentinel = path.join(canonicalDir, "old-sentinel.txt");
+		await fs.writeFile(oldSentinel, "old-sentinel");
+		expect(renameFailures).toBe(3);
+		expect(retained.sidecarOk).toBe(true);
+		expect(await exists(canonicalDir)).toBe(true);
+		expect(await exists(path.join(canonicalDir, RETAINED_BACKEND_FILE))).toBe(true);
+
+		const initialOwner = await readIsolationOwner(canonicalDir);
+		const readStarted = Promise.withResolvers<void>();
+		const releaseRead = Promise.withResolvers<void>();
+		const originalReadFile = fs.readFile;
+		let heldRead = false;
+		vi.spyOn(fs, "readFile").mockImplementation((async (...args: Parameters<typeof fs.readFile>) => {
+			const contents = await originalReadFile(...args);
+			if (!heldRead && String(args[0]) === path.join(canonicalDir, RETAINED_BACKEND_FILE)) {
+				heldRead = true;
+				readStarted.resolve();
+				await releaseRead.promise;
+			}
+			return contents;
+		}) as typeof fs.readFile);
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+		vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+			await fs.mkdir(mergedDir, { recursive: true });
+		});
+
+		// C already holds the old metadata. B and allocation cannot cross its lease.
+		const clearC = clearWorktrees({ all: false, dryRun: false, json: true });
+		try {
+			await Promise.race([readStarted.promise, clearC]);
+			await clearWorktrees({ all: false, dryRun: false, json: true });
+			expect(JSON.parse(stdout)).toMatchObject({ removed: 0, failed: 1 });
+			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+			expect(await fs.readFile(oldSentinel, "utf8")).toBe("old-sentinel");
+		} finally {
+			releaseRead.resolve();
+			await clearC;
+		}
+		expect(JSON.parse(stdout)).toMatchObject({ removed: 1, failed: 0 });
+		expect(await exists(canonicalDir)).toBe(false);
+
+		// Reuse is allowed after C finishes, never while its authorization is pending.
+		await ensureIsolation(repo, id);
+		const newSentinel = path.join(canonicalDir, "task-a-sentinel.txt");
+		await fs.writeFile(newSentinel, "task-a-data");
+		const newOwner = await readIsolationOwner(canonicalDir);
+		expect(newOwner).not.toBeNull();
+		expect(newOwner!.token).not.toBe(initialOwner!.token);
+		await clearWorktrees({ all: false, dryRun: false, json: true });
+		expect(JSON.parse(stdout)).toMatchObject({ removed: 0, failed: 1 });
+		expect(await fs.readFile(newSentinel, "utf8")).toBe("task-a-data");
+	});
+
+	it("P2 regression: dead child process abandoned empty reservation is reclaimable by clear and allocation", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo, { recursive: true });
+		child_process.execFileSync("git", ["init", "-q", repo]);
+
+		const id = "p2-abandoned-empty";
+		const repoRootDir = await getRepoRoot(repo);
+		const segment = getTaskIsolationSegment(repoRootDir, id);
+		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
+
+		const childScriptPath = path.join(root, `child-crash-${Date.now()}.test.ts`);
+		const childScript = `
+import { vi, spyOn } from "bun:test";
+import * as natives from ${JSON.stringify(import.meta.resolve("@veyyon/natives"))};
+import * as utils from ${JSON.stringify(import.meta.resolve("@veyyon/utils"))};
+import { ensureIsolation } from ${JSON.stringify(path.resolve(__dirname, "../../src/task/worktree.ts"))};
+
+const workspacesDir = process.env.TEST_WORKSPACES_DIR!;
+const repo = process.env.TEST_REPO_DIR!;
+const id = process.env.TEST_TASK_ID!;
+
+process.env.VEYYON_WORKTREE_DIR = workspacesDir;
+utils.setWorktreesDir(workspacesDir);
+
+const mockSpy = (typeof vi !== "undefined" && vi.spyOn) ? vi.spyOn : spyOn;
+mockSpy(natives, "isoResolve").mockReturnValue({
+	kind: natives.IsoBackendKind.Rcopy,
+	candidates: [natives.IsoBackendKind.Rcopy],
+	fellBack: false,
+	reason: undefined,
+});
+
+mockSpy(natives, "isoStart").mockImplementation(async () => {
+	process.exit(42);
+});
+
+try {
+	await ensureIsolation(repo, id);
+} catch (err) {
+	console.error("CHILD_ERR:", err);
+	process.exit(1);
+}
+`;
+		await fs.writeFile(childScriptPath, childScript, "utf8");
+
+		try {
+			const childRes = child_process.spawnSync("bun", ["test", childScriptPath], {
+				cwd: process.cwd(),
+				env: {
+					...process.env,
+					TEST_WORKSPACES_DIR: path.join(root, "workspaces"),
+					TEST_REPO_DIR: repo,
+					TEST_TASK_ID: id,
+				},
+				encoding: "utf8",
+			});
+			if (childRes.status !== 42) {
+				console.error("CHILD STDERR:", childRes.stderr);
+				console.error("CHILD STDOUT:", childRes.stdout);
+			}
+			expect(childRes.status).toBe(42);
+		} finally {
+			await fs.rm(childScriptPath, { force: true });
+		}
+		// Verify on-disk state: canonicalDir exists, has ONLY owner record, NO "m"
+		expect(await exists(canonicalDir)).toBe(true);
+		expect(await exists(path.join(canonicalDir, "m"))).toBe(false);
+		expect(await exists(path.join(canonicalDir, ISOLATION_OWNER_FILE))).toBe(true);
+		const entries = await fs.readdir(canonicalDir);
+		expect(entries.sort()).toEqual([ISOLATION_CLAIM_FILE, ISOLATION_OWNER_FILE].sort());
+
+		const deadOwner = await readIsolationOwner(canonicalDir);
+		expect(deadOwner).not.toBeNull();
+		expect(utils.isProcessInstanceAlive(deadOwner!.pid, deadOwner!.startIdentity)).toBe(false);
+
+		// Same-id ensureIsolation must successfully reclaim the dead abandoned empty reservation!
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+		vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+			await fs.mkdir(mergedDir, { recursive: true });
+		});
+
+		const reclaimedHandle = await ensureIsolation(repo, id);
+		expect(reclaimedHandle.mergedDir).toBe(path.join(canonicalDir, "m"));
+		expect(await exists(path.join(canonicalDir, "m"))).toBe(true);
+
+		const activeOwner = await readIsolationOwner(canonicalDir);
+		expect(activeOwner!.pid).toBe(process.pid);
+		expect(activeOwner!.token).not.toBe(deadOwner!.token);
+	});
+
+	it("P2 regression: clearWorktrees reclaims dead abandoned empty reservation", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo, { recursive: true });
+		child_process.execFileSync("git", ["init", "-q", repo]);
+
+		const id = "p2-clear-abandoned-empty";
+		const repoRootDir = await getRepoRoot(repo);
+		const segment = getTaskIsolationSegment(repoRootDir, id);
+		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
+
+		await fs.mkdir(canonicalDir, { recursive: true });
+		const deadRecord: IsolationOwnerRecord = {
+			pid: 999999,
+			startIdentity: "dead-start-id",
+			token: "dead-token-123",
+			createdAt: new Date().toISOString(),
+		};
+		await fs.writeFile(path.join(canonicalDir, ISOLATION_OWNER_FILE), JSON.stringify(deadRecord));
+		expect(await fs.readdir(canonicalDir)).toEqual([ISOLATION_OWNER_FILE]);
+
+		stdout = "";
+		await clearWorktrees({ all: false, dryRun: false, json: true });
+		const result = JSON.parse(stdout);
+		expect(result).toMatchObject({ removed: 1, failed: 0 });
+		expect(await exists(canonicalDir)).toBe(false);
+	});
+
+	it("P2 negative control: dead reservation containing unknown files or mount directory fails closed", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo, { recursive: true });
+		child_process.execFileSync("git", ["init", "-q", repo]);
+
+		const id = "p2-negative-control";
+		const repoRootDir = await getRepoRoot(repo);
+		const segment = getTaskIsolationSegment(repoRootDir, id);
+		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
+
+		await fs.mkdir(canonicalDir, { recursive: true });
+		const deadRecord: IsolationOwnerRecord = {
+			pid: 999999,
+			startIdentity: "dead-start-id",
+			token: "dead-token-456",
+			createdAt: new Date().toISOString(),
+		};
+		await fs.writeFile(path.join(canonicalDir, ISOLATION_OWNER_FILE), JSON.stringify(deadRecord));
+		await fs.writeFile(path.join(canonicalDir, "mystery.txt"), "important-data");
+
+		stdout = "";
+		await clearWorktrees({ all: false, dryRun: false, json: true });
+		const result = JSON.parse(stdout);
+		expect(result).toMatchObject({ removed: 0, failed: 1 });
+		expect(result.results[0].error).toContain("Missing retained backend metadata");
+		expect(await exists(canonicalDir)).toBe(true);
+		expect(await exists(path.join(canonicalDir, "mystery.txt"))).toBe(true);
+
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+
+		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+		expect(await exists(path.join(canonicalDir, "mystery.txt"))).toBe(true);
+	});
+
+	it("refuses clear and replacement when owner record is malformed (invalid pid or empty token)", async () => {
+		const repo = path.join(root, "repo");
+		await fs.mkdir(repo, { recursive: true });
+		child_process.execFileSync("git", ["init", "-q", repo]);
+
+		const id = "malformed-owner-regression";
+		const repoRootDir = await getRepoRoot(repo);
+		const segment = getTaskIsolationSegment(repoRootDir, id);
+		const canonicalDir = path.join(path.join(root, "workspaces"), segment);
+
+		await fs.mkdir(canonicalDir, { recursive: true });
+		// Write corrupt/malformed owner record with negative PID and empty token
+		await fs.writeFile(
+			path.join(canonicalDir, ISOLATION_OWNER_FILE),
+			JSON.stringify({ pid: -1, token: "   ", createdAt: new Date().toISOString() }),
+			"utf8",
+		);
+
+		stdout = "";
+		await clearWorktrees({ all: false, dryRun: false, json: true });
+		const result = JSON.parse(stdout);
+		expect(result).toMatchObject({ removed: 0, failed: 1 });
+		expect(result.results[0].error).toContain("Missing retained backend metadata");
+		expect(await exists(canonicalDir)).toBe(true);
+
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+
+		await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+		expect(await exists(canonicalDir)).toBe(true);
 	});
 });
