@@ -9,6 +9,18 @@ import { withEnv } from "./helpers";
 const { getAgentDir, setAgentDir, TempDir } = piUtils;
 
 const originalAgentDir = getAgentDir();
+// `setAgentDir` WRITES `VEYYON_CODING_AGENT_DIR` and clears the active profile, so
+// `setAgentDir(originalAgentDir)` alone cannot undo either; see openai-codex-stream.test.ts.
+const originalAgentDirEnv = process.env.VEYYON_CODING_AGENT_DIR;
+const originalProfileEnv = process.env.VEYYON_PROFILE;
+
+function restoreEnv(name: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[name];
+		return;
+	}
+	process.env[name] = value;
+}
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
 
 beforeEach(() => {
@@ -18,6 +30,9 @@ beforeEach(() => {
 
 afterEach(() => {
 	setAgentDir(originalAgentDir);
+	restoreEnv("VEYYON_CODING_AGENT_DIR", originalAgentDirEnv);
+	restoreEnv("VEYYON_PROFILE", originalProfileEnv);
+	piUtils.__resetDirsFromEnvForTests();
 	__resetProxyCache();
 	vi.restoreAllMocks();
 });
