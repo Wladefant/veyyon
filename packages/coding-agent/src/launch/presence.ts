@@ -1,8 +1,8 @@
-import type { Dirent } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile, errorMessage, isEnoent, logger, postmortem } from "@veyyon/utils";
-import { tryWithFileLock } from "@veyyon/utils/file-lock";
+import { tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
 import { getProcessStartIdentity } from "@veyyon/utils/process-liveness";
 import { type BrokerLeaseClock, daemonOwnerIsAlive, daemonOwnerRetirement } from "./broker-lease";
 import {
@@ -46,32 +46,74 @@ export async function registerDaemonProjectPresence(
 	const canonical = await canonicalProjectDir(projectDir);
 	const runtimeDir = runtimeOverride ?? daemonRuntimeDir(canonical);
 	const clientsDir = daemonPresenceDir(runtimeDir);
-	await fs.mkdir(clientsDir, { recursive: true, mode: 0o700 });
 	const id = `${process.pid}-${crypto.randomUUID()}`;
 	const presencePath = daemonPresenceEntryPath(clientsDir, id);
-	await atomicWriteFile(
-		presencePath,
-		JSON.stringify({
-			pid: process.pid,
-			processIdentity: getProcessStartIdentity(process.pid),
-			id,
-			projectDir: canonical,
-		}),
-	);
-	await fs.chmod(presencePath, 0o600);
+	const removeOwnedPresence = async (): Promise<void> => {
+		try {
+			const raw: unknown = JSON.parse(await fs.readFile(presencePath, "utf8"));
+			if (typeof raw === "object" && raw !== null && "id" in raw && raw.id === id) {
+				await fs.rm(presencePath, { force: true });
+			}
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+	};
+	// Share the broker transition lock with publication and whole-scope pruning.
+	// Prune may detach the parent while we are waiting to acquire its lock.
+	// Retry only that pre-publication race, not a failed presence publication.
+	// A permanently missing ancestor must still reject rather than spin forever.
+	for (let attempt = 0; ; attempt++) {
+		let entered = false;
+		let observed: Stats | undefined;
+		try {
+			await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+			observed = await fs.stat(runtimeDir);
+			await withFileLock(daemonBrokerLeasePath(runtimeDir), async () => {
+				entered = true;
+				try {
+					await fs.mkdir(clientsDir, { recursive: true, mode: 0o700 });
+					await atomicWriteFile(
+						presencePath,
+						JSON.stringify({
+							pid: process.pid,
+							processIdentity: getProcessStartIdentity(process.pid),
+							id,
+							projectDir: canonical,
+						}),
+					);
+					await fs.chmod(presencePath, 0o600);
+				} catch (error) {
+					await removeOwnedPresence();
+					throw error;
+				}
+			});
+			break;
+		} catch (error) {
+			if (entered || attempt >= 9) throw error;
+			if (isEnoent(error)) continue;
+			const current = await fs.stat(runtimeDir).catch((statError: unknown) => {
+				if (isEnoent(statError)) return null;
+				throw statError;
+			});
+			if (current === null || (observed && (current.dev !== observed.dev || current.ino !== observed.ino))) {
+				continue;
+			}
+			throw error;
+		}
+	}
 	let closed = false;
 	const close = async (): Promise<void> => {
 		if (closed) return;
 		closed = true;
 		cancelCleanup();
-		await fs.rm(presencePath, { force: true });
+		await removeOwnedPresence();
 	};
 	const cancelCleanup = postmortem.register(`daemon-presence:${id}`, () => close());
 	return { close };
 }
 
 /** Return whether a registered veyyon process in this runtime directory is still alive. */
-export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<boolean> {
+export async function hasLiveDaemonProjectPresence(runtimeDir: string, clock: BrokerLeaseClock = {}): Promise<boolean> {
 	const clientsDir = daemonPresenceDir(runtimeDir);
 	let entries: string[];
 	try {
@@ -95,8 +137,20 @@ export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<
 				await fs.rm(presencePath, { force: true });
 				continue;
 			}
-			if (daemonOwnerIsAlive(decoded, (await fs.stat(presencePath)).mtimeMs)) live = true;
-			else await fs.rm(presencePath, { force: true });
+			const mtimeMs = (await fs.stat(presencePath)).mtimeMs;
+			const identity =
+				"processIdentity" in decoded && typeof decoded.processIdentity === "string"
+					? decoded.processIdentity
+					: null;
+			// Only a matching OS incarnation proves ownership. A live numeric PID
+			// alone (including an unreadable identity) gets the 24-hour lease bound.
+			const verified = identity !== null && getProcessStartIdentity(decoded.pid) === identity;
+			if (
+				daemonOwnerIsAlive(decoded, mtimeMs) &&
+				(verified || (clock.now ?? Date.now)() - mtimeMs <= 24 * 60 * 60_000)
+			) {
+				live = true;
+			} else await fs.rm(presencePath, { force: true });
 		} catch (error) {
 			if (!isEnoent(error)) await fs.rm(presencePath, { force: true });
 		}
@@ -167,7 +221,7 @@ export async function pruneDeadDaemonRuntimeDirs(
 				const observed = await fs.stat(dir);
 				if (observed.dev !== stat.dev || observed.ino !== stat.ino) return null;
 				if (!(await retireDaemonBroker(dir, clock))) return null;
-				if (await hasLiveDaemonProjectPresence(dir)) return null;
+				if (await hasLiveDaemonProjectPresence(dir, clock)) return null;
 				const tombstone = path.join(root, `.retired-${entry.name}-${crypto.randomUUID()}`);
 				await fs.rename(dir, tombstone);
 				return tombstone;
