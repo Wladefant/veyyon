@@ -3,7 +3,7 @@ import { buildAnthropicClientOptions, streamAnthropic } from "@veyyon/ai/provide
 import type { Context, Model } from "@veyyon/ai/types";
 import { buildAnthropicUrl } from "@veyyon/ai/utils/anthropic-auth";
 import { buildModel } from "@veyyon/catalog/build";
-import { OPENCODE_HEADERS } from "@veyyon/catalog/wire/github-copilot";
+import { COPILOT_IDENTITY_HEADERS, COPILOT_USER_AGENT } from "@veyyon/catalog/wire/github-copilot";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -16,7 +16,7 @@ function makeCopilotClaudeModel(): Model<"anthropic-messages"> {
 		api: "anthropic-messages",
 		provider: "github-copilot",
 		baseUrl: "https://api.githubcopilot.com",
-		headers: { ...OPENCODE_HEADERS },
+		headers: { ...COPILOT_IDENTITY_HEADERS },
 		reasoning: true,
 		input: ["text", "image"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -161,7 +161,8 @@ describe("Anthropic Copilot auth config", () => {
 			dynamicHeaders: {},
 		});
 
-		expect(options.defaultHeaders["User-Agent"]).toContain("opencode");
+		expect(options.defaultHeaders["User-Agent"]).toBe(COPILOT_USER_AGENT);
+		expect(options.defaultHeaders["User-Agent"]).not.toContain("opencode");
 	});
 
 	it("includes interleaved-thinking beta header when enabled", () => {
@@ -243,7 +244,10 @@ describe("Anthropic Copilot auth config", () => {
 
 	it("merges Copilot headers case-insensitively so auth headers cannot duplicate", () => {
 		const result = buildAnthropicClientOptions({
-			model: { ...makeCopilotClaudeModel(), headers: { ...OPENCODE_HEADERS, authorization: "Bearer override" } },
+			model: {
+				...makeCopilotClaudeModel(),
+				headers: { ...COPILOT_IDENTITY_HEADERS, authorization: "Bearer override" },
+			},
 			apiKey: "ghu_test",
 			extraBetas: [],
 			stream: true,

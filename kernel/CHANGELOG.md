@@ -8,13 +8,17 @@
 
 - `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
 - Exported SessionManagerStateSnapshot in SessionManager for atomic session migration and state restoration ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the `tools.artifactMaxBytes` setting (default 16 MiB, `0` unbounded, negative rejected) capping saved tool-output artifacts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi ac896ded0bd499cbc1c480b500c2a43b3abc2027).
 
 ### Changed
 
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
+- Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#451](https://github.com/Wladefant/veyyon/pull/451)).
+- Restore blob-backed display values before migration, publish the new session version only after all saves succeed, and reserve artifact IDs across independent writers and synchronous allocations. The registered eval-result codec owns display migration; read-only loads retain full values without writing, and writable flush saves recovery artifacts ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 
 ### Fixed
+- Flush persists stale OpenAI Responses replay cleanup while deferring legacy structural migrations until writable activity ([PR 451](https://github.com/Wladefant/veyyon/pull/451)).
 - Fence fresh terminal breadcrumbs to an explicit session directory and require positive directory inode evidence before re-rooting moved projects (oh-my-pi 13fc0b6c33c536481221a1b23d16ef993f01d7b0, oh-my-pi cd46dd0ca51641560e53d3cd14e164cd4f241e9d, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Session discovery recovers hashed-layout transcripts without changing active directory names or deleting conflicting stale copies ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed terminal breadcrumbs being rewritten when unchanged, skipping redundant disk writes when re-recording identical session pointers (oh-my-pi aa4136eb4a9e8cbe99e9f17435e7fd2b207ba655, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

@@ -14,6 +14,7 @@ set +e
 # path `t` types through: an XTEST key did not reach the window on the
 # containerised recorder.
 pty_key() { kitty @ --to "${KITTY_SOCKET}" send-text -- "$1"; }
+# needle-source: C# sources -- the search query in the resumed seed session from proof/docker/glyph-seed/cmd.sh
 expect_screen "C# sources" 120 launch
 settle 6
 shot search-card

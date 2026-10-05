@@ -179,7 +179,7 @@ export type DaemonOperation =
 
 /** Typed broker result decoded before it reaches tool code. */
 export type DaemonRpcResult =
-	| { op: "ping"; projectDir: string }
+	| { op: "ping"; projectDir: string; pid?: number }
 	| { op: "start"; daemon: DaemonSnapshot; readyTimedOut: boolean }
 	| { op: "list"; daemons: DaemonSnapshot[]; completions: DaemonCompletionRecord[] }
 	| {
@@ -462,7 +462,11 @@ export function parseDaemonRpcResult(operation: DaemonOperation, value: unknown)
 	const source = record(value, `${operation.op} result`);
 	switch (operation.op) {
 		case "ping":
-			return { op: "ping", projectDir: stringValue(source.projectDir, "result.projectDir") };
+			return {
+				op: "ping",
+				projectDir: stringValue(source.projectDir, "result.projectDir"),
+				...(typeof source.pid === "number" ? { pid: source.pid } : {}),
+			};
 		case "start":
 			return {
 				op: "start",

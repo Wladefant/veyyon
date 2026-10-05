@@ -422,6 +422,8 @@ export interface AuthCredentialStore {
 	 * skipped — the broker host records into its own database instead.
 	 */
 	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
+	/** Delete every recorded usage-limit snapshot. Nothing else in the store is touched. */
+	purgeUsageHistory?(): void;
 	/** Read recorded usage-limit snapshots, oldest first. */
 	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
 	/**

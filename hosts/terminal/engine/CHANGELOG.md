@@ -9,6 +9,7 @@
 ### Added
 
 - Added `naturalWidth()`, `isSearchable()`, and `cancel()` to `SelectList`, alongside `ComponentScopedRender` and dynamic viewport adaptations.
+- While the engine holds the mouse, a left click above the pinned footer reaches the root child drawn on that row when it declares click targets with `wantsPointer()` ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Fixed
 

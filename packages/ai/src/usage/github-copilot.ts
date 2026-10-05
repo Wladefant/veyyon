@@ -5,7 +5,7 @@
  */
 
 import { toBoolean, toNumber } from "@veyyon/catalog/utils";
-import { GITHUB_REST_HEADERS, OPENCODE_HEADERS } from "@veyyon/catalog/wire/github-copilot";
+import { COPILOT_IDENTITY_HEADERS, GITHUB_REST_HEADERS } from "@veyyon/catalog/wire/github-copilot";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
 import type {
@@ -174,7 +174,7 @@ async function fetchInternalUsage(
 		"Content-Type": "application/json",
 		Accept: "application/json",
 		Authorization: `Bearer ${token}`,
-		...OPENCODE_HEADERS,
+		...COPILOT_IDENTITY_HEADERS,
 	};
 	const data = await fetchGitHubCopilotJson(ctx.fetch, `${githubApiBaseUrl}/copilot_internal/user`, {
 		headers,

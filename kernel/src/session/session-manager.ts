@@ -95,7 +95,7 @@ import {
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 import { assertNotTerminalOwned } from "./terminal-ownership";
-import { migrateToolResultEntries } from "./tool-result-codecs";
+import { hasPendingToolResultMigrations } from "./tool-result-codecs";
 
 const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
@@ -295,6 +295,7 @@ export interface SessionManagerStateSnapshot {
 	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
+	deferredLegacyRewrite?: boolean;
 	draftOnlySessionCleanupArmed: boolean;
 	nextSequence: number;
 	lifecycleStarted: boolean;
@@ -380,6 +381,8 @@ export class SessionManager {
 	#fileIsCurrent = false;
 	/** In-memory entries diverged from disk (load-migration/sanitize) → next persist must full-rewrite. */
 	#rewriteRequired = false;
+	/** Structural load migrations wait for a writable publish; ordinary dirty state does not. */
+	#deferredLegacyRewrite = false;
 	/** Lazy gate crossed (ensureOnDisk / loaded file): every entry must persist from now on. */
 	#forceFileCreation = false;
 	/**
@@ -1677,6 +1680,7 @@ export class SessionManager {
 			sessionFile: this.#sessionFile,
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
+			deferredLegacyRewrite: this.#deferredLegacyRewrite,
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			nextSequence: this.#nextSequence,
 			lifecycleStarted: this.#lifecycleStarted,
@@ -1700,6 +1704,7 @@ export class SessionManager {
 		this.#sessionFile = snapshot.sessionFile;
 		this.#fileIsCurrent = snapshot.onDisk;
 		this.#rewriteRequired = snapshot.needsRewrite;
+		this.#deferredLegacyRewrite = snapshot.deferredLegacyRewrite ?? false;
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
@@ -1742,7 +1747,6 @@ export class SessionManager {
 		let header: SessionHeader | undefined;
 		let adoptedCwd: string | undefined;
 		if (fileEntries.length > 0) {
-			migrated = migrateToCurrentVersion(fileEntries);
 			await resolveBlobRefsInEntries(
 				fileEntries,
 				new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
@@ -1751,14 +1755,7 @@ export class SessionManager {
 					operatorNotices: this.#operatorNotices,
 				},
 			);
-			const migrationArtifacts = new ArtifactManager(sessionFileStem(resolvedSessionFile));
-			if (
-				await migrateToolResultEntries(fileEntries, {
-					saveArtifact: (content, toolName) => migrationArtifacts.save(content, toolName),
-				})
-			) {
-				migrated = true;
-			}
+			migrated = await migrateToCurrentVersion(fileEntries);
 			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
@@ -1801,11 +1798,15 @@ export class SessionManager {
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
 		this.#rewriteRequired = migrated;
+		this.#deferredLegacyRewrite = migrated;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 
-		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
+		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) {
+			this.#rewriteRequired = true;
+			this.#deferredLegacyRewrite = false;
+		}
 		if (layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(layout);
 		this.#startLifecycle("resumed");
 		this.#coolUnreachablePayloads();
@@ -2039,7 +2040,21 @@ export class SessionManager {
 		// A flush is a request to make the file match memory, so a latched fault takes
 		// its attempt here instead of being rethrown at a caller who asked for the
 		// opposite of a refusal.
-		if (this.#retryPersistenceAfterFailure() || this.#rewriteRequired) await this.#rewriteAtomically();
+		const pendingMigration = hasPendingToolResultMigrations(this.#entries);
+		if (pendingMigration) {
+			const artifacts = this.#artifactManagerForSession();
+			if (!artifacts) throw new Error("Cannot migrate tool results without session artifact storage");
+			await migrateToCurrentVersion([this.#header, ...this.#entries], {
+				saveArtifact: (content, toolType) => artifacts.save(content, toolType),
+			});
+			this.#rewriteRequired = true;
+		}
+		const retry = this.#retryPersistenceAfterFailure();
+		const dirty = this.#rewriteRequired && (!this.#deferredLegacyRewrite || !this.#fileIsCurrent);
+		if (retry || pendingMigration || dirty) {
+			await this.#rewriteAtomically();
+			this.#deferredLegacyRewrite = false;
+		}
 		await this.#scheduleDiskWork(async () => {
 			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});
@@ -2381,6 +2396,16 @@ export class SessionManager {
 		if (manager) return manager.save(content, toolType);
 
 		// Non-persistent session: keep an in-memory copy so spill truncation works.
+		this.#inMemoryArtifacts ??= new Map();
+		const id = String(this.#inMemoryArtifactCounter++);
+		this.#inMemoryArtifacts.set(id, content);
+		return id;
+	}
+
+	saveArtifactSync(content: string, toolType: string): string | undefined {
+		const manager = this.#artifactManagerForSession();
+		if (manager) return manager.saveSync(content, toolType);
+
 		this.#inMemoryArtifacts ??= new Map();
 		const id = String(this.#inMemoryArtifactCounter++);
 		this.#inMemoryArtifacts.set(id, content);
@@ -3088,11 +3113,11 @@ export class SessionManager {
 		const sourceEntries = structuredClone(
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
 		) as FileEntry[];
-		migrateToCurrentVersion(sourceEntries);
 		await resolveBlobRefsInEntries(sourceEntries, new BlobStore(blobsDirForSessionDir(path.dirname(sourcePath))), {
 			source: sourcePath,
 			operatorNotices: options?.operatorNotices,
 		});
+		await migrateToCurrentVersion(sourceEntries);
 
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const history = sourceEntries.filter((entry): entry is SessionEntry => {

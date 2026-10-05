@@ -1244,17 +1244,12 @@ const streamOpenAICompletionsOnce = (
 		const { requestAbortController, requestSignal } = abortTracker;
 		const onSseEvent = options?.onSseEvent;
 		const modelSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
-		// Track the OpenAI `[DONE]` sentinel independently of `onSseEvent`: it is
-		// the streaming protocol's terminal signal, so a stream that ends with it
-		// completed by server agreement even when no `finish_reason` chunk arrived.
-		let sawDoneSentinel = false;
-		const rawSseObserver = (event: RawSseEvent) => {
-			if (event.data === "[DONE]") sawDoneSentinel = true;
-			if (modelSseObserver) {
-				resolveOpenAiSseEventName(event);
-				notifyRawSseEvent(modelSseObserver, event);
-			}
-		};
+		const rawSseObserver = modelSseObserver
+			? (event: RawSseEvent) => {
+					resolveOpenAiSseEventName(event);
+					notifyRawSseEvent(modelSseObserver, event);
+				}
+			: undefined;
 		// Assigned once the block helpers exist (they are scoped to the `try`);
 		// the catch handler uses it to close open blocks before emitting the
 		// terminal error so both exit paths obey the same block lifecycle.
@@ -1268,7 +1263,7 @@ const streamOpenAICompletionsOnce = (
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			const { copilotPremiumRequests, baseUrl, headers, query, requestHeaders } = createRequestSetup(
+			const { baseUrl, headers, query, requestHeaders } = createRequestSetup(
 				model,
 				context,
 				apiKey,
@@ -1277,7 +1272,6 @@ const streamOpenAICompletionsOnce = (
 				getOpenAIPromptCacheKey(options),
 				conversationIdForOpenCode(options),
 			);
-			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
 				model,
 				baseUrl,
@@ -1316,9 +1310,6 @@ const streamOpenAICompletionsOnce = (
 			disableStrictTools = connectionResult.disableStrictTools;
 			await notifyProviderResponse(options, openaiHandle.response, model, openaiHandle.requestId);
 			const openaiStream = openaiHandle.events;
-			if (premiumRequestsTotal !== undefined) {
-				output.usage.premiumRequests = premiumRequestsTotal;
-			}
 			stream.push({ type: "start", partial: output });
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
 			const toolCallBlockByIndex = new Map<number, ToolCallStreamBlock>();
@@ -1577,7 +1568,7 @@ const streamOpenAICompletionsOnce = (
 			let sawUsagePayload = false;
 			let awaitTrailingUsageDetails = false;
 			const applyUsagePayload = (rawUsage: object): void => {
-				output.usage = parseChunkUsage(rawUsage, model, premiumRequestsTotal);
+				output.usage = parseChunkUsage(rawUsage, model, undefined);
 				sawUsagePayload = true;
 				awaitTrailingUsageDetails = !hasPositiveCacheReadTokenField(rawUsage);
 			};
@@ -1720,18 +1711,20 @@ const streamOpenAICompletionsOnce = (
 			// sweep. Throwing after that sweep would make the error handler emit a
 			// second text_end/thinking_end for the same partial block.
 			//
-			// Only a genuine truncation — transport EOF with neither a
-			// `finish_reason` chunk nor the `[DONE]` sentinel — is incomplete. A
-			// stream terminated by `[DONE]` completed by server agreement; some
-			// OpenAI-compatible hosts omit or `null` the `finish_reason` and rely on
-			// `[DONE]` alone, so finalize those as the default `stop`
-			// (mapStopReason(null)) instead of surfacing a false incomplete-stream
-			// error and retrying every turn.
-			if (streamFinishedAt === undefined && !sawDoneSentinel && output.content.length > 0) {
-				throw new AIError.ProviderResponseError(
-					"OpenAI completions stream closed before a finish_reason was received",
-					{ provider: model.provider, kind: "incomplete-stream" },
-				);
+			// A transport EOF with no `finish_reason` chunk is judged by what arrived,
+			// the same way on every dialect (`stopReasonForTerminallessEof`): text, a
+			// complete tool batch or reasoning stand as a turn, while an empty body or
+			// a partial tool call is a truncation. A `[DONE]` sentinel is not a
+			// stronger signal than that, so it gets no separate carve-out: a stream
+			// that ends `[DONE]` with nothing usable is still incomplete.
+			if (streamFinishedAt === undefined) {
+				const stopReason = stopReasonForTerminallessEof(output.content, hasCompleteToolCallBatch());
+				if (stopReason === undefined) {
+					throw new AIError.ProviderResponseError(
+						"OpenAI completions stream closed before a terminal finish reason was received",
+						{ provider: model.provider, kind: "incomplete-stream" },
+					);
+				}
 			}
 
 			finalizeOpenAICompletionsStream(

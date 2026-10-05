@@ -135,6 +135,15 @@ import {
 	orderUsageRankedCandidates,
 } from "./auth-storage/usage-ranking";
 import {
+	redactingUsageLogger,
+	redactUsageError,
+	redactUsageReport,
+	redactUsageShape,
+	redactUsageValue,
+	usageCredentialSecrets,
+	usageErrorStatus,
+} from "./auth-storage/usage-redaction";
+import {
 	getScopedUsageLimits,
 	getUsageReportIdentifiers,
 	getUsageReportMetadataValue,
@@ -149,6 +158,7 @@ import type { UsageRequestDescriptor } from "./auth-storage/usage-requests";
 import {
 	buildRefreshableOauthCredential,
 	buildUsageCacheIdentity,
+	buildUsageHistoryAccountKey,
 	buildUsageCredential,
 	buildUsageReportCacheKey,
 	buildUsageReportsCacheKey,
@@ -282,6 +292,11 @@ const defaultBackoffMs = 60_000;
  * Reads from storage on reload(), manages round-robin credential selection,
  * usage limit tracking, and OAuth token refresh.
  */
+/** Bump when what usage history may hold changes and rows written before must be dropped. */
+const USAGE_HISTORY_PURGE_MARKER = "usage_history:purged";
+const USAGE_HISTORY_PURGE_VERSION = "1";
+const USAGE_HISTORY_PURGE_MARKER_TTL_SEC = 10 * 365 * 24 * 60 * 60;
+
 export class AuthStorage {
 	// Default backoff when no reset time available
 
@@ -373,6 +388,7 @@ export class AuthStorage {
 			this.onUsageLimitWithheld(options.onUsageLimitWithheld);
 		}
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
+		this.#purgeLegacyUsageHistory();
 		this.#routing = new CredentialRouting(this.#store, (provider) =>
 			this.#getStoredCredentials(provider),
 		);
@@ -2338,9 +2354,16 @@ export class AuthStorage {
 			sessionPref?.type === "oauth"
 				? allCredentials[sessionPref.index]
 				: undefined;
-		return stickyCredential?.type === "oauth"
-			? stickyCredential
-			: oauthCredentials[0];
+		if (stickyCredential?.type === "oauth") return stickyCredential;
+		// No session preference: the account the operator globally selected (`/account use`)
+		// is the active one. Storage order (`oauthCredentials[0]`) is only the last resort,
+		// otherwise a switch leaves identity attribution on the previous account.
+		const selected = this.#routing.getSelectedCredential(provider);
+		if (selected?.type === "oauth") {
+			const selectedCredential = allCredentials[selected.index];
+			if (selectedCredential?.type === "oauth") return selectedCredential;
+		}
+		return oauthCredentials[0];
 	}
 
 	/**
@@ -2644,7 +2667,7 @@ export class AuthStorage {
 						signal: timeoutSignal,
 					};
 				} catch (error) {
-					const errorMsg = String(error);
+					const safeErrorMsg = redactUsageError(error, usageCredentialSecrets(request.credential));
 					// Definitive failure (invalid_grant / 401 not from a network blip) means
 					// the refresh token itself is dead — probing with the original credential
 					// will 401, the catch below will return null, and #fetchUsageCached's
@@ -2652,7 +2675,7 @@ export class AuthStorage {
 					// (including its already-elapsed `resetsAt`). CAS-disable the row and
 					// clear the cache so the credential drops out of the report instead of
 					// freezing in place until the user notices and re-logs in.
-					if (AIError.isDefinitiveOAuthFailure(errorMsg)) {
+					if (AIError.isDefinitiveOAuthFailure(safeErrorMsg)) {
 						const credentialId = this.#findStoredCredentialIdForUsageCredential(
 							request.provider,
 							request.credential,
@@ -2667,7 +2690,7 @@ export class AuthStorage {
 									request.provider,
 									index,
 									refreshableCredential,
-									`oauth refresh failed during usage probe: ${errorMsg}`,
+									`oauth refresh failed during usage probe: ${safeErrorMsg}`,
 								);
 								if (disabled) {
 									this.#usageLogger?.warn(
@@ -2675,7 +2698,7 @@ export class AuthStorage {
 										{
 											provider: request.provider,
 											credentialId,
-											error: errorMsg,
+											error: safeErrorMsg,
 										},
 									);
 									// Neutralize last-good for this cache key: write a null
@@ -2695,20 +2718,32 @@ export class AuthStorage {
 						"Usage credential refresh failed, using original credential",
 						{
 							provider: request.provider,
-							error: errorMsg,
+							error: safeErrorMsg,
 						},
 					);
 				}
 			}
 		}
 
-		if (providerImpl.supports && !providerImpl.supports(params)) return null;
+		if (!this.#usageProviderSupports(providerImpl, params).supported) return null;
 
+		const fetchSecrets = [
+			...new Set([
+				...usageCredentialSecrets(request.credential),
+				...usageCredentialSecrets(params.credential),
+			]),
+		];
 		try {
-			const report = await providerImpl.fetchUsage(params, {
+			const fetched = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
-				logger: this.#usageLogger,
+				logger: redactingUsageLogger(this.#usageLogger, fetchSecrets),
 			});
+			// Everything below reads the redacted snapshot, never the backend's own object.
+			const report = fetched === null ? null : redactUsageReport(fetched, fetchSecrets);
+			if (fetched !== null && report === undefined) {
+				logger.debug("AuthStorage usage fetch returned an unreadable report", { provider: request.provider });
+				return null;
+			}
 			// Attribute the report to the credential's organization. The orgId and
 			// orgName fallbacks apply independently: Claude's usage endpoint stamps
 			// orgId from the `anthropic-organization-id` response header but never
@@ -2732,12 +2767,14 @@ export class AuthStorage {
 					};
 				}
 			}
-			return report;
+			// Redact last: the org fallback above filled fields from the stored credential, and the
+			// value returned here is the one that is cached and persisted.
+			return report ? (redactUsageReport(report, fetchSecrets) ?? null) : null;
 		} catch (error) {
-			if (
-				error instanceof AIError.ProviderHttpError &&
-				(error.status === 401 || error.status === 403)
-			) {
+			// Classified without running user code: no `instanceof` (a Proxy's getPrototypeOf trap) and no
+			// plain `status` read (a getter may throw the credential).
+			const failureStatus = usageErrorStatus(error);
+			if (failureStatus === 401 || failureStatus === 403) {
 				// Definitive auth failure (revoked key, lapsed subscription): purge the
 				// last-good report so #fetchUsageCached's failure branch cannot keep
 				// rendering and ranking from stale quota the way it does for transient
@@ -2749,7 +2786,7 @@ export class AuthStorage {
 			}
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
-				error: String(error),
+				error: redactUsageValue(error, fetchSecrets),
 			});
 			return null;
 		}
@@ -2812,6 +2849,28 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Usage history written before redaction holds raw account identities and whatever a backend put in
+	 * its labels, and its account keys are not the digests written now, so those series are orphaned
+	 * anyway. Drop it once per store: the marker is written only after the delete succeeded, so a failed
+	 * purge is retried on the next start. Credentials, names, blocks and the usage cache are untouched.
+	 */
+	#purgeLegacyUsageHistory(): void {
+		const purge = this.#store.purgeUsageHistory;
+		if (!purge) return;
+		try {
+			if (this.#store.getCache(USAGE_HISTORY_PURGE_MARKER) === USAGE_HISTORY_PURGE_VERSION) return;
+			purge.call(this.#store);
+			this.#store.setCache(
+				USAGE_HISTORY_PURGE_MARKER,
+				USAGE_HISTORY_PURGE_VERSION,
+				Math.floor(Date.now() / 1000) + USAGE_HISTORY_PURGE_MARKER_TTL_SEC,
+			);
+		} catch (error) {
+			this.#usageLogger?.debug("usage history purge failed", { error: redactUsageError(error, []) });
+		}
+	}
+
+	/**
 	 * Append a freshly fetched report to durable usage history (when the store
 	 * supports it). The usage cache is latest-snapshot-only — these rows are
 	 * the only place limit utilization is kept over time.
@@ -2826,7 +2885,7 @@ export class AuthStorage {
 			Number.isFinite(report.fetchedAt) && report.fetchedAt > 0
 				? report.fetchedAt
 				: Date.now();
-		const accountKey = buildUsageCacheIdentity(request.credential);
+		const accountKey = buildUsageHistoryAccountKey(request.credential);
 		const metadata = report.metadata ?? {};
 		const metaEmail =
 			typeof metadata.email === "string" ? metadata.email : undefined;
@@ -2846,12 +2905,17 @@ export class AuthStorage {
 			status: limit.status,
 			resetsAt: limit.window?.resetsAt,
 		}));
+		// Durable history is a persisted channel too: accountKey, email, accountId and the labels are built
+		// from stored identity and a backend's report, and any of them can hold the credential. The account key
+		// is a digest of the identity, so distinct accounts never collapse onto one redacted key; the other
+		// fields are redacted by value and the property names are never rewritten.
+		const secrets = usageCredentialSecrets(request.credential);
 		try {
-			record.call(this.#store, entries);
+			record.call(this.#store, redactUsageShape(entries, secrets, "list:historyEntry"));
 		} catch (error) {
 			this.#usageLogger?.debug("usage history record failed", {
 				provider: request.provider,
-				error: String(error),
+				error: redactUsageError(error, secrets),
 			});
 		}
 	}
@@ -2880,11 +2944,23 @@ export class AuthStorage {
 		);
 		if (!credential) return false;
 
-		const cacheKey = buildUsageReportCacheKey(
-			buildUsageRequestForOauth(provider, credential, options?.baseUrl),
-		);
+		const ingestRequest = buildUsageRequestForOauth(provider, credential, options?.baseUrl);
+		const cacheKey = buildUsageReportCacheKey(ingestRequest);
+		const secrets = usageCredentialSecrets(ingestRequest.credential);
 		const now = Date.now();
-		const parsedReport = parseHeaders(headers, now);
+		// The parser is a backend callback: a throw is redacted and ends this ingest, and what it returns
+		// is read only through the redacted snapshot, so it cannot reach the cache or the store raw.
+		let parsedReport: UsageReport | null | undefined;
+		try {
+			const parsedRaw = parseHeaders(headers, now);
+			parsedReport = parsedRaw ? redactUsageReport(parsedRaw, secrets) : null;
+		} catch (error) {
+			redactingUsageLogger(this.#usageLogger, secrets)?.debug("Usage header parse failed", {
+				provider,
+				error: redactUsageError(error, secrets),
+			});
+			return false;
+		}
 		if (!parsedReport) return false;
 		// Throttled to one ingest per interval — except when a window reads
 		// exhausted: that snapshot must land immediately so the next getApiKey
@@ -2912,7 +2988,9 @@ export class AuthStorage {
 			metadata.orgId = credential.orgId;
 		if (credential.orgName && metadata.orgName === undefined)
 			metadata.orgName = credential.orgName;
-		const report: UsageReport = { ...parsedReport, metadata };
+		// Redact last: the stored identity fields copied in above are credential-controlled too.
+		const report = redactUsageReport({ ...parsedReport, metadata }, secrets);
+		if (!report) return false;
 
 		const storeIngest = this.#store.ingestUsageReport?.bind(this.#store);
 		if (storeIngest) {
@@ -2964,6 +3042,29 @@ export class AuthStorage {
 		return true;
 	}
 
+	/**
+	 * Asks a usage backend whether it handles `request`, inside the redaction boundary. A `supports` that
+	 * throws (its message may quote the credential it was handed) fails closed for that request alone: it
+	 * is reported through the redacting logger, never rethrown, so the other providers still run.
+	 */
+	#usageProviderSupports(
+		providerImpl: UsageProvider,
+		request: UsageRequestDescriptor,
+	): { supported: boolean; failure?: string } {
+		if (!providerImpl.supports) return { supported: true };
+		try {
+			return { supported: providerImpl.supports(request) };
+		} catch (error) {
+			const secrets = usageCredentialSecrets(request.credential);
+			const failure = redactUsageError(error, secrets);
+			redactingUsageLogger(this.#usageLogger, secrets)?.debug(
+				"Usage provider support check failed",
+				{ provider: request.provider, error: failure },
+			);
+			return { supported: false, failure };
+		}
+	}
+
 	#collectUsageRequests(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 	}): UsageRequestDescriptor[] {
@@ -3007,7 +3108,7 @@ export class AuthStorage {
 					{ type: "api_key", apiKey },
 					options?.baseUrlResolver?.(provider),
 				);
-				if (providerImpl.supports && !providerImpl.supports(request)) continue;
+				if (!this.#usageProviderSupports(providerImpl, request).supported) continue;
 				requests.push(request);
 				continue;
 			}
@@ -3023,7 +3124,7 @@ export class AuthStorage {
 								baseUrl,
 							)
 						: buildUsageRequestForOauth(provider, credential, baseUrl);
-				if (providerImpl.supports && !providerImpl.supports(request)) continue;
+				if (!this.#usageProviderSupports(providerImpl, request).supported) continue;
 				requests.push(request);
 			}
 		}
@@ -3175,7 +3276,7 @@ export class AuthStorage {
 
 		const promise = (async () => {
 			for (const request of requests) {
-				this.#usageLogger?.debug("Usage fetch queued", {
+				redactingUsageLogger(this.#usageLogger, usageCredentialSecrets(request.credential))?.debug("Usage fetch queued", {
 					provider: request.provider,
 					credentialType: request.credential.type,
 					baseUrl: request.baseUrl,
@@ -3347,11 +3448,20 @@ export class AuthStorage {
 							accountKey: buildUsageCacheIdentity(refreshedCredential),
 						};
 					} catch (error) {
-						refreshError = `oauth refresh failed: ${errorMessage(error)}`;
+						refreshError = `oauth refresh failed: ${redactUsageError(error, [])}`;
 					}
 				}
 			}
 
+			// Every secret this row's probes held. `base` is redacted with them once, where it is pushed,
+			// so a field copied from the backend's report, a resolved completion probe and an error all
+			// pass the same boundary and a field added later does too.
+			const probeSecrets = [
+				...new Set([
+					...usageCredentialSecrets(initialRequest.credential),
+					...usageCredentialSecrets(params.credential),
+				]),
+			];
 			if (refreshError) {
 				probeTimeout.cancel();
 				base.ok = false;
@@ -3365,25 +3475,39 @@ export class AuthStorage {
 				this.#authDeadCredentials.add(row.id);
 				// Refresh failed → the access token is unusable. Skip both probes;
 				// they would only re-surface the same upstream failure.
-				results.push(base);
+				results.push(redactUsageShape(base, probeSecrets, "result"));
 				continue;
 			}
 
 			const providerImpl = resolver?.(row.provider as Provider);
+			const supportCheck = providerImpl
+				? this.#usageProviderSupports(providerImpl, initialRequest)
+				: { supported: false };
 			if (!providerImpl) {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
-			} else if (
-				providerImpl.supports &&
-				!providerImpl.supports(initialRequest)
-			) {
-				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+			} else if (!supportCheck.supported) {
+				if (supportCheck.failure !== undefined) {
+					base.ok = false;
+					base.reason = supportCheck.failure;
+				} else {
+					base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+				}
 			} else if (providerImpl.validatesCredentials === false) {
 				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
 				try {
-					const report = await providerImpl.fetchUsage(params, ctx);
+					const rawReport = await providerImpl.fetchUsage(params, {
+						...ctx,
+						logger: redactingUsageLogger(ctx.logger, probeSecrets),
+					});
+					// Read the report only through the redacted snapshot: no getter or method the
+					// backend put on it runs, and nothing below can copy the key out of it.
+					const report = rawReport === null ? null : redactUsageReport(rawReport, probeSecrets);
 					if (report === null) {
 						base.reason = "usage probe returned no data for this credential";
+					} else if (report === undefined) {
+						base.ok = false;
+						base.reason = "usage probe returned a report that could not be read";
 					} else {
 						base.ok = true;
 						const accountId = getUsageReportMetadataValue(report, "accountId");
@@ -3395,7 +3519,7 @@ export class AuthStorage {
 					}
 				} catch (error) {
 					base.ok = false;
-					base.reason = errorMessage(error);
+					base.reason = redactUsageError(error, probeSecrets);
 				}
 			}
 			probeTimeout.cancel();
@@ -3420,17 +3544,14 @@ export class AuthStorage {
 							signal: completionTimeout.signal,
 						});
 					} catch (error) {
-						base.completion = {
-							ok: false,
-							reason: errorMessage(error),
-						};
+						base.completion = { ok: false, reason: redactUsageError(error, probeSecrets) };
 					} finally {
 						completionTimeout.cancel();
 					}
 				}
 			}
 
-			results.push(base);
+			results.push(redactUsageShape(base, probeSecrets, "result"));
 		}
 
 		return results;
@@ -5202,14 +5323,17 @@ export class AuthStorage {
 	 * Force-invalidate cached usage reports so the next fetch retrieves fresh
 	 * values from upstream providers. If `provider` is specified, only that
 	 * provider's credentials are invalidated; otherwise, all credentials in the
-	 * store are invalidated.
+	 * store are invalidated. `baseUrlResolver` must match the one used to fetch:
+	 * report cache keys include the base URL, so a sidecar-served provider's
+	 * entries are only evicted when the same URL is supplied.
 	 */
 	async invalidateUsageCache(
 		provider?: string,
 		signal?: AbortSignal,
+		baseUrlResolver?: (provider: string) => string | undefined,
 	): Promise<void> {
 		if (provider) {
-			this.#invalidateUsageReportCache(provider);
+			this.#invalidateUsageReportCache(provider, baseUrlResolver?.(provider));
 		} else {
 			this.#usageCacheEpoch += 1;
 			const expired = Date.now() - 1;
@@ -5218,7 +5342,11 @@ export class AuthStorage {
 				for (const entry of credentials) {
 					if (entry.credential.type !== "oauth") continue;
 					const cacheKey = buildUsageReportCacheKey(
-						buildUsageRequestForOauth(entry.provider, entry.credential),
+						buildUsageRequestForOauth(
+							entry.provider,
+							entry.credential,
+							baseUrlResolver?.(entry.provider),
+						),
 					);
 					const existing = this.#usageCache.getStale<UsageReport | null>(
 						cacheKey,

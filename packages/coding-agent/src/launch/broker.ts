@@ -12,6 +12,7 @@ import {
 	isEnoent,
 	logger,
 	postmortem,
+	ptree,
 	sanitizeText,
 } from "@veyyon/utils";
 import { processHandle } from "@veyyon/utils/native-process";
@@ -444,7 +445,7 @@ export class DaemonBroker {
 	async #dispatch(operation: DaemonOperation): Promise<DaemonRpcResult> {
 		switch (operation.op) {
 			case "ping":
-				return { op: "ping", projectDir: this.#projectDir };
+				return { op: "ping", projectDir: this.#projectDir, pid: process.pid };
 			case "start":
 				return this.#start(operation.spec, operation.owner);
 			case "list": {
@@ -652,7 +653,7 @@ export class DaemonBroker {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
-			detached: true,
+			...ptree.detachedSpawnOptions(),
 		});
 		record.process = process;
 		record.input = process.stdin;
@@ -673,7 +674,7 @@ export class DaemonBroker {
 				cwd: record.spec.cwd,
 				env: workerEnvFromParent(record.spec.env),
 				stdio: ["ignore", output.fd, output.fd],
-				detached: true,
+				...ptree.detachedSpawnOptions(),
 			});
 			record.process = process;
 			record.snapshot.pid = process.pid;
@@ -1378,7 +1379,7 @@ export async function startDaemonBrokerFromEnvironment(): Promise<void> {
 	// Detached and non-throwing so it never delays clients connecting to us.
 	void pruneDeadDaemonRuntimeDirs(runtimeDir).catch(error => {
 		logger.warn("Daemon runtime prune failed", {
-			error: error instanceof Error ? error.message : String(error),
+			error: errorMessage(error),
 		});
 	});
 	try {

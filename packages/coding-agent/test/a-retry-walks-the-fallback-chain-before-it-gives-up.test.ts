@@ -2189,10 +2189,7 @@ describe("AgentSession retry fallback", () => {
 		const mock = createMockModel({
 			responses: [
 				{
-					content: [
-						{ type: "thinking", thinking: "Thinking before malformed function call..." },
-						{ type: "text", text: "Text before malformed function call..." },
-					],
+					content: [{ type: "thinking", thinking: "Thinking before malformed function call..." }],
 					stopReason: "error",
 					errorMessage: malformedError,
 				},

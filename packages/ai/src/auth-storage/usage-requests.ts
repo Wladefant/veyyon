@@ -3,6 +3,7 @@
  * batch of requests are stored under.
  */
 
+import { createHash } from "node:crypto";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
@@ -81,12 +82,35 @@ function normalizeUsageBaseUrl(baseUrl?: string): string {
 	return baseUrl ? trimTrailingSlashes(baseUrl.trim()) : "";
 }
 
+/**
+ * What a cache key says about an identity. The identity string embeds the stored accountId, email and
+ * orgId, and a backend or a hand-edited row can put a credential in any of them, so a persisted key
+ * carries a digest instead. Equal identities still give equal keys, so refresh and rotation keep hitting
+ * the same row.
+ */
+function usageIdentityDigest(identity: string): string {
+	return createHash("sha256").update(identity).digest("hex").slice(0, 32);
+}
+
+/**
+ * The account key usage history is grouped under: a digest of the account identity, never the identity
+ * itself, because the identity embeds the stored accountId, email and orgId and any of them can hold a
+ * credential. Distinct accounts keep distinct keys and one account keeps one key across token refreshes.
+ */
+export function buildUsageHistoryAccountKey(credential: UsageCredential): string {
+	return usageIdentityDigest(buildUsageCacheIdentity(credential));
+}
+
+/** Cache-key namespace for report rows. Rows under any other `report` prefix predate digest keys. */
+export const USAGE_REPORT_CACHE_NAMESPACE = "reportv2";
+
 export function buildUsageReportCacheKey(request: UsageRequestDescriptor): string {
 	const baseUrl = normalizeUsageBaseUrl(request.baseUrl) || "default";
 	const identity = buildUsageCacheIdentity(request.credential);
 	const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
 	const providerKey = versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
-	return `report:${providerKey}:${baseUrl}:${identity}`;
+	// The base URL can carry a query string a caller put a credential in, so it is digested with the identity.
+	return `${USAGE_REPORT_CACHE_NAMESPACE}:${providerKey}:${usageIdentityDigest(`${baseUrl}\n${identity}`)}`;
 }
 
 export function buildUsageReportsCacheKey(requests: ReadonlyArray<UsageRequestDescriptor>): string {

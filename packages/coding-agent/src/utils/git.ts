@@ -1406,6 +1406,11 @@ export const worktree = {
 	async prune(cwd: string, signal?: AbortSignal): Promise<void> {
 		await runEffect(cwd, ["worktree", "prune"], { signal });
 	},
+
+	/** Re-link a moved linked worktree: `git worktree repair <path>` rewrites the registration's gitdir. */
+	async repair(cwd: string, worktreePath: string, signal?: AbortSignal): Promise<void> {
+		await runEffect(cwd, ["worktree", "repair", worktreePath], { signal });
+	},
 };
 
 // ════════════════════════════════════════════════════════════════════════════

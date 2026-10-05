@@ -4,9 +4,18 @@
 
 ### Changed
 
+- Added the `providers.githubCopilot.oauthClientId` setting; `/usage` shows Copilot premium requests as unknown because GitHub bills Copilot in credits ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
+
+### Changed
+
+- Clicking an agent's row in the anchored Agents block focuses that agent while scroll isolation holds the mouse ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- On Windows the daemon broker and `launch` daemons no longer open a visible console window for each git, gh, Python or Node child they run: they start with a hidden console that children inherit, not `DETACHED_PROCESS` ([super-board#446](https://github.com/Wladefant/super-board/issues/446)).
+- Eval display migration preserves complete objects that resemble legacy previews, including every field in oversized recovery artifacts ([PR 451](https://github.com/Wladefant/veyyon/pull/451)).
+- Capped artifacts no longer claim to contain full output. Interactive bash honors the configured cap, negative caps are rejected, and short background results and job snapshots keep artifact capture warnings ([PR 432](https://github.com/Wladefant/veyyon/pull/432)).
+- A cancelled eval call now names a failed artifact capture in its abort message, and job cards show the capture warning whenever the visible preview lacks it ([PR 432](https://github.com/Wladefant/veyyon/pull/432)).
 - Fixed `OutputSink.dump()` skipping artifact writer cleanup when a throttled `onChunk` preview flush threw: the writer now ends once and the original error still propagates ([Refs #446](https://github.com/Wladefant/veyyon/issues/446)).
 - Command output from native Windows tools on Chinese (and other non-UTF-8) locales is decoded using the system ANSI code page instead of turning into replacement characters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6d628ff863415f75004f992733f33daeb29b6a2b).
 - Daemon startup recovers stale broker leases after PID reuse, including legacy PID-only records whose process started after the record. Lease transitions are serialized, and stale client presence no longer pins brokers or runtime scopes ([#411](https://github.com/Wladefant/veyyon/issues/411)).
@@ -26,6 +35,7 @@
 - Retained isolation workspaces move to unique sibling paths where the backend permits relocation and report missing mount metadata on retention errors ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 28459665c328fc5d4e965e1a398c253b7c8e9c3e, 3d2776d1d492999211341ee3270517d16142ed70).
 - Worktree cleanup refuses missing backend metadata, unmounts retained Overlayfs before deletion, preserves live Projfs projections and occupied isolation slots, and keeps an isolation slot from `worktree clear` while its owning process is still setting it up ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 8d80286ce71d63307afdf2f318d70ee84259f745).
 - Isolation cleanup serializes claim publication and deletion, rejects stale root identities, and reclaims dead marker-only slots through clear and same-id setup ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Tool streaming output reports failed artifact captures without false recovery links, caps artifact files at tools.artifactMaxBytes, and preserves capture warnings in follow-up results ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi ac896ded0bd499cbc1c480b500c2a43b3abc2027, 6acbb161c8c8f3da58d987dbc76d833651c6d719, cbf7898ce150c8a903db24fabe8f111567a3dc97).
 - Templated task isolation summaries and recovery hints, naming unmerged branches and nested patches on root merge failures ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved verbatim and device path prefixes on Windows during path normalization in file searches ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 499778383b6b950580964461e7e5c3ca536480de).
 - Fixed `plan.defaultOnStartup` being ignored by headless print mode sessions so initial prompts run in plan mode ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi a5ff9f9a3032ee4789066256e55228f06a9e3dd1).
@@ -35,7 +45,6 @@
 - Keep terminal text readable on painted surfaces by emitting explicit contrasting ANSI foregrounds for empty theme tokens ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 3634ec23229951ed4902dae6ca9a2b021b65392e).
 - Nested patch persistence removes only newly created patch files on write failure and preserves existing destination data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 1c01111697356e0c2d7bf41fb93ac97807943604).
 
-## [18.1.11] - 2026-09-05
 
 ### Added
 

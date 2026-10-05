@@ -10,6 +10,7 @@
 import { describe, expect, it, vi } from "bun:test";
 import { processHandle } from "@veyyon/utils/native-process";
 import { isProcessAlive } from "@veyyon/utils/process-liveness";
+import { isPidRunning } from "@veyyon/utils/procmgr";
 import { MnemopiEmbedClient, type MnemopiEmbedWorkerHandle } from "../src/memory/mnemopi/embed-client";
 import type { MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound } from "../src/memory/mnemopi/embed-protocol";
 import { createWorkerHandle, createWorkerSubprocess } from "../src/subprocess/worker-client";
@@ -169,13 +170,13 @@ describe("mnemopi embed requests are bounded and reap wedged workers", () => {
 		await handle.terminate();
 		await spawned.proc.exited;
 
-		if (nativeHandle) await nativeHandle.waitForExit({ timeoutMs: 3_000 });
+		if (nativeHandle) await nativeHandle.waitForExit({ timeoutMs: 5_000 });
 		for (const gpid of grandchildPids) {
 			const gHandle = processHandle(gpid);
-			if (gHandle) await gHandle.waitForExit({ timeoutMs: 3_000 });
-			expect(isProcessAlive(gpid)).toBe(false);
+			if (gHandle) await gHandle.waitForExit({ timeoutMs: 5_000 });
+			expect(isPidRunning(gpid)).toBe(false);
 		}
-		expect(isProcessAlive(childPid)).toBe(false);
+		expect(isPidRunning(childPid)).toBe(false);
 		expect(isProcessAlive(process.pid)).toBe(true);
 	}, 15_000);
 });

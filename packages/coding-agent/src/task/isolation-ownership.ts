@@ -27,6 +27,13 @@ export const RETAINED_BACKEND_FILE = ".veyyon-retained-backend.json";
 /** Process ownership record created during atomic slot claim. */
 export const ISOLATION_OWNER_FILE = ".veyyon-owner.json";
 
+/**
+ * Token file stamped into the git registration (`<repo>/.git/worktrees/<name>`) of an isolation
+ * checkout. Together with the unique mount directory name it proves the registration belongs to
+ * exactly one isolation instance.
+ */
+export const REGISTRATION_OWNER_FILE = "veyyon-owner";
+
 export interface IsolationOwnerRecord {
 	pid: number;
 	startIdentity: string | null;
@@ -46,15 +53,32 @@ export function isMountingIsolationBackend(backend: unknown): backend is natives
 }
 
 /**
- * Record every retained backend. Cleanup requires this record to distinguish
- * copy workspaces from mounts; a missing record never authorizes removal.
+ * Record the backend of an isolation workspace. Cleanup requires this record to distinguish
+ * copy workspaces from mounts; a missing record never authorizes removal. Setup writes it
+ * with `retained: false` so a crashed owner's slot is reclaimable; retention rewrites it
+ * with `retainedAt`, which {@link isRetainedWorkspace} reads.
  */
-export async function writeRetainedBackend(baseDir: string, backend: natives.IsoBackendKind): Promise<void> {
-	await fs.writeFile(
-		path.join(baseDir, RETAINED_BACKEND_FILE),
-		JSON.stringify({ backend, retainedAt: new Date().toISOString() }),
-		"utf8",
-	);
+export async function writeRetainedBackend(
+	baseDir: string,
+	backend: natives.IsoBackendKind,
+	options: { retained?: boolean } = {},
+): Promise<void> {
+	const record = options.retained === false ? { backend } : { backend, retainedAt: new Date().toISOString() };
+	await fs.writeFile(path.join(baseDir, RETAINED_BACKEND_FILE), JSON.stringify(record), "utf8");
+}
+
+/**
+ * Whether the sidecar marks a deliberate retention (as opposed to the setup record of a slot
+ * a task may still be running in). An unreadable sidecar counts as not retained, so callers
+ * treating a live owner as a blocker stay conservative.
+ */
+export async function isRetainedWorkspace(dir: string): Promise<boolean> {
+	try {
+		const decoded: unknown = JSON.parse(await fs.readFile(path.join(dir, RETAINED_BACKEND_FILE), "utf8"));
+		return typeof decoded === "object" && decoded !== null && "retainedAt" in decoded;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -113,6 +137,84 @@ export async function writeIsolationOwner(
 	return record;
 }
 
+/** A linked-worktree registration plus the checkout `.git` path its `gitdir` file named when found. */
+export interface LinkedWorktreeRegistration {
+	adminDir: string;
+	backlink: string;
+	/** Owner token the registration carried when found; deletion requires it to be unchanged. */
+	token: string;
+}
+
+/** Resolve the registration directory a checkout's `.git` pointer file names, or null. */
+async function readRegistrationPointer(checkout: string): Promise<{ adminDir: string; backlink: string } | null> {
+	try {
+		const pointer = await fs.readFile(path.join(checkout, ".git"), "utf8");
+		const match = /^gitdir:\s*(.+?)\s*$/m.exec(pointer);
+		if (!match) return null;
+		const adminDir = path.resolve(checkout, match[1]);
+		// Only a genuine registration: <repo>/.git/worktrees/<name>.
+		if (path.basename(path.dirname(adminDir)) !== "worktrees") return null;
+		const backlink = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
+		return { adminDir, backlink };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Stamp the isolation owner token into the registration of a freshly created linked-worktree
+ * checkout. Only a registration whose backlink names this checkout is stamped. Best effort: a
+ * checkout that is not a linked worktree has no registration to stamp.
+ */
+export async function stampLinkedWorktreeRegistration(checkout: string, token: string): Promise<void> {
+	const registration = await readRegistrationPointer(checkout);
+	if (registration === null || registration.backlink !== path.resolve(checkout, ".git")) return;
+	await fs.writeFile(path.join(registration.adminDir, REGISTRATION_OWNER_FILE), token, "utf8");
+}
+
+/**
+ * Registration directories (`<repo>/.git/worktrees/<name>`) of the linked-worktree checkouts
+ * inside an isolation slot that this slot's instance created. A copy backend such as Rcopy
+ * materialises `git worktree add` checkouts, so deleting the slot with `fs.rm` alone leaves the
+ * source repo listing a missing worktree, and the next `ensureIsolation` for the same id fails
+ * with "missing but already registered". Callers collect these before removal and delete
+ * exactly these directories afterwards. A registration qualifies only when its `gitdir`
+ * backlink names the checkout AND its owner token equals the slot's owner token, so a copied
+ * view of another worktree's `.git` pointer never qualifies. Each checkout has a unique
+ * basename, so git never reuses the registration name for another checkout. Looks at the slot
+ * and one level below it, which covers the mount dir of a plain and of a retained slot.
+ */
+export async function findLinkedWorktreeAdminDirs(baseDir: string): Promise<LinkedWorktreeRegistration[]> {
+	let owner: IsolationOwnerRecord | null;
+	try {
+		owner = await readIsolationOwner(baseDir);
+	} catch {
+		return [];
+	}
+	if (owner === null) return [];
+	const candidates = [baseDir];
+	try {
+		for (const entry of await fs.readdir(baseDir, { withFileTypes: true })) {
+			if (entry.isDirectory()) candidates.push(path.join(baseDir, entry.name));
+		}
+	} catch {
+		return [];
+	}
+	const adminDirs: LinkedWorktreeRegistration[] = [];
+	for (const dir of candidates) {
+		const registration = await readRegistrationPointer(dir);
+		if (registration === null || registration.backlink !== path.resolve(dir, ".git")) continue;
+		try {
+			const token = (await fs.readFile(path.join(registration.adminDir, REGISTRATION_OWNER_FILE), "utf8")).trim();
+			if (token !== owner.token) continue;
+			adminDirs.push({ ...registration, token });
+		} catch {
+			/* unstamped registration: not provably ours */
+		}
+	}
+	return adminDirs;
+}
+
 /**
  * Read the process ownership record of an isolation slot, or `null` when missing.
  * Throws on corrupt JSON or missing required fields so callers can fail closed.
@@ -160,53 +262,26 @@ export async function readIsolationOwner(baseDir: string): Promise<IsolationOwne
  * Directories with any other contents fail closed (return `false`).
  */
 export async function isAbandonedEmptyReservation(baseDir: string): Promise<boolean> {
-	let pid: number | null = null;
-	let startIdentity: string | null = null;
+	let pid: number;
+	let startIdentity: string | null;
 
-	try {
-		const rawClaim = await fs.readFile(path.join(baseDir, ISOLATION_CLAIM_FILE), "utf8");
-		let decoded: unknown;
-		try {
-			decoded = JSON.parse(rawClaim);
-		} catch {
-			return false;
-		}
-		if (decoded && typeof decoded === "object" && "pid" in decoded) {
-			const candidatePid = decoded.pid;
-			if (
-				typeof candidatePid === "number" &&
-				Number.isInteger(candidatePid) &&
-				candidatePid > 0 &&
-				candidatePid <= 0x7fffffff
-			) {
-				pid = candidatePid;
-				if ("startIdentity" in decoded && typeof decoded.startIdentity === "string") {
-					startIdentity = decoded.startIdentity;
-				}
-			} else {
-				return false;
-			}
-		} else {
-			return false;
-		}
-	} catch (err) {
-		if (!isEnoent(err)) return false;
-	}
-
-	if (pid === null) {
-		let owner: IsolationOwnerRecord | null = null;
+	const claim = await readClaimIncarnation(baseDir);
+	if (claim.state === "unreadable") return false;
+	if (claim.state === "present") {
+		pid = claim.pid;
+		startIdentity = claim.startIdentity;
+	} else {
+		let owner: IsolationOwnerRecord | null;
 		try {
 			owner = await readIsolationOwner(baseDir);
 		} catch {
 			return false;
 		}
-		if (owner) {
-			pid = owner.pid;
-			startIdentity = owner.startIdentity;
-		}
+		if (!owner) return false;
+		pid = owner.pid;
+		startIdentity = owner.startIdentity;
 	}
 
-	if (pid === null) return false;
 	if (isProcessInstanceAlive(pid, startIdentity)) return false;
 
 	try {
@@ -218,13 +293,46 @@ export async function isAbandonedEmptyReservation(baseDir: string): Promise<bool
 }
 
 /**
- * Path for a base directory's exclusive lifecycle lock outside the scanned
- * `wt` directory (under a sibling `isolation-locks` directory).
+ * One canonical spelling of a physical path, so every alias of an isolation
+ * slot (a case variant on Windows, a junction or symlink on a parent
+ * directory) names the same lock and compares equal. Resolves the deepest
+ * existing ancestor with `fs.realpath` and appends the not-yet-existing rest;
+ * on win32 the result is lowercased with `\` separators.
  */
-export function getIsolationLifecycleLockPath(baseDir: string): string {
-	const resolved = path.resolve(baseDir);
-	const name = path.basename(resolved);
-	const hash = crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 16);
+export async function canonicalIsolationPath(target: string): Promise<string> {
+	const resolved = path.resolve(target);
+	const rest: string[] = [];
+	let current = resolved;
+	let real: string | undefined;
+	for (;;) {
+		try {
+			real = await fs.realpath(current);
+			break;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+			const parent = path.dirname(current);
+			if (parent === current) {
+				real = current;
+				break;
+			}
+			rest.unshift(path.basename(current));
+			current = parent;
+		}
+	}
+	const joined = rest.length > 0 ? path.join(real, ...rest) : real;
+	return process.platform === "win32" ? joined.replace(/\//g, "\\").toLowerCase() : joined;
+}
+
+/**
+ * Path for a base directory's exclusive lifecycle lock outside the scanned
+ * `wt` directory (under a sibling `isolation-locks` directory). The lock name
+ * hashes the canonical path, so every alias of one slot shares one lock.
+ */
+export async function getIsolationLifecycleLockPath(baseDir: string): Promise<string> {
+	const canonical = await canonicalIsolationPath(baseDir);
+	const name = path.basename(canonical);
+	const hash = crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 	let locksDir: string;
 	try {
 		const wtRoot = path.resolve(getWorktreesDir());
@@ -244,7 +352,7 @@ export async function withIsolationLifecycleLock<T>(
 	fn: () => Promise<T>,
 	options?: FileLockOptions,
 ): Promise<T> {
-	const lockPath = getIsolationLifecycleLockPath(baseDir);
+	const lockPath = await getIsolationLifecycleLockPath(baseDir);
 	await fs.mkdir(path.dirname(lockPath), { recursive: true });
 	return await withFileLock(lockPath, fn, options);
 }
@@ -257,7 +365,7 @@ export async function tryWithIsolationLifecycleLock<T>(
 	fn: () => Promise<T>,
 	options?: FileLockOptions,
 ): Promise<TryFileLockResult<T>> {
-	const lockPath = getIsolationLifecycleLockPath(baseDir);
+	const lockPath = await getIsolationLifecycleLockPath(baseDir);
 	await fs.mkdir(path.dirname(lockPath), { recursive: true });
 	return await tryWithFileLock(lockPath, fn, options);
 }
@@ -272,7 +380,11 @@ export async function withRetentionLifecycleLock<T>(
 	destinationBaseDir: string,
 	fn: () => Promise<T>,
 ): Promise<T> {
-	if (path.resolve(originalBaseDir) === path.resolve(destinationBaseDir)) {
+	const [original, destination] = await Promise.all([
+		canonicalIsolationPath(originalBaseDir),
+		canonicalIsolationPath(destinationBaseDir),
+	]);
+	if (original === destination) {
 		return await withIsolationLifecycleLock(originalBaseDir, fn);
 	}
 	return await withIsolationLifecycleLock(originalBaseDir, async () => {
@@ -297,16 +409,13 @@ export const ISOLATION_CLAIM_FILE = ".veyyon-isolation-claim.json";
  */
 export async function claimIsolationSlot(baseDir: string): Promise<void> {
 	const staging = path.join(
-		path.dirname(getIsolationLifecycleLockPath(baseDir)),
+		path.dirname(await getIsolationLifecycleLockPath(baseDir)),
 		`${path.basename(baseDir)}.claim-${crypto.randomUUID()}`,
 	);
 	await fs.mkdir(staging);
 	try {
-		await fs.writeFile(
-			path.join(staging, ISOLATION_CLAIM_FILE),
-			JSON.stringify({ pid: process.pid, startIdentity: getProcessStartIdentity(process.pid) }),
-			"utf8",
-		);
+		const marker = { pid: process.pid, startIdentity: getProcessStartIdentity(process.pid) };
+		await fs.writeFile(path.join(staging, ISOLATION_CLAIM_FILE), JSON.stringify(marker), "utf8");
 		await fs.rename(staging, baseDir);
 	} catch (error) {
 		await fs.rm(staging, { recursive: true, force: true });
@@ -319,32 +428,57 @@ export async function releaseIsolationClaim(baseDir: string): Promise<void> {
 	await fs.rm(path.join(baseDir, ISOLATION_CLAIM_FILE), { force: true });
 }
 
+type ClaimIncarnation =
+	| { state: "absent" }
+	| { state: "unreadable" }
+	| { state: "present"; pid: number; startIdentity: string | null };
+
 /**
- * Whether `dir` carries a claim whose process is still running. A claim left by
- * a dead process is stale and reads false, so a crashed setup stays reclaimable.
- * An unreadable or malformed marker reads true: removal is the unsafe answer.
+ * Read the process incarnation (pid plus start identity) a claim marker names.
+ * A marker written before start identities were recorded carries no
+ * `startIdentity` key; it takes the owner record's identity instead, so a
+ * reused PID is still told apart from the process that made the claim. A
+ * marker that is present but unparseable reads `unreadable`.
  */
-export async function isolationClaimIsLive(dir: string): Promise<boolean> {
+async function readClaimIncarnation(dir: string): Promise<ClaimIncarnation> {
 	let raw: string;
 	try {
 		raw = await fs.readFile(path.join(dir, ISOLATION_CLAIM_FILE), "utf8");
 	} catch (error) {
-		return !isEnoent(error);
+		return isEnoent(error) ? { state: "absent" } : { state: "unreadable" };
 	}
-	let pid: unknown;
+	let decoded: unknown;
 	try {
-		const decoded = JSON.parse(raw);
-		if (decoded && typeof decoded === "object" && "pid" in decoded) {
-			pid = decoded.pid;
-		}
+		decoded = JSON.parse(raw);
 	} catch {
-		return true;
+		return { state: "unreadable" };
 	}
-	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return true;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
+	if (!decoded || typeof decoded !== "object" || !("pid" in decoded)) return { state: "unreadable" };
+	const pid = decoded.pid;
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) {
+		return { state: "unreadable" };
 	}
+	if ("startIdentity" in decoded) {
+		return {
+			state: "present",
+			pid,
+			startIdentity: typeof decoded.startIdentity === "string" ? decoded.startIdentity : null,
+		};
+	}
+	const owner = await readIsolationOwner(dir).catch(() => null);
+	return { state: "present", pid, startIdentity: owner?.pid === pid ? owner.startIdentity : null };
+}
+
+/**
+ * Whether `dir` carries a claim whose process incarnation is still running. A
+ * claim left by a dead process, or by a process whose PID has since been reused
+ * by an unrelated one, is stale and reads false, so a crashed setup stays
+ * reclaimable. An unreadable or malformed marker reads true: removal is the
+ * unsafe answer.
+ */
+export async function isolationClaimIsLive(dir: string): Promise<boolean> {
+	const claim = await readClaimIncarnation(dir);
+	if (claim.state === "absent") return false;
+	if (claim.state === "unreadable") return true;
+	return isProcessInstanceAlive(claim.pid, claim.startIdentity);
 }

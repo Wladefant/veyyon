@@ -8,11 +8,18 @@ import * as git from "../utils/git";
 import * as jj from "../utils/jj";
 import {
 	claimIsolationSlot,
+	findLinkedWorktreeAdminDirs,
+	type IsolationOwnerRecord,
 	isAbandonedEmptyReservation,
+	type LinkedWorktreeRegistration,
+	REGISTRATION_OWNER_FILE,
+	readIsolationOwner,
 	releaseIsolationClaim,
+	stampLinkedWorktreeRegistration,
 	tryWithIsolationLifecycleLock,
 	withIsolationLifecycleLock,
 	writeIsolationOwner,
+	writeRetainedBackend,
 } from "./isolation-ownership";
 import { mapWithConcurrencyLimit } from "./parallel";
 
@@ -23,7 +30,17 @@ export const TASK_BRANCH_PREFIX = "veyyon/task/";
 
 export const TASK_ISOLATION_DIR_PREFIX = "t";
 export const TASK_ISOLATION_DIR_DIGEST_CHARS = 9;
-export const TASK_ISOLATION_MOUNT_DIR = "m";
+/** Mount dir name prefix; the full name is unique per isolation instance, see {@link isolationMountName}. */
+export const TASK_ISOLATION_MOUNT_PREFIX = "m-";
+
+/**
+ * Per-instance mount directory name. Git names a linked worktree's registration after the
+ * checkout's basename, so a basename unique to one isolation instance means no other checkout
+ * is ever allocated its registration name, even after `git worktree prune` frees it.
+ */
+export function isolationMountName(token: string): string {
+	return `${TASK_ISOLATION_MOUNT_PREFIX}${token.replaceAll("-", "").slice(0, 16)}`;
+}
 
 const TASK_ISOLATION_DIR_REGEX = new RegExp(
 	`^${TASK_ISOLATION_DIR_PREFIX}[0-9a-fA-F]{${TASK_ISOLATION_DIR_DIGEST_CHARS}}(?:\\.retained(?:-.*)?)?$`,
@@ -478,6 +495,12 @@ export interface IsolationHandle {
 	fellBack: boolean;
 	/** Why the downgrade happened; set when `fellBack` is true, `null` otherwise. */
 	fallbackReason: string | null;
+	/**
+	 * Token of the owner record written when this handle's slot was claimed. Cleanup refuses to
+	 * touch a slot whose current owner token differs, so a stale handle cannot delete the
+	 * workspace of a later task that took the same slot.
+	 */
+	ownerToken?: string;
 }
 
 /**
@@ -500,7 +523,8 @@ export async function ensureIsolation(
 ): Promise<IsolationHandle> {
 	const repoRoot = await getRepoRoot(baseCwd);
 	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
-	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
+	const ownerToken = crypto.randomUUID();
+	const mergedDir = path.join(baseDir, isolationMountName(ownerToken));
 	const resolution = natives.isoResolve(preferred ?? null);
 	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
 	let fallbackReason = resolution.reason ?? null;
@@ -534,10 +558,21 @@ export async function ensureIsolation(
 					cause: error,
 				});
 			}
-			await writeIsolationOwner(baseDir);
+			const owner = await writeIsolationOwner(baseDir, ownerToken);
 
 			try {
 				await natives.isoStart(candidate, repoRoot, mergedDir);
+				// A copy backend registers a linked worktree in the source repo: stamp it so only this
+				// instance can later clear it.
+				await stampLinkedWorktreeRegistration(mergedDir, owner.token).catch(error =>
+					logger.warn("isolation registration not stamped at setup", { baseDir, error: errorMessage(error) }),
+				);
+				// Record the backend at setup, not only on retention, so `veyyon worktree clear` can
+				// reclaim the slot after this owner crashes. Marked unretained: while the owner lives,
+				// clear still refuses the slot.
+				await writeRetainedBackend(baseDir, candidate, { retained: false }).catch(error =>
+					logger.warn("isolation backend metadata not recorded at setup", { baseDir, error: errorMessage(error) }),
+				);
 				await releaseIsolationClaim(baseDir).catch(error =>
 					logger.warn("isolation claim marker left in place", { baseDir, error: errorMessage(error) }),
 				);
@@ -547,6 +582,7 @@ export async function ensureIsolation(
 					backend: candidate,
 					fellBack,
 					fallbackReason: fellBack ? fallbackReason : null,
+					ownerToken: owner.token,
 				};
 			} catch (err) {
 				await fs.rm(baseDir, { recursive: true, force: true });
@@ -568,10 +604,59 @@ export async function ensureIsolation(
 	return lockResult.value;
 }
 
+/**
+ * Delete the linked-worktree registrations a removed isolation slot left in its source
+ * repositories, naming exactly the directories {@link findLinkedWorktreeAdminDirs} found.
+ * Best effort: a registration that is already gone needs nothing.
+ *
+ * A registration is removed only while its `gitdir` backlink still names the removed checkout
+ * AND its owner token is the one found at collection. Every isolation checkout has a unique
+ * basename (see {@link isolationMountName}) and git names the registration after that
+ * basename, so no other checkout can ever be allocated this registration name; the checks
+ * are defence against a forged or copied pointer, not against name reuse.
+ */
+export async function removeLinkedWorktreeRegistrations(
+	registrations: readonly LinkedWorktreeRegistration[],
+): Promise<void> {
+	for (const { adminDir, backlink, token } of registrations) {
+		try {
+			const current = path.resolve(adminDir, (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim());
+			const currentToken = (await fs.readFile(path.join(adminDir, REGISTRATION_OWNER_FILE), "utf8")).trim();
+			if (current !== backlink || currentToken !== token) {
+				logger.warn("left a worktree registration that is no longer this isolation's", { adminDir });
+				continue;
+			}
+			// Residual risk, accepted: an external `git worktree add` with a hand-picked basename equal to this token, landing after the checks above, could still be removed.
+			await fs.rm(adminDir, { recursive: true, force: true });
+		} catch (err) {
+			if (isEnoent(err)) continue;
+			logger.warn("could not remove worktree registration after isolation removal", {
+				adminDir,
+				error: errorMessage(err),
+			});
+		}
+	}
+}
+
 /** Tear down a handle returned by {@link ensureIsolation}. */
 export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 	const baseDir = path.dirname(handle.mergedDir);
 	await withIsolationLifecycleLock(baseDir, async () => {
+		if (handle.ownerToken !== undefined) {
+			let current: IsolationOwnerRecord | null;
+			try {
+				current = await readIsolationOwner(baseDir);
+			} catch (err) {
+				// An unreadable owner record means ownership is unknown: leave the slot to `worktree clear`.
+				logger.warn("isolation cleanup skipped: owner record unreadable", { baseDir, error: errorMessage(err) });
+				return;
+			}
+			if (current !== null && current.token !== handle.ownerToken) {
+				logger.warn("isolation cleanup skipped: the slot now belongs to another task", { baseDir });
+				return;
+			}
+		}
+		const adminDirs = await findLinkedWorktreeAdminDirs(baseDir);
 		try {
 			try {
 				await natives.isoStop(handle.backend, handle.mergedDir);
@@ -584,6 +669,7 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 			}
 		} finally {
 			await fs.rm(baseDir, { recursive: true, force: true });
+			await removeLinkedWorktreeRegistrations(adminDirs);
 		}
 	});
 }

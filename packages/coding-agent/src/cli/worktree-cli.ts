@@ -22,21 +22,36 @@ import * as natives from "@veyyon/natives";
 import { errorMessage, formatCount, getWorktreesDir, isEnoent, isProcessInstanceAlive } from "@veyyon/utils";
 import chalk from "chalk";
 import {
+	findLinkedWorktreeAdminDirs,
 	ISOLATION_CLAIM_FILE,
 	ISOLATION_OWNER_FILE,
 	isAbandonedEmptyReservation,
 	isolationClaimIsLive,
+	isRetainedWorkspace,
 	RETAINED_BACKEND_FILE,
 	readIsolationOwner,
 	readRetainedMountBackend,
 	tryWithIsolationLifecycleLock,
 } from "../task/isolation-ownership";
-import { isTaskIsolationDir } from "../task/worktree";
+import { isTaskIsolationDir, removeLinkedWorktreeRegistrations, TASK_ISOLATION_MOUNT_PREFIX } from "../task/worktree";
 import * as git from "../utils/git";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
 
-const TASK_ISOLATION_MOUNT_DIRS = ["m", "merged"] as const;
+const LEGACY_TASK_ISOLATION_MOUNT_DIRS = ["m", "merged"] as const;
+
+/** Mount directory names to inspect in a slot: the legacy fixed names plus every per-instance `m-*` entry. */
+async function taskIsolationMountDirs(dir: string): Promise<string[]> {
+	const names: string[] = [...LEGACY_TASK_ISOLATION_MOUNT_DIRS];
+	try {
+		for (const entry of await fs.readdir(dir)) {
+			if (entry.startsWith(TASK_ISOLATION_MOUNT_PREFIX)) names.push(entry);
+		}
+	} catch {
+		/* unreadable slot: the fixed names still report their own stat errors */
+	}
+	return names;
+}
 
 export interface WorktreeEntry {
 	/** Absolute path to the worktree dir (or stray container) under `~/.veyyon/wt/`. */
@@ -83,7 +98,7 @@ async function stopRetainedMount(dir: string): Promise<void> {
 		throw new Error("Cannot stop retained Projfs from this process; workspace left intact.");
 	}
 	let found = false;
-	for (const name of TASK_ISOLATION_MOUNT_DIRS) {
+	for (const name of await taskIsolationMountDirs(dir)) {
 		const candidate = path.join(dir, name);
 		const stat = await fs.stat(candidate).catch(error => {
 			if (isEnoent(error)) return undefined;
@@ -183,7 +198,8 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					}
 					const sidecarStat = await statPath(path.join(target.path, RETAINED_BACKEND_FILE));
 					const hasSidecar = sidecarStat?.found?.isFile();
-					const owner = await readIsolationOwner(target.path).catch(() => null);
+					// An unreadable or corrupt owner record means a live owner cannot be ruled out: refuse.
+					const owner = await readIsolationOwner(target.path);
 
 					if (!hasSidecar) {
 						if (owner && isProcessInstanceAlive(owner.pid, owner.startIdentity)) {
@@ -193,9 +209,19 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 						}
 						throw new Error(`Missing retained backend metadata in ${target.path}; refusing removal`);
 					}
+					if (
+						owner &&
+						isProcessInstanceAlive(owner.pid, owner.startIdentity) &&
+						!(await isRetainedWorkspace(target.path))
+					) {
+						throw new Error(
+							`Isolation workspace ${target.path} is in use by live owner PID ${owner.pid}; refusing removal`,
+						);
+					}
 					const initialStat = stat.found;
 					const initialToken = owner?.token;
 
+					const linkedAdminDirs = await findLinkedWorktreeAdminDirs(target.path);
 					await stopRetainedMount(target.path);
 
 					const currentStat = await statPath(target.path);
@@ -219,6 +245,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 					}
 
 					await fs.rm(target.path, { recursive: true, force: true });
+					await removeLinkedWorktreeRegistrations(linkedAdminDirs);
 				});
 
 				if (!lockResult.acquired) {
@@ -369,7 +396,7 @@ async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
 	const hasRetainedSidecar = (await statPath(path.join(dir, RETAINED_BACKEND_FILE)))?.found?.isFile();
 	const hasClaimFile = (await statPath(path.join(dir, ISOLATION_CLAIM_FILE)))?.found?.isFile();
 	if (isTaskIsolationDir(dir) || hasOwnerRecord || hasRetainedSidecar || hasClaimFile) {
-		for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
+		for (const mountDir of await taskIsolationMountDirs(dir)) {
 			const mountPath = path.join(dir, mountDir);
 			const mountStat = await statPath(mountPath);
 			if (!mountStat) {
@@ -382,7 +409,7 @@ async function classifyDir(dir: string): Promise<WorktreeEntry | null> {
 			orphanReason: "task-isolation leftover (no live task owns it)",
 		};
 	}
-	for (const mountDir of TASK_ISOLATION_MOUNT_DIRS) {
+	for (const mountDir of await taskIsolationMountDirs(dir)) {
 		const mountPath = path.join(dir, mountDir);
 		const mountStat = await statPath(mountPath);
 		if (!mountStat) {
