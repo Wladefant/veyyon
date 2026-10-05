@@ -37,6 +37,7 @@ const FRAME_SETS: Record<string, string[] | undefined> = {
 	digits: ["0", "1", "2"],
 	"wide emoji": ["🌑", "🌒", "🌓"],
 	"combining cluster": ["e\u0301", "a\u0300"],
+	"held frame": ["x", "x", "y"],
 	"unequal widths": ["a", "語"],
 	"two clusters": ["ab", "cd"],
 	whitespace: [" ", "x"],
@@ -45,7 +46,7 @@ const FRAME_SETS: Record<string, string[] | undefined> = {
 	"prepend joins the space": ["\u0600", "\u0601"],
 };
 
-const SHARED_LAYOUT = ["default", "ascii", "braille", "digits", "wide emoji", "combining cluster"];
+const SHARED_LAYOUT = ["default", "ascii", "braille", "digits", "wide emoji", "combining cluster", "held frame"];
 
 const MESSAGES = [
 	"Checking",
@@ -70,6 +71,28 @@ function reference(frame: string, message: string, width: number): readonly stri
 	return loader.render(width);
 }
 
+const SCREEN_WIDTH = 40;
+
+/**
+ * A host that repaints a loader only when the loader asks, the way the TUI does: requests made between two
+ * paints coalesce into one, and `shown` holds the row each paint drew.
+ */
+function paintedScreen() {
+	let pending: Loader | undefined;
+	const shown: string[] = [];
+	const request = (component: Loader) => {
+		pending = component;
+	};
+	return {
+		ui: { requestDirectWrite: request, requestComponentRender: request } as unknown as TUI,
+		shown,
+		paint() {
+			if (pending) shown.push(pending.render(SCREEN_WIDTH).join("\n"));
+			pending = undefined;
+		},
+	};
+}
+
 describe("a spinner tick", () => {
 	afterEach(() => {
 		vi.useRealTimers();
@@ -81,10 +104,13 @@ describe("a spinner tick", () => {
 			vi.useFakeTimers();
 			const cycle = frames ?? DEFAULT_FRAMES;
 			for (const message of MESSAGES) {
-				const ui = stubUi();
-				const loader = new Loader(ui as unknown as TUI, spinner, colorMessage, message, frames);
+				const screen = paintedScreen();
+				const loader = new Loader(screen.ui, spinner, colorMessage, message, frames);
+				screen.paint();
+				// The mount paints the first frame, then every tick paints the frame it moved to, and a tick
+				// that keeps the frame paints nothing.
+				const wantShown = [reference(cycle[0]!, message, SCREEN_WIDTH).join("\n")];
 				const mismatches: { tick: number; width: number; got: readonly string[]; want: readonly string[] }[] = [];
-				let advanced = 0;
 				for (let tick = 0; tick < cycle.length * 2; tick++) {
 					const frame = cycle[tick % cycle.length]!;
 					for (const width of WIDTHS) {
@@ -92,13 +118,14 @@ describe("a spinner tick", () => {
 						const want = reference(frame, message, width);
 						if (got.join("\n") !== want.join("\n")) mismatches.push({ tick, width, got, want });
 					}
-					if (cycle[(tick + 1) % cycle.length] !== frame) advanced++;
+					const next = cycle[(tick + 1) % cycle.length]!;
+					if (next !== frame) wantShown.push(reference(next, message, SCREEN_WIDTH).join("\n"));
 					vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
+					screen.paint();
 				}
 				loader.stop();
 				expect(mismatches).toEqual([]);
-				// The mount repaints once, then every tick whose frame differs from the one before.
-				expect(ui.requestDirectWrite).toHaveBeenCalledTimes(1 + advanced);
+				expect(screen.shown).toEqual(wantShown);
 			}
 		});
 	}
