@@ -7,7 +7,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as utils from "@veyyon/utils";
-import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
+import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -53,12 +53,57 @@ async function rpc(owner: TerminalOwner, op: string, payload: Record<string, unk
 	}
 }
 
-async function serve(deliver: (text: string) => Promise<string>) {
+/** A connection that keeps its frames, for tests that need several requests on one socket. */
+function connect(owner: TerminalOwner) {
+	const socket = net.createConnection(owner.endpoint);
+	cleanup.push(() => {
+		socket.destroy();
+	});
+	const frames: Record<string, any>[] = [];
+	const waiters: Array<{ match: (frame: Record<string, any>) => boolean; done: (frame: Record<string, any>) => void }> = [];
+	let buffer = "";
+	socket.setEncoding("utf8");
+	socket.on("data", chunk => {
+		buffer += chunk;
+		for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
+			const frame = JSON.parse(buffer.slice(0, newline));
+			buffer = buffer.slice(newline + 1);
+			frames.push(frame);
+			for (const waiter of waiters.splice(0)) {
+				if (waiter.match(frame)) waiter.done(frame);
+				else waiters.push(waiter);
+			}
+		}
+	});
+	return {
+		send(request: Record<string, unknown>) {
+			socket.write(`${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, ...request })}\n`);
+		},
+		/** Resolves with the first frame, seen or future, that matches. Bounded against a dead socket. */
+		next(match: (frame: Record<string, any>) => boolean): Promise<Record<string, any>> {
+			const seen = frames.find(match);
+			if (seen) return Promise.resolve(seen);
+			const { promise, resolve, reject } = Promise.withResolvers<Record<string, any>>();
+			const timer = setTimeout(() => reject(new Error("no matching frame")), 5_000);
+			waiters.push({
+				match,
+				done: frame => {
+					clearTimeout(timer);
+					resolve(frame);
+				},
+			});
+			return promise;
+		},
+		frames,
+	};
+}
+
+async function serve(deliver: (text: string) => Promise<string>, sessionId: () => string = () => "busy") {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-ack-"));
 	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
 	const close = await serveTerminalControl(
 		{
-			identity: () => ({ sessionId: "busy", cwd: root, sessionFile: path.join(root, "busy.jsonl") }),
+			identity: () => ({ sessionId: sessionId(), cwd: root, sessionFile: path.join(root, "busy.jsonl") }),
 			deliver,
 			abort: async () => false,
 			history: () => [],
@@ -210,4 +255,112 @@ test("history converts only new entries on a leaf change, and the frame stays bo
 	const rebuilt = await rpc(owner, "subscribe");
 	expect(rebuilt.events.find(event => event.kind === "history")!.entries.at(-1).entryId).toBe(`e${BASE + 50}`);
 	expect(conversions).toBe(BASE + 50 + journal.length);
+});
+
+const settle = async () => {
+	for (let i = 0; i < 50; i++) await Promise.resolve();
+};
+
+test("an acked message is never delivered to a session that replaced the one it was accepted for", async () => {
+	const gate = Promise.withResolvers<void>();
+	let current = "busy";
+	const delivered: string[] = [];
+	const owner = await serve(
+		async text => {
+			if (text === "one") await gate.promise;
+			delivered.push(text);
+			return "started";
+		},
+		() => current,
+	);
+	const client = connect(owner);
+	client.send({ id: "a", op: "deliver", text: "one", mode: "auto", ack: true, messageId: "m-1" });
+	client.send({ id: "b", op: "deliver", text: "two", mode: "auto", ack: true, messageId: "m-2" });
+	await client.next(frame => frame.id === "b");
+	// /new: the terminal now holds another session. "one" is already running; "two" must not follow it.
+	current = "other";
+	gate.resolve();
+	await settle();
+	expect(delivered).toEqual(["one"]);
+});
+
+test("a not-ready terminal is retried on the chain, so the second message still arrives", async () => {
+	let attempts = 0;
+	const owner = await serve(async () => {
+		attempts++;
+		if (attempts < 3) throw new TerminalNotReadyError("Terminal is not ready for input; delivery not accepted");
+		return "started";
+	});
+	const client = connect(owner);
+	client.send({ id: "a", op: "deliver", text: "x", mode: "auto", ack: true, messageId: "m-r" });
+	expect(await client.next(frame => frame.event?.kind === "delivery")).toMatchObject({
+		event: { messageId: "m-r", state: "delivered", outcome: "started" },
+	});
+	expect(attempts).toBe(3);
+});
+
+test("a plain deliver shares the ordered chain, and an acked one never waits behind it", async () => {
+	const gate = Promise.withResolvers<void>();
+	const delivered: string[] = [];
+	const owner = await serve(async text => {
+		if (text === "one") await gate.promise;
+		delivered.push(text);
+		return "started";
+	});
+	const client = connect(owner);
+	client.send({ id: "a", op: "deliver", text: "one", mode: "auto", ack: true, messageId: "m-1" });
+	await client.next(frame => frame.id === "a");
+	client.send({ id: "plain", op: "deliver", text: "legacy", mode: "auto" });
+	// The plain deliver is stuck behind "one". An acked deliver on the same socket is still answered at once.
+	client.send({ id: "b", op: "deliver", text: "two", mode: "auto", ack: true, messageId: "m-2" });
+	expect(await client.next(frame => frame.id === "b")).toMatchObject({ ok: true, result: { state: "pending" } });
+	expect(client.frames.some(frame => frame.id === "plain")).toBe(false);
+	gate.resolve();
+	expect(await client.next(frame => frame.id === "plain")).toMatchObject({ ok: true, result: "started" });
+	await client.next(frame => frame.event?.messageId === "m-2" && frame.event?.state === "delivered");
+	// Both later messages ran on the same chain, after "one" and one at a time.
+	expect(delivered[0]).toBe("one");
+	expect([...delivered].sort()).toEqual(["legacy", "one", "two"]);
+});
+
+test("the terminal refuses a delivery with busy when too many are pending", async () => {
+	const gate = Promise.withResolvers<void>();
+	const owner = await serve(async () => {
+		await gate.promise;
+		return "queued";
+	});
+	const client = connect(owner);
+	for (let i = 0; i < 64; i++) {
+		client.send({ id: `a${i}`, op: "deliver", text: "x", mode: "auto", ack: true, messageId: `m-${i}` });
+	}
+	await client.next(frame => frame.id === "a63");
+	expect(client.frames.every(frame => frame.ok === true)).toBe(true);
+	client.send({ id: "over", op: "deliver", text: "x", mode: "auto", ack: true, messageId: "m-over" });
+	const refused = await client.next(frame => frame.id === "over");
+	expect(refused.ok).toBe(false);
+	expect(refused.error).toContain("busy");
+	// The refused id is not remembered as pending.
+	client.send({ id: "st", op: "deliveryStatus", messageId: "m-over" });
+	expect((await client.next(frame => frame.id === "st")).result).toEqual({ state: "unknown" });
+	gate.resolve();
+	await client.next(frame => frame.event?.messageId === "m-63" && frame.event?.state === "delivered");
+});
+
+test("the ack is written before a delivery that blocks the event loop starts", async () => {
+	const owner = await serve(async () => {
+		const until = performance.now() + 200;
+		while (performance.now() < until) {
+			// Synchronous block, like the session-file rewrite on a large session.
+		}
+		return "started";
+	});
+	const client = connect(owner);
+	client.send({ id: "a", op: "deliver", text: "x", mode: "auto", ack: true, messageId: "m-s" });
+	const ack = await client.next(frame => frame.id === "a");
+	expect(ack.result).toMatchObject({ accepted: true, state: "pending" });
+	// The ack frame precedes the delivery outcome on the wire.
+	await client.next(frame => frame.event?.messageId === "m-s" && frame.event?.state === "delivered");
+	expect(client.frames.findIndex(frame => frame.id === "a")).toBeLessThan(
+		client.frames.findIndex(frame => frame.event?.kind === "delivery"),
+	);
 });

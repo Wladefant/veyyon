@@ -1,5 +1,5 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { serveTerminalControl } from "../../launch/terminal-control";
+import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
 import type { InteractiveMode } from "./interactive-mode";
 
 /** Deliver to the existing REPL, never create a second AgentSession or transcript writer. */
@@ -56,7 +56,7 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 				return "steered";
 			}
 			const submit = mode.onInputCallback;
-			if (!submit) throw new Error("Terminal is not ready for input; delivery not accepted");
+			if (!submit) throw new TerminalNotReadyError("Terminal is not ready for input; delivery not accepted");
 			// A promise resolver accepts only one input. Reserve it synchronously before acknowledging.
 			mode.onInputCallback = undefined;
 			submit(mode.startPendingSubmission({ text }));

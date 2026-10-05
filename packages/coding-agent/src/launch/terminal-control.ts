@@ -28,6 +28,16 @@ export const TERMINAL_CAPABILITIES = ["deliver-ack"] as const;
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
 const MAX_REMEMBERED_DELIVERIES = 256;
+/** Deliveries accepted and not yet settled. Beyond this the terminal answers `busy`: each holds its text. */
+const MAX_PENDING_DELIVERIES = 64;
+const NOT_READY_RETRIES = 20;
+const NOT_READY_RETRY_MS = 100;
+
+/**
+ * The terminal has no input slot free right now, for example because the previous message reserved it
+ * and its turn has not started streaming. A delivery on the chain retries this briefly.
+ */
+export class TerminalNotReadyError extends Error {}
 
 type DeliveryState =
 	| { state: "pending" }
@@ -98,16 +108,52 @@ export async function serveTerminalControl(
 	};
 	// Acked deliveries, by the daemon's message id. The table lets a retry after a lost connection
 	// find the earlier request instead of enqueueing the message twice. Insertion order = age.
+	// Only settled records are evicted, so a pending id is never forgotten and re-enqueued.
+	//
+	// Crash window: from the ack until `target.deliver` runs, the message exists only in this process.
+	// A crash or close in that window loses it, although the daemon already holds the ack. The window
+	// is the time the terminal needs to reach the message on the chain.
 	const deliveries = new Map<string, { status: DeliveryState; watchers: Set<net.Socket> }>();
-	// One chain: acked messages reach the terminal in the order they were accepted.
-	let deliveryChain = Promise.resolve();
+	// One chain for acked and plain deliveries: messages reach the terminal in the order they were accepted.
+	let deliveryChain: Promise<void> = Promise.resolve();
+	let pendingDeliveries = 0;
 	const announceDelivery = (messageId: string, watchers: Iterable<net.Socket>, status: DeliveryState): void => {
 		for (const socket of watchers) {
 			send(socket, { event: { kind: "delivery", sessionId: publishedSessionId, messageId, ...status } });
 		}
 	};
+	const runDelivery = (sessionId: string, text: string, mode: "auto" | "steer" | "followUp"): Promise<string> => {
+		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) {
+			return Promise.reject(new Error("Terminal busy: too many deliveries pending; retry later"));
+		}
+		pendingDeliveries++;
+		const run = deliveryChain.then(async () => {
+			for (let attempt = 0; ; attempt++) {
+				// The session may have changed since the message was accepted. Never deliver it to another one.
+				if (closed || sessionId !== target.identity().sessionId) {
+					throw new Error("Terminal session detached or changed; message not delivered");
+				}
+				try {
+					return await target.deliver(text, mode);
+				} catch (error) {
+					if (!(error instanceof TerminalNotReadyError) || attempt >= NOT_READY_RETRIES) throw error;
+					await Bun.sleep(NOT_READY_RETRY_MS);
+				}
+			}
+		});
+		const settle = (): void => {
+			pendingDeliveries--;
+		};
+		run.then(settle, settle);
+		deliveryChain = run.then(
+			() => {},
+			() => {},
+		);
+		return run;
+	};
 	const acceptDelivery = (
 		socket: net.Socket,
+		sessionId: string,
 		messageId: string,
 		text: string,
 		mode: "auto" | "steer" | "followUp",
@@ -117,18 +163,23 @@ export async function serveTerminalControl(
 			if (known.status.state === "pending") known.watchers.add(socket);
 			return { accepted: true, messageId, state: known.status.state };
 		}
+		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) {
+			throw new Error("Terminal busy: too many deliveries pending; retry later");
+		}
 		const record = { status: { state: "pending" } as DeliveryState, watchers: new Set([socket]) };
 		deliveries.set(messageId, record);
-		for (const oldest of deliveries.keys()) {
+		for (const [oldestId, oldest] of deliveries) {
 			if (deliveries.size <= MAX_REMEMBERED_DELIVERIES) break;
-			deliveries.delete(oldest);
+			if (oldest.status.state !== "pending") deliveries.delete(oldestId);
 		}
-		deliveryChain = deliveryChain.then(async () => {
-			try {
-				record.status = { state: "delivered", outcome: await target.deliver(text, mode) };
-			} catch (error) {
+		void runDelivery(sessionId, text, mode).then(
+			outcome => {
+				record.status = { state: "delivered", outcome };
+			},
+			error => {
 				record.status = { state: "failed", error: String(error) };
-			}
+			},
+		).then(() => {
 			announceDelivery(messageId, record.watchers, record.status);
 			record.watchers.clear();
 		});
@@ -160,7 +211,7 @@ export async function serveTerminalControl(
 				if (newline < 0) break;
 				const line = buffer.slice(0, newline);
 				buffer = buffer.slice(newline + 1);
-				queue = queue.then(async () => {
+				const handle = async (): Promise<void> => {
 					let id: unknown;
 					try {
 						const request = JSON.parse(line);
@@ -206,10 +257,10 @@ export async function serveTerminalControl(
 										request.messageId.length > 128
 									)
 										throw new Error("Invalid delivery");
-									result = acceptDelivery(socket, request.messageId, request.text, request.mode);
+									result = acceptDelivery(socket, request.sessionId, request.messageId, request.text, request.mode);
 									break;
 								}
-								result = await target.deliver(request.text, request.mode);
+								result = await runDelivery(request.sessionId, request.text, request.mode);
 								break;
 							case "deliveryStatus": {
 								const known = typeof request.messageId === "string" ? deliveries.get(request.messageId) : undefined;
@@ -229,7 +280,10 @@ export async function serveTerminalControl(
 					} catch (error) {
 						send(socket, { id, ok: false, error: String(error) });
 					}
-				});
+				};
+				// An acked delivery only registers the message, so it never waits behind a slower request on this socket.
+				if (/"ack"\s*:\s*true/.test(line) && /"op"\s*:\s*"deliver"/.test(line)) void handle();
+				else queue = queue.then(handle);
 			}
 		});
 	});
