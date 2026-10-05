@@ -33,9 +33,11 @@
 - `@veyyon/utils/idle-trim` exports `trimEngine`, the trim `IdleTrim` runs when no `trim` is given, which calls `Bun.shrink()` and then returns the free pages of the C allocator's arenas with `releaseFreeHeapPages()`, so a session that read four 8 MiB web pages settles at 216 MiB RSS instead of 504 MiB.
 - `@veyyon/utils/log-file` exports `RotatingLogFile`, which appends each line to the profile's day file in one `write(2)`, moves a full file to the next free numbered generation, gzips a generation no writer has appended to for 3 seconds and keeps the newest five files, and `logFileName`, the day file's name for a local date.
 - `@veyyon/utils/yaml-sync` exports `loadYaml`, which returns the `yaml` module namespace and evaluates the package on its first call.
+- `@veyyon/utils/log-file` exports `dayLogFileName(year, month, day)`, the day file's name for a calendar date given as numbers.
 
 ### Changed
 
+- The terminal output guard names today's log file from the C library's local time instead of a `Date`, and `analyzeTemplate` lists variables in code-unit order instead of `localeCompare` order, so neither builds ICU's time zone cache or collator; a `TZ` assigned to `process.env` at run time names the file through a `Date`, as the logger does.
 - `@veyyon/utils/yaml-sync` evaluates the `yaml` package on the first settings file edit instead of when the module loads, which keeps 72 modules off a launch that edits no settings file.
 - Six class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `@veyyon/utils/json-snapshot` frames each snapshot with a layout version, payload byte length and CRC-32 instead of a SHA-256 digest, and rejects snapshots framed by the previous layout.

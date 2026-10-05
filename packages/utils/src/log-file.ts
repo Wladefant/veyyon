@@ -30,9 +30,12 @@ import { isEnoent } from "./fs-error";
  * whenever `dirs.ts` is the first of the two to load.
  */
 export function logFileName(date = new Date()): string {
-	const month = String(date.getMonth() + 1).padStart(2, "0");
-	const day = String(date.getDate()).padStart(2, "0");
-	return `${APP_DIRECTORY_SLUG}.${date.getFullYear()}-${month}-${day}.log`;
+	return dayLogFileName(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}
+
+/** Name of the log file for a local calendar day; `month` counts from 1. */
+export function dayLogFileName(year: number, month: number, day: number): string {
+	return `${APP_DIRECTORY_SLUG}.${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}.log`;
 }
 
 /** Size at which the live file is moved to a numbered generation. */
