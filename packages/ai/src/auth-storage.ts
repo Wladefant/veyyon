@@ -160,6 +160,7 @@ import {
 	buildUsageRequestForOauth,
 	isUsageCredentialRow,
 	mergeRefreshedUsageCredential,
+	USAGE_HISTORY_DIGEST_KEY,
 } from "./auth-storage/usage-requests";
 // The store class itself, for the `AuthStorage.create` convenience factory. The edge runs ONE way:
 // this module names the store, and the store names this module only for TYPES, which are erased. So
@@ -2507,7 +2508,11 @@ export class AuthStorage {
 	 * store has no durable history (e.g. a broker-backed remote store).
 	 */
 	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
-		return this.#store.listUsageHistory?.(query) ?? [];
+		const rows = this.#store.listUsageHistory?.(query) ?? [];
+		// A store that reads history but cannot purge it (the purge is optional) may still hold rows keyed by a
+		// raw identity from before redaction. Fail closed: only digest-keyed rows leave the store.
+		if (this.#store.purgeUsageHistory) return rows;
+		return rows.filter(row => USAGE_HISTORY_DIGEST_KEY.test(row.accountKey));
 	}
 
 	ingestUsageHeaders(

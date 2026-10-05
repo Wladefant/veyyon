@@ -422,7 +422,11 @@ export interface AuthCredentialStore {
 	 * skipped — the broker host records into its own database instead.
 	 */
 	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
-	/** Delete every recorded usage-limit snapshot. Nothing else in the store is touched. */
+	/**
+	 * Delete every recorded usage-limit snapshot. Nothing else in the store is touched. A store that
+	 * implements `listUsageHistory` without this has no way to drop raw pre-redaction rows, so
+	 * `AuthStorage.listUsageHistory()` returns only rows whose account key is a digest.
+	 */
 	purgeUsageHistory?(): void;
 	/** Read recorded usage-limit snapshots, oldest first. */
 	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
