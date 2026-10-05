@@ -7,12 +7,15 @@ import { ToolAbortError, ToolError } from "../../core/tool-errors";
 import { findFreeCdpPort, findReusableCdp, gracefulKillTreeOnce, killExistingByPath, waitForCdp } from "./attach";
 import type { CmuxKind } from "./cmux/rpc";
 import { CmuxSocketClient } from "./cmux/socket-client";
+import type { ExtensionRelay } from "./extension-relay";
+import { type ExtensionKind, openExtensionSession } from "./extension-session";
 import { BROWSER_PROTOCOL_TIMEOUT_MS, launchHeadlessBrowser, loadPuppeteer, type UserAgentOverride } from "./launch";
 
 export type PuppeteerBrowserKind =
 	| { kind: "headless"; headless: boolean }
 	| { kind: "spawned"; path: string }
-	| { kind: "connected"; cdpUrl: string };
+	| { kind: "connected"; cdpUrl: string }
+	| ExtensionKind;
 
 export type BrowserKind = PuppeteerBrowserKind | CmuxKind;
 
@@ -35,6 +38,8 @@ export interface PuppeteerBrowserHandle extends BrowserHandleCommon {
 	kind: PuppeteerBrowserKind;
 	browser: Browser;
 	cdpUrl?: string;
+	/** Present for the extension backend: owns the loopback relay and the extension connection. */
+	relay?: ExtensionRelay;
 	pid?: number;
 	subprocess?: Subprocess;
 	stealth: { browserSession: CDPSession | null; override: UserAgentOverride | null };
@@ -58,6 +63,8 @@ function browserKey(kind: BrowserKind): string {
 			return `spawned:${kind.path}`;
 		case "connected":
 			return `connected:${kind.cdpUrl}`;
+		case "extension":
+			return `extension:${kind.instanceId ?? kind.profile ?? "default"}`;
 		case "cmux":
 			return `cmux:${kind.socketPath}`;
 	}
@@ -140,6 +147,28 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			refCount: 0,
 			stealth: { browserSession: null, override: null },
 		};
+	}
+	if (kind.kind === "extension") {
+		const relay = await openExtensionSession(kind, { signal: opts.signal });
+		try {
+			const puppeteer = await loadPuppeteer();
+			const browser = await puppeteer.connect({
+				browserWSEndpoint: relay.cdpUrl,
+				defaultViewport: null,
+				protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
+			});
+			return {
+				key: browserKey(kind),
+				kind,
+				browser,
+				relay,
+				refCount: 0,
+				stealth: { browserSession: null, override: null },
+			};
+		} catch (err) {
+			await relay.close();
+			throw new ToolError(`Connected to the extension but puppeteer.connect failed: ${(err as Error).message}`);
+		}
 	}
 	if (kind.kind === "connected") {
 		const cdpUrl = normalizeConnectedCdpUrl(kind.cdpUrl);
@@ -262,6 +291,18 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean
 				if (proc?.pid !== undefined) await gracefulKillTreeOnce(proc.pid).catch(() => undefined);
 			}
 		}
+		return;
+	}
+	if (handle.kind.kind === "extension") {
+		if (handle.browser.connected) {
+			try {
+				handle.browser.disconnect();
+			} catch (err) {
+				logger.debug("Failed to disconnect from the extension relay", { error: (err as Error).message });
+			}
+		}
+		// Detaches every debugger session; never waits on chrome.tabs.remove.
+		await handle.relay?.close();
 		return;
 	}
 	if (handle.kind.kind === "connected") {

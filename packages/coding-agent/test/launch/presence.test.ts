@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getProcessStartIdentity, getProcessStartTime } from "@veyyon/utils/process-liveness";
 import { hasLiveDaemonProjectPresence, registerDaemonProjectPresence } from "../../src/launch/presence";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
@@ -146,5 +147,434 @@ describe("hasLiveDaemonProjectPresence", () => {
 		expect(await Bun.file(truncated).exists()).toBe(false);
 		expect(await Bun.file(wrongShape).exists()).toBe(false);
 		expect(await Bun.file(nonObject).exists()).toBe(false);
+	});
+
+	it("ambiguous live client presence preserved without broker identity witness", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "legacy-ambiguous.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "legacy-ambiguous" }));
+			// Mtime before process start: simulates wall-clock step / WSL resume
+			const recordMtime = (startedAt ?? Date.now()) - 10_000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+
+			// Ambiguous client presence lacks broker endpoint witness: fail-closed preserves it
+			expect(await hasLiveDaemonProjectPresence(runtimeDir)).toBe(true);
+			// Presence file must not be pruned
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("ambiguous live client presence older than 24h expires and is pruned", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "legacy-ambiguous-25h.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "legacy-ambiguous-25h" }));
+			// Mtime 25h ago: simulates inconclusive ambiguous record exceeding the 24h bound.
+			const recordMtime = Date.now() - 25 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+
+			expect(await hasLiveDaemonProjectPresence(runtimeDir)).toBe(false);
+			expect(await Bun.file(presenceFile).exists()).toBe(false);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("ambiguous live client presence within 24h is kept", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "legacy-ambiguous-1h.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "legacy-ambiguous-1h" }));
+			// Mtime 1h ago: ambiguous record within the 24h inconclusive window.
+			const recordMtime = Date.now() - 1 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+
+			expect(await hasLiveDaemonProjectPresence(runtimeDir)).toBe(true);
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("ambiguous live client presence with real age 25h is kept when supplied clock is within 24h", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "ambiguous-real25h-injected1h.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "ambiguous-real25h-injected1h" }));
+			// Mtime 25h before real Date.now():
+			const recordMtime = Date.now() - 25 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+			const stat = await fs.stat(presenceFile);
+			const clock = {
+				now: () => stat.mtimeMs + 3600_000,
+				bootTimeMs: () => 0,
+			};
+
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clock)).toBe(true);
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("ambiguous live client presence with real age 1h expires and is pruned when supplied clock is older than 24h", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "ambiguous-real1h-injected25h.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "ambiguous-real1h-injected25h" }));
+			// Mtime 1h before real Date.now():
+			const recordMtime = Date.now() - 1 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+			const stat = await fs.stat(presenceFile);
+			const clock = {
+				now: () => stat.mtimeMs + 25 * 3600_000,
+				bootTimeMs: () => 0,
+			};
+
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clock)).toBe(false);
+			expect(await Bun.file(presenceFile).exists()).toBe(false);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("ambiguous live client presence evaluates exact 24h boundary using supplied clock", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const startedAt = getProcessStartTime(child.pid);
+		expect(startedAt).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "ambiguous-exact-boundary.json");
+			await fs.writeFile(presenceFile, JSON.stringify({ pid: child.pid, id: "ambiguous-exact-boundary" }));
+			const recordMtime = Date.now() - 10 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+			const stat = await fs.stat(presenceFile);
+
+			// Exactly 24h (24 * 3600 * 1000 ms): <= 24h, must be kept
+			const clockAt24h = {
+				now: () => stat.mtimeMs + 24 * 3600_000,
+				bootTimeMs: () => 0,
+			};
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clockAt24h)).toBe(true);
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+
+			// Over 24h by 1ms: > 24h, must expire and be pruned
+			const clockOver24h = {
+				now: () => stat.mtimeMs + 24 * 3600_000 + 1,
+				bootTimeMs: () => 0,
+			};
+			expect(await hasLiveDaemonProjectPresence(runtimeDir, clockOver24h)).toBe(false);
+			expect(await Bun.file(presenceFile).exists()).toBe(false);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("modern client presence matching live process identity is kept even when older than 24h", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const { env, cleanup } = hermeticSpawnEnv();
+		const child = Bun.spawn([process.execPath, "-e", 'process.stdout.write("up\\n"); process.stdin.resume()'], {
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+		const identity = getProcessStartIdentity(child.pid);
+		expect(identity).not.toBeNull();
+
+		try {
+			const clientsDir = path.join(runtimeDir, CLIENTS);
+			await fs.mkdir(clientsDir, { recursive: true });
+			const presenceFile = path.join(clientsDir, "modern-25h.json");
+			await fs.writeFile(
+				presenceFile,
+				JSON.stringify({ pid: child.pid, processIdentity: identity, id: "modern-25h" }),
+			);
+			// Mtime 25h ago: verified same modern incarnation must be kept regardless of age.
+			const recordMtime = Date.now() - 25 * 3600 * 1000;
+			await fs.utimes(presenceFile, recordMtime / 1000, recordMtime / 1000);
+
+			expect(await hasLiveDaemonProjectPresence(runtimeDir)).toBe(true);
+			expect(await Bun.file(presenceFile).exists()).toBe(true);
+		} finally {
+			child.kill("SIGTERM");
+			await child.exited;
+			cleanup();
+		}
+	});
+
+	it("failed registration cleans up own presence file on chmod failure while preserving siblings and replacement-token records", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const projectDir = await tempRuntimeDir();
+		const clientsDir = path.join(runtimeDir, CLIENTS);
+		await fs.mkdir(clientsDir, { recursive: true });
+
+		const siblingFile = path.join(clientsDir, "sibling-alive.json");
+		await fs.writeFile(siblingFile, JSON.stringify({ pid: process.pid, id: "sibling-alive", projectDir }));
+
+		const replacementFile = path.join(clientsDir, "replacement-record.json");
+		await fs.writeFile(
+			replacementFile,
+			JSON.stringify({ pid: process.pid, id: "replacement-token-1234", projectDir }),
+		);
+
+		const { env, cleanup } = hermeticSpawnEnv();
+		const childScript = `
+import { mock } from "bun:test";
+import * as realFs from "node:fs/promises";
+
+mock.module("node:fs/promises", () => ({
+	...realFs,
+	chmod: async (filePath, mode) => {
+		if (typeof filePath === "string" && filePath.includes("clients")) {
+			throw new Error("EPERM: simulated chmod fault after write");
+		}
+		return realFs.chmod(filePath, mode);
+	},
+}));
+
+// Dynamic import required after mock.module to bind mocked fs/promises dependency
+const { registerDaemonProjectPresence } = await import("./packages/coding-agent/src/launch/presence");
+const runtimeDir = process.env.TEST_RUNTIME_DIR;
+const projectDir = process.env.TEST_PROJECT_DIR;
+
+try {
+	await registerDaemonProjectPresence(projectDir, runtimeDir);
+	process.exit(1);
+} catch (err) {
+	if (err && String(err).includes("simulated chmod fault after write")) {
+		process.exit(0);
+	}
+	process.exit(2);
+}
+`;
+		const child = Bun.spawn([process.execPath, "-e", childScript], {
+			env: {
+				...env,
+				TEST_RUNTIME_DIR: runtimeDir,
+				TEST_PROJECT_DIR: projectDir,
+			},
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+
+		const exitCode = await child.exited;
+		cleanup();
+		expect(exitCode).toBe(0);
+
+		const remaining = await fs.readdir(clientsDir);
+		const ownRecord = remaining.find(f => f.startsWith(`${child.pid}-`));
+		expect(ownRecord).toBeUndefined();
+
+		expect(await Bun.file(siblingFile).exists()).toBe(true);
+		const siblingContent = JSON.parse(await fs.readFile(siblingFile, "utf8"));
+		expect(siblingContent.id).toBe("sibling-alive");
+
+		expect(await Bun.file(replacementFile).exists()).toBe(true);
+		const replacementContent = JSON.parse(await fs.readFile(replacementFile, "utf8"));
+		expect(replacementContent.id).toBe("replacement-token-1234");
+	});
+
+	it("closing presence removes own file but preserves replaced token record", async () => {
+		const runtimeDir = await tempRuntimeDir();
+		const projectDir = await tempRuntimeDir();
+		const presenceHandle = await registerDaemonProjectPresence(projectDir, runtimeDir);
+		const clientsDir = path.join(runtimeDir, CLIENTS);
+		const entries = await fs.readdir(clientsDir);
+		expect(entries.length).toBe(1);
+		const presencePath = path.join(clientsDir, entries[0]);
+
+		// Simulate replacement by another registration / token with different id
+		await fs.writeFile(
+			presencePath,
+			JSON.stringify({
+				pid: process.pid,
+				id: `${process.pid}-replaced-token`,
+				projectDir,
+			}),
+		);
+
+		await presenceHandle.close();
+
+		// In origin/main: close() unconditionally deletes presencePath (failure).
+		// In fixed code: close() checks if the file matches own token and preserves the replacement.
+		expect(await Bun.file(presencePath).exists()).toBe(true);
+	});
+});
+
+describe("registerDaemonProjectPresence", () => {
+	it("registration rejects with original ENOENT when ancestor symlink dangles rather than spinning forever", async () => {
+		const tempDir = await tempRuntimeDir();
+		const brokenAncestor = path.join(tempDir, "dangling-ancestor");
+		const nonExistent = path.join(tempDir, "nonexistent-target");
+		await fs.symlink(nonExistent, brokenAncestor, "dir");
+		const runtimeOverride = path.join(brokenAncestor, "runtime");
+		const projectDir = path.join(tempDir, "project");
+		await fs.mkdir(projectDir, { recursive: true });
+
+		const { env, cleanup } = hermeticSpawnEnv();
+		const childScript = `
+import { registerDaemonProjectPresence } from "./packages/coding-agent/src/launch/presence";
+
+try {
+	await registerDaemonProjectPresence(process.env.TEST_PROJECT_DIR!, process.env.TEST_RUNTIME_DIR!);
+	process.stdout.write("RESOLVED_UNEXPECTEDLY\\n");
+	process.exit(1);
+} catch (err: unknown) {
+	const code = (err && typeof err === "object" && "code" in err && typeof err.code === "string") ? err.code : undefined;
+	const message = err instanceof Error ? err.message : String(err);
+	if (code === "ENOENT" || message.includes("ENOENT")) {
+		process.stdout.write("REJECTED_ENOENT\\n");
+		process.exit(0);
+	}
+	process.stderr.write("UNEXPECTED_ERROR:" + code + ":" + message + "\\n");
+	process.exit(2);
+}
+`;
+		const child = Bun.spawn([process.execPath, "-e", childScript], {
+			env: {
+				...env,
+				TEST_RUNTIME_DIR: runtimeOverride,
+				TEST_PROJECT_DIR: projectDir,
+			},
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+
+		// Real child process out-of-process execution requires wall-clock bound to detect infinite CPU retry loop regression.
+		const DEADLINE_MS = 2500;
+		let timer: NodeJS.Timeout | undefined;
+		const timeoutPromise = new Promise<{ kind: "TIMEOUT" }>(resolve => {
+			timer = setTimeout(() => resolve({ kind: "TIMEOUT" }), DEADLINE_MS);
+		});
+
+		let outcome: { kind: "EXITED"; code: number } | { kind: "TIMEOUT" };
+		try {
+			outcome = await Promise.race([child.exited.then(code => ({ kind: "EXITED" as const, code })), timeoutPromise]);
+		} finally {
+			clearTimeout(timer);
+		}
+
+		if (outcome.kind === "TIMEOUT") {
+			child.kill("SIGKILL");
+			await child.exited;
+		}
+
+		cleanup();
+		await fs.rm(tempDir, { recursive: true, force: true });
+
+		expect(outcome.kind).toBe("EXITED");
+		if (outcome.kind === "EXITED") {
+			const stdout = await new Response(child.stdout).text();
+			expect(stdout).toContain("REJECTED_ENOENT");
+			expect(outcome.code).toBe(0);
+		}
 	});
 });

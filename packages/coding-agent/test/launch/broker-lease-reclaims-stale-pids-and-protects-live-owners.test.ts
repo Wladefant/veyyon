@@ -74,7 +74,7 @@ it("preserves unverifiable legacy live owners instead of stealing their lease", 
 	expect(await acquireBrokerLease(dir)).toBeNull();
 });
 
-it("prunes legacy presence and keeps the broker lease of a live process that started after the record", async () => {
+it("expires aged legacy presence but keeps a broker lease within its injected age bound", async () => {
 	const dir = await runtime();
 	expect(getProcessStartTime(process.pid)).not.toBeNull();
 	const leasePath = daemonBrokerLeasePath(dir);
@@ -150,7 +150,7 @@ for await (const chunk of Bun.stdin.stream()) {
 	}
 }, 15_000);
 
-it("prunes an aged runtime pinned by reused legacy broker and presence PIDs without touching current scope", async () => {
+it("retires an aged runtime with expired legacy client presence without touching current scope", async () => {
 	const root = path.join(await runtime(), "daemons");
 	const current = path.join(root, "1111111111111111");
 	const stale = path.join(root, "2222222222222222");

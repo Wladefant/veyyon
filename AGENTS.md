@@ -1,5 +1,9 @@
 # Development Rules
 
+Project stage: greenfield
+
+This fork has no external users, so user compatibility is not a goal here. Upstream compatibility is a separate concern: the merge-forward rules from `santhreal/veyyon` below stay as they are.
+
 ## Default context
 
 This repo holds many packages. `packages/coding-agent/` is the subject of a request unless it names
@@ -739,3 +743,17 @@ The website is a static site under `apps/site/`, deployed to Cloudflare Pages.
 `veyyon-<platform>-<arch>` plus its `.sha256`, and fails closed on a checksum mismatch. It covers
 linux and darwin on x64 and arm64; Windows uses `install.ps1`. A release that ships only some
 platforms 404s for the rest, so keep the asset set complete.
+
+## Change loop
+
+Shared policy: section 14 of [the default policy](https://github.com/Wladefant/super-board/blob/main/policies/default/AGENTS.md). On every change, in this order:
+
+1. Docs first. Leave no contradiction.
+2. Tests for the behaviour, seen failing before the fix.
+3. The smallest implementation. No shim or alias; update every caller in the same change.
+4. Clean up what the change made unused. Ask when unsure.
+5. The done report names the tests you ran and ends with `Deleted:` and `Not run:` (each a list or `none`).
+
+## Lessons
+
+Newest first. One `When X, do Y` line per operator correction, at most 20. The same mistake twice means rewrite the line, not add one. Over 20: merge duplicates, drop outdated lines, show the operator.

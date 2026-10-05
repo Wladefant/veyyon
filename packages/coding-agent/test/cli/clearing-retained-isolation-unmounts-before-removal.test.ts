@@ -518,7 +518,7 @@ describe("retained isolation cleanup", () => {
 				await releaseRead.promise;
 			}
 			return contents;
-		}) as typeof fs.readFile);
+		}) as unknown as typeof fs.readFile);
 		vi.spyOn(natives, "isoResolve").mockReturnValue({
 			kind: natives.IsoBackendKind.Rcopy,
 			candidates: [natives.IsoBackendKind.Rcopy],

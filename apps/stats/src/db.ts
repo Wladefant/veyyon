@@ -1,10 +1,10 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import type { StopReason, Usage } from "@veyyon/ai";
 import type { GeneratedProvider } from "@veyyon/catalog/models";
 import { emptyCost, getBundledModel, hasBillableCost } from "@veyyon/catalog/models";
 import { DAY_MS, getConfigRootDir, getStatsDbPath } from "@veyyon/utils";
-import { tableExists } from "@veyyon/utils/sqlite";
+import { openSqliteDatabaseSync, tableExists } from "@veyyon/utils/sqlite";
 import { classifyAgentType } from "./parser";
 import type {
 	AgentType,
@@ -65,11 +65,19 @@ export async function initDb(): Promise<Database> {
 	// Ensure directory exists
 	await fs.mkdir(getConfigRootDir(), { recursive: true });
 
-	db = new Database(getStatsDbPath());
+	// Rows come from the live session files only: sessions the GC archived (archive/sessions/*.jsonl.gz) are
+	// not re-parsed, so a rebuilt stats.db would silently lose their history. Corruption is left untouched.
+	db = openSqliteDatabaseSync(getStatsDbPath(), prepareStatsDb, {
+		failClosedReason:
+			"stats.db holds usage history from GC-archived sessions that a rebuild cannot recover; restore it from a backup",
+	});
+	return db;
+}
+
+function prepareStatsDb(db: Database): Database {
 	// Install the busy handler BEFORE any lock-taking statement.
 	db.run("PRAGMA busy_timeout = 5000");
 	db.run("PRAGMA journal_mode = WAL");
-
 	// Whether `messages` predates this init — drives the one-time agent_type
 	// backfill below, so it must be sampled before CREATE TABLE adds the table.
 	const messagesTableExisted = tableExists(db, "messages");

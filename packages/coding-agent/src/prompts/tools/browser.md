@@ -13,6 +13,7 @@ Drives real Chromium tab; full puppeteer access via JS.
   - `app.path` → spawn absolute binary (Electron/CDP). No stealth patches — NEVER tamper with a real desktop app.
   - `app.cdp_url` → connect to existing CDP endpoint (e.g. `http://127.0.0.1:9222`).
   - `app.target` (with `path`/`cdp_url`) — substring on url+title picks BrowserWindow.
+  - `app: { extension: true, instance_id?, profile? }` → the operator's own signed-in Chrome through the Playwright Extension and a loopback relay. This is the backend for the operator's real Chrome: use it whenever a task needs the operator's logged-in browser, and never attach to it over CDP or `chrome://inspect`. Routine work without a login stays on headless. Needs a stored token (`veyyon browser-extension set-token`). Only origins on the allowlist load (default deny, production hosts always refused); `context`/`storage_state` are headless only; the tab you open is closed by `close`, and `close` with `all: true` disconnects every tab. Chrome shows its "debugging this browser" bar on controlled tabs.
 - `tab` helpers; drop to raw puppeteer `page` for anything uncovered:
   - `tab.goto(url, { waitUntil? })` — navigate. A hung load fails ~1s before the cell budget with a named, catchable error and the pending navigation is stopped; for slow pages raise `timeout` or use `waitUntil: "domcontentloaded"`.
   - `tab.observe({ includeAll?, viewportOnly? })` — accessibility snapshot: `{ url, title, viewport, scroll, elements: [{ id, role, name, value, states, … }] }`. Ids stable until next observe/goto.

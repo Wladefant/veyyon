@@ -16,13 +16,14 @@
  *   Past hard TTL → treat as miss and fetch fresh.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getGithubCacheDbPath } from "@veyyon/utils/dirs";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import * as logger from "@veyyon/utils/logger";
+import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import type { Settings } from "../../config/settings";
 import { ToolAbortError } from "../core/tool-errors";
 import { defaultGhHost, splitRepoRef } from "./gh-format";
@@ -97,37 +98,44 @@ export function openDb(): Database | null {
 	try {
 		const dbPath = getGithubCacheDbPath();
 		ensureParentDir(dbPath);
-		const db = new Database(dbPath);
-		// Install the busy handler BEFORE any lock-taking statement. See #2421.
-		db.run("PRAGMA busy_timeout = 5000");
-		db.run(`
-			PRAGMA journal_mode=WAL;
-			PRAGMA synchronous=NORMAL;
-		`);
-		// Migrate any pre-existing table whose key/check constraint predates
-		// the current schema. The cache is regenerable, so we drop rows rather
-		// than running an in-place ALTER dance.
-		const userVersion = (db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)
-			?.user_version;
-		if (userVersion !== undefined && userVersion < 3) {
-			db.run("DROP TABLE IF EXISTS github_view_cache");
-		}
-		db.run(`
-			CREATE TABLE IF NOT EXISTS github_view_cache (
-				auth_key        TEXT    NOT NULL,
-				repo             TEXT    NOT NULL,
-				kind             TEXT    NOT NULL CHECK (kind IN ('issue','pr','pr-diff')),
-				number           INTEGER NOT NULL,
-				include_comments INTEGER NOT NULL,
-				fetched_at       INTEGER NOT NULL,
-				payload          TEXT    NOT NULL,
-				rendered         TEXT    NOT NULL,
-				source_url       TEXT,
-				PRIMARY KEY (auth_key, repo, kind, number, include_comments)
-			);
-			CREATE INDEX IF NOT EXISTS idx_github_view_cache_fetched ON github_view_cache(fetched_at);
-			PRAGMA user_version = 3;
-		`);
+		// Regenerable cache: a corrupt file is quarantined (backup kept) and recreated empty.
+		const db = openSqliteDatabaseSync(
+			dbPath,
+			db => {
+				// Install the busy handler BEFORE any lock-taking statement. See #2421.
+				db.run("PRAGMA busy_timeout = 5000");
+				db.run(`
+					PRAGMA journal_mode=WAL;
+					PRAGMA synchronous=NORMAL;
+				`);
+				// Migrate any pre-existing table whose key/check constraint predates
+				// the current schema. The cache is regenerable, so we drop rows rather
+				// than running an in-place ALTER dance.
+				const userVersion = (db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined)
+					?.user_version;
+				if (userVersion !== undefined && userVersion < 3) {
+					db.run("DROP TABLE IF EXISTS github_view_cache");
+				}
+				db.run(`
+					CREATE TABLE IF NOT EXISTS github_view_cache (
+						auth_key        TEXT    NOT NULL,
+						repo             TEXT    NOT NULL,
+						kind             TEXT    NOT NULL CHECK (kind IN ('issue','pr','pr-diff')),
+						number           INTEGER NOT NULL,
+						include_comments INTEGER NOT NULL,
+						fetched_at       INTEGER NOT NULL,
+						payload          TEXT    NOT NULL,
+						rendered         TEXT    NOT NULL,
+						source_url       TEXT,
+						PRIMARY KEY (auth_key, repo, kind, number, include_comments)
+					);
+					CREATE INDEX IF NOT EXISTS idx_github_view_cache_fetched ON github_view_cache(fetched_at);
+					PRAGMA user_version = 3;
+				`);
+				return db;
+			},
+			{ recoverCorruption: true },
+		);
 		protectDbFiles(dbPath);
 		cachedDb = db;
 		// No eviction on open: the default `DEFAULT_HARD_TTL_SEC` is a coarse
