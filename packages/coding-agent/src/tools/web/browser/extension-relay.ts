@@ -39,18 +39,52 @@ const METHOD_NOT_FOUND_CODE = -32601;
 /** Auto-attach owned by the relay: children start paused so they are gated before they run. */
 const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
 
-/** Runs in every document of a controlled tab: no popups. Links and forms that ask for a new window stay in place, where the request gate judges them. */
+/**
+ * Runs in every document of a controlled tab so nothing opens a new tab: `window.open` returns null, forms
+ * (`submit()`, `requestSubmit()`, submit events, `formtarget`), `<base target>` and links (also inside shadow
+ * DOM, and ctrl/meta/shift/middle clicks) stay in the same tab, where the request gate judges them. Best
+ * effort: a path that is not script-visible can still open a tab, which the relay then removes unattached.
+ */
 const POPUP_GUARD_SOURCE = `(() => {
   const key = "__veyyonPopupGuard";
   if (window[key]) return;
   Object.defineProperty(window, key, { value: true });
+  const keep = target => !target || ["_self", "_parent", "_top"].includes(target);
   window.open = () => null;
-  const same = event => {
-    const el = event.target instanceof Element ? event.target.closest("a[target],area[target],form[target]") : null;
-    if (el && el.getAttribute("target") && !["_self", "_parent", "_top"].includes(el.getAttribute("target"))) el.setAttribute("target", "_self");
+  const formProto = HTMLFormElement.prototype;
+  const nativeSubmit = formProto.submit;
+  const nativeRequestSubmit = formProto.requestSubmit;
+  const fixBase = () => {
+    for (const base of document.querySelectorAll("base[target]")) {
+      if (!keep(base.getAttribute("target"))) base.setAttribute("target", "_self");
+    }
   };
-  addEventListener("click", same, true);
-  addEventListener("submit", same, true);
+  const inPlace = form => { fixBase(); if (!keep(form.target)) form.target = "_self"; };
+  formProto.submit = function () { inPlace(this); return nativeSubmit.call(this); };
+  formProto.requestSubmit = function (submitter) { inPlace(this); return nativeRequestSubmit.call(this, submitter); };
+  addEventListener("submit", event => {
+    if (event.target instanceof HTMLFormElement) inPlace(event.target);
+    const submitter = event.submitter;
+    if (submitter && !keep(submitter.getAttribute("formtarget"))) submitter.setAttribute("formtarget", "_self");
+  }, true);
+  new MutationObserver(fixBase).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["target"] });
+  document.addEventListener("DOMContentLoaded", fixBase);
+  const onLink = event => {
+    let link = null;
+    for (const node of event.composedPath()) {
+      if (node instanceof Element && node.matches("a[href],area[href]")) { link = node; break; }
+    }
+    if (!link) return;
+    fixBase();
+    if (!keep(link.getAttribute("target"))) link.setAttribute("target", "_self");
+    const newTab = event.button === 1 || event.ctrlKey || event.metaKey || event.shiftKey;
+    if (!newTab || (event.type === "auxclick" && event.button !== 1)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    location.href = link.href;
+  };
+  addEventListener("click", onLink, true);
+  addEventListener("auxclick", onLink, true);
 })();`;
 
 export interface NavigationAudit {

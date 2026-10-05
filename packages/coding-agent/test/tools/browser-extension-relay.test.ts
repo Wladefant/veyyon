@@ -369,6 +369,29 @@ describe("policy at the relay", () => {
 		expect(exposed).toHaveLength(0);
 	});
 
+	test("the popup guard sent to every tab covers forms, base target and shadow-DOM links", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const injected = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.find(call => call.params[1] === "Page.addScriptToEvaluateOnNewDocument");
+		expect(injected).toBeDefined();
+		const source = String((injected?.params[2] as { source: string } | undefined)?.source);
+		for (const needle of [
+			"formProto.submit =",
+			"formProto.requestSubmit =",
+			'"submit"',
+			"formtarget",
+			"base[target]",
+			"composedPath()",
+			'"auxclick"',
+			"ctrlKey",
+		]) {
+			expect(source).toContain(needle);
+		}
+		expect(injected?.params[2]).toMatchObject({ runImmediately: true });
+	});
+
 	test("a page that lands on a refused origin is sent back to about:blank", async () => {
 		const { ext, cdp } = await connected(["https://staging.example.com"]);
 		await cdp.send("Target.createTarget", { url: "about:blank" });

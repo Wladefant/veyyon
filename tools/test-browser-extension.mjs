@@ -107,6 +107,23 @@ try {
 	await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
 	lap("goto", t2);
 	receipt.steps.titleBefore = await page.title();
+	// puppeteer evaluates in its own world; a page's own scripts run in the main world, where the relay's
+	// guard lives. Cases that must behave like page code run through this helper.
+	const mainWorld = (fn, arg) =>
+		page.evaluate(
+			(code, json) => {
+				const el = document.createElement("script");
+				el.textContent = `(${code})(${json})`;
+				document.documentElement.append(el);
+				el.remove();
+			},
+			fn.toString(),
+			JSON.stringify(arg ?? null),
+		);
+	await mainWorld(() => {
+		document.documentElement.dataset.guard = String(window.__veyyonPopupGuard);
+	});
+	receipt.steps.guardInstalledInMainWorld = await page.evaluate(() => document.documentElement.dataset.guard);
 
 	const t3 = performance.now();
 	await page.type("#name", "QA-live");
@@ -155,7 +172,7 @@ try {
 	}, refusedBase);
 	await sleep(3000);
 	cases.crossSiteIframe = refusedHits();
-	await page.evaluate(src => window.open(src, "_blank"), refusedBase);
+	await mainWorld(src => window.open(src, "_blank"), refusedBase);
 	await sleep(3000);
 	cases.popup = refusedHits() - cases.crossSiteIframe;
 	await page.evaluate(src => {
@@ -163,6 +180,76 @@ try {
 	}, refusedBase);
 	await sleep(3000);
 	cases.scriptNavigation = refusedHits() - cases.crossSiteIframe - cases.popup;
+	const mark = () => refusedHits();
+	const resetPage = async () => {
+		await page.goto(pageUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+		await sleep(500);
+	};
+	const probe = async (name, run) => {
+		await resetPage();
+		const before = mark();
+		await run();
+		await sleep(3000);
+		cases[name] = mark() - before;
+	};
+	await probe("formSubmitTargetBlank", () =>
+		mainWorld(src => {
+			const form = document.createElement("form");
+			form.method = "post";
+			form.action = src;
+			form.target = "_blank";
+			document.body.append(form);
+			form.submit();
+		}, refusedBase),
+	);
+	await probe("formRequestSubmitFormtarget", () =>
+		mainWorld(src => {
+			const form = document.createElement("form");
+			form.method = "post";
+			form.action = src;
+			const button = document.createElement("button");
+			button.setAttribute("formtarget", "_blank");
+			form.append(button);
+			document.body.append(form);
+			form.requestSubmit(button);
+		}, refusedBase),
+	);
+	await probe("baseTargetBlank", () =>
+		page.evaluate(src => {
+			const base = document.createElement("base");
+			base.target = "_blank";
+			document.head.append(base);
+			const link = document.createElement("a");
+			link.href = src;
+			link.textContent = "go";
+			document.body.append(link);
+			link.click();
+		}, refusedBase),
+	);
+	const shadowLink = src =>
+		page.evaluate(href => {
+			const host = document.createElement("div");
+			host.style.cssText = "position:fixed;left:200px;top:200px;width:200px;height:60px";
+			document.body.append(host);
+			const root = host.attachShadow({ mode: "open" });
+			const link = document.createElement("a");
+			link.href = href;
+			link.target = "_blank";
+			link.style.cssText = "display:block;width:200px;height:60px";
+			link.textContent = "shadow";
+			root.append(link);
+		}, src);
+	await probe("shadowDomCtrlClick", async () => {
+		await shadowLink(refusedBase);
+		await page.keyboard.down("Control");
+		await page.mouse.click(250, 220);
+		await page.keyboard.up("Control");
+	});
+	await probe("middleClick", async () => {
+		await shadowLink(refusedBase);
+		await page.mouse.click(250, 220, { button: "middle" });
+	});
+	await resetPage();
 	receipt.steps.refusedRequestsReceivedPerCase = cases;
 	receipt.steps.refusedHostRequestsReceived = refusedHits();
 	receipt.steps.audits = audits;
