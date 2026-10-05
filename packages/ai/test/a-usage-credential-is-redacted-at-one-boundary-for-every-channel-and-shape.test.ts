@@ -19,8 +19,8 @@ import {
 	type CredentialHealthResult,
 	SqliteAuthCredentialStore,
 } from "@veyyon/ai/auth-storage";
-import { ProviderHttpError } from "@veyyon/ai/error";
 import { redactUsageError } from "@veyyon/ai/auth-storage/usage-redaction";
+import { ProviderHttpError } from "@veyyon/ai/error";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import type { UsageLimit, UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import * as logger from "@veyyon/utils/logger";
@@ -126,14 +126,13 @@ async function drive(
 }
 
 function expireRows(r: Rig): void {
-	const row = r.db.query("SELECT key, value FROM cache WHERE key LIKE 'usage_cache:%'").get() as
-		| { key: string; value: string }
-		| null;
+	const row = r.db.query("SELECT key, value FROM cache WHERE key LIKE 'usage_cache:%'").get() as {
+		key: string;
+		value: string;
+	} | null;
 	const entry = JSON.parse(row?.value ?? "{}") as { expiresAt: number };
 	entry.expiresAt = Date.now() - 1000;
-	r.db
-		.query("UPDATE cache SET value = ? WHERE key = ?")
-		.run(JSON.stringify(entry), row?.key ?? "");
+	r.db.query("UPDATE cache SET value = ? WHERE key = ?").run(JSON.stringify(entry), row?.key ?? "");
 }
 
 function throwing(message: string): UsageProvider {
@@ -271,7 +270,11 @@ describe("the usage credential boundary", () => {
 			orgId: "org-1",
 			orgName: KEY,
 		};
-		const r = await rig(reporting(() => ({ metadata: {} })), KEY, credential);
+		const r = await rig(
+			reporting(() => ({ metadata: {} })),
+			KEY,
+			credential,
+		);
 		const out = await drive(r);
 		expect(out.reports.length).toBeGreaterThan(0);
 		expectClean(observe(r, out), [KEY]);
@@ -321,7 +324,16 @@ describe("the usage credential boundary", () => {
 		["undefined", () => undefined],
 		["an array", () => []],
 		["an object with no limits", () => ({ provider: PROVIDER, fetchedAt: 1 })],
-		["an object whose limits is a getter", () => ({ provider: PROVIDER, fetchedAt: 1, get limits() { return []; } })],
+		[
+			"an object whose limits is a getter",
+			() => ({
+				provider: PROVIDER,
+				fetchedAt: 1,
+				get limits() {
+					return [];
+				},
+			}),
+		],
 		["an object without a provider", () => ({ fetchedAt: 1, limits: [] })],
 		["an object without fetchedAt", () => ({ provider: PROVIDER, limits: [] })],
 		["an object whose limits is a Proxy", () => ({ provider: PROVIDER, fetchedAt: 1, limits: new Proxy([], {}) })],
@@ -340,7 +352,17 @@ describe("the usage credential boundary", () => {
 	}
 
 	it("drops a limit that is not an object instead of crashing the reader", async () => {
-		const limits = [() => 1, undefined, "text", { id: "kept", label: "Kept", scope: { provider: "anthropic" }, amount: { unit: "percent", used: 1, limit: 100 } }];
+		const limits = [
+			() => 1,
+			undefined,
+			"text",
+			{
+				id: "kept",
+				label: "Kept",
+				scope: { provider: "anthropic" },
+				amount: { unit: "percent", used: 1, limit: 100 },
+			},
+		];
 		const r = await rig(reporting(() => ({ limits: limits as unknown as UsageLimit[] })));
 		const out = await drive(r);
 		expect(out.reports[0]?.limits.map(limit => limit.id)).toEqual(["kept"]);
@@ -382,10 +404,7 @@ describe("the usage credential boundary", () => {
 
 	it("redacts a URL-encoded key in an error", async () => {
 		const key = "sec+ret/key==123";
-		const r = await rig(
-			throwing("GET https://api.example.com/usage?key=sec%2Bret%2Fkey%3D%3D123 failed"),
-			key,
-		);
+		const r = await rig(throwing("GET https://api.example.com/usage?key=sec%2Bret%2Fkey%3D%3D123 failed"), key);
 		const out = await drive(r);
 		expectClean(observe(r, out), [key, "sec%2Bret%2Fkey%3D%3D123", "sec%2bret%2fkey%3d%3d123"]);
 	});
@@ -411,9 +430,7 @@ describe("the usage credential boundary", () => {
 
 	describe("a usage_cache row written before the fix", () => {
 		async function seedLegacyRow(r: Rig, expiresAt: number): Promise<void> {
-			const row = r.db.query("SELECT key FROM cache WHERE key LIKE 'usage_cache:%'").get() as
-				| { key: string }
-				| null;
+			const row = r.db.query("SELECT key FROM cache WHERE key LIKE 'usage_cache:%'").get() as { key: string } | null;
 			expect(row).not.toBeNull();
 			const legacy = {
 				value: { provider: PROVIDER, fetchedAt: Date.now(), limits: [], metadata: { echo: KEY } },
@@ -477,14 +494,22 @@ describe("the usage credential boundary", () => {
 		} as StoredCredential;
 
 		it("carries a digest of the account identity, never the identity", async () => {
-			const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })), KEY, oauth);
+			const r = await rig(
+				reporting(() => ({ metadata: { echo: "clean" } })),
+				KEY,
+				oauth,
+			);
 			await r.storage.fetchUsageReports();
 			expect(usageRows(r.db)).toContain("clean");
 			expectClean(observe(r, {}), [KEY]);
 		});
 
 		it("keeps one row per account across repeated fetches", async () => {
-			const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })), KEY, oauth);
+			const r = await rig(
+				reporting(() => ({ metadata: { echo: "clean" } })),
+				KEY,
+				oauth,
+			);
 			await r.storage.fetchUsageReports();
 			await r.storage.fetchUsageReports();
 			const rows = r.db.query("SELECT key FROM cache WHERE key LIKE 'usage_cache:%'").all();
@@ -693,7 +718,10 @@ describe("the usage credential boundary", () => {
 				"an Error whose message getter throws the key",
 				() => Object.defineProperty(new Error("x"), "message", { get: boom }),
 			],
-			["an object whose Symbol.toPrimitive and toString throw the key", () => ({ [Symbol.toPrimitive]: boom, toString: boom })],
+			[
+				"an object whose Symbol.toPrimitive and toString throw the key",
+				() => ({ [Symbol.toPrimitive]: boom, toString: boom }),
+			],
 			[
 				"an Error with a Proxy prototype",
 				() =>
@@ -737,88 +765,95 @@ describe("the usage credential boundary", () => {
 		const entries: Array<[string, Entry, { ingest?: boolean; completionThrows?: boolean }]> = [
 			[
 				"a fetchUsage that throws it",
-				value => ({
-					id: PROVIDER,
-					async fetchUsage() {
-						throw value();
-					},
-				}) as UsageProvider,
+				value =>
+					({
+						id: PROVIDER,
+						async fetchUsage() {
+							throw value();
+						},
+					}) as UsageProvider,
 				{},
 			],
 			[
 				"a supports() that throws it",
-				value => ({
-					id: PROVIDER,
-					supports() {
-						throw value();
-					},
-					async fetchUsage() {
-						return okReport("anthropic");
-					},
-				}) as unknown as UsageProvider,
+				value =>
+					({
+						id: PROVIDER,
+						supports() {
+							throw value();
+						},
+						async fetchUsage() {
+							return okReport("anthropic");
+						},
+					}) as unknown as UsageProvider,
 				{},
 			],
 			[
 				"a fetchUsage that returns it in metadata",
-				value => ({
-					id: PROVIDER,
-					async fetchUsage(params: { provider: UsageReport["provider"] }) {
-						return okReport(params.provider, { metadata: { value: value() } });
-					},
-				}) as unknown as UsageProvider,
+				value =>
+					({
+						id: PROVIDER,
+						async fetchUsage(params: { provider: UsageReport["provider"] }) {
+							return okReport(params.provider, { metadata: { value: value() } });
+						},
+					}) as unknown as UsageProvider,
 				{},
 			],
 			[
 				"a completion probe that throws it",
-				() => ({
-					id: PROVIDER,
-					async fetchUsage(params: { provider: UsageReport["provider"] }) {
-						return okReport(params.provider);
-					},
-				}) as unknown as UsageProvider,
+				() =>
+					({
+						id: PROVIDER,
+						async fetchUsage(params: { provider: UsageReport["provider"] }) {
+							return okReport(params.provider);
+						},
+					}) as unknown as UsageProvider,
 				{ completionThrows: true },
 			],
 			[
 				"a header parser that throws it",
-				value => ({
-					id: PROVIDER,
-					async fetchUsage(params: { provider: UsageReport["provider"] }) {
-						return okReport(params.provider);
-					},
-					parseRateLimitHeaders() {
-						throw value();
-					},
-				}) as unknown as UsageProvider,
+				value =>
+					({
+						id: PROVIDER,
+						async fetchUsage(params: { provider: UsageReport["provider"] }) {
+							return okReport(params.provider);
+						},
+						parseRateLimitHeaders() {
+							throw value();
+						},
+					}) as unknown as UsageProvider,
 				{ ingest: true },
 			],
 			[
 				"a header parser that returns a report whose limits getter throws it",
-				value => ({
-					id: PROVIDER,
-					async fetchUsage(params: { provider: UsageReport["provider"] }) {
-						return okReport(params.provider);
-					},
-					parseRateLimitHeaders() {
-						return Object.defineProperty(okReport("anthropic"), "limits", {
-							get() {
-								value();
-							},
-						});
-					},
-				}) as unknown as UsageProvider,
+				value =>
+					({
+						id: PROVIDER,
+						async fetchUsage(params: { provider: UsageReport["provider"] }) {
+							return okReport(params.provider);
+						},
+						parseRateLimitHeaders() {
+							return Object.defineProperty(okReport("anthropic"), "limits", {
+								get() {
+									value();
+								},
+							});
+						},
+					}) as unknown as UsageProvider,
 				{ ingest: true },
 			],
 			[
 				"a header parser that returns it in metadata",
-				value => ({
-					id: PROVIDER,
-					async fetchUsage(params: { provider: UsageReport["provider"] }) {
-						return okReport(params.provider);
-					},
-					parseRateLimitHeaders() {
-						return okReport("anthropic", { metadata: { value: value() } });
-					},
-				}) as unknown as UsageProvider,
+				value =>
+					({
+						id: PROVIDER,
+						async fetchUsage(params: { provider: UsageReport["provider"] }) {
+							return okReport(params.provider);
+						},
+						parseRateLimitHeaders() {
+							return okReport("anthropic", { metadata: { value: value() } });
+						},
+					}) as unknown as UsageProvider,
 				{ ingest: true },
 			],
 		];
