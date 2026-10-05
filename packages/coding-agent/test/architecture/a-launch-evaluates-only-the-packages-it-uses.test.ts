@@ -18,15 +18,20 @@
  * `loadOpenTelemetry` in the agent's telemetry module, and a `lazy()` holder beside each `diff` reader. Every
  * top-level session now holds its at-rest reading until its first turn, as the interactive host already did.
  *
+ * A launch with secret obfuscation on still evaluated `yaml` (14 ms and 12.5 MiB from source), because the
+ * secret runtime it builds parsed the bundled keyword list through `loadYaml`. Bun's YAML parser reads the
+ * bundled list now, and `yaml` loads only for a keyword file a user wrote.
+ *
  * THE CLASS. A third-party package that a launch evaluates without using. Neither census below names the
  * packages it looks for: each reads every package out of the module cache and pins the set by exact equality,
  * so a new package on a launch, or a deferred one that returns to it, turns this red until the set records a
- * decision. One census launches the CLI from source in RPC mode under a hermetic home and reads the cache when
- * it reports ready, which covers what session creation evaluates. The other evaluates the interactive launch
- * modules and every tool module the dispatch tables load (swept at run time), which covers the modules a
- * terminal launch evaluates and RPC does not. That process then takes each deferred package's first use
- * through the shipped function and observes that package, and only that package, arrive, so an empty census
- * is a measurement and not a probe that cannot see the package.
+ * decision. One census launches the CLI from source in RPC mode under a hermetic home with secret obfuscation
+ * on, so session creation builds the secret runtime as well, and reads the cache when it reports ready, which
+ * covers what session creation evaluates. The other evaluates the interactive launch modules and every tool
+ * module the dispatch tables load (swept at run time), which covers the modules a terminal launch evaluates
+ * and RPC does not. That process then takes each deferred package's first use through the shipped function
+ * (the keyword list's with a keyword file a user wrote) and observes that package, and only that package,
+ * arrive, so an empty census is a measurement and not a probe that cannot see the package.
  *
  * WHAT IT DOES NOT CATCH. A package evaluated by a dynamic import outside the tool tables that the RPC launch
  * does not take (extensions, MCP, a command a keystroke opens), and any module first evaluated after the
@@ -37,6 +42,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
+import { ENV_KEYWORDS_FILENAME } from "../../src/secrets/env-keywords";
+import { VAULT_KEY_FILENAME } from "../../src/secrets/vault-crypto";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 import { lazyToolModules, PACKAGES, SRC } from "../helpers/module-reach-gate";
 
@@ -106,28 +113,30 @@ interface ModuleCensus {
 /**
  * An entry that statically imports every module under test, then reports. ES module imports evaluate before
  * the importing body runs, so the first reading is taken with every module evaluated and nothing called.
+ * `keywordDir` holds a keyword file a user wrote, which is what makes the keyword list load `yaml`.
  */
-function censusEntry(modules: readonly string[]): string {
+function censusEntry(modules: readonly string[], keywordDir: string): string {
 	const imports = modules.map(file => `import ${JSON.stringify(file)};`).join("\n");
 	const use = (name: keyof typeof FIRST_USES): string => JSON.stringify(FIRST_USES[name]);
+	const dir = JSON.stringify(keywordDir);
 	return `${imports}
-import { bundledEnvKeywords } from ${use("keywords")};
+import { loadEnvSecretKeywords } from ${use("keywords")};
 import { resolveTelemetry, SpanStatusCode } from ${use("telemetry")};
 import { generateDiffString } from ${use("editDiff")};
 const atRest = Object.keys(require.cache);
 const arrived = {};
 let before = new Set(atRest);
-const step = (name, fn) => {
-	const value = fn();
+const step = async (name, fn) => {
+	const value = await fn();
 	const after = Object.keys(require.cache);
 	arrived[name] = after.filter(file => !before.has(file));
 	before = new Set(after);
 	return value;
 };
-const keywords = step("keywords", () => [...bundledEnvKeywords()]);
-const tracerResolved = step("telemetry", () => resolveTelemetry({}, "census")?.tracer !== undefined);
+const keywords = await step("keywords", () => loadEnvSecretKeywords({ cwd: ${dir}, agentDir: ${dir} }));
+const tracerResolved = await step("telemetry", () => resolveTelemetry({}, "census")?.tracer !== undefined);
 const statusError = SpanStatusCode.ERROR;
-const editDiff = step("editDiff", () => generateDiffString("one\\ntwo\\n", "one\\nthree\\n").diff);
+const editDiff = await step("editDiff", () => generateDiffString("one\\ntwo\\n", "one\\nthree\\n").diff);
 process.stdout.write(JSON.stringify({
 	evaluated: Object.keys(require.cache).length,
 	atRest,
@@ -171,21 +180,29 @@ describe("a launch evaluates only the third-party packages it uses", () => {
 	let census: ModuleCensus;
 	let rpcPackages: string[] = [];
 	let rpcEvaluated = 0;
+	let secretRuntimeBuilt = false;
 	let child: ChildProcess | undefined;
 
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@package-census-");
 		const entry = path.join(tempDir.path(), "census.ts");
-		fs.writeFileSync(entry, censusEntry(modules));
+		const keywordDir = path.join(tempDir.path(), "keywords");
+		fs.mkdirSync(keywordDir);
+		fs.writeFileSync(path.join(keywordDir, ENV_KEYWORDS_FILENAME), "keywords:\n  - CENSUSWORD\n");
+		fs.writeFileSync(entry, censusEntry(modules, keywordDir));
 		census = JSON.parse(await runToExit([entry], tempDir.path(), {})) as ModuleCensus;
 
 		const rpcCensus = path.join(tempDir.path(), "rpc-census.txt");
 		// RPC resolves a model before it reports ready; a key of the right shape that reaches nothing is enough.
-		const { env, cleanup } = hermeticSpawnEnv({
+		// Secret obfuscation on makes session creation build the secret runtime and read the keyword list.
+		const { env, home, cleanup } = hermeticSpawnEnv({
 			LOADED_MODULE_CENSUS: rpcCensus,
 			ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key",
 			VEYYON_NO_TITLE: "1",
 		});
+		const agentDir = path.join(home, ".veyyon", "profiles", "default", "agent");
+		fs.mkdirSync(agentDir, { recursive: true });
+		fs.writeFileSync(path.join(agentDir, "config.yml"), "secrets:\n  enabled: true\n");
 		try {
 			const launched = spawn(
 				process.execPath,
@@ -221,6 +238,8 @@ describe("a launch evaluates only the third-party packages it uses", () => {
 			const loaded = fs.readFileSync(rpcCensus, "utf8").split("\n").filter(Boolean);
 			rpcEvaluated = loaded.length;
 			rpcPackages = packagesOf(loaded);
+			// The secret runtime creates the vault key; a launch with secret obfuscation off creates none.
+			secretRuntimeBuilt = fs.existsSync(path.join(home, ".veyyon", VAULT_KEY_FILENAME));
 		} finally {
 			cleanup();
 		}
@@ -236,6 +255,7 @@ describe("a launch evaluates only the third-party packages it uses", () => {
 		expect(tools.modules).toContain(path.join(SRC, "edit", "index.ts"));
 		expect(census.evaluated).toBeGreaterThan(1500);
 		expect(rpcEvaluated).toBeGreaterThan(1500);
+		expect(secretRuntimeBuilt).toBe(true);
 	});
 
 	it("an RPC launch evaluates exactly the packages recorded for it", () => {
@@ -258,7 +278,7 @@ describe("a launch evaluates only the third-party packages it uses", () => {
 	});
 
 	it("each first use answers from the package it loaded", () => {
-		expect(census.keywords).toContain("TOKEN");
+		expect(census.keywords).toEqual(expect.arrayContaining(["TOKEN", "CENSUSWORD"]));
 		expect(census.tracerResolved).toBe(true);
 		expect(census.statusError).toBe(2);
 		expect(census.editDiff).toContain("three");
