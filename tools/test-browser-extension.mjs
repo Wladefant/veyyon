@@ -300,7 +300,10 @@ try {
 		);
 		if (done) removed.push(id);
 	}
-	const guardOff = await popupByClick();
+	// A popup that opens can still be closed by the relay before its first request lands, so give the
+	// unguarded case up to three tries. The guarded case above needs only one: it must always be 0.
+	let guardOff = 0;
+	for (let attempt = 0; attempt < 3 && guardOff === 0; attempt++) guardOff = await popupByClick();
 	await mainWorld(() => {
 		document.documentElement.dataset.guard = String(window.__veyyonPopupGuard);
 	});
