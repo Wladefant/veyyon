@@ -252,6 +252,8 @@ describe("retained isolation cleanup", () => {
 			expect(path.basename(workspace)).toMatch(/^t[0-9a-f]{9}$/);
 			await fs.rm(handle.mergedDir, { recursive: true });
 			await fs.rm(path.join(workspace, ISOLATION_OWNER_FILE));
+			// Setup now records an unretained backend sidecar; a reservation that crashed before the mount has none.
+			await fs.rm(path.join(workspace, RETAINED_BACKEND_FILE), { force: true });
 			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
 			await gone.exited;
 			await fs.writeFile(path.join(workspace, ".veyyon-isolation-claim.json"), JSON.stringify({ pid: gone.pid }));
