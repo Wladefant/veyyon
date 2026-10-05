@@ -717,8 +717,14 @@ describe("worktree isolation helpers", () => {
 
 				expect(result).toMatchObject({ removed: 0, failed: 1 });
 				expect(result.results[0].error).toContain("Missing retained backend metadata");
+				expect(result.results[0].error).toContain('docs/tools/task.md, "Slot left after a crash during setup"');
 				expect(process.exitCode).toBe(1);
-				await expect(ensureIsolation(source, "pe")).rejects.toThrow("refusing replacement");
+				const reuseError = await ensureIsolation(source, "pe").then(
+					() => "",
+					(error: Error) => error.message,
+				);
+				expect(reuseError).toContain("refusing replacement");
+				expect(reuseError).toContain('docs/tools/task.md, "Slot left after a crash during setup"');
 				expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
 				await fs.rm(base, { recursive: true, force: true });
 			});

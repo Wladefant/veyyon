@@ -159,6 +159,28 @@ Artifacts and side channels:
 - If the child omits `yield`, `finalizeSubprocessOutput(...)` injects warnings such as `SYSTEM WARNING: Agent exited without calling yield tool after 3 reminders.`
 - `agent://<id>` resolution errors are model-visible when another tool reads them: no session, no artifacts dir, missing id, conflicting extraction syntax, or invalid JSON for extraction.
 
+## Slot left after a crash during setup
+Isolation slots live under the worktrees directory (`VEYYON_WORKTREE_DIR`, else the `worktree.base` setting, else the profile `wt/` directory), one `t<9 hex>` directory per repository and task id. Setup mounts the backend first and writes `.veyyon-retained-backend.json` second. If the owner process dies between those two steps, the slot has an owner record (`.veyyon-owner.json`) and a mount directory (`m-<16 hex>`), but no backend record.
+
+Both `veyyon worktree clear` and a new isolated task with the same id then refuse the slot:
+
+- clear: `Missing retained backend metadata in <slot>; refusing removal`
+- reuse: `Isolation slot already exists or cannot be claimed: <slot>; refusing replacement`
+
+This is deliberate (fail-closed). Without the backend record, veyyon cannot tell a copy backend from a live overlay mount. Removing a live mount with a recursive delete can destroy the preserved layer or fail on the mount point. Automatic removal on owner PID alone is not safe, so a person confirms the state and removes the slot. The decision is recorded on [Wladefant/veyyon#498](https://github.com/Wladefant/veyyon/issues/498).
+
+Recovery:
+
+1. Find the slot. Run `veyyon worktree list --json`, or look in the worktrees directory for a `t<9 hex>` directory that holds `.veyyon-owner.json` and an `m-*` directory but no `.veyyon-retained-backend.json`. Call it `<slot>`.
+2. Confirm the owner is gone. Read `pid` and `startIdentity` from `<slot>/.veyyon-owner.json`. Linux: `ps -p <pid>`. Windows: `tasklist /FI "PID eq <pid>"`. If a process with that PID exists, check that it is not a veyyon process (PIDs are reused). Stop here if the owner or any task shell is still running: the slot is in use.
+3. Confirm nothing holds the mount. Linux: `fuser -vm <slot>/m-*` (or `lsof +D <slot>/m-*`) must list no process. Close shells whose working directory is inside the slot.
+4. Linux, find the backend. Run `findmnt -T <slot>/m-*`. Type `overlay` is a kernel overlay. Type `fuse.fuse-overlayfs` is a FUSE overlay. A plain directory (`findmnt` names the parent file system) is a copy backend: go to step 6.
+5. Linux, unmount. Kernel overlay: `sudo umount -l <slot>/m-*` (veyyon itself uses a lazy `umount2`). FUSE overlay: `fusermount3 -u <slot>/m-*`, or `fusermount -u` when `fusermount3` is missing. Run `findmnt -T <slot>/m-*` again and continue only when it no longer reports an overlay.
+6. Remove the slot: `rm -rf <slot>` (Linux), or `rmdir /s /q <slot>` (Windows). Never run this while step 5 is still pending.
+7. If the mount directory held a git checkout (a `.git` file inside `m-*`, which is the `rcopy` backend on any OS), the source repository still lists a worktree for it. Before step 6, read the `gitdir:` line in `<slot>/m-*/.git` to find the repository. After step 6, run `git -C <repo> worktree prune`.
+
+Windows: the `rcopy` and `block-clone` backends mount nothing, so steps 3 to 7 reduce to removing the slot and pruning the registration. The `projfs` backend keeps its projection handles inside the crashed owner process. Once that process is gone, there is no veyyon command that stops the projection, and veyyon does not exercise the manual delete of a left-over projection root (not tested; [INFERENCE] it deletes like an ordinary directory). After the slot is gone, the same task id can be used again.
+
 ## Notes
 - Parallelism is parallel `task` calls in one assistant message: or, with `agent.batch`, a `tasks[]` batch in one call; either way the session-scoped semaphore bounds the fan-out. With `async.enabled=true`, each spawn is an independent background job.
 - Shared background convention without batch mode: write it once to a `local://` file and reference that path in each spawn's `task`: agents share the parent's `local://` root. With `agent.batch`, the required `context` parameter carries the shared background directly into each spawn's system prompt.

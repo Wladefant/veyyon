@@ -15,6 +15,7 @@ import {
 	REGISTRATION_OWNER_FILE,
 	readIsolationOwner,
 	releaseIsolationClaim,
+	SLOT_RECOVERY_HINT,
 	stampLinkedWorktreeRegistration,
 	tryWithIsolationLifecycleLock,
 	withIsolationLifecycleLock,
@@ -546,7 +547,9 @@ export async function ensureIsolation(
 			if (await isAbandonedEmptyReservation(baseDir)) {
 				await fs.rm(baseDir, { recursive: true, force: true });
 			} else {
-				throw new Error(`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement`);
+				throw new Error(
+					`Isolation slot already exists or cannot be claimed: ${baseDir}; refusing replacement (${SLOT_RECOVERY_HINT})`,
+				);
 			}
 		}
 
