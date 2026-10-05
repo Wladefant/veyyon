@@ -59,6 +59,7 @@
 - `SessionEntryIndex` extends the active branch while it indexes a loaded session that never branched instead of walking the branch afterward by parent id, which cut the median open of a 312 MB, 108,163-entry synthetic session from 526 ms to 508 ms (7 interleaved runs each).
 - A session load's string-pooling walk writes a string back only when an earlier equal string replaces it and skips a cold entry's moved fields by one cursor over its key order, which cut the walk over a 108,163-entry synthetic session with two thirds of it cooled from 89 ms to 80 ms (median of 7 rounds, 2 runs each) and its median open from 500 ms to 494 ms (6 interleaved runs).
 - The pass that moves unreachable entries out of memory after a resume, a publish or a compaction matches entries to a never-branched session's active branch by file position instead of building a set of the live entries, which cut that pass over a 312 MB, 108,163-entry synthetic session from 2.86 ms to 2.51 ms (median of 5 interleaved runs of 31 passes each).
+- `AgentStorage` builds its credential store on the first credential or cache call instead of when it opens, and leaves a current schema version row unwritten, which cut the memory of a launch's held `agent.db` connection from 384 KiB to 209 KiB and its open plus model-usage read from 827 µs to 606 µs (median of 7 alternating runs of 60 opens).
 
 ### Fixed
 

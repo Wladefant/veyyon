@@ -1,4 +1,4 @@
-import { Database, type Statement } from "bun:sqlite";
+import { constants, Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
@@ -133,7 +133,12 @@ const unopenable = new Set<string>();
  */
 export class AgentStorage {
 	#db: Database;
-	#authStore: AuthCredentialStore;
+	/**
+	 * Built by {@link #auth} on the first credential or cache call. A launch opens this database to read
+	 * model usage, and constructing the credential store prepares about forty statements and runs its
+	 * schema checks on a connection the process then holds for its whole life.
+	 */
+	#authStore: AuthCredentialStore | undefined;
 
 	#upsertModelUsageStmt: Statement;
 	#listModelUsageStmt: Statement;
@@ -165,9 +170,6 @@ export class AgentStorage {
 
 		this.#initializeSchema();
 		hardenPermissions(dbPath);
-
-		// Create AuthCredentialStore with our open database
-		this.#authStore = new SqliteAuthCredentialStore(this.#db);
 
 		this.#upsertModelUsageStmt = this.#db.prepare(
 			`INSERT INTO model_usage (model_key, last_used_at) VALUES (?, ${SQLITE_NOW_EPOCH}) ON CONFLICT(model_key) DO UPDATE SET last_used_at = ${SQLITE_NOW_EPOCH}`,
@@ -203,6 +205,10 @@ ON CONFLICT(model_key) DO UPDATE SET
 		// recovery). Without this, concurrent veyyon startups can crash here with
 		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. See issue #2421.
 		this.#db.run("PRAGMA busy_timeout = 5000");
+		// Keep `agent.db-wal` and `agent.db-shm` on close, as the credential store does on its connection: a
+		// WAL database opens only when both files exist or can be created, so a read-only directory needs them
+		// left in place. This connection may close without ever building the credential store.
+		this.#db.fileControl(constants.SQLITE_FCNTL_PERSIST_WAL, 1);
 		this.#db.run(`
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -298,7 +304,10 @@ CREATE TABLE settings (
 		if (schemaVersion < SCHEMA_VERSION) {
 			this.#migrateSchema(schemaVersion);
 		}
-		this.#db.prepare("INSERT OR REPLACE INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
+		// Rewriting the current version is a write transaction on every launch for no change.
+		if (schemaVersion !== SCHEMA_VERSION) {
+			this.#db.prepare("INSERT OR REPLACE INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
+		}
 	}
 
 	#migrateSchema(fromVersion: number): void {
@@ -437,7 +446,8 @@ FROM model_usage_legacy
 		this.#listModelPerfStmt.finalize();
 		// SqliteAuthCredentialStore.close() finalizes its own statements and
 		// closes the shared #db handle — must run after our statements finalize.
-		this.#authStore.close();
+		if (this.#authStore) this.#authStore.close();
+		else this.#db.close();
 	}
 
 	/**
@@ -681,7 +691,7 @@ ON CONFLICT(model_key) DO UPDATE SET
 	 * @returns True if at least one credential is stored
 	 */
 	hasAuthCredentials(): boolean {
-		return this.#authStore.listAuthCredentials().length > 0;
+		return this.authStore.listAuthCredentials().length > 0;
 	}
 
 	/**
@@ -691,6 +701,7 @@ ON CONFLICT(model_key) DO UPDATE SET
 	 * own.
 	 */
 	get authStore(): AuthCredentialStore {
+		this.#authStore ??= new SqliteAuthCredentialStore(this.#db);
 		return this.#authStore;
 	}
 
@@ -702,7 +713,7 @@ ON CONFLICT(model_key) DO UPDATE SET
 	 * @returns Array of stored credentials with their database IDs
 	 */
 	listAuthCredentials(provider?: string, includeDisabled = false): StoredAuthCredential[] {
-		const credentials = this.#authStore.listAuthCredentials(provider);
+		const credentials = this.authStore.listAuthCredentials(provider);
 		if (!includeDisabled) return credentials;
 
 		const stmt = this.#db.prepare(
@@ -765,7 +776,7 @@ ON CONFLICT(model_key) DO UPDATE SET
 	 * @returns Array of newly stored credentials with their database IDs
 	 */
 	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[] {
-		return this.#authStore.replaceAuthCredentialsForProvider(provider, credentials);
+		return this.authStore.replaceAuthCredentialsForProvider(provider, credentials);
 	}
 
 	/**
@@ -774,7 +785,7 @@ ON CONFLICT(model_key) DO UPDATE SET
 	 * @param credential - New credential data
 	 */
 	updateAuthCredential(id: number, credential: AuthCredential): void {
-		this.#authStore.updateAuthCredential(id, credential);
+		this.authStore.updateAuthCredential(id, credential);
 	}
 
 	/**
@@ -783,7 +794,7 @@ ON CONFLICT(model_key) DO UPDATE SET
 	 * @param disabledCause - Human-readable cause stored with the disabled row
 	 */
 	deleteAuthCredential(id: number, disabledCause: string): void {
-		this.#authStore.deleteAuthCredential(id, disabledCause);
+		this.authStore.deleteAuthCredential(id, disabledCause);
 	}
 
 	/**
@@ -792,28 +803,28 @@ ON CONFLICT(model_key) DO UPDATE SET
 	 * @param disabledCause - Human-readable cause stored with the disabled rows
 	 */
 	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
-		this.#authStore.deleteAuthCredentialsForProvider(provider, disabledCause);
+		this.authStore.deleteAuthCredentialsForProvider(provider, disabledCause);
 	}
 
 	/**
 	 * Gets a cached value by key. Returns null if not found or expired.
 	 */
 	getCache(key: string): string | null {
-		return this.#authStore.getCache(key);
+		return this.authStore.getCache(key);
 	}
 
 	/**
 	 * Sets a cached value with expiry time (unix seconds).
 	 */
 	setCache(key: string, value: string, expiresAtSec: number): void {
-		this.#authStore.setCache(key, value, expiresAtSec);
+		this.authStore.setCache(key, value, expiresAtSec);
 	}
 
 	/**
 	 * Deletes expired cache entries. Call periodically for cleanup.
 	 */
 	cleanExpiredCache(): void {
-		this.#authStore.cleanExpiredCache();
+		this.authStore.cleanExpiredCache();
 	}
 }
 
