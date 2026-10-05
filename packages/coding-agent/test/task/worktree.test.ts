@@ -10,6 +10,7 @@ import {
 	REGISTRATION_OWNER_FILE,
 	RETAINED_BACKEND_FILE,
 	writeIsolationOwner,
+	writeRetainedBackend,
 } from "@veyyon/coding-agent/task/isolation-ownership";
 import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
 import {
@@ -186,324 +187,352 @@ describe("worktree isolation helpers", () => {
 		// while the first was still being set up. A live claim must survive an
 		// ordinary clear; a claim left by a dead process must not. Native mount
 		// setup is substituted; actual kernel mounts are not proved.
-		it("keeps a slot claimed during native setup through an ordinary clear", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
+		describe("clearing isolation claims", () => {
+			let previousRoot: string | undefined;
+			let previousExitCode: typeof process.exitCode;
+			beforeEach(async () => {
+				previousRoot = process.env.VEYYON_WORKTREE_DIR;
+				previousExitCode = process.exitCode;
+				process.exitCode = 0;
+				const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-clear-claim-"));
+				tempDirs.push(fixture);
+				process.env.VEYYON_WORKTREE_DIR = path.join(fixture, "wt");
+				await fs.mkdir(getWorktreesDir());
 			});
-			const started = Promise.withResolvers<void>();
-			const proceed = Promise.withResolvers<void>();
-			let starts = 0;
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				// Only the first start blocks, so a regression that lets a later task claim the slot fails
-				// the assertion instead of hanging on `proceed`.
-				if (++starts === 1) {
-					started.resolve();
-					await proceed.promise;
+			afterEach(() => {
+				if (previousRoot === undefined) delete process.env.VEYYON_WORKTREE_DIR;
+				else process.env.VEYYON_WORKTREE_DIR = previousRoot;
+				process.exitCode = previousExitCode;
+			});
+			it("keeps a slot claimed during native setup through an ordinary clear", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				const started = Promise.withResolvers<void>();
+				const proceed = Promise.withResolvers<void>();
+				let starts = 0;
+				let liveSlot = "";
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					liveSlot = path.dirname(mergedDir);
+					// Only the first start blocks, so a regression that lets a later task claim the slot fails
+					// the assertion instead of hanging on `proceed`.
+					if (++starts === 1) {
+						started.resolve();
+						await proceed.promise;
+					}
+					await fs.mkdir(mergedDir, { recursive: true });
+					await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
+				});
+				const log = vi.spyOn(console, "log").mockImplementation(() => {});
+				const id = "claim-during-setup";
+				const first = ensureIsolation(repo, id);
+				// Racing `first` fails fast when the claim itself throws, instead of waiting out the test timeout.
+				await Promise.race([started.promise, first]);
+				// This test owns the extra orphan too: dry-run must include it, but not the live slot.
+				const orphan = path.join(getWorktreesDir(), "t000000001");
+				await fs.mkdir(path.join(orphan, "m"), { recursive: true });
+				await writeRetainedBackend(orphan, natives.IsoBackendKind.Rcopy);
+
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+				// A dry run reports what the scan classifies as orphaned, independent of the removal guards.
+				log.mockClear();
+				await clearWorktrees({ all: false, dryRun: true, json: true });
+				const dryRun = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+				expect(dryRun.wouldRemove ?? []).not.toContain(liveSlot);
+				expect(dryRun.wouldRemove).toContain(orphan);
+				await clearWorktrees({ all: false, dryRun: false, json: true });
+				expect(process.exitCode ?? 0).toBe(0);
+				const claimed: string[] = [];
+				for (const entry of await fs.readdir(getWorktreesDir())) {
+					if (await Bun.file(path.join(getWorktreesDir(), entry, ISOLATION_CLAIM_FILE)).exists())
+						claimed.push(entry);
 				}
-				await fs.mkdir(mergedDir, { recursive: true });
-				await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
-			});
-			const log = vi.spyOn(console, "log").mockImplementation(() => {});
-			const id = "claim-during-setup";
-			const first = ensureIsolation(repo, id);
-			// Racing `first` fails fast when the claim itself throws, instead of waiting out the test timeout.
-			await Promise.race([started.promise, first]);
+				// The clear must leave the in-flight slot, with its owner marker, on disk.
+				expect(claimed).toHaveLength(1);
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
 
-			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
-			// A dry run reports what the scan classifies as orphaned, independent of the removal guards.
-			log.mockClear();
-			await clearWorktrees({ all: false, dryRun: true, json: true });
-			expect(log.mock.calls.map(call => String(call[0])).join("\n")).not.toContain("wouldRemove");
-			await clearWorktrees({ all: false, dryRun: false, json: true });
-			const claimed: string[] = [];
-			for (const entry of await fs.readdir(getWorktreesDir())) {
-				if (await Bun.file(path.join(getWorktreesDir(), entry, ISOLATION_CLAIM_FILE)).exists()) claimed.push(entry);
-			}
-			// The clear must leave the in-flight slot, with its owner marker, on disk.
-			expect(claimed).toHaveLength(1);
-			await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
-
-			proceed.resolve();
-			const handle = await first;
-			expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
-			const left = await fs.readdir(path.dirname(handle.mergedDir));
-			// Setup records the backend (unretained) so a crashed owner's slot stays reclaimable.
-			expect(left.sort()).toEqual(
-				[ISOLATION_OWNER_FILE, RETAINED_BACKEND_FILE, path.basename(handle.mergedDir)].sort(),
-			);
-			const setupRecord = JSON.parse(
-				await fs.readFile(path.join(path.dirname(handle.mergedDir), RETAINED_BACKEND_FILE), "utf8"),
-			);
-			expect(setupRecord).toEqual({ backend: natives.IsoBackendKind.Rcopy });
-			expect(left).not.toContain(ISOLATION_CLAIM_FILE);
-			await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });
-		});
-
-		it("does not let a stale handle remove a slot that now belongs to another owner", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
-			});
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				await fs.mkdir(mergedDir, { recursive: true });
-			});
-			const handle = await ensureIsolation(repo, "stale-handle-token");
-			const baseDir = path.dirname(handle.mergedDir);
-			// Another task took the slot after this handle was preempted.
-			await fs.writeFile(
-				path.join(baseDir, ISOLATION_OWNER_FILE),
-				JSON.stringify({ pid: process.pid, startIdentity: null, token: "someone-else", createdAt: "now" }),
-			);
-
-			await cleanupIsolation(handle);
-
-			expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
-			await fs.rm(baseDir, { recursive: true, force: true });
-		});
-
-		it("lets clear reclaim a slot whose owner crashed after setup, but not one with a live owner", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
-			});
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				await fs.mkdir(mergedDir, { recursive: true });
-			});
-			vi.spyOn(console, "log").mockImplementation(() => {});
-			const live = await ensureIsolation(repo, "crash-live-owner");
-			const crashed = await ensureIsolation(repo, "crash-dead-owner");
-			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
-			await gone.exited;
-			const crashedBase = path.dirname(crashed.mergedDir);
-			const owner = JSON.parse(await fs.readFile(path.join(crashedBase, ISOLATION_OWNER_FILE), "utf8"));
-			await fs.writeFile(
-				path.join(crashedBase, ISOLATION_OWNER_FILE),
-				JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
-			);
-
-			await clearWorktrees({ all: true, dryRun: false, json: true });
-
-			await expect(fs.stat(crashedBase)).rejects.toThrow();
-			expect((await fs.stat(live.mergedDir)).isDirectory()).toBe(true);
-			await fs.rm(path.dirname(live.mergedDir), { recursive: true, force: true });
-		});
-
-		it("prunes the linked-worktree registration when clear removes a crashed copy-backend slot", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
-			});
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
-			});
-			vi.spyOn(console, "log").mockImplementation(() => {});
-			const crashed = await ensureIsolation(repo, "crash-registered");
-			const base = path.dirname(crashed.mergedDir);
-			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
-			await gone.exited;
-			const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
-			await fs.writeFile(
-				path.join(base, ISOLATION_OWNER_FILE),
-				JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
-			);
-
-			await clearWorktrees({ all: true, dryRun: false, json: true });
-
-			await expect(fs.stat(base)).rejects.toThrow();
-			// The source repo no longer lists the removed checkout, so the same id can be set up again.
-			expect(await runGit(repo, ["worktree", "list", "--porcelain"])).not.toContain("prunable");
-			const again = await ensureIsolation(repo, "crash-registered");
-			expect((await fs.stat(again.mergedDir)).isDirectory()).toBe(true);
-			await cleanupIsolation(again);
-		});
-
-		it("collects and removes only a registration that names this checkout and carries this slot's owner token", async () => {
-			const slot = await fs.mkdtemp(path.join(os.tmpdir(), "slot-"));
-			tempDirs.push(slot);
-			const owner = await writeIsolationOwner(slot);
-			const admin = path.join(slot, "src", ".git", "worktrees", "wt");
-			await fs.mkdir(admin, { recursive: true });
-			const checkout = path.join(slot, "mount");
-			await fs.mkdir(checkout);
-			await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${admin}\n`);
-			const gitdirFile = path.join(admin, "gitdir");
-			const tokenFile = path.join(admin, REGISTRATION_OWNER_FILE);
-
-			// Copied view of a source linked worktree: the registration names the source, not this copy.
-			await fs.writeFile(gitdirFile, path.join(slot, "source", ".git"));
-			await fs.writeFile(tokenFile, owner.token);
-			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
-
-			// Right backlink but another isolation's token (or none): not provably ours.
-			await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
-			await fs.writeFile(tokenFile, "someone-else");
-			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
-			await fs.rm(tokenFile);
-			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
-
-			await fs.writeFile(tokenFile, owner.token);
-			const found = await findLinkedWorktreeAdminDirs(slot);
-			expect(found).toHaveLength(1);
-
-			// A forged token or a repointed backlink after collection makes removal a no-op.
-			await fs.writeFile(tokenFile, "forged");
-			await removeLinkedWorktreeRegistrations(found);
-			expect(await Bun.file(gitdirFile).exists()).toBe(true);
-			await fs.writeFile(tokenFile, owner.token);
-			await fs.writeFile(gitdirFile, path.join(slot, "other", ".git"));
-			await removeLinkedWorktreeRegistrations(found);
-			expect(await Bun.file(gitdirFile).exists()).toBe(true);
-
-			await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
-			await removeLinkedWorktreeRegistrations(found);
-			expect(await Bun.file(gitdirFile).exists()).toBe(false);
-		});
-
-		it("never lets another isolation reuse the registration name freed after the final backlink read", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
-			});
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
-				await runGit(source, ["worktree", "add", "--detach", mergedDir]);
-			});
-			const { repo: source } = await createGitRepo();
-			const a = await ensureIsolation(source, "reuse-a");
-			const baseA = path.dirname(a.mergedDir);
-			const found = await findLinkedWorktreeAdminDirs(baseA);
-			expect(found).toHaveLength(1);
-			const adminDir = found[0].adminDir;
-
-			// Slot A is removed; right at A's registration delete, real git frees the name (prune) and a
-			// different-id isolation B is registered.
-			await fs.rm(baseA, { recursive: true, force: true });
-			const realRm = fs.rm;
-			let b: Awaited<ReturnType<typeof ensureIsolation>> | undefined;
-			vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-				if (target === adminDir && b === undefined) {
-					await runGit(source, ["worktree", "prune", "--expire", "now"]);
-					b = await ensureIsolation(source, "reuse-b");
-					await fs.writeFile(path.join(b.mergedDir, "sentinel-b"), "b\n");
-					await runGit(b.mergedDir, ["add", "sentinel-b"]);
-				}
-				return realRm(target, options);
+				proceed.resolve();
+				const handle = await first;
+				expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
+				const left = await fs.readdir(path.dirname(handle.mergedDir));
+				// Setup records the backend (unretained) so a crashed owner's slot stays reclaimable.
+				expect(left.sort()).toEqual(
+					[ISOLATION_OWNER_FILE, RETAINED_BACKEND_FILE, path.basename(handle.mergedDir)].sort(),
+				);
+				const setupRecord = JSON.parse(
+					await fs.readFile(path.join(path.dirname(handle.mergedDir), RETAINED_BACKEND_FILE), "utf8"),
+				);
+				expect(setupRecord).toEqual({ backend: natives.IsoBackendKind.Rcopy });
+				expect(left).not.toContain(ISOLATION_CLAIM_FILE);
+				await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });
 			});
 
-			await removeLinkedWorktreeRegistrations(found);
-
-			if (b === undefined) throw new Error("the registration delete was never reached");
-			const adminB = (await findLinkedWorktreeAdminDirs(path.dirname(b.mergedDir)))[0].adminDir;
-			expect(adminB).not.toBe(adminDir);
-			expect(await Bun.file(path.join(adminDir, "gitdir")).exists()).toBe(false);
-			expect(await runGit(b.mergedDir, ["status", "--porcelain"])).toContain("sentinel-b");
-			await cleanupIsolation(b);
-		});
-
-		it("does not repoint a source isolation's registration when retaining a copied .git pointer", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
+			it("clears a claim whose process is gone", async () => {
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				const slot = path.join(getWorktreesDir(), "tdeadca11a");
+				await fs.mkdir(slot, { recursive: true });
+				await fs.writeFile(path.join(slot, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: gone.pid }));
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				await clearWorktrees({ all: false, dryRun: false, json: true });
+				expect(process.exitCode ?? 0).toBe(0);
+				await expect(fs.stat(slot)).rejects.toThrow();
 			});
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
-				await runGit(source, ["worktree", "add", "--detach", mergedDir]);
+			it("does not let a stale handle remove a slot that now belongs to another owner", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+				});
+				const handle = await ensureIsolation(repo, "stale-handle-token");
+				const baseDir = path.dirname(handle.mergedDir);
+				// Another task took the slot after this handle was preempted.
+				await fs.writeFile(
+					path.join(baseDir, ISOLATION_OWNER_FILE),
+					JSON.stringify({ pid: process.pid, startIdentity: null, token: "someone-else", createdAt: "now" }),
+				);
+
+				await cleanupIsolation(handle);
+
+				expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(baseDir, { recursive: true, force: true });
 			});
-			const { repo: source } = await createGitRepo();
-			const live = await ensureIsolation(source, "retain-live");
-			const liveAdmin = (await findLinkedWorktreeAdminDirs(path.dirname(live.mergedDir)))[0].adminDir;
 
-			// Copy backends materialise regular files, including the live checkout's `.git` pointer.
-			const slot = await fs.mkdtemp(path.join(os.tmpdir(), "retain-adopt-"));
-			tempDirs.push(slot);
-			const mergedDir = path.join(slot, path.basename(live.mergedDir));
-			await fs.cp(live.mergedDir, mergedDir, { recursive: true });
-			await writeIsolationOwner(slot);
-			expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+			it("lets clear reclaim a slot whose owner crashed after setup, but not one with a live owner", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+				});
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				const live = await ensureIsolation(repo, "crash-live-owner");
+				const crashed = await ensureIsolation(repo, "crash-dead-owner");
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				const crashedBase = path.dirname(crashed.mergedDir);
+				const owner = JSON.parse(await fs.readFile(path.join(crashedBase, ISOLATION_OWNER_FILE), "utf8"));
+				await fs.writeFile(
+					path.join(crashedBase, ISOLATION_OWNER_FILE),
+					JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
+				);
 
-			const retained = await retainIsolationWorkspace(mergedDir, natives.IsoBackendKind.Rcopy);
+				await clearWorktrees({ all: true, dryRun: false, json: true });
 
-			expect(retained.dir).not.toBe(mergedDir);
-			expect(await findLinkedWorktreeAdminDirs(path.dirname(retained.dir))).toEqual([]);
-			expect(path.resolve(liveAdmin, (await fs.readFile(path.join(liveAdmin, "gitdir"), "utf8")).trim())).toBe(
-				path.join(live.mergedDir, ".git"),
-			);
-			expect(await runGit(live.mergedDir, ["status", "--porcelain"])).toBe("");
-			await cleanupIsolation(live);
-		});
-
-		it("removes only its own worktree registration, never another slot's of the same repo", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
+				await expect(fs.stat(crashedBase)).rejects.toThrow();
+				expect((await fs.stat(live.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(path.dirname(live.mergedDir), { recursive: true, force: true });
 			});
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
+
+			it("prunes the linked-worktree registration when clear removes a crashed copy-backend slot", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
+				});
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				const crashed = await ensureIsolation(repo, "crash-registered");
+				const base = path.dirname(crashed.mergedDir);
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
+				await fs.writeFile(
+					path.join(base, ISOLATION_OWNER_FILE),
+					JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
+				);
+
+				await clearWorktrees({ all: true, dryRun: false, json: true });
+
+				await expect(fs.stat(base)).rejects.toThrow();
+				// The source repo no longer lists the removed checkout, so the same id can be set up again.
+				expect(await runGit(repo, ["worktree", "list", "--porcelain"])).not.toContain("prunable");
+				const again = await ensureIsolation(repo, "crash-registered");
+				expect((await fs.stat(again.mergedDir)).isDirectory()).toBe(true);
+				await cleanupIsolation(again);
 			});
-			const a = await ensureIsolation(repo, "registration-a");
-			const b = await ensureIsolation(repo, "registration-b");
-			// B is mid-retention: its checkout has moved but the registration is not repaired yet.
-			const moved = `${b.mergedDir}-moved`;
-			await fs.rename(b.mergedDir, moved);
-			const registrations = path.join(repo, ".git", "worktrees");
-			const before = await fs.readdir(registrations);
-			expect(before).toHaveLength(2);
 
-			await cleanupIsolation(a);
+			it("collects and removes only a registration that names this checkout and carries this slot's owner token", async () => {
+				const slot = await fs.mkdtemp(path.join(os.tmpdir(), "slot-"));
+				tempDirs.push(slot);
+				const owner = await writeIsolationOwner(slot);
+				const admin = path.join(slot, "src", ".git", "worktrees", "wt");
+				await fs.mkdir(admin, { recursive: true });
+				const checkout = path.join(slot, "mount");
+				await fs.mkdir(checkout);
+				await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${admin}\n`);
+				const gitdirFile = path.join(admin, "gitdir");
+				const tokenFile = path.join(admin, REGISTRATION_OWNER_FILE);
 
-			// A's teardown removes A's registration only. A repo-wide `git worktree prune` would also
-			// drop B's, because its recorded path is missing, and B's repair would then fail.
-			const after = await fs.readdir(registrations);
-			expect(after).toHaveLength(1);
-			await runGit(repo, ["worktree", "repair", moved]);
-			expect(await runGit(moved, ["rev-parse", "--is-inside-work-tree"])).toBe("true");
-			await fs.rm(path.dirname(b.mergedDir), { recursive: true, force: true });
-		});
+				// Copied view of a source linked worktree: the registration names the source, not this copy.
+				await fs.writeFile(gitdirFile, path.join(slot, "source", ".git"));
+				await fs.writeFile(tokenFile, owner.token);
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
 
-		it("refuses to clear a slot whose owner record cannot be read", async () => {
-			vi.spyOn(natives, "isoResolve").mockReturnValue({
-				kind: natives.IsoBackendKind.Rcopy,
-				candidates: [natives.IsoBackendKind.Rcopy],
-				fellBack: false,
-				reason: undefined,
+				// Right backlink but another isolation's token (or none): not provably ours.
+				await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
+				await fs.writeFile(tokenFile, "someone-else");
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+				await fs.rm(tokenFile);
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+
+				await fs.writeFile(tokenFile, owner.token);
+				const found = await findLinkedWorktreeAdminDirs(slot);
+				expect(found).toHaveLength(1);
+
+				// A forged token or a repointed backlink after collection makes removal a no-op.
+				await fs.writeFile(tokenFile, "forged");
+				await removeLinkedWorktreeRegistrations(found);
+				expect(await Bun.file(gitdirFile).exists()).toBe(true);
+				await fs.writeFile(tokenFile, owner.token);
+				await fs.writeFile(gitdirFile, path.join(slot, "other", ".git"));
+				await removeLinkedWorktreeRegistrations(found);
+				expect(await Bun.file(gitdirFile).exists()).toBe(true);
+
+				await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
+				await removeLinkedWorktreeRegistrations(found);
+				expect(await Bun.file(gitdirFile).exists()).toBe(false);
 			});
-			vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
-				await fs.mkdir(mergedDir, { recursive: true });
-				await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "live owner work");
+
+			it("never lets another isolation reuse the registration name freed after the final backlink read", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
+					await runGit(source, ["worktree", "add", "--detach", mergedDir]);
+				});
+				const { repo: source } = await createGitRepo();
+				const a = await ensureIsolation(source, "reuse-a");
+				const baseA = path.dirname(a.mergedDir);
+				const found = await findLinkedWorktreeAdminDirs(baseA);
+				expect(found).toHaveLength(1);
+				const adminDir = found[0].adminDir;
+
+				// Slot A is removed; right at A's registration delete, real git frees the name (prune) and a
+				// different-id isolation B is registered.
+				await fs.rm(baseA, { recursive: true, force: true });
+				const realRm = fs.rm;
+				let b: Awaited<ReturnType<typeof ensureIsolation>> | undefined;
+				vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+					if (target === adminDir && b === undefined) {
+						await runGit(source, ["worktree", "prune", "--expire", "now"]);
+						b = await ensureIsolation(source, "reuse-b");
+						await fs.writeFile(path.join(b.mergedDir, "sentinel-b"), "b\n");
+						await runGit(b.mergedDir, ["add", "sentinel-b"]);
+					}
+					return realRm(target, options);
+				});
+
+				await removeLinkedWorktreeRegistrations(found);
+
+				if (b === undefined) throw new Error("the registration delete was never reached");
+				const adminB = (await findLinkedWorktreeAdminDirs(path.dirname(b.mergedDir)))[0].adminDir;
+				expect(adminB).not.toBe(adminDir);
+				expect(await Bun.file(path.join(adminDir, "gitdir")).exists()).toBe(false);
+				expect(await runGit(b.mergedDir, ["status", "--porcelain"])).toContain("sentinel-b");
+				await cleanupIsolation(b);
 			});
-			vi.spyOn(console, "log").mockImplementation(() => {});
-			const live = await ensureIsolation(repo, "unreadable-owner");
-			const base = path.dirname(live.mergedDir);
-			await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), "{ not json");
 
-			await clearWorktrees({ all: true, dryRun: false, json: true });
+			it("does not repoint a source isolation's registration when retaining a copied .git pointer", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
+					await runGit(source, ["worktree", "add", "--detach", mergedDir]);
+				});
+				const { repo: source } = await createGitRepo();
+				const live = await ensureIsolation(source, "retain-live");
+				const liveAdmin = (await findLinkedWorktreeAdminDirs(path.dirname(live.mergedDir)))[0].adminDir;
 
-			expect(await fs.readFile(path.join(live.mergedDir, "sentinel.txt"), "utf8")).toBe("live owner work");
-			await fs.rm(base, { recursive: true, force: true });
-		});
+				// Copy backends materialise regular files, including the live checkout's `.git` pointer.
+				const slot = await fs.mkdtemp(path.join(os.tmpdir(), "retain-adopt-"));
+				tempDirs.push(slot);
+				const mergedDir = path.join(slot, path.basename(live.mergedDir));
+				await fs.cp(live.mergedDir, mergedDir, { recursive: true });
+				await writeIsolationOwner(slot);
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
 
-		it("clears a claim whose process is gone", async () => {
-			const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
-			await gone.exited;
-			const slot = path.join(getWorktreesDir(), "tdeadclaim");
-			await fs.mkdir(slot, { recursive: true });
-			await fs.writeFile(path.join(slot, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: gone.pid }));
-			vi.spyOn(console, "log").mockImplementation(() => {});
-			await clearWorktrees({ all: false, dryRun: false, json: true });
-			await expect(fs.stat(slot)).rejects.toThrow();
+				const retained = await retainIsolationWorkspace(mergedDir, natives.IsoBackendKind.Rcopy);
+
+				expect(retained.dir).not.toBe(mergedDir);
+				expect(await findLinkedWorktreeAdminDirs(path.dirname(retained.dir))).toEqual([]);
+				expect(path.resolve(liveAdmin, (await fs.readFile(path.join(liveAdmin, "gitdir"), "utf8")).trim())).toBe(
+					path.join(live.mergedDir, ".git"),
+				);
+				expect(await runGit(live.mergedDir, ["status", "--porcelain"])).toBe("");
+				await cleanupIsolation(live);
+			});
+
+			it("removes only its own worktree registration, never another slot's of the same repo", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
+				});
+				const a = await ensureIsolation(repo, "registration-a");
+				const b = await ensureIsolation(repo, "registration-b");
+				// B is mid-retention: its checkout has moved but the registration is not repaired yet.
+				const moved = `${b.mergedDir}-moved`;
+				await fs.rename(b.mergedDir, moved);
+				const registrations = path.join(repo, ".git", "worktrees");
+				const before = await fs.readdir(registrations);
+				expect(before).toHaveLength(2);
+
+				await cleanupIsolation(a);
+
+				// A's teardown removes A's registration only. A repo-wide `git worktree prune` would also
+				// drop B's, because its recorded path is missing, and B's repair would then fail.
+				const after = await fs.readdir(registrations);
+				expect(after).toHaveLength(1);
+				await runGit(repo, ["worktree", "repair", moved]);
+				expect(await runGit(moved, ["rev-parse", "--is-inside-work-tree"])).toBe("true");
+				await fs.rm(path.dirname(b.mergedDir), { recursive: true, force: true });
+			});
+
+			it("refuses to clear a slot whose owner record cannot be read", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+					await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "live owner work");
+				});
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				const live = await ensureIsolation(repo, "unreadable-owner");
+				const base = path.dirname(live.mergedDir);
+				await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), "{ not json");
+
+				await clearWorktrees({ all: true, dryRun: false, json: true });
+
+				expect(await fs.readFile(path.join(live.mergedDir, "sentinel.txt"), "utf8")).toBe("live owner work");
+				await fs.rm(base, { recursive: true, force: true });
+			});
 		});
 
 		it("retries isoResolve candidates when a backend is path-unavailable", async () => {
