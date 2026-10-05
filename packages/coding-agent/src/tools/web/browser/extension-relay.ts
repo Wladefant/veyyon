@@ -14,6 +14,7 @@
  * `chrome.tabs.remove` does not answer on the wire, so teardown never waits for it.
  */
 import * as fs from "node:fs";
+import { isIPv4, isIPv6 } from "node:net";
 import * as path from "node:path";
 import { logger } from "@veyyon/utils";
 import { type } from "arktype";
@@ -25,7 +26,6 @@ import {
 	extensionStateDir,
 	generateSecret,
 	instanceFileName,
-	isLoopbackHost,
 	isProductionUrl,
 	type PolicyDecision,
 	redactSecrets,
@@ -177,7 +177,7 @@ const frameNavigatedSchema = type({ frame: { "parentId?": "string", url: "string
 const attachedSchema = type({
 	sessionId: "string",
 	"waitingForDebugger?": "boolean",
-	"targetInfo?": { type: "string" },
+	"targetInfo?": { type: "string", "targetId?": "string" },
 });
 
 function errorText(error: unknown): string {
@@ -189,7 +189,10 @@ function errorText(error: unknown): string {
 	return JSON.stringify(error);
 }
 
-/** Loopback, private-range and `.local` hosts: the addresses Chrome's local network access check protects. */
+/**
+ * Loopback, private-range, link-local and `.local` hosts: the addresses Chrome's local network access check
+ * protects. Only a real IP literal is range-tested, so a public name such as `10.example.com` is not local.
+ */
 function isLocalNetworkUrl(url: string): boolean {
 	let host: string;
 	try {
@@ -197,8 +200,13 @@ function isLocalNetworkUrl(url: string): boolean {
 	} catch {
 		return true;
 	}
-	if (isLoopbackHost(host) || host.endsWith(".localhost") || host.endsWith(".local")) return true;
-	return /^(?:10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host) || /^\[(?:f[cd]|fe80)/i.test(host);
+	const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+	if (isIPv4(bare)) {
+		const [a, b] = bare.split(".").map(Number);
+		return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+	}
+	if (isIPv6(bare)) return /^(?:::1?|f[cd]|fe[89ab])/i.test(bare);
+	return bare === "localhost" || bare.endsWith(".localhost") || bare.endsWith(".local");
 }
 
 export class ExtensionRelay {
@@ -565,8 +573,9 @@ export class ExtensionRelay {
 
 	/**
 	 * A child target (iframe, popup frame, worker) starts paused because the relay owns auto-attach with
-	 * `waitForDebuggerOnStart`. Gate it first, then resume it, then tell the client. An iframe or page
-	 * that cannot be gated is detached and never shown.
+	 * `waitForDebuggerOnStart`. Gate it first, then resume it, then tell the client. A target that cannot
+	 * be gated fails closed: it is never resumed, never shown, and never detached (a detach lets Chrome
+	 * resume it). The relay asks Chrome to close it instead.
 	 */
 	async #gateChild(
 		tab: OwnedTab,
@@ -575,21 +584,18 @@ export class ExtensionRelay {
 		eventParams: unknown,
 	): Promise<void> {
 		const debuggee = { tabId: tab.tabId, sessionId: attached.sessionId };
-		const kind = attached.targetInfo?.type;
 		try {
 			await this.#enableFetchGate(debuggee);
 			await this.#call("chrome.debugger.sendCommand", [debuggee, "Target.setAutoAttach", AUTO_ATTACH]);
 		} catch (error) {
-			if (kind === "iframe" || kind === "page") {
-				this.#childSessions.delete(attached.sessionId);
-				await this.#call("chrome.debugger.sendCommand", [
-					{ tabId: tab.tabId },
-					"Target.detachFromTarget",
-					{ sessionId: attached.sessionId },
-				]).catch(() => {});
-				throw error;
+			this.#childSessions.delete(attached.sessionId);
+			const targetId = attached.targetInfo?.targetId;
+			if (targetId !== undefined) {
+				await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Target.closeTarget", { targetId }]).catch(
+					closeError => this.#log("could not close an ungated target", { error: errorText(closeError) }),
+				);
 			}
-			this.#log("a worker target could not be gated", { error: errorText(error) });
+			throw error;
 		}
 		if (attached.waitingForDebugger === true) {
 			await this.#call("chrome.debugger.sendCommand", [debuggee, "Runtime.runIfWaitingForDebugger", {}]);

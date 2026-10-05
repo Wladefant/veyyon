@@ -467,6 +467,45 @@ describe("policy at the relay", () => {
 		expect(byId.get("m3")).toBeUndefined();
 	});
 
+	test("public hosts that merely start like a private range are still sandboxed", async () => {
+		const hosts = ["10.example.com", "192.168.evil.test", "172.16.attacker.io", "169.254.example.org"];
+		const privates = ["10.1.2.3", "192.168.1.5", "172.20.0.1", "169.254.1.1"];
+		const { ext, cdp } = await connected([...hosts, ...privates]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		for (const [index, host] of hosts.entries()) {
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Fetch.requestPaused",
+				{ requestId: `p${index}`, request: { url: `https://${host}/` }, resourceType: "Document", frameId: MAIN_FRAME_ID },
+			]);
+		}
+		await until(
+			() =>
+				ext.callsOf("chrome.debugger.sendCommand").filter(call => call.params[1] === "Fetch.continueRequest")
+					.length === hosts.length,
+			"public continues",
+		);
+		for (const call of ext.callsOf("chrome.debugger.sendCommand").filter(c => c.params[1] === "Fetch.continueRequest")) {
+			expect(Reflect.get(call.params[2] as object, "interceptResponse")).toBe(true);
+		}
+		const before = ext.callsOf("chrome.debugger.sendCommand").length;
+		for (const [index, host] of privates.entries()) {
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Fetch.requestPaused",
+				{ requestId: `q${index}`, request: { url: `http://${host}/` }, resourceType: "Document", frameId: MAIN_FRAME_ID },
+			]);
+		}
+		await until(
+			() => ext.callsOf("chrome.debugger.sendCommand").length >= before + privates.length,
+			"private continues",
+		);
+		const rest = ext.callsOf("chrome.debugger.sendCommand").slice(before);
+		for (const call of rest.filter(c => c.params[1] === "Fetch.continueRequest")) {
+			expect(Reflect.get(call.params[2] as object, "interceptResponse")).toBeUndefined();
+		}
+	});
+
 	test("a document response is resent with a sandbox that has no allow-popups and no stale encoding headers", async () => {
 		const { ext, cdp } = await connected(["https://staging.example.com"]);
 		await cdp.send("Target.createTarget", { url: "about:blank" });
@@ -652,23 +691,25 @@ describe("policy at the relay", () => {
 		expect(failed?.params[0]).toEqual({ tabId: 100, sessionId: "child-1" });
 	});
 
-	test("an iframe that cannot be gated is detached and never announced", async () => {
-		const { ext, cdp } = await connected(["https://staging.example.com"]);
-		await cdp.send("Target.createTarget", { url: "about:blank" });
-		ext.failNext("Fetch.enable");
-		ext.emit("chrome.debugger.onEvent", [
-			{ tabId: 100 },
-			"Target.attachedToTarget",
-			{ sessionId: "child-2", waitingForDebugger: true, targetInfo: { type: "iframe" } },
-		]);
-		await until(
-			() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Target.detachFromTarget"),
-			"the detach",
-		);
-		expect(cdp.events.some(event => event.params?.sessionId === "child-2")).toBe(false);
-		expect(
-			ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Runtime.runIfWaitingForDebugger"),
-		).toBe(false);
+	test("a child that cannot be gated fails closed: closed, never resumed, never detached, never announced", async () => {
+		for (const type of ["iframe", "page", "service_worker"]) {
+			const { ext, cdp } = await connected(["https://staging.example.com"]);
+			await cdp.send("Target.createTarget", { url: "about:blank" });
+			ext.failNext("Fetch.enable");
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Target.attachedToTarget",
+				{ sessionId: "child-2", waitingForDebugger: true, targetInfo: { type, targetId: "T-2" } },
+			]);
+			await until(
+				() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Target.closeTarget"),
+				`the close for ${type}`,
+			);
+			const methods = ext.callsOf("chrome.debugger.sendCommand").map(call => call.params[1]);
+			expect(methods).not.toContain("Runtime.runIfWaitingForDebugger");
+			expect(methods).not.toContain("Target.detachFromTarget");
+			expect(cdp.events.some(event => event.params?.sessionId === "child-2")).toBe(false);
+		}
 	});
 });
 
