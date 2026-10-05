@@ -23,6 +23,17 @@ export interface TerminalControlTarget {
 	subscribe(listener: (event: unknown) => void): () => void;
 }
 
+/** Optional protocol features this build serves. A peer that lacks one never sees the field. */
+export const TERMINAL_CAPABILITIES = ["deliver-ack"] as const;
+/** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
+const HISTORY_FRAME_ENTRIES = 1000;
+const MAX_REMEMBERED_DELIVERIES = 256;
+
+type DeliveryState =
+	| { state: "pending" }
+	| { state: "delivered"; outcome: string }
+	| { state: "failed"; error: string };
+
 /** The socket lives in the CLI process; neither this module nor a client opens a session file. */
 export async function serveTerminalControl(
 	target: TerminalControlTarget,
@@ -85,6 +96,44 @@ export async function serveTerminalControl(
 		}
 		socket.write(`${JSON.stringify(frame)}\n`);
 	};
+	// Acked deliveries, by the daemon's message id. The table lets a retry after a lost connection
+	// find the earlier request instead of enqueueing the message twice. Insertion order = age.
+	const deliveries = new Map<string, { status: DeliveryState; watchers: Set<net.Socket> }>();
+	// One chain: acked messages reach the terminal in the order they were accepted.
+	let deliveryChain = Promise.resolve();
+	const announceDelivery = (messageId: string, watchers: Iterable<net.Socket>, status: DeliveryState): void => {
+		for (const socket of watchers) {
+			send(socket, { event: { kind: "delivery", sessionId: publishedSessionId, messageId, ...status } });
+		}
+	};
+	const acceptDelivery = (
+		socket: net.Socket,
+		messageId: string,
+		text: string,
+		mode: "auto" | "steer" | "followUp",
+	): { accepted: true; messageId: string; state: DeliveryState["state"] } => {
+		const known = deliveries.get(messageId);
+		if (known) {
+			if (known.status.state === "pending") known.watchers.add(socket);
+			return { accepted: true, messageId, state: known.status.state };
+		}
+		const record = { status: { state: "pending" } as DeliveryState, watchers: new Set([socket]) };
+		deliveries.set(messageId, record);
+		for (const oldest of deliveries.keys()) {
+			if (deliveries.size <= MAX_REMEMBERED_DELIVERIES) break;
+			deliveries.delete(oldest);
+		}
+		deliveryChain = deliveryChain.then(async () => {
+			try {
+				record.status = { state: "delivered", outcome: await target.deliver(text, mode) };
+			} catch (error) {
+				record.status = { state: "failed", error: String(error) };
+			}
+			announceDelivery(messageId, record.watchers, record.status);
+			record.watchers.clear();
+		});
+		return { accepted: true, messageId, state: "pending" };
+	};
 	const server = net.createServer(socket => {
 		sockets.add(socket);
 		armRefresh();
@@ -134,7 +183,11 @@ export async function serveTerminalControl(
 								subscribers.add(socket);
 								startEvents();
 								send(socket, {
-									event: { kind: "history", sessionId: publishedSessionId, entries: target.history() },
+									event: {
+										kind: "history",
+										sessionId: publishedSessionId,
+										entries: target.history().slice(-HISTORY_FRAME_ENTRIES),
+									},
 								});
 								result = true;
 								break;
@@ -145,13 +198,29 @@ export async function serveTerminalControl(
 									!["auto", "steer", "followUp"].includes(request.mode)
 								)
 									throw new Error("Invalid delivery");
+								if (request.ack === true) {
+									// The terminal may be blocked for seconds. Accept now, deliver on the chain.
+									if (
+										typeof request.messageId !== "string" ||
+										!request.messageId ||
+										request.messageId.length > 128
+									)
+										throw new Error("Invalid delivery");
+									result = acceptDelivery(socket, request.messageId, request.text, request.mode);
+									break;
+								}
 								result = await target.deliver(request.text, request.mode);
 								break;
+							case "deliveryStatus": {
+								const known = typeof request.messageId === "string" ? deliveries.get(request.messageId) : undefined;
+								result = known ? known.status : { state: "unknown" };
+								break;
+							}
 							case "abort":
 								result = await target.abort();
 								break;
 							case "ping":
-								result = { ...target.identity(), pid: process.pid };
+								result = { ...target.identity(), pid: process.pid, capabilities: TERMINAL_CAPABILITIES };
 								break;
 							default:
 								throw new Error("Unknown terminal operation");
