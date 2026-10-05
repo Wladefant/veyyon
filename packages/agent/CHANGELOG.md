@@ -28,6 +28,7 @@
 
 ### Fixed
 
+- A `tool_execution_update` a tool reports after its run emitted `agent_end` reaches `Agent` subscribers through the new `AgentLoopConfig.onToolUpdateAfterRun` sink instead of being dropped, so a background task card settles when its agents finish instead of animating for the life of the process, which cut timer callbacks in the 20 idle seconds after three turns that each spawned two background agents from 2,301 to 64.
 - A branch summary over session history held on disk reads each message's fields before it redacts them, so navigating the tree with a summary no longer fails with "Branch summary provider text transformation failed." when the history was moved out of memory again while the credential resolved.
 
 ## [1.5.4] - 2026-09-24

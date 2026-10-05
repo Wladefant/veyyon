@@ -2739,13 +2739,17 @@ async function executeToolCalls(
 					effectiveArgs,
 					record.signal,
 					partialResult => {
-						stream.push({
+						const update: Extract<AgentEvent, { type: "tool_execution_update" }> = {
 							type: "tool_execution_update",
 							toolCallId: toolCall.id,
 							toolName: toolCall.name,
 							args: displayArgs,
 							partialResult: coerceToolResult(partialResult).result,
-						});
+						};
+						// Work the call started can outlive the run: the stream drops anything pushed
+						// after `agent_end`, so a background job's completion goes to the run's owner.
+						if (stream.done) config.onToolUpdateAfterRun?.(update);
+						else stream.push(update);
 					},
 					toolContext,
 				);
