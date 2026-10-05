@@ -2,15 +2,16 @@
  * Message persistence: how a live message reaches the session log, in order and at most once.
  *
  * This is a session collaborator. It holds the `message_end` write queue, the in-flight write per
- * message, and the persistence-key index of the current branch, and reaches the session only
+ * message, and the message-timestamp index of the current branch, and reaches the session only
  * through {@link MessagePersistenceHost}.
  *
  * - **The write queue** ({@link openSlot}, {@link persistMessageEnd}) writes finished messages in
  *   the order their `message_end` events arrived, even when an earlier write is still awaiting its
  *   turn. {@link waitFor} lets a later pass wait until a message's entry exists.
- * - **The key index** answers "is this message already on the branch?" in O(1). It is memoized
- *   against a (session file, leaf id) anchor, so every branch mutation (rewind, branch switch, new
- *   session, custom-entry append) invalidates it without a call site having to remember to.
+ * - **The timestamp index** answers "is this message already on the branch?" in O(log n) for the
+ *   common miss. It is memoized against a (session file, leaf id) anchor, so every branch mutation
+ *   (rewind, branch switch, new session, custom-entry append) invalidates it without a call site
+ *   having to remember to.
  * - **The write** ({@link persistIfMissing}) strips telemetry the instrumentation level does not
  *   allow, drops classifier refusals and empty error turns, stamps the assistant's context
  *   snapshot, and appends only when the branch does not already hold the same message.
@@ -85,17 +86,78 @@ export interface MessagePersistenceHost {
 	onTtsrInjectionPersisted(details: unknown): void;
 }
 
-/** The persistence-key index of one branch, valid while the anchor matches. */
-interface PersistedKeyIndex {
+/** Room an index leaves for appended timestamps before its array grows. */
+const INDEX_SPARE = 64;
+
+/**
+ * The message timestamps of one branch, sorted, valid while `anchor` matches. A persistence key
+ * includes its message's timestamp, so a timestamp absent here proves the key absent and a present
+ * one sends the caller to the branch to compare keys. A 600-turn branch holds 5,418 messages: as
+ * numbers in a typed array they take 43 KiB, where a `Set` of their key strings took 1 MiB.
+ */
+class BranchTimestamps {
 	anchor: string;
-	keys: Set<string>;
+	/** Ascending in `[0, #length)`; the slots after it are spare. */
+	#sorted: Float64Array;
+	#length = 0;
+	/**
+	 * Set when a keyed message on the branch has a timestamp that is not a finite number, as a
+	 * hand-edited log can: its key cannot be found by number, so every lookup reads as a hit.
+	 */
+	#irregular = false;
+
+	constructor(anchor: string, branch: readonly SessionEntry[]) {
+		this.anchor = anchor;
+		this.#sorted = new Float64Array(branch.length + INDEX_SPARE);
+		for (const entry of branch) {
+			if (entry.type !== "message") continue;
+			const timestamp = entry.message.timestamp;
+			if (Number.isFinite(timestamp)) this.#sorted[this.#length++] = timestamp;
+			else if (sessionMessagePersistenceKey(entry.message) !== undefined) this.#irregular = true;
+		}
+		this.#sorted.subarray(0, this.#length).sort();
+	}
+
+	/** The position of the first timestamp after `timestamp`. */
+	#after(timestamp: number): number {
+		let low = 0;
+		let high = this.#length;
+		while (low < high) {
+			const middle = (low + high) >>> 1;
+			if (this.#sorted[middle] <= timestamp) low = middle + 1;
+			else high = middle;
+		}
+		return low;
+	}
+
+	has(timestamp: number): boolean {
+		if (this.#irregular) return true;
+		const at = this.#after(timestamp);
+		return at > 0 && this.#sorted[at - 1] === timestamp;
+	}
+
+	add(timestamp: number): void {
+		if (!Number.isFinite(timestamp)) {
+			this.#irregular = true;
+			return;
+		}
+		if (this.#length === this.#sorted.length) {
+			const grown = new Float64Array(this.#length + (this.#length >>> 1) + INDEX_SPARE);
+			grown.set(this.#sorted);
+			this.#sorted = grown;
+		}
+		const at = this.#after(timestamp);
+		this.#sorted.copyWithin(at + 1, at, this.#length);
+		this.#sorted[at] = timestamp;
+		this.#length++;
+	}
 }
 
 export class MessagePersistence {
 	readonly #host: MessagePersistenceHost;
 	#tail: Promise<void> = Promise.resolve();
 	readonly #pending = new Map<string, Promise<void>>();
-	#index: PersistedKeyIndex | undefined;
+	#index: BranchTimestamps | undefined;
 
 	constructor(host: MessagePersistenceHost) {
 		this.#host = host;
@@ -191,31 +253,44 @@ export class MessagePersistence {
 
 	/**
 	 * True when {@link message} is structurally identical to a message already on the current
-	 * branch. The key index answers the common missing-key case; the branch is walked only to
-	 * compare content when a key hit could be a collision.
+	 * branch. The timestamp index answers the common miss; the branch is walked only when it holds
+	 * a message with the same timestamp, to compare keys and then content.
 	 */
 	alreadyPersisted(message: AgentMessage): boolean {
 		const key = sessionMessagePersistenceKey(message);
 		if (key === undefined) return false;
-		if (!this.#keys().has(key)) return false;
+		return this.#onBranch(message, key, true);
+	}
+
+	/**
+	 * Whether a message entry with {@link key}, and with {@link message}'s content when
+	 * `sameContent` is set, is on the branch.
+	 */
+	#onBranch(message: AgentMessage, key: string, sameContent: boolean): boolean {
+		const timestamp = message.timestamp;
+		const finite = Number.isFinite(timestamp);
+		// A timestamp the index cannot hold leaves only the walk to answer.
+		if (finite && !this.#timestamps().has(timestamp)) return false;
 		const branch = this.#host.sessionStore.getBranch();
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type !== "message") continue;
+			// Two different finite numbers never print the same, so their keys differ.
+			const other = entry.message.timestamp;
+			if (finite && other !== timestamp && Number.isFinite(other)) continue;
 			if (sessionMessagePersistenceKey(entry.message) !== key) continue;
-			if (sameMessageContent(entry.message, message)) return true;
+			if (!sameContent || sameMessageContent(entry.message, message)) return true;
 		}
 		return false;
 	}
 
-	/** Append a message entry, keeping a fresh key index fresh instead of letting it rebuild. */
+	/** Append a message entry, keeping a fresh timestamp index fresh instead of letting it rebuild. */
 	append(message: PersistableSessionMessage): string {
 		const index = this.#index;
 		const wasFresh = index !== undefined && index.anchor === this.#anchor();
 		const entryId = this.#host.sessionStore.appendMessage(message);
-		const key = sessionMessagePersistenceKey(message);
-		if (wasFresh && index && key) {
-			index.keys.add(key);
+		if (wasFresh && index) {
+			index.add(message.timestamp);
 			index.anchor = this.#anchor();
 		}
 		return entryId;
@@ -288,11 +363,11 @@ export class MessagePersistence {
 		for (const message of turnMessages) {
 			await this.waitFor(message);
 		}
-		const branchKeys = this.#keys();
 		const turnKeys = turnMessages.map(sessionMessagePersistenceKey);
 		const persistedKeys = new Set<string>();
-		for (const key of turnKeys) {
-			if (key !== undefined && branchKeys.has(key)) persistedKeys.add(key);
+		for (let index = 0; index < turnMessages.length; index++) {
+			const key = turnKeys[index];
+			if (key !== undefined && this.#onBranch(turnMessages[index], key, false)) persistedKeys.add(key);
 		}
 		const plan = planTurnPersistence(turnKeys, persistedKeys);
 		if (plan.kind === "out-of-order") {
@@ -356,20 +431,14 @@ export class MessagePersistence {
 		return `${store.getSessionFile() ?? ""}\u0000${store.getLeafId() ?? ""}`;
 	}
 
-	#keys(): Set<string> {
+	#timestamps(): BranchTimestamps {
 		const anchor = this.#anchor();
 		let index = this.#index;
 		if (index === undefined || index.anchor !== anchor) {
-			const keys = new Set<string>();
-			for (const entry of this.#host.sessionStore.getBranch()) {
-				if (entry.type !== "message") continue;
-				const key = sessionMessagePersistenceKey(entry.message);
-				if (key !== undefined) keys.add(key);
-			}
-			index = { anchor, keys };
+			index = new BranchTimestamps(anchor, this.#host.sessionStore.getBranch());
 			this.#index = index;
 		}
-		return index.keys;
+		return index;
 	}
 
 	/**
