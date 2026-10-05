@@ -21,6 +21,12 @@ interface Recorded {
 class FakeExtension {
 	readonly calls: Recorded[] = [];
 	#nextTab = 100;
+	readonly #failing = new Set<string>();
+
+	/** Make the next `chrome.debugger.sendCommand` of this CDP method fail once. */
+	failNext(cdpMethod: string): void {
+		this.#failing.add(cdpMethod);
+	}
 	readonly #ws: WebSocket;
 
 	private constructor(ws: WebSocket) {
@@ -50,6 +56,11 @@ class FakeExtension {
 		this.calls.push({ method: message.method, params: message.params });
 		// chrome.tabs.remove never answers on the real extension.
 		if (message.method === "chrome.tabs.remove") return;
+		const target = message.method === "chrome.debugger.sendCommand" ? String(message.params[1]) : "";
+		if (this.#failing.delete(target)) {
+			this.#ws.send(JSON.stringify({ id: message.id, error: { message: `${target} refused by the fake` } }));
+			return;
+		}
 		let result: unknown = {};
 		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++ };
 		this.#ws.send(JSON.stringify({ id: message.id, result }));
@@ -347,9 +358,10 @@ describe("policy at the relay", () => {
 			const reply = await cdp.send(method, {}, sessionId);
 			expect(reply.error?.message).toMatch(/blocked|allowlist/);
 		}
-		expect(ext.callsOf("chrome.debugger.sendCommand").filter(call => call.params[1] !== "Fetch.enable")).toHaveLength(
-			0,
-		);
+		const exposed = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(call => call.params[1] !== "Fetch.enable" && call.params[1] !== "Target.setAutoAttach");
+		expect(exposed).toHaveLength(0);
 	});
 
 	test("a page that lands on a refused origin is sent back to about:blank", async () => {
@@ -406,7 +418,7 @@ describe("policy at the relay", () => {
 		const answers = new Map(
 			ext
 				.callsOf("chrome.debugger.sendCommand")
-				.filter(call => call.params[1] !== "Fetch.enable")
+				.filter(call => String(call.params[1]).startsWith("Fetch.") && call.params[1] !== "Fetch.enable")
 				.map(call => [String((call.params[2] as { requestId: string }).requestId), String(call.params[1])]),
 		);
 		expect(Object.fromEntries(answers)).toEqual({
@@ -439,6 +451,77 @@ describe("policy at the relay", () => {
 		await until(() => ext.callsOf("chrome.tabs.remove").length > 0, "the popup removal");
 		expect(ext.callsOf("chrome.tabs.remove").map(call => call.params)).toEqual([[600]]);
 		expect(ext.callsOf("chrome.debugger.attach").map(call => call.params[0])).toEqual([{ tabId: 100 }]);
+	});
+
+	test("the relay owns auto-attach: the root is paused-on-start, a client call is ignored", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const owned = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(call => call.params[1] === "Target.setAutoAttach");
+		expect(owned.map(call => call.params)).toEqual([
+			[{ tabId: 100 }, "Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }],
+		]);
+		const reply = await cdp.send("Target.setAutoAttach", { autoAttach: false }, sessionId);
+		expect(reply.error).toBeUndefined();
+		expect(
+			ext.callsOf("chrome.debugger.sendCommand").filter(call => call.params[1] === "Target.setAutoAttach"),
+		).toHaveLength(1);
+	});
+
+	test("a child frame is gated and resumed before the client hears about it; its early request is judged", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.emit("chrome.debugger.onEvent", [
+			{ tabId: 100 },
+			"Target.attachedToTarget",
+			{ sessionId: "child-1", waitingForDebugger: true, targetInfo: { type: "iframe" } },
+		]);
+		await until(
+			() =>
+				cdp.events.some(
+					event => event.method === "Target.attachedToTarget" && event.params?.sessionId === "child-1",
+				),
+			"the child announcement",
+		);
+		const childCalls = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(call => (call.params[0] as { sessionId?: string }).sessionId === "child-1")
+			.map(call => call.params[1]);
+		expect(childCalls).toEqual(["Fetch.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
+		expect(cdp.events.length).toBeGreaterThan(0);
+		// The child asks for a refused document the moment it runs.
+		ext.emit("chrome.debugger.onEvent", [
+			{ tabId: 100, sessionId: "child-1" },
+			"Fetch.requestPaused",
+			{ requestId: "c1", request: { url: "https://evil.example/" }, resourceType: "Document" },
+		]);
+		await until(
+			() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Fetch.failRequest"),
+			"the child's request answer",
+		);
+		const failed = ext.callsOf("chrome.debugger.sendCommand").find(call => call.params[1] === "Fetch.failRequest");
+		expect(failed?.params[0]).toEqual({ tabId: 100, sessionId: "child-1" });
+	});
+
+	test("an iframe that cannot be gated is detached and never announced", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.failNext("Fetch.enable");
+		ext.emit("chrome.debugger.onEvent", [
+			{ tabId: 100 },
+			"Target.attachedToTarget",
+			{ sessionId: "child-2", waitingForDebugger: true, targetInfo: { type: "iframe" } },
+		]);
+		await until(
+			() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Target.detachFromTarget"),
+			"the detach",
+		);
+		expect(cdp.events.some(event => event.params?.sessionId === "child-2")).toBe(false);
+		expect(
+			ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Runtime.runIfWaitingForDebugger"),
+		).toBe(false);
 	});
 });
 

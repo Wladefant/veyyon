@@ -36,6 +36,9 @@ const DETACH_TIMEOUT_MS = 2_000;
 const CDP_ERROR_CODE = -32000;
 const METHOD_NOT_FOUND_CODE = -32601;
 
+/** Auto-attach owned by the relay: children start paused so they are gated before they run. */
+const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+
 export interface NavigationAudit {
 	tabId: number;
 	/** `scheme://host`, never the path or query, never page content. */
@@ -99,7 +102,11 @@ const debugSourceSchema = type({ tabId: "number", "sessionId?": "string" });
 const tabSchema = type({ id: "number", "openerTabId?": "number", "pendingUrl?": "string", "url?": "string" });
 const requestPausedSchema = type({ requestId: "string", request: { url: "string" }, resourceType: "string" });
 const frameNavigatedSchema = type({ frame: { "parentId?": "string", url: "string" } });
-const attachedSchema = type({ sessionId: "string" });
+const attachedSchema = type({
+	sessionId: "string",
+	"waitingForDebugger?": "boolean",
+	"targetInfo?": { type: "string" },
+});
 
 function errorText(error: unknown): string {
 	if (typeof error === "string") return error;
@@ -439,13 +446,14 @@ export class ExtensionRelay {
 		}
 		if (method === "Target.attachedToTarget") {
 			const attached = attachedSchema(eventParams);
-			if (!(attached instanceof type.errors)) {
-				this.#childSessions.set(attached.sessionId, tab.tabId);
-				void this.#enableFetchGate({ tabId: tab.tabId, sessionId: attached.sessionId }).catch(error =>
-					this.#log("could not gate a child session", { error: errorText(error) }),
-				);
-			}
-		} else if (method === "Target.detachedFromTarget") {
+			if (attached instanceof type.errors) return;
+			this.#childSessions.set(attached.sessionId, tab.tabId);
+			void this.#gateChild(tab, source, attached, eventParams).catch(error =>
+				this.#log("could not gate a child session", { error: errorText(error) }),
+			);
+			return;
+		}
+		if (method === "Target.detachedFromTarget") {
 			const detached = attachedSchema(eventParams);
 			if (!(detached instanceof type.errors)) this.#childSessions.delete(detached.sessionId);
 		} else if (method === "Page.frameNavigated" && source.sessionId === undefined) {
@@ -454,12 +462,55 @@ export class ExtensionRelay {
 				this.#onMainFrameNavigated(tab, navigated.frame.url);
 			}
 		}
+		this.#forwardEvent(tab, source, method, eventParams);
+	}
+
+	#forwardEvent(
+		tab: OwnedTab,
+		source: { tabId: number; sessionId?: string },
+		method: string,
+		eventParams: unknown,
+	): void {
 		for (const client of this.#clients.values()) {
 			for (const [sessionId, tabId] of client.sessions) {
 				if (tabId !== tab.tabId) continue;
 				this.#send(client, { sessionId: source.sessionId ?? sessionId, method, params: eventParams ?? {} });
 			}
 		}
+	}
+
+	/**
+	 * A child target (iframe, popup frame, worker) starts paused because the relay owns auto-attach with
+	 * `waitForDebuggerOnStart`. Gate it first, then resume it, then tell the client. An iframe or page
+	 * that cannot be gated is detached and never shown.
+	 */
+	async #gateChild(
+		tab: OwnedTab,
+		source: { tabId: number; sessionId?: string },
+		attached: typeof attachedSchema.infer,
+		eventParams: unknown,
+	): Promise<void> {
+		const debuggee = { tabId: tab.tabId, sessionId: attached.sessionId };
+		const kind = attached.targetInfo?.type;
+		try {
+			await this.#enableFetchGate(debuggee);
+			await this.#call("chrome.debugger.sendCommand", [debuggee, "Target.setAutoAttach", AUTO_ATTACH]);
+		} catch (error) {
+			if (kind === "iframe" || kind === "page") {
+				this.#childSessions.delete(attached.sessionId);
+				await this.#call("chrome.debugger.sendCommand", [
+					{ tabId: tab.tabId },
+					"Target.detachFromTarget",
+					{ sessionId: attached.sessionId },
+				]).catch(() => {});
+				throw error;
+			}
+			this.#log("a worker target could not be gated", { error: errorText(error) });
+		}
+		if (attached.waitingForDebugger === true) {
+			await this.#call("chrome.debugger.sendCommand", [debuggee, "Runtime.runIfWaitingForDebugger", {}]);
+		}
+		if (this.#tabs.has(tab.tabId)) this.#forwardEvent(tab, source, "Target.attachedToTarget", eventParams);
 	}
 
 	/** Pause every request of a debuggee so the policy runs before the request leaves, cookies included. */
@@ -538,6 +589,7 @@ export class ExtensionRelay {
 		await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
 		try {
 			await this.#enableFetchGate({ tabId });
+			await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.setAutoAttach", AUTO_ATTACH]);
 		} catch (error) {
 			// Fail closed: a tab we cannot gate is never exposed.
 			this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
@@ -637,6 +689,9 @@ export class ExtensionRelay {
 		const childTab = this.#childSessions.get(sessionId);
 		const tabId = rootTab ?? childTab;
 		if (tabId === undefined || !this.#tabs.has(tabId)) throw new Error(`Session ${sessionId} is not attached.`);
+		// The relay owns auto-attach (it is what keeps new targets paused until they are gated). A client's
+		// own call is acknowledged and ignored, so it can neither turn auto-attach off nor widen it.
+		if (method === "Target.setAutoAttach") return {};
 		const blocked = checkCdpMethod(method);
 		if (!blocked.allowed) throw new Error(blocked.reason);
 		if (method === "Page.navigate" && typeof params.url === "string") this.#checkNavigationOrThrow(tabId, params.url);

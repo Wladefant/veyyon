@@ -50,9 +50,6 @@ const ALLOWED_CDP_DOMAINS: ReadonlySet<string> = new Set([
 	"Inspector",
 ]);
 
-/** Single methods allowed from a domain that is otherwise refused. `Target.*` stays refused except flat auto-attach. */
-const ALLOWED_CDP_METHODS: ReadonlySet<string> = new Set(["Target.setAutoAttach"]);
-
 /** Methods refused even inside an allowed domain: they export cookies, storage or page snapshots, or change downloads. */
 const DENIED_CDP_METHODS: ReadonlySet<string> = new Set([
 	"Page.printToPDF",
@@ -200,7 +197,7 @@ export function checkCdpMethod(method: string): PolicyDecision {
 	if (DENIED_CDP_METHODS.has(method)) {
 		return { allowed: false, reason: `${method} is blocked on the extension backend; it would export profile data.` };
 	}
-	if (ALLOWED_CDP_DOMAINS.has(domain) || ALLOWED_CDP_METHODS.has(method)) return { allowed: true };
+	if (ALLOWED_CDP_DOMAINS.has(domain)) return { allowed: true };
 	return { allowed: false, reason: `${method} is not on the extension backend's CDP allowlist.` };
 }
 

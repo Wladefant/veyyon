@@ -97,6 +97,8 @@ describe("navigation policy", () => {
 			"Storage.getCookies",
 			"Target.createTarget",
 			"Target.attachToTarget",
+			"Target.setAutoAttach",
+			"Target.setDiscoverTargets",
 			"Browser.setDownloadBehavior",
 			"Browser.getVersion",
 			"DOMStorage.getDOMStorageItems",
@@ -109,12 +111,7 @@ describe("navigation policy", () => {
 		]) {
 			expect(checkCdpMethod(method)).toMatchObject({ allowed: false });
 		}
-		for (const method of [
-			"Runtime.evaluate",
-			"Page.captureScreenshot",
-			"Input.dispatchMouseEvent",
-			"Target.setAutoAttach",
-		]) {
+		for (const method of ["Runtime.evaluate", "Page.captureScreenshot", "Input.dispatchMouseEvent"]) {
 			expect(checkCdpMethod(method)).toEqual({ allowed: true });
 		}
 	});
