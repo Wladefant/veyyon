@@ -45,6 +45,11 @@ The idle measurement above is repeated on that release.
   RSS at 100 s unchanged at 141.3 MiB. Rejected: the shipped launch path has no step that sets it.
 - **Re-exec through `process.execve` with the variable set.** Rejected: the re-exec costs one more
   runtime start, 16.2 ms median end to end for `--version`, on a 37 ms first frame.
+- **`--compile-exec-argv="--env-file=<path>"` at build time.** The file sets the variable in
+  `process.env`, and the timer keeps running. On a compiled 1.4.0 binary holding 200,000 objects,
+  a 10 s idle window costs 9.9 to 11.2 ms of CPU without the file, 10.8 to 11.9 ms with it, and 1.0
+  to 1.1 ms with the variable in the launching environment. An env file embedded in the binary
+  (`/$bunfs/root/<file>`) is not loaded at all. Rejected: no effect.
 - **A different idle trim.** From launch, with the trim at 30 s: no trim ends the fast phase at
   70 s, `Bun.gc(true)` at 90 s, and both the shipped `Bun.shrink()` and `Bun.shrink()` followed by
   `Bun.gc(true)` at 110 s. Parking every JavaScript timer right after the trim ends it 112 to 115 s
