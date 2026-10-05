@@ -359,6 +359,7 @@
 - The edit card reads its target paths through `editInputPaths` from `@veyyon/utils/fs-tool-args`; rendered output is unchanged.
 - The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
 - `Input`, `Editor` and `wordWrapLine` take the shared grapheme segmenter on first use instead of when their module loads, so loading them builds no `Intl.Segmenter`.
+- The frame throttle and the terminal hosts' settle windows are in `core/frame-pacing.ts` instead of `core/tui.ts`; frame timing is unchanged.
 - 23 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
 - The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.

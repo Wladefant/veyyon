@@ -87,8 +87,13 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * RE-MEASURED 2026-10-04 at 359, from 358: `@veyyon/utils/local-time`, the local date and clock
  * time the logger reads instead of a `Date`, whose first local-time read builds the ICU time zone
  * cache. It imports only `bun:ffi`. The ceiling keeps the one leaf of margin.
+ *
+ * RE-MEASURED 2026-10-04 at 360, from 359: `hosts/terminal/engine/src/core/frame-pacing.ts`, the
+ * frame throttle and the terminal hosts' settle windows split out of `core/tui.ts`, which the shell
+ * already evaluates, so the graph runs no new code. It imports nothing. The ceiling keeps the one
+ * leaf of margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 361;
+const SHELL_GRAPH_MODULE_CEILING = 362;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });

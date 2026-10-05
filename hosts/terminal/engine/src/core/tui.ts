@@ -59,6 +59,13 @@ import {
 } from "./component-types";
 import { Container } from "./container";
 import { HardwareCursorTracker, type HardwareCursorUpdate, relativeMoveY } from "./cursor";
+import {
+	CONPTY_POST_FULL_PAINT_SETTLE_MS,
+	FramePacer,
+	GHOSTTY_INITIAL_IMAGE_DELAY_MS,
+	MULTIPLEXER_RESIZE_DEBOUNCE_MS,
+	RESIZE_VIEWPORT_SETTLE_MS,
+} from "./frame-pacing";
 import type { AssembledWindow, FrameTransition, PrefixReconciliation, RenderIntent, WindowPlan } from "./frame-plan";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./image-budget";
 import { footerWantsPointer, pinnedFooterScreenBounds, routeFooterMouse } from "./mouse-routing";
@@ -188,74 +195,6 @@ export interface AdoptedScreen {
 	/** Frame row the visible window starts at. */
 	readonly windowTopRow: number;
 }
-/**
- * Weight of the newest frame in `#frameCostEstimateMs`. At 0.3 a sustained
- * change in frame cost is ~90% absorbed within seven frames, so the loop
- * reaches its duty-cycle floor inside a quarter second of going slow, while
- * an isolated spike lifts the floor by under a third of itself.
- */
-const FRAME_COST_SMOOTHING = 0.3;
-
-const MIN_RENDER_INTERVAL_MS = 1000 / 30;
-
-const INPUT_RENDER_GRACE_MS = MIN_RENDER_INTERVAL_MS;
-
-/**
- * Cap on the adaptive floor derived from `#frameCostEstimateMs`. Bounds the
- * UI responsiveness at ~5 fps under sustained heavy renders — anything
- * slower feels dead to the user and no longer justifies further CPU savings.
- */
-const MAX_ADAPTIVE_RENDER_MS = 200;
-
-// Pane-reflow settle window for tmux/screen/zellij. The host process gets
-// SIGWINCH (and `process.stdout` already reports the new geometry) before
-// the multiplexer finishes repainting the pane at the new size, and
-// drag-resize/pane-close animations fire several events in flight. A forced
-// render on each SIGWINCH races those mid-reflow paints — the multiplexer's
-// catch-up paint then partially overwrites the TUI output, which the user
-// sees as a viewport flash or blank screen before the next throttled frame
-// arrives (issue #2088). Coalescing every SIGWINCH inside this window into
-// a single forced render lets the multiplexer settle first.
-const MULTIPLEXER_RESIZE_DEBOUNCE_MS = 50;
-
-// Resize viewport fast path (non-multiplexer). A drag emits a SIGWINCH burst,
-// and outside a multiplexer the host gets each new geometry atomically. The
-// authoritative resize paint erases and replays the entire transcript so it
-// rewraps at the new width — O(history) compose (markdown re-lexes every
-// block, the per-width cache missing on every distinct drag width) plus an
-// O(history) write that pushes all of it back through native scrollback. At
-// drag rates that whole-history pass is recomputed dozens of times a second
-// and discarded the instant the next event lands. While the drag is in
-// flight the engine instead composes and paints ONLY the viewport (see
-// `#renderResizeViewport`): a state-isolated, throwaway frame that never
-// touches the commit ledger. The authoritative full replay fires once, after
-// the drag has been quiet for this long. Multiplexer sessions keep their own
-// debounce (`#armMultiplexerResizeTimer`, see #2088) and never take this path.
-const RESIZE_VIEWPORT_SETTLE_MS = 120;
-
-// Ghostty can drop Kitty graphics commands sent during its first post-startup
-// settle window, leaving only Unicode placeholder cells. Hold the first image
-// paint until that window has passed; later images render normally.
-const GHOSTTY_INITIAL_IMAGE_DELAY_MS = 100;
-
-// Post-paint settle window for ConPTY hosts. The `sessionReplace` /
-// `historyRebuild` / `overlayRebuild` intents drive `#emitFullPaint` over
-// a transcript that overflows the viewport, scroll-pushing everything past
-// the last `height` rows into native scrollback. Windows Terminal's
-// viewport-follow logic gets lossy during that burst: spinner/blink-driven
-// `requestRender(false)` calls firing inside the window each produce another
-// diff write, and the WT host processes them faster than its viewport
-// tracker can keep up — the visible tail ends up parked a few rows above
-// the actual last row until any focus event (Alt+Tab) forces a host repaint.
-// Coalescing every non-forced render inside this window into a single
-// trailing render lets the host fully settle the big paint before any
-// follow-up writes touch the buffer. The first-ever `initial` paint is
-// deliberately exempt: nothing has been on screen yet, so no drift can
-// have accumulated, and tests that start the TUI over an over-tall
-// component depend on the next paint firing without delay. Only armed on
-// ConPTY hosts (`isConPTYHosted()`); other terminals do not exhibit the
-// drift and would just see an unnecessary post-paint latency. See #2095.
-const CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
 
 /**
  * TUI - Main class for managing terminal UI with differential rendering
@@ -289,27 +228,7 @@ export class TUI extends Container {
 	#renderRequested = false;
 	#renderTimer: RenderTimer | undefined;
 	#renderScheduler: RenderScheduler;
-	#lastRenderAt = 0;
-	/**
-	 * Decayed estimate of what a frame costs, in milliseconds. `#scheduleRender`
-	 * derives the adaptive floor from it to hold the render loop near a 50%
-	 * duty cycle: without one the throttle collapses to zero as soon as
-	 * `elapsed >= MIN_RENDER_INTERVAL_MS`, and a run of slow frames (large
-	 * transcript diffs, huge assistant text wrap, component-tree walks) turns
-	 * the loop into a busy loop at 40-50% CPU (see #4145).
-	 *
-	 * A duty cycle is a property of a window, not of one frame, and reading the
-	 * previous frame alone conflated two different situations. A loop that
-	 * paints slowly on every frame converges here and is held to half the CPU,
-	 * which is what #4145 asked for. A single expensive paint among cheap ones
-	 * moves the estimate by a fraction of itself, so the frame after it still
-	 * arrives at the cadence: a scrolled viewport leaves the diff nothing to
-	 * reuse and costs a full paint, and putting a 66ms floor under the cheap
-	 * diff that followed it is how a session that painted on time 68% of the
-	 * time published at 14.2 fps against a 30 fps capture.
-	 */
-	#frameCostEstimateMs = 0;
-	#inputRenderGraceUntilMs = 0;
+	#pacer = new FramePacer();
 	#postFullPaintSettleUntilMs = 0;
 	#postFullPaintSettleTimer: RenderTimer | undefined;
 	#sixelProbe = new SixelProbe({
@@ -2144,21 +2063,7 @@ export class TUI extends Container {
 		if (this.#multiplexerResizeTimer) {
 			return;
 		}
-		const now = this.#renderScheduler.now();
-		const elapsed = now - this.#lastRenderAt;
-		const cadenceDelay = Math.max(0, MIN_RENDER_INTERVAL_MS - elapsed);
-		// Adaptive backpressure — target ~50% render duty cycle: the next frame
-		// starts no sooner than `frame_end + estimated_cost`, i.e.
-		// `frame_start + 2 × estimated_cost`. So `elapsed` (which counts from
-		// the last frame's start) must already exceed twice the estimate before
-		// we allow the follow-up render to fire. The estimate is decayed rather
-		// than the previous sample, so a sustained slow loop is held to half the
-		// CPU (#4145) and an isolated expensive paint is not charged to the
-		// cheap frame behind it. Capped so a pathological cost cannot lock the UI.
-		const adaptiveFloor = Math.min(MAX_ADAPTIVE_RENDER_MS, this.#frameCostEstimateMs * 2);
-		const adaptiveDelay = Math.max(0, adaptiveFloor - elapsed);
-		const inputGraceDelay = Math.max(0, this.#inputRenderGraceUntilMs - now);
-		const delay = Math.max(cadenceDelay, adaptiveDelay, inputGraceDelay);
+		const delay = this.#pacer.delay(this.#renderScheduler.now());
 		this.#renderTimer = this.#renderScheduler.scheduleRender(() => {
 			this.#renderTimer = undefined;
 			if (this.#stopped || !this.#renderRequested) {
@@ -2173,9 +2078,9 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Wrap `#doRender()` so every path records the wall-clock frame cost that
-	 * feeds adaptive backpressure. Set `#lastRenderAt` first (some render code
-	 * reads it re-entrantly) and compute the cost once the paint returns.
+	 * Wrap `#doRender()` so every path records the frame cost that feeds the
+	 * pacer's adaptive backpressure. The start is recorded first, because a
+	 * render requested from inside the compose schedules against it.
 	 *
 	 * The phase is what a blocked frame is reported as. A compose walks every
 	 * component, wraps every line of the transcript and diffs the frame, and it
@@ -2185,14 +2090,13 @@ export class TUI extends Container {
 	 */
 	#executeRender(): void {
 		const start = this.#renderScheduler.now();
-		this.#lastRenderAt = start;
+		this.#pacer.frameStarted(start);
 		pushLoopPhase("ui.render");
 		try {
 			this.#doRender();
 		} finally {
 			popLoopPhase();
-			const costMs = this.#renderScheduler.now() - start;
-			this.#frameCostEstimateMs += FRAME_COST_SMOOTHING * (costMs - this.#frameCostEstimateMs);
+			this.#pacer.frameEnded(start, this.#renderScheduler.now());
 		}
 	}
 
@@ -2263,7 +2167,7 @@ export class TUI extends Container {
 		// key would make idle navigation pay a full frame of latency.
 		const c0 = data.charCodeAt(0);
 		if ((c0 === 3 || c0 === 27) && (matchesKey(data, "ctrl+c") || matchesKey(data, "escape"))) {
-			this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + INPUT_RENDER_GRACE_MS;
+			this.#pacer.holdForInput(this.#renderScheduler.now());
 		}
 		if (this.#inputListeners.size > 0) {
 			let current = data;

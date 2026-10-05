@@ -9,7 +9,9 @@
  * a recorded reason, not a target. Two of them are far above the 800-line figure
  * the plan asked for, and that is stated rather than hidden:
  *
- * `core/tui.ts` is 3821 lines. MEASURED 2026-09-30, after the queue of
+ * `core/tui.ts` is 3800 lines. MEASURED 2026-10-04, after the frame throttle
+ * and the terminal hosts' settle windows moved to `core/frame-pacing.ts`; it
+ * was 3821 at 2026-09-30, after the queue of
  * virtualized roots a component-scoped frame compacts and the switch that
  * records the scroll tape only while scroll isolation reads it; it was 3757 at
  * 2026-09-26, after the escape sequences each paint emits moved to
@@ -62,6 +64,7 @@ const CORE_CEILINGS: Record<string, number> = {
 	"core/mouse-routing.ts": 150,
 	"core/paint-sequences.ts": 430,
 	"core/frame-plan.ts": 90,
+	"core/frame-pacing.ts": 150,
 };
 
 /** Ceiling for every module in the presentation layer, which is new and has no legacy. */
