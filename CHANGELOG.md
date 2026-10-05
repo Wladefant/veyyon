@@ -41,6 +41,7 @@
 - `TUIOptions.activity` sets the `ActivitySignal` the TUI attaches to between `start()` and `stop()`; the default is `processActivity`.
 - `RenderSignature`, every input besides the text that a `Markdown` render's rows depend on, is exported from `@veyyon/tui/components/markdown`.
 - `TUI.reusedRows(child)`, read inside `onBeforeCompose`, returns the rows a component-scoped frame keeps for a root child it does not re-render, and `undefined` when the frame renders the child or outside the sizing pass.
+- The `@veyyon/utils` barrel re-exports every export of `@veyyon/utils/abortable`, which adds `cancellationError` and `abortableSource` to it.
 - `LoopRace` races each pass of a loop against an outcome that settles once for the loop's life, such as an abort, and settles as `Promise.race([pass, outcome])` would without attaching a reaction per pass to the pending outcome, so the race holds no pass the loop moved past.
 - `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.
 - `@veyyon/utils/rearming-timeout` exports `rearmingTimeout`, a schedule for a callback that arms its own next run, which re-arms one `setTimeout` with `refresh()` instead of creating a timeout per call.
@@ -68,6 +69,7 @@
 
 ### Changed
 
+- `createAgentSession` reads the caller's telemetry config in two fewer statements; its behavior is unchanged.
 - A launch builds no ICU time zone cache, number formatter or collator before the first frame: the terminal guard reads the local date from the C library, the `tts` tool description prints its character limit literally, and prompt templates sort variable names by code unit, so the source launch paints its first frame in 58.5 ms instead of 60.5 ms and its ready run peaks at 217.1 MiB RSS instead of 220.4 MiB (median of 30 and 11).
 - A launch builds no ICU time zone cache or grapheme segmenter: the logger, the session's tool signature and the date the session states to the model read local time from the C library, and the grapheme segmenter is built on first use, so the compiled binary reports ready in 180.3 ms instead of 188.0 ms and paints its first frame in 37.0 ms instead of 38.4 ms (median of 30), and 8 s after launch holds 249.5 MiB RSS instead of 254.3 MiB, 118.5 MiB anonymous memory instead of 119.7 MiB and a 260.4 MiB peak instead of 264.8 MiB (median of 10).
 - A launch evaluates `yaml` on the first settings file edit or secret declaration parse, `@opentelemetry/api` on the first traced span, and `diff` on the first diff it generates or renders, instead of with the module graph, so an RPC launch of the compiled binary evaluates 1,876 modules instead of 1,991 and holds 190.6 MiB RSS instead of 194.6 MiB, 93.4 MiB anonymous memory instead of 97.2 MiB and a 199.1 MiB peak instead of 203.7 MiB (median of 31).
