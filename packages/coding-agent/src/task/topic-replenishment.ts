@@ -730,18 +730,23 @@ export async function runLedgerBridge<T = unknown>(
 	const timeout = options?.timeoutMs ?? 30000;
 
 	const { promise, resolve, reject } = Promise.withResolvers<T>();
-	execFile(python, [bridgeScript, ...args], { timeout, cwd: options?.cwd }, (error, stdout, stderr) => {
-		if (error) {
-			reject(new Error(`native-ledger-bridge failed (${error.message}): ${stderr}`));
-			return;
-		}
-		try {
-			const parsed = JSON.parse(stdout.trim()) as T;
-			resolve(parsed);
-		} catch {
-			reject(new Error(`Failed to parse bridge output: ${stdout}\nstderr: ${stderr}`));
-		}
-	});
+	execFile(
+		python,
+		[bridgeScript, ...args],
+		{ timeout, cwd: options?.cwd, windowsHide: true },
+		(error, stdout, stderr) => {
+			if (error) {
+				reject(new Error(`native-ledger-bridge failed (${error.message}): ${stderr}`));
+				return;
+			}
+			try {
+				const parsed = JSON.parse(stdout.trim()) as T;
+				resolve(parsed);
+			} catch {
+				reject(new Error(`Failed to parse bridge output: ${stdout}\nstderr: ${stderr}`));
+			}
+		},
+	);
 	return promise;
 }
 
@@ -780,7 +785,7 @@ export class FileLock {
 				"--ready-signal",
 				"LOCKED",
 			],
-			{ stdio: ["ignore", "pipe", "pipe"] },
+			{ stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
 		);
 		this.#proc = proc;
 

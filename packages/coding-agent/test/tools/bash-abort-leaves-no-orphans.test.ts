@@ -30,6 +30,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
+import { disposeBashSessionsByOwner } from "../../src/exec/bash-executor";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
 import { makeToolSession } from "../helpers/tool-session";
 
@@ -139,7 +140,7 @@ async function runAndEnd(
 	buildCommand: (pidFile: string) => string,
 	how: "abort" | "timeout",
 ): Promise<{ pid: number; aliveBefore: boolean }> {
-	const pidFile = path.join(tmpDir, `${label}.pid`);
+	const pidFile = path.join(tmpDir, `${label}.pid`).replaceAll("\\", "/");
 	const controller = new AbortController();
 	const run = bashTool().execute(
 		label,
@@ -262,5 +263,34 @@ describe("the boundary: a process that leaves the group deliberately", () => {
 		expect(pid).toBeGreaterThan(0);
 		expect(aliveBefore).toBe(true);
 		expect(isAlive(pid)).toBe(true);
+	});
+});
+
+describe("session disposal evicts and aborts owned bash sessions", () => {
+	it("disposes bash shell sessions when owner session is disposed", async () => {
+		const ownerId = `test-owner-${Date.now()}`;
+		const tool = new BashTool(
+			makeToolSession({
+				cwd: tmpDir,
+				hasUI: false,
+				skills: [],
+				getSessionFile: () => null,
+				getSessionId: () => ownerId,
+				allocateOutputArtifact: async () => ({ id: "1", path: path.join(tmpDir, "1.txt") }),
+				settings: {
+					get: () => undefined,
+					getBashInterceptorRules: () => [],
+				},
+				getClientBridge: () => undefined,
+			}) as never,
+		);
+
+		await tool.execute("warmup", { command: "export VEYYON_LIFETIME_PROBE=held" });
+		const warm = await tool.execute("warm_state", { command: "echo $VEYYON_LIFETIME_PROBE" });
+		expect(warm.content[0].text).toContain("held");
+		await disposeBashSessionsByOwner(ownerId);
+		const result = await tool.execute("after_dispose", { command: "echo $VEYYON_LIFETIME_PROBE; echo state_read" });
+		expect(result.content[0].text).toContain("state_read");
+		expect(result.content[0].text).not.toContain("held");
 	});
 });

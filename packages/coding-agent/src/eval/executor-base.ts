@@ -749,7 +749,16 @@ export class KernelSessionPool<
 		const inFlight = this.#startingSessions.get(sessionKey);
 		if (inFlight) {
 			attachSessionOwner(inFlight, sessionId, options.kernelOwnerId);
-			return await waitForPromiseWithCancellation(inFlight.promise, options, this.#cancelledErrorClass);
+			try {
+				return await waitForPromiseWithCancellation(inFlight.promise, options, this.#cancelledErrorClass);
+			} catch (error) {
+				inFlight.ownerIds.delete(options.kernelOwnerId ?? sessionId);
+				const session = this.#sessions.get(sessionKey);
+				if (session?.ownerIds === inFlight.ownerIds && session.ownerIds.size === 0) {
+					await this.resetSession(sessionKey);
+				}
+				throw error;
+			}
 		}
 
 		let startingSession!: StartingManagedKernelSession<TKernel>;
@@ -760,9 +769,13 @@ export class KernelSessionPool<
 				sessionId,
 				cwd,
 				kernel,
-				ownerIds: new Set(startingSession.ownerIds),
+				ownerIds: startingSession.ownerIds,
 				hasFallbackOwner: startingSession.hasFallbackOwner,
 			};
+			if (startingSession.ownerIds.size === 0) {
+				await releaseKernel(kernel, `${this.#options.logLabel}-startup-owner-cancelled`);
+				return session;
+			}
 			if (this.#startingSessions.get(sessionKey) === startingSession) {
 				this.#sessions.set(sessionKey, session);
 			}
@@ -776,12 +789,22 @@ export class KernelSessionPool<
 		};
 		attachSessionOwner(startingSession, sessionId, options.kernelOwnerId);
 		this.#startingSessions.set(sessionKey, startingSession);
+		void startPromise
+			.finally(() => {
+				if (this.#startingSessions.get(sessionKey) === startingSession) {
+					this.#startingSessions.delete(sessionKey);
+				}
+			})
+			.catch(() => {});
 		try {
 			return await waitForPromiseWithCancellation(startPromise, options, this.#cancelledErrorClass);
-		} finally {
-			if (this.#startingSessions.get(sessionKey) === startingSession) {
-				this.#startingSessions.delete(sessionKey);
+		} catch (error) {
+			startingSession.ownerIds.delete(options.kernelOwnerId ?? sessionId);
+			const session = this.#sessions.get(sessionKey);
+			if (session?.ownerIds === startingSession.ownerIds && session.ownerIds.size === 0) {
+				await this.resetSession(sessionKey);
 			}
+			throw error;
 		}
 	}
 
