@@ -423,8 +423,8 @@ export interface AuthCredentialStore {
 	 */
 	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
 	/**
-	 * Delete every recorded usage-limit snapshot. Nothing else in the store is touched. A store that
-	 * implements `listUsageHistory` without this has no way to drop raw pre-redaction rows, so
+	 * Delete every recorded usage-limit snapshot. Nothing else in the store is touched. Raw pre-redaction
+	 * rows are never returned whether or not a store has this or its call succeeds:
 	 * `AuthStorage.listUsageHistory()` returns only rows whose account key is a digest.
 	 */
 	purgeUsageHistory?(): void;

@@ -53,8 +53,9 @@ export function buildUsageCredential(credential: AuthCredential): UsageCredentia
 /**
  * Parts are joined with `|`, so a `|` or `\` inside a field is backslash-escaped. Without that, an
  * accountId of `x|email:y@z.io` and the pair accountId `x`, email `y@z.io` gave one identity, and their
- * history and cache rows merged. A field with neither character is written as before, so every key that
- * was unambiguous keeps its value and its stored history stays readable.
+ * history and cache rows merged. A field with neither character is written as before, so its key keeps its
+ * value and its stored history stays readable. A field that holds either character, a lone backslash
+ * included, is written differently, so that identity gets a new key and its history series restarts.
  */
 function escapeIdentityPart(part: string): string {
 	return part.replace(/[\\|]/g, "\\$&");

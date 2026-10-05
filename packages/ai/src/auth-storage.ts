@@ -2509,9 +2509,8 @@ export class AuthStorage {
 	 */
 	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
 		const rows = this.#store.listUsageHistory?.(query) ?? [];
-		// A store that reads history but cannot purge it (the purge is optional) may still hold rows keyed by a
-		// raw identity from before redaction. Fail closed: only digest-keyed rows leave the store.
-		if (this.#store.purgeUsageHistory) return rows;
+		// Raw rows from before redaction (their account key is the identity, not a digest) must never leave
+		// the store: the store may have no purge, or its purge may have failed. Fail closed on every read.
 		return rows.filter(row => USAGE_HISTORY_DIGEST_KEY.test(row.accountKey));
 	}
 
