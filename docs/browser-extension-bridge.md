@@ -59,6 +59,7 @@ An entry without a scheme matches the host on any scheme.
 ### Popup guard: best effort
 Chrome loads a popup tab before the debugger can attach to it. The relay therefore installs a guard in every controlled document. `window.open` returns `null`. `form.submit()`, `form.requestSubmit()`, submit events and `formtarget` are forced to the same tab. A `<base target>` is rewritten. Links open in place, also inside shadow DOM and on ctrl, meta, shift or middle click. Same-tab requests then pass the request gate before they leave Chrome.
 The guard is still best effort. It runs as page script, so a path with no script hook can open a tab (for example a native browser gesture such as a context-menu "open in new tab", or a page that restores the original functions from a fresh iframe). The relay removes a refused tab and never attaches to it, but one blind request, with the page's cookies, can still go out. Do not rely on the guard to protect a host that must never be contacted. Keep such hosts off the allowlist and in the production refusal list.
+Forms inside shadow roots may still open a new tab: the `submit` event does not cross the shadow boundary, so only the patched `submit()` and `requestSubmit()` are covered there. The Fetch gate does NOT cover that case. A new tab is only gated after the relay attaches to it, so its first request can reach a refused host before the relay removes the tab. A live negative control (real click, guard removed) measured 2 such requests; with the guard in place it measured 0.
 
 ## Operator install steps (one time)
 
