@@ -847,7 +847,7 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 		}
 	}
 	await terminateWorker(tab.worker, "release-tab");
-	if (forced && tab.kindTag === "headless") await closeOrphanTarget(tab);
+	if ((forced && tab.kindTag === "headless") || tab.kindTag === "extension") await closeOrphanTarget(tab);
 	// Before the browser hold goes: the last hold on a browser closes it, and the context with it.
 	if (tab.contextName !== undefined) await releaseNamedContext(tab.browser, tab.contextName);
 	await releaseBrowser(tab.browser, { kill: opts.kill ?? false });
@@ -925,7 +925,11 @@ async function buildInitPayload(
 			...(browserContextId === undefined ? {} : { browserContextId }),
 		};
 	}
-	const page = await pickElectronTarget(browser.browser, opts.target);
+	// The extension backend adopts only tabs it creates itself, so open one now and hand its id to the worker.
+	const page =
+		browser.kind.kind === "extension"
+			? await browser.browser.newPage()
+			: await pickElectronTarget(browser.browser, opts.target);
 	const targetId = await targetIdForPage(page);
 	return {
 		mode: "attach",
@@ -1094,7 +1098,7 @@ async function forceKillTab(name: string, reason: string): Promise<void> {
 		return;
 	}
 	await terminateWorker(tab.worker, "force-kill");
-	if (tab.kindTag === "headless") await closeOrphanTarget(tab);
+	if (tab.kindTag === "headless" || tab.kindTag === "extension") await closeOrphanTarget(tab);
 	if (tab.contextName !== undefined) await releaseNamedContext(tab.browser, tab.contextName);
 	await releaseBrowser(tab.browser, { kill: false });
 	tabs.delete(name);
