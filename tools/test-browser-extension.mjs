@@ -7,6 +7,7 @@
 // It starts the real ExtensionRelay, connects the extension to it, drives a page through puppeteer on the
 // relay's CDP endpoint (no remote-debugging port on the browser), and prints a JSON receipt:
 // served host, timings, refused-origin proof, user tabs untouched, and what an idle service worker does.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,7 +28,11 @@ const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-ext-live-agent-")
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-ext-live-profile-"));
 setAgentDir(agentDir);
 
-const receipt = { steps: {}, timingsMs: {} };
+const receipt = {
+	head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim(),
+	steps: {},
+	timingsMs: {},
+};
 const lap = (name, since) => {
 	receipt.timingsMs[name] = Math.round(performance.now() - since);
 };
@@ -255,6 +260,61 @@ try {
 	receipt.steps.audits = audits;
 	receipt.steps.refusedPopupTabsLeft = (await owner.pages()).filter(p => p.url().includes("127.0.0.2")).length;
 
+	// Negative control: a real click (user gesture, so Chrome's popup blocker allows it) opens a popup to the
+	// refused host. With the guard it must send nothing; with the guard removed it must leak.
+	const popupDetails = [];
+	const popupByClick = async () => {
+		await resetPage();
+		await mainWorld(src => {
+			const button = document.createElement("button");
+			button.id = "popbtn";
+			button.textContent = "pop";
+			button.style.cssText = "position:fixed;left:50px;top:300px;width:200px;height:60px";
+			button.onclick = () => {
+				document.documentElement.dataset.clicked = "yes";
+				const opened = window.open(src, "_blank");
+				document.documentElement.dataset.opened = String(opened);
+			};
+			document.body.append(button);
+		}, refusedBase);
+		const before = refusedHits();
+		let created = 0;
+		const onCreated = () => created++;
+		owner.on("targetcreated", onCreated);
+		await page.mouse.click(150, 330);
+		await sleep(3000);
+		owner.off("targetcreated", onCreated);
+		const state = await page
+			.evaluate(() => ({ clicked: document.documentElement.dataset.clicked, opened: document.documentElement.dataset.opened }))
+			.catch(() => "evaluate failed");
+		popupDetails.push({ ...state, newTargets: created });
+		return refusedHits() - before;
+	};
+	const guardOn = await popupByClick();
+	const control = await page.createCDPSession();
+	const removed = [];
+	for (let id = 1; id <= 8; id++) {
+		const done = await control.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: String(id) }).then(
+			() => true,
+			() => false,
+		);
+		if (done) removed.push(id);
+	}
+	// A popup that opens can still be closed by the relay before its first request lands, so give the
+	// unguarded case up to three tries. The guarded case above needs only one: it must always be 0.
+	let guardOff = 0;
+	for (let attempt = 0; attempt < 3 && guardOff === 0; attempt++) guardOff = await popupByClick();
+	await mainWorld(() => {
+		document.documentElement.dataset.guard = String(window.__veyyonPopupGuard);
+	});
+	receipt.steps.negativeControl = {
+		guardOn,
+		guardOff,
+		removedScriptIds: removed,
+		popupDetails,
+		guardPresentAfterRemoval: await page.evaluate(() => document.documentElement.dataset.guard),
+	};
+
 	// User tabs untouched.
 	const userTitles = await Promise.all((await owner.pages()).map(p => p.title().catch(() => "?")));
 	receipt.steps.userTabStillThere = userTitles.includes("user-tab");
@@ -291,7 +351,9 @@ try {
 		receipt.steps.nonAllowlistedNavigation !== "navigated" &&
 		receipt.steps.userTabStillThere === true &&
 		receipt.steps.oopifAllowedHits > 0 &&
-		receipt.steps.refusedHostRequestsReceived === 0;
+		receipt.steps.refusedHostRequestsReceived === 0 &&
+		receipt.steps.negativeControl.guardOn === 0 &&
+		receipt.steps.negativeControl.guardOff > 0;
 } catch (error) {
 	receipt.error = String(error?.message ?? error);
 	receipt.ok = false;
