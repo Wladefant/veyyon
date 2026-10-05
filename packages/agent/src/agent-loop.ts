@@ -67,6 +67,7 @@ import {
 	internString,
 	isAbortError,
 	isRecord,
+	LoopRace,
 	logger,
 	sanitizeText,
 	structuredCloneJSON,
@@ -1549,7 +1550,7 @@ async function streamAssistantResponse(
 	// fabricating a `<tool_response>`, so the provider stops generating the rest of
 	// the hallucinated turn. Merged into the provider signal ONLY (not
 	// `requestSignal`), so it cancels the request without tripping the loop's
-	// external-abort handling (`abortRacePromise` / `requestSignal.aborted`).
+	// external-abort handling (`abortRace` / `requestSignal.aborted`).
 	const promptToolAbortController = ownedDialect ? new AbortController() : undefined;
 	const providerAbortSignals: AbortSignal[] = [];
 	if (requestSignal) providerAbortSignals.push(requestSignal);
@@ -1725,27 +1726,28 @@ async function streamAssistantResponse(
 				return aborted;
 			};
 
-			// Set up a single abort race: register the abort listener once for the whole
-			// stream and reuse the same race promise for every iterator.next() instead of
-			// allocating Promise.withResolvers and add/removeEventListener per event.
-			let abortRacePromise: Promise<typeof ABORTED> | undefined;
+			// One race for the whole stream: the abort listener is registered once and settles it once,
+			// and each `iterator.next()` waits on a promise of its own. `Promise.race` against one
+			// long-lived abort promise attached a reaction to that promise per event, and the pending
+			// promise held every event of the stream until the turn ended.
+			let abortRace: LoopRace<typeof ABORTED> | undefined;
 			let detachAbortListener: (() => void) | undefined;
 			if (requestSignal) {
 				if (requestSignal.aborted) {
 					return await finishAbortedStream();
 				}
-				const { promise, resolve } = Promise.withResolvers<typeof ABORTED>();
-				const onAbort = () => resolve(ABORTED);
+				const race = new LoopRace<typeof ABORTED>();
+				const onAbort = () => race.resolve(ABORTED);
 				requestSignal.addEventListener("abort", onAbort, { once: true });
-				abortRacePromise = promise;
+				abortRace = race;
 				detachAbortListener = () => requestSignal.removeEventListener("abort", onAbort);
 			}
 
 			try {
 				while (true) {
 					let next: IteratorResult<AssistantMessageEvent>;
-					if (abortRacePromise) {
-						const result = await Promise.race([responseIterator.next(), abortRacePromise]);
+					if (abortRace) {
+						const result = await abortRace.race(responseIterator.next());
 						if (result === ABORTED) {
 							return await finishAbortedStream();
 						}

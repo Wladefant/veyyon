@@ -11,6 +11,7 @@
 
 ### Added
 
+- `LoopRace` races each pass of a loop against an outcome that settles once for the loop's life, such as an abort, and settles as `Promise.race([pass, outcome])` would without attaching a reaction per pass to the pending outcome, so the race holds no pass the loop moved past.
 - `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.
 - `@veyyon/utils/rearming-timeout` exports `rearmingTimeout`, a schedule for a callback that arms its own next run, which re-arms one `setTimeout` with `refresh()` instead of creating a timeout per call.
 - `@veyyon/utils/byte-truncate` exports `dropFrontBytes`, which walks whole characters off the front of a string while a byte count exceeds a budget and returns the index the kept text starts at and its UTF-8 length, without encoding the string.

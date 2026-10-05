@@ -1,4 +1,13 @@
-export { AbortError, isAbortError, isCancellation, isTimeoutError, type Lazy, lazy, untilAborted } from "./abortable";
+export {
+	AbortError,
+	isAbortError,
+	isCancellation,
+	isTimeoutError,
+	type Lazy,
+	LoopRace,
+	lazy,
+	untilAborted,
+} from "./abortable";
 export * from "./array";
 export * from "./async";
 export * from "./atomic-write";
