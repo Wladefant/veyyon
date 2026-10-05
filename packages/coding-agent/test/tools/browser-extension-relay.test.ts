@@ -360,7 +360,12 @@ describe("policy at the relay", () => {
 		}
 		const exposed = ext
 			.callsOf("chrome.debugger.sendCommand")
-			.filter(call => call.params[1] !== "Fetch.enable" && call.params[1] !== "Target.setAutoAttach");
+			.filter(
+				call =>
+					!["Fetch.enable", "Target.setAutoAttach", "Page.addScriptToEvaluateOnNewDocument"].includes(
+						String(call.params[1]),
+					),
+			);
 		expect(exposed).toHaveLength(0);
 	});
 
@@ -489,7 +494,12 @@ describe("policy at the relay", () => {
 			.callsOf("chrome.debugger.sendCommand")
 			.filter(call => (call.params[0] as { sessionId?: string }).sessionId === "child-1")
 			.map(call => call.params[1]);
-		expect(childCalls).toEqual(["Fetch.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
+		expect(childCalls).toEqual([
+			"Fetch.enable",
+			"Page.addScriptToEvaluateOnNewDocument",
+			"Target.setAutoAttach",
+			"Runtime.runIfWaitingForDebugger",
+		]);
 		expect(cdp.events.length).toBeGreaterThan(0);
 		// The child asks for a refused document the moment it runs.
 		ext.emit("chrome.debugger.onEvent", [

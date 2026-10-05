@@ -33,15 +33,19 @@ const lap = (name, since) => {
 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+const hits = new Map();
 const web = Bun.serve({
-	hostname: "127.0.0.1",
+	hostname: "0.0.0.0",
 	port: 0,
-	fetch: () =>
-		new Response(
+	fetch: request => {
+		const host = request.headers.get("host") ?? "?";
+		hits.set(host, (hits.get(host) ?? 0) + 1);
+		return new Response(
 			`<!doctype html><title>before</title><body style="margin:20px;font:20px sans-serif">
 <input id=name placeholder="test account name"><button id=b onclick="document.title='clicked:'+document.getElementById('name').value">Save</button>`,
 			{ headers: { "content-type": "text/html" } },
-		),
+		);
+	},
 });
 const pageUrl = `http://127.0.0.1:${web.port}/`;
 receipt.servedHost = `127.0.0.1:${web.port}`;
@@ -69,7 +73,13 @@ try {
 	writeExtensionToken("live", token);
 	await status.close();
 
-	relay = ExtensionRelay.start({ policy: { allow: ["127.0.0.1"] }, instance: "live", scrub: [token] });
+	const audits = [];
+	relay = ExtensionRelay.start({
+		policy: { allow: ["127.0.0.1", "localhost"] },
+		instance: "live",
+		scrub: [token],
+		onAudit: entry => audits.push(entry),
+	});
 	const connectPage = await owner.newPage();
 	const t0 = performance.now();
 	connectPage
@@ -123,6 +133,41 @@ try {
 	);
 	receipt.steps.nonAllowlistedNavigation = blocked;
 
+	await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
+	// Each case to a refused host (127.0.0.2 reaches the same server, so any request that leaves Chrome shows
+	// up in `hits` under its Host header). Refused means zero hits. Cases run one after the other.
+	const refusedBase = `http://127.0.0.2:${web.port}/`;
+	const crossSite = `http://localhost:${web.port}/`;
+	const refusedKey = `127.0.0.2:${web.port}`;
+	const refusedHits = () => hits.get(refusedKey) ?? 0;
+	const cases = {};
+	await page.evaluate(src => {
+		const frame = document.createElement("iframe");
+		frame.src = src;
+		document.body.append(frame);
+	}, crossSite);
+	await sleep(2000);
+	receipt.steps.oopifAllowedHits = hits.get(`localhost:${web.port}`) ?? 0;
+	await page.evaluate(src => {
+		const frame = document.createElement("iframe");
+		frame.src = src;
+		document.body.append(frame);
+	}, refusedBase);
+	await sleep(3000);
+	cases.crossSiteIframe = refusedHits();
+	await page.evaluate(src => window.open(src, "_blank"), refusedBase);
+	await sleep(3000);
+	cases.popup = refusedHits() - cases.crossSiteIframe;
+	await page.evaluate(src => {
+		location.href = src;
+	}, refusedBase);
+	await sleep(3000);
+	cases.scriptNavigation = refusedHits() - cases.crossSiteIframe - cases.popup;
+	receipt.steps.refusedRequestsReceivedPerCase = cases;
+	receipt.steps.refusedHostRequestsReceived = refusedHits();
+	receipt.steps.audits = audits;
+	receipt.steps.refusedPopupTabsLeft = (await owner.pages()).filter(p => p.url().includes("127.0.0.2")).length;
+
 	// User tabs untouched.
 	const userTitles = await Promise.all((await owner.pages()).map(p => p.title().catch(() => "?")));
 	receipt.steps.userTabStillThere = userTitles.includes("user-tab");
@@ -157,7 +202,9 @@ try {
 		receipt.steps.titleAfter === "clicked:QA-live" &&
 		receipt.steps.screenshotBytes > 500 &&
 		receipt.steps.nonAllowlistedNavigation !== "navigated" &&
-		receipt.steps.userTabStillThere === true;
+		receipt.steps.userTabStillThere === true &&
+		receipt.steps.oopifAllowedHits > 0 &&
+		receipt.steps.refusedHostRequestsReceived === 0;
 } catch (error) {
 	receipt.error = String(error?.message ?? error);
 	receipt.ok = false;

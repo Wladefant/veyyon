@@ -36,6 +36,7 @@ const PRODUCTION_HOSTS: readonly string[] = [
 
 /** CDP domains a session may use. Everything else (`Browser`, `Storage`, `DOMStorage`, `IndexedDB`, `Fetch`, ...) is refused. */
 const ALLOWED_CDP_DOMAINS: ReadonlySet<string> = new Set([
+	"Audits",
 	"Page",
 	"Runtime",
 	"DOM",

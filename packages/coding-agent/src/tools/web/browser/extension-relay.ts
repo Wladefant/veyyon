@@ -39,6 +39,20 @@ const METHOD_NOT_FOUND_CODE = -32601;
 /** Auto-attach owned by the relay: children start paused so they are gated before they run. */
 const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
 
+/** Runs in every document of a controlled tab: no popups. Links and forms that ask for a new window stay in place, where the request gate judges them. */
+const POPUP_GUARD_SOURCE = `(() => {
+  const key = "__veyyonPopupGuard";
+  if (window[key]) return;
+  Object.defineProperty(window, key, { value: true });
+  window.open = () => null;
+  const same = event => {
+    const el = event.target instanceof Element ? event.target.closest("a[target],area[target],form[target]") : null;
+    if (el && el.getAttribute("target") && !["_self", "_parent", "_top"].includes(el.getAttribute("target"))) el.setAttribute("target", "_self");
+  };
+  addEventListener("click", same, true);
+  addEventListener("submit", same, true);
+})();`;
+
 export interface NavigationAudit {
 	tabId: number;
 	/** `scheme://host`, never the path or query, never page content. */
@@ -513,12 +527,21 @@ export class ExtensionRelay {
 		if (this.#tabs.has(tab.tabId)) this.#forwardEvent(tab, source, "Target.attachedToTarget", eventParams);
 	}
 
-	/** Pause every request of a debuggee so the policy runs before the request leaves, cookies included. */
+	/**
+	 * Pause every request of a debuggee so the policy runs before the request leaves, cookies included,
+	 * and keep its pages from opening popups. A popup is a new tab that Chrome loads before the debugger
+	 * can attach, so the only gate is to stop `window.open` and `target=_blank` at the source.
+	 */
 	async #enableFetchGate(debuggee: { tabId: number; sessionId?: string }): Promise<void> {
 		await this.#call("chrome.debugger.sendCommand", [
 			debuggee,
 			"Fetch.enable",
 			{ patterns: [{ urlPattern: "*", requestStage: "Request" }] },
+		]);
+		await this.#call("chrome.debugger.sendCommand", [
+			debuggee,
+			"Page.addScriptToEvaluateOnNewDocument",
+			{ source: POPUP_GUARD_SOURCE, runImmediately: true },
 		]);
 	}
 
