@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
+- `CompactionPreparation.remoteChain` holds every window a server-side pass may chain as `links`, each with the offset at which its span starts in one shared `messages` array, instead of a single `previousPreserveData` with `messagesToSummarize` and `turnPrefixMessages`.
 
 ### Added
 
@@ -28,6 +29,10 @@
 
 ### Fixed
 
+- A server-side compaction whose cut lands inside a turn that opened before the previous provider window chains that window and posts only the context behind it, instead of posting the whole session, which on a long single-turn Codex run outgrew the provider's context and failed every pass with `context_length_exceeded`.
+- A compaction reads the turns the previous compaction kept, so a local pass no longer drops them from the context and a chained server-side pass no longer omits them from the input it posts.
+- A server-side compaction after a local summary posts that summary ahead of the messages since it, so the window it returns replaces the summary instead of discarding the history the summary held.
+- A compaction never cuts behind the kept boundary of any provider window on the branch, so a branch where a newer window kept turns behind an older one chains the older window instead of posting the whole session.
 - A `tool_execution_update` a tool reports after its run emitted `agent_end` reaches `Agent` subscribers through the new `AgentLoopConfig.onToolUpdateAfterRun` sink instead of being dropped, so a background task card settles when its agents finish instead of animating for the life of the process, which cut timer callbacks in the 20 idle seconds after three turns that each spawned two background agents from 2,301 to 64.
 - A branch summary over session history held on disk reads each message's fields before it redacts them, so navigating the tree with a summary no longer fails with "Branch summary provider text transformation failed." when the history was moved out of memory again while the credential resolved.
 - The turn loop no longer holds every streamed event until the turn ends: it waits on each provider event through one `LoopRace` instead of racing it against a long-lived abort promise, which cut the heap held by a 20,000-delta turn from 4.0 MiB and 120,359 objects to 0.3 MiB and 2,438 objects and the loop's cost per event from 1,160 ns to 877 ns (median of seven).

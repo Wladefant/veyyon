@@ -46,7 +46,7 @@ import {
 	estimateCacheAlignedRequestTokens,
 } from "./cache-aligned-context";
 import type { CompactionEntry, SessionEntry, SessionMessageEntry } from "./entries";
-import { KEEP_NOTHING_ENTRY_ID } from "./entries";
+import { KEEP_NOTHING_ENTRY_ID, resolveCompactionBoundaryIndex } from "./entries";
 import { CompactionCancelledError } from "./errors";
 import { LEGACY_REMOTE_PRESERVE_KEYS } from "./legacy-provider-native";
 import { hasLegacyArchive, legacyArchiveSourceText, stripLegacyArchive } from "./legacy-snapcompact-archive";
@@ -465,13 +465,17 @@ export interface CutPointResult {
  * - turnStartIndex: if cutting mid-turn, the user message that started that turn
  * - isSplitTurn: whether we're cutting in the middle of a turn
  *
- * Only considers entries between `startIndex` and `endIndex` (exclusive).
+ * Only considers entries between `startIndex` and `endIndex` (exclusive). The turn a
+ * mid-turn cut splits is searched for from `turnSearchStart`, which a caller sets
+ * below `startIndex` when the history it summarizes begins earlier than the range
+ * the cut may land in.
  */
 export function findCutPoint(
 	entries: SessionEntry[],
 	startIndex: number,
 	endIndex: number,
 	keepRecentTokens: number,
+	turnSearchStart = startIndex,
 ): CutPointResult {
 	const cutPoints = findValidCutPoints(entries, startIndex, endIndex);
 
@@ -580,7 +584,7 @@ export function findCutPoint(
 	// Determine if this is a split turn
 	const cutEntry = entries[cutIndex];
 	const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
-	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
+	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, turnSearchStart);
 
 	return {
 		firstKeptEntryIndex: cutIndex,
@@ -850,10 +854,18 @@ function formatLegacyArchiveText(archiveText: string): string {
 	return prompt.render(AGENT_PROMPTS["compaction/legacy-archive-context"].text, { archiveText });
 }
 
-function mergePreviousSummaryWithLegacyArchive(
-	previousSummary: string | undefined,
-	archiveText: string | undefined,
+/**
+ * The account of earlier history a pass builds on: the previous compaction's
+ * summary, with the plaintext of a legacy image archive it still carries folded
+ * in. The local summary, its size estimate and the server-side span all read it
+ * here, so a server-side pass sends the provider the history a local pass would
+ * summarize from.
+ */
+export function previousCompactionSummaryText(
+	preparation: Pick<CompactionPreparation, "previousSummary" | "previousPreserveData">,
 ): string | undefined {
+	const { previousSummary } = preparation;
+	const archiveText = legacyArchiveSourceText(preparation.previousPreserveData);
 	if (!archiveText) return previousSummary;
 	const archiveSummary = formatLegacyArchiveText(archiveText);
 	return previousSummary ? `${previousSummary}\n\n${archiveSummary}` : archiveSummary;
@@ -1557,30 +1569,40 @@ export async function generateHandoff(
 // Compaction Preparation (for hooks)
 // ============================================================================
 
+/** A server-side window a later server-side pass may chain in front of its span. */
+export interface RemoteCompactionChainLink {
+	/** `preserveData` of the entry whose window this link chains. */
+	previousPreserveData: Record<string, unknown>;
+	/**
+	 * Offset into {@link RemoteCompactionChain.messages} of the first message the
+	 * context sends behind this window: the first entry the window kept.
+	 */
+	start: number;
+}
+
 /**
- * The narrower span a SERVER-SIDE pass compacts when the branch already holds
- * a server-side window this model can chain in front of it.
+ * The span a SERVER-SIDE pass compacts when the branch holds a server-side
+ * window newer than the previous summary.
  *
- * The two passes need different spans over the same branch, which is why this
- * cannot be folded into the fields above. A local pass must look straight past
- * a remote entry and re-expand everything behind it, because that entry holds
- * no summary text to build on and the local summary it writes replaces the
- * window. A remote pass must do the opposite: chain the window and send only
- * what arrived after it, because the window already carries that history
- * (encrypted reasoning included) and re-sending it as plain messages pays for
- * the same span twice and grows every compaction past the last one.
+ * The two passes read the same context in different forms, which is why this
+ * cannot be folded into the fields above. A local pass cannot read a window: it
+ * re-expands the messages behind one, summarizes them, and the summary it writes
+ * replaces the window. A server-side pass on the host that minted the window
+ * chains it instead and posts what the context sends after it: the entries the
+ * window kept and every entry since, up to the cut. Re-sending the window's span
+ * as plain messages pays for that span twice, and on a long run it outgrows the
+ * provider's context and the pass fails with `context_length_exceeded`.
  *
- * Absent when there is no such entry, or when the cut point falls before it,
- * where the window is still in the retained tail and chaining would double the
- * span it covers.
+ * One link per provider and api, newest first. An older window from the same
+ * host is chainable exactly when the newer one is, and the newer one replaces
+ * more. `compactWithProvider` chains the first link the session model can read
+ * and posts the summary span (`previousSummary`, `messagesToSummarize`,
+ * `turnPrefixMessages`) when no link qualifies.
  */
 export interface RemoteCompactionChain {
-	/** `preserveData` of the entry whose window is being chained. */
-	previousPreserveData: Record<string, unknown>;
-	/** Messages after that entry, up to the cut point. */
-	messagesToSummarize: AgentMessage[];
-	/** Same turn prefix the local pass uses: it lies after the cut either way. */
-	turnPrefixMessages: AgentMessage[];
+	links: RemoteCompactionChainLink[];
+	/** Messages from the oldest link's kept boundary up to the cut point. */
+	messages: AgentMessage[];
 }
 
 export interface CompactionPreparation {
@@ -1600,8 +1622,8 @@ export interface CompactionPreparation {
 	/** Preserved opaque compaction payload from the previous compaction, if any. */
 	previousPreserveData?: Record<string, unknown>;
 	/**
-	 * Span and window for a chained server-side pass. See {@link
-	 * RemoteCompactionChain}; a local pass ignores it.
+	 * Windows a server-side pass may chain, and the context behind them. See
+	 * {@link RemoteCompactionChain}; a local pass ignores it.
 	 */
 	remoteChain?: RemoteCompactionChain;
 	/**
@@ -1765,10 +1787,7 @@ export function estimateCompactionRequestTokens(
 	options?: SummaryOptions,
 ): number {
 	const reserveTokens = preparation.settings.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
-	const previousSummary = mergePreviousSummaryWithLegacyArchive(
-		preparation.previousSummary,
-		legacyArchiveSourceText(preparation.previousPreserveData),
-	);
+	const previousSummary = previousCompactionSummaryText(preparation);
 	const requests: number[] = [];
 	const cacheAligned = canUseCacheAlignedCompaction({
 		model,
@@ -2004,6 +2023,68 @@ function elideTailToolResults(
 	return elisions;
 }
 
+/**
+ * Index on `pathEntries` of the first entry the compaction at `compactionIndex`
+ * kept, where the context a turn sends behind it resumes. Keeping nothing
+ * resumes just past the entry. An id that resolves to no entry is the damage
+ * the rebuild re-expands from the start of the branch, so it resolves to 0 here
+ * too, and an id past the entry kept nothing in front of it.
+ */
+function keptEntriesStart(pathEntries: SessionEntry[], compactionIndex: number): number {
+	const keepId = (pathEntries[compactionIndex] as CompactionEntry).firstKeptEntryId;
+	if (keepId === KEEP_NOTHING_ENTRY_ID) return compactionIndex + 1;
+	return Math.min(resolveCompactionBoundaryIndex(pathEntries, keepId), compactionIndex + 1);
+}
+
+/**
+ * The windows at `windowIndices` (newest first, each keeping from the same
+ * position on `windowStarts`) a server-side pass may chain, one per provider
+ * and api, and the messages the context sends behind them up to `cutIndex`,
+ * which lies at or past every window's kept boundary. Undefined when no window
+ * can be chained.
+ */
+function remoteCompactionChain(
+	pathEntries: SessionEntry[],
+	windowIndices: readonly number[],
+	windowStarts: readonly number[],
+	cutIndex: number,
+	excludedCustomMessageTypes: ReadonlySet<string> | undefined,
+): RemoteCompactionChain | undefined {
+	const hosts = new Set<string>();
+	const links: Array<{ previousPreserveData: Record<string, unknown>; from: number }> = [];
+	let chainStart = cutIndex;
+	for (let w = 0; w < windowIndices.length; w++) {
+		const preserveData = (pathEntries[windowIndices[w]] as CompactionEntry).preserveData;
+		const data = getRemoteCompactionPreserveData(preserveData);
+		if (!data || !preserveData) continue;
+		const host = `${data.provider}\u0000${data.api}`;
+		if (hosts.has(host)) continue;
+		hosts.add(host);
+		const from = windowStarts[w];
+		links.push({ previousPreserveData: preserveData, from });
+		if (from < chainStart) chainStart = from;
+	}
+	if (links.length === 0) return undefined;
+
+	const messages: AgentMessage[] = [];
+	// Message count in front of each entry of the chained span, so every link
+	// slices the one array instead of copying the span it shares with the others.
+	const offsets = new Uint32Array(cutIndex - chainStart + 1);
+	for (let i = chainStart; i < cutIndex; i++) {
+		offsets[i - chainStart] = messages.length;
+		const msg = getMessageFromEntry(pathEntries[i], excludedCustomMessageTypes);
+		if (msg) messages.push(msg);
+	}
+	offsets[cutIndex - chainStart] = messages.length;
+	return {
+		links: links.map(link => ({
+			previousPreserveData: link.previousPreserveData,
+			start: offsets[link.from - chainStart],
+		})),
+		messages,
+	};
+}
+
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
@@ -2014,11 +2095,11 @@ export function prepareCompaction(
 	}
 
 	let prevCompactionIndex = -1;
-	// Newest server-side entry ahead of that boundary, if any. The scan below
-	// walks past it because a local pass cannot build on it, and that is exactly
-	// the entry a REMOTE pass has to chain rather than re-read, so it is picked
-	// up on the same walk instead of a second one.
-	let remoteCompactionIndex = -1;
+	// Server-side entries ahead of that boundary, newest first. The scan below
+	// walks past them because a local pass cannot build on them, and they are
+	// exactly the entries a REMOTE pass has to chain rather than re-read, so they
+	// are picked up on the same walk instead of a second one.
+	const windowIndices: number[] = [];
 	for (let i = pathEntries.length - 1; i >= 0; i--) {
 		if (pathEntries[i].type !== "compaction") continue;
 		// Skip an entry whose summary a local pass cannot build on: one of the two
@@ -2027,15 +2108,27 @@ export function prepareCompaction(
 		// behind it and summarize them locally rather than stranding that span.
 		const entry = pathEntries[i] as CompactionEntry;
 		if (!hasReusableSummary(entry.preserveData)) {
-			if (remoteCompactionIndex === -1 && getRemoteCompactionPreserveData(entry.preserveData)) {
-				remoteCompactionIndex = i;
-			}
+			if (getRemoteCompactionPreserveData(entry.preserveData)) windowIndices.push(i);
 			continue;
 		}
 		prevCompactionIndex = i;
 		break;
 	}
-	const boundaryStart = prevCompactionIndex + 1;
+	// The context a turn sends behind a compaction is its artifact, the entries
+	// it kept, and every entry after it (`buildSessionContext`). The kept entries
+	// sit BEFORE the compaction entry, so a pass that read from just past the
+	// entry summarized them nowhere and kept them nowhere: the next compaction
+	// dropped them from the context for good.
+	const summaryStart = prevCompactionIndex >= 0 ? keptEntriesStart(pathEntries, prevCompactionIndex) : 0;
+	// The cut never lands behind any window's kept boundary. Everything in front
+	// of it is that window's span: a server-side pass chains the window, so a
+	// kept tail reaching into the span would hand the model part of it twice, and
+	// a cut behind it leaves the window nothing to chain, so the pass re-sends the
+	// whole span the window holds. A newer window's boundary sits at or past an
+	// older one's on a branch this pass wrote; an older pass could keep behind it.
+	const windowStarts = windowIndices.map(index => keptEntriesStart(pathEntries, index));
+	let boundaryStart = summaryStart;
+	for (const start of windowStarts) if (start > boundaryStart) boundaryStart = start;
 	const boundaryEnd = pathEntries.length;
 
 	const lastUsage = getLastAssistantUsage(pathEntries);
@@ -2110,7 +2203,10 @@ export function prepareCompaction(
 		}
 	}
 
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, keepRecentTokens);
+	// The turn a mid-turn cut splits may have opened behind the newest window,
+	// and the local pass reads back to the summary's kept boundary, so the turn
+	// opening is searched for from there.
+	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, keepRecentTokens, summaryStart);
 
 	// Get ID of first kept entry. A cut at `boundaryEnd` keeps nothing: the
 	// summary replaces the whole range, which is the only way to free anything
@@ -2128,7 +2224,7 @@ export function prepareCompaction(
 
 	// Messages to summarize (will be discarded after summary)
 	const messagesToSummarize: AgentMessage[] = [];
-	for (let i = boundaryStart; i < historyEnd; i++) {
+	for (let i = summaryStart; i < historyEnd; i++) {
 		const msg = getMessageFromEntry(pathEntries[i], options?.excludedCustomMessageTypes);
 		if (msg) messagesToSummarize.push(msg);
 	}
@@ -2190,23 +2286,16 @@ export function prepareCompaction(
 		extractFileOpsFromMessages(turnPrefixMessages, fileOps);
 	}
 
-	// The span a chained server-side pass sends: only what arrived after the
-	// window, because the window already carries everything before it. Skipped
-	// when the cut lands at or before that entry, where the window is still in
-	// the retained tail and chaining it would send its span twice.
-	let remoteChain: RemoteCompactionChain | undefined;
-	if (remoteCompactionIndex >= 0 && remoteCompactionIndex < historyEnd) {
-		const chainMessages: AgentMessage[] = [];
-		for (let i = remoteCompactionIndex + 1; i < historyEnd; i++) {
-			const msg = getMessageFromEntry(pathEntries[i], options?.excludedCustomMessageTypes);
-			if (msg) chainMessages.push(msg);
-		}
-		remoteChain = {
-			previousPreserveData: (pathEntries[remoteCompactionIndex] as CompactionEntry).preserveData ?? {},
-			messagesToSummarize: chainMessages,
-			turnPrefixMessages,
-		};
-	}
+	const remoteChain =
+		windowIndices.length > 0
+			? remoteCompactionChain(
+					pathEntries,
+					windowIndices,
+					windowStarts,
+					cutPoint.firstKeptEntryIndex,
+					options?.excludedCustomMessageTypes,
+				)
+			: undefined;
 
 	return {
 		firstKeptEntryId,
@@ -2252,7 +2341,6 @@ export async function compact(
 		turnPrefixMessages,
 		isSplitTurn,
 		tokensBefore,
-		previousSummary,
 		previousPreserveData,
 		fileOps,
 		fileListBase,
@@ -2268,11 +2356,7 @@ export async function compact(
 	// settings own.
 	const summaryOptions: SummaryOptions = { ...options, remoteEndpoint: settings.remoteEndpoint };
 
-	const previousLegacyArchiveText = legacyArchiveSourceText(previousPreserveData);
-	const previousSummaryForCompaction = mergePreviousSummaryWithLegacyArchive(
-		previousSummary,
-		previousLegacyArchiveText,
-	);
+	const previousSummaryForCompaction = previousCompactionSummaryText(preparation);
 	// This function is the LOCAL pass and it always produces summary text. It is
 	// what runs whenever server-side compaction does not apply, which is most of
 	// the time.
