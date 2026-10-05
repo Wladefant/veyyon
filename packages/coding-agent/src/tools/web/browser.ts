@@ -44,6 +44,11 @@ const appSchema = lazy(() =>
 		"cdp_url?": type("string").describe("existing cdp endpoint"),
 		"args?": type("string[]").describe("extra cli args"),
 		"target?": type("string").describe("substring to pick a window"),
+		"extension?": type("boolean").describe(
+			"drive the operator's own signed-in Chrome through the Playwright Extension (no remote-debugging port)",
+		),
+		"instance_id?": type("string").describe("with extension: which stored Chrome profile token to use"),
+		"profile?": type("string").describe("with extension: Chrome --profile-directory name"),
 	}),
 );
 
@@ -95,6 +100,16 @@ export interface BrowserToolDetails {
 
 function resolveBrowserKind(params: BrowserParams, session: ToolSession): BrowserKind {
 	const app = params.app;
+	if (app?.extension) {
+		if (app.cdp_url || app.path) {
+			throw new ToolError("app.extension cannot be combined with app.cdp_url or app.path.");
+		}
+		return {
+			kind: "extension",
+			...(app.instance_id ? { instanceId: app.instance_id } : {}),
+			...(app.profile ? { profile: app.profile } : {}),
+		};
+	}
 	if (app?.cdp_url) {
 		return { kind: "connected", cdpUrl: trimTrailingSlashes(app.cdp_url) };
 	}
@@ -532,6 +547,8 @@ function describeBrowser(handle: BrowserHandle): string {
 			return `spawned ${handle.kind.path} (pid ${handle.pid ?? "?"})`;
 		case "connected":
 			return `connected ${handle.cdpUrl ?? handle.kind.cdpUrl}`;
+		case "extension":
+			return `extension (operator's Chrome, ${handle.kind.instanceId ?? handle.kind.profile ?? "default profile"})`;
 	}
 }
 
@@ -543,6 +560,8 @@ function describeKind(kind: BrowserKind): string {
 			return `spawned:${kind.path}`;
 		case "connected":
 			return `connected:${kind.cdpUrl}`;
+		case "extension":
+			return `extension:${kind.instanceId ?? kind.profile ?? "default"}`;
 		case "cmux":
 			return `cmux:${kind.surface ?? "split"}`;
 	}
@@ -553,6 +572,9 @@ function sameBrowserKind(a: BrowserKind, b: BrowserKind): boolean {
 	if (a.kind === "headless" && b.kind === "headless") return a.headless === b.headless;
 	if (a.kind === "spawned" && b.kind === "spawned") return a.path === b.path;
 	if (a.kind === "connected" && b.kind === "connected") return a.cdpUrl === b.cdpUrl;
+	if (a.kind === "extension" && b.kind === "extension") {
+		return (a.instanceId ?? a.profile) === (b.instanceId ?? b.profile);
+	}
 	if (a.kind === "cmux" && b.kind === "cmux") return a.socketPath === b.socketPath;
 	return false;
 }

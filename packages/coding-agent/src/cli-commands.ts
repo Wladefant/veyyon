@@ -192,6 +192,11 @@ export const commands: CommandEntry[] = [
 		summary: { description: "Show provider usage limits for every authenticated account" },
 	},
 	{
+		name: "browser-extension",
+		load: () => import("./commands/browser-extension").then(m => m.default),
+		summary: { description: "Set up and control the Chrome extension bridge for the browser tool" },
+	},
+	{
 		name: "tiny-models",
 		load: () => import("./commands/tiny-models").then(m => m.default),
 		summary: { description: "Download tiny local models (session titles + memory)" },

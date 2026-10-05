@@ -59,6 +59,7 @@ const BROWSER_KINDS: Record<NonNullable<BrowserToolDetails["browser"]>, true> = 
 	spawned: true,
 	connected: true,
 	cmux: true,
+	extension: true,
 };
 
 /** Every action the tool takes, as a total record of the schema's own union. */
@@ -67,7 +68,12 @@ const ACTIONS: Record<BrowserParams["action"], true> = { open: true, close: true
 /** Actions main's renderer never drew, so there is nothing of main's to compare them to. */
 const NEWER_THAN_MAIN: ReadonlySet<BrowserParams["action"]> = new Set(["save_state"]);
 
-const KINDS = Object.keys(BROWSER_KINDS) as Array<NonNullable<BrowserToolDetails["browser"]>>;
+/** Kinds main's renderer never drew, so there is nothing of main's to compare them to. */
+const KIND_NEWER_THAN_MAIN: ReadonlySet<NonNullable<BrowserToolDetails["browser"]>> = new Set(["extension"]);
+
+const KINDS = (Object.keys(BROWSER_KINDS) as Array<NonNullable<BrowserToolDetails["browser"]>>).filter(
+	kind => !KIND_NEWER_THAN_MAIN.has(kind),
+);
 const EVERY_ACTION = Object.keys(ACTIONS) as Array<BrowserParams["action"]>;
 const WIDTHS = [200, WIDTH, 40];
 const DISCLOSURES = [
