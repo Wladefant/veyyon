@@ -309,8 +309,13 @@ const LAUNCH_REACH_CEILING = 1468;
  * instead of parsing the whole catalog.
  *
  * 521 to 522: `ai/src/utils/schema/arktype.ts`, for the reason the launch ceiling above records.
+ *
+ * 522 to 523: `utils/src/local-time.ts`, which reads local time from the C library's `localtime_r`
+ * so a launch builds no ICU time zone cache. `logger.ts` and `log-file.ts`, already here, read through
+ * it, and its one import is `bun:ffi`. The launch count above is unchanged: the session's local day
+ * moved from `coding-agent/src/utils/local-date.ts`, which left, to the same module.
  */
-const ASSEMBLER_REACH_CEILING = 522;
+const ASSEMBLER_REACH_CEILING = 523;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

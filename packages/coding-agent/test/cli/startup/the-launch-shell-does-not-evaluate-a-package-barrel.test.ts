@@ -83,8 +83,12 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * `@veyyon/utils/idle-trim`, whose busy-CPU threshold the loop watchdog `core/tui.ts` arms reads. The
  * first two import nothing, and `idle-trim` imports them, the logger and `@veyyon/natives`, which the
  * shell already evaluates. The ceiling keeps the one leaf of margin.
+ *
+ * RE-MEASURED 2026-10-04 at 359, from 358: `@veyyon/utils/local-time`, the local date and clock
+ * time the logger reads instead of a `Date`, whose first local-time read builds the ICU time zone
+ * cache. It imports only `bun:ffi`. The ceiling keeps the one leaf of margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 360;
+const SHELL_GRAPH_MODULE_CEILING = 361;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });

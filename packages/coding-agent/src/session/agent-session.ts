@@ -154,6 +154,7 @@ import {
 	withTimeout,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
+import { localCalendarDate } from "@veyyon/utils/local-time";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import type { AdvisorConfig } from "../advisor";
@@ -288,7 +289,6 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallback";
-import { formatLocalCalendarDate } from "../utils/local-date";
 import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
@@ -4505,7 +4505,7 @@ export class AgentSession {
 			}
 			feedJoined(entries.sort(), "\u0006");
 		}
-		hash.update(`|${(this.#config.getLocalCalendarDate ?? formatLocalCalendarDate)()}`);
+		hash.update(`|${this.#config.getLocalCalendarDate?.() ?? localCalendarDate(Date.now())}`);
 		return hash.digest("base64");
 	}
 
@@ -5046,7 +5046,7 @@ export class AgentSession {
 	#buildSessionStateMessage(): CustomMessage | null {
 		const content = prompt
 			.render(sessionPrompts["session/session-state"].text, {
-				date: formatLocalCalendarDate(),
+				date: localCalendarDate(Date.now()),
 				cwd: shortenPath(normalizePromptPath(this.sessionManager.getCwd())),
 			})
 			.trim();

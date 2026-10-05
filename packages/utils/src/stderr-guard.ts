@@ -32,12 +32,11 @@
  * Ownership is released at every point the terminal is handed back (external
  * editor, Ctrl+Z suspend, shutdown, crash restore).
  *
- * dup/dup2 and the local-time read that names the log file go through bun:ffi
- * on POSIX. fcntl is avoided: it is variadic, and the arm64-darwin ABI passes
- * variadic arguments on the stack, so a fixed-arity FFI signature would read
- * garbage for the third argument.
+ * Only dup/dup2 go through bun:ffi on POSIX. fcntl is avoided: it is variadic,
+ * and the arm64-darwin ABI passes variadic arguments on the stack, so a
+ * fixed-arity FFI signature would read garbage for the third argument.
  */
-import { CString, dlopen, FFIType, type Pointer } from "bun:ffi";
+import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs";
 import * as path from "node:path";
 // `node:util` is required when a routed console call formats its arguments, not imported here: this
@@ -45,25 +44,21 @@ import * as path from "node:path";
 // frame for calls most sessions never make.
 import type * as nodeUtil from "node:util";
 import { isMainThread } from "node:worker_threads";
-import { getLogPath, getLogsDir } from "./dirs";
-import { dayLogFileName } from "./log-file";
+import { getLogPath } from "./dirs";
 
 const STDOUT_FILENO = 1;
 const STDERR_FILENO = 2;
 
-interface LibcOps {
+interface LibcFdOps {
 	dup(fd: number): number;
 	dup2(oldFd: number, newFd: number): number;
-	getenv(name: Uint8Array): Pointer | bigint | null;
-	tzset(): void;
-	localtime_r(time: BigInt64Array, tm: Int32Array): Pointer | bigint | null;
 }
 
-let libcOpsCache: LibcOps | null | undefined;
+let libcFdOpsCache: LibcFdOps | null | undefined;
 
-function libcOps(): LibcOps | null {
-	if (libcOpsCache !== undefined) return libcOpsCache;
-	libcOpsCache = null;
+function libcFdOps(): LibcFdOps | null {
+	if (libcFdOpsCache !== undefined) return libcFdOpsCache;
+	libcFdOpsCache = null;
 	if (process.platform !== "darwin" && process.platform !== "linux") return null;
 	// Darwin: dyld resolves libSystem from the shared cache. Linux: glibc
 	// first, then the generic soname for musl-style layouts.
@@ -74,17 +69,14 @@ function libcOps(): LibcOps | null {
 			const libc = dlopen(candidate, {
 				dup: { args: [FFIType.i32], returns: FFIType.i32 },
 				dup2: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-				getenv: { args: [FFIType.ptr], returns: FFIType.ptr },
-				tzset: { args: [], returns: FFIType.void },
-				localtime_r: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
 			});
-			libcOpsCache = libc.symbols;
-			return libcOpsCache;
+			libcFdOpsCache = libc.symbols;
+			return libcFdOpsCache;
 		} catch {
 			// Try the next candidate; the guard stays inert if none load.
 		}
 	}
-	return libcOpsCache;
+	return libcFdOpsCache;
 }
 
 /** `STD_ERROR_HANDLE`, `(DWORD)-12`. */
@@ -95,7 +87,7 @@ const FILE_SHARE_READ_WRITE_DELETE = 0x7;
 const OPEN_ALWAYS = 4;
 const FILE_ATTRIBUTE_NORMAL = 0x80;
 
-interface Kernel32Ops {
+interface Kernel32HandleOps {
 	GetStdHandle(which: number): bigint;
 	SetStdHandle(which: number, handle: bigint): number;
 	CreateFileW(
@@ -108,12 +100,11 @@ interface Kernel32Ops {
 		template: bigint,
 	): bigint;
 	CloseHandle(handle: bigint): number;
-	GetLocalTime(time: Uint16Array): void;
 }
 
-let kernel32Cache: Kernel32Ops | null | undefined;
+let kernel32Cache: Kernel32HandleOps | null | undefined;
 
-function kernel32Ops(): Kernel32Ops | null {
+function kernel32HandleOps(): Kernel32HandleOps | null {
 	if (kernel32Cache !== undefined) return kernel32Cache;
 	kernel32Cache = null;
 	if (process.platform !== "win32") return null;
@@ -127,51 +118,12 @@ function kernel32Ops(): Kernel32Ops | null {
 				returns: FFIType.u64,
 			},
 			CloseHandle: { args: [FFIType.u64], returns: FFIType.i32 },
-			GetLocalTime: { args: [FFIType.ptr], returns: FFIType.void },
 		});
-		kernel32Cache = kernel32.symbols as unknown as Kernel32Ops;
+		kernel32Cache = kernel32.symbols as unknown as Kernel32HandleOps;
 	} catch {
 		// The guard stays inert for native writes; the JavaScript routing still applies.
 	}
 	return kernel32Cache;
-}
-
-const TZ_NAME = Buffer.from("TZ\0");
-
-/**
- * Today's log file, named from the C library's local time rather than a `Date`.
- *
- * The first local-time read of a `Date` builds JavaScriptCore's ICU time zone cache. MEASURED on
- * linux-x64: 2.2 ms and 1.9 MiB of private memory, on the path to the first frame and again in
- * each worker thread. `getenv`, `tzset` and `localtime_r` read the same zone in 0.1 ms; Node has
- * no local-time call besides `Date`. The C library reads `TZ` from the launch environment, and Bun
- * applies a later `process.env.TZ` assignment to `Date` alone, so while the two disagree, and on
- * Windows whenever `TZ` is set, the file is named through a `Date`: the logger names its file that
- * way, and both must name the same day.
- */
-function todaysLogPath(): string {
-	const libc = libcOps();
-	if (libc) {
-		const tz = libc.getenv(TZ_NAME);
-		if ((tz === null ? undefined : new CString(tz).toString()) === process.env.TZ) {
-			libc.tzset();
-			// struct tm opens with nine ints (sec, min, hour, mday, mon, year, ...) on glibc, musl and
-			// Darwin, and is 56 bytes on each.
-			const tm = new Int32Array(16);
-			if (libc.localtime_r(new BigInt64Array([BigInt(Math.floor(Date.now() / 1000))]), tm) !== null) {
-				return path.join(getLogsDir(), dayLogFileName(tm[5] + 1900, tm[4] + 1, tm[3]));
-			}
-		}
-		return getLogPath();
-	}
-	const kernel32 = kernel32Ops();
-	if (kernel32 && process.env.TZ === undefined) {
-		// SYSTEMTIME: wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds.
-		const time = new Uint16Array(8);
-		kernel32.GetLocalTime(time);
-		return path.join(getLogsDir(), dayLogFileName(time[0], time[1], time[3]));
-	}
-	return getLogPath();
 }
 
 /**
@@ -217,7 +169,7 @@ export interface SuppressTerminalStderrOptions {
 
 function openRedirectTarget(redirectPath: string | undefined): number | null {
 	try {
-		const target = redirectPath ?? todaysLogPath();
+		const target = redirectPath ?? getLogPath();
 		// getLogsDir() only computes the path; the logger creates it lazily, so on a fresh profile the
 		// logs directory may not exist yet. Create it so diagnostics land in the log.
 		fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -232,7 +184,7 @@ function openRedirectTarget(redirectPath: string | undefined): number | null {
 }
 
 function redirectNativeStderr(redirectPath: string | undefined): boolean {
-	const libc = libcOps();
+	const libc = libcFdOps();
 	if (libc) {
 		const redirectFd = openRedirectTarget(redirectPath);
 		if (redirectFd === null) return false;
@@ -251,9 +203,9 @@ function redirectNativeStderr(redirectPath: string | undefined): boolean {
 		return true;
 	}
 
-	const kernel32 = kernel32Ops();
+	const kernel32 = kernel32HandleOps();
 	if (!kernel32) return false;
-	const target = redirectPath ?? todaysLogPath();
+	const target = redirectPath ?? getLogPath();
 	try {
 		fs.mkdirSync(path.dirname(target), { recursive: true });
 	} catch {
@@ -284,7 +236,7 @@ function restoreNativeStderr(): void {
 	if (active === null) return;
 	nativeRedirect = null;
 	if (active.kind === "fd") {
-		libcOps()?.dup2(active.savedFd, STDERR_FILENO);
+		libcFdOps()?.dup2(active.savedFd, STDERR_FILENO);
 		try {
 			fs.closeSync(active.savedFd);
 		} catch {
@@ -292,7 +244,7 @@ function restoreNativeStderr(): void {
 		}
 		return;
 	}
-	const kernel32 = kernel32Ops();
+	const kernel32 = kernel32HandleOps();
 	if (!kernel32) return;
 	kernel32.SetStdHandle(STD_ERROR_HANDLE, active.savedHandle);
 	kernel32.CloseHandle(active.redirect);

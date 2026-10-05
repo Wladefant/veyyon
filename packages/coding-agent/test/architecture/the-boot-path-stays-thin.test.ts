@@ -14,7 +14,7 @@
  * offers when you type a symbol name, pulls the settings store, the theme, the session and its
  * whole graph onto the boot path, and the only symptom is that startup got slower.
  *
- * WHAT THE NUMBERS ARE. `cli.ts` reaches 38 modules. `main.ts`, one dynamic import away, reaches
+ * WHAT THE NUMBERS ARE. `cli.ts` reaches 39 modules. `main.ts`, one dynamic import away, reaches
  * 1468, and `sdk.ts` reaches 1421. So the lazy boundary is not decorative: it holds back more than a
  * thousand modules the entry never parses, and the assertions below say that in both directions, as
  * a ceiling on the entry and as a named list of what must stay off it.
@@ -76,8 +76,14 @@ import { PACKAGES, reach, reachedNames } from "../helpers/module-reach-gate";
  * imports are `node:fs`, `node:path`, a type-only `node:zlib`, `./app-identity` and `./fs-error`, all
  * already here, so the edge cannot grow. The count sees one module more; the process loads 29 npm
  * modules fewer, since the walk never counted `winston`, which the logger imported on this same path.
+ *
+ * 39 from 2026-10-04: `@veyyon/utils/local-time`, the local date and clock time read from the C
+ * library's `localtime_r` (and `GetLocalTime` on Windows). The logger stamps its lines and names its
+ * day file through it instead of through a `Date`, whose first local-time read builds the engine's
+ * ICU time zone cache: 2.2 ms and 1.9 MiB of anonymous memory on the path to the first frame. Its one
+ * import is `bun:ffi`, a runtime builtin the walk does not count, so the edge cannot grow.
  */
-const BOOT_CEILING = 38;
+const BOOT_CEILING = 39;
 
 /** The same measurement as a floor, so a broken walk fails instead of passing quietly. */
 const BOOT_FLOOR = 25;

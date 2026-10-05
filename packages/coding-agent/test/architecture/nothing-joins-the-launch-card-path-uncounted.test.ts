@@ -89,11 +89,15 @@ const ADMITTED_THIRD_PARTY = ["chalk", "lru-cache"];
 
 /**
  * Workspace modules the five graphs reach, measured 2026-10-04 with the workspace resolved to source:
- * 38 from `cli.ts`, 27 from `cli-commands.ts`, 5 from `@veyyon/utils/cli`, 43 from
- * `commands/launch.ts` and 309 from `cli/launch-card.ts`, 331 once the overlap is counted once. The
+ * 39 from `cli.ts`, 28 from `cli-commands.ts`, 5 from `@veyyon/utils/cli`, 44 from
+ * `commands/launch.ts` and 310 from `cli/launch-card.ts`, 332 once the overlap is counted once. The
  * floor is what stops a resolution table that resolves nothing from passing the ceiling.
+ *
+ * 332 rather than 331 is `@veyyon/utils/local-time`, which the logger on every leg reads local time
+ * through instead of a `Date` whose first local-time read builds the ICU time zone cache. It imports
+ * only `bun:ffi`.
  */
-const CARD_PATH_CEILING = 331;
+const CARD_PATH_CEILING = 332;
 const CARD_PATH_FLOOR = 250;
 
 describe("nothing joins the launch card path uncounted", () => {
