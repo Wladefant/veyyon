@@ -34,3 +34,5 @@ MIT attribution and the record of where the code came from (`LICENSE`, `NOTICE`,
 - **Depend on oh-my-pi as an upstream package.** Rejected: veyyon needs to change core
   surfaces (branding, install, model selection, packaging) that a dependency boundary
   would not allow.
+
+Evidence: [`LICENSE`](../../LICENSE), [`NOTICE`](../../NOTICE), [`UPSTREAM.md`](../../UPSTREAM.md).
