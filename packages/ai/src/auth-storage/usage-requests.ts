@@ -50,18 +50,29 @@ export function buildUsageCredential(credential: AuthCredential): UsageCredentia
 	};
 }
 
+/**
+ * Parts are joined with `|`, so a `|` or `\` inside a field is backslash-escaped. Without that, an
+ * accountId of `x|email:y@z.io` and the pair accountId `x`, email `y@z.io` gave one identity, and their
+ * history and cache rows merged. A field with neither character is written as before, so its key keeps its
+ * value and its stored history stays readable. A field that holds either character, a lone backslash
+ * included, is written differently, so that identity gets a new key and its history series restarts.
+ */
+function escapeIdentityPart(part: string): string {
+	return part.replace(/[\\|]/g, "\\$&");
+}
+
 export function buildUsageCacheIdentity(credential: UsageCredential): string {
-	const parts: string[] = [credential.type];
+	const parts: string[] = [escapeIdentityPart(credential.type)];
 	const accountId = credential.accountId?.trim();
-	if (accountId) parts.push(`account:${accountId}`);
+	if (accountId) parts.push(`account:${escapeIdentityPart(accountId)}`);
 	const email = credential.email?.trim().toLowerCase();
-	if (email) parts.push(`email:${email}`);
+	if (email) parts.push(`email:${escapeIdentityPart(email)}`);
 	const orgId = credential.orgId?.trim();
-	if (orgId) parts.push(`org:${orgId}`);
+	if (orgId) parts.push(`org:${escapeIdentityPart(orgId)}`);
 	const projectId = credential.projectId?.trim();
-	if (projectId) parts.push(`project:${projectId}`);
+	if (projectId) parts.push(`project:${escapeIdentityPart(projectId)}`);
 	const enterpriseUrl = credential.enterpriseUrl?.trim().toLowerCase();
-	if (enterpriseUrl) parts.push(`enterprise:${enterpriseUrl}`);
+	if (enterpriseUrl) parts.push(`enterprise:${escapeIdentityPart(enterpriseUrl)}`);
 	// Only fall back to a secret-derived key when a stable account identifier is
 	// unavailable. Including the token hash when accountId/email/orgId are present
 	// causes cache misses on every OAuth refresh — usage data is per-account (or
@@ -77,6 +88,9 @@ export function buildUsageCacheIdentity(credential: UsageCredential): string {
 	}
 	return parts.join("|");
 }
+
+/** The shape of every account key written since history keys became digests (see usageIdentityDigest). */
+export const USAGE_HISTORY_DIGEST_KEY = /^[0-9a-f]{32}$/;
 
 function normalizeUsageBaseUrl(baseUrl?: string): string {
 	return baseUrl ? trimTrailingSlashes(baseUrl.trim()) : "";
