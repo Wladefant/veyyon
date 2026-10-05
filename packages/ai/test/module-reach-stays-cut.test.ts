@@ -180,8 +180,13 @@ const AUTH_STORAGE_CEILING = 227;
  * 84 since 2026-10-01, measured: `catalog/catalog-spans.ts`, the zero-import leaf that indexes each
  * provider's byte range in `models.json`. `catalog/models.ts`, already in this closure, parses one
  * provider's span through it instead of the whole document, so it adds one module and no subtree.
+ *
+ * 85 since 2026-10-05, measured: `@veyyon/utils/local-time`, which reads the local clock through the C
+ * library's `localtime_r` so naming a log file builds no ICU time zone cache. `@veyyon/utils/logger` and
+ * `@veyyon/utils/log-file`, already in this closure, take the local time from it, and its only import is
+ * `bun:ffi`, so it adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 84;
+const ENV_API_KEY_CEILING = 85;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

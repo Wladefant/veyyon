@@ -261,11 +261,19 @@ describe("the modules that were repointed stay cut", () => {
 	 * span through it. The leaf imports nothing, so no consumer gained an edge to a subsystem it did not
 	 * already reach.
 	 */
+	/**
+	 * Re-measured 2026-10-05: `agent/src/proxy.ts` 148 -> 149, `parser.ts` 125 -> 126, `db.ts`
+	 * 127 -> 128, `sync-worker.ts` 126 -> 127 and `api-key-resolver.ts` 58 -> 59, each by the one module
+	 * `@veyyon/utils/local-time`, which reads the local clock through the C library's `localtime_r` so
+	 * naming a log file builds no ICU time zone cache. `@veyyon/utils/logger` and `@veyyon/utils/log-file`,
+	 * already on every one of these reaches, take the local time from it. Its only import is `bun:ffi`, so
+	 * no consumer gained an edge to a subsystem it did not already reach.
+	 */
 	it.each([
-		["agent/src/proxy.ts", 148],
-		["apps/stats/src/parser.ts", 125],
-		["apps/stats/src/db.ts", 127],
-		["apps/stats/src/sync-worker.ts", 126],
+		["agent/src/proxy.ts", 149],
+		["apps/stats/src/parser.ts", 126],
+		["apps/stats/src/db.ts", 128],
+		["apps/stats/src/sync-worker.ts", 127],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
@@ -276,7 +284,7 @@ describe("the modules that were repointed stay cut", () => {
 		// zero-import leaf that owns the escape constants; `sanitize-text.ts`, already on this reach,
 		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
 		// its own, so nothing outside this closure was gained.
-		["coding-agent/src/config/api-key-resolver.ts", 58],
+		["coding-agent/src/config/api-key-resolver.ts", 59],
 		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The

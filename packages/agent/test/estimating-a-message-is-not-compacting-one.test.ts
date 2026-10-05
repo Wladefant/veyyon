@@ -136,9 +136,13 @@ const PRUNING_CEILING = 195;
  * imports. Both reaches gained `ai/providers/azure-deployment-names.ts`, the zero-import leaf holding the
  * Azure deployment map: the remote summarizer took it from `providers/openai-shared.ts`, which put the
  * bundled catalog, the dialect renderers and the schema normalizers (125 modules) behind one parser.
+ *
+ * RE-MEASURED 2026-10-05: engine 304, remote summarizer 101. Both reach the logger, which reads the local
+ * time from `@veyyon/utils/local-time` now instead of building ICU's time zone cache through `Date`. That
+ * module imports only `bun:ffi`, so the growth is the one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 303;
-const REMOTE_SUMMARIZER_CEILING = 100;
+const COMPACTION_ENGINE_CEILING = 304;
+const REMOTE_SUMMARIZER_CEILING = 101;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {

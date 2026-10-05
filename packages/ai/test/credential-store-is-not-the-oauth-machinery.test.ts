@@ -122,8 +122,13 @@ const ROWS_CEILING = 8;
  * that replaced `winston` and `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on this reach,
  * writes through it, and its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already
  * reached, so this closure gained a name and no edge.
+ *
+ * RE-MEASURED 2026-10-05 at 48. The one new module is `@veyyon/utils/local-time`, which reads the local
+ * clock through the C library's `localtime_r` so naming a log file builds no ICU time zone cache.
+ * `@veyyon/utils/logger` and `@veyyon/utils/log-file`, already on this reach, take the local time from it,
+ * and its only import is `bun:ffi`, so this closure gained a name and no edge.
  */
-const STORE_CEILING = 47;
+const STORE_CEILING = 48;
 
 describe("the row helpers are pure", () => {
 	/**
