@@ -6,7 +6,8 @@
  *
  * - `yaml` (72 modules): `yaml-sync.ts`, which writes a settings file in place, and the secrets loader, whose
  *   keyword module parsed the bundled keyword list while it evaluated, with secret obfuscation off.
- * - `@opentelemetry/api` (44 modules): the agent loop's telemetry, which reaches a tracer on the first turn.
+ * - `@opentelemetry/api` (44 modules): the agent loop's telemetry, which reaches a tracer only in a session given
+ *   a telemetry config.
  * - `diff` (19 modules): the edit tool's diff helpers, the patcher's stale-tag recovery and the transcript's
  *   word diff, none of which runs before something is edited.
  *

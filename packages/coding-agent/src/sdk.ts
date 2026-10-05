@@ -1247,9 +1247,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			createSettingsAwareStreamFn(settings),
 		);
-		const callerTelemetryTextSanitizer = options.telemetry?.textSanitizer;
-		const telemetry: AgentTelemetryConfig = {
-			...(options.telemetry ?? {}),
+		// Telemetry stays opt-in: a session without a telemetry config starts no span, so it has no span
+		// text to obfuscate and its turns never evaluate `@opentelemetry/api`.
+		const callerTelemetry = options.telemetry;
+		const callerTelemetryTextSanitizer = callerTelemetry?.textSanitizer;
+		const telemetry: AgentTelemetryConfig | undefined = callerTelemetry && {
+			...callerTelemetry,
 			textSanitizer: text =>
 				secretRuntime.obfuscateText(callerTelemetryTextSanitizer ? callerTelemetryTextSanitizer(text) : text),
 		};
