@@ -262,4 +262,4 @@ Switch/open also throws on I/O failures (permission errors, rewrite failures, et
 - First match in modified-descending order wins; there is no ambiguity UI if multiple sessions share a prefix.
 - Prefix-listing metadata is intentionally lightweight, so search text may not include messages outside the scanned window (the first 4KB, or the 1 MiB escalated read), and each text field is cut to 4,096 characters.
 
-*Verified against `9a035acb63` on 2026-09-30.*
+*Verified against `42d40c0cd4` on 2026-10-05.*
