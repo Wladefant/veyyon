@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
-import { ensureChromiumExecutable } from "@veyyon/coding-agent/tools/web/browser/launch";
+import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 function makeSession(): ToolSession {
 	return {
@@ -13,25 +13,6 @@ function makeSession(): ToolSession {
 		settings: Settings.isolated({ "browser.headless": true }),
 	};
 }
-
-/**
- * Whether the Chromium puppeteer resolves can actually execute on this host.
- * CI runners without Chrome's system libraries (libnspr4 & co.) hold the
- * downloaded binary but cannot exec it — probe with --version and skip
- * instead of failing.
- */
-async function chromiumCanLaunch(): Promise<boolean> {
-	try {
-		const executable = await ensureChromiumExecutable();
-		if (!executable) return false;
-		const probe = Bun.spawnSync([executable, "--version"], { stdout: "ignore", stderr: "ignore" });
-		return probe.exitCode === 0;
-	} catch {
-		return false;
-	}
-}
-
-const CHROMIUM_AVAILABLE = await chromiumCanLaunch();
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser tab evaluation", () => {
 	// Launches real headless Chromium; CI cold start easily exceeds bun's 5s default.
