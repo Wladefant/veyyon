@@ -33,5 +33,3 @@ workflow's first `1.0.0` cut starts cleanly.
   conflating the two histories.
 - **Leave the changelog as-is.** Rejected: it reads as ~641 veyyon releases that never
   happened.
-
-Evidence: [`scripts/release.ts`](../../scripts/release.ts), [`CHANGELOG.md`](../../CHANGELOG.md).

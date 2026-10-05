@@ -35,5 +35,3 @@ incrementally where profiling justifies it.
   the TUI renderer, provider-dialect layer, MCP client, or mode/tool system. Multi-
   person-year cost, discarding a working and tested feature set, in exchange for
   performance the current split already captures where it matters.
-
-Evidence: [`ARCHITECTURE.md`](../../ARCHITECTURE.md) ("Keep the product in TypeScript + Bun; Rust for hot paths only"), [`package.json`](../../package.json), [`Cargo.toml`](../../Cargo.toml).
