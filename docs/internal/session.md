@@ -872,6 +872,8 @@ Before persisting entries:
 
 On load, blob refs are resolved back: `blob:sha256:` image refs to base64 for message/custom_message image blocks, and `blobtext:sha256:` refs to the original string in place. `restoreToolResultEntries` then runs each registered codec's `restore` over the loaded tool results, so the entries in memory match what the tool returned; a line written before a codec existed keeps its field and loads unchanged.
 
+A persisting `SessionManager` runs the tool's codec `settle`, when the codec defines one, over a tool result it records, before writing it. `settle` replaces in place each field `slim` would drop with the form `restore` builds, so a running session holds a recorded result as a load holds it. The `read` codec settles a `rows` card into a display whose `text` is built from the result's text on first read, and a `prefix` card into a slice of that text. The `eval` codec settles each cell `output` and the `job` codec each `resultText` and `errorText` the content text holds verbatim into a slice of that text. The `search` and `edit` codecs define no `settle`: a paths-only search card is already the content's own string, a load builds a `rows` search card whole, and an edit's `newText` is rebuilt from `oldText` and the diff into a new string. A session that writes no file does not settle, since only its rewrite after a prune builds a settled card's text and drops the numbered rows it was built from. `test/tools/a-recorded-result-holds-its-text-once.test.ts` sweeps `BUILTIN_RESULT_CODECS` and pins the codecs without `settle` by name.
+
 ## Storage Abstractions
 
 `SessionStorage` provides the filesystem-shaped operations used by `SessionManager`:

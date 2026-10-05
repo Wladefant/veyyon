@@ -16,6 +16,7 @@
 - `SessionStorage` has an optional `openPinnedReaderSync` that opens a read handle whose reads keep answering from the file object a path named when it was opened; `FileSessionStorage` implements it outside Windows.
 - `SessionLoadOptions.coolCompactedHistory` makes a streamed load move compacted history to disk as it reads and return the store and the session's usage totals as `cold`, and `SessionEntryIndex.rebuild` takes those totals instead of counting every entry.
 - `readColdEntry` returns an entry whose payloads are held in the session file as its line reads back, and leaves the entry's payloads in the file.
+- A `ToolResultCodec` can define `settle`, which a persisting `SessionManager` calls on a tool result it records, before writing it, to replace in place each `details` field `slim` drops with the form `restore` builds.
 
 ### Changed
 

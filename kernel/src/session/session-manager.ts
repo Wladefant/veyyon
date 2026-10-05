@@ -93,6 +93,7 @@ import {
 	type SessionStorageWriter,
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
+import { settleToolResultMessage } from "./tool-result-codecs";
 
 const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
@@ -2548,6 +2549,10 @@ export class SessionManager {
 	}
 
 	appendMessage(message: Exclude<AgentMessage, BranchSummaryMessage | CompactionSummaryMessage>): string {
+		// Only a persisting session settles. Its rewrite after a prune builds a settled card's text and
+		// drops the numbered rows it was built from; a session that writes nothing never rewrites, so a
+		// settled card would keep those rows after the prune.
+		if (this.#persist && message.role === "toolResult") settleToolResultMessage(message);
 		return this.#appendFresh({ type: "message", message });
 	}
 
