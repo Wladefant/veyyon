@@ -47,6 +47,7 @@
 - `usageWireSchemas` from `@veyyon/ai/usage/report-wire` is a `Lazy` holder read through `.value` instead of a function, and the Gemini CLI credentials validator is built on the first credentials read instead of when the provider module loads.
 - The Gemini usage reader takes the Gemini CLI headers from `@veyyon/catalog/wire/gemini-headers` instead of the Cloud Code Assist client, so a launch no longer evaluates that client and its validation helper (44 KiB of source).
 - The Anthropic session-state key and fast-mode reset, the Claude device id, the Codex session-state readers, the OpenAI cache-key normalizers, the Gemini thought-signature accounting and the Azure deployment map are defined in leaf modules, and `providers/server-compaction-transport` loads `providers/openai-compaction` on the first server-side compaction, so a caller of any of them no longer evaluates the Anthropic, Codex, Google or OpenAI shared modules; `providers/register-builtins` exports `loadOpenAICodexResponses`, the one loader of the Codex client.
+- `discoverAuthStorage` serves credentials from the shared-store connection it checked for seeding instead of opening the shared database a second time, which takes one open, schema check and close (1.1 ms median of 300) off each launch that uses the shared store.
 
 ### Fixed
 
