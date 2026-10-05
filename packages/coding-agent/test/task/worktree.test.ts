@@ -9,6 +9,7 @@ import {
 	ISOLATION_OWNER_FILE,
 	REGISTRATION_OWNER_FILE,
 	RETAINED_BACKEND_FILE,
+	stampLinkedWorktreeRegistration,
 	writeIsolationOwner,
 	writeRetainedBackend,
 } from "@veyyon/coding-agent/task/isolation-ownership";
@@ -532,6 +533,217 @@ describe("worktree isolation helpers", () => {
 
 				expect(await fs.readFile(path.join(live.mergedDir, "sentinel.txt"), "utf8")).toBe("live owner work");
 				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			// WHY: the tests below pin guards of the isolation lifecycle that mutation testing showed no
+			// test defended (Wladefant/veyyon#498, review of Wladefant/veyyon#408). Native mounts are
+			// substituted; actual kernel mounts are not proved.
+			function mockBackend(
+				kind: natives.IsoBackendKind,
+				start: (source: string, mergedDir: string) => Promise<void>,
+			): void {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind,
+					candidates: [kind],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => start(source, mergedDir));
+			}
+			const addWorktree = (source: string, mergedDir: string) =>
+				runGit(source, ["worktree", "add", "--detach", mergedDir]).then(() => {});
+			const makeDir = (_source: string, mergedDir: string) =>
+				fs.mkdir(mergedDir, { recursive: true }).then(() => {});
+			async function deadPid(): Promise<number> {
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				return gone.pid;
+			}
+			async function rewriteOwner(base: string, patch: Record<string, unknown>): Promise<void> {
+				const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
+				await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), JSON.stringify({ ...owner, ...patch }));
+			}
+			const gone = (target: string) =>
+				fs.stat(target).then(
+					() => false,
+					() => true,
+				);
+			async function clearResult(): Promise<{ removed: number; failed: number; results: { error?: string }[] }> {
+				let out = "";
+				vi.spyOn(console, "log").mockImplementation(line => {
+					out = String(line);
+				});
+				await clearWorktrees({ all: true, dryRun: false, json: true });
+				return JSON.parse(out);
+			}
+
+			it("repairs the registration of an owned linked worktree when retaining it (M8)", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, addWorktree);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "retain-owned");
+
+				const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
+
+				expect(retained.dir).not.toBe(handle.mergedDir);
+				const [registration] = await findLinkedWorktreeAdminDirs(path.dirname(retained.dir));
+				expect(registration.backlink).toBe(path.join(retained.dir, ".git"));
+				expect(await runGit(retained.dir, ["status", "--porcelain"])).toBe("");
+				await fs.rm(path.dirname(retained.dir), { recursive: true, force: true });
+			});
+
+			it("names the live owner when it refuses a slot without retained backend metadata (M10)", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const slot = await ensureIsolation(source, "no-sidecar-live");
+				const base = path.dirname(slot.mergedDir);
+				await fs.rm(path.join(base, RETAINED_BACKEND_FILE));
+				const stop = vi.spyOn(natives, "isoStop").mockResolvedValue(undefined);
+
+				const result = await clearResult();
+
+				expect(result.results[0].error).toContain(`refusing removal (active live owner PID ${process.pid})`);
+				expect(stop).not.toHaveBeenCalled();
+				expect((await fs.stat(slot.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("refuses removal when the owner token changes while the mount is being stopped (M15)", async () => {
+				mockBackend(natives.IsoBackendKind.Overlayfs, makeDir);
+				const { repo: source } = await createGitRepo();
+				const slot = await ensureIsolation(source, "owner-swap");
+				const base = path.dirname(slot.mergedDir);
+				await rewriteOwner(base, { pid: await deadPid(), startIdentity: null });
+				vi.spyOn(natives, "isoStop").mockImplementation(async () => {
+					await rewriteOwner(base, { token: "replacement-owner" });
+				});
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 0, failed: 1 });
+				expect(result.results[0].error).toContain("Isolation directory instance changed during cleanup");
+				expect((await fs.stat(slot.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("keeps a reservation whose claim marker is unreadable even though its owner is dead (M18)", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const slot = await ensureIsolation(source, "unreadable-claim");
+				const base = path.dirname(slot.mergedDir);
+				await rewriteOwner(base, { pid: await deadPid(), startIdentity: null });
+				await fs.rm(slot.mergedDir, { recursive: true });
+				await fs.rm(path.join(base, RETAINED_BACKEND_FILE));
+				await fs.writeFile(path.join(base, ISOLATION_CLAIM_FILE), "{ not json");
+				expect((await fs.readdir(base)).sort()).toEqual([ISOLATION_CLAIM_FILE, ISOLATION_OWNER_FILE]);
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 0, failed: 1 });
+				expect(await fs.readFile(path.join(base, ISOLATION_CLAIM_FILE), "utf8")).toBe("{ not json");
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("PA stamping never writes this slot's token into another checkout's registration", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, addWorktree);
+				const { repo: source } = await createGitRepo();
+				const live = await ensureIsolation(source, "pa-live");
+				const liveAdmin = (await findLinkedWorktreeAdminDirs(path.dirname(live.mergedDir)))[0].adminDir;
+				const before = await fs.readFile(path.join(liveAdmin, REGISTRATION_OWNER_FILE), "utf8");
+				const copy = await fs.mkdtemp(path.join(os.tmpdir(), "pa-copy-"));
+				tempDirs.push(copy);
+				await fs.cp(live.mergedDir, copy, { recursive: true });
+
+				await stampLinkedWorktreeRegistration(copy, "copy-token");
+
+				expect(await fs.readFile(path.join(liveAdmin, REGISTRATION_OWNER_FILE), "utf8")).toBe(before);
+				await cleanupIsolation(live);
+			});
+
+			it("PB cleanupIsolation prunes the linked-worktree registration on the normal path", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, addWorktree);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "pb");
+				const admin = (await findLinkedWorktreeAdminDirs(path.dirname(handle.mergedDir)))[0].adminDir;
+
+				await cleanupIsolation(handle);
+
+				expect(await gone(admin)).toBe(true);
+				expect(await runGit(source, ["worktree", "list", "--porcelain"])).not.toContain("prunable");
+			});
+
+			it("PC cleanupIsolation leaves the slot when the owner record is unreadable", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "pc");
+				const base = path.dirname(handle.mergedDir);
+				await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), "{not json");
+
+				await cleanupIsolation(handle);
+
+				expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("PD keeps an owner with unknown start identity and a live pid, and reclaims a dead pid", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const liveSlot = await ensureIsolation(source, "pd-live");
+				const deadSlot = await ensureIsolation(source, "pd-dead");
+				const liveBase = path.dirname(liveSlot.mergedDir);
+				const deadBase = path.dirname(deadSlot.mergedDir);
+				await rewriteOwner(liveBase, { startIdentity: null });
+				await rewriteOwner(deadBase, { pid: await deadPid(), startIdentity: "linux:bogus:1" });
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 1, failed: 1 });
+				expect((await fs.stat(liveBase)).isDirectory()).toBe(true);
+				expect(await gone(deadBase)).toBe(true);
+				await fs.rm(liveBase, { recursive: true, force: true });
+			});
+
+			// OPEN (Wladefant/veyyon#498 item 3): a crash between the mount and the setup sidecar write leaves
+			// an owner record and no sidecar. Clear cannot tell a copy backend from a live overlay mount without
+			// the sidecar, so today it fails closed and the slot needs manual removal. This pins that behaviour.
+			it("PE fails closed on a dead-owner slot whose setup sidecar was never written", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "pe");
+				const base = path.dirname(handle.mergedDir);
+				await fs.rm(path.join(base, RETAINED_BACKEND_FILE));
+				await rewriteOwner(base, { pid: await deadPid(), startIdentity: null });
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 0, failed: 1 });
+				expect(result.results[0].error).toContain("Missing retained backend metadata");
+				expect(process.exitCode).toBe(1);
+				await expect(ensureIsolation(source, "pe")).rejects.toThrow("refusing replacement");
+				expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("PF clear removes a deliberately retained workspace of a live owner but refuses one whose retention sidecar failed", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const ok = await ensureIsolation(source, "pf-ok");
+				const okRetained = await retainIsolationWorkspace(ok.mergedDir, ok.backend);
+				expect(okRetained.sidecarOk).toBe(true);
+				const bad = await ensureIsolation(source, "pf-bad");
+				const realWrite = fs.writeFile;
+				const failing = vi.spyOn(fs, "writeFile").mockImplementation(async (file, ...rest) => {
+					if (String(file).endsWith(RETAINED_BACKEND_FILE)) throw new Error("ENOSPC");
+					return realWrite(file, ...(rest as [never]));
+				});
+				const badRetained = await retainIsolationWorkspace(bad.mergedDir, bad.backend);
+				failing.mockRestore();
+				expect(badRetained.sidecarOk).toBe(false);
+
+				await clearResult();
+
+				expect(await gone(path.dirname(okRetained.dir))).toBe(true);
+				expect((await fs.stat(badRetained.dir)).isDirectory()).toBe(true);
+				await fs.rm(path.dirname(badRetained.dir), { recursive: true, force: true });
 			});
 		});
 
