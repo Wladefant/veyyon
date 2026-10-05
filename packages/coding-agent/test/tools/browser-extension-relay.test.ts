@@ -18,6 +18,8 @@ interface Recorded {
 }
 
 /** Speaks the Playwright Extension wire protocol: JSON RPC in, `chrome.*` events out. */
+const MAIN_FRAME_ID = "main-frame";
+
 class FakeExtension {
 	readonly calls: Recorded[] = [];
 	#nextTab = 100;
@@ -63,6 +65,8 @@ class FakeExtension {
 		}
 		let result: unknown = {};
 		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++ };
+		if (target === "Fetch.getResponseBody") result = { body: "<h1>hi</h1>", base64Encoded: false };
+		if (target === "Target.getTargetInfo") result = { targetInfo: { targetId: MAIN_FRAME_ID } };
 		this.#ws.send(JSON.stringify({ id: message.id, result }));
 	}
 
@@ -362,9 +366,12 @@ describe("policy at the relay", () => {
 			.callsOf("chrome.debugger.sendCommand")
 			.filter(
 				call =>
-					!["Fetch.enable", "Target.setAutoAttach", "Page.addScriptToEvaluateOnNewDocument"].includes(
-						String(call.params[1]),
-					),
+					![
+						"Fetch.enable",
+						"Target.setAutoAttach",
+						"Target.getTargetInfo",
+						"Page.addScriptToEvaluateOnNewDocument",
+					].includes(String(call.params[1])),
 			);
 		expect(exposed).toHaveLength(0);
 	});
@@ -418,6 +425,152 @@ describe("policy at the relay", () => {
 		const sentOrder = ext.calls.map(call => call.method);
 		expect(sentOrder.indexOf("chrome.debugger.attach")).toBeLessThan(
 			ext.calls.findIndex(call => call.params[1] === "Fetch.enable"),
+		);
+	});
+
+	test("the gate pauses every request; a document response is asked for per request, not by a standing pattern", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const gate = ext.callsOf("chrome.debugger.sendCommand").find(call => call.params[1] === "Fetch.enable");
+		expect(gate?.params[2]).toEqual({ patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+	});
+
+	test("only a public top-level document asks for its response; sub-frames and local pages do not", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com", "localhost"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const paused = (requestId: string, url: string, frameId: string) =>
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Fetch.requestPaused",
+				{ requestId, request: { url }, resourceType: "Document", frameId },
+			]);
+		paused("m1", "https://staging.example.com/app", MAIN_FRAME_ID);
+		paused("m2", "https://staging.example.com/frame", "child-frame");
+		paused("m3", "http://localhost:3000/", MAIN_FRAME_ID);
+		await until(
+			() =>
+				ext.callsOf("chrome.debugger.sendCommand").filter(call => call.params[1] === "Fetch.continueRequest")
+					.length === 3,
+			"three continues",
+		);
+		const byId = new Map(
+			ext
+				.callsOf("chrome.debugger.sendCommand")
+				.filter(call => call.params[1] === "Fetch.continueRequest")
+				.map(call => [
+					String(Reflect.get(call.params[2] as object, "requestId")),
+					Reflect.get(call.params[2] as object, "interceptResponse"),
+				]),
+		);
+		expect(byId.get("m1")).toBe(true);
+		expect(byId.get("m2")).toBeUndefined();
+		expect(byId.get("m3")).toBeUndefined();
+	});
+
+	test("public hosts that merely start like a private range are still sandboxed", async () => {
+		const hosts = ["10.example.com", "192.168.evil.test", "172.16.attacker.io", "169.254.example.org"];
+		const privates = ["10.1.2.3", "192.168.1.5", "172.20.0.1", "169.254.1.1"];
+		const { ext, cdp } = await connected([...hosts, ...privates]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		for (const [index, host] of hosts.entries()) {
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Fetch.requestPaused",
+				{ requestId: `p${index}`, request: { url: `https://${host}/` }, resourceType: "Document", frameId: MAIN_FRAME_ID },
+			]);
+		}
+		await until(
+			() =>
+				ext.callsOf("chrome.debugger.sendCommand").filter(call => call.params[1] === "Fetch.continueRequest")
+					.length === hosts.length,
+			"public continues",
+		);
+		for (const call of ext.callsOf("chrome.debugger.sendCommand").filter(c => c.params[1] === "Fetch.continueRequest")) {
+			expect(Reflect.get(call.params[2] as object, "interceptResponse")).toBe(true);
+		}
+		const before = ext.callsOf("chrome.debugger.sendCommand").length;
+		for (const [index, host] of privates.entries()) {
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Fetch.requestPaused",
+				{ requestId: `q${index}`, request: { url: `http://${host}/` }, resourceType: "Document", frameId: MAIN_FRAME_ID },
+			]);
+		}
+		await until(
+			() => ext.callsOf("chrome.debugger.sendCommand").length >= before + privates.length,
+			"private continues",
+		);
+		const rest = ext.callsOf("chrome.debugger.sendCommand").slice(before);
+		for (const call of rest.filter(c => c.params[1] === "Fetch.continueRequest")) {
+			expect(Reflect.get(call.params[2] as object, "interceptResponse")).toBeUndefined();
+		}
+	});
+
+	test("a document response is resent with a sandbox that has no allow-popups and no stale encoding headers", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.emit("chrome.debugger.onEvent", [
+			{ tabId: 100 },
+			"Fetch.requestPaused",
+			{
+				requestId: "d1",
+				request: { url: "https://staging.example.com/app" },
+				resourceType: "Document",
+				responseStatusCode: 200,
+				responseStatusText: "OK",
+				responseHeaders: [
+					{ name: "Content-Type", value: "text/html" },
+					{ name: "Content-Encoding", value: "gzip" },
+					{ name: "Content-Length", value: "99" },
+				],
+			},
+		]);
+		await until(
+			() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Fetch.fulfillRequest"),
+			"the sandboxed fulfilment",
+		);
+		const sent = ext.callsOf("chrome.debugger.sendCommand");
+		expect(sent.some(call => call.params[1] === "Fetch.getResponseBody")).toBe(true);
+		const fulfilled = sent.find(call => call.params[1] === "Fetch.fulfillRequest")?.params[2] as {
+			requestId: string;
+			responseCode: number;
+			responseHeaders: { name: string; value: string }[];
+			body: string;
+		};
+		expect(fulfilled.requestId).toBe("d1");
+		expect(fulfilled.responseCode).toBe(200);
+		expect(Buffer.from(fulfilled.body, "base64").toString("utf8")).toBe("<h1>hi</h1>");
+		const names = fulfilled.responseHeaders.map(header => header.name.toLowerCase());
+		expect(names).toContain("content-type");
+		expect(names).not.toContain("content-encoding");
+		expect(names).not.toContain("content-length");
+		const csp = fulfilled.responseHeaders.find(header => header.name === "Content-Security-Policy")?.value ?? "";
+		expect(csp.startsWith("sandbox ")).toBe(true);
+		expect(csp).not.toContain("allow-popups");
+		expect(csp).toContain("allow-same-origin");
+		expect(csp).toContain("allow-scripts");
+	});
+
+	test("a redirect response is continued without a body fetch", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.emit("chrome.debugger.onEvent", [
+			{ tabId: 100 },
+			"Fetch.requestPaused",
+			{
+				requestId: "d2",
+				request: { url: "https://staging.example.com/old" },
+				resourceType: "Document",
+				responseStatusCode: 302,
+				responseHeaders: [{ name: "Location", value: "https://staging.example.com/new" }],
+			},
+		]);
+		await until(
+			() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Fetch.continueRequest"),
+			"the continue",
+		);
+		expect(ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Fetch.getResponseBody")).toBe(
+			false,
 		);
 	});
 
@@ -538,23 +691,25 @@ describe("policy at the relay", () => {
 		expect(failed?.params[0]).toEqual({ tabId: 100, sessionId: "child-1" });
 	});
 
-	test("an iframe that cannot be gated is detached and never announced", async () => {
-		const { ext, cdp } = await connected(["https://staging.example.com"]);
-		await cdp.send("Target.createTarget", { url: "about:blank" });
-		ext.failNext("Fetch.enable");
-		ext.emit("chrome.debugger.onEvent", [
-			{ tabId: 100 },
-			"Target.attachedToTarget",
-			{ sessionId: "child-2", waitingForDebugger: true, targetInfo: { type: "iframe" } },
-		]);
-		await until(
-			() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Target.detachFromTarget"),
-			"the detach",
-		);
-		expect(cdp.events.some(event => event.params?.sessionId === "child-2")).toBe(false);
-		expect(
-			ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Runtime.runIfWaitingForDebugger"),
-		).toBe(false);
+	test("a child that cannot be gated fails closed: closed, never resumed, never detached, never announced", async () => {
+		for (const type of ["iframe", "page", "service_worker"]) {
+			const { ext, cdp } = await connected(["https://staging.example.com"]);
+			await cdp.send("Target.createTarget", { url: "about:blank" });
+			ext.failNext("Fetch.enable");
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Target.attachedToTarget",
+				{ sessionId: "child-2", waitingForDebugger: true, targetInfo: { type, targetId: "T-2" } },
+			]);
+			await until(
+				() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Target.closeTarget"),
+				`the close for ${type}`,
+			);
+			const methods = ext.callsOf("chrome.debugger.sendCommand").map(call => call.params[1]);
+			expect(methods).not.toContain("Runtime.runIfWaitingForDebugger");
+			expect(methods).not.toContain("Target.detachFromTarget");
+			expect(cdp.events.some(event => event.params?.sessionId === "child-2")).toBe(false);
+		}
 	});
 });
 
