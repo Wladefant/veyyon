@@ -25,6 +25,7 @@ import {
 	extensionStateDir,
 	generateSecret,
 	instanceFileName,
+	isLoopbackHost,
 	isProductionUrl,
 	type PolicyDecision,
 	redactSecrets,
@@ -38,6 +39,16 @@ const METHOD_NOT_FOUND_CODE = -32601;
 
 /** Auto-attach owned by the relay: children start paused so they are gated before they run. */
 const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+
+/**
+ * Added to every document response of a controlled tab. A sandboxed document without `allow-popups` cannot
+ * open a window or tab by any path (`window.open`, also with `noopener`; `target=_blank`; `formtarget`;
+ * modified clicks), so no new tab starts loading before the relay can attach to it. Every other
+ * capability stays on, and `allow-same-origin` keeps cookies and storage working. The request gate still
+ * judges each navigation, so `allow-top-navigation` widens nothing.
+ */
+const POPUP_SANDBOX_POLICY =
+	"sandbox allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-presentation allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation";
 
 /**
  * Runs in every document of a controlled tab so nothing opens a new tab: `window.open` returns null, forms
@@ -107,6 +118,8 @@ export interface ExtensionRelayOptions {
 interface OwnedTab {
 	tabId: number;
 	targetId: string;
+	/** Chrome's id of the tab's main frame (its page target id). */
+	mainFrameId: string;
 	url: string;
 	title: string;
 }
@@ -147,8 +160,19 @@ const extensionMessageSchema = type({
 });
 
 const debugSourceSchema = type({ tabId: "number", "sessionId?": "string" });
+const targetInfoSchema = type({ targetInfo: { targetId: "string" } });
+const responseBodySchema = type({ body: "string", "base64Encoded?": "boolean" });
 const tabSchema = type({ id: "number", "openerTabId?": "number", "pendingUrl?": "string", "url?": "string" });
-const requestPausedSchema = type({ requestId: "string", request: { url: "string" }, resourceType: "string" });
+const requestPausedSchema = type({
+	requestId: "string",
+	"frameId?": "string",
+	request: { url: "string" },
+	resourceType: "string",
+	"responseStatusCode?": "number",
+	"responseStatusText?": "string",
+	"responseErrorReason?": "string",
+	"responseHeaders?": [{ name: "string", value: "string" }, "[]"],
+});
 const frameNavigatedSchema = type({ frame: { "parentId?": "string", url: "string" } });
 const attachedSchema = type({
 	sessionId: "string",
@@ -163,6 +187,18 @@ function errorText(error: unknown): string {
 		return error.message;
 	}
 	return JSON.stringify(error);
+}
+
+/** Loopback, private-range and `.local` hosts: the addresses Chrome's local network access check protects. */
+function isLocalNetworkUrl(url: string): boolean {
+	let host: string;
+	try {
+		host = new URL(url).hostname;
+	} catch {
+		return true;
+	}
+	if (isLoopbackHost(host) || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+	return /^(?:10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host) || /^\[(?:f[cd]|fe80)/i.test(host);
 }
 
 export class ExtensionRelay {
@@ -564,7 +600,9 @@ export class ExtensionRelay {
 	/**
 	 * Pause every request of a debuggee so the policy runs before the request leaves, cookies included,
 	 * and keep its pages from opening popups. A popup is a new tab that Chrome loads before the debugger
-	 * can attach, so the only gate is to stop `window.open` and `target=_blank` at the source.
+	 * can attach, and the extension offers no browser-level target to pause it on, so the pause cannot
+	 * happen at the new tab. Two layers stop it at the source instead: the guard script, and a sandbox
+	 * header (no `allow-popups`) on every document response, which Chrome enforces for paths no script sees.
 	 */
 	async #enableFetchGate(debuggee: { tabId: number; sessionId?: string }): Promise<void> {
 		await this.#call("chrome.debugger.sendCommand", [
@@ -582,10 +620,50 @@ export class ExtensionRelay {
 	/**
 	 * Decide a paused request. Documents (top level, frames, every redirect hop) must pass the full
 	 * policy. Other resources fail only when they target a production host. Fails closed on error.
+	 * A document response of the main frame (second pause, asked for by the first) is let through with the popup sandbox added.
 	 */
 	#onRequestPaused(source: { tabId: number; sessionId?: string }, params: unknown): void {
 		const paused = requestPausedSchema(params);
 		if (paused instanceof type.errors) return;
+		const debuggee = source.sessionId === undefined ? { tabId: source.tabId } : source;
+		const answer = (cdpMethod: string, body: Record<string, unknown>): Promise<unknown> =>
+			this.#call("chrome.debugger.sendCommand", [debuggee, cdpMethod, { requestId: paused.requestId, ...body }]);
+		const failClosed = (error: unknown): void => {
+			this.#log("could not answer a paused request", { error: errorText(error) });
+			answer("Fetch.failRequest", { errorReason: "BlockedByClient" }).catch(() => {});
+		};
+		if (paused.responseStatusCode !== undefined || paused.responseErrorReason !== undefined) {
+			const status = paused.responseStatusCode;
+			// The request stage already judged this URL. An error or a redirect has no document to sandbox.
+			if (paused.responseErrorReason !== undefined || status === undefined || (status >= 300 && status < 400)) {
+				answer("Fetch.continueRequest", {}).catch(failClosed);
+				return;
+			}
+			// The header is set by answering from the body Chrome already fetched. Chrome does not re-read
+			// Content-Security-Policy from a continueResponse override (measured: popups still opened). The body
+			// arrives decoded, so the encoding and length headers no longer describe it.
+			const sandboxed = [
+				...(paused.responseHeaders ?? []).filter(
+					header =>
+						!["content-encoding", "content-length", "transfer-encoding"].includes(header.name.toLowerCase()),
+				),
+				{ name: "Content-Security-Policy", value: POPUP_SANDBOX_POLICY },
+			];
+			answer("Fetch.getResponseBody", {})
+				.then(body => {
+					const parsed = responseBodySchema(body);
+					if (parsed instanceof type.errors) throw new Error("no response body");
+					const { body: content, base64Encoded } = parsed;
+					return answer("Fetch.fulfillRequest", {
+						responseCode: status,
+						...(paused.responseStatusText ? { responsePhrase: paused.responseStatusText } : {}),
+						responseHeaders: sandboxed,
+						body: base64Encoded ? content : Buffer.from(content, "utf8").toString("base64"),
+					});
+				})
+				.catch(failClosed);
+			return;
+		}
 		const url = paused.request.url;
 		let allowed: boolean;
 		if (paused.resourceType === "Document") {
@@ -597,19 +675,22 @@ export class ExtensionRelay {
 		} else {
 			allowed = !isProductionUrl(url);
 		}
-		const debuggee = source.sessionId === undefined ? { tabId: source.tabId } : source;
-		const reply = allowed
-			? this.#call("chrome.debugger.sendCommand", [
-					debuggee,
-					"Fetch.continueRequest",
-					{ requestId: paused.requestId },
-				])
-			: this.#call("chrome.debugger.sendCommand", [
-					debuggee,
-					"Fetch.failRequest",
-					{ requestId: paused.requestId, errorReason: "BlockedByClient" },
-				]);
-		reply.catch(error => this.#log("could not answer a paused request", { error: errorText(error) }));
+		if (!allowed) {
+			answer("Fetch.failRequest", { errorReason: "BlockedByClient" }).catch(failClosed);
+			return;
+		}
+		// Only a top-level document on a public host is sandboxed. A sub-frame inherits the flags from it, and
+		// intercepting a cross-site sub-frame response makes Chrome fail that navigation. A page answered
+		// through Fetch.fulfillRequest loses its address space, and Chrome's local network access check then
+		// blocks it from reaching other local origins, which would break a local dev stack (frontend on one
+		// port, API on another). A local-network page therefore keeps the guard script as its only popup layer.
+		const isSandboxedDocument =
+			paused.resourceType === "Document" &&
+			source.sessionId === undefined &&
+			paused.frameId !== undefined &&
+			paused.frameId === this.#tabs.get(source.tabId)?.mainFrameId &&
+			!isLocalNetworkUrl(url);
+		answer("Fetch.continueRequest", isSandboxedDocument ? { interceptResponse: true } : {}).catch(failClosed);
 	}
 
 	/** A page can navigate itself (redirect, link, script). Catch the landing and send the tab to about:blank. */
@@ -644,15 +725,22 @@ export class ExtensionRelay {
 
 	async #registerTab(tabId: number): Promise<OwnedTab> {
 		await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
+		let mainFrameId: string;
 		try {
 			await this.#enableFetchGate({ tabId });
 			await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.setAutoAttach", AUTO_ATTACH]);
+			// Chrome names a page's main frame after its target. Needed to tell its document from a sub-frame's.
+			const info = targetInfoSchema(
+				await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.getTargetInfo", {}]),
+			);
+			if (info instanceof type.errors) throw new Error("Chrome did not name the main frame of the tab.");
+			mainFrameId = info.targetInfo.targetId;
 		} catch (error) {
 			// Fail closed: a tab we cannot gate is never exposed.
 			this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
 			throw error;
 		}
-		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, url: "about:blank", title: "" };
+		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, mainFrameId, url: "about:blank", title: "" };
 		this.#tabs.set(tabId, tab);
 		for (const client of this.#clients.values()) {
 			if (client.discover)

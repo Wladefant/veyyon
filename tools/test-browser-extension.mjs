@@ -52,8 +52,13 @@ const web = Bun.serve({
 		);
 	},
 });
-const pageUrl = `http://127.0.0.1:${web.port}/`;
-receipt.servedHost = `127.0.0.1:${web.port}`;
+// The test server is on loopback, but a public page is what the sandbox covers, so Chrome maps two public-looking
+// names to it. LocalNetworkAccessChecks is off only because these names resolve to loopback here; a real public
+// site never does.
+const pageHost = "qa.test";
+const farHost = "far.test";
+const pageUrl = `http://${pageHost}:${web.port}/`;
+receipt.steps.servedHost = `${pageHost}:${web.port}`;
 
 let owner;
 let relay;
@@ -64,7 +69,11 @@ try {
 		userDataDir: profile,
 		pipe: true,
 		enableExtensions: [unpacked],
-		args: ["--no-first-run"],
+		args: [
+			"--no-first-run",
+			`--host-resolver-rules=MAP ${pageHost} 127.0.0.1, MAP ${farHost} 127.0.0.1`,
+			"--disable-features=LocalNetworkAccessChecks",
+		],
 	});
 	// A "user tab" that Veyyon must not touch.
 	const userTab = await owner.newPage();
@@ -80,7 +89,7 @@ try {
 
 	const audits = [];
 	relay = ExtensionRelay.start({
-		policy: { allow: ["127.0.0.1", "localhost"] },
+		policy: { allow: [pageHost, farHost, "127.0.0.1", "localhost"] },
 		instance: "live",
 		scrub: [token],
 		onAudit: entry => audits.push(entry),
@@ -159,7 +168,7 @@ try {
 	// Each case to a refused host (127.0.0.2 reaches the same server, so any request that leaves Chrome shows
 	// up in `hits` under its Host header). Refused means zero hits. Cases run one after the other.
 	const refusedBase = `http://127.0.0.2:${web.port}/`;
-	const crossSite = `http://localhost:${web.port}/`;
+	const crossSite = `http://${farHost}:${web.port}/`;
 	const refusedKey = `127.0.0.2:${web.port}`;
 	const refusedHits = () => hits.get(refusedKey) ?? 0;
 	const cases = {};
@@ -169,7 +178,7 @@ try {
 		document.body.append(frame);
 	}, crossSite);
 	await sleep(2000);
-	receipt.steps.oopifAllowedHits = hits.get(`localhost:${web.port}`) ?? 0;
+	receipt.steps.oopifAllowedHits = hits.get(`${farHost}:${web.port}`) ?? 0;
 	await page.evaluate(src => {
 		const frame = document.createElement("iframe");
 		frame.src = src;
@@ -261,22 +270,24 @@ try {
 	receipt.steps.refusedPopupTabsLeft = (await owner.pages()).filter(p => p.url().includes("127.0.0.2")).length;
 
 	// Negative control: a real click (user gesture, so Chrome's popup blocker allows it) opens a popup to the
-	// refused host. With the guard it must send nothing; with the guard removed it must leak.
+	// refused host. Guard on: it must send nothing. Guard removed: the response sandbox alone must still send
+	// nothing, also for a `noopener` popup that no auto-attach reaches. Before the sandbox existed, the
+	// guard-removed case leaked 2 requests (measured 2026-10-05, base 676e14674635b342156397d65f5a6e4725665658).
 	const popupDetails = [];
-	const popupByClick = async () => {
+	const popupByClick = async (features = "") => {
 		await resetPage();
-		await mainWorld(src => {
+		await mainWorld(({ src, features }) => {
 			const button = document.createElement("button");
 			button.id = "popbtn";
 			button.textContent = "pop";
 			button.style.cssText = "position:fixed;left:50px;top:300px;width:200px;height:60px";
 			button.onclick = () => {
 				document.documentElement.dataset.clicked = "yes";
-				const opened = window.open(src, "_blank");
+				const opened = window.open(src, "_blank", features);
 				document.documentElement.dataset.opened = String(opened);
 			};
 			document.body.append(button);
-		}, refusedBase);
+		}, { src: refusedBase, features });
 		const before = refusedHits();
 		let created = 0;
 		const onCreated = () => created++;
@@ -300,16 +311,15 @@ try {
 		);
 		if (done) removed.push(id);
 	}
-	// A popup that opens can still be closed by the relay before its first request lands, so give the
-	// unguarded case up to three tries. The guarded case above needs only one: it must always be 0.
-	let guardOff = 0;
-	for (let attempt = 0; attempt < 3 && guardOff === 0; attempt++) guardOff = await popupByClick();
+	const guardOff = await popupByClick();
+	const guardOffNoopener = await popupByClick("noopener");
 	await mainWorld(() => {
 		document.documentElement.dataset.guard = String(window.__veyyonPopupGuard);
 	});
 	receipt.steps.negativeControl = {
 		guardOn,
 		guardOff,
+		guardOffNoopener,
 		removedScriptIds: removed,
 		popupDetails,
 		guardPresentAfterRemoval: await page.evaluate(() => document.documentElement.dataset.guard),
@@ -353,7 +363,8 @@ try {
 		receipt.steps.oopifAllowedHits > 0 &&
 		receipt.steps.refusedHostRequestsReceived === 0 &&
 		receipt.steps.negativeControl.guardOn === 0 &&
-		receipt.steps.negativeControl.guardOff > 0;
+		receipt.steps.negativeControl.guardOff === 0 &&
+		receipt.steps.negativeControl.guardOffNoopener === 0;
 } catch (error) {
 	receipt.error = String(error?.message ?? error);
 	receipt.ok = false;
