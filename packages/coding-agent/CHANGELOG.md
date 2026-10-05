@@ -12,6 +12,7 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- `veyyon worktree clear` and same-id task isolation refusals for a slot left by a crash during setup now point to the manual recovery steps in `docs/tools/task.md` ([Refs](https://github.com/Wladefant/veyyon/issues/498)).
 - Eval `defs()` lists only names and types/shapes in Python and JavaScript. It no longer prints values or function source, and JS shape inspection skips proxy traps. Tool status previews redact credential-shaped text before truncation. Environment get/set status hides values, and Python file-read status reports metadata only ([Refs](https://github.com/Wladefant/veyyon/issues/473)).
 - On Windows the daemon broker and `launch` daemons no longer open a visible console window for each git, gh, Python or Node child they run: they start with a hidden console that children inherit, not `DETACHED_PROCESS` ([super-board#446](https://github.com/Wladefant/super-board/issues/446)).
 - Eval display migration preserves complete objects that resemble legacy previews, including every field in oversized recovery artifacts ([PR 451](https://github.com/Wladefant/veyyon/pull/451)).

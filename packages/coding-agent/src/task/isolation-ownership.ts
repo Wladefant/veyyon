@@ -34,6 +34,9 @@ export const ISOLATION_OWNER_FILE = ".veyyon-owner.json";
  */
 export const REGISTRATION_OWNER_FILE = "veyyon-owner";
 
+/** Where to find the manual recovery steps for a slot that fail-closed refusal left in place. */
+export const SLOT_RECOVERY_HINT = 'see docs/tools/task.md, "Slot left after a crash during setup"';
+
 export interface IsolationOwnerRecord {
 	pid: number;
 	startIdentity: string | null;

@@ -31,6 +31,7 @@ import {
 	RETAINED_BACKEND_FILE,
 	readIsolationOwner,
 	readRetainedMountBackend,
+	SLOT_RECOVERY_HINT,
 	tryWithIsolationLifecycleLock,
 } from "../task/isolation-ownership";
 import { isTaskIsolationDir, removeLinkedWorktreeRegistrations, TASK_ISOLATION_MOUNT_PREFIX } from "../task/worktree";
@@ -207,7 +208,9 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 								`Missing retained backend metadata in ${target.path}; refusing removal (active live owner PID ${owner.pid})`,
 							);
 						}
-						throw new Error(`Missing retained backend metadata in ${target.path}; refusing removal`);
+						throw new Error(
+							`Missing retained backend metadata in ${target.path}; refusing removal (${SLOT_RECOVERY_HINT})`,
+						);
 					}
 					if (
 						owner &&
