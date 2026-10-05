@@ -8,6 +8,7 @@ import {
 	checkNavigation,
 	EXTENSION_ALLOW_ENV,
 	isLoopbackHost,
+	isProductionUrl,
 	loadExtensionPolicy,
 	policyFilePath,
 	readExtensionToken,
@@ -88,11 +89,55 @@ describe("navigation policy", () => {
 		}
 	});
 
-	test("data-exporting commands are blocked", () => {
-		for (const method of ["Page.printToPDF", "Network.getAllCookies", "Network.getCookies", "Storage.getCookies"]) {
+	test("only allowlisted CDP domains pass; Target, Browser, storage and cookie commands are refused", () => {
+		for (const method of [
+			"Page.printToPDF",
+			"Network.getAllCookies",
+			"Network.getCookies",
+			"Storage.getCookies",
+			"Target.createTarget",
+			"Target.attachToTarget",
+			"Browser.setDownloadBehavior",
+			"Browser.getVersion",
+			"DOMStorage.getDOMStorageItems",
+			"IndexedDB.requestData",
+			"Storage.clearDataForOrigin",
+			"Fetch.disable",
+			"Fetch.enable",
+			"Page",
+			"NoDotMethod",
+		]) {
 			expect(checkCdpMethod(method)).toMatchObject({ allowed: false });
 		}
-		expect(checkCdpMethod("Runtime.evaluate")).toEqual({ allowed: true });
+		for (const method of [
+			"Runtime.evaluate",
+			"Page.captureScreenshot",
+			"Input.dispatchMouseEvent",
+			"Target.setAutoAttach",
+		]) {
+			expect(checkCdpMethod(method)).toEqual({ allowed: true });
+		}
+	});
+
+	test("a trailing dot, upper case, a port or IDNA cannot dodge the production list or change an allow match", () => {
+		const allowAll = { allow: ["*.polysimulator.com", "polysimulator.com", "https://staging.example.com"] };
+		for (const url of [
+			"https://polysimulator.com./",
+			"https://POLYSIMULATOR.COM../",
+			"https://www.polysimulator.com.:8443/x",
+			"https://zaraprptkegxqpvnsubu.supabase.co./rest",
+			"https://x.akamai-iad-prod.example.",
+		]) {
+			const decision = checkNavigation(allowAll, url);
+			expect(decision.allowed).toBe(false);
+			expect(decision.allowed ? "" : decision.reason).toContain("production host");
+		}
+		expect(checkNavigation(allowAll, "https://staging.example.com./")).toEqual({ allowed: true });
+		expect(checkNavigation({ allow: ["https://staging.example.com"] }, "https://STAGING.example.com:443/")).toEqual({
+			allowed: true,
+		});
+		expect(isProductionUrl("https://app.polysimulator.com./")).toBe(true);
+		expect(isProductionUrl("https://example.com/")).toBe(false);
 	});
 });
 

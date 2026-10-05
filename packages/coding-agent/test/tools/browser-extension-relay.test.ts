@@ -345,9 +345,11 @@ describe("policy at the relay", () => {
 		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
 		for (const method of ["Page.printToPDF", "Network.getAllCookies", "Storage.getCookies"]) {
 			const reply = await cdp.send(method, {}, sessionId);
-			expect(reply.error?.message).toContain("blocked");
+			expect(reply.error?.message).toMatch(/blocked|allowlist/);
 		}
-		expect(ext.callsOf("chrome.debugger.sendCommand")).toHaveLength(0);
+		expect(ext.callsOf("chrome.debugger.sendCommand").filter(call => call.params[1] !== "Fetch.enable")).toHaveLength(
+			0,
+		);
 	});
 
 	test("a page that lands on a refused origin is sent back to about:blank", async () => {
@@ -358,13 +360,85 @@ describe("policy at the relay", () => {
 			"Page.frameNavigated",
 			{ frame: { id: "f", url: "https://redirect.example/landing" } },
 		]);
-		await until(() => ext.callsOf("chrome.debugger.sendCommand").length > 0, "the corrective navigation");
-		expect(ext.callsOf("chrome.debugger.sendCommand")[0]?.params).toEqual([
-			{ tabId: 100 },
-			"Page.navigate",
-			{ url: "about:blank" },
-		]);
+		await until(
+			() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Page.navigate"),
+			"the corrective navigation",
+		);
+		expect(
+			ext.callsOf("chrome.debugger.sendCommand").find(call => call.params[1] === "Page.navigate")?.params,
+		).toEqual([{ tabId: 100 }, "Page.navigate", { url: "about:blank" }]);
 		expect(audits.at(-1)).toMatchObject({ origin: "https://redirect.example", allowed: false });
+	});
+
+	test("every owned tab is gated with Fetch.enable before the client can see it", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const gate = ext.callsOf("chrome.debugger.sendCommand").find(call => call.params[1] === "Fetch.enable");
+		expect(gate?.params[0]).toEqual({ tabId: 100 });
+		const sentOrder = ext.calls.map(call => call.method);
+		expect(sentOrder.indexOf("chrome.debugger.attach")).toBeLessThan(
+			ext.calls.findIndex(call => call.params[1] === "Fetch.enable"),
+		);
+	});
+
+	test("a refused document request, including a redirect hop, is failed before it is sent", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const paused = (requestId: string, url: string, resourceType: string) =>
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Fetch.requestPaused",
+				{ requestId, request: { url }, resourceType },
+			]);
+		paused("r1", "https://staging.example.com/app", "Document");
+		paused("r2", "https://evil.example/landing", "Document");
+		paused("r3", "https://app.polysimulator.com./", "Document");
+		paused("r4", "https://zaraprptkegxqpvnsubu.supabase.co/rest/v1/x", "Fetch");
+		paused("r5", "https://cdn.example.net/logo.png", "Image");
+		await until(
+			() =>
+				ext
+					.callsOf("chrome.debugger.sendCommand")
+					.filter(call => String(call.params[1]).startsWith("Fetch.") && call.params[1] !== "Fetch.enable")
+					.length === 5,
+			"five answers",
+		);
+		const answers = new Map(
+			ext
+				.callsOf("chrome.debugger.sendCommand")
+				.filter(call => call.params[1] !== "Fetch.enable")
+				.map(call => [String((call.params[2] as { requestId: string }).requestId), String(call.params[1])]),
+		);
+		expect(Object.fromEntries(answers)).toEqual({
+			r1: "Fetch.continueRequest",
+			r2: "Fetch.failRequest",
+			r3: "Fetch.failRequest",
+			r4: "Fetch.failRequest",
+			r5: "Fetch.continueRequest",
+		});
+		expect(cdp.events.some(event => event.method === "Fetch.requestPaused")).toBe(false);
+	});
+
+	test("a client cannot switch the gate off", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const before = ext.callsOf("chrome.debugger.sendCommand").length;
+		for (const method of ["Fetch.disable", "Fetch.enable", "Target.createTarget", "Browser.setDownloadBehavior"]) {
+			const reply = await cdp.send(method, {}, sessionId);
+			expect(reply.error?.message).toContain("allowlist");
+		}
+		expect(ext.callsOf("chrome.debugger.sendCommand")).toHaveLength(before);
+	});
+
+	test("a popup whose first URL is refused is closed; a user tab with no owned opener is left alone", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.emit("chrome.tabs.onCreated", [{ id: 600, openerTabId: 100, pendingUrl: "https://evil.example/" }]);
+		ext.emit("chrome.tabs.onCreated", [{ id: 601, pendingUrl: "chrome://newtab/" }]);
+		await until(() => ext.callsOf("chrome.tabs.remove").length > 0, "the popup removal");
+		expect(ext.callsOf("chrome.tabs.remove").map(call => call.params)).toEqual([[600]]);
+		expect(ext.callsOf("chrome.debugger.attach").map(call => call.params[0])).toEqual([{ tabId: 100 }]);
 	});
 });
 

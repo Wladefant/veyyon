@@ -34,12 +34,44 @@ const PRODUCTION_HOSTS: readonly string[] = [
 	"api.polysimulator.com",
 ];
 
-/** Commands that would export data out of the operator's profile. Refused on every session. */
-const BLOCKED_CDP_METHODS: ReadonlySet<string> = new Set([
+/** CDP domains a session may use. Everything else (`Browser`, `Storage`, `DOMStorage`, `IndexedDB`, `Fetch`, ...) is refused. */
+const ALLOWED_CDP_DOMAINS: ReadonlySet<string> = new Set([
+	"Page",
+	"Runtime",
+	"DOM",
+	"DOMSnapshot",
+	"CSS",
+	"Accessibility",
+	"Input",
+	"Emulation",
+	"Log",
+	"Network",
+	"Performance",
+	"Inspector",
+]);
+
+/** Single methods allowed from a domain that is otherwise refused. `Target.*` stays refused except flat auto-attach. */
+const ALLOWED_CDP_METHODS: ReadonlySet<string> = new Set(["Target.setAutoAttach"]);
+
+/** Methods refused even inside an allowed domain: they export cookies, storage or page snapshots, or change downloads. */
+const DENIED_CDP_METHODS: ReadonlySet<string> = new Set([
 	"Page.printToPDF",
+	"Page.captureSnapshot",
+	"Page.setDownloadBehavior",
+	"Page.generateTestReport",
 	"Network.getAllCookies",
 	"Network.getCookies",
-	"Storage.getCookies",
+	"Network.setCookie",
+	"Network.setCookies",
+	"Network.deleteCookies",
+	"Network.clearBrowserCookies",
+	"Network.clearBrowserCache",
+	"Network.loadNetworkResource",
+	"Network.streamResourceContent",
+	"Network.getResponseBodyForInterception",
+	"Network.takeResponseBodyForInterceptionAsStream",
+	"Network.enableReportingApi",
+	"Network.setRequestInterception",
 ]);
 
 export type PolicyDecision = { allowed: true } | { allowed: false; reason: string };
@@ -85,13 +117,27 @@ export function secretsEqual(expected: string, actual: string | undefined): bool
 	return crypto.timingSafeEqual(a, b);
 }
 
-/** The host of a URL, or undefined when the text is not a URL. */
+/**
+ * Normalize a hostname for matching: lowercase, no trailing dots. `URL` has already applied IDNA
+ * (punycode) and removed the port and userinfo.
+ */
+export function normalizeHost(hostname: string): string {
+	return hostname.toLowerCase().replace(/\.+$/, "");
+}
+
+/** The normalized host of a URL, or undefined when the text is not a URL. */
 function hostOf(rawUrl: string): string | undefined {
 	try {
-		return new URL(rawUrl).hostname.toLowerCase();
+		return normalizeHost(new URL(rawUrl).hostname);
 	} catch {
 		return undefined;
 	}
+}
+
+/** True when the URL points at a production host. Used for subresources, which are not allowlist-checked. */
+export function isProductionUrl(rawUrl: string): boolean {
+	const host = hostOf(rawUrl);
+	return host !== undefined && isProductionHost(host);
 }
 
 function isProductionHost(host: string): boolean {
@@ -99,15 +145,23 @@ function isProductionHost(host: string): boolean {
 	return PRODUCTION_HOST_FRAGMENTS.some(fragment => host.includes(fragment));
 }
 
+/** The origin of `url` built from the normalized host, so a trailing dot or a default port cannot change the match. */
+function normalizedOrigin(url: URL): string {
+	const host = normalizeHost(url.hostname);
+	const bracketed = host.includes(":") ? `[${host}]` : host;
+	return `${url.protocol}//${bracketed}${url.port ? `:${url.port}` : ""}`;
+}
+
 function patternMatches(pattern: string, url: URL): boolean {
 	const entry = pattern.trim().toLowerCase();
 	if (entry.length === 0) return false;
-	if (entry.includes("://")) return url.origin.toLowerCase() === entry.replace(/\/+$/, "");
+	const host = normalizeHost(url.hostname);
+	if (entry.includes("://")) return normalizedOrigin(url) === entry.replace(/\/+$/, "");
 	if (entry.startsWith("*.")) {
-		const suffix = entry.slice(1);
-		return url.hostname.toLowerCase().endsWith(suffix) && url.hostname.length > suffix.length;
+		const suffix = normalizeHost(entry.slice(1));
+		return host.endsWith(`.${suffix.replace(/^\./, "")}`);
 	}
-	return url.hostname.toLowerCase() === entry;
+	return host === normalizeHost(entry);
 }
 
 /**
@@ -136,12 +190,18 @@ export function checkNavigation(policy: ExtensionPolicy, rawUrl: string): Policy
 	};
 }
 
-/** Refuse a CDP command that exports profile data. */
+/**
+ * Refuse a CDP command that is not on the allowlist. Default deny: a domain not listed in
+ * `ALLOWED_CDP_DOMAINS` is refused, and so is every method in `DENIED_CDP_METHODS`.
+ */
 export function checkCdpMethod(method: string): PolicyDecision {
-	if (BLOCKED_CDP_METHODS.has(method)) {
+	const dot = method.indexOf(".");
+	const domain = dot < 0 ? "" : method.slice(0, dot);
+	if (DENIED_CDP_METHODS.has(method)) {
 		return { allowed: false, reason: `${method} is blocked on the extension backend; it would export profile data.` };
 	}
-	return { allowed: true };
+	if (ALLOWED_CDP_DOMAINS.has(domain) || ALLOWED_CDP_METHODS.has(method)) return { allowed: true };
+	return { allowed: false, reason: `${method} is not on the extension backend's CDP allowlist.` };
 }
 
 export function extensionStateDir(): string {

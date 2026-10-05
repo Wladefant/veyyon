@@ -25,6 +25,7 @@ import {
 	extensionStateDir,
 	generateSecret,
 	instanceFileName,
+	isProductionUrl,
 	type PolicyDecision,
 	redactSecrets,
 	secretsEqual,
@@ -95,7 +96,8 @@ const extensionMessageSchema = type({
 });
 
 const debugSourceSchema = type({ tabId: "number", "sessionId?": "string" });
-const tabSchema = type({ id: "number", "openerTabId?": "number" });
+const tabSchema = type({ id: "number", "openerTabId?": "number", "pendingUrl?": "string", "url?": "string" });
+const requestPausedSchema = type({ requestId: "string", request: { url: "string" }, resourceType: "string" });
 const frameNavigatedSchema = type({ frame: { "parentId?": "string", url: "string" } });
 const attachedSchema = type({ sessionId: "string" });
 
@@ -407,6 +409,15 @@ export class ExtensionRelay {
 				const tab = tabSchema(params[0]);
 				if (tab instanceof type.errors) return;
 				if (tab.openerTabId === undefined || !this.#tabs.has(tab.openerTabId)) return;
+				const landing = tab.pendingUrl ?? tab.url;
+				if (landing !== undefined && landing !== "") {
+					const decision = checkNavigation(this.#policy, landing);
+					if (!decision.allowed) {
+						this.#audit(tab.id, landing, decision);
+						this.#fireAndForget("chrome.tabs.remove", [tab.id]);
+						return;
+					}
+				}
 				void this.#registerTab(tab.id).catch(error =>
 					this.#log("could not adopt a popup", { error: errorText(error) }),
 				);
@@ -422,9 +433,18 @@ export class ExtensionRelay {
 		const tab = this.#tabs.get(source.tabId);
 		if (!tab) return;
 		const eventParams = params[2];
+		if (method === "Fetch.requestPaused") {
+			this.#onRequestPaused(source, eventParams);
+			return;
+		}
 		if (method === "Target.attachedToTarget") {
 			const attached = attachedSchema(eventParams);
-			if (!(attached instanceof type.errors)) this.#childSessions.set(attached.sessionId, tab.tabId);
+			if (!(attached instanceof type.errors)) {
+				this.#childSessions.set(attached.sessionId, tab.tabId);
+				void this.#enableFetchGate({ tabId: tab.tabId, sessionId: attached.sessionId }).catch(error =>
+					this.#log("could not gate a child session", { error: errorText(error) }),
+				);
+			}
 		} else if (method === "Target.detachedFromTarget") {
 			const detached = attachedSchema(eventParams);
 			if (!(detached instanceof type.errors)) this.#childSessions.delete(detached.sessionId);
@@ -440,6 +460,48 @@ export class ExtensionRelay {
 				this.#send(client, { sessionId: source.sessionId ?? sessionId, method, params: eventParams ?? {} });
 			}
 		}
+	}
+
+	/** Pause every request of a debuggee so the policy runs before the request leaves, cookies included. */
+	async #enableFetchGate(debuggee: { tabId: number; sessionId?: string }): Promise<void> {
+		await this.#call("chrome.debugger.sendCommand", [
+			debuggee,
+			"Fetch.enable",
+			{ patterns: [{ urlPattern: "*", requestStage: "Request" }] },
+		]);
+	}
+
+	/**
+	 * Decide a paused request. Documents (top level, frames, every redirect hop) must pass the full
+	 * policy. Other resources fail only when they target a production host. Fails closed on error.
+	 */
+	#onRequestPaused(source: { tabId: number; sessionId?: string }, params: unknown): void {
+		const paused = requestPausedSchema(params);
+		if (paused instanceof type.errors) return;
+		const url = paused.request.url;
+		let allowed: boolean;
+		if (paused.resourceType === "Document") {
+			const decision = checkNavigation(this.#policy, url);
+			if (!decision.allowed) this.#audit(source.tabId, url, decision);
+			allowed = decision.allowed;
+		} else if (url.startsWith("data:") || url.startsWith("blob:")) {
+			allowed = true;
+		} else {
+			allowed = !isProductionUrl(url);
+		}
+		const debuggee = source.sessionId === undefined ? { tabId: source.tabId } : source;
+		const reply = allowed
+			? this.#call("chrome.debugger.sendCommand", [
+					debuggee,
+					"Fetch.continueRequest",
+					{ requestId: paused.requestId },
+				])
+			: this.#call("chrome.debugger.sendCommand", [
+					debuggee,
+					"Fetch.failRequest",
+					{ requestId: paused.requestId, errorReason: "BlockedByClient" },
+				]);
+		reply.catch(error => this.#log("could not answer a paused request", { error: errorText(error) }));
 	}
 
 	/** A page can navigate itself (redirect, link, script). Catch the landing and send the tab to about:blank. */
@@ -474,6 +536,13 @@ export class ExtensionRelay {
 
 	async #registerTab(tabId: number): Promise<OwnedTab> {
 		await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
+		try {
+			await this.#enableFetchGate({ tabId });
+		} catch (error) {
+			// Fail closed: a tab we cannot gate is never exposed.
+			this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
+			throw error;
+		}
 		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, url: "about:blank", title: "" };
 		this.#tabs.set(tabId, tab);
 		for (const client of this.#clients.values()) {
