@@ -242,6 +242,10 @@ export class ExtensionRelay {
 	readonly #tabs = new Map<number, OwnedTab>();
 	/** Chrome's own child session ids (iframes, workers) to the tab that owns them. */
 	readonly #childSessions = new Map<string, number>();
+	/** Per debuggee: the isolated-world creation in flight, so later commands wait for its guard. */
+	readonly #worldLocks = new Map<string, Promise<void>>();
+	/** Isolated worlds (`tab:session:contextId`) the guard script has not run in; commands on them are refused. */
+	readonly #unguardedWorlds = new Set<string>();
 	readonly #pending = new Map<number, PendingCall>();
 	#extension: ServerWebSocket<SocketData> | undefined;
 	#extensionWaiters: Array<() => void> = [];
@@ -877,24 +881,60 @@ export class ExtensionRelay {
 		if (!blocked.allowed) throw new Error(blocked.reason);
 		if (method === "Page.navigate" && typeof params.url === "string") this.#checkNavigationOrThrow(tabId, params.url);
 		const debuggee = rootTab !== undefined ? { tabId } : { tabId, sessionId };
+		const key = `${tabId}:${sessionId}`;
+		if (method === "Page.createIsolatedWorld") {
+			// Creation, guard run and the client's reply are one step. The next command of this session
+			// waits for it, so a pipelined command cannot reach a world before the guard has.
+			const run = (this.#worldLocks.get(key) ?? Promise.resolve()).then(() =>
+				this.#createGuardedWorld(key, debuggee, method, params),
+			);
+			const settled = run.then(
+				() => undefined,
+				() => undefined,
+			);
+			this.#worldLocks.set(key, settled);
+			void settled.then(() => {
+				if (this.#worldLocks.get(key) === settled) this.#worldLocks.delete(key);
+			});
+			return run;
+		}
+		await this.#worldLocks.get(key);
+		for (const field of ["contextId", "executionContextId"]) {
+			if (this.#unguardedWorlds.has(`${key}:${String(params[field])}`)) {
+				throw new Error("That isolated world could not be guarded and is refused.");
+			}
+		}
 		const result = await this.#call("chrome.debugger.sendCommand", [debuggee, method, params]);
-		if (method === "Page.createIsolatedWorld") await this.#guardIsolatedWorld(debuggee, result);
 		return result ?? {};
 	}
 
 	/**
 	 * An isolated world has its own `Worker` and `ServiceWorkerContainer`, which the document guard script
 	 * (main world only) never reaches. Puppeteer needs these worlds for ordinary work, so run the guard in
-	 * each one before the client hears its context id. If that fails the command fails: no unguarded world.
+	 * each one before the client hears its context id. If the guard fails the command fails, and the world
+	 * is remembered as unguarded so no later command can use it.
 	 */
-	async #guardIsolatedWorld(debuggee: { tabId: number; sessionId?: string }, created: unknown): Promise<void> {
+	async #createGuardedWorld(
+		key: string,
+		debuggee: { tabId: number; sessionId?: string },
+		method: string,
+		params: Record<string, unknown>,
+	): Promise<unknown> {
+		const created = await this.#call("chrome.debugger.sendCommand", [debuggee, method, params]);
 		const contextId = (created as { executionContextId?: unknown } | undefined)?.executionContextId;
 		if (typeof contextId !== "number") throw new Error("Isolated world refused: no context id to guard.");
-		await this.#call("chrome.debugger.sendCommand", [
+		const worldKey = `${key}:${contextId}`;
+		this.#unguardedWorlds.add(worldKey);
+		const guard = await this.#call("chrome.debugger.sendCommand", [
 			debuggee,
 			"Runtime.evaluate",
 			{ expression: POPUP_GUARD_SOURCE, contextId },
 		]);
+		if ((guard as { exceptionDetails?: unknown } | undefined)?.exceptionDetails !== undefined) {
+			throw new Error("Isolated world refused: the guard script failed in it.");
+		}
+		this.#unguardedWorlds.delete(worldKey);
+		return created;
 	}
 
 	#checkNavigationOrThrow(tabId: number, url: string): void {

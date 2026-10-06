@@ -416,8 +416,26 @@ describe("policy at the relay", () => {
 		await cdp.send("Target.createTarget", { url: "about:blank" });
 		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
 		ext.failNext("Runtime.evaluate");
-		const reply = await cdp.send("Page.createIsolatedWorld", { frameId: "f" }, sessionId);
+		// Pipelined: the client names the next context id before the guard has finished.
+		const [reply, early] = await Promise.all([
+			cdp.send("Page.createIsolatedWorld", { frameId: "f" }, sessionId),
+			cdp.send("Runtime.evaluate", { expression: "1", contextId: 77 }, sessionId),
+		]);
 		expect(reply.error).toBeDefined();
+		expect(early.error?.message).toContain("could not be guarded");
+		const later = await cdp.send(
+			"Runtime.callFunctionOn",
+			{ executionContextId: 77, functionDeclaration: "()=>1" },
+			sessionId,
+		);
+		expect(later.error?.message).toContain("could not be guarded");
+		const evaluated = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(
+				call =>
+					call.params[1] === "Runtime.evaluate" && (call.params[2] as { contextId?: number }).contextId === 77,
+			);
+		expect(evaluated).toHaveLength(1);
 	});
 
 	test("the popup guard sent to every tab covers forms, base target and shadow-DOM links", async () => {
