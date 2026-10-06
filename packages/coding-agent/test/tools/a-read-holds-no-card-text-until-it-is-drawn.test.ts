@@ -57,7 +57,16 @@ const run = promisify(execFile);
 const FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "read-string-growth.ts");
 
 /** A fresh process loads the modules and takes two heap snapshots of its own heap. */
-const MEASURED_ROW_TIMEOUT_MS = 60_000;
+const MEASURED_PROCESS_TIMEOUT_MS = 55_000;
+
+/** At most two measuring processes run per row. */
+const MEASURED_ROW_TIMEOUT_MS = 2 * MEASURED_PROCESS_TIMEOUT_MS + 10_000;
+
+/**
+ * Live string bytes above the session's one copy of each result, as a share of the read bodies. A
+ * second copy of the rows, in any form, is another body's worth on top.
+ */
+const SECOND_COPY_BOUND = 1.5;
 
 const ARRIVAL_NAMES: Record<Arrival, string> = {
 	load: "a loaded read",
@@ -95,7 +104,7 @@ describe("a read holds no card text until it is drawn", () => {
 		try {
 			const { stdout, stderr } = await run(process.execPath, [FIXTURE, root.path(), arrival, step], {
 				env,
-				timeout: MEASURED_ROW_TIMEOUT_MS - 5_000,
+				timeout: MEASURED_PROCESS_TIMEOUT_MS,
 				killSignal: "SIGKILL",
 			});
 			expect(stderr).toBe("");
@@ -103,6 +112,20 @@ describe("a read holds no card text until it is drawn", () => {
 		} finally {
 			cleanup();
 		}
+	}
+
+	/**
+	 * The reading of `arrival` then `step`: one fresh process, or the lesser of two when the first
+	 * reads over the bound. A string the conservative stack scan keeps alive only ever adds bytes, and
+	 * one CI run in many read 1.62 bodies where every other run reads 1.002, so a second process is
+	 * the reading `liveStringBytes` takes the least of its samples for. A held second copy is held in
+	 * every process and reads over the bound in both.
+	 */
+	async function leastGrowth(arrival: Arrival, step: Step): Promise<Growth> {
+		const first = await measureInFreshProcess(arrival, step);
+		if (first.grown < first.bodyBytes * SECOND_COPY_BOUND) return first;
+		const second = await measureInFreshProcess(arrival, step);
+		return second.grown < first.grown ? second : first;
 	}
 
 	/** The session `arrival` brings `results` into, under the suite's directory. */
@@ -118,13 +141,12 @@ describe("a read holds no card text until it is drawn", () => {
 			it(
 				`keeps no copy of the rows of ${ARRIVAL_NAMES[arrival]} after ${STEP_NAMES[step]}`,
 				async () => {
-					const growth = await measureInFreshProcess(arrival, step);
+					const growth = await leastGrowth(arrival, step);
 					expect(growth.entries).toBe(growth.reads + 1);
 					// The measurement sees the results, so a bound it passes is not a count that missed them.
 					expect(growth.grown).toBeGreaterThan(growth.bodyBytes / 2);
-					// The session holds each result's text once. A second copy of the rows, in any form, is
-					// another body's worth of bytes on top.
-					expect(growth.grown).toBeLessThan(growth.bodyBytes * 1.5);
+					// The session holds each result's text once.
+					expect(growth.grown).toBeLessThan(growth.bodyBytes * SECOND_COPY_BOUND);
 					// Every card is written as its tag, so the rebuild from the tag is the path under test.
 					expect(growth.tags).toBe(growth.reads);
 				},
