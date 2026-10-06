@@ -13,6 +13,7 @@
 
 ### Changed
 
+- The stdio, streamable-HTTP and SSE MCP transports answer a server-to-client request through one `answerServerRequest` in `mcp/types`; each answer is unchanged.
 - Tool result text joining and the web tool display projection use template literals and optional chains; their output is unchanged.
 - `createAgentSession` reads the caller's telemetry config in two fewer statements; its behavior is unchanged.
 - A launch builds no ICU time zone cache, number formatter or collator before the first frame: the terminal guard reads the local date from the C library, the `tts` tool description prints its character limit literally, and prompt templates sort variable names by code unit, so the source launch paints its first frame in 58.5 ms instead of 60.5 ms and its ready run peaks at 217.1 MiB RSS instead of 220.4 MiB (median of 30 and 11).
