@@ -70,6 +70,8 @@ const DENIED_CDP_METHODS: ReadonlySet<string> = new Set([
 	"Network.takeResponseBodyForInterceptionAsStream",
 	"Network.enableReportingApi",
 	"Network.setRequestInterception",
+	// The relay sets the bypass so pages cannot be answered by a service worker outside the request gate.
+	"Network.setBypassServiceWorker",
 ]);
 
 export type PolicyDecision = { allowed: true } | { allowed: false; reason: string };

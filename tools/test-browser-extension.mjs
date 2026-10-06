@@ -89,6 +89,7 @@ try {
 			"--no-first-run",
 			`--host-resolver-rules=MAP ${pageHost} 127.0.0.1, MAP ${farHost} 127.0.0.1`,
 			"--disable-features=LocalNetworkAccessChecks",
+			`--unsafely-treat-insecure-origin-as-secure=http://${pageHost}:${web.port}`,
 		],
 	});
 	// A "user tab" that Veyyon must not touch.
@@ -286,44 +287,68 @@ try {
 	receipt.steps.refusedPopupTabsLeft = (await owner.pages()).filter(p => p.url().includes("127.0.0.2")).length;
 
 	// Workers and service workers (https://github.com/Wladefant/veyyon/issues/493). Chrome has no Fetch gate
-	// for either, so a controlled tab must not create one. localhost is a secure context, which a service
-	// worker needs; the page is allowlisted above.
+	// for either, so a controlled tab must not create one, from any realm or by any constructor path.
+	// qa.test is treated as a secure context (a service worker needs one) and is a public host, so it gets
+	// the response header; localhost is a secure context too but a local-network page, so it does not.
 	const localUrl = `http://localhost:${web.port}/`;
+	const probeWorkers = async () => {
+		await mainWorld(() => {
+			const out = document.documentElement.dataset;
+			for (const key of Object.keys(out)) delete out[key];
+			const watch = (key, make) => {
+				try {
+					const worker = make();
+					out[key] = "created";
+					worker.onmessage = () => {
+						out[key] = "ran";
+					};
+					worker.onerror = () => {
+						out[key] = "error";
+					};
+				} catch (error) {
+					out[key] = `rejected:${error.name}`;
+				}
+			};
+			watch("dedicated", () => new Worker("/worker.js"));
+			watch("blob", () => new Worker(URL.createObjectURL(new Blob(["postMessage(1)"], { type: "text/javascript" }))));
+			watch("data", () => new Worker("data:text/javascript,postMessage(1)"));
+			watch("shared", () => new SharedWorker("/worker.js"));
+			const frame = document.createElement("iframe");
+			frame.srcdoc = "<!doctype html>";
+			frame.onload = () => watch("iframe", () => new frame.contentWindow.Worker("/worker.js"));
+			document.body.append(frame);
+			const register = (key, call) => {
+				if (!navigator.serviceWorker) {
+					out[key] = "no serviceWorker API";
+					return;
+				}
+				call().then(
+					() => {
+						out[key] = "registered";
+					},
+					error => {
+						out[key] = `rejected:${error.name}`;
+					},
+				);
+			};
+			register("swInstance", () => navigator.serviceWorker.register("/sw.js"));
+			register("swPrototype", () =>
+				ServiceWorkerContainer.prototype.register.call(navigator.serviceWorker, "/sw.js"),
+			);
+		});
+		await sleep(3000);
+		return page.evaluate(() => ({ ...document.documentElement.dataset }));
+	};
+	await resetPage();
+	receipt.steps.workersGuardOnPublic = await probeWorkers();
 	await page.goto(localUrl, { waitUntil: "domcontentloaded" });
-	await mainWorld(() => {
-		const out = document.documentElement.dataset;
-		try {
-			new Worker("/worker.js");
-			out.worker = "created";
-		} catch (error) {
-			out.worker = `rejected:${error.name}`;
-		}
-		if (!navigator.serviceWorker) {
-			out.sw = "no serviceWorker API";
-			return;
-		}
-		navigator.serviceWorker.register("/sw.js").then(
-			() => {
-				out.sw = "registered";
-			},
-			error => {
-				out.sw = `rejected:${error.name}`;
-			},
-		);
-	});
-	await sleep(1500);
-	receipt.steps.dedicatedWorker = await page.evaluate(() => document.documentElement.dataset.worker);
-	receipt.steps.serviceWorkerRegister = await page.evaluate(() => document.documentElement.dataset.sw);
-	receipt.steps.serviceWorkerRegistrations = await page.evaluate(async () =>
-		navigator.serviceWorker ? (await navigator.serviceWorker.getRegistrations()).length : -1,
-	);
+	receipt.steps.workersGuardOnLocal = await probeWorkers();
+	// A client must not be able to switch the service worker bypass back off.
 	const bypassSession = await page.createCDPSession();
-	receipt.steps.serviceWorkerBypassAccepted = await bypassSession
-		.send("Network.setBypassServiceWorker", { bypass: true })
-		.then(
-			() => true,
-			error => String(error.message).slice(0, 120),
-		);
+	receipt.steps.bypassUndoRefused = await bypassSession.send("Network.setBypassServiceWorker", { bypass: false }).then(
+		() => false,
+		error => String(error.message).slice(0, 120),
+	);
 
 	// Negative control: a real click (user gesture, so Chrome's popup blocker allows it) opens a popup to the
 	// refused host. Guard on: it must send nothing. Guard removed: the response sandbox alone must still send
@@ -381,6 +406,27 @@ try {
 		guardPresentAfterRemoval: await page.evaluate(() => document.documentElement.dataset.guard),
 	};
 
+	// Guard removed (the script ids were removed above, so new documents get none). On a public page the
+	// response header alone must still stop every worker and every service worker. On a local-network page
+	// there is no header: a worker is created, but the relay cannot pause it, so it must be closed and
+	// never run; a service worker registers there, which is the documented gap of a local-network page.
+	await resetPage();
+	const offPublic = await probeWorkers();
+	await page.goto(localUrl, { waitUntil: "domcontentloaded" });
+	const offLocal = await probeWorkers();
+	receipt.steps.workersGuardOff = { public: offPublic, local: offLocal };
+	const noneCreated = r => !Object.values(r).some(v => ["ran", "registered", "created"].includes(v));
+	const refusedAll = r => Object.values(r).every(v => String(v).startsWith("rejected") || v === "error");
+	receipt.steps.workersOk =
+		refusedAll(receipt.steps.workersGuardOnPublic) &&
+		refusedAll(receipt.steps.workersGuardOnLocal) &&
+		typeof receipt.steps.bypassUndoRefused === "string" &&
+		noneCreated(offPublic) &&
+		!["dedicated", "blob", "data", "iframe"].some(key => offLocal[key] === "ran") &&
+		["dedicated", "blob", "data"].every(key => offLocal[key] === "created") &&
+		offLocal.swInstance === "registered" &&
+		relayLog.some(line => line.includes("could not gate a child session"));
+
 	// User tabs untouched.
 	const userTitles = await Promise.all((await owner.pages()).map(p => p.title().catch(() => "?")));
 	receipt.steps.userTabStillThere = userTitles.includes("user-tab");
@@ -422,9 +468,7 @@ try {
 		receipt.steps.negativeControl.guardOn === 0 &&
 		receipt.steps.negativeControl.guardOff === 0 &&
 		receipt.steps.negativeControl.guardOffNoopener === 0 &&
-		receipt.steps.dedicatedWorker === "rejected:SecurityError" &&
-		receipt.steps.serviceWorkerRegister === "rejected:SecurityError" &&
-		receipt.steps.serviceWorkerRegistrations === 0;
+		receipt.steps.workersOk === true;
 } catch (error) {
 	receipt.error = String(error?.message ?? error);
 	receipt.ok = false;

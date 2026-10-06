@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vm from "node:vm";
 import {
 	buildConnectUrl,
 	ExtensionRelay,
@@ -562,6 +563,7 @@ describe("policy at the relay", () => {
 		expect(csp).not.toContain("allow-popups");
 		expect(csp).toContain("allow-same-origin");
 		expect(csp).toContain("allow-scripts");
+		expect(csp).toContain("worker-src 'none'");
 	});
 
 	test("a redirect response is continued without a body fetch", async () => {
@@ -788,18 +790,60 @@ describe("policy at the relay", () => {
 		await until(() => ext.callsOf("chrome.tabs.remove").some(call => call.params[0] === 200), "the popup removal");
 	});
 
-	test("pages bypass service workers and cannot register one; a tab that refuses the bypass is not exposed", async () => {
+	test("the guard script refuses service workers through the prototype too, and removes the worker constructors", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const injected = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.find(call => call.params[1] === "Page.addScriptToEvaluateOnNewDocument");
+		const source = String((injected?.params[2] as { source: string } | undefined)?.source);
+		class ServiceWorkerContainer {
+			register(): Promise<string> {
+				return Promise.resolve("native register reached");
+			}
+		}
+		class Stub {
+			observe(): void {}
+		}
+		const page: Record<string, unknown> = {
+			DOMException,
+			ServiceWorkerContainer,
+			HTMLFormElement: Stub,
+			Element: Stub,
+			MutationObserver: Stub,
+			Worker: class {},
+			SharedWorker: class {},
+			navigator: { serviceWorker: new ServiceWorkerContainer() },
+			document: { querySelectorAll: () => [], addEventListener: () => {} },
+			addEventListener: () => {},
+		};
+		page.window = page;
+		vm.runInNewContext(source, page);
+		const container = (page.navigator as { serviceWorker: ServiceWorkerContainer }).serviceWorker;
+		await expect(container.register()).rejects.toMatchObject({ name: "SecurityError" });
+		await expect(ServiceWorkerContainer.prototype.register.call(container)).rejects.toMatchObject({
+			name: "SecurityError",
+		});
+		expect(vm.runInNewContext("typeof Worker + typeof SharedWorker", page)).toBe("undefinedundefined");
+	});
+
+	test("a client cannot undo the service worker bypass", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const before = ext.callsOf("chrome.debugger.sendCommand").length;
+		const reply = await cdp.send("Network.setBypassServiceWorker", { bypass: false }, sessionId);
+		expect(reply.error).toBeDefined();
+		expect(ext.callsOf("chrome.debugger.sendCommand")).toHaveLength(before);
+	});
+
+	test("pages bypass service workers; a tab that refuses the bypass is removed", async () => {
 		const { ext, cdp } = await connected(["https://staging.example.com"]);
 		await cdp.send("Target.createTarget", { url: "about:blank" });
 		const bypass = ext
 			.callsOf("chrome.debugger.sendCommand")
 			.find(call => call.params[1] === "Network.setBypassServiceWorker");
 		expect(bypass?.params).toEqual([{ tabId: 100 }, "Network.setBypassServiceWorker", { bypass: true }]);
-		const guard = ext
-			.callsOf("chrome.debugger.sendCommand")
-			.find(call => call.params[1] === "Page.addScriptToEvaluateOnNewDocument");
-		expect(JSON.stringify(guard?.params[2])).toContain("serviceWorker.register");
-		expect(JSON.stringify(guard?.params[2])).toContain("SharedWorker");
 		ext.failNext("Network.setBypassServiceWorker");
 		const refused = await cdp.send("Target.createTarget", { url: "about:blank" });
 		expect(refused.error).toBeDefined();

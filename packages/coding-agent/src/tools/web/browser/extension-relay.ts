@@ -45,10 +45,13 @@ const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: t
  * open a window or tab by any path (`window.open`, also with `noopener`; `target=_blank`; `formtarget`;
  * modified clicks), so no new tab starts loading before the relay can attach to it. Every other
  * capability stays on, and `allow-same-origin` keeps cookies and storage working. The request gate still
- * judges each navigation, so `allow-top-navigation` widens nothing.
+ * judges each navigation, so `allow-top-navigation` widens nothing. `worker-src 'none'` is the gate for
+ * workers: a worker or service worker cannot be paused (no `Fetch` on a worker session, a service worker is
+ * never auto-attached), so Chrome refuses to start one, from any realm, `blob:`, `data:` or `srcdoc` child.
+ * Local-network pages get no header (see `isSandboxedDocument`) and keep only the guard script.
  */
 const POPUP_SANDBOX_POLICY =
-	"sandbox allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-presentation allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation";
+	"sandbox allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-presentation allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation; worker-src 'none'";
 
 /**
  * Runs in every document of a controlled tab so nothing opens a new tab: `window.open` returns null, forms
@@ -99,9 +102,12 @@ const POPUP_GUARD_SOURCE = `(() => {
   };
   addEventListener("click", onLink, true);
   addEventListener("auxclick", onLink, true);
-  if (navigator.serviceWorker) navigator.serviceWorker.register = () => Promise.reject(new DOMException("Service workers are disabled in a controlled tab.", "SecurityError"));
+  const refuseWorker = () => Promise.reject(new DOMException("Service workers are disabled in a controlled tab.", "SecurityError"));
+  if (window.ServiceWorkerContainer) {
+    Object.defineProperty(ServiceWorkerContainer.prototype, "register", { value: refuseWorker, configurable: false, writable: false });
+  }
   for (const name of ["Worker", "SharedWorker"]) {
-    if (window[name]) window[name] = function () { throw new DOMException("Workers are disabled in a controlled tab.", "SecurityError"); };
+    try { delete window[name]; } catch {}
   }
 })();`;
 
