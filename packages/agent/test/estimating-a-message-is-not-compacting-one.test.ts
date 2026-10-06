@@ -73,8 +73,13 @@ const SHAKE_CEILING = 16;
  * RE-MEASURED 2026-08-26 at 187, down from 204. It does not reach the ceiling above because it genuinely uses
  * more of the directory: the entry helpers, the message shapes and the read-selector split. 187 is that work,
  * not a leftover edge into the engine, which is why this ceiling is not "the same as shake".
+ *
+ * RE-MEASURED 2026-10-06 at 196. The one new module is `ai/dialect/json-tool-call-scanner.ts`, the
+ * `<tool_call>` JSON scanner the `hermes` and `qwen3` dialects share; both dialects were already on this
+ * closure. It imports only `./coercion` and `./wire-tags`, both already here, so the growth is that one
+ * file and no subtree.
  */
-const PRUNING_CEILING = 195;
+const PRUNING_CEILING = 196;
 
 /**
  * The engine and the remote summarizer both took `ProviderHttpError` from the `@veyyon/ai/error` barrel,
@@ -140,8 +145,13 @@ const PRUNING_CEILING = 195;
  * RE-MEASURED 2026-10-05: engine 304, remote summarizer 101. Both reach the logger, which reads the local
  * time from `@veyyon/utils/local-time` now instead of building ICU's time zone cache through `Date`. That
  * module imports only `bun:ffi`, so the growth is the one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-06: engine 305, remote summarizer 101. The one new module is
+ * `ai/dialect/json-tool-call-scanner.ts`, the `<tool_call>` JSON scanner the `hermes` and `qwen3` dialects
+ * share. It imports only `./coercion` and `./wire-tags`, both already on the engine's reach, so the growth
+ * is that one file and no subtree; the remote summarizer reaches no dialect.
  */
-const COMPACTION_ENGINE_CEILING = 304;
+const COMPACTION_ENGINE_CEILING = 305;
 const REMOTE_SUMMARIZER_CEILING = 101;
 
 describe("the estimator is a leaf", () => {
