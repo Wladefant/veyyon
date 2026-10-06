@@ -15,7 +15,7 @@
  * by a field eventually, and the field that goes missing is the one a report needed.
  */
 import { lazy } from "@veyyon/utils/abortable";
-import { type } from "arktype";
+import { type } from "../utils/schema/arktype";
 
 /**
  * The nine schemas a usage report is validated against, built once per process.

@@ -253,6 +253,29 @@ describe("the modules that were repointed stay cut", () => {
 	 * `./prompt-variables` and the second imports only `handlebars/runtime`, so no consumer gained an
 	 * edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-10-03: `agent/src/proxy.ts` 147 -> 148, `parser.ts` 124 -> 125, `db.ts`
+	 * 126 -> 127 and `sync-worker.ts` 125 -> 126, each by the one module `catalog/catalog-spans.ts`, a
+	 * zero-import leaf that finds a provider's and a model's byte range in `models.json` without parsing
+	 * the document. `catalog/models.ts`, already on every one of these reaches, reads one provider's
+	 * span through it. The leaf imports nothing, so no consumer gained an edge to a subsystem it did not
+	 * already reach.
+	 */
+	/**
+	 * Re-measured 2026-10-05: `agent/src/proxy.ts` 148 -> 149, `parser.ts` 125 -> 126, `db.ts`
+	 * 127 -> 128, `sync-worker.ts` 126 -> 127 and `api-key-resolver.ts` 58 -> 59, each by the one module
+	 * `@veyyon/utils/local-time`, which reads the local clock through the C library's `localtime_r` so
+	 * naming a log file builds no ICU time zone cache. `@veyyon/utils/logger` and `@veyyon/utils/log-file`,
+	 * already on every one of these reaches, take the local time from it. Its only import is `bun:ffi`, so
+	 * no consumer gained an edge to a subsystem it did not already reach.
+	 */
+	/**
+	 * Re-measured 2026-10-06: `shared-llm.ts` 211 -> 212 by the one module `ai/dialect/bracket-walk.ts`,
+	 * a zero-import leaf holding the bracket-depth walk that splits call arguments. `dialect/gemini.ts`
+	 * and `dialect/gemma.ts`, already on this reach, each walked brackets inline and now take the walk
+	 * from that owner. The leaf imports nothing, so no consumer gained an edge to a subsystem it did not
+	 * already reach.
+	 */
 	it.each([
 		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
 		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt
@@ -262,10 +285,10 @@ describe("the modules that were repointed stay cut", () => {
 		// reach, now import the value `modelKind` (chat versus runner rows) through `./types`, which was a type-only
 		// import and so cost nothing before. `types.ts` re-exports the contract module; no consumer gained an edge
 		// to a subsystem it did not already reach.
-		["agent/src/proxy.ts", 150],
-		["apps/stats/src/parser.ts", 125],
-		["apps/stats/src/db.ts", 127],
-		["apps/stats/src/sync-worker.ts", 126],
+		["agent/src/proxy.ts", 151],
+		["apps/stats/src/parser.ts", 126],
+		["apps/stats/src/db.ts", 128],
+		["apps/stats/src/sync-worker.ts", 127],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
@@ -276,14 +299,14 @@ describe("the modules that were repointed stay cut", () => {
 		// zero-import leaf that owns the escape constants; `sanitize-text.ts`, already on this reach,
 		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
 		// its own, so nothing outside this closure was gained.
-		["coding-agent/src/config/api-key-resolver.ts", 58],
+		["coding-agent/src/config/api-key-resolver.ts", 59],
 		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
 		// RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
 		// RE-MEASURED 2026-10-04 after the upstream port wave (#219): 215 -> 226, the provider definitions and OAuth flows ported into `ai/src/registry`.
-		["coding-agent/src/commit/shared-llm.ts", 226],
+		["coding-agent/src/commit/shared-llm.ts", 227],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

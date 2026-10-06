@@ -46,3 +46,17 @@ export function holdSharedMcpManager(manager: MCPManager): McpManagerRelease | u
 	holds.set(manager, current + 1);
 	return releaseOnce(manager);
 }
+
+/**
+ * The hold a session takes on its MCP manager. A session holds a manager it created, and a top-level
+ * session holds one handed down by the session that created it (the `/new` that keeps the previous
+ * conversation running). A spawned agent holds nothing and never disconnects its parent's manager.
+ */
+export function holdSessionMcpManager(
+	manager: MCPManager,
+	handedDown: MCPManager | undefined,
+	isSpawned: boolean,
+): McpManagerRelease | undefined {
+	if (!handedDown) return holdCreatedMcpManager(manager);
+	return isSpawned ? undefined : holdSharedMcpManager(manager);
+}

@@ -71,6 +71,7 @@ export const parseKittySequence = lazyNativeFn("parseKittySequence");
 export const readCommitMemory = lazyNativeFn("readCommitMemory");
 export const readImageFromClipboard = lazyNativeFn("readImageFromClipboard");
 export const releaseEmbeddedModulePages = lazyNativeFn("releaseEmbeddedModulePages");
+export const releaseFreeHeapPages = lazyNativeFn("releaseFreeHeapPages");
 export const search = lazyNativeFn("search");
 export const setHangulCompatJamoWidthOverride = lazyNativeFn("setHangulCompatJamoWidthOverride");
 export const sliceWithWidth = lazyNativeFn("sliceWithWidth");

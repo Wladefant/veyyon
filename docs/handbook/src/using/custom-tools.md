@@ -55,6 +55,7 @@ CustomTool.execute(toolCallId, params, onUpdate, ctx, signal)
 ### Behavior
 
 - Duplicate resolved paths are deduplicated.
+- A `tools/` directory contributes the `.ts`, `.js`, `.sh`, `.bash`, `.py`, `.md` and `.json` files directly inside it, and one tool per `<name>/index.ts`. Any other file in a sub-directory is part of that tool and is not discovered on its own.
 - Tool name conflicts are rejected against built-ins and already-loaded custom tools.
 - `.md` and `.json` files are discovered as tool metadata by some providers, but the executable module loader rejects them as runnable tools.
 - Relative configured paths are resolved from `cwd`; `~` is expanded.

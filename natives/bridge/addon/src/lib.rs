@@ -34,6 +34,7 @@ pub mod fd;
 pub mod glob;
 pub mod glob_util;
 pub mod grep;
+pub mod heap_pages;
 pub mod highlight;
 pub mod html;
 pub mod iofs;

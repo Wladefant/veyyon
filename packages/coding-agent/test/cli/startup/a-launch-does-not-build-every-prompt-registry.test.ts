@@ -246,6 +246,59 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * second only the `handlebars/runtime` package entry, so a binary launch evaluates no Handlebars
  * compiler module.
  *
+ * 1623 to 1624: `catalog/catalog-spans.ts`, the zero-import leaf `catalog/models.ts` reads one
+ * provider's span of `models.json` through. Nine modules arrived after it and nine left, so the count
+ * held. Arrived: `config/launch-facts.ts` (moved from `modes/`), `secrets/expiry.ts`, the four
+ * `session/runtime/` collaborators split out of `agent-session.ts`, `kernel/src/session/session-load-cooling.ts`,
+ * and `@veyyon/utils` `activity-signal.ts` and `rearming-timeout.ts`. Left: `modes/launch-facts.ts`,
+ * `secrets/secret-command.ts` and `secrets/scope-move.ts` (now behind the `/secret` handler),
+ * `tools/core/tool-result.ts`, `tools/core/aborted-partway.ts`, `tools/web/gh.ts`, and the
+ * `@veyyon/ai` `providers/gitlab-duo-workflow.ts`, `providers/google-gemini-cli.ts` and
+ * `utils/google-validation.ts` provider modules, now registered lazily.
+ *
+ * 1624 to 1603: the edit tool's write path, `executePatchSingle` and `LspFileSystem`, moved out of
+ * `edit/modes/patch.ts` into `edit/modes/patch-execute.ts`. The streaming edit guard imports `patch.ts`
+ * on every launch to preview a patch, and the write path imported the LSP writethrough, so 21 modules
+ * left: fourteen under `lsp/` (the client, its server table and config, the linter clients, the edit
+ * applier, the multiplexer and the view), `utils/jsonrpc-framing.ts`, `edit/snapshot-details.ts`, and
+ * `tools/core/` `acp-bridge.ts`, `diagnostics.ts`, `fs-cache-invalidation.ts`, `plan-mode-guard.ts` and
+ * `result-notice.ts`. `test/architecture/a-launch-loads-no-language-server-client.test.ts` pins the cut.
+ *
+ * 1603 to 1582: the session, its provider wire, compaction and the remote summarizer each took a constant
+ * or a function from a provider client, which put the client and its subtree on the launch graph. They
+ * take them from leaves split out of the clients: `providers/anthropic-session-state.ts` and
+ * `providers/claude-device-id.ts` (from `anthropic.ts`), `providers/openai-codex/session-state.ts` and
+ * `providers/openai-stable-ids.ts` (from `openai-codex-responses.ts` and `openai-shared.ts`),
+ * `providers/google-thought-signatures.ts` (from `google-shared.ts`) and
+ * `providers/azure-deployment-names.ts` (from `openai-shared.ts`). `openai-compaction.ts` loads its
+ * request half on the first server-side compaction. 27 modules (691 KiB) left: the Anthropic and Codex
+ * clients, `google-shared.ts`, `openai-shared.ts`, the Codex compaction window, the four `ai/cache/`
+ * modules, and the stream utilities only they import; the six leaves arrived.
+ * `test/architecture/a-launch-loads-no-provider-client.test.ts` pins the provider modules a launch reaches.
+ *
+ * 1582 to 1467: `main.ts` loads `cli/session-picker.ts` when `--resume` opens the picker instead of at
+ * the top of the file. The picker imported the terminal engine root and the session selector, so every
+ * launch evaluated the renderer, the editor, the markdown, mermaid and LaTeX renderers, the status line
+ * and the loop watchdog: 115 modules (1695 KiB), none of which a print, RPC or ACP launch draws with. The
+ * interactive mode imports the same stack behind its own `await import`.
+ * `test/architecture/a-launch-outside-the-terminal-loads-no-terminal-engine.test.ts` pins the cut.
+ *
+ * 1467 to 1468: `ai/src/utils/schema/arktype.ts`, the module shipped source imports arktype's `type`,
+ * `scope` and `Type` from. It imports `arktype` through `require` on the first schema built, so the
+ * count sees one workspace module more while a launch evaluates the 115 modules of `arktype` fewer,
+ * which this walk never counted. Its only static imports are type-only.
+ * `test/architecture/a-launch-evaluates-arktype-only-when-a-schema-is-built.test.ts` pins the cut.
+ *
+ * 1468 to 1474: six modules split out of modules already here, each importing only what its source
+ * did. `ai/src/dialect/json-tool-call-scanner.ts` is the `<tool_call>` JSON scanner `hermes.ts` and
+ * `qwen3.ts` shared by copy. `session/startup-credential-relay.ts`, `session/startup-identity.ts`,
+ * `session/startup-request-hooks.ts` and `config/openai-websockets-mode.ts` are session startup steps
+ * that left `sdk.ts`, and `session/tool-discovery.ts` left `session/factory-tools.ts`. No module left
+ * and none arrived through a new import.
+ *
+ * 1474 to 1475: `ai/src/dialect/bracket-walk.ts`, the zero-import bracket walk `gemini.ts` and
+ * `gemma.ts` split call arguments with instead of each spelling it inline.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
@@ -291,8 +344,12 @@ const LAUNCH_REACH_CEILING = 1668;
  * capability detection to theme/color.ts (7 modules: terminal-capabilities, terminal-emulator,
  * window-focus, desktop-notify, tmux, kitty-graphics, color-format), and catalog added 5 modules
  * (types, model, discovery/typesafe, codex-subscription, models-dev-policies).
+ *
+ * 536 to 540, re-measured 2026-10-06 on the santhreal sync (+4 upstream additions:
+ * `ai/src/utils/schema/arktype.ts`, `utils/src/local-time.ts`, `ai/src/dialect/json-tool-call-scanner.ts`,
+ * and `ai/src/dialect/bracket-walk.ts`).
  */
-const ASSEMBLER_REACH_CEILING = 536;
+const ASSEMBLER_REACH_CEILING = 540;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

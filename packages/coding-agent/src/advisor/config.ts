@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import {
 	errorMessage,
 	isEnoent,
@@ -9,7 +10,6 @@ import {
 	quarantineUnparseableFile,
 	syncYamlTextToSettings,
 } from "@veyyon/utils";
-import { type } from "arktype";
 import { YAML } from "bun";
 import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/core/builtin-names";

@@ -237,7 +237,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/ai/src/cache/tracker.ts",
 	"packages/ai/src/dialect/fenced-thinking.ts",
 	"packages/ai/src/error/connect.ts",
-
 	"packages/ai/src/providers/grammar.ts",
 	"packages/ai/src/registry/api-key-login.ts",
 	"packages/ai/src/registry/baseten.ts",
@@ -301,7 +300,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/coding-agent/src/cli/init-xdg.ts",
 	"packages/coding-agent/src/cli/read-cli.ts",
 	"packages/coding-agent/src/cli/rollback-picker-host.ts",
-	"packages/coding-agent/src/cli/session-picker.ts",
 	"packages/coding-agent/src/cli/session-stats-cli.ts",
 	"packages/coding-agent/src/cli/stats-cli.ts",
 	"packages/coding-agent/src/cli/worktree-cli.ts",

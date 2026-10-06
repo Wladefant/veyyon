@@ -7,6 +7,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import type {
 	ClientBridgeTerminalExitStatus,
 	ClientBridgeTerminalHandle,
@@ -14,7 +15,6 @@ import type {
 } from "@veyyon/kernel/session/client-bridge";
 import { errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
 import { normalizePathForComparison } from "@veyyon/utils/dirs";
-import { type } from "arktype";
 import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
 import { type BashResult, executeBash } from "../../exec/bash-executor";

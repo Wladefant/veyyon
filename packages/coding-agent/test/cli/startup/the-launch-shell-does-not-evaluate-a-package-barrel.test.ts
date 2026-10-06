@@ -77,6 +77,22 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * `node:` built-ins and utils leaves the shell already evaluates. The ceiling keeps the one leaf of
  * margin.
  *
+ * RE-MEASURED 2026-10-03 at 358, from 355: `@veyyon/utils/activity-signal`, the keystroke and frame
+ * report that parks the samplers of a resting session, which `core/tui.ts` reports to;
+ * `@veyyon/utils/rearming-timeout`, the timer the samplers re-arm in place; and
+ * `@veyyon/utils/idle-trim`, whose busy-CPU threshold the loop watchdog `core/tui.ts` arms reads. The
+ * first two import nothing, and `idle-trim` imports them, the logger and `@veyyon/natives`, which the
+ * shell already evaluates. The ceiling keeps the one leaf of margin.
+ *
+ * RE-MEASURED 2026-10-04 at 359, from 358: `@veyyon/utils/local-time`, the local date and clock
+ * time the logger reads instead of a `Date`, whose first local-time read builds the ICU time zone
+ * cache. It imports only `bun:ffi`. The ceiling keeps the one leaf of margin.
+ *
+ * RE-MEASURED 2026-10-04 at 360, from 359: `hosts/terminal/engine/src/core/frame-pacing.ts`, the
+ * frame throttle and the terminal hosts' settle windows split out of `core/tui.ts`, which the shell
+ * already evaluates, so the graph runs no new code. It imports nothing. The ceiling keeps the one
+ * leaf of margin.
+ *
  * RE-MEASURED 2026-10-04 at 359, from 355: usage tracking additions for Antigravity account windows
  * and launch-facts reorganization. The ceiling keeps the one leaf of margin.
  */

@@ -193,7 +193,8 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			format: "esm",
 			...((options.bytecode ?? Bun.env.VEYYON_BUILD_BYTECODE !== "0") ? { bytecode: true } : {}),
 			plugins: [
-				await createLegacyPiVirtualModulePlugin(),
+				// mupdf is replaced by the stub below, so the export pass leaves it unbundled.
+				await createLegacyPiVirtualModulePlugin([...COMPILED_EXTERNAL_DEPENDENCIES, "mupdf"]),
 				createMupdfStubPlugin(),
 				createYargsImportMetaResolvePatchPlugin(),
 				createPrecompiledPromptPlugin(),

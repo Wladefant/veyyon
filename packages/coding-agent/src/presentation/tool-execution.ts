@@ -20,6 +20,7 @@ import { displayArguments } from "./display-arguments";
 import { toReadEntryView } from "./read-group";
 import { ToolCallPreview, type ToolCallPreviewListener } from "./tool-call-preview";
 import { buildGenericDisplay, getTextOutput, NO_CARD_VIEWS, renderToolCardViews } from "./tool-card-views";
+import { serializeToolInput, type ToolInputMemo, withLazyInput } from "./tool-input";
 
 export type DisplaceableToolName = "job" | "todo";
 
@@ -106,6 +107,18 @@ export function getAllImageBlocks(
 	return [...contentImages, ...detailImages];
 }
 
+/**
+ * The images a block built from `result` shows: every image block that carries both its bytes and
+ * its type. Derived from the result alone, so a card can ask for them without building its views.
+ */
+export function toolExecutionImages(result: ToolExecutionBuildParams["result"]): ToolExecutionImageItem[] | undefined {
+	const images: ToolExecutionImageItem[] = [];
+	for (const img of getAllImageBlocks(result)) {
+		if (img.data && img.mimeType) images.push({ data: img.data, mimeType: img.mimeType });
+	}
+	return images.length > 0 ? images : undefined;
+}
+
 export function getImageSourceName(result: { details?: unknown } | undefined, args: unknown): string | undefined {
 	const detailsRecord = isRecord(result?.details) ? result.details : undefined;
 	const argsRecord = isRecord(args) ? args : undefined;
@@ -130,8 +143,14 @@ export function buildToolRenderContext(
 	const context: Record<string, unknown> = {};
 	if (toolName === "bash") {
 		if (result) {
-			const output = getTextOutput(result).trimEnd();
-			context.output = output;
+			// Computed when a renderer reads it. The bash card reads its result, not this, so the whole tail
+			// of a streaming command is not sanitized a second time on every frame for a field nobody read.
+			let output: string | undefined;
+			Object.defineProperty(context, "output", {
+				configurable: true,
+				enumerable: true,
+				get: () => (output ??= getTextOutput(result).trimEnd()),
+			});
 		}
 		context.expanded = options.expanded ?? false;
 		context.previewLines = DEFAULT_TERMINAL_PREVIEW_LINES;
@@ -235,7 +254,19 @@ function resolveToolExecutionPolicies(params: ToolExecutionBuildParams): ToolExe
 	};
 }
 
-export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): ToolExecutionDisplay {
+/**
+ * What a producer keeps from one build of its block to the next. A card rebuilds its block for a
+ * spinner frame or an expansion with the same arguments.
+ */
+export interface ToolExecutionBuildMemo extends ToolInputMemo {
+	/** Whether a view renderer of the last build read the spinner frame. */
+	frameRead: boolean;
+}
+
+export function buildToolExecutionDisplay(
+	params: ToolExecutionBuildParams,
+	memo?: ToolExecutionBuildMemo,
+): ToolExecutionDisplay {
 	const toolName = params.toolName;
 	const toolCallId = params.toolCallId ?? "";
 	const toolLabel = params.toolLabel ?? params.tool?.label ?? toolName;
@@ -259,11 +290,17 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 	// Call args resolution
 	const callArgs = params.callPreview ? params.callPreview.arguments : args;
 
-	// View context
+	// View context. The frame is read through a getter so a producer knows whether the views it built
+	// change with the spinner; a renderer that spreads the context reads it too.
+	if (memo) memo.frameRead = false;
+	const frame = params.frame;
 	const viewContext: ToolViewContext = {
 		expanded: params.expanded ?? false,
 		partial: isPartial,
-		frame: params.frame,
+		get frame() {
+			if (memo) memo.frameRead = true;
+			return frame;
+		},
 		hasResult: Boolean(renderableResult),
 		frozen: policies.backgroundTaskFrozen,
 		showResolvedModel: params.showResolvedModel ?? showResolvedModelDefault(),
@@ -291,12 +328,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 			? buildGenericDisplay(args, renderableResult, isPartial, params.frame)
 			: undefined;
 
-	// Image extraction
-	const imageBlocks = getAllImageBlocks(result);
 	const imageSourcePath = getImageSourceName(result, args);
-	const images: ToolExecutionImageItem[] = imageBlocks
-		.filter(img => img.data && img.mimeType)
-		.map(img => ({ data: img.data, mimeType: img.mimeType }));
 
 	const isError = params.isError === true || renderableResult?.isError === true;
 
@@ -310,7 +342,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 		notExecutedReason: notExecuted,
 		neverRan,
 		generic,
-		images: images.length > 0 ? images : undefined,
+		images: toolExecutionImages(result),
 		imageSourcePath,
 		policies,
 		failures: views.failures,
@@ -330,7 +362,10 @@ export function toolExecutionStatus(params: ToolExecutionBuildParams): ToolStatu
 	return result === undefined ? "pending" : "succeeded";
 }
 
-export function buildToolExecutionBlock(params: ToolExecutionBuildParams): ToolExecutionBlock {
+export function buildToolExecutionBlock(
+	params: ToolExecutionBuildParams,
+	memo?: ToolExecutionBuildMemo,
+): ToolExecutionBlock {
 	const toolName = params.toolName;
 	const toolCallId = params.toolCallId ?? "";
 	const id = params.id ?? (toolCallId ? `tool:${toolCallId}` : `tool:${toolName}:${Date.now()}`);
@@ -340,37 +375,44 @@ export function buildToolExecutionBlock(params: ToolExecutionBuildParams): ToolE
 	const neverRan = isNeverRanResult(result);
 	const status = toolExecutionStatus(params);
 
-	const display = buildToolExecutionDisplay(params);
+	const display = buildToolExecutionDisplay(params, memo);
 	const renderableResult = neverRan ? undefined : result;
 	const isError = params.isError === true || renderableResult?.isError === true;
 	const textOutput = renderableResult ? getTextOutput(renderableResult) : undefined;
 	const blockOutput = isError ? undefined : textOutput;
 	const blockError = isError ? textOutput : undefined;
 
-	let inputStr = "";
-	if (typeof args === "string") {
-		inputStr = args;
-	} else if (args !== undefined) {
-		try {
-			inputStr = typeof args === "object" && args !== null ? JSON.stringify(args, null, 2) : JSON.stringify(args);
-		} catch {
-			inputStr = "[unserializable]";
-		}
+	if (memo === undefined) {
+		return {
+			kind: "tool-execution",
+			id,
+			toolCallId,
+			toolName,
+			status,
+			input: serializeToolInput(args),
+			output: blockOutput,
+			error: blockError,
+			durationMs: params.durationMs,
+			timestamp,
+			display,
+		};
 	}
-
-	return {
-		kind: "tool-execution",
-		id,
-		toolCallId,
-		toolName,
-		status,
-		input: inputStr,
-		output: blockOutput,
-		error: blockError,
-		durationMs: params.durationMs,
-		timestamp,
-		display,
-	};
+	return withLazyInput(
+		{
+			kind: "tool-execution",
+			id,
+			toolCallId,
+			toolName,
+			status,
+			output: blockOutput,
+			error: blockError,
+			durationMs: params.durationMs,
+			timestamp,
+			display,
+		} satisfies Omit<ToolExecutionBlock, "input">,
+		args,
+		memo,
+	);
 }
 
 export interface ToolExecutionProducerParams {
@@ -425,6 +467,8 @@ export class ToolExecutionProducer implements ToolCallPreviewListener {
 	#currentPolicies: ToolExecutionPolicies | undefined;
 	/** The arguments as the model sent them, so a repeat of the same object is recognised before conforming. */
 	#rawArgs: unknown;
+	/** The serialized arguments and whether the views read the frame, kept between builds of the block. */
+	readonly #memo: ToolExecutionBuildMemo = { inputArgs: undefined, input: undefined, frameRead: false };
 
 	constructor(params: ToolExecutionProducerParams) {
 		const cwd = params.cwd ?? getProjectDir();
@@ -454,8 +498,13 @@ export class ToolExecutionProducer implements ToolCallPreviewListener {
 	}
 
 	get block(): ToolExecutionBlock {
-		this.#currentBlock ??= buildToolExecutionBlock(this.#params);
+		this.#currentBlock ??= buildToolExecutionBlock(this.#params, this.#memo);
 		return this.#currentBlock;
+	}
+
+	/** The arguments as the card shows them, which the block states serialized as its `input`. */
+	get args(): unknown {
+		return this.#params.args;
 	}
 
 	get toolName(): string {
@@ -557,6 +606,8 @@ export class ToolExecutionProducer implements ToolCallPreviewListener {
 	 */
 	releaseBlock(): void {
 		this.#currentBlock = undefined;
+		this.#memo.input = undefined;
+		this.#memo.inputArgs = undefined;
 	}
 
 	/**
@@ -570,18 +621,38 @@ export class ToolExecutionProducer implements ToolCallPreviewListener {
 		return this.#currentPolicies;
 	}
 
+	/**
+	 * Whether the block changes with the spinner frame: a view read the frame when the block was last
+	 * built, or the card declares an animation. A declared animation is rebuilt on every frame, because
+	 * its renderer may state what it reads from the clock rather than from the frame.
+	 */
+	get followsFrame(): boolean {
+		if (this.#memo.frameRead) return true;
+		const policies = this.policies();
+		return policies.animatedPendingPreview || policies.animatedPartialResult || policies.displaceable === "job";
+	}
+
+	/**
+	 * Take the card's context, dropping the block only when it no longer matches. A spinner frame
+	 * moves twelve times a second while a call streams, and a block that does not follow the frame is
+	 * the same block at the next one: the generic card states only whether a frame is present, and the
+	 * policies do not read it at all.
+	 */
 	#applyContext(context: ToolExecutionDrawContext): void {
+		const params = this.#params;
 		const expanded = context.expanded ?? false;
-		if (
-			(this.#params.expanded ?? false) === expanded &&
-			this.#params.frame === context.frame &&
-			this.#params.frozen === context.frozen
-		) {
+		if ((params.expanded ?? false) === expanded && params.frozen === context.frozen) {
+			const previousFrame = params.frame;
+			if (previousFrame === context.frame) return;
+			params.frame = context.frame;
+			if (this.followsFrame || (previousFrame === undefined) !== (context.frame === undefined)) {
+				this.#currentBlock = undefined;
+			}
 			return;
 		}
-		this.#params.expanded = expanded;
-		this.#params.frame = context.frame;
-		this.#params.frozen = context.frozen;
+		params.expanded = expanded;
+		params.frame = context.frame;
+		params.frozen = context.frozen;
 		this.#currentBlock = undefined;
 		this.#currentPolicies = undefined;
 	}

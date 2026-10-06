@@ -160,6 +160,10 @@ export class EventController {
 	// emits one read per completion — does not break it, so a run of consecutive
 	// reads collapses into one group even across completion boundaries.
 	#lastVisibleBlockCount = 0;
+	// Content indexes of the streaming message already counted as visible. A
+	// block stays visible as it grows, so only the others are read on a delta:
+	// reading a streamed block's text flattens it, which costs its whole length.
+	#visibleBlocks = new Set<number>();
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundTaskCallIds = new Set<string>();
@@ -469,6 +473,7 @@ export class EventController {
 	resetTranscriptAnchors(): void {
 		this.#resetReadGroup();
 		this.#lastVisibleBlockCount = 0;
+		this.#visibleBlocks.clear();
 		this.#renderedCustomMessages.clear();
 		this.#lastIntent = undefined;
 		this.#toolTimelineComponents.clear();
@@ -708,6 +713,7 @@ export class EventController {
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
 			this.#lastVisibleBlockCount = 0;
+			this.#visibleBlocks.clear();
 			this.#projection.recordAssistantMessageToolCalls(event.message);
 			this.ctx.streamingComponent = createAssistantMessageComponent(this.ctx);
 			this.ctx.streamingMessage = event.message;
@@ -885,11 +891,7 @@ export class EventController {
 			const timeline = splitAssistantMessageToolTimeline(this.ctx.streamingMessage);
 			this.#streamingReveal.setTarget(toAssistantMessageView(timeline.beforeTools));
 
-			const visibleBlockCount = this.ctx.streamingMessage.content.filter(
-				content =>
-					(content.type === "text" && canonicalizeMessage(content.text)) ||
-					(content.type === "thinking" && canonicalizeMessage(content.thinking)),
-			).length;
+			const visibleBlockCount = this.#countVisibleBlocks(this.ctx.streamingMessage.content);
 			if (visibleBlockCount > this.#lastVisibleBlockCount) {
 				// A new visible block after the first (e.g. thinking closed, next text
 				// block) changes transcript layout; the first block's growth is paced
@@ -1040,6 +1042,21 @@ export class EventController {
 			}
 			this.#repaintMessageUpdateComponents(repaintTargets);
 		}
+	}
+
+	/** Visible (non-placeholder) text and thinking blocks of the streaming message seen so far. */
+	#countVisibleBlocks(content: AssistantMessage["content"]): number {
+		for (let i = 0; i < content.length; i++) {
+			if (this.#visibleBlocks.has(i)) continue;
+			const block = content[i]!;
+			if (
+				(block.type === "text" && canonicalizeMessage(block.text)) ||
+				(block.type === "thinking" && canonicalizeMessage(block.thinking))
+			) {
+				this.#visibleBlocks.add(i);
+			}
+		}
+		return this.#visibleBlocks.size;
 	}
 
 	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
@@ -1402,6 +1419,8 @@ export class EventController {
 		// next turn opens fresh from `thinking` rather than mid-motion.
 		setShimmerActivity("idle");
 		this.ctx.statusLine.markActivityEnd();
+		// The turn's tools may have moved the tree; the marker is otherwise up to GIT_STATUS_MAX_AGE_MS old.
+		this.ctx.statusLine.refreshGitStatus();
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
 		if (this.ctx.clearWorkingLoader()) {

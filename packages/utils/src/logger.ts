@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isPromise } from "node:util/types";
 import { getLogsDir } from "./dirs";
+import { localTime } from "./local-time";
 import { logFileName, RotatingLogFile } from "./log-file";
 import { drainModuleLoadEvents } from "./timing-buffer";
 import { errorMessage } from "./type-guards";
@@ -54,12 +55,20 @@ function pad2(value: number): string {
 
 /** `YYYY-MM-DDTHH:mm:ss.SSS±HH:MM` in local time. */
 function localTimestamp(date: Date): string {
-	const offset = -date.getTimezoneOffset();
+	const {
+		year,
+		month,
+		day,
+		hours,
+		minutes,
+		seconds,
+		milliseconds: ms,
+		offsetMinutes: offset,
+	} = localTime(date.getTime());
 	const absolute = Math.abs(offset);
-	const ms = date.getMilliseconds();
 	return (
-		`${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}` +
-		`T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}` +
+		`${year}-${pad2(month)}-${pad2(day)}` +
+		`T${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}` +
 		`.${ms < 10 ? `00${ms}` : ms < 100 ? `0${ms}` : ms}` +
 		`${offset < 0 ? "-" : "+"}${pad2(Math.floor(absolute / 60))}:${pad2(absolute % 60)}`
 	);

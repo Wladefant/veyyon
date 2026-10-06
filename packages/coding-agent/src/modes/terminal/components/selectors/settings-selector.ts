@@ -90,10 +90,9 @@ import {
 	noSelectableEffortNotice,
 } from "../../../../thinking";
 import { getTabBarTheme } from "../../shared";
+import { computeModalDims, MODAL_SIZING_SETTINGS, sizingForArea } from "../chrome/modal-geometry";
 import {
 	BREADCRUMB_HOVER_ID,
-	computeModalDims,
-	MODAL_SIZING_SETTINGS,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	planModalChrome,
@@ -102,7 +101,6 @@ import {
 	SETTINGS_BROWSE_SHORTCUTS,
 	SETTINGS_FILTER_SHORTCUTS,
 	SETTINGS_SUBPANE_SHORTCUTS,
-	sizingForArea,
 } from "../chrome/modal-shell";
 import { handleInputOrEscape, PluginSettingsComponent } from "../dialogs/plugin-settings";
 import { RollbackPanelComponent } from "../dialogs/rollback-panel";

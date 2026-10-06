@@ -137,10 +137,10 @@ export class StreamMarkupHealing {
 	}
 
 	/**
-	 * Flush held-back stream-end fragments as ordered events. Partial tool-call
-	 * sections/envelopes are dropped by the delegated scanners; unterminated
-	 * thinking blocks are emitted as thinking, matching the previous MiniMax parser
-	 * behavior.
+	 * Flush held-back stream-end fragments as ordered events. A tool call the stream ended inside is
+	 * dropped: the delegated scanner ends it `unterminated`, and a leaked envelope that never closed is
+	 * not a call to run. Unterminated thinking blocks are emitted as thinking, matching the previous
+	 * MiniMax parser behavior.
 	 */
 	flushEvents(): StreamMarkupHealingEvent[] {
 		const tail = this.#toolScanner ? this.#healThinking(this.#toolScanner.flush()) : [];
@@ -205,6 +205,7 @@ function convertScannerEvents(events: readonly InbandScanEvent[]): StreamMarkupH
 				if (event.delta.length > 0) out.push({ type: "thinking", thinking: event.delta });
 				break;
 			case "toolEnd":
+				if (event.unterminated) break;
 				out.push({
 					type: "toolCall",
 					call: {

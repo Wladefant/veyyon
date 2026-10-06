@@ -37,7 +37,7 @@ import { atomicWriteJson } from "@veyyon/utils/atomic-write";
 import { getLaunchFactsCachePath, getProjectDir, VERSION } from "@veyyon/utils/dirs";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
-import { clampLow } from "@veyyon/utils/math";
+import { clamp } from "@veyyon/utils/math";
 import { detectTerminalId } from "@veyyon/utils/terminal-emulator";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking/constants";
@@ -259,11 +259,6 @@ function modelRole(): string {
 	return settings.getModelRole("default") ?? "";
 }
 
-/** Hold a percentage inside the band the gauge can draw, since the bar derives its cells from it. */
-function clampPercent(percent: number): number {
-	return clampLow(percent, 0, 100);
-}
-
 /**
  * A recorded percentage the gauge can draw, or null.
  *
@@ -274,7 +269,7 @@ function clampPercent(percent: number): number {
  * exist yet, and a test cannot tell them apart.
  */
 function asPercent(value: unknown): number | null {
-	return Number.isFinite(value) ? clampPercent(value as number) : null;
+	return Number.isFinite(value) ? clamp(value as number, 0, 100) : null;
 }
 
 /**
@@ -550,10 +545,10 @@ export function recordLaunchFacts(update: LaunchFactsUpdate): Promise<void> {
 	// exactly what this project's context adds. Only an at-rest reading reaches here (the
 	// recorder's own guard), so neither number is the size of somebody's conversation.
 	if (update.contextPercent !== undefined && Number.isFinite(update.contextPercent)) {
-		nextProject.contextPercent = clampPercent(Math.round(update.contextPercent));
+		nextProject.contextPercent = clamp(Math.round(update.contextPercent), 0, 100);
 	}
 	if (update.modelContextPercent !== undefined && Number.isFinite(update.modelContextPercent)) {
-		nextModel.contextPercent = clampPercent(Math.round(update.modelContextPercent));
+		nextModel.contextPercent = clamp(Math.round(update.modelContextPercent), 0, 100);
 	}
 
 	// The one fact a caller can erase: `null` states that the row printed no effort, which is a

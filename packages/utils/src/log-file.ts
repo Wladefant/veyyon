@@ -20,6 +20,7 @@ import type * as Zlib from "node:zlib";
 import { APP_DIRECTORY_SLUG } from "./app-identity";
 import { atomicWriteFileWith } from "./atomic-write";
 import { isEnoent } from "./fs-error";
+import { localCalendarDate } from "./local-time";
 
 /**
  * Name of the log file for the local calendar day of `date` (`veyyon.YYYY-MM-DD.log`). The logger,
@@ -30,9 +31,7 @@ import { isEnoent } from "./fs-error";
  * whenever `dirs.ts` is the first of the two to load.
  */
 export function logFileName(date = new Date()): string {
-	const month = String(date.getMonth() + 1).padStart(2, "0");
-	const day = String(date.getDate()).padStart(2, "0");
-	return `${APP_DIRECTORY_SLUG}.${date.getFullYear()}-${month}-${day}.log`;
+	return `${APP_DIRECTORY_SLUG}.${localCalendarDate(date.getTime())}.log`;
 }
 
 /** Size at which the live file is moved to a numbered generation. */

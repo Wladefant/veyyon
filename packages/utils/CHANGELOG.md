@@ -38,8 +38,11 @@
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
+- The `@veyyon/utils` barrel re-exports every export of `@veyyon/utils/abortable`, which adds `cancellationError` and `abortableSource` to it.
+- `LoopRace` races each pass of a loop against an outcome that settles once for the loop's life, such as an abort, and settles as `Promise.race([pass, outcome])` would without attaching a reaction per pass to the pending outcome, so the race holds no pass the loop moved past.
 - `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.
 - `@veyyon/utils/rearming-timeout` exports `rearmingTimeout`, a schedule for a callback that arms its own next run, which re-arms one `setTimeout` with `refresh()` instead of creating a timeout per call.
+- `@veyyon/utils/byte-truncate` exports `dropFrontBytes`, which walks whole characters off the front of a string while a byte count exceeds a budget and returns the index the kept text starts at and its UTF-8 length, without encoding the string.
 - `@veyyon/utils/activity-signal` exports `ActivitySignal` and the process-wide `processActivity`: a host attaches with `attachHost()` and calls `report()` on its work, and a sampler that found the process quiet calls `park(wake)` to arm no timer until the next report.
 - `LoopWatchdog` accepts `parkAfterMs` (default 10,000) and `activity`, and `IdleTrim` accepts `activity`.
 - `IdleTrim` accepts `release`, which runs on the first quiet sampling window after a busy one and again after each trim; a `release` that throws is not called again and the trim continues.
@@ -55,12 +58,17 @@
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
 - `detachedString` returns a string's characters in a buffer of their own, so a slice, split piece or regex capture stored past the text it was cut from no longer keeps that text alive.
-- `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
-- `@veyyon/utils/idle-trim` exports `trimEngine`, the `Bun.shrink()` call `IdleTrim` runs when no `trim` is given.
+- `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `trimEngine()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
+- `@veyyon/utils/idle-trim` exports `trimEngine`, the trim `IdleTrim` runs when no `trim` is given, which calls `Bun.shrink()` and then returns the free pages of the C allocator's arenas with `releaseFreeHeapPages()`, so a session that read four 8 MiB web pages settles at 216 MiB RSS instead of 504 MiB.
 - `@veyyon/utils/log-file` exports `RotatingLogFile`, which appends each line to the profile's day file in one `write(2)`, moves a full file to the next free numbered generation, gzips a generation no writer has appended to for 3 seconds and keeps the newest five files, and `logFileName`, the day file's name for a local date.
+- `@veyyon/utils/yaml-sync` exports `loadYaml`, which returns the `yaml` module namespace and evaluates the package on its first call.
+- `@veyyon/utils/local-time` exports `localTime`, an instant's local date, clock time and UTC offset, read from the C library's `localtime_r` on Linux and macOS and from a `Date` on Windows or while `process.env.TZ` differs from its launch value, and `localCalendarDate`, the instant's local `YYYY-MM-DD`.
 
 ### Changed
 
+- The logger's line timestamps, its day file name and the terminal output guard's redirect target read local time through `localTime` instead of a `Date`, and `analyzeTemplate` lists variables in code-unit order instead of `localeCompare` order, so none of them builds ICU's time zone cache or collator; with a POSIX rule string in `TZ`, which ICU does not parse, log timestamps follow the rule.
+- `getSegmenter`, word navigation and the diagram renderer's text measure build their `Intl.Segmenter` on first use instead of when their module loads, so a launch opens no ICU break iterator before it segments text.
+- `@veyyon/utils/yaml-sync` evaluates the `yaml` package on the first settings file edit instead of when the module loads, which keeps 72 modules off a launch that edits no settings file.
 - Six class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `@veyyon/utils/json-snapshot` frames each snapshot with a layout version, payload byte length and CRC-32 instead of a SHA-256 digest, and rejects snapshots framed by the previous layout.
 - `utf8ByteLength` measures a whole string, or a range longer than 64 code units, with `Buffer.byteLength`, and `isWellFormedUtf16` answers with `String.prototype.isWellFormed`, instead of looping over code units, cutting a 3 KB ASCII string from 11.1 µs to 28 ns and from 1.3 µs to 4.5 ns with identical answers.
@@ -102,6 +110,7 @@
 - Mermaid `colorMode: "html"` output escapes `"` and `'` in diagram text and in each span's color attribute, and escapes uncolored xychart text.
 - `extractRetryHint` reads `retry-after: <date>` in an error message as a wait until that instant instead of a wait of the year's number of seconds, and reads `x-ratelimit-reset-ms`, `x-ratelimit-reset` and `x-ratelimit-reset-after` written into a message as it reads those headers; `RETRY_HINT_HEADERS` exports the header forms both readings share.
 - `getLogPath` names the local calendar day's file, the file the logger writes, instead of the UTC day's, so the stderr redirect, the startup log hint and the debug report read the logger's file in a zone off UTC when the two dates differ.
+- `errorMessage` returns the `Object.prototype.toString` tag for a thrown value with no string form, such as a null-prototype object or one whose `toString` throws, instead of throwing a `TypeError` from inside the caller's error handling.
 
 ## [1.5.5] - 2026-09-25
 

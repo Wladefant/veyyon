@@ -290,11 +290,17 @@ export async function discoverAuthStorage(options: DiscoverAuthStorageOptions = 
 	// can prepend legacy locations (e.g. a per-profile `shared-auth` dir that
 	// predates the global-store move). No-op when the store dir is the per-profile
 	// dir (sharing off) or the shared store already has credentials.
+	const store = await SqliteAuthCredentialStore.open(dbPath);
 	if (options.storeAgentDir && options.storeAgentDir !== agentDir) {
 		const seedSources = options.seedSourceDbPaths ?? [getAgentDbPath(agentDir)];
-		await seedSharedCredentialStore(seedSources, dbPath);
+		try {
+			await seedSharedCredentialStore(seedSources, store, dbPath);
+		} catch (error) {
+			store.close();
+			throw error;
+		}
 	}
-	const storage = await AuthStorage.create(dbPath, {
+	const storage = new AuthStorage(store, {
 		configValueResolver: options.configValueResolver,
 		sourceLabel: options.sourceLabel ?? `local ${dbPath}`,
 		loadBalancing: options.loadBalancing,
@@ -315,45 +321,47 @@ export async function discoverAuthStorage(options: DiscoverAuthStorageOptions = 
  * skipped: a known-bad login is not worth promoting. Idempotent under
  * concurrency because `replaceAuthCredentialsForProvider` is a per-provider
  * replace with identical data, so a racing second process writes the same rows.
+ *
+ * `shared` is the connection the caller goes on to serve credentials from, so
+ * a launch opens and schema-checks the shared database once rather than twice.
  */
-async function seedSharedCredentialStore(sourceDbPaths: readonly string[], sharedDbPath: string): Promise<void> {
-	const shared = await SqliteAuthCredentialStore.open(sharedDbPath);
-	try {
-		if (shared.listAuthCredentials().length > 0) return;
-		for (const sourceDbPath of sourceDbPaths) {
-			if (sourceDbPath === sharedDbPath) continue;
-			if (!existsSync(sourceDbPath)) continue;
-			const source = await SqliteAuthCredentialStore.open(sourceDbPath);
-			let seeded = false;
-			try {
-				// `listAuthCredentials` already returns only active rows; the explicit
-				// disabled guard keeps the promotion correct even if that ever changes,
-				// so a known-bad login is never carried into the shared store.
-				const rows = source.listAuthCredentials().filter(row => row.disabledCause === null);
-				if (rows.length === 0) continue;
-				const byProvider = new Map<string, AuthCredential[]>();
-				for (const row of rows) {
-					const list = byProvider.get(row.provider);
-					if (list) list.push(row.credential);
-					else byProvider.set(row.provider, [row.credential]);
-				}
-				for (const [provider, credentials] of byProvider) {
-					shared.replaceAuthCredentialsForProvider(provider, credentials);
-				}
-				seeded = true;
-				logger.info("Promoted per-profile credentials to the shared store", {
-					source: sourceDbPath,
-					shared: sharedDbPath,
-					providers: Array.from(byProvider.keys()),
-					count: rows.length,
-				});
-			} finally {
-				source.close();
+async function seedSharedCredentialStore(
+	sourceDbPaths: readonly string[],
+	shared: SqliteAuthCredentialStore,
+	sharedDbPath: string,
+): Promise<void> {
+	if (shared.listAuthCredentials().length > 0) return;
+	for (const sourceDbPath of sourceDbPaths) {
+		if (sourceDbPath === sharedDbPath) continue;
+		if (!existsSync(sourceDbPath)) continue;
+		const source = await SqliteAuthCredentialStore.open(sourceDbPath);
+		let seeded = false;
+		try {
+			// `listAuthCredentials` already returns only active rows; the explicit
+			// disabled guard keeps the promotion correct even if that ever changes,
+			// so a known-bad login is never carried into the shared store.
+			const rows = source.listAuthCredentials().filter(row => row.disabledCause === null);
+			if (rows.length === 0) continue;
+			const byProvider = new Map<string, AuthCredential[]>();
+			for (const row of rows) {
+				const list = byProvider.get(row.provider);
+				if (list) list.push(row.credential);
+				else byProvider.set(row.provider, [row.credential]);
 			}
-			// First non-empty source wins; do not merge older stores on top.
-			if (seeded) return;
+			for (const [provider, credentials] of byProvider) {
+				shared.replaceAuthCredentialsForProvider(provider, credentials);
+			}
+			seeded = true;
+			logger.info("Promoted per-profile credentials to the shared store", {
+				source: sourceDbPath,
+				shared: sharedDbPath,
+				providers: Array.from(byProvider.keys()),
+				count: rows.length,
+			});
+		} finally {
+			source.close();
 		}
-	} finally {
-		shared.close();
+		// First non-empty source wins; do not merge older stores on top.
+		if (seeded) return;
 	}
 }

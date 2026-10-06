@@ -9,7 +9,7 @@ import {
 	type StreamingJsonStringExtractor,
 	sameStringKeys,
 } from "../../../tools/core/streamed-tool-args";
-import { nextStep, STREAMING_REVEAL_FRAME_MS } from "./streaming-reveal";
+import { RevealFrameClock, RevealPacer } from "./streaming-reveal";
 
 /** Minimal component surface the reveal pushes frames into. */
 type ToolArgsRevealComponent = Component & {
@@ -103,6 +103,8 @@ type RevealEntry = {
 	target: string;
 	/** Revealed UTF-16 code units of `target`. */
 	revealed: number;
+	/** Paces `revealed` toward `target` at the rate the stream arrives. */
+	pacer: RevealPacer;
 	/** Custom-tool raw input: display args are `{ input: prefix }`, never parsed as JSON. */
 	rawInput: boolean;
 	/** Whether the renderer observes fresh raw JSON prefixes directly. */
@@ -135,8 +137,8 @@ export type ToolArgsRevealTarget = {
  * paces assistant text: providers that deliver `partialJson` in large batches
  * (or throttle their partial parses) would otherwise make write/edit/bash
  * streaming previews jump in chunks. Each pending tool call reveals its raw
- * argument stream at the shared 30fps cadence with the same adaptive
- * catch-up step. JSON prefixes are parsed only when enough new bytes arrive to
+ * argument stream at the shared 30fps cadence through its own {@link RevealPacer}.
+ * JSON prefixes are parsed only when enough new bytes arrive to
  * change renderer-visible fields, while raw-prefix consumers still receive
  * fresh `__partialJson` on every reveal frame.
  *
@@ -148,7 +150,7 @@ export class ToolArgsRevealController {
 	readonly #getSmoothStreaming: () => boolean;
 	readonly #requestRender: (component: Component) => void;
 	readonly #entries = new Map<string, RevealEntry>();
-	#timer: NodeJS.Timeout | undefined;
+	readonly #clock = new RevealFrameClock(() => this.#tick());
 
 	constructor(options: ToolArgsRevealControllerOptions) {
 		this.#getSmoothStreaming = options.getSmoothStreaming;
@@ -166,12 +168,14 @@ export class ToolArgsRevealController {
 	 */
 	setTarget(id: string, partialJson: string, target: ToolArgsRevealTarget): Record<string, unknown> {
 		const { rawInput, exposeRawPartialJson, streamingStringKeys, argot } = target;
+		const now = performance.now();
 		let entry = this.#entries.get(id);
 		if (!entry) {
 			entry = {
 				component: undefined,
 				target: partialJson,
 				revealed: clampSliceEnd(partialJson, partialJson.length),
+				pacer: new RevealPacer(),
 				rawInput,
 				exposeRawPartialJson,
 				parsedArgs: {},
@@ -205,6 +209,7 @@ export class ToolArgsRevealController {
 			}
 			entry.target = partialJson;
 		}
+		entry.pacer.arrive(now, partialJson.length, entry.revealed);
 		// Toggle may flip mid-call: snap the reveal to everything received so
 		// pacing stops (and never restarts while the toggle stays off).
 		if (!this.#getSmoothStreaming()) entry.revealed = entry.target.length;
@@ -224,7 +229,7 @@ export class ToolArgsRevealController {
 	 *  text snaps to the full message at message_end. */
 	finish(id: string): void {
 		this.#entries.delete(id);
-		if (this.#entries.size === 0) this.#stopTimer();
+		if (this.#entries.size === 0) this.#clock.stop();
 	}
 
 	/** Snap every live entry to its full received stream and clear. Used at
@@ -237,41 +242,28 @@ export class ToolArgsRevealController {
 			}
 		}
 		this.#entries.clear();
-		this.#stopTimer();
+		this.#clock.stop();
 	}
 
 	/** Clear without pushing (teardown). */
 	stop(): void {
 		this.#entries.clear();
-		this.#stopTimer();
+		this.#clock.stop();
 	}
 
 	#syncTimer(): void {
 		for (const entry of this.#entries.values()) {
 			if (entry.revealed < entry.target.length) {
-				this.#startTimer();
+				this.#clock.start();
 				return;
 			}
 		}
-		this.#stopTimer();
-	}
-
-	#startTimer(): void {
-		if (this.#timer) return;
-		this.#timer = setInterval(() => {
-			this.#tick();
-		}, STREAMING_REVEAL_FRAME_MS);
-		this.#timer.unref?.();
-	}
-
-	#stopTimer(): void {
-		if (!this.#timer) return;
-		clearInterval(this.#timer);
-		this.#timer = undefined;
+		this.#clock.stop();
 	}
 
 	#tick(): void {
-		let advanced = false;
+		const now = performance.now();
+		let backlogged = false;
 		// Collect components with changed display args; render each subtree once
 		// per tick even when multiple entries share a component (they don't
 		// today, but the API contract doesn't prevent it).
@@ -279,19 +271,19 @@ export class ToolArgsRevealController {
 		for (const [id, entry] of this.#entries) {
 			const backlog = entry.target.length - entry.revealed;
 			if (backlog <= 0 || !entry.component) continue;
-			entry.revealed = clampSliceEnd(entry.target, entry.revealed + nextStep(backlog));
-			const display = displayArgsForPrefix(entry, entry.target.slice(0, entry.revealed));
-			if (display.changed) {
-				entry.component.updateArgs(display.args, id);
-				rendered.add(entry.component);
+			const step = entry.pacer.step(now, backlog);
+			if (step > 0) {
+				entry.revealed = clampSliceEnd(entry.target, entry.revealed + step);
+				const display = displayArgsForPrefix(entry, entry.target.slice(0, entry.revealed));
+				if (display.changed) {
+					entry.component.updateArgs(display.args, id);
+					rendered.add(entry.component);
+				}
 			}
-			advanced = true;
+			if (entry.revealed < entry.target.length) backlogged = true;
 		}
-		if (advanced) {
-			for (const component of rendered) this.#requestRender(component);
-		} else {
-			// Every entry caught up (or unbound); setTarget restarts on growth.
-			this.#stopTimer();
-		}
+		for (const component of rendered) this.#requestRender(component);
+		// Every entry caught up (or unbound); setTarget restarts on growth.
+		if (!backlogged) this.#clock.stop();
 	}
 }

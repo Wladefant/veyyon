@@ -11,17 +11,19 @@ import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
 import {
-	CARD_BODY_COL_INSET,
 	computeModalDims,
 	MODAL_SIZING_MEDIUM,
-	type ModalShellGeometry,
-	type ModalShortcut,
 	type ModalSizing,
 	modalWidthForContent,
+	sizingForArea,
+} from "../chrome/modal-geometry";
+import {
+	CARD_BODY_COL_INSET,
+	type ModalShellGeometry,
+	type ModalShortcut,
 	modalWidthForTitle,
 	planModalChrome,
 	renderModalShell,
-	sizingForArea,
 } from "../chrome/modal-shell";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 

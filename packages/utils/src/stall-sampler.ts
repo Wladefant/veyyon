@@ -260,11 +260,12 @@ export class StallSampler implements StallStackSource {
 
 	/**
 	 * Restarts the profile at the parked interval, so the profiler's thread wakes once a second.
-	 * Stopping the profile does not stop the thread, which keeps waking at the last interval set:
-	 * MEASURED, a profile stopped after running at 100ms woke its thread 99 times in 10s, and one
-	 * stopped after running at 10s woke it once. The thread applies a new interval when its current
-	 * wait ends, so the quiet tick after the watchdog wakes restores a shorter interval within one
-	 * parked interval.
+	 * Stopping the profile does not stop the thread, which keeps waking at the last interval set,
+	 * and neither does `Profiler.disable` or disconnecting the session: MEASURED, a profile stopped
+	 * after running at 100ms woke its thread 99 times in 10s, one stopped after running at 10s woke it
+	 * once, and after `Profiler.disable` or a disconnect at 100ms the thread woke 10 times a second.
+	 * The thread applies a new interval when its current wait ends, so the quiet tick after the
+	 * watchdog wakes restores a shorter interval within one parked interval.
 	 */
 	park(): void {
 		if (this.#state !== "running" || this.#intervalUs >= PARKED_INTERVAL_US) return;

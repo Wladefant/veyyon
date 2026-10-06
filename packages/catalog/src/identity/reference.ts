@@ -209,59 +209,72 @@ function stripReferenceTrailingMarker(candidate: string): string | undefined {
 	return match ? candidate.slice(0, match.index) : undefined;
 }
 
-function getReferenceCandidateIds(modelId: string): string[] {
-	const candidates = new Set<string>();
-	const queue = [modelId];
-	for (let index = 0; index < queue.length; index += 1) {
-		const candidate = queue[index]?.trim();
-		if (!candidate || candidates.has(candidate)) continue;
-		candidates.add(candidate);
+const CLOUD_SUFFIXES = [":cloud", "-cloud"] as const;
 
-		for (const stripped of getBracketStrippedModelIdCandidates(candidate)) {
-			queue.push(stripped);
-		}
-		for (const segment of getModelLikeIdSegments(candidate)) {
-			queue.push(segment);
-		}
+/**
+ * Queue the ids `candidate` reduces to: each affix, segment, separator and spelling a proxy may add or
+ * change. `key` is the candidate's lookup key, its lowercase spelling.
+ */
+function queueReducedIds(candidate: string, key: string, queue: string[]): void {
+	for (const stripped of getBracketStrippedModelIdCandidates(candidate)) {
+		queue.push(stripped);
+	}
+	for (const segment of getModelLikeIdSegments(candidate)) {
+		queue.push(segment);
+	}
 
-		for (const suffix of [":cloud", "-cloud"] as const) {
-			if (candidate.toLowerCase().endsWith(suffix)) {
-				queue.push(candidate.slice(0, -suffix.length));
-			}
-		}
-
-		const slashIndex = candidate.lastIndexOf("/");
-		if (slashIndex !== -1) {
-			queue.push(candidate.slice(slashIndex + 1));
-		}
-
-		const colonToDash = candidate.replace(/:/g, "-");
-		if (colonToDash !== candidate) {
-			queue.push(colonToDash);
-		}
-
-		const lowercased = candidate.toLowerCase();
-		if (lowercased !== candidate) {
-			queue.push(lowercased);
-		}
-
-		const strippedMarker = stripReferenceTrailingMarker(candidate);
-		if (strippedMarker) {
-			queue.push(strippedMarker);
+	for (const suffix of CLOUD_SUFFIXES) {
+		if (key.endsWith(suffix)) {
+			queue.push(candidate.slice(0, -suffix.length));
 		}
 	}
-	return Array.from(candidates);
+
+	const slashIndex = candidate.lastIndexOf("/");
+	if (slashIndex !== -1) {
+		queue.push(candidate.slice(slashIndex + 1));
+	}
+
+	const colonToDash = candidate.replace(/:/g, "-");
+	if (colonToDash !== candidate) {
+		queue.push(colonToDash);
+	}
+
+	if (key !== candidate) {
+		queue.push(key);
+	}
+
+	const strippedMarker = stripReferenceTrailingMarker(candidate);
+	if (strippedMarker) {
+		queue.push(strippedMarker);
+	}
 }
 
-/** Resolve a (possibly proxied/affixed) model id to its bundled upstream reference. */
+/**
+ * Resolve a (possibly proxied/affixed) model id to its bundled upstream reference.
+ *
+ * Candidate ids are tried breadth-first from `modelId`, and a candidate is reduced only after it
+ * missed: an id the catalog holds as served reads one key and derives nothing. Each candidate is
+ * reduced once and each lookup key is read once; a key a candidate in another case already missed
+ * misses again, so it is not read twice.
+ */
 export function resolveModelReference<TCandidate extends ModelReferenceCandidate = Model<Api>>(
 	modelId: string,
 	index: ModelReferenceLookup<TCandidate>,
 ): TCandidate | undefined {
-	for (const candidate of getReferenceCandidateIds(modelId)) {
-		const key = normalizeReferenceKey(candidate);
-		const reference = index.exact.get(key) ?? index.suffixAlias.get(key);
-		if (reference) return reference;
+	const reduced = new Set<string>();
+	const missed = new Set<string>();
+	const queue = [modelId];
+	for (let next = 0; next < queue.length; next += 1) {
+		const candidate = queue[next]?.trim();
+		if (!candidate || reduced.has(candidate)) continue;
+		reduced.add(candidate);
+		const key = candidate.toLowerCase();
+		if (!missed.has(key)) {
+			const reference = index.exact.get(key) ?? index.suffixAlias.get(key);
+			if (reference) return reference;
+			missed.add(key);
+		}
+		queueReducedIds(candidate, key, queue);
 	}
 	return undefined;
 }

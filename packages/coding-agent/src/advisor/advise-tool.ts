@@ -6,8 +6,8 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { escapeXmlAttribute, escapeXmlText, lazy } from "@veyyon/utils";
-import { type } from "arktype";
 import { advisorPrompts } from "../prompts/advisor/rows";
 
 const adviseSchema = lazy(() =>

@@ -4,8 +4,8 @@ import type { Api, ImageContent, Model, ToolExample } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { completeSimple } from "@veyyon/ai/stream";
 import "@veyyon/ai/usage/defaults";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy, prompt } from "@veyyon/utils";
-import { type } from "arktype";
 import { extractTextContent } from "../../commit/utils";
 
 import { expandRoleAlias, getModelMatchPreferences, resolveModelFromString } from "../../config/model-resolver";

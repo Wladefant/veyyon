@@ -15,12 +15,16 @@
  * The status a producer states without building its block (the card's rail reads it) is compared
  * with its block's in every state the changes reach, a call that never ran, one an interrupt skipped
  * and one an interrupt stopped while running.
+ * A producer builds a block for every step a streaming call reveals, and the card drawing it reads the
+ * arguments rather than their serialized `input`, which for a long write is the whole file. In every
+ * state and every draw context the block is built without serializing the arguments, and reading its
+ * `input` serializes them once and states what the block always stated, on the block and on the wire.
  *
  * WHAT IT DOES NOT CATCH. A change that lands through the call preview's asynchronous edit diff is
  * delivered through `toolCallPreviewChanged`, which only an edit tool with a diff strategy drives; the
  * streamed edit preview suites cover that path.
  */
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { isDeepStrictEqual } from "node:util";
 import type { AnyAgentTool } from "@veyyon/agent-core";
 import type { ToolExecutionBlock } from "@veyyon/wire/presentation";
@@ -100,9 +104,11 @@ const CHANGES: Record<string, Record<string, Change>> = {
 
 /** Members that read the producer and change nothing it shows. */
 const READS = [
+	"args",
 	"block",
 	"callPreview",
 	"constructor",
+	"followsFrame",
 	"isPartial",
 	"policies",
 	"produceBlock",
@@ -213,6 +219,35 @@ describe("a tool card's block shows the latest change it was handed", () => {
 		expect(read.map(({ status }) => status)).toEqual(read.map(({ built }) => built));
 		expect(new Set(read.map(({ status }) => status))).toEqual(
 			new Set(["running", "succeeded", "failed", "rejected", "aborted"]),
+		);
+	});
+
+	it("serializes the arguments only when a block's input is read, in every state and context", () => {
+		const states: readonly (readonly Step[])[] = [
+			[],
+			...Object.values(CHANGES).flatMap(changes =>
+				Object.values(changes).map(({ from, apply }) => [...from, apply]),
+			),
+		];
+		const contexts = [{ expanded: false, frame: 0 }, ...Object.values(CONTEXT_CHANGES).map(([, second]) => second)];
+		const stringify = spyOn(JSON, "stringify");
+		const serializations = (producer: ToolExecutionProducer) =>
+			stringify.mock.calls.filter(([value]) => value === producer.args).length;
+		const read = states.flatMap(steps =>
+			contexts.map(context => {
+				const producer = producerAt(steps);
+				stringify.mockClear();
+				const block = producer.produceBlock(context);
+				const built = serializations(producer);
+				const input = [block.input, block.input];
+				const wire = (JSON.parse(JSON.stringify(block)) as ToolExecutionBlock).input;
+				return { built, read: serializations(producer), input, wire, spread: { ...block }.input };
+			}),
+		);
+		stringify.mockRestore();
+		const stated = states.flatMap(steps => contexts.map(() => JSON.stringify(producerAt(steps).args, null, 2) ?? ""));
+		expect(read).toEqual(
+			stated.map(input => ({ built: 0, read: 1, input: [input, input], wire: input, spread: input })),
 		);
 	});
 

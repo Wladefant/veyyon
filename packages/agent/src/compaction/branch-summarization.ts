@@ -554,8 +554,11 @@ function prepareBranchEntriesForProvider(
 		if (!rawMessage) continue;
 
 		// File tracking above retains raw paths. Clone and transform only the
-		// separately provider-bound message before lossy processing.
-		const message = transform ? transformProviderValue(rawMessage, transform) : rawMessage;
+		// separately provider-bound message before lossy processing. The walk runs
+		// over the message's fields as read: a session entry held on disk keeps its
+		// message's large fields behind accessors that read them back from the
+		// session file on first use, and the walk rejects accessors.
+		const message = transform ? transformProviderValue({ ...rawMessage }, transform) : rawMessage;
 		const tokens = estimateBranchSummaryTokens(message);
 
 		// Check budget before adding

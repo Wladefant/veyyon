@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `clearAnthropicFastModeFallback` moved from `@veyyon/ai/providers/anthropic` to `@veyyon/ai/providers/anthropic-session-state`, `deriveClaudeDeviceId` to `providers/claude-device-id`, `createOpenAICodexCompactionRequestContext`, `resetOpenAICodexHistoryAfterCompaction`, `getOpenAICodexTransportDetails`, `getOpenAICodexWebSocketDebugStats` and their option and result types from `providers/openai-codex-responses` to `providers/openai-codex/session-state`, `normalizeOpenAIPromptCacheKey` and `normalizeOpenRouterResponsesSessionId` from `providers/openai-shared` to `providers/openai-stable-ids`, and `signaturePolicy`, `sendsSignature`, `elidedSignatureBytes`, `firstRetainedAssistantIndex` and `SignaturePolicy` from `providers/google-shared` to `providers/google-thought-signatures`; the `@veyyon/ai` barrel keeps every name it exported.
+
+### Added
+
+- `@veyyon/ai/utils/schema/arktype` exports `type`, `scope` and `Type` stand-ins that evaluate the `arktype` package on their first call, construction or property read, plus `loadArktype`, `configureArktype`, which holds a configuration until the first `loadArktype` applies it, and `arktypeRelease`, which reads the installed release from package metadata; every arktype value import in the package goes through it, so a process that configures ArkType and builds no schema evaluates none of arktype's 115 modules.
+- `@veyyon/ai/dialect` exports `InbandToolEnd`, the `toolEnd` scan event, whose `unterminated: true` marks a call the stream ended inside; the Kimi and DSML leaked-markup healers drop such a call.
+
 ### Changed
 
 - GitHub Copilot requests now send `User-Agent: veyyon/<version>` instead of another client's name. `/login github-copilot` needs your own OAuth app Client ID (`VEYYON_GITHUB_COPILOT_CLIENT_ID` or `providers.githubCopilot.oauthClientId`) and fails with registration steps when none is set; stored logins keep working. `/login github-copilot` refuses an OAuth app that issues expiring tokens (Veyyon cannot refresh them). Copilot no longer derives `premiumRequests` from `X-Initiator`, which is still sent ([Fixes https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
@@ -145,6 +154,14 @@
 - Fixed Cursor duplicate tool execution on re-sent requests and prevented EventStream from leaking waiting resolvers on early abort.
 ### Changed
 
+- GitLab Duo builds the stream options its Anthropic, Responses and Chat Completions routes share once, and Claude usage builds its account-wide 5-hour and 7-day limits in one place for the usage endpoint and the rate-limit headers; requests and limits are unchanged.
+- `EventStream`'s iterator `return` passes its value to the generator as `undefined` rather than `void`; behavior is unchanged.
+- The in-band tag scanners find a held-back partial tag by comparing in place at the positions holding the tag's first character instead of slicing every candidate prefix on each delta, cutting the leaked-thinking scan of a 60,000-char answer at 24-char deltas from 2.6 ms to 0.4 ms with identical holds across every text and tag over a three-symbol alphabet.
+- The output-loop guard compares a streamed tail's candidate repeats char by char in place instead of slicing both sides of every candidate length on each delta, cutting its cost on a 200,000-char non-looping stream from 228 ms to 26 ms at 12-char deltas with identical verdicts across 200,000 generated tails.
+- The output-loop guard answers an ASCII char's letter test from its char code, probes only the repeat lengths at which the tail's last char recurs, keeps the recent vocabulary as per-word counts, matches a paragraph's references only when a low-novelty paragraph needs them and stops a trigram comparison once 0.8 is out of reach, cutting its cost on a 200,000-char non-looping stream from 53.0 to 35.7 ms at 4-char deltas and from 20.3 to 10.9 ms at 64-char deltas with identical verdicts across 8,000 generated streams.
+- The output-loop guard appends each delta to a fixed code-unit buffer instead of rebuilding a 900-char string tail, and resumes its paragraph-break search where the pending text's trailing whitespace begins instead of rescanning the paragraph, cutting its cost on a 400,000-char non-looping stream from 717 to 254 ns per char at 1-char deltas, from 146 to 86 at 6-char deltas and from 61 to 56 at 48-char deltas with verdicts unchanged under every cut tested.
+- `detectDegenerateRepetition` compares only the positions a qualifying run must cover, one per shortest agreement that clears the four-repeat and 180-char floors, and measures a run only around a position that agrees, so a 20,000-char summary scans in 0.04 ms instead of 9.2 ms and a 100,000-char summary in 0.17 ms instead of 44.6 ms, and `/compact` of a session whose summary is 100,000 chars costs 0.08 s of CPU instead of 0.14 s (median of nine), with identical verdicts to the exhaustive scan at every unit length.
+- `stream.ts` reaches the GitLab Duo Workflow provider through the lazy loader in `register-builtins.ts`, so a process loads its 3,000-line protocol client on the first `gitlab-duo-agent` turn instead of at startup.
 - 15 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
 - `calculateRateLimitBackoffMs` takes a `RateLimitBackoffContext` (`"credential-park"` or `"selector-suppression"`) that sets the cost of an unreadable failure: 30 minutes for a credential park, 5 minutes for a selector suppression.
@@ -153,6 +170,7 @@
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
+- The Ollama chat stream builds its message, markup healing and stop reason in an `OllamaTurn` and opens its response in `openOllamaResponse`; a 20,000-chunk stream decodes in 20.1 ms instead of 20.2 ms (median of 15), and the events it emits are unchanged.
 - The OpenAI-compatible stream reads a tool call's prior object arguments through the shared `isRecord` guard instead of an inline check; no user-visible change.
 - Provider message replay splits into per-block replay steps and a tool-result pairing pass, cutting its time on a 52,000-message history by 7% for Anthropic targets and 13% for OpenAI Responses targets.
 - The OpenAI Responses stream decoder routes each event through an open-item registry and per-event handlers instead of one 560-line loop, cutting decode time of a 9,600-event stream by 10%.
@@ -172,6 +190,11 @@
 - The JSON Schema value validator walks one instance path it pushes and pops instead of copying the path into every child, applies each keyword group in its own step, and lists an object's keys and builds its type list only when a keyword reads them, cutting validation of a 60-entry tool argument from 45 µs to 22 µs with identical issues across 600,000 generated schemas and values.
 - `utils/schema/wire.ts` holds no Zod value: the `@veyyon/ai` barrel installs Zod's core converter through `@veyyon/ai/utils/schema/zod-core`, so a process whose tools are all ArkType never evaluates Zod, and a process that loads no barrel converts a classic Zod schema through its own `toJSONSchema` and rejects a `zod/mini` schema with an error naming that import.
 - `usageWireSchemas` from `@veyyon/ai/usage/report-wire` is a `Lazy` holder read through `.value` instead of a function, and the Gemini CLI credentials validator is built on the first credentials read instead of when the provider module loads.
+- The Gemini usage reader takes the Gemini CLI headers from `@veyyon/catalog/wire/gemini-headers` instead of the Cloud Code Assist client, so a launch no longer evaluates that client and its validation helper (44 KiB of source).
+- The Anthropic session-state key and fast-mode reset, the Claude device id, the Codex session-state readers, the OpenAI cache-key normalizers, the Gemini thought-signature accounting and the Azure deployment map are defined in leaf modules, and `providers/server-compaction-transport` loads `providers/openai-compaction` on the first server-side compaction, so a caller of any of them no longer evaluates the Anthropic, Codex, Google or OpenAI shared modules; `providers/register-builtins` exports `loadOpenAICodexResponses`, the one loader of the Codex client.
+- `discoverAuthStorage` serves credentials from the shared-store connection it checked for seeding instead of opening the shared database a second time, which takes one open, schema check and close (1.1 ms median of 300) off each launch that uses the shared store.
+- The Hermes and Qwen3 dialects share one in-band scanner, `dialect/json-tool-call-scanner.ts`.
+- The Gemini and Gemma scanners split call arguments through one bracket walk, `dialect/bracket-walk.ts`, and the DeepSeek, Gemini, Harmony, Kimi, pi-native and leaked-reasoning scanners hold a partial tag and stream a fenced reasoning section through shared helpers in `dialect/coercion.ts`; apart from the two stream-end fixes below, the events they emit are unchanged.
 
 ### Fixed
 
@@ -188,6 +211,12 @@
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
 - An OpenAI-compatible request whose `tool_choice` the endpoint rejects with a 400 (`only "auto" is supported for 'tool_choice'`, `Thinking mode does not support this tool_choice`) retries once without that form, and the session leaves the form out for that model afterwards.
+- A Hermes in-band tool call is announced once its name has finished streaming, so the terminal no longer opens the call's card under a partial name such as `search` for `search_files`.
+- A Qwen3 tool call cut off by the end of the stream no longer repeats its body as visible text after the call, and a Hermes or Qwen3 `<tool_call>` block that names no call is shown as text instead of dropped.
+- Hermes and Harmony end a reasoning section, and Harmony ends an announced tool call, when the stream ends inside it with no text held back, instead of leaving it open.
+- An in-band tool call the stream ends inside now ends with the arguments read before the cut in the Anthropic, DeepSeek, GLM, Harmony, Kimi, MiniMax, pi-native and XML dialects, instead of staying open or ending with no arguments.
+- The leaked-reasoning healer ends a tag-closed reasoning section the stream ends inside when no text is held back, instead of leaving it open.
+- A Hermes or Qwen3 reply that ends on a bare `<tool_call>` shows the tag as text instead of dropping it.
 
 ## [1.5.4] - 2026-09-24
 

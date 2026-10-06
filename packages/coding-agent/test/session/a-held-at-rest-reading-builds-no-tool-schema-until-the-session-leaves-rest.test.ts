@@ -1,11 +1,12 @@
 /**
  * WHY: a top-level session measured its at-rest reading inside `createAgentSession`, and that
  * reading estimates the tool half of the prompt by building the ArkType schema of every active
- * tool: about 20 ms of a cold launch and 3.4 MiB of heap, all of it before the session's first
- * frame, for schemas only a prompt needs. The interactive host creates its session with the reading
- * held (`deferAtRestReading`) and takes it (`recordAtRestLaunch`) when the session leaves rest: once
- * the frame that draws the composer's first edit is committed, or before a submitted prompt appends
- * its message. A session left idle builds no schema at all. The status row renders while the reading
+ * tool: about 20 ms of a cold launch and 3.4 MiB of heap, plus the evaluation of `arktype`, all of it
+ * before the session's first frame or an RPC launch's `ready`, for schemas only a prompt needs.
+ * `createAgentSession` holds the reading of every top-level session (`deferAtRestReading`). The
+ * session takes it (`takeHeldAtRestReading`) before its first turn appends a message, and the
+ * interactive host takes it earlier, once the frame that draws the composer's first edit is
+ * committed. A session left idle builds no schema at all. The status row renders while the reading
  * is held, so the hold is only worth anything if no path of the row's render measures: the gauge
  * draws the resting reading the last launch recorded, and the row's own recorder files no gauge,
  * since a recorded value drawn back is not a measurement.
@@ -16,31 +17,32 @@
  * frames of a real `InteractiveMode` over a real session, so a new read either grows is covered by
  * the render rather than by a list of paths. The release arms are the positive control: the same
  * instrumentation sees the reads once the session leaves rest, so zero reads under the hold is the
- * guard and not a blind probe. Around it: the edit takes the reading after its frame and not inside
- * the keystroke, a first keystroke that opens a popup (`/`, `@`, `#`) builds no schema while the
- * popup computes its rows (the slash popup evaluates every command's description, and `/context`
- * and `/compact` state no figure at rest), a submission takes it before its message lands, the
- * borrowed gauge is the recorded one for the default role and the unknown for any other model, a
- * resumed session states the resting usage its last stamped response supports (the figure the
- * measurement reaches while the stamped non-message size is current) in the row and the slash popup
- * without building a schema, a session whose messages carry no stamped size measures as before, the
- * readings compaction and `/context` take measure whether or not the row is held, and a session
- * created without the hold measures during creation.
+ * guard and not a blind probe. Around it: creation files nothing, a session's first turn files the
+ * reading at rest before its request reaches the provider, with no host involved, the edit takes the
+ * reading after its frame and not inside the keystroke, a first keystroke that opens a popup (`/`,
+ * `@`, `#`) builds no schema while the popup computes its rows (the slash popup evaluates every
+ * command's description, and `/context` and `/compact` state no figure at rest), a submission takes
+ * it before its message lands, the borrowed gauge is the recorded one for the default role and the
+ * unknown for any other model, a resumed session states the resting usage its last stamped response
+ * supports (the figure the measurement reaches while the stamped non-message size is current) in the
+ * row and the slash popup without building a schema, a session whose messages carry no stamped size
+ * measures as before, and the readings compaction and `/context` take measure whether or not the
+ * reading is held.
  *
- * WHAT THIS DOES NOT CATCH: `runInteractiveMode` in `main.ts`, which this suite does not drive. It
- * passes `deferAtRestReading` for an interactive launch and takes the reading before a startup
- * prompt (`promptAtStartup`); dropping the first rebuilds the schemas during creation, measured by
- * the startup A/B, and dropping the second leaves the launch's reading unrecorded until the first
- * edit. It also does not prove the reading lands after the edit's frame is flushed to the terminal,
- * only after the frame is committed.
+ * WHAT THIS DOES NOT CATCH: a host that reads `getContextUsage` before the first prompt, which
+ * measures by design; the RPC launch census (`a-launch-evaluates-only-the-packages-it-uses`) observes
+ * that `arktype` stays unevaluated through an RPC launch. It also does not prove the reading lands
+ * after the edit's frame is flushed to the terminal, only after the frame is committed.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Model } from "@veyyon/ai";
+import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { measureContextGauge } from "@veyyon/coding-agent/config/compaction-strategy";
 import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -55,8 +57,8 @@ import {
 	computeNonMessageBreakdown,
 	computeNonMessageTokens,
 	isAtRestReadingDeferred,
+	takeHeldAtRestReading,
 } from "@veyyon/coding-agent/session/non-message-tokens";
-import { recordAtRestLaunch } from "@veyyon/coding-agent/session/startup-records";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -190,7 +192,6 @@ async function resumeHeld(stamp: (nonMessageTokens: number) => number | null): P
 	if (!file) throw new Error("the writer persisted no session file");
 	const cwd = manager.getCwd();
 	return create({
-		deferAtRestReading: true,
 		cwd,
 		agentDir: path.join(path.dirname(cwd), "agent"),
 		sessionManager: await SessionManager.open(file, path.dirname(file)),
@@ -233,7 +234,7 @@ afterAll(() => {
 
 describe("a held at-rest reading builds no tool schema in the status row", () => {
 	it("renders the row without reading any tool's schema, drawing the recorded resting gauge", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const reads = countSchemaReads(session);
 		const { row } = mountRow(session);
 
@@ -244,7 +245,7 @@ describe("a held at-rest reading builds no tool schema in the status row", () =>
 	});
 
 	it("files no gauge from the row while the reading is held", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		render(mountRow(session).row);
 
 		// A later floor for the model shows through only when the row filed nothing for this project.
@@ -255,7 +256,7 @@ describe("a held at-rest reading builds no tool schema in the status row", () =>
 
 	it("draws the unknown for a model that is not the default role the record is filed under", async () => {
 		// The record stays filed under the default role; this session runs another model, by `--model`.
-		const session = await create({ deferAtRestReading: true, model: bundledModel("claude-opus-4-1") });
+		const session = await create({ model: bundledModel("claude-opus-4-1") });
 		const reads = countSchemaReads(session);
 
 		const line = render(mountRow(session).row);
@@ -265,13 +266,13 @@ describe("a held at-rest reading builds no tool schema in the status row", () =>
 	});
 
 	it("measures, redraws and files the reading once the host releases the hold", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const reads = countSchemaReads(session);
 		const { row, producer } = mountRow(session);
 		render(row);
 		expect(reads.count).toBe(0);
 
-		recordAtRestLaunch(session, session.settings);
+		takeHeldAtRestReading(session);
 		const line = render(row);
 
 		expect(reads.count).toBeGreaterThan(0);
@@ -285,7 +286,7 @@ describe("a held at-rest reading builds no tool schema in the status row", () =>
 	});
 
 	it("measures the row of a held session that already holds a message", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		session.agent.appendMessage({ role: "user", content: "hello", timestamp: 1 });
 		const reads = countSchemaReads(session);
 
@@ -296,7 +297,7 @@ describe("a held at-rest reading builds no tool schema in the status row", () =>
 	});
 
 	it("leaves the readings compaction and /context take measuring while the row is held", async () => {
-		const held = await create({ deferAtRestReading: true });
+		const held = await create({});
 		const reads = countSchemaReads(held);
 
 		const usage = held.getContextUsage();
@@ -306,14 +307,62 @@ describe("a held at-rest reading builds no tool schema in the status row", () =>
 		expect(breakdown.toolsTokens).toBeGreaterThan(0);
 		expect(usage?.tokens ?? 0).toBeGreaterThan(breakdown.toolsTokens);
 	});
+});
 
-	it("measures and files the reading during creation when the host does not hold it", async () => {
-		await create({});
+describe("a session takes its held reading when its first turn leaves rest", () => {
+	/** A provider reply that ends the turn. */
+	function stoppedReply(model: Model): AssistantMessageEventStream {
+		const message: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "done" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+		const stream = new AssistantMessageEventStream();
+		queueMicrotask(() => stream.push({ type: "done", reason: "stop", message }));
+		return stream;
+	}
 
-		const filed = readLaunchFacts().contextPercent;
+	it("holds the reading through creation and files nothing", async () => {
+		const session = await create({});
 
-		expect(filed).not.toBeNull();
-		expect(filed).not.toBe(RECORDED_PERCENT);
+		expect(isAtRestReadingDeferred(session)).toBe(true);
+		expect(readLaunchFacts().contextPercent).toBe(RECORDED_PERCENT);
+	});
+
+	it("files the reading at rest before the first prompt reaches the provider, with no host", async () => {
+		const session = await create({});
+		const atRest = session.getContextUsage();
+		if (!atRest) throw new Error("the session measured no usage at rest");
+		const expected = Math.round(
+			measureContextGauge(
+				atRest.tokens,
+				atRest.contextWindow,
+				session.autoCompactionEnabled ? session.settings.getGroup("compaction") : undefined,
+			).contextPercent ?? Number.NaN,
+		);
+		const atRequest: Array<{ held: boolean; filed: number | null }> = [];
+		session.agent.streamFn = model => {
+			atRequest.push({ held: isAtRestReadingDeferred(session), filed: readLaunchFacts().contextPercent });
+			return stoppedReply(model);
+		};
+
+		await session.prompt("hello");
+
+		// A gauge is filed only from a reading with no message, so the filed figure is the at-rest one.
+		expect(expected).not.toBe(RECORDED_PERCENT);
+		expect(atRequest).toEqual([{ held: false, filed: expected }]);
 	});
 });
 
@@ -333,14 +382,14 @@ describe("a resumed session's held reading states its resting usage without buil
 		expect(drawn).toBe(measured ?? -1);
 	});
 
-	it("draws the stamped size while held and the measured one once the host releases the hold", async () => {
+	it("draws the stamped size while held and the measured one once the session leaves rest", async () => {
 		// The prompt grew by 1,000 tokens outside the message list since the stamp.
 		const session = await resumeHeld(current => current - 1_000);
 		const { row, producer } = mountRow(session);
 		render(row);
 		const held = producer.getSnapshot().context.usedTokens;
 
-		recordAtRestLaunch(session, session.settings);
+		takeHeldAtRestReading(session);
 		render(row);
 		const released = producer.getSnapshot().context.usedTokens;
 
@@ -438,7 +487,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 	}
 
 	it("commits frames over an idle session without reading any tool's schema", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const reads = countSchemaReads(session);
 		const mode = await host(session);
 
@@ -450,7 +499,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 	});
 
 	it("takes the reading after the frame that draws the first edit, not inside the keystroke", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const reads = countSchemaReads(session);
 		const mode = await host(session);
 		await committedFrame(mode);
@@ -466,7 +515,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 	});
 
 	it("takes the reading when a prompt is submitted with no edit before it", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const reads = countSchemaReads(session);
 		const mode = await host(session);
 		await committedFrame(mode);
@@ -481,7 +530,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 	// The characters that open a popup on an empty composer (`Editor#insertCharacter`). The release the
 	// keystroke queues after its frame is held off, so a read counted here is the popup's own.
 	it.each(["/", "@", "#"])("opens the %s popup on a first keystroke without reading any tool's schema", async key => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const reads = countSchemaReads(session);
 		const mode = await host(session);
 		await committedFrame(mode);
@@ -494,7 +543,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 	});
 
 	it("states no context figure in the slash popup a first keystroke opens", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const mode = await host(session);
 		await committedFrame(mode);
 
@@ -507,7 +556,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 	});
 
 	it("states the measured context in the slash popup once the session left rest", async () => {
-		const session = await create({ deferAtRestReading: true });
+		const session = await create({});
 		const mode = await host(session);
 		await committedFrame(mode);
 		mode.takeAtRestReading();

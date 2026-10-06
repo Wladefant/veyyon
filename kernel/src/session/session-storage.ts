@@ -58,6 +58,11 @@ export interface PinnedSessionReader {
 	close(): void;
 }
 
+/** {@link SessionStorageStat.identity} of a file object, from its `stat` or `fstat`. */
+export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: number }): string {
+	return `${stats.dev}:${stats.ino}`;
+}
+
 /**
  * Optional guard applied by {@link SessionStorage.writeTextAtomic}. The
  * backend MUST call `commitGuard()` synchronously immediately before it makes
@@ -511,7 +516,7 @@ export class FileSessionStorage implements SessionStorage {
 			size: stats.size,
 			mtimeMs: stats.mtimeMs,
 			mtime: stats.mtime,
-			identity: `${stats.dev}:${stats.ino}`,
+			identity: fileObjectIdentity(stats),
 		};
 	}
 
@@ -584,7 +589,7 @@ export class FileSessionStorage implements SessionStorage {
 		const fd = fs.openSync(path, "r");
 		try {
 			const stats = fs.fstatSync(fd);
-			return new FilePinnedSessionReader(fd, `${stats.dev}:${stats.ino}`);
+			return new FilePinnedSessionReader(fd, fileObjectIdentity(stats));
 		} catch (err) {
 			fs.closeSync(fd);
 			throw toError(err);

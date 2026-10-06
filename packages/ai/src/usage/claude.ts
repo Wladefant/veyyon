@@ -431,11 +431,12 @@ function buildScopedWeeklyUsageLimits(entries: readonly ParsedApiLimitEntry[]): 
 	return limits;
 }
 
-export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
-	const fiveHour = parseUnifiedWindow(headers, "5h");
-	const sevenDay = parseUnifiedWindow(headers, "7d");
-	const modelScopedSevenDay = parseUnifiedWindow(headers, "7d_oi");
-	const limits = [
+/** The account-wide 5-hour and 7-day windows that the usage endpoint and the rate-limit headers both report. */
+function accountWindowLimits(
+	fiveHour: ParsedUsageBucket | undefined,
+	sevenDay: ParsedUsageBucket | undefined,
+): Array<UsageLimit | null> {
+	return [
 		buildUsageLimit({
 			id: "anthropic:5h",
 			label: "Claude 5 Hour",
@@ -456,6 +457,15 @@ export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now
 			provider: "anthropic",
 			shared: true,
 		}),
+	];
+}
+
+export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
+	const fiveHour = parseUnifiedWindow(headers, "5h");
+	const sevenDay = parseUnifiedWindow(headers, "7d");
+	const modelScopedSevenDay = parseUnifiedWindow(headers, "7d_oi");
+	const limits = [
+		...accountWindowLimits(fiveHour, sevenDay),
 		buildUsageLimit({
 			id: "anthropic:7d:fable",
 			label: "Claude 7 Day (Fable)",
@@ -499,26 +509,7 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 	const sevenDaySonnet = parseBucket(payload.seven_day_sonnet);
 
 	const limits = [
-		buildUsageLimit({
-			id: "anthropic:5h",
-			label: "Claude 5 Hour",
-			windowId: "5h",
-			windowLabel: "5 Hour",
-			durationMs: FIVE_HOURS_MS,
-			bucket: fiveHour,
-			provider: "anthropic",
-			shared: true,
-		}),
-		buildUsageLimit({
-			id: "anthropic:7d",
-			label: "Claude 7 Day",
-			windowId: "7d",
-			windowLabel: "7 Day",
-			durationMs: WEEK_MS,
-			bucket: sevenDay,
-			provider: "anthropic",
-			shared: true,
-		}),
+		...accountWindowLimits(fiveHour, sevenDay),
 		buildUsageLimit({
 			id: "anthropic:7d:opus",
 			label: "Claude 7 Day (Opus)",

@@ -1284,6 +1284,7 @@ export class Agent {
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
+			onToolUpdateAfterRun: event => this.#emit(event),
 			telemetry: this.#telemetry,
 		};
 

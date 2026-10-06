@@ -17,6 +17,7 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
+import { type as arkType } from "@veyyon/ai/utils/schema/arktype";
 import { Ellipsis } from "@veyyon/natives";
 import {
 	clamp,
@@ -30,10 +31,11 @@ import {
 } from "@veyyon/utils";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { stripRecommendedSuffix, withRecommendedSuffix } from "@veyyon/wire";
-import { type as arkType } from "arktype";
 import type { ExtensionUISelectItem } from "../../extensibility/extensions";
-import { mediumModalContentWidth } from "../../modes/terminal/components/chrome/modal-shell";
-import { HOOK_EDITOR_TEXT_PAD_COLS } from "../../modes/terminal/components/dialogs/hook-editor";
+import {
+	HOOK_EDITOR_TEXT_PAD_COLS,
+	mediumModalContentWidth,
+} from "../../modes/terminal/components/chrome/modal-geometry";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { vocalizer } from "../../speech/tts/vocalizer";
 import { type Theme, theme } from "../../theme/theme";
