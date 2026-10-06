@@ -8,6 +8,7 @@ import type { CustomTool } from "../extensibility/custom-tools/types";
 import {
 	discoverAndLoadMCPTools,
 	type MCPDiscoverOptions,
+	type MCPGetPromptResult,
 	type MCPLoadResult,
 	MCPManager,
 	MCPToolCache,
@@ -103,6 +104,28 @@ export function clipMCPServerInstructions(instructions: Map<string, string>): Ma
 	return clipped;
 }
 
+/** `key=value` command arguments as prompt arguments. An argument with no key before its `=` is dropped. */
+function promptArguments(args: string[]): Record<string, string> {
+	const promptArgs: Record<string, string> = {};
+	for (const arg of args) {
+		const eqIdx = arg.indexOf("=");
+		if (eqIdx > 0) promptArgs[arg.slice(0, eqIdx)] = arg.slice(eqIdx + 1);
+	}
+	return promptArgs;
+}
+
+/** The text and resource-text parts of a prompt's messages, in order, separated by a blank line. */
+function promptResultText(result: MCPGetPromptResult): string {
+	const parts: string[] = [];
+	for (const message of result.messages) {
+		for (const item of Array.isArray(message.content) ? message.content : [message.content]) {
+			if (item.type === "text") parts.push(item.text);
+			else if (item.type === "resource" && item.resource.text) parts.push(item.resource.text);
+		}
+	}
+	return parts.join("\n\n");
+}
+
 /**
  * Build LoadedCustomCommand entries for all MCP prompts across connected servers.
  * These are re-created whenever prompts change (setOnPromptsChanged callback).
@@ -122,28 +145,8 @@ export function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand
 					name: commandName,
 					description: prompt.description ?? `MCP prompt from ${serverName}`,
 					async execute(args: string[]) {
-						const promptArgs: Record<string, string> = {};
-						for (const arg of args) {
-							const eqIdx = arg.indexOf("=");
-							if (eqIdx > 0) {
-								promptArgs[arg.slice(0, eqIdx)] = arg.slice(eqIdx + 1);
-							}
-						}
-						const result = await manager.executePrompt(serverName, prompt.name, promptArgs);
-						if (!result) return "";
-						const parts: string[] = [];
-						for (const msg of result.messages) {
-							const contentItems = Array.isArray(msg.content) ? msg.content : [msg.content];
-							for (const item of contentItems) {
-								if (item.type === "text") {
-									parts.push(item.text);
-								} else if (item.type === "resource") {
-									const resource = item.resource;
-									if (resource.text) parts.push(resource.text);
-								}
-							}
-						}
-						return parts.join("\n\n");
+						const result = await manager.executePrompt(serverName, prompt.name, promptArguments(args));
+						return result ? promptResultText(result) : "";
 					},
 				},
 			});
