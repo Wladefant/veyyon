@@ -7,12 +7,24 @@ import {
 	type AgentTool,
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
+	type StreamFn,
+	type ToolCallArgumentTransform,
 } from "@veyyon/agent-core";
-import type { Context, CredentialDisabledEvent, Message, Model, SimpleStreamOptions } from "@veyyon/ai";
+import type {
+	Context,
+	CredentialDisabledEvent,
+	Message,
+	Model,
+	ServiceTierByFamily,
+	SimpleStreamOptions,
+} from "@veyyon/ai";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import type { Dialect } from "@veyyon/ai/dialect";
 import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import { createInterruptedTurnAbortMessage } from "@veyyon/kernel/session/exit-diagnostics";
 import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { optionalNumber } from "@veyyon/kernel/settings/optional-number";
 import { attachNativeNoticeSink } from "@veyyon/natives/loader-state";
@@ -29,6 +41,7 @@ import {
 } from "@veyyon/utils";
 import { type ArgotGate, shouldEncode } from "argot/policy";
 import { renderPreamble } from "argot/preamble";
+import type { ArgotSession } from "argot/session";
 import { collectArgotLoadedRoots, createArgotSession, rearmArgotForDecode } from "./argot-cache";
 import { buildArgotGate, expandToolArguments } from "./argot-wire";
 import { AsyncJobManager } from "./async";
@@ -43,13 +56,7 @@ import { CursorExecHandlers } from "./cursor";
 import { initializeWithSettings } from "./discovery";
 import { setActiveRules } from "./discovery/capability/rule";
 import { bucketRules } from "./discovery/capability/rule-buckets";
-import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "./discovery/mode";
-import {
-	collectDiscoverableTools,
-	filterBySource,
-	isMCPToolName,
-	selectDiscoverableToolNamesByServer,
-} from "./discovery/tool-index";
+import { collectDiscoverableTools, filterBySource, selectDiscoverableToolNamesByServer } from "./discovery/tool-index";
 import { TtsrManager } from "./export/ttsr";
 import type { CustomTool } from "./extensibility/custom-tools/types";
 import {
@@ -111,7 +118,7 @@ import {
 } from "./tools/core/loading";
 import { wrapToolWithMetaNotice } from "./tools/core/output-meta";
 import { createRepairToolCallArgumentsHook } from "./tools/core/repair/agent-hook";
-import { renderSearchToolBm25Description, SearchToolBm25Tool } from "./tools/search/search-tool-bm25";
+import { renderSearchToolBm25Description } from "./tools/search/search-tool-bm25";
 import { isImageProviderPreference, setPreferredImageProvider } from "./tools/web/image-gen";
 import {
 	isSearchProviderId,
@@ -219,6 +226,7 @@ import {
 	isCustomTool,
 	isLegacyBuiltinToolDefinition,
 	loadSessionCustomTools,
+	SessionToolDiscovery,
 } from "./session/factory-tools";
 import { deferAtRestReading } from "./session/non-message-tokens";
 import {
@@ -251,6 +259,308 @@ function registerSshCleanup(): void {
 	if (sshCleanupRegistered) return;
 	sshCleanupRegistered = true;
 	postmortem.register("ssh-cleanup", cleanupSshResources);
+}
+
+function deliverCredentialDisabled(runner: ExtensionRunner, event: CredentialDisabledEvent, failure: string): void {
+	void runner.emitCredentialDisabled(event).catch(error => {
+		logger.warn(failure, { error: errorMessage(error) });
+	});
+}
+
+/**
+ * Delivers an auth store's `credential_disabled` events to the session's extension runner.
+ *
+ * Subscribed before any `getApiKey()` call, so a startup model probe cannot raise an event unseen. An
+ * embedder's constructor handler makes the store's listener set non-empty from construction, which
+ * defeats the store's own no-listener buffer, so events raised before the runner exists are held here
+ * and delivered when it attaches. Delivery is not awaited: handler errors are isolated onto the runner's
+ * `onError` listeners, and a failure of the runner itself is logged instead of reaching the
+ * process-level rejection handler and ending the session over a notification.
+ */
+class CredentialDisabledRelay {
+	#runner: ExtensionRunner | undefined;
+	readonly #pending: CredentialDisabledEvent[] = [];
+	readonly #unsubscribe: () => void;
+
+	constructor(authStorage: AuthStorage) {
+		this.#unsubscribe = authStorage.onCredentialDisabled(event => {
+			if (this.#runner) {
+				deliverCredentialDisabled(
+					this.#runner,
+					event,
+					"Failed to deliver a credential-disabled event to extensions",
+				);
+			} else {
+				this.#pending.push(event);
+			}
+		});
+	}
+
+	/** Deliver the held events to `runner`, and every later one. */
+	attach(runner: ExtensionRunner): void {
+		this.#runner = runner;
+		for (const event of this.#pending.splice(0)) {
+			deliverCredentialDisabled(
+				runner,
+				event,
+				"Failed to deliver a buffered credential-disabled event to extensions",
+			);
+		}
+	}
+
+	/** Stop listening. Idempotent. */
+	dispose(): void {
+		this.#unsubscribe();
+	}
+}
+
+/** Apply the web search, excluded web search and image provider preferences in `settings`. */
+function applyProviderPreferences(settings: Settings): void {
+	const excludedWebSearchProviders = settings.get("providers.webSearchExclude");
+	if (Array.isArray(excludedWebSearchProviders)) {
+		setExcludedSearchProviders(excludedWebSearchProviders.filter(isSearchProviderId));
+	}
+	const webSearchProvider = settings.get("providers.webSearch");
+	if (typeof webSearchProvider === "string" && isSearchProviderPreference(webSearchProvider)) {
+		setPreferredSearchProvider(webSearchProvider);
+	}
+	const imageProvider = settings.get("providers.image");
+	if (isImageProviderPreference(imageProvider)) setPreferredImageProvider(imageProvider);
+}
+
+/** The provider prompt cache key a session sends, and where it came from. */
+interface ProviderPromptCache {
+	readonly key: string | undefined;
+	readonly source: "explicit" | "fork" | undefined;
+}
+
+/**
+ * An explicit key wins. Otherwise a session inherits the key its file records, unless the caller set the
+ * model, thinking level, system prompt or tools, any of which changes the cached prefix.
+ */
+function resolveProviderPromptCache(
+	options: CreateAgentSessionOptions,
+	sessionManager: SessionManager,
+): ProviderPromptCache {
+	if (options.providerPromptCacheKey !== undefined) {
+		return { key: options.providerPromptCacheKey, source: options.providerPromptCacheKeySource ?? "explicit" };
+	}
+	const cacheShapeChanged =
+		options.model !== undefined ||
+		options.modelPattern !== undefined ||
+		options.thinkingLevel !== undefined ||
+		options.systemPrompt !== undefined ||
+		options.customSystemPrompt !== undefined ||
+		options.appendSystemPrompt !== undefined ||
+		options.toolNames !== undefined ||
+		options.customTools !== undefined;
+	const key = cacheShapeChanged ? undefined : sessionManager.getHeader()?.providerPromptCacheKey;
+	return { key, source: key !== undefined ? "fork" : undefined };
+}
+
+/**
+ * Re-arm `argot` to decode the handles a resumed branch holds. History keeps the short handles, and the
+ * display and export seams expand them only with their dictionaries loaded. The branch's own
+ * `argot_load` results state the projects the model loaded, so exactly those are re-armed, without
+ * teaching: the model decides again whether to load one.
+ */
+async function rearmArgotForResume(
+	argot: ArgotSession | undefined,
+	branch: SessionEntry[],
+	settings: Settings,
+): Promise<void> {
+	if (argot === undefined || branch.length === 0) return;
+	const roots = collectArgotLoadedRoots(branch.flatMap(entry => (entry.type === "message" ? [entry.message] : [])));
+	if (roots.length > 0) await rearmArgotForDecode(argot, roots, undefined, settings.get("argot.tokenBudget"));
+}
+
+/** The id, display name and kind an agent registers under. */
+interface AgentIdentity {
+	readonly id: string;
+	readonly displayName: string;
+	readonly kind: "main" | "sub";
+}
+
+/**
+ * A driving agent is named for the conversation it starts, so two live top-level sessions in one process
+ * cannot collide on one key. It takes the bare alias only while there is no conversation id, which
+ * cannot produce a second main.
+ */
+function resolveAgentIdentity(
+	options: CreateAgentSessionOptions,
+	isSpawned: boolean,
+	conversationId: string | undefined,
+): AgentIdentity {
+	const derivedId = !isSpawned && conversationId ? mainAgentIdFor(conversationId) : MAIN_AGENT_ID;
+	const kind = isSpawned ? "sub" : "main";
+	return {
+		id: options.agentId ?? options.parentTaskPrefix ?? derivedId,
+		displayName: options.agentDisplayName ?? kind,
+		kind,
+	};
+}
+
+/**
+ * The agent's stream function. `onFirstChatDispatch`, the launch-latency marker, fires once, before the
+ * first request reaches the provider transport. Each request's payload passes through the secret lease
+ * the request was admitted under, after any `onPayload` the request carries.
+ */
+function createLeasedStreamFn(
+	requestLeases: SecretRequestLeases,
+	streamFn: StreamFn,
+	onFirstChatDispatch: (() => void) | undefined,
+): StreamFn {
+	let notifyFirstChatDispatch = onFirstChatDispatch;
+	return async (streamModel, context, streamOptions) => {
+		if (notifyFirstChatDispatch) {
+			const notify = notifyFirstChatDispatch;
+			notifyFirstChatDispatch = undefined;
+			try {
+				notify();
+			} catch (err) {
+				logger.warn("onFirstChatDispatch hook threw", { error: errorMessage(err) });
+			}
+		}
+		const runtime = requestLeases.requestLease(context);
+		const optionsForRequest = streamOptions ?? {};
+		const requestOnPayload = optionsForRequest.onPayload;
+		const leasedOnPayload =
+			runtime.hasRedactions || requestOnPayload
+				? async (payload: unknown, payloadModel?: Model) => {
+						const replacement = requestOnPayload ? await requestOnPayload(payload, payloadModel) : undefined;
+						return runtime.obfuscatePayload(replacement ?? payload);
+					}
+				: undefined;
+		return streamFn(streamModel, context, { ...optionsForRequest, onPayload: leasedOnPayload });
+	};
+}
+
+/** What {@link createToolArgumentTransform} reads. */
+interface ToolArgumentTransformInput {
+	settings: Settings;
+	secretRuntime: SessionSecretRuntime;
+	requestLeases: SecretRequestLeases;
+	argot: ArgotSession | undefined;
+	sessionId: () => string | undefined;
+}
+
+/**
+ * The agent's tool-argument transform. `display` is what an operator reads and the session records;
+ * `execution` is what the tool runs with, and differs from `display` only where a secret expanded. Both
+ * carry a timeout clamped to `tools.maxTimeout`, and both expand loaded argot handles: a handle is
+ * opaque to a reader, so an unexpanded display is a defect, not a protection.
+ */
+function createToolArgumentTransform(
+	input: ToolArgumentTransformInput,
+): (args: Record<string, unknown>, toolName: string) => ToolCallArgumentTransform {
+	const { settings, secretRuntime, requestLeases, argot, sessionId } = input;
+	return (args, toolName) => {
+		let display = args;
+		const maxTimeout = settings.get("tools.maxTimeout");
+		if (maxTimeout > 0 && typeof display.timeout === "number") {
+			display = { ...display, timeout: Math.min(display.timeout, maxTimeout) };
+		}
+		let execution = secretRuntime.deobfuscateForExecution(requestLeases.mainRequest, display, toolName, sessionId());
+		if (argot?.loaded) {
+			// When no secret expanded, `execution` is `display` itself and one walk serves both.
+			const expandedDisplay = expandToolArguments(argot, display);
+			execution = execution === display ? expandedDisplay : expandToolArguments(argot, execution);
+			display = expandedDisplay;
+		}
+		return { execution, display };
+	};
+}
+
+/**
+ * The agent's dialect resolver, run with the active model on every request, so a switch to a
+ * `supportsTools: false` model stops sending the native `tools` parameter its endpoint rejects with a
+ * 400. `warn` receives one message per model that `tools.format` moves onto a text dialect for that reason.
+ */
+function createDialectResolver(
+	settings: Settings,
+	warn: (message: string) => void,
+): (requestModel: Model) => Dialect | undefined {
+	const warnedModels = new Set<string>();
+	return requestModel => {
+		const dialect = resolveDialect(settings.get("tools.format"), requestModel);
+		if (dialect === undefined || requestModel.supportsTools !== false) return dialect;
+		const modelKey = `${requestModel.provider}/${requestModel.id}`;
+		if (!warnedModels.has(modelKey)) {
+			warnedModels.add(modelKey);
+			warn(
+				`${modelKey} is cataloged as non-tool-calling; tools are delivered through the "${dialect}" text dialect instead of the native tools parameter.`,
+			);
+		}
+		return dialect;
+	};
+}
+
+/**
+ * Report the prompt size the model saw each turn: its input plus cached-prompt tokens, output excluded,
+ * read from the assistant message's usage.
+ */
+function onTurnPromptTokens(agent: Agent, report: (tokens: number) => void): void {
+	agent.subscribe(event => {
+		if (event.type !== "turn_end" || !("usage" in event.message) || !event.message.usage) return;
+		const { usage } = event.message;
+		report(usage.input + usage.cacheRead + usage.cacheWrite);
+	});
+}
+
+/**
+ * Record a new session's starting model, thinking level and service tier, so a resume restores them. An
+ * `auto` thinking selector is not recorded: the first real turn records the concrete effort it resolves.
+ */
+function recordNewSessionDefaults(
+	sessionManager: SessionManager,
+	model: Model | undefined,
+	modelSelection: StartupModelSelection,
+	serviceTierByFamily: ServiceTierByFamily,
+): void {
+	if (model) sessionManager.appendModelChange(`${model.provider}/${model.id}`);
+	if (!modelSelection.autoThinking) sessionManager.appendThinkingLevelChange(modelSelection.effectiveThinkingLevel);
+	if (Object.keys(serviceTierByFamily).length > 0) sessionManager.appendServiceTierChange(serviceTierByFamily);
+}
+
+/**
+ * The release a session holds on its MCP manager. A session holds a manager it created, and a top-level
+ * session holds one handed down by the session that created it (the `/new` that keeps the previous
+ * conversation running). A spawned agent holds nothing and never disconnects its parent's manager.
+ */
+function holdSessionMcpManager(
+	manager: MCPManager,
+	handedDown: MCPManager | undefined,
+	isSpawned: boolean,
+): McpManagerRelease | undefined {
+	if (!handedDown) return holdCreatedMcpManager(manager);
+	return isSpawned ? undefined : holdSharedMcpManager(manager);
+}
+
+/** What a failed startup releases when no session took ownership of it. */
+interface UnstartedSessionResources {
+	registered: boolean;
+	unregisterUnlessParked: () => void;
+	asyncJobManager: AsyncJobManager | undefined;
+	evalKernelOwnerId: string;
+	releaseMcpManager: McpManagerRelease | undefined;
+	/** A manager startup created, disconnected when no release holds it. */
+	createdMcpManager: MCPManager | undefined;
+	createdSessionManager: SessionManager | undefined;
+	createdAuthStorage: AuthStorage | undefined;
+}
+
+async function releaseUnstartedSession(resources: UnstartedSessionResources): Promise<void> {
+	if (resources.registered) resources.unregisterUnlessParked();
+	const jobs = resources.asyncJobManager;
+	if (jobs) {
+		if (AsyncJobManager.instance() === jobs) AsyncJobManager.setInstance(undefined);
+		await jobs.dispose({ timeoutMs: 3_000 });
+	}
+	await disposeOwnedResources("eval-kernel-owner", resources.evalKernelOwnerId);
+	if (resources.releaseMcpManager) await resources.releaseMcpManager();
+	else await resources.createdMcpManager?.disconnectAll();
+	await resources.createdSessionManager?.close();
+	resources.createdAuthStorage?.close();
 }
 
 // Factory
@@ -309,27 +619,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			"options.authStorage and options.modelRegistry.authStorage must be the same instance when both are provided",
 		);
 	}
-	// Subscribe before any getApiKey() call so startup model probes can't fire a
-	// credential_disabled event past us. An embedder's constructor handler makes the
-	// listener set non-empty from construction, which defeats AuthStorage's no-listener
-	// buffer — so we can't rely on it to catch startup events for the extension runner.
-	const startupCredentialDisabledEvents: CredentialDisabledEvent[] = [];
-	let credentialDisabledTarget: ExtensionRunner | undefined;
-	const unsubscribeCredentialDisabled: (() => void) | undefined = authStorage.onCredentialDisabled(event => {
-		if (credentialDisabledTarget) {
-			// Discard the result: handler errors are already isolated onto runner.onError
-			// listeners. The catch is for the runner itself failing, which nothing here
-			// awaits, so without it the rejection reaches the process-level handler and
-			// takes the whole session down over a notification.
-			void credentialDisabledTarget.emitCredentialDisabled(event).catch(error => {
-				logger.warn("Failed to deliver a credential-disabled event to extensions", {
-					error: errorMessage(error),
-				});
-			});
-		} else {
-			startupCredentialDisabledEvents.push(event);
-		}
-	});
+	const credentialDisabled = new CredentialDisabledRelay(authStorage);
 	let detachFaultSink: (() => void) | undefined;
 	let detachSecretsNoticeSink: (() => void) | undefined;
 	let sessionManager!: SessionManager;
@@ -371,21 +661,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				: logger.time("discoverSlashCommands", discoverSlashCommands, cwd, agentDir),
 		);
 
-		// Initialize provider preferences from settings
-		const excludedWebSearchProviders = settings.get("providers.webSearchExclude");
-		if (Array.isArray(excludedWebSearchProviders)) {
-			setExcludedSearchProviders(excludedWebSearchProviders.filter(isSearchProviderId));
-		}
-
-		const webSearchProvider = settings.get("providers.webSearch");
-		if (typeof webSearchProvider === "string" && isSearchProviderPreference(webSearchProvider)) {
-			setPreferredSearchProvider(webSearchProvider);
-		}
-
-		const imageProvider = settings.get("providers.image");
-		if (isImageProviderPreference(imageProvider)) {
-			setPreferredImageProvider(imageProvider);
-		}
+		applyProviderPreferences(settings);
 
 		// The operator-visible channel for non-fatal startup and runtime problems. Construct it
 		// before the session manager so load-time recovery notices use the same surface as secrets
@@ -405,25 +681,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionManager.setOperatorNotices(operatorNotices);
 		sessionManager.setInstrumentationLevel(settings.get("session.instrumentation"));
 		const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
-		const forkCacheShapeChanged =
-			options.model !== undefined ||
-			options.modelPattern !== undefined ||
-			options.thinkingLevel !== undefined ||
-			options.systemPrompt !== undefined ||
-			options.customSystemPrompt !== undefined ||
-			options.appendSystemPrompt !== undefined ||
-			options.toolNames !== undefined ||
-			options.customTools !== undefined;
-		const inheritedPromptCacheKey = forkCacheShapeChanged
-			? undefined
-			: sessionManager.getHeader()?.providerPromptCacheKey;
-		const providerPromptCacheKey = options.providerPromptCacheKey ?? inheritedPromptCacheKey;
-		const providerPromptCacheKeySource =
-			options.providerPromptCacheKey !== undefined
-				? (options.providerPromptCacheKeySource ?? "explicit")
-				: providerPromptCacheKey !== undefined
-					? "fork"
-					: undefined;
+		const providerPromptCache = resolveProviderPromptCache(options, sessionManager);
 
 		// Key and vault conditions are raised from deep inside the secrets subsystem
 		// and cannot be returned. See secrets/notices.ts for why this is a sink.
@@ -509,21 +767,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			existingBranch = logger.time("getRecoveredSessionBranch", () => sessionManager.getBranch());
 		}
 		let existingSession = logger.time("loadSessionContext", () => sessionManager.buildSessionContext());
-		// Decode-only re-arm on resume. Persisted history keeps cheap handles (the
-		// token win), so a resumed branch can hold `§handle` tokens from argot_load
-		// calls in earlier sessions; the display/export seams can only expand them
-		// with those dictionaries loaded. The branch's own argot_load tool results
-		// name the exact projects the model chose, so resume re-arms those roots
-		// with teach:false — no walking, no guessing, and teaching stays
-		// agent-driven (the model re-decides by calling argot_load again).
-		if (argot !== undefined && existingBranch.length > 0) {
-			const argotRoots = collectArgotLoadedRoots(
-				existingBranch.flatMap(entry => (entry.type === "message" ? [entry.message] : [])),
-			);
-			if (argotRoots.length > 0) {
-				await rearmArgotForDecode(argot, argotRoots, undefined, settings.get("argot.tokenBudget"));
-			}
-		}
+		await rearmArgotForResume(argot, existingBranch, settings);
 		const hasExistingSession = existingBranch.length > 0;
 		const hasThinkingEntry = existingBranch.some(entry => entry.type === "thinking_level_change");
 		const hasServiceTierEntry = existingBranch.some(entry => entry.type === "service_tier_change");
@@ -585,17 +829,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			(isInProcessChildSession(options) ? (options.asyncJobManager ?? AsyncJobManager.instance()) : undefined);
 
 		const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
-		// A driving agent is named for the conversation it starts, so two live
-		// top-level sessions in one process cannot collide on one key. Falls back
-		// to the bare alias only when there is no conversation id to name yet,
-		// which is the pre-existing behavior and cannot produce a second main.
-		const conversationId = sessionManager.getSessionId?.();
-		const resolvedAgentId =
-			options.agentId ??
-			options.parentTaskPrefix ??
-			(!sessionIsSpawned && conversationId ? mainAgentIdFor(conversationId) : MAIN_AGENT_ID);
-		const resolvedAgentDisplayName = options.agentDisplayName ?? (sessionIsSpawned ? "sub" : "main");
-		const agentKind = sessionIsSpawned ? ("sub" as const) : ("main" as const);
+		const {
+			id: resolvedAgentId,
+			displayName: resolvedAgentDisplayName,
+			kind: agentKind,
+		} = resolveAgentIdentity(options, sessionIsSpawned, sessionManager.getSessionId?.());
 		/**
 		 * Forget the agent ref on teardown — unless the agent is being parked (or is
 		 * already parked). Parking disposes the session but keeps the ref addressable
@@ -791,15 +1029,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			localProtocolOptions,
 		);
 
-		credentialDisabledTarget = extensionRunner;
-		for (const event of startupCredentialDisabledEvents.splice(0)) {
-			// Same containment as the live path above: nothing awaits this drain.
-			void extensionRunner.emitCredentialDisabled(event).catch(error => {
-				logger.warn("Failed to deliver a buffered credential-disabled event to extensions", {
-					error: errorMessage(error),
-				});
-			});
-		}
+		credentialDisabled.attach(extensionRunner);
 
 		const getSessionContext = () => ({
 			sessionManager,
@@ -857,50 +1087,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolSession,
 		});
 
-		// `let`: the deferred MCP discovery closure upgrades these when the real
-		// MCP tool count pushes `auto` past its threshold; `rebuildSystemPrompt`
-		// below reads the live bindings.
-		let effectiveDiscoveryMode = resolveEffectiveToolDiscoveryMode(
+		const toolDiscovery = new SessionToolDiscovery({
+			tools: toolRegistry,
+			builtInNames: builtInRegistryToolNames,
 			settings,
-			countToolsForAutoDiscovery(toolRegistry.keys()),
-		);
-		if (effectiveDiscoveryMode !== "off" && !toolRegistry.has(TOOL.search_tool_bm25)) {
-			const searchTool: Tool = new SearchToolBm25Tool(toolSession);
-			toolRegistry.set(
-				searchTool.name,
-				new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
-			);
-			builtInRegistryToolNames.add(searchTool.name);
-		}
-		let mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
-
-		async function enableDeferredMCPDiscoveryForTools(
-			liveSession: AgentSession,
-			mcpTools: CustomTool[],
-		): Promise<boolean> {
-			if (mcpDiscoveryEnabled) return true;
-			const nonMCPToolNames = Array.from(toolRegistry.keys()).filter(name => !isMCPToolName(name));
-			const projectedMode = resolveEffectiveToolDiscoveryMode(
-				settings,
-				countToolsForAutoDiscovery(nonMCPToolNames.concat(mcpTools.map(tool => tool.name))),
-			);
-			if (projectedMode === "off") return false;
-
-			effectiveDiscoveryMode = projectedMode;
-			mcpDiscoveryEnabled = true;
-			liveSession.enableMCPDiscovery();
-			if (!toolRegistry.has(TOOL.search_tool_bm25)) {
-				const searchTool: Tool = new SearchToolBm25Tool(toolSession);
-				toolRegistry.set(
-					searchTool.name,
-					new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
-				);
-			}
-			if (!liveSession.getActiveToolNames().includes(TOOL.search_tool_bm25)) {
-				await liveSession.setActiveToolsByName(liveSession.getActiveToolNames().concat([TOOL.search_tool_bm25]));
-			}
-			return true;
-		}
+			toolSession,
+			extensionRunner,
+		});
 
 		const reloadSshTool = async (): Promise<AgentTool | null> => {
 			if (!requestedToolNameSet.has(TOOL.ssh)) return null;
@@ -983,8 +1176,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const discoverable = promptDiscoverableTools({
 				tools,
 				activeToolNames: toolNames,
-				mcpDiscoveryEnabled,
-				discoveryMode: effectiveDiscoveryMode,
+				mcpDiscoveryEnabled: toolDiscovery.enabled,
+				discoveryMode: toolDiscovery.mode,
 				builtInToolNames: builtInRegistryToolNames,
 			});
 			const promptTools = buildSystemPromptToolMetadata(tools, {
@@ -1093,7 +1286,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const discoveryDefaultServers = new Set(
 			(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
 		);
-		const discoveryDefaultServerToolNames = mcpDiscoveryEnabled
+		const discoveryDefaultServerToolNames = toolDiscovery.enabled
 			? selectDiscoverableToolNamesByServer(
 					filterBySource(collectDiscoverableTools(toolRegistry.values()), "mcp"),
 					discoveryDefaultServers,
@@ -1122,12 +1315,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			goalEnabled: settings.get("goal.enabled"),
 			defaultInactiveToolNames,
 			hasRegistryTool: name => toolRegistry.has(name),
-			mcpDiscoveryEnabled,
+			mcpDiscoveryEnabled: toolDiscovery.enabled,
 			discoveryDefaultServerToolNames,
 			persistedSelectedMCPToolNames: existingSession.selectedMCPToolNames,
 			hasPersistedMCPToolSelection: existingSession.hasPersistedMCPToolSelection,
 			alwaysIncludeToolNames: alwaysInclude,
-			effectiveDiscoveryMode,
+			effectiveDiscoveryMode: toolDiscovery.mode,
 			loadModeOf: name => toolRegistry.get(name)?.loadMode,
 			essentialToolNames: computeEssentialBuiltinNames(settings),
 			forceActiveToolNames: resolveDiscoveryAllForceActive({
@@ -1233,9 +1426,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					settings.get("tier.google"),
 				);
 
-		// One-shot launch-latency marker: fired the first time the loop dispatches
-		// a chat request to the provider transport. See onFirstChatDispatch.
-		let notifyFirstChatDispatch = options.onFirstChatDispatch;
 		// Shared, settings-aware stream wrapper used by the main agent, advisor,
 		// and side-channel requests (`/btw`, `/omfg`, IRC auto-replies, handoff).
 		// Keeps OpenRouter sticky-routing variants, antigravity endpoint routing,
@@ -1254,9 +1444,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			textSanitizer: text =>
 				secretRuntime.obfuscateText(callerTelemetryTextSanitizer ? callerTelemetryTextSanitizer(text) : text),
 		};
-		// One warning per model when auto tool-format reroutes a non-tool-calling
-		// model onto an in-band text dialect — the operator must see the degrade.
-		const notifiedDialectFallbackModels = new Set<string>();
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -1275,7 +1462,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onPayload,
 			onResponse,
 			sessionId: providerSessionId,
-			promptCacheKey: providerPromptCacheKey,
+			promptCacheKey: providerPromptCache.key,
 			deadline: options.deadline,
 			transformContext,
 			transformProviderContext,
@@ -1298,148 +1485,47 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: requestModel => modelRegistry.resolver(requestModel, agent.sessionId),
-			streamFn: async (streamModel, context, streamOptions) => {
-				if (notifyFirstChatDispatch) {
-					const cb = notifyFirstChatDispatch;
-					notifyFirstChatDispatch = undefined;
-					try {
-						cb();
-					} catch (err) {
-						logger.warn("onFirstChatDispatch hook threw", {
-							error: errorMessage(err),
-						});
-					}
-				}
-				const runtime = requestLeases.requestLease(context);
-				const optionsForRequest = streamOptions ?? {};
-				const requestOnPayload = optionsForRequest.onPayload;
-				const leasedOnPayload =
-					runtime.hasRedactions || requestOnPayload
-						? async (payload: unknown, payloadModel?: Model) => {
-								const replacement = requestOnPayload
-									? await requestOnPayload(payload, payloadModel)
-									: undefined;
-								return runtime.obfuscatePayload(replacement ?? payload);
-							}
-						: undefined;
-				return settingsAwareStreamFn(streamModel, context, {
-					...optionsForRequest,
-					onPayload: leasedOnPayload,
-				});
-			},
+			streamFn: createLeasedStreamFn(requestLeases, settingsAwareStreamFn, options.onFirstChatDispatch),
 			cursorExecHandlers,
-			transformToolCallArguments: (args, toolName) => {
-				// `display` is what an operator reads and what the session records;
-				// `execution` is what the tool runs with. They diverge on exactly one thing
-				// below, and that divergence is the point of the split.
-				let display = args;
-				const maxTimeout = settings.get("tools.maxTimeout");
-				if (maxTimeout > 0 && typeof display.timeout === "number") {
-					display = {
-						...display,
-						timeout: Math.min(display.timeout, maxTimeout),
-					};
-				}
-				// `execution` is `display` itself unless a secret expanded.
-				let execution = secretRuntime.deobfuscateForExecution(
-					requestLeases.mainRequest,
-					display,
-					toolName,
-					agent.sessionId,
-				);
-				// BOTH. A codec handle is opaque to a person, so an unexpanded display is the
-				// bug rather than the protection — the opposite of a secret. When no secret
-				// expanded, `execution` is still the same object as `display` and one walk
-				// serves both.
-				if (argot?.loaded) {
-					const expandedDisplay = expandToolArguments(argot, display);
-					execution = execution === display ? expandedDisplay : expandToolArguments(argot, execution);
-					display = expandedDisplay;
-				}
-				return { execution, display };
-			},
+			transformToolCallArguments: createToolArgumentTransform({
+				settings,
+				secretRuntime,
+				requestLeases,
+				argot,
+				sessionId: () => agent.sessionId,
+			}),
 			repairToolCallArguments: createRepairToolCallArgumentsHook(settings, () => agent.state.model),
 			// The RESOLVERS keep provider schemas synchronized with the rebuilt
 			// prompt on settings changes and model-family switches.
 			intentTracing: intentTracingEnabled,
 			instrumentation: settings.get("session.instrumentation"),
 			pruneToolDescriptions: inlineToolDescriptorsForModel,
-			// Re-resolved with the active model on every request so mid-session
-			// model switches pick the right tool-calling shape (a switch to a
-			// `supportsTools: false` model must stop sending a native `tools`
-			// param the endpoint rejects with a 400).
-			dialect: requestModel => {
-				const dialect = resolveDialect(settings.get("tools.format"), requestModel);
-				if (dialect !== undefined && requestModel.supportsTools === false) {
-					const modelKey = `${requestModel.provider}/${requestModel.id}`;
-					if (!notifiedDialectFallbackModels.has(modelKey)) {
-						notifiedDialectFallbackModels.add(modelKey);
-						session?.emitNotice(
-							"warning",
-							`${modelKey} is cataloged as non-tool-calling; tools are delivered through the "${dialect}" text dialect instead of the native tools parameter.`,
-							"tools.format",
-						);
-					}
-				}
-				return dialect;
-			},
+			dialect: createDialectResolver(settings, message => session?.emitNotice("warning", message, "tools.format")),
 			abortOnFabricatedToolResult: settings.get("tools.abortOnFabricatedResult"),
 			getToolChoice: () => session?.nextToolChoiceDirective(),
 			telemetry,
-			appendOnlyContext: model
-				? shouldEnableAppendOnlyContext(settings.get("provider.appendOnlyContext"), model)
+			appendOnlyContext:
+				model && shouldEnableAppendOnlyContext(settings.get("provider.appendOnlyContext"), model)
 					? new AppendOnlyContextManager()
-					: undefined
-				: undefined,
+					: undefined,
 		});
 
 		cursorEventEmitter = event => agent.emitExternalEvent(event);
 
-		// Track the live context size for the argot encode cutoff. The prompt the
-		// model saw this turn is its input plus cached-prompt tokens; output is
-		// excluded. Read from the assistant message's usage so no re-estimation is
-		// needed. Next turn's system-prompt rebuild reads this to decide whether to
-		// keep teaching shorthand (see argotGate / shouldEncode below).
+		// The argot encode cutoff reads the context size the model last saw.
 		if (argotEnabled && argotGate.disableAboveTokens > 0) {
-			agent.subscribe(event => {
-				if (event.type !== "turn_end") return;
-				const usage = (event.message as { usage?: { input?: number; cacheRead?: number; cacheWrite?: number } })
-					.usage;
-				if (usage) {
-					argotContextTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-				}
+			onTurnPromptTokens(agent, tokens => {
+				argotContextTokens = tokens;
 			});
 		}
 
-		// Restore messages if session has existing data
 		if (hasExistingSession) {
 			agent.replaceMessages(existingSession.messages);
 		} else {
-			// Save initial model, thinking level, and service tier for new sessions so they can be restored on resume.
-			if (model) {
-				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
-			}
-			if (!modelSelection.autoThinking) {
-				// Do not write the `auto` selector before the first turn resolves; auto
-				// classification persists its concrete effort once a real user turn runs.
-				sessionManager.appendThinkingLevelChange(modelSelection.effectiveThinkingLevel);
-			}
-			if (Object.keys(initialServiceTierByFamily).length > 0) {
-				sessionManager.appendServiceTierChange(initialServiceTierByFamily);
-			}
+			recordNewSessionDefaults(sessionManager, model, modelSelection, initialServiceTierByFamily);
 		}
 
-		// A session that created its manager holds it; a top-level session handed a
-		// session-created manager (the `/new` that keeps the previous conversation
-		// running) holds it too. Spawned agents hold nothing and MUST NOT disconnect
-		// a parent's manager.
-		if (mcpManager) {
-			releaseMcpManager = !options.mcpManager
-				? holdCreatedMcpManager(mcpManager)
-				: sessionIsSpawned
-					? undefined
-					: holdSharedMcpManager(mcpManager);
-		}
+		if (mcpManager) releaseMcpManager = holdSessionMcpManager(mcpManager, options.mcpManager, sessionIsSpawned);
 		session = new AgentSession({
 			// The advisor gets the same project context files (AGENTS.md, etc.) the primary agent
 			// gets in its system prompt, so the read-only reviewer judges against them.
@@ -1494,7 +1580,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				? () => clipMCPServerInstructions(mcpManager!.getServerInstructions())
 				: undefined,
 			releaseMcpManager,
-			mcpDiscoveryEnabled,
+			mcpDiscoveryEnabled: toolDiscovery.enabled,
 			initialSelectedMCPToolNames,
 			defaultSelectedMCPToolNames,
 			persistInitialMCPToolSelection: !hasExistingSession,
@@ -1509,7 +1595,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agentId: resolvedAgentId,
 			agentKind,
 			providerSessionId: options.providerSessionId,
-			providerPromptCacheKeySource,
+			providerPromptCacheKeySource: providerPromptCache.source,
 			parentEvalSessionId: options.parentEvalSessionId,
 			loadAdvisorTools: () => buildAdvisorTools(advisorToolSession),
 			titleSystemPrompt: options.titleSystemPrompt,
@@ -1588,7 +1674,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					detachFaultSink?.();
 					detachSecretsNoticeSink?.();
 					unregisterUnlessParked();
-					unsubscribeCredentialDisabled?.();
+					credentialDisabled.dispose();
 				}
 			},
 		});
@@ -1653,24 +1739,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				manager: mcpManager,
 				session,
 				settings,
-				refreshTools: async tools => {
-					let activateAll = deferMCPDiscoveryForUI && !mcpDiscoveryEnabled;
-					if (activateAll && (await enableDeferredMCPDiscoveryForTools(session, tools))) {
-						activateAll = false;
-					}
-					await session.refreshMCPTools(tools, activateAll ? { activateAll: true } : undefined);
-				},
+				refreshTools: tools => toolDiscovery.refreshMCPTools(session, tools, deferMCPDiscoveryForUI),
 			});
 		}
 
 		startDeferredMCPDiscovery?.(
 			session,
 			{
-				mcpDiscoveryEnabled,
+				mcpDiscoveryEnabled: toolDiscovery.enabled,
 				explicitlyRequestedMCPToolNames,
-				activateAllMCPTools: !mcpDiscoveryEnabled,
+				activateAllMCPTools: !toolDiscovery.enabled,
 			},
-			enableDeferredMCPDiscoveryForTools,
+			(liveSession, tools) => toolDiscovery.enableForMCPTools(liveSession, tools),
 		);
 
 		return {
@@ -1684,36 +1764,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			eventBus,
 		};
 	} catch (error) {
-		// Release the subscription if the throw happened after install but before the
-		// dispose-wrap took ownership. Idempotent with dispose() — Set.delete is a no-op
-		// for already-removed listeners.
-		unsubscribeCredentialDisabled?.();
-		// Same reason as the dispose path: the sink was attached near the top of this function, so a
-		// throw anywhere after it would otherwise leave a sink pointing at notices for a session that
-		// never started. Idempotent, so the `session.dispose()` below detaching again is harmless.
+		// A throw after the subscription and the sinks attached, and before the dispose path took them
+		// over, would leave them pointing at a session that never started. Each release is idempotent
+		// with the dispose path.
+		credentialDisabled.dispose();
 		detachFaultSink?.();
 		detachSecretsNoticeSink?.();
 		try {
 			if (hasSession) {
 				await session.dispose();
 			} else {
-				if (hasRegistered) unregisterUnlessParked();
-				if (asyncJobManager) {
-					if (AsyncJobManager.instance() === asyncJobManager) {
-						AsyncJobManager.setInstance(undefined);
-					}
-					await asyncJobManager.dispose({ timeoutMs: 3_000 });
-				}
-				if (evalKernelOwnerId) {
-					await disposeOwnedResources("eval-kernel-owner", evalKernelOwnerId);
-				}
-				if (releaseMcpManager) {
-					await releaseMcpManager();
-				} else if (mcpManager && mcpManager !== options.mcpManager) {
-					await mcpManager.disconnectAll();
-				}
-				if (!options.sessionManager) await sessionManager?.close();
-				if (ownsAuthStorage) authStorage.close();
+				await releaseUnstartedSession({
+					registered: hasRegistered,
+					unregisterUnlessParked,
+					asyncJobManager,
+					evalKernelOwnerId,
+					releaseMcpManager,
+					createdMcpManager: mcpManager !== options.mcpManager ? mcpManager : undefined,
+					createdSessionManager: options.sessionManager ? undefined : sessionManager,
+					createdAuthStorage: ownsAuthStorage ? authStorage : undefined,
+				});
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {
