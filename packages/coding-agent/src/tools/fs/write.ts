@@ -7,6 +7,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolTier,
 } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { BARE_LITERAL_VALUE_RE, formatHashlineHeader } from "@veyyon/hashline";
 import {
 	atomicWriteFileWith,
@@ -18,7 +19,6 @@ import {
 	untilAborted,
 	urlScheme,
 } from "@veyyon/utils";
-import { type } from "arktype";
 
 import { allLineNumbers, canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { normalizeToLF } from "../../edit/normalize";

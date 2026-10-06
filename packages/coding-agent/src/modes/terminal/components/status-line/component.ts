@@ -39,6 +39,14 @@ export { messageFingerprint } from "../../../../presentation/status-producer";
 
 const STATUS_USAGE_START_DELAY_MS = 0;
 const STATUS_USAGE_REFRESH_TIMEOUT_MS = 2_000;
+/**
+ * How old the dirty marker grows before a render runs `git status` again. A turn's end, a `!` or
+ * `%` command and a HEAD change refresh it at once through {@link StatusLineComponent.refreshGitStatus};
+ * this bounds how late any other change appears, such as an edit made outside the session or a
+ * tool's write before its turn ends. A streaming turn renders every frame, so this is also the
+ * rate at which the turn runs `git status`.
+ */
+const GIT_STATUS_MAX_AGE_MS = 10_000;
 
 function hasGitBackedSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return hasGitSegment(segments) || hasPrSegment(segments);
@@ -93,11 +101,14 @@ export class StatusLineComponent implements Component {
 	#focusedAgentId: string | undefined;
 	#activeRepoCache: LocationContext | undefined;
 
-	// Git status caching (1s TTL)
+	// Git status caching: refreshed on request, otherwise once GIT_STATUS_MAX_AGE_MS old
 	#cachedGitStatus: git.GitStatusSummary | null = null;
 	#cachedGitStatusCwd: string | undefined = undefined;
 	#gitStatusLastFetch = 0;
 	#gitStatusInFlightCwd: string | undefined = undefined;
+	/** Refresh requests made so far, and how many of them the cached status was read after. */
+	#gitStatusRequested = 0;
+	#gitStatusAnswered = 0;
 
 	// PR lookup caching (invalidated on branch/repo context changes)
 	#cachedPr: { number: number; url: string } | null | undefined = undefined;
@@ -340,7 +351,7 @@ export class StatusLineComponent implements Component {
 			const watcher = fs.watch(watchPath, () => {
 				if (this.#disposed) return;
 				this.#invalidateGitCaches();
-				this.#onGitStateChange?.();
+				this.refreshGitStatus();
 			});
 			// Windows reports a watched path that is deleted or locked as an async
 			// EPERM 'error' event. Unhandled, it is an uncaught exception that ends the process.
@@ -378,6 +389,17 @@ export class StatusLineComponent implements Component {
 
 	invalidate(): void {
 		this.#invalidateGitCaches();
+	}
+
+	/**
+	 * Run `git status` on the next render instead of once the marker is
+	 * {@link GIT_STATUS_MAX_AGE_MS} old, and ask for that render, because the tree may have moved.
+	 * A lookup already running may have read the tree before the move, so a request made while it
+	 * runs asks for another render when it lands.
+	 */
+	refreshGitStatus(): void {
+		this.#gitStatusRequested++;
+		this.#onGitStateChange?.();
 	}
 
 	#invalidateSessionCaches(): void {
@@ -455,11 +477,16 @@ export class StatusLineComponent implements Component {
 		if (this.#gitStatusInFlightCwd !== undefined) {
 			return this.#cachedGitStatusCwd === gitCwd ? this.#cachedGitStatus : null;
 		}
-		if (this.#cachedGitStatusCwd === gitCwd && Date.now() - this.#gitStatusLastFetch < 1000) {
+		if (
+			this.#cachedGitStatusCwd === gitCwd &&
+			this.#gitStatusAnswered === this.#gitStatusRequested &&
+			Date.now() - this.#gitStatusLastFetch < GIT_STATUS_MAX_AGE_MS
+		) {
 			return this.#cachedGitStatus;
 		}
 
 		this.#gitStatusInFlightCwd = gitCwd;
+		const requested = this.#gitStatusRequested;
 
 		(async () => {
 			let nextStatus: git.GitStatusSummary | null = null;
@@ -473,8 +500,9 @@ export class StatusLineComponent implements Component {
 					this.#cachedGitStatus = nextStatus;
 					this.#cachedGitStatusCwd = gitCwd;
 					this.#gitStatusLastFetch = Date.now();
+					this.#gitStatusAnswered = requested;
 					this.#gitStatusInFlightCwd = undefined;
-					if (moved) this.#onGitStateChange?.();
+					if (moved || requested !== this.#gitStatusRequested) this.#onGitStateChange?.();
 				}
 			}
 		})();

@@ -39,27 +39,76 @@
  * table is typed against the union, so a new role fails the type check until it has a row), reads
  * every small field the fresh load holds, runs those scans, and pins the reads at zero.
  *
- * NOT CAUGHT: the heap bound has a 4x margin, so a regression that keeps a quarter of the cold
- * payloads resident passes. Windows holds no pinned reader, so there every entry stays in memory
- * and the fd assertions are skipped. A branch scan this suite does not run that reads a large field
- * of every compacted message still reads the history back.
+ * A turn reads the session's spend only when a goal is charged for it, and the spend of the
+ * summarized history lives in the large fields of its assistant turns and `task` results. Read
+ * through the accessors, the first tally on a resumed session moved that whole history back into
+ * memory: the first turn after resuming a 154 MiB session cost 470 ms of CPU and 103 MiB of peak
+ * RSS more than the turns after it. The turn sweep runs a whole turn with no goal and pins the
+ * reads at zero, then charges a goal and pins the reads at one per such entry, the totals at those
+ * of the same file held in memory, and every summarized entry still on disk afterwards.
+ *
+ * A branch summary walks every message it sends the provider by property descriptor, and that walk
+ * rejects accessors, which is what a cold message's large fields are. The size estimate the summary
+ * runs first reads most of them back, so the walk met a cold message only when the history cooled
+ * again in between: a publish landing while the credential resolved. The summary sweep cools the
+ * history at that await and navigates back across every message role and every entry kind, and
+ * pins the request to the one the same file sends when nothing is moved out of memory.
+ *
+ * A file at the stream threshold (`STREAM_LOAD_THRESHOLD_BYTES`) moves compacted history out of
+ * memory while it loads (`LoadCooling`), as each compaction is read, rather than once the whole
+ * file is in memory. That opens a second class: an entry moved before the load learns the branch
+ * it resumes on, a usage total that misses a moved entry, a blob resolution that reads a moved
+ * entry back, an older file whose moved lines read back unmigrated, and a load whose peak still
+ * holds the whole history. The read-back sweeps run once per load path (`LOAD_PATHS`), with
+ * compacted padding putting the streamed arm past the threshold; the branch sweep resumes on a
+ * turn off summarized history; the migration sweep loads an older file; the heap bound samples
+ * the heap at every turn of the event loop while a file with a compaction every eight results
+ * streams in.
+ *
+ * NOT CAUGHT: the heap bounds have a 2x and 4x margin, so a regression that keeps a quarter of the
+ * cold payloads resident passes. Windows holds no pinned reader, so there every entry stays in
+ * memory and the fd assertions are skipped. A branch scan this suite does not run that reads a
+ * large field of every compacted message still reads the history back. A descriptor walk other
+ * than the branch summary's that is handed a whole session entry or message fails on a cold one.
+ * A record-only entry a streamed load leaves in memory is moved once the load returns, so only the
+ * load's peak, which no sweep here bounds for that kind, shows it. Every migration today changes
+ * only fields a moved entry keeps in memory, so the migration sweep sees the older file load whole
+ * through `cold` and not through a wrong value.
  */
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import type { AgentMessage } from "@veyyon/agent-core";
+import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as ai from "@veyyon/ai/stream";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { SessionSpend, SessionStats } from "@veyyon/coding-agent/session/agent-session-types";
 import { isSuccessfulCheckpointEntry } from "@veyyon/coding-agent/session/rewind-checkpoint";
 import { getLatestTodoPhasesSnapshotFromEntries } from "@veyyon/coding-agent/tools/agent/todo";
+import { shellDomain } from "@veyyon/coding-agent/tools/shell/manifest";
 import { BlobStore, blobsDirForSessionDir } from "@veyyon/kernel/session/blob-store";
 import { collectPendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
-import { MIN_COLD_STRING_LENGTH, RECORD_ONLY_ENTRY_TYPES } from "@veyyon/kernel/session/session-cold-payloads";
+import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
+import {
+	coldFieldsOf,
+	MIN_COLD_STRING_LENGTH,
+	RECORD_ONLY_ENTRY_TYPES,
+} from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionEntryBase } from "@veyyon/kernel/session/session-entries";
-import { loadSessionFile, resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
+import {
+	loadSessionFile,
+	resolveBlobRefsInEntries,
+	STREAM_LOAD_THRESHOLD_BYTES,
+} from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage, type PinnedSessionReader } from "@veyyon/kernel/session/session-storage";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
@@ -78,6 +127,10 @@ const COLD_HEAP_FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "cold
 const SUBPROCESS_TIMEOUT_MS = 30_000;
 
 const PROBE_TOOL = "cold_readback_probe";
+
+// A branch summary converts the shell roles through the kinds the shell manifest declares,
+// registered here the way the tool registry registers them.
+registerAgentMessageKinds(shellDomain.messageKinds);
 
 /** Drops `details.echo` when it repeats the result's first text block, and rebuilds it on load. */
 registerToolResultCodecs([
@@ -124,6 +177,13 @@ class ObservedStorage extends FileSessionStorage {
 
 	openIdentities(): string[] {
 		return [...this.open].map(reader => reader.identity);
+	}
+}
+
+/** A store that pins no reader, so a manager over it holds every entry in memory. */
+class UnpinnedStorage extends FileSessionStorage {
+	openPinnedReaderSync(): PinnedSessionReader | undefined {
+		return undefined;
 	}
 }
 
@@ -407,6 +467,53 @@ function everyRoleHistory(): SessionEntry[] {
 /** The text persistence externalizes: one line past its 500,000-character cap. */
 const OVERSIZED_TEXT = big("oversized", 520_000);
 
+/** One padding result's text: below the cap, so persistence writes it inline. */
+const PADDING_CHARS = 450_000;
+
+interface LoadPath {
+	load: "whole" | "streamed";
+	/** Text of compacted tool output {@link writeSession} puts ahead of the history. */
+	padding: number;
+}
+
+/**
+ * The two ways a resume reads a session file: as one string, and as a stream of reads that moves
+ * compacted history out of memory as each compaction is read. The streamed arm's padding puts the
+ * file past the stream threshold.
+ */
+const LOAD_PATHS: LoadPath[] = [
+	{ load: "whole", padding: 0 },
+	{ load: "streamed", padding: STREAM_LOAD_THRESHOLD_BYTES },
+];
+
+/** Fails unless a load of `file` reads it the way `arm` names. */
+function expectLoadPath(file: string, arm: LoadPath): void {
+	expect([arm.load, fs.statSync(file).size >= STREAM_LOAD_THRESHOLD_BYTES]).toEqual([
+		arm.load,
+		arm.load === "streamed",
+	]);
+}
+
+/** Compacted tool results ahead of a history, `paddingBytes` of text in all, chained from `base`. */
+function paddingResults(paddingBytes: number, base: (parentId: string | null) => SessionEntryBase): SessionEntry[] {
+	const entries: SessionEntry[] = [];
+	for (let i = 0; i * PADDING_CHARS < paddingBytes; i++) {
+		entries.push({
+			...base(entries.at(-1)?.id ?? null),
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolCallId: `padding-${i}`,
+				toolName: "bash",
+				content: [{ type: "text", text: big(`padding-${i}`, PADDING_CHARS) }],
+				isError: false,
+				timestamp: 0,
+			},
+		});
+	}
+	return entries;
+}
+
 interface SessionFixture {
 	dir: string;
 	file: string;
@@ -424,19 +531,57 @@ afterEach(() => {
 	for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/** Bases with ids `<prefix>00001`, `<prefix>00002`, … one second apart, each under the parent it is given. */
+function entryBases(prefix: string): (parentId: string | null) => SessionEntryBase {
+	let n = 0;
+	return parentId => ({
+		type: "",
+		id: `${prefix}${String(++n).padStart(5, "0")}`,
+		parentId,
+		timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, n)).toISOString(),
+	});
+}
+
 /**
- * Write `history` then a kept tail and a compaction over it, and publish the file through a
- * manager, so persistence writes it the way a live session does: title slot, externalized blobs,
- * codec-slimmed details.
+ * Write `lines` under a session header named `id`, and publish the file through a manager, so
+ * persistence writes it the way a live session does: title slot, externalized blobs, codec-slimmed
+ * details.
  */
-async function writeSession(history: SessionEntry[]): Promise<SessionFixture> {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-readback-"));
+async function publishLines(id: string, lines: readonly SessionEntry[]): Promise<Pick<SessionFixture, "dir" | "file">> {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), `veyyon-${id}-`));
 	tempDirs.push(root);
 	const dir = path.join(root, "sessions");
 	fs.mkdirSync(dir);
 	fs.mkdirSync(path.join(root, "blobs"));
 	const file = path.join(dir, "session.jsonl");
+	const header = { type: "session", version: 3, id, timestamp: "2025-01-01T00:00:00.000Z", cwd: root };
+	fs.writeFileSync(file, `${[header, ...lines].map(line => JSON.stringify(line)).join("\n")}\n`);
+	const seed = await SessionManager.open(file, dir, new FileSessionStorage(), { suppressBreadcrumb: true });
+	await seed.rewriteEntries();
+	await seed.close();
+	return { dir, file };
+}
 
+/** The entries whose serialization read the file, in file order, each checked against `expected`. */
+function readBackEntries(
+	manager: SessionManager,
+	storage: ObservedStorage,
+	expected: Map<string, string>,
+): SessionEntry[] {
+	const readBack: SessionEntry[] = [];
+	for (const entry of manager.getEntries()) {
+		const before = storage.reads;
+		expect(JSON.stringify(entry)).toBe(expected.get(entry.id)!);
+		if (storage.reads > before) readBack.push(entry);
+	}
+	return readBack;
+}
+
+/**
+ * Write `paddingBytes` of compacted tool output, `history` after it, then a kept tail and a
+ * compaction over both, and publish the file through {@link publishLines}.
+ */
+async function writeSession(history: SessionEntry[], paddingBytes = 0): Promise<SessionFixture> {
 	let counter = 0;
 	const base = (parentId: string | null): SessionEntryBase => ({
 		type: "",
@@ -444,23 +589,27 @@ async function writeSession(history: SessionEntry[]): Promise<SessionFixture> {
 		parentId,
 		timestamp: new Date(Date.UTC(2025, 0, 1, 0, 0, counter)).toISOString(),
 	});
-	const lines: SessionEntry[] = [];
+	const lines: SessionEntry[] = paddingResults(paddingBytes, base);
 	const push = (entry: SessionEntry): string => {
 		lines.push(entry);
 		return entry.id;
 	};
 
-	let parent: string | null = null;
+	const padded = lines.at(-1)?.id ?? null;
+	let parent: string | null = padded;
+	const compacted: string[] = [];
 	for (const entry of history) {
-		// History entries name their own parents; the chain continues from the last one.
-		lines.push(entry);
+		// History entries name their own parents; the chain continues from the last one, and a
+		// history root hangs off the padding.
+		lines.push(entry.parentId === null ? { ...entry, parentId: padded } : entry);
+		compacted.push(entry.id);
 		parent = entry.id;
 	}
-	const compacted = lines.map(entry => entry.id);
+	// Large enough to move, so a load that moves the entry a compaction keeps reads it back for the context.
 	const keptId = push({
 		...base(parent),
 		type: "message",
-		message: { role: "user", content: "kept prompt", timestamp: 10 },
+		message: { role: "user", content: big("kept prompt"), timestamp: 10 },
 	});
 	parent = push({ ...base(keptId), type: "message", message: assistantTurn("kept answer", 11) });
 	const summary = big("newest-compaction");
@@ -472,19 +621,7 @@ async function writeSession(history: SessionEntry[]): Promise<SessionFixture> {
 	});
 	push({ ...base(parent), type: "message", message: assistantTurn("tail answer", 13) });
 
-	const header = {
-		type: "session",
-		version: 3,
-		id: "cold-readback",
-		timestamp: "2025-01-01T00:00:00.000Z",
-		cwd: root,
-	};
-	fs.writeFileSync(file, `${[header, ...lines].map(line => JSON.stringify(line)).join("\n")}\n`);
-
-	const seed = await SessionManager.open(file, dir, new FileSessionStorage(), { suppressBreadcrumb: true });
-	await seed.rewriteEntries();
-	await seed.close();
-	return { dir, file, keptId, summary, compacted };
+	return { ...(await publishLines("cold-readback", lines)), keptId, summary, compacted };
 }
 
 /** Every entry of the file as a fresh load restores it, keyed by id. */
@@ -502,17 +639,25 @@ function serialized(manager: SessionManager): Map<string, string> {
 	return new Map(manager.getEntries().map(entry => [entry.id, JSON.stringify(entry)]));
 }
 
-/** One chain holding every entry kind, a side branch off its first entry, and the oversized text. */
-function everyKindHistory(): SessionEntry[] {
+/** A manager over a copy of the fixture's session directory, holding every entry in memory. */
+async function openInMemoryCopy(fixture: Pick<SessionFixture, "dir" | "file">): Promise<SessionManager> {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-warm-"));
+	tempDirs.push(root);
+	fs.cpSync(path.dirname(fixture.dir), root, { recursive: true });
+	const dir = path.join(root, path.basename(fixture.dir));
+	return SessionManager.open(path.join(dir, path.basename(fixture.file)), dir, new UnpinnedStorage(), {
+		suppressBreadcrumb: true,
+	});
+}
+
+/**
+ * One chain holding every entry kind, a side branch off its first entry unless `sideBranch` is
+ * false, and the oversized text.
+ */
+function everyKindHistory(sideBranch = true): SessionEntry[] {
 	const entries: SessionEntry[] = [];
 	let parent: string | null = null;
-	let n = 0;
-	const next = (parentId: string | null): SessionEntryBase => ({
-		type: "",
-		id: `h${String(++n).padStart(5, "0")}`,
-		parentId,
-		timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, n)).toISOString(),
-	});
+	const next = entryBases("h");
 	const first = next(null);
 	entries.push({ ...first, type: "message", message: { role: "user", content: big("first-prompt"), timestamp: 1 } });
 	parent = first.id;
@@ -522,88 +667,269 @@ function everyKindHistory(): SessionEntry[] {
 		parent = entry.id;
 	}
 	// A branch the active path does not walk.
-	entries.push({
-		...next(first.id),
-		type: "message",
-		message: { role: "user", content: big("side-branch"), timestamp: 2 },
-	});
+	if (sideBranch) {
+		entries.push({
+			...next(first.id),
+			type: "message",
+			message: { role: "user", content: big("side-branch"), timestamp: 2 },
+		});
+	}
 	const oversized = next(parent);
 	entries.push({ ...oversized, type: "message", message: { role: "user", content: OVERSIZED_TEXT, timestamp: 4 } });
 	return entries;
 }
 
+/** {@link everyRoleHistory} after a root prompt, so navigating back to that prompt leaves every role. */
+function everyRoleHistoryAfterAnchor(): SessionEntry[] {
+	const roles = everyRoleHistory();
+	const anchor: SessionEntry = {
+		type: "message",
+		id: "m00000",
+		parentId: null,
+		timestamp: new Date(Date.UTC(2023, 11, 31)).toISOString(),
+		message: { role: "user", content: "anchor", timestamp: 0 },
+	};
+	roles[0] = { ...roles[0]!, parentId: anchor.id };
+	return [anchor, ...roles];
+}
+
+let authFiles = 0;
+
+/**
+ * Navigate from the leaf of `manager`'s session back to `targetId` with a branch summary, through
+ * the session `/tree` drives, and return the prompt the summary request sent. Only the provider
+ * stream is replaced. `onCredential` runs each time the credential store is asked for the key, the
+ * await a summary attempt starts from. Disposing the session closes `manager`.
+ */
+async function summarizeBranch(
+	manager: SessionManager,
+	root: string,
+	targetId: string,
+	onCredential: () => void,
+): Promise<string> {
+	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	const resolveKey = authStorage.getApiKey.bind(authStorage);
+	vi.spyOn(authStorage, "getApiKey").mockImplementation(async (provider, sessionId, options) => {
+		onCredential();
+		return resolveKey(provider, sessionId, options);
+	});
+	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
+	const session = new AgentSession({
+		agent: new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+		}),
+		sessionManager: manager,
+		settings: Settings.isolated(),
+		modelRegistry: new ModelRegistry(authStorage),
+	});
+	let prompt: string | undefined;
+	vi.spyOn(ai, "streamSimple").mockImplementation((_model, context) => {
+		prompt = JSON.stringify(context.messages.map(message => message.content));
+		const stream = new AssistantMessageEventStream();
+		queueMicrotask(() => {
+			stream.push({ type: "done", reason: "stop", message: assistantTurn("branch summary", 20) });
+			stream.end();
+		});
+		return stream;
+	});
+	try {
+		const result = await session.navigateTree(targetId, { summarize: true });
+		expect(result.cancelled).toBe(false);
+		expect(result.summaryEntry?.type).toBe("branch_summary");
+	} finally {
+		vi.restoreAllMocks();
+		await session.dispose();
+		authStorage.close();
+	}
+	if (prompt === undefined) throw new Error("The branch summary sent no request");
+	return prompt;
+}
+
+/**
+ * An `AgentSession` resumed on `manager`, its agent holding the context the manager builds and
+ * answering every request with `reply`. `close` disposes the session, which closes `manager`.
+ */
+async function resumeSession(
+	manager: SessionManager,
+	root: string,
+	reply: AssistantMessage,
+): Promise<{ session: AgentSession; close: () => Promise<void> }> {
+	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const session = new AgentSession({
+		agent: new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: { ...bundled, contextWindow: 200_000, maxTokens: 64_000 },
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: manager.buildSessionContext().messages,
+			},
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: { ...reply, timestamp: Date.now() } });
+					stream.end();
+				});
+				return stream;
+			},
+		}),
+		sessionManager: manager,
+		settings: Settings.isolated(),
+		modelRegistry: new ModelRegistry(authStorage),
+	});
+	return {
+		session,
+		close: async () => {
+			await session.dispose();
+			authStorage.close();
+		},
+	};
+}
+
+/** {@link everyRoleHistory} and a `task` result whose details hold the usage of the agents it ran. */
+function spendHistory(): SessionEntry[] {
+	const entries = everyRoleHistory();
+	entries.push({
+		type: "message",
+		id: "m00099",
+		parentId: entries.at(-1)!.id,
+		timestamp: new Date(Date.UTC(2024, 0, 2)).toISOString(),
+		message: {
+			role: "toolResult",
+			toolCallId: "call-task",
+			toolName: "task",
+			content: [{ type: "text", text: big("task-output") }],
+			details: {
+				note: big("task-details"),
+				usage: {
+					input: 7,
+					output: 3,
+					cacheRead: 0,
+					cacheWrite: 2,
+					totalTokens: 12,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 },
+				},
+			},
+			isError: false,
+			timestamp: 1,
+		},
+	});
+	return entries;
+}
+
+/** A reply whose usage a goal is charged `input + output + cacheWrite` = 345 tokens of. */
+const RESUMED_REPLY: AssistantMessage = {
+	...assistantTurn("resumed answer", 30),
+	usage: {
+		input: 300,
+		output: 40,
+		cacheRead: 9,
+		cacheWrite: 5,
+		totalTokens: 354,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 },
+	},
+};
+
+/** The spend of a session's stats, without what names the session or measures its live context. */
+function spendOf({ sessionFile: _file, sessionId: _id, contextUsage: _context, ...spend }: SessionStats): SessionSpend {
+	return spend;
+}
+
+/**
+ * The live branch as a session that branched holds it, and as one that never branched does: the
+ * whole file in file order, which the manager walks by index instead of by a set of the live entries.
+ */
+const HISTORY_SHAPES = [
+	{ shape: "a side branch", sideBranch: true },
+	{ shape: "no branch", sideBranch: false },
+];
+
 describe.skipIf(!pins)("compacted history reads back from the session file", () => {
-	it("reads back every entry kind as a fresh load of the file, and never reads the disk for the live context", async () => {
-		const fixture = await writeSession(everyKindHistory());
+	it.each(LOAD_PATHS.flatMap(arm => HISTORY_SHAPES.map(shape => ({ ...arm, ...shape }))))(
+		"reads back every entry kind as a fresh load of the file, and never reads the disk for the live context ($load, $shape)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(arm.sideBranch), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			// Persistence moved every payload kind out of the line, so each restore path is exercised.
+			const text = fs.readFileSync(fixture.file, "utf8");
+			expect(text).not.toContain(OVERSIZED_TEXT.slice(0, 4096));
+			expect(text).not.toContain(base64("result-image").slice(0, 512));
+			expect(text).not.toContain(base64("custom-url").slice(0, 512));
+			expect(text).not.toContain('"echo"');
 
-		// Persistence moved every payload kind out of the line, so each restore path is exercised.
-		const text = fs.readFileSync(fixture.file, "utf8");
-		expect(text).not.toContain(OVERSIZED_TEXT.slice(0, 4096));
-		expect(text).not.toContain(base64("result-image").slice(0, 512));
-		expect(text).not.toContain(base64("custom-url").slice(0, 512));
-		expect(text).not.toContain('"echo"');
+			const expected = await freshLoad(fixture);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
 
-		const expected = await freshLoad(fixture);
-		const storage = new ObservedStorage();
-		const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			expect(storage.openIdentities()).toEqual([storage.statSync(fixture.file).identity!]);
+			const context = manager.buildSessionContext();
+			const contextText = JSON.stringify(context.messages);
+			expect(contextText).toContain(fixture.summary);
+			expect(contextText).toContain("kept prompt");
+			expect(contextText).toContain("tail answer");
+			expect(contextText).not.toContain("first-prompt");
+			// Every settings-bearing entry sits in the compacted history and still reaches the context.
+			expect(context.thinkingLevel).toBe("high");
+			expect(context.configuredThinkingLevel).toBe("auto");
+			expect(context.models).toEqual({ default: "anthropic/claude-sonnet-4-5" });
+			expect(context.injectedTtsrRules).toEqual([big("rule-a", 600), big("rule-b", 600)]);
+			expect(context.selectedMCPToolNames).toEqual([big("tool-a", 600), big("tool-b", 600)]);
+			expect(context.hasPersistedMCPToolSelection).toBe(true);
+			expect(context.mode).toBe("plan");
+			expect(context.modeData).toEqual({ planFile: big("plan-file") });
+			expect(storage.reads).toBe(0);
 
-		expect(storage.openIdentities()).toEqual([storage.statSync(fixture.file).identity!]);
-		const context = manager.buildSessionContext();
-		const contextText = JSON.stringify(context.messages);
-		expect(contextText).toContain(fixture.summary);
-		expect(contextText).toContain("kept prompt");
-		expect(contextText).toContain("tail answer");
-		expect(contextText).not.toContain("first-prompt");
-		// Every settings-bearing entry sits in the compacted history and still reaches the context.
-		expect(context.thinkingLevel).toBe("high");
-		expect(context.configuredThinkingLevel).toBe("auto");
-		expect(context.models).toEqual({ default: "anthropic/claude-sonnet-4-5" });
-		expect(context.injectedTtsrRules).toEqual([big("rule-a", 600), big("rule-b", 600)]);
-		expect(context.selectedMCPToolNames).toEqual([big("tool-a", 600), big("tool-b", 600)]);
-		expect(context.hasPersistedMCPToolSelection).toBe(true);
-		expect(context.mode).toBe("plan");
-		expect(context.modeData).toEqual({ planFile: big("plan-file") });
-		expect(storage.reads).toBe(0);
+			expect(serialized(manager)).toEqual(expected);
+			expect(storage.reads).toBeGreaterThan(0);
+			// The last cold entry read back releases the handle.
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
 
-		expect(serialized(manager)).toEqual(expected);
-		expect(storage.reads).toBeGreaterThan(0);
-		// The last cold entry read back releases the handle.
-		expect(storage.open.size).toBe(0);
-		await manager.close();
-	});
+	it.each(LOAD_PATHS)(
+		"keeps an in-place update of a cold entry across a tail republish, and moves the rest onto the new file ($load)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const original = storage.statSync(fixture.file).identity!;
 
-	it("keeps an in-place update of a cold entry across a tail republish, and moves the rest onto the new file", async () => {
-		const fixture = await writeSession(everyKindHistory());
-		const storage = new ObservedStorage();
-		const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
-		const original = storage.statSync(fixture.file).identity!;
+			const entries = manager.getEntries();
+			const custom = entries.find(entry => entry.type === "custom");
+			const summary = entries.find(entry => entry.type === "branch_summary");
+			if (custom?.type !== "custom" || summary?.type !== "branch_summary") {
+				throw new Error("fixture lost its custom entry or branch summary");
+			}
+			expect(storage.reads).toBe(0);
 
-		const entries = manager.getEntries();
-		const custom = entries.find(entry => entry.type === "custom");
-		const summary = entries.find(entry => entry.type === "branch_summary");
-		if (custom?.type !== "custom" || summary?.type !== "branch_summary") {
-			throw new Error("fixture lost its custom entry or branch summary");
-		}
-		expect(storage.reads).toBe(0);
+			// Two write paths: a nested mutation through the getter, and an assignment through the setter
+			// to an entry nothing has read.
+			(custom.data as Record<string, unknown>).note = "edited in place";
+			summary.summary = "replaced summary";
+			await manager.rewriteEntries([custom, summary]);
 
-		// Two write paths: a nested mutation through the getter, and an assignment through the setter
-		// to an entry nothing has read.
-		(custom.data as Record<string, unknown>).note = "edited in place";
-		summary.summary = "replaced summary";
-		await manager.rewriteEntries([custom, summary]);
+			const republished = storage.statSync(fixture.file).identity!;
+			expect(republished).not.toBe(original);
+			// The replaced object is released: every cold entry now reads from the new one.
+			expect(storage.openIdentities()).toEqual([republished]);
 
-		const republished = storage.statSync(fixture.file).identity!;
-		expect(republished).not.toBe(original);
-		// The replaced object is released: every cold entry now reads from the new one.
-		expect(storage.openIdentities()).toEqual([republished]);
-
-		const expected = await freshLoad(fixture);
-		expect(JSON.parse(expected.get(custom.id)!).data.note).toBe("edited in place");
-		expect(JSON.parse(expected.get(summary.id)!).summary).toBe("replaced summary");
-		expect(serialized(manager)).toEqual(expected);
-		expect(storage.open.size).toBe(0);
-		await manager.close();
-	});
+			const expected = await freshLoad(fixture);
+			expect(JSON.parse(expected.get(custom.id)!).data.note).toBe("edited in place");
+			expect(JSON.parse(expected.get(summary.id)!).summary).toBe("replaced summary");
+			expect(serialized(manager)).toEqual(expected);
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
 
 	it("moves the history a live compaction summarized out of memory once the compaction is recorded", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-live-"));
@@ -641,22 +967,115 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		await manager.close();
 	});
 
-	it("reads the bytes it resumed from after another writer republishes the path", async () => {
-		const fixture = await writeSession(everyKindHistory());
-		const expected = await freshLoad(fixture);
+	it.each(LOAD_PATHS)(
+		"reads the bytes it resumed from after another writer republishes the path ($load)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const expected = await freshLoad(fixture);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+
+			// Another process replaces the file with one whose bytes sit at different offsets.
+			const replacement = `${fixture.file}.other`;
+			fs.writeFileSync(replacement, `${"\n".repeat(4096)}${fs.readFileSync(fixture.file, "utf8")}`);
+			fs.renameSync(replacement, fixture.file);
+
+			for (const [id, line] of expected) {
+				const entry = manager.getEntry(id);
+				expect(entry && JSON.stringify(entry)).toBe(line);
+			}
+			expect(storage.open.size).toBe(0);
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"builds the context of a resumed branch that leaves the newest compaction behind ($load)",
+		async arm => {
+			const fixture = await writeSession(everyRoleHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			// A turn off an entry the newest compaction summarized, as a navigation back before it writes
+			// one, is the last line of the file: the branch the session resumes on.
+			fs.appendFileSync(
+				fixture.file,
+				`${JSON.stringify({
+					type: "message",
+					id: "fork-1",
+					parentId: fixture.compacted[3],
+					timestamp: "2025-02-01T00:00:00.000Z",
+					message: { role: "user", content: "forked prompt", timestamp: 20 },
+				})}\n`,
+			);
+			const warm = await openInMemoryCopy(fixture);
+			const expected = JSON.stringify(warm.buildSessionContext().messages);
+			expect(expected).toContain("forked prompt");
+			expect(expected).toContain("role-user:");
+			expect(expected).not.toContain(fixture.summary);
+
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			expect(JSON.stringify(manager.buildSessionContext().messages)).toBe(expected);
+			expect(manager.getUsageStatistics()).toEqual(warm.getUsageStatistics());
+			expect(serialized(manager)).toEqual(serialized(warm));
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+			await warm.close();
+		},
+	);
+
+	it.each(LOAD_PATHS)("loads a file an older version wrote into memory before it migrates it ($load)", async arm => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-migrate-"));
+		tempDirs.push(root);
+		const dir = path.join(root, "sessions");
+		fs.mkdirSync(dir);
+		fs.mkdirSync(path.join(root, "blobs"));
+		const file = path.join(dir, "session.jsonl");
+		let n = 0;
+		const next = (parentId: string | null): SessionEntryBase => ({
+			type: "",
+			id: `v${String(++n).padStart(5, "0")}`,
+			parentId,
+			timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, n)).toISOString(),
+		});
+		const lines = paddingResults(arm.padding, next);
+		const hook: SessionEntry = {
+			...next(lines.at(-1)?.id ?? null),
+			type: "message",
+			message: { ...EVERY_MESSAGE_ROLE.hookMessage() },
+		};
+		const kept: SessionEntry = { ...next(hook.id), type: "message", message: assistantTurn("kept answer", 2) };
+		const compaction: SessionEntry = {
+			...next(kept.id),
+			type: "compaction",
+			summary: big("v2-compaction"),
+			firstKeptEntryId: kept.id,
+			tokensBefore: 10,
+		};
+		lines.push(hook, kept, compaction);
+		const header = {
+			type: "session",
+			version: 2,
+			id: "cold-migrate",
+			timestamp: "2024-01-01T00:00:00.000Z",
+			cwd: root,
+		};
+		fs.writeFileSync(file, `${[header, ...lines].map(line => JSON.stringify(line)).join("\n")}\n`);
+		expectLoadPath(file, arm);
+
+		// A moved entry reads its line back as the older version wrote it, so the load moves nothing.
+		const loaded = await loadSessionFile(file, new ObservedStorage(), { coolCompactedHistory: true });
+		expect(loaded.cold).toBeUndefined();
+
+		const warm = await openInMemoryCopy({ dir, file });
 		const storage = new ObservedStorage();
-		const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
-
-		// Another process replaces the file with one whose bytes sit at different offsets.
-		const replacement = `${fixture.file}.other`;
-		fs.writeFileSync(replacement, `${"\n".repeat(4096)}${fs.readFileSync(fixture.file, "utf8")}`);
-		fs.renameSync(replacement, fixture.file);
-
-		for (const id of fixture.compacted) {
-			const entry = manager.getEntry(id);
-			expect(entry && JSON.stringify(entry)).toBe(expected.get(id));
-		}
+		const manager = await SessionManager.open(file, dir, storage, { suppressBreadcrumb: true });
+		const migrated = manager.getEntry(hook.id);
+		expect(migrated?.type === "message" && migrated.message.role).toBe("custom");
+		expect(serialized(manager)).toEqual(serialized(warm));
+		expect(manager.getUsageStatistics()).toEqual(warm.getUsageStatistics());
 		expect(storage.open.size).toBe(0);
+		await manager.close();
+		await warm.close();
 	});
 
 	it(
@@ -685,18 +1104,22 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 	);
 
 	it(
-		"holds a compacted history's payloads out of the heap until they are read",
+		"holds a compacted history's payloads out of the heap while the file streams in, and until they are read",
 		async () => {
 			const RESULTS = 160;
 			const RESULT_CHARS = 128 * 1024;
+			const COMPACT_EVERY = 8;
 			const payloadBytes = RESULTS * RESULT_CHARS;
 			const history: SessionEntry[] = [];
+			let parent: string | null = null;
 			for (let i = 0; i < RESULTS; i++) {
+				const id = `r${String(i).padStart(5, "0")}`;
+				const timestamp = new Date(Date.UTC(2024, 0, 1, 0, 0, i)).toISOString();
 				history.push({
 					type: "message",
-					id: `r${String(i).padStart(5, "0")}`,
-					parentId: i === 0 ? null : `r${String(i - 1).padStart(5, "0")}`,
-					timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, i)).toISOString(),
+					id,
+					parentId: parent,
+					timestamp,
 					message: {
 						role: "toolResult",
 						toolCallId: `call-${i}`,
@@ -706,9 +1129,25 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 						timestamp: i,
 					},
 				});
+				parent = id;
+				// A long session compacts every few turns, each compaction keeping the result before it.
+				if (i % COMPACT_EVERY === COMPACT_EVERY - 1) {
+					const compactionId = `c${String(i).padStart(5, "0")}`;
+					history.push({
+						type: "compaction",
+						id: compactionId,
+						parentId: parent,
+						timestamp,
+						summary: big(`compaction-${i}`),
+						firstKeptEntryId: id,
+						tokensBefore: 100,
+					});
+					parent = compactionId;
+				}
 			}
 			const fixture = await writeSession(history);
 			history.length = 0;
+			expect(fs.statSync(fixture.file).size).toBeGreaterThanOrEqual(STREAM_LOAD_THRESHOLD_BYTES);
 
 			const { env, cleanup } = hermeticSpawnEnv();
 			let heap: ColdHistoryHeap;
@@ -732,54 +1171,137 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(heap.results).toBe(RESULTS);
 			expect(heap.cold).toBeLessThan(payloadBytes / 4);
 			expect(heap.warm).toBeGreaterThan(payloadBytes);
+			// The open yields a turn of the event loop after each read of the file, so the samples span
+			// the load. It holds the results read since the last compaction, not the history before it.
+			expect(heap.loadSamples).toBeGreaterThanOrEqual(10);
+			expect(heap.loadPeak).toBeLessThan(payloadBytes / 2);
 		},
 		SUBPROCESS_TIMEOUT_MS,
 	);
 
-	it("picks compacted message entries by their small fields without reading the session file back", async () => {
-		const fixture = await writeSession(everyRoleHistory());
-		const expected = await freshLoad(fixture);
-		const storage = new ObservedStorage();
-		const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
-		const compacted = fixture.compacted.map(id => {
-			const entry = manager.getEntry(id);
-			if (entry?.type !== "message") throw new Error(`fixture lost message entry ${id}`);
-			return entry;
-		});
+	it.each(LOAD_PATHS)(
+		"picks compacted message entries by their small fields without reading the session file back ($load)",
+		async arm => {
+			const fixture = await writeSession(everyRoleHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const expected = await freshLoad(fixture);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const compacted = fixture.compacted.map(id => {
+				const entry = manager.getEntry(id);
+				if (entry?.type !== "message") throw new Error(`fixture lost message entry ${id}`);
+				return entry;
+			});
 
-		// Every small field a fresh load holds, read off every role.
-		const roles: string[] = [];
-		for (const entry of compacted) {
-			const loaded = (JSON.parse(expected.get(entry.id)!) as { message: Record<string, unknown> }).message;
-			const message = entry.message as unknown as Record<string, unknown>;
-			for (const [key, value] of Object.entries(loaded)) {
-				if (typeof value === "object" && value !== null) continue;
-				if (typeof value === "string" && value.length >= MIN_COLD_STRING_LENGTH) continue;
-				expect([entry.message.role, key, message[key]]).toEqual([entry.message.role, key, value]);
+			// Every small field a fresh load holds, read off every role.
+			const roles: string[] = [];
+			for (const entry of compacted) {
+				const loaded = (JSON.parse(expected.get(entry.id)!) as { message: Record<string, unknown> }).message;
+				const message = entry.message as unknown as Record<string, unknown>;
+				for (const [key, value] of Object.entries(loaded)) {
+					if (typeof value === "object" && value !== null) continue;
+					if (typeof value === "string" && value.length >= MIN_COLD_STRING_LENGTH) continue;
+					expect([entry.message.role, key, message[key]]).toEqual([entry.message.role, key, value]);
+				}
+				roles.push(entry.message.role);
 			}
-			roles.push(entry.message.role);
-		}
-		expect(roles.sort()).toEqual(Object.keys(EVERY_MESSAGE_ROLE).sort());
+			expect(roles.sort()).toEqual(Object.keys(EVERY_MESSAGE_ROLE).sort());
 
-		// The scans a resume runs over the whole branch.
-		const branch = manager.getBranch();
-		expect(collectPendingToolCalls(branch)).toEqual([]);
-		expect(branch.filter(isSuccessfulCheckpointEntry)).toEqual([]);
-		expect(getLatestTodoPhasesSnapshotFromEntries(manager.getEntries())).toEqual({ found: false, phases: [] });
-		expect(storage.reads).toBe(0);
+			// The scans a resume runs over the whole branch.
+			const branch = manager.getBranch();
+			expect(collectPendingToolCalls(branch)).toEqual([]);
+			expect(branch.filter(isSuccessfulCheckpointEntry)).toEqual([]);
+			expect(getLatestTodoPhasesSnapshotFromEntries(manager.getEntries())).toEqual({ found: false, phases: [] });
+			expect(storage.reads).toBe(0);
+			// The totals count every compacted assistant turn, without reading one back.
+			const warm = await openInMemoryCopy(fixture);
+			expect(manager.getUsageStatistics()).toEqual(warm.getUsageStatistics());
+			await warm.close();
+			expect(storage.reads).toBe(0);
 
-		// A large field reads its entry's line back once, into the message object the entry already held.
-		for (const entry of compacted) {
-			const message = entry.message;
-			const before = storage.reads;
-			JSON.stringify(message);
-			expect([entry.message.role, storage.reads - before]).toEqual([entry.message.role, 1]);
-			expect(entry.message).toBe(message);
-		}
-		expect(serialized(manager)).toEqual(expected);
-		expect(storage.open.size).toBe(0);
-		await manager.close();
-	});
+			// A large field reads its entry's line back once, into the message object the entry already held.
+			for (const entry of compacted) {
+				const message = entry.message;
+				const before = storage.reads;
+				JSON.stringify(message);
+				expect([entry.message.role, storage.reads - before]).toEqual([entry.message.role, 1]);
+				expect(entry.message).toBe(message);
+			}
+			expect(serialized(manager)).toEqual(expected);
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"runs a turn on a resumed session without reading the summarized history back ($load)",
+		async arm => {
+			const fixture = await writeSession(spendHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const compacted = fixture.compacted.map(id => manager.getEntry(id)!);
+			const inMemory = () => compacted.filter(entry => coldFieldsOf(entry) === undefined).map(entry => entry.id);
+			expect(inMemory()).toEqual([]);
+
+			const { session, close } = await resumeSession(manager, path.dirname(fixture.dir), RESUMED_REPLY);
+			try {
+				await session.prompt("after the resume");
+				await session.agent.waitForIdle();
+				const leaf = manager.getLeafEntry();
+				expect(leaf?.type === "message" && leaf.message.role === "assistant" && leaf.message.content).toEqual(
+					RESUMED_REPLY.content,
+				);
+				expect(storage.reads).toBe(0);
+				expect(inMemory()).toEqual([]);
+			} finally {
+				await close();
+			}
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"charges a goal the spend of the summarized history and leaves that history on disk ($load)",
+		async arm => {
+			const fixture = await writeSession(spendHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const root = path.dirname(fixture.dir);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const compacted = fixture.compacted.map(id => manager.getEntry(id)!);
+			const inMemory = () => compacted.filter(entry => coldFieldsOf(entry) === undefined).map(entry => entry.id);
+			// The summarized entries whose spend sits in their large fields.
+			const spending = compacted.filter(
+				entry =>
+					entry.type === "message" &&
+					(entry.message.role === "assistant" ||
+						(entry.message.role === "toolResult" && entry.message.toolName === "task")),
+			);
+			expect(spending.map(entry => entry.id)).toEqual(["m00003", "m00099"]);
+
+			const reference = await resumeSession(await openInMemoryCopy(fixture), root, RESUMED_REPLY);
+			const cold = await resumeSession(manager, root, RESUMED_REPLY);
+			try {
+				const expected = spendOf(reference.session.getSessionStats());
+				// The summarized `task` result is the only cache write the file records.
+				expect(expected.tokens.cacheWrite).toBe(2);
+				expect(spendOf(cold.session.getSessionStats())).toEqual(expected);
+				expect(storage.reads).toBe(spending.length);
+				expect(inMemory()).toEqual([]);
+
+				await cold.session.goalRuntime.createGoal({ objective: "Finish the resumed work" });
+				await cold.session.prompt("after the resume");
+				await cold.session.agent.waitForIdle();
+				expect(cold.session.getGoalModeState()?.goal).toMatchObject({ tokensUsed: 345, turnsCompleted: 1 });
+				// The tally of the summarized history is kept; the turn reads none of it again.
+				expect(storage.reads).toBe(spending.length);
+				expect(inMemory()).toEqual([]);
+			} finally {
+				await cold.close();
+				await reference.close();
+			}
+		},
+	);
 
 	it("reads a cold message entry back before its message is replaced", async () => {
 		const fixture = await writeSession(everyRoleHistory());
@@ -803,38 +1325,15 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 	});
 
 	it("holds record-only entries on disk on the live branch, and only them", async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-record-"));
-		tempDirs.push(root);
-		const dir = path.join(root, "sessions");
-		fs.mkdirSync(dir);
-		fs.mkdirSync(path.join(root, "blobs"));
-		const file = path.join(dir, "session.jsonl");
-
 		// The compaction keeps itself, so every entry after it is on the live branch.
-		let n = 0;
-		const next = (parentId: string | null): SessionEntryBase => ({
-			type: "",
-			id: `l${String(++n).padStart(5, "0")}`,
-			parentId,
-			timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, n)).toISOString(),
-		});
+		const next = entryBases("l");
 		const kinds = Object.entries(EVERY_ENTRY_KIND) as [string, (base: SessionEntryBase) => SessionEntry][];
 		const lines: SessionEntry[] = [EVERY_ENTRY_KIND.compaction(next(null))];
 		for (const [kind, make] of kinds) {
 			if (kind !== "compaction") lines.push(make(next(lines.at(-1)!.id)));
 		}
 		lines.push({ ...next(lines.at(-1)!.id), type: "message", message: assistantTurn("live answer", 20) });
-		const header = {
-			type: "session",
-			version: 3,
-			id: "cold-record",
-			timestamp: "2025-01-01T00:00:00.000Z",
-			cwd: root,
-		};
-		fs.writeFileSync(file, `${[header, ...lines].map(line => JSON.stringify(line)).join("\n")}\n`);
-		const seed = await SessionManager.open(file, dir, new FileSessionStorage(), { suppressBreadcrumb: true });
-		await seed.rewriteEntries();
-		await seed.close();
+		const { dir, file } = await publishLines("cold-record", lines);
 
 		const expected = await freshLoad({ dir, file });
 		const storage = new ObservedStorage();
@@ -842,13 +1341,103 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		expect(JSON.stringify(manager.buildSessionContext().messages)).toContain("live answer");
 		expect(storage.reads).toBe(0);
 
-		const readBack: string[] = [];
-		for (const entry of manager.getEntries()) {
-			const before = storage.reads;
-			expect(JSON.stringify(entry)).toBe(expected.get(entry.id)!);
-			if (storage.reads > before) readBack.push(entry.type);
-		}
+		const readBack = readBackEntries(manager, storage, expected).map(entry => entry.type);
 		expect(readBack.sort()).toEqual(["session_init", "settings_snapshot", "subagent_spawn"]);
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("keeps the live entries in memory when the branch's lines are out of file order", async () => {
+		const next = entryBases("o");
+		const first = next(null);
+		const second = next(first.id);
+		const kept = next(second.id);
+		const after = next(kept.id);
+		const compaction = next(after.id);
+		// Every entry is on the branch, and the kept prompt's line comes before its parent's: the
+		// file order puts the kept prompt where the branch has the history before it.
+		const lines: SessionEntry[] = [
+			{ ...first, type: "message", message: { role: "user", content: big("first-prompt"), timestamp: 1 } },
+			{ ...kept, type: "message", message: { role: "user", content: big("kept prompt"), timestamp: 3 } },
+			{ ...second, type: "message", message: assistantTurn(big("first-answer"), 2) },
+			{ ...after, type: "message", message: assistantTurn("kept answer", 4) },
+			{ ...compaction, type: "compaction", summary: big("summary"), firstKeptEntryId: kept.id, tokensBefore: 100 },
+		];
+		const { dir, file } = await publishLines("cold-order", lines);
+
+		const expected = await freshLoad({ dir, file });
+		const storage = new ObservedStorage();
+		const manager = await SessionManager.open(file, dir, storage, { suppressBreadcrumb: true });
+		expect(manager.getBranch().map(entry => entry.id)).toEqual([
+			first.id,
+			second.id,
+			kept.id,
+			after.id,
+			compaction.id,
+		]);
+		const contextText = JSON.stringify(manager.buildSessionContext().messages);
+		expect(contextText).toContain("kept prompt");
+		expect(contextText).not.toContain("first-prompt");
+		expect(storage.reads).toBe(0);
+
+		// The history before the kept prompt was moved, and only it; each reads back as a fresh load has it.
+		expect(readBackEntries(manager, storage, expected).map(entry => entry.id)).toEqual([first.id, second.id]);
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("moves another branch out of memory when nothing is compacted", async () => {
+		const next = entryBases("b");
+		const root = next(null);
+		const side = next(root.id);
+		const answer = next(root.id);
+		const prompt = next(answer.id);
+		// The side branch's line sits between the live entries, and the file's last line is the leaf.
+		const { dir, file } = await publishLines("cold-branch", [
+			{ ...root, type: "message", message: { role: "user", content: big("root prompt"), timestamp: 1 } },
+			{ ...side, type: "message", message: { role: "user", content: big("side-branch"), timestamp: 2 } },
+			{ ...answer, type: "message", message: assistantTurn(big("root answer"), 3) },
+			{ ...prompt, type: "message", message: { role: "user", content: big("live prompt"), timestamp: 4 } },
+		]);
+
+		const expected = await freshLoad({ dir, file });
+		const storage = new ObservedStorage();
+		const manager = await SessionManager.open(file, dir, storage, { suppressBreadcrumb: true });
+		const contextText = JSON.stringify(manager.buildSessionContext().messages);
+		for (const text of ["root prompt", "root answer", "live prompt"]) expect(contextText).toContain(text);
+		expect(contextText).not.toContain("side-branch");
+		expect(storage.reads).toBe(0);
+
+		expect(readBackEntries(manager, storage, expected).map(entry => entry.id)).toEqual([side.id]);
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("moves the entries past the leaf out of memory once the leaf moves back and the file is republished", async () => {
+		const next = entryBases("r");
+		const lines: SessionEntry[] = [];
+		for (const [i, tag] of ["first prompt", "first answer", "second prompt", "second answer"].entries()) {
+			const base = next(lines.at(-1)?.id ?? null);
+			lines.push(
+				i % 2 === 0
+					? { ...base, type: "message", message: { role: "user", content: big(tag), timestamp: i } }
+					: { ...base, type: "message", message: assistantTurn(big(tag), i) },
+			);
+		}
+		const { dir, file } = await publishLines("cold-leaf", lines);
+
+		const storage = new ObservedStorage();
+		const manager = await SessionManager.open(file, dir, storage, { suppressBreadcrumb: true });
+		// The active branch is a prefix of the file in file order.
+		manager.branch(lines[1]!.id);
+		await manager.rewriteEntries();
+		const contextText = JSON.stringify(manager.buildSessionContext().messages);
+		for (const text of ["first prompt", "first answer"]) expect(contextText).toContain(text);
+		expect(contextText).not.toContain("second prompt");
+		expect(storage.reads).toBe(0);
+
+		const expected = await freshLoad({ dir, file });
+		expect(readBackEntries(manager, storage, expected).map(entry => entry.id)).toEqual([lines[2]!.id, lines[3]!.id]);
 		expect(storage.open.size).toBe(0);
 		await manager.close();
 	});
@@ -946,4 +1535,39 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		expect(storage.reads).toBe(0);
 		await manager.close();
 	});
+
+	it.each([
+		{ history: "every message role", make: everyRoleHistoryAfterAnchor, target: "m00000", oldest: "role-user-0" },
+		{ history: "every entry kind", make: everyKindHistory, target: "h00001", oldest: "probe-result-0" },
+	])(
+		"summarizes a branch across compacted history of $history as across the same history in memory",
+		async ({ make, target, oldest }) => {
+			const fixture = await writeSession(make());
+			const root = path.dirname(fixture.dir);
+			const warmRoot = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-summary-"));
+			tempDirs.push(warmRoot);
+			fs.cpSync(root, warmRoot, { recursive: true });
+			const warmDir = path.join(warmRoot, "sessions");
+			const warm = await SessionManager.open(path.join(warmDir, "session.jsonl"), warmDir, new UnpinnedStorage(), {
+				suppressBreadcrumb: true,
+			});
+			const expected = await summarizeBranch(warm, warmRoot, target, () => warm.coolCompactedHistory());
+			// The walk reached the oldest entry the navigation leaves, so every cold entry is in the request.
+			expect(expected).toContain(oldest);
+
+			// The size estimate a summary runs first reads most of the history back. A publish that lands
+			// while the credential resolves cools it again, so the attempt walks cold entries.
+			const storage = new ObservedStorage();
+			const cold = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			expect(storage.openIdentities()).toEqual([storage.statSync(fixture.file).identity!]);
+			let readsWhenCooled: number | undefined;
+			const prompt = await summarizeBranch(cold, root, target, () => {
+				cold.coolCompactedHistory();
+				readsWhenCooled = storage.reads;
+			});
+			expect(prompt).toBe(expected);
+			expect(readsWhenCooled).toBeGreaterThan(0);
+			expect(storage.reads).toBeGreaterThan(readsWhenCooled!);
+		},
+	);
 });

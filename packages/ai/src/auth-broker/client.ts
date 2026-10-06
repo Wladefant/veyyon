@@ -8,9 +8,9 @@
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { readSseEvents } from "@veyyon/utils/stream";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import { type } from "arktype";
 import type { AuthCredential } from "../auth-storage";
 import { AuthBrokerError, AuthBrokerStreamUnsupportedError } from "../error/classes";
+import { type } from "../utils/schema/arktype";
 import { formatGenerationTag, parseGenerationTag } from "./generation-tag";
 import type {
 	CredentialBlockRequest,

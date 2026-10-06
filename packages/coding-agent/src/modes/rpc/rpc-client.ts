@@ -12,6 +12,7 @@ import { errorMessage, isRecord, ptree, readJsonl } from "@veyyon/utils";
 import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session-types";
+import type { BackgroundConversation } from "../../session/background-sessions";
 import { primarySessionCpuAdoption } from "../../session/cpu-limit";
 import type {
 	RpcAgentEventFrame,
@@ -32,6 +33,7 @@ import type {
 	RpcHostToolResult,
 	RpcHostToolUpdate,
 	RpcResponse,
+	RpcSessionChange,
 	RpcSessionState,
 } from "./rpc-types";
 
@@ -481,13 +483,26 @@ export class RpcClient {
 	}
 
 	/**
-	 * Start a new session, optionally with parent tracking.
-	 * @param parentSession - Optional parent session path for lineage tracking
-	 * @returns Object with `cancelled: true` if an extension cancelled the new session
+	 * Start a new session, optionally with a parent session for lineage tracking.
+	 * Can be cancelled by a `session_before_switch` extension event handler.
+	 * With `background: true`, a session that is streaming keeps its turn running
+	 * in the background and the client attaches to a new session; `background` in
+	 * the result describes that handoff.
 	 */
-	async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
-		const response = await this.#send({ type: "new_session", parentSession });
+	async newSession(parentSession?: string, options?: { background?: boolean }): Promise<RpcSessionChange> {
+		const response = await this.#send({ type: "new_session", parentSession, background: options?.background });
 		return getData(response);
+	}
+
+	/** The conversations running in the background of this process. */
+	async getBackgroundSessions(): Promise<BackgroundConversation[]> {
+		const response = await this.#send({ type: "get_background_sessions" });
+		return getData<{ sessions: BackgroundConversation[] }>(response).sessions;
+	}
+
+	/** Stop the background conversation with `sessionId` and wait until it is disposed. */
+	async cancelBackgroundSession(sessionId: string): Promise<void> {
+		await this.#send({ type: "cancel_background_session", sessionId });
 	}
 
 	/**
@@ -666,10 +681,13 @@ export class RpcClient {
 	}
 
 	/**
-	 * Switch to a different session file.
-	 * @returns Object with `cancelled: true` if an extension cancelled the switch
+	 * Switch to a different session file. A conversation running in the
+	 * background that writes `sessionPath` is re-attached live, and the session
+	 * the client was driving moves to the background; `background` in the result
+	 * describes that handoff.
+	 * Can be cancelled by a `session_before_switch` extension event handler.
 	 */
-	async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
+	async switchSession(sessionPath: string): Promise<RpcSessionChange> {
 		const response = await this.#send({ type: "switch_session", sessionPath });
 		return getData(response);
 	}

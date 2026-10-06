@@ -3,7 +3,7 @@
  * derivation shared by catalog discovery and the pi-ai OAuth flow. The device
  * login / token refresh flow lives in `@veyyon/ai`'s registry.
  */
-import { VERSION } from "@veyyon/utils";
+import { VERSION } from "@veyyon/utils/dirs";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 
 /**

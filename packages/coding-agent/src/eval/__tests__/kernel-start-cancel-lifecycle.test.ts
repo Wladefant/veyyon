@@ -6,7 +6,7 @@ test("cancelled startup releases its late kernel instead of losing ownership", a
 	const ready = Promise.withResolvers<SessionKernel>();
 	let shutdowns = 0;
 	const kernel: SessionKernel = {
-		execute: async () => ({ status: "ok" }),
+		execute: async () => ({ status: "ok", cancelled: false, timedOut: false, stdinRequested: false }),
 		isAlive: () => true,
 		shutdown: async () => {
 			shutdowns++;
@@ -35,7 +35,7 @@ test("cancelled startup releases its late kernel instead of losing ownership", a
 
 function fakeKernel(counter: { shutdowns: number }, release?: Promise<void>): SessionKernel {
 	return {
-		execute: async () => ({ status: "ok" }),
+		execute: async () => ({ status: "ok", cancelled: false, timedOut: false, stdinRequested: false }),
 		isAlive: () => true,
 		shutdown: async () => {
 			counter.shutdowns++;

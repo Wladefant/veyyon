@@ -231,56 +231,64 @@ export function computeNonMessageBreakdown(session: AgentSession): {
 }
 
 /**
- * Top-level sessions whose at-rest reading waits until the session leaves rest.
+ * Top-level sessions whose at-rest reading waits until the session leaves rest, each with the
+ * function that takes it.
  *
  * The first non-message reading of a process builds the ArkType schema of every active tool to
- * estimate the tool half: about 20 ms of a cold launch and 3.4 MiB of heap for the built-in tools.
- * The interactive host creates its session with the reading deferred and takes it when the composer
- * is first edited or a prompt is submitted, so neither the first frame nor a session left idle pays
- * for schemas only a prompt needs. Until then the status row
- * draws the resting gauge the last launch recorded instead of measuring. Compaction and `/context`
- * read through {@link computeNonMessageTokens} and {@link computeNonMessageBreakdown}, which always
- * measure.
+ * estimate the tool half: about 20 ms of a cold launch and 3.4 MiB of heap for the built-in tools,
+ * plus the evaluation of `arktype` itself. `createAgentSession` holds the reading of every top-level
+ * session. The session takes it before its first turn appends a message, and the interactive host
+ * takes it earlier, once the composer's first edit is drawn, so neither a launch nor a session left
+ * idle pays for schemas only a prompt needs. Until then the status row draws the resting gauge the
+ * last launch recorded instead of measuring. Compaction and `/context` read through
+ * {@link computeNonMessageTokens} and {@link computeNonMessageBreakdown}, which always measure.
  */
-const deferredAtRestReadings = new WeakSet<AgentSession>();
+const heldAtRestReadings = new WeakMap<AgentSession, () => void>();
 
-/** Hold `session`'s at-rest reading until {@link releaseAtRestReading}. */
-export function deferAtRestReading(session: AgentSession): void {
-	deferredAtRestReadings.add(session);
+/** Hold `session`'s at-rest reading until {@link takeHeldAtRestReading}, which calls `take`. */
+export function deferAtRestReading(session: AgentSession, take: () => void): void {
+	heldAtRestReadings.set(session, take);
 }
 
 /** Whether `session`'s at-rest reading is still held. */
 export function isAtRestReadingDeferred(session: AgentSession): boolean {
-	return deferredAtRestReadings.has(session);
+	return heldAtRestReadings.has(session);
 }
 
 /**
- * Whether `session` rests with its reading held: the host holds the at-rest reading and the session
+ * End the hold on `session`'s at-rest reading and take the reading. Returns false, and measures
+ * nothing, when no reading is held: it was taken already, or `session` is a spawned agent.
+ */
+export function takeHeldAtRestReading(session: AgentSession): boolean {
+	const take = heldAtRestReadings.get(session);
+	if (take === undefined) return false;
+	heldAtRestReadings.delete(session);
+	take();
+	return true;
+}
+
+/**
+ * Whether `session` rests with its reading held: the at-rest reading is not taken yet and the session
  * has no message yet. A reader of the context gauge in this state does not measure, because measuring
  * builds every active tool's schema: the status row draws the gauge the last launch recorded, and the
  * slash popup, which a first keystroke opens, states no figure.
  */
 export function restsWithReadingHeld(session: AgentSession): boolean {
-	return deferredAtRestReadings.has(session) && (session.messages?.length ?? 0) === 0;
+	return heldAtRestReadings.has(session) && (session.messages?.length ?? 0) === 0;
 }
 
 /**
- * The context usage a display states for `session`. While the host holds the at-rest reading, a
+ * The context usage a display states for `session`. While the at-rest reading is held, a
  * session with no message states no figure and a session with messages, such as a resumed one,
  * states its resting usage (`AgentSession.getRestingContextUsage`), which takes the non-message
  * size its newest provider response recorded instead of building every tool's schema. A held
- * session whose responses recorded no such size, and every session the host does not hold, measure.
+ * session whose responses recorded no such size, and every session whose reading was taken, measure.
  */
 export function displayedContextUsage(session: AgentSession): ContextUsage | undefined {
-	if (deferredAtRestReadings.has(session)) {
+	if (heldAtRestReadings.has(session)) {
 		if ((session.messages?.length ?? 0) === 0) return undefined;
 		const resting = session.getRestingContextUsage();
 		if (resting) return resting;
 	}
 	return session.getContextUsage();
-}
-
-/** End the hold {@link deferAtRestReading} placed on `session`. */
-export function releaseAtRestReading(session: AgentSession): void {
-	deferredAtRestReadings.delete(session);
 }

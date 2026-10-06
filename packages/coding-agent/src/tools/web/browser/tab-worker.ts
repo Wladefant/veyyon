@@ -11,11 +11,13 @@ import type {
 	CDPSession,
 	Dialog,
 	ElementHandle,
-	ElementScreenshotOptions,
+	HTTPRequest,
 	HTTPResponse,
 	ImageFormat,
+	JSHandle,
 	KeyInput,
 	Page,
+	PuppeteerLifeCycleEvent,
 	SerializedAXNode,
 	Target,
 } from "puppeteer-core";
@@ -26,11 +28,22 @@ import { resolveToCwd } from "../../core/path-utils";
 import { formatScreenshot } from "../../core/render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "../../core/tool-errors";
 import {
+	type AriaSnapshotCapture,
 	type AriaSnapshotOptions,
 	captureAriaSnapshot,
 	parseAriaRefSelector,
 	resolveAriaRefHandle,
 } from "./aria-snapshot";
+import {
+	type ElementIdentity,
+	focusConnected,
+	type HandleRelocation,
+	pointerPoint,
+	relocateElement,
+	scrollConnected,
+	selectConnected,
+	withRelocation,
+} from "./element-identity";
 import { releaseHandle, releaseHandles } from "./handle-release";
 import {
 	applyStealthPatches,
@@ -48,6 +61,14 @@ import {
 	waitForBrowserRun,
 } from "./run-cancellation";
 import { cloneSafe, RunOutput } from "./run-output";
+import {
+	CAPTURE_HEDGE_MS,
+	CAPTURE_MAX_ATTEMPTS,
+	type CaptureParams,
+	elementClip,
+	hedgeCapture,
+	startCapture,
+} from "./screenshot-capture";
 import {
 	applyStorageState,
 	captureStorageState,
@@ -308,17 +329,70 @@ function asElementHandle(handle: unknown): ElementHandle | null {
 	return handle ? (handle as ElementHandle) : null;
 }
 
+/** How long an aborted `tab.goto` waits for the request of the navigation that aborted it. */
+const NAVIGATION_INTERRUPT_GRACE_MS = 250;
+
+/**
+ * A URL as puppeteer reports a navigation request's: parsed, so equivalent spellings compare equal,
+ * and with its fragment, which `HTTPRequest.url()` appends.
+ */
+function navigationKey(url: string): string {
+	return URL.canParse(url) ? new URL(url).href : url;
+}
+
 /** ElementHandle enriched with the `fill()` the tool docs promise on handles from `tab.id()`/`tab.ref()`/`tab.waitFor()`. */
 export type ActionableHandle = ElementHandle & { fill(value: string): Promise<void> };
 
+/** Handles whose actions already relocate; enriching one again would wrap its wrappers. */
+const relocatingHandles = new WeakSet<ElementHandle>();
+
 /**
  * Attach `fill()` to a puppeteer ElementHandle before handing it to user code.
- * Puppeteer handles expose `type()` but no `fill()`; the semantics are the
- * selector-based `tab.fill()`'s.
+ * Puppeteer handles expose `type()` but no `fill()`; the semantics mirror the
+ * selector-based `tab.fill()`: focus, clear any existing value, then type.
+ *
+ * With a `relocation`, which an id or ARIA ref handle carries, every action
+ * that fails because the page re-rendered the node runs again on the element
+ * that replaced it (see {@link withRelocation}). Scrolling, focusing or selecting a detached node
+ * succeeds and changes nothing the page shows, so those actions check the node and act on it in one
+ * evaluation (see {@link scrollConnected}). Puppeteer's `type()` and `press()` focus through
+ * `this.focus()`, the wrapped focus, and need no wrapper.
  */
-export function toActionableHandle(handle: ElementHandle): ActionableHandle {
+export function toActionableHandle(handle: ElementHandle, relocation?: HandleRelocation): ActionableHandle {
 	const enriched = handle as ActionableHandle;
-	enriched.fill = value => fillViaHandle(enriched, value);
+	// A cached id handle is enriched on every tab.id(); its methods are already the wrappers.
+	if (relocatingHandles.has(handle)) return enriched;
+	if (!relocation) {
+		enriched.fill = value => fillViaHandle(handle, value);
+		return enriched;
+	}
+	const { click, hover, tap } = handle;
+	// Pointer actions aim in one evaluation, so a node the page redraws between puppeteer's round
+	// trips still receives them (see pointerPoint). A node in a child frame keeps puppeteer's path,
+	// which adds the frame offsets.
+	enriched.click = options =>
+		withRelocation(handle, relocation, async target => {
+			if (target.frame.parentFrame()) return click.call(target, options);
+			const { x, y } = await pointerPoint(target, options?.offset);
+			await target.frame.page().mouse.click(x, y, options);
+		});
+	enriched.hover = () =>
+		withRelocation(handle, relocation, async target => {
+			if (target.frame.parentFrame()) return hover.call(target);
+			const { x, y } = await pointerPoint(target);
+			await target.frame.page().mouse.move(x, y);
+		});
+	enriched.tap = () =>
+		withRelocation(handle, relocation, async target => {
+			if (target.frame.parentFrame()) return tap.call(target);
+			const { x, y } = await pointerPoint(target);
+			await target.frame.page().touchscreen.tap(x, y);
+		});
+	enriched.select = (...values) => withRelocation(handle, relocation, target => selectConnected(target, values));
+	enriched.scrollIntoView = () => withRelocation(handle, relocation, scrollConnected);
+	enriched.focus = () => withRelocation(handle, relocation, focusConnected);
+	enriched.fill = value => withRelocation(handle, relocation, target => fillViaHandle(target, value));
+	relocatingHandles.add(handle);
 	return enriched;
 }
 
@@ -486,11 +560,25 @@ function replyError(payload: TabRunErrorPayload): Error {
 	return err;
 }
 
+/** How many nodes an observation considers carry each role and name, keyed `role\nname`. */
+function countIdentities(
+	node: SerializedAXNode,
+	includeAll: boolean,
+	counts: Map<string, number>,
+): Map<string, number> {
+	if (includeAll || isInteractiveNode(node)) {
+		const key = `${node.role}\n${node.name ?? ""}`;
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+	for (const child of node.children ?? []) countIdentities(child, includeAll, counts);
+	return counts;
+}
+
 async function collectObservationEntries(
 	core: WorkerCore,
 	node: SerializedAXNode,
 	entries: ObservationEntry[],
-	options: { viewportOnly: boolean; includeAll: boolean },
+	options: { viewportOnly: boolean; includeAll: boolean; identities: Map<string, number> },
 ): Promise<void> {
 	if (options.includeAll || isInteractiveNode(node)) {
 		const handle = await node.elementHandle();
@@ -517,7 +605,10 @@ async function collectObservationEntries(
 				if (node.multiline) states.push("multiline");
 				if (node.modal) states.push("modal");
 				if (node.focused) states.push("focused");
-				core.cacheElement(id, handle as ElementHandle);
+				const name = node.name ?? "";
+				// Only a role and name the page held once can name this element's replacement.
+				const unique = options.identities.get(`${node.role}\n${name}`) === 1;
+				core.cacheElement(id, handle as ElementHandle, unique ? { role: node.role, name } : null);
 				entries.push({
 					id,
 					role: node.role,
@@ -774,7 +865,13 @@ export class WorkerCore {
 	#browser?: Browser;
 	#page?: Page;
 	#targetId?: string;
-	#elementCache = new Map<number, ElementHandle>();
+	#elementCache = new Map<number, { handle: ElementHandle; identity: ElementIdentity | null }>();
+	/** Handles an id held before a re-render replaced its node; released with the cache. */
+	#retiredHandles: ElementHandle[] = [];
+	/** Role and name of each ref the latest whole-page ARIA snapshot held once; null when it held it more often. */
+	#ariaRefIdentities = new Map<string, ElementIdentity | null>();
+	/** The document the latest whole-page ARIA snapshot read; a ref relocates only while it is the page's. */
+	#ariaSnapshotDocument?: JSHandle;
 	#elementCounter = 0;
 	#active: ActiveRun | null = null;
 	#runtime: JsRuntime | null = null;
@@ -796,8 +893,8 @@ export class WorkerCore {
 		return this.#elementCounter;
 	}
 
-	cacheElement(id: number, handle: ElementHandle): void {
-		this.#elementCache.set(id, handle);
+	cacheElement(id: number, handle: ElementHandle, identity: ElementIdentity | null): void {
+		this.#elementCache.set(id, { handle, identity });
 	}
 
 	async #handleMessage(msg: TabWorkerInbound): Promise<void> {
@@ -1306,9 +1403,7 @@ export class WorkerCore {
 						// Default to "load" because dev servers with HMR/WS never reach networkidle.
 						// budgetBound (not the full cell) so a hung navigation fails named and
 						// catchable inside the run instead of dying with the whole cell.
-						await untilAborted(sig, () =>
-							page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: budgetBound }),
-						);
+						await this.#navigate(page, url, opts?.waitUntil ?? "load", budgetBound, sig);
 					} catch (err) {
 						if (isTimeoutError(err)) {
 							// Abandon the hung navigation NOW — a still-pending load stalls every
@@ -1338,7 +1433,9 @@ export class WorkerCore {
 								);
 						}
 						try {
-							return await untilAborted(sig, () => captureAriaSnapshot(page, root, opts));
+							const capture = await untilAborted(sig, () => captureAriaSnapshot(page, root, opts));
+							await this.#recordAriaRefs(page, capture, root === null);
+							return capture.text;
 						} finally {
 							await releaseHandle(root);
 						}
@@ -1432,7 +1529,7 @@ export class WorkerCore {
 				return op(
 					`tab.waitFor(${JSON.stringify(selector)})`,
 					w,
-					async sig => toActionableHandle(await this.#resolveActionHandle(selector, w, sig)),
+					sig => this.#resolveActionHandle(selector, w, sig),
 					{ selector, zeroMatchAfterMs: opts?.timeout === undefined ? ZERO_MATCH_FAIL_FAST_MS : undefined },
 				);
 			},
@@ -1442,8 +1539,7 @@ export class WorkerCore {
 					`tab.waitForSelector(${JSON.stringify(selector)})`,
 					w,
 					async sig => {
-						if (parseAriaRefSelector(selector) !== null)
-							return toActionableHandle(await this.#resolveAriaRef(selector));
+						if (parseAriaRefSelector(selector) !== null) return this.#resolveAriaRef(selector);
 						const handle = (await untilAborted(sig, () =>
 							page.waitForSelector(normalizeSelector(selector), {
 								timeout: w,
@@ -1487,14 +1583,7 @@ export class WorkerCore {
 					async sig => {
 						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
 						try {
-							await untilAborted(sig, () =>
-								handle.evaluate(el => {
-									const target = el as unknown as {
-										scrollIntoView: (opts: { behavior: string; block: string; inline: string }) => void;
-									};
-									target.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
-								}),
-							);
+							await untilAborted(sig, () => handle.scrollIntoView());
 						} finally {
 							await releaseHandle(handle);
 						}
@@ -1523,8 +1612,8 @@ export class WorkerCore {
 				const w = waitMs(opts?.timeout);
 				return op("tab.waitForResponse()", w, sig => this.#waitForResponse(pattern, w, sig));
 			},
-			id: async id => toActionableHandle(await this.#resolveCachedHandle(id)),
-			ref: async id => toActionableHandle(await this.#resolveAriaRef(id)),
+			id: id => this.#resolveCachedHandle(id),
+			ref: id => this.#resolveAriaRef(id),
 			storageState: opts =>
 				op("tab.storageState()", actionOpMs, sig => this.#storageState(opts?.path, sig, session)),
 			loadStorageState: stateOrPath =>
@@ -1546,7 +1635,8 @@ export class WorkerCore {
 		)) as SerializedAXNode | null;
 		if (!snapshot) throw new ToolError("Accessibility snapshot unavailable");
 		const entries: ObservationEntry[] = [];
-		await collectObservationEntries(this, snapshot, entries, { includeAll, viewportOnly });
+		const identities = countIdentities(snapshot, includeAll, new Map());
+		await collectObservationEntries(this, snapshot, entries, { includeAll, viewportOnly, identities });
 		const scroll = (await untilAborted(options.signal, () =>
 			page.evaluate(() => {
 				const win = globalThis as unknown as {
@@ -1600,7 +1690,7 @@ export class WorkerCore {
 		const explicitPath = opts.save ? resolveToCwd(opts.save, session.cwd) : undefined;
 		const captureType = explicitPath ? imageFormatForPath(explicitPath) : "png";
 		const captureMime = `image/${captureType}` as const;
-		let buffer: Buffer;
+		let params: CaptureParams;
 		if (opts.selector) {
 			const handle = (await untilAborted(signal, () =>
 				page.$(normalizeSelector(opts.selector!)),
@@ -1621,18 +1711,26 @@ export class WorkerCore {
 					),
 					"the capture renders the clipped region whether or not the scroll landed",
 				);
-				// scrollIntoView:false skips the same IntersectionObserver check inside screenshot();
-				// captureBeyondViewport (puppeteer's default) still renders the clipped region.
-				const shotOpts: ElementScreenshotOptions = { type: captureType, scrollIntoView: false };
-				buffer = (await untilAborted(signal, () => handle.screenshot(shotOpts))) as Buffer;
+				// captureBeyondViewport renders the clipped region even where it leaves the viewport.
+				params = {
+					format: captureType,
+					captureBeyondViewport: true,
+					clip: await untilAborted(signal, () => elementClip(page, handle)),
+				};
 			} finally {
 				await releaseHandle(handle);
 			}
 		} else {
-			buffer = (await untilAborted(signal, () => page.screenshot({ type: captureType, fullPage }))) as Buffer;
+			params = { format: captureType, captureBeyondViewport: fullPage };
 		}
+		const data = await hedgeCapture(() => startCapture(page, params), {
+			hedgeAfterMs: CAPTURE_HEDGE_MS,
+			maxAttempts: CAPTURE_MAX_ATTEMPTS,
+			signal,
+		});
+		const buffer = Buffer.from(data, "base64");
 		const resized = await resizeImage(
-			{ type: "image", data: buffer.toBase64(), mimeType: captureMime },
+			{ type: "image", data, mimeType: captureMime },
 			{ maxWidth: 1024, maxHeight: 1024, maxBytes: 150 * 1024, jpegQuality: 70, excludeWebP: session.excludeWebP },
 		);
 		const saveFullRes = !!(explicitPath || session.browserScreenshotDir);
@@ -1789,6 +1887,65 @@ export class WorkerCore {
 		}
 	}
 
+	/**
+	 * `page.goto(url)`, sent again once when another main-frame navigation aborted it. Chromium
+	 * cancels a pending navigation when a newer one starts in the same frame, as one the page starts
+	 * from a click handler (a script redirect, a meta refresh, a reload, a form submission) does, and
+	 * `page.goto` reports that as `net::ERR_ABORTED`, the same error as a URL that answers with a
+	 * download or with no content. A main-frame navigation request to another URL separates the two:
+	 * a download sends none, so it is never sent twice. That request is reported after the abort, so
+	 * an abort waits up to {@link NAVIGATION_INTERRUPT_GRACE_MS} for it.
+	 */
+	async #navigate(
+		page: Page,
+		url: string,
+		waitUntil: PuppeteerLifeCycleEvent,
+		timeout: number,
+		signal: AbortSignal,
+	): Promise<void> {
+		const own = navigationKey(url);
+		let interrupter: string | undefined;
+		let noticed: (() => void) | undefined;
+		const onRequest = (request: HTTPRequest): void => {
+			if (interrupter !== undefined || !request.isNavigationRequest() || request.frame() !== page.mainFrame())
+				return;
+			if (request.redirectChain().length !== 0 || navigationKey(request.url()) === own) return;
+			interrupter = request.url();
+			noticed?.();
+		};
+		page.on("request", onRequest);
+		try {
+			for (let attempt = 1; ; attempt++) {
+				interrupter = undefined;
+				try {
+					await untilAborted(signal, () => page.goto(url, { waitUntil, timeout }));
+					return;
+				} catch (err) {
+					if (!errorMessage(err).includes("net::ERR_ABORTED")) throw err;
+					if (interrupter === undefined) {
+						const { promise, resolve } = Promise.withResolvers<void>();
+						noticed = resolve;
+						const grace = setTimeout(resolve, NAVIGATION_INTERRUPT_GRACE_MS);
+						try {
+							await untilAborted(signal, () => promise);
+						} finally {
+							clearTimeout(grace);
+							noticed = undefined;
+						}
+						if (interrupter === undefined) throw err;
+					}
+					if (attempt === 2) {
+						throw new ToolError(
+							`tab.goto(${JSON.stringify(url)}) was aborted twice by other navigations, the last to ${interrupter}; wait for the page to settle (tab.waitForNavigation()) and retry`,
+						);
+					}
+				}
+			}
+		} finally {
+			page.off("request", onRequest);
+		}
+	}
+
 	async #waitForUrl(pattern: string | RegExp, timeout: number, signal: AbortSignal): Promise<string> {
 		const page = this.#requirePage();
 		const isRegex = pattern instanceof RegExp;
@@ -1824,32 +1981,98 @@ export class WorkerCore {
 		return (await untilAborted(signal, () => page.waitForResponse(predicate, { timeout, signal }))) as HTTPResponse;
 	}
 
-	async #resolveCachedHandle(id: number): Promise<ElementHandle> {
-		const handle = this.#elementCache.get(id);
-		if (!handle) throw new ToolError(`Unknown element id ${id}. Run tab.observe() to refresh the element list.`);
-		try {
-			const isConnected = (await handle.evaluate(el => el.isConnected)) as boolean;
-			if (!isConnected) {
-				this.#clearElementCache();
-				throw new ToolError(`Element id ${id} is stale. Run tab.observe() again.`);
-			}
-		} catch (err) {
-			if (err instanceof ToolError) throw err;
+	/**
+	 * The element behind an observe id. A node the page re-rendered out of the document is replaced
+	 * by the single element holding its role and name (see `element-identity.ts`); a node whose
+	 * document a navigation replaced, or one with no single replacement, makes every id stale.
+	 */
+	async #resolveCachedHandle(id: number): Promise<ActionableHandle> {
+		const entry = this.#elementCache.get(id);
+		if (!entry) throw new ToolError(`Unknown element id ${id}. Run tab.observe() to refresh the element list.`);
+		const page = this.#requirePage();
+		const { identity } = entry;
+		const relocation: HandleRelocation = {
+			relocate: () => (identity ? relocateElement(page, identity) : Promise.resolve(null)),
+			stale: cause =>
+				new ToolError(
+					`Element id ${id} is stale (${cause})${identity ? `, and no single element with role ${JSON.stringify(identity.role)} and name ${JSON.stringify(identity.name)} replaced it` : ""}. Run tab.observe() again.`,
+				),
+		};
+		const connected = await optionalResult(
+			entry.handle.evaluate(el => el.isConnected),
+			"a node whose document was replaced cannot be evaluated, and that makes it stale",
+		);
+		if (connected === undefined) {
 			this.#clearElementCache();
-			throw new ToolError(`Element id ${id} is stale. Run tab.observe() again.`);
+			throw new ToolError(`Element id ${id} is stale (the page navigated). Run tab.observe() again.`);
 		}
-		return handle;
+		if (!connected) {
+			const fresh = await relocation.relocate();
+			if (!fresh) {
+				this.#clearElementCache();
+				throw relocation.stale("the page re-rendered it");
+			}
+			// A handle an earlier tab.id() returned stays usable: its actions relocate on their own.
+			this.#retiredHandles.push(entry.handle);
+			entry.handle = fresh;
+		}
+		return toActionableHandle(entry.handle, relocation);
 	}
 
-	async #resolveAriaRef(id: string): Promise<ElementHandle> {
+	/**
+	 * The element behind an ARIA ref of the latest snapshot. A ref whose element the page re-rendered
+	 * resolves to the single element holding the role and name the ref had, as long as the document
+	 * the snapshot read is still the page's.
+	 */
+	async #resolveAriaRef(id: string): Promise<ActionableHandle> {
 		const ref = parseAriaRefSelector(id) ?? id.trim();
-		const handle = await resolveAriaRefHandle(this.#requirePage(), ref);
+		const page = this.#requirePage();
+		const identity = this.#ariaRefIdentities.get(ref) ?? null;
+		const snapshotDocument = this.#ariaSnapshotDocument;
+		const relocation: HandleRelocation = {
+			relocate: async () => {
+				if (!identity || !snapshotDocument) return null;
+				const sameDocument = await optionalResult(
+					snapshotDocument.evaluate(() => true),
+					"a document a navigation replaced cannot be evaluated, and its refs name nothing on the next page",
+				);
+				return sameDocument === true ? relocateElement(page, identity) : null;
+			},
+			stale: cause =>
+				new ToolError(
+					`ARIA ref ${JSON.stringify(ref)} is stale (${cause})${identity ? `, and no single element with role ${JSON.stringify(identity.role)} and name ${JSON.stringify(identity.name)} replaced it` : ""}. Run tab.ariaSnapshot() to refresh refs.`,
+				),
+		};
+		const handle = (await resolveAriaRefHandle(page, ref)) ?? (await relocation.relocate());
 		if (!handle) {
 			throw new ToolError(
 				`Unknown ARIA ref ${JSON.stringify(ref)}. Run tab.ariaSnapshot() to refresh refs (they renumber each snapshot).`,
 			);
 		}
-		return handle;
+		return toActionableHandle(handle, relocation);
+	}
+
+	/**
+	 * Keep the ref identities of a snapshot: each ref's role and name when the snapshot held that
+	 * pair once, and the document it read. A snapshot of a subtree keeps none, since a pair unique
+	 * in the subtree can belong to another element elsewhere in the page.
+	 */
+	async #recordAriaRefs(page: Page, capture: AriaSnapshotCapture, wholePage: boolean): Promise<void> {
+		const identities = new Map<string, ElementIdentity | null>();
+		if (wholePage) {
+			const counts = new Map<string, number>();
+			for (const [, role, name] of capture.refs) {
+				const key = `${role}\n${name}`;
+				counts.set(key, (counts.get(key) ?? 0) + 1);
+			}
+			for (const [ref, role, name] of capture.refs) {
+				identities.set(ref, counts.get(`${role}\n${name}`) === 1 ? { role, name } : null);
+			}
+		}
+		this.#ariaRefIdentities = identities;
+		const previous = this.#ariaSnapshotDocument;
+		this.#ariaSnapshotDocument = wholePage ? await page.evaluateHandle("document") : undefined;
+		void releaseHandle(previous);
 	}
 
 	/**
@@ -1863,22 +2086,21 @@ export class WorkerCore {
 		timeoutMs: number,
 		sig: AbortSignal,
 		opts?: { visible?: boolean },
-	): Promise<ElementHandle> {
+	): Promise<ActionableHandle> {
 		if (parseAriaRefSelector(selector) !== null) return this.#resolveAriaRef(selector);
 		const locator = this.#requirePage().locator(normalizeSelector(selector)).setTimeout(timeoutMs);
-		return (await untilAborted(sig, () =>
+		const handle = (await untilAborted(sig, () =>
 			(opts?.visible ? locator.setVisibility("visible") : locator).waitHandle({ signal: sig }),
 		)) as ElementHandle;
+		return toActionableHandle(handle);
 	}
 	#clearElementCache(): void {
-		if (this.#elementCache.size === 0) {
-			this.#elementCounter = 0;
-			return;
-		}
-		const handles = Array.from(this.#elementCache.values());
-		this.#elementCache.clear();
 		this.#elementCounter = 0;
-		for (const handle of handles) void releaseHandle(handle);
+		if (this.#elementCache.size === 0 && this.#retiredHandles.length === 0) return;
+		const released = [...Array.from(this.#elementCache.values(), entry => entry.handle), ...this.#retiredHandles];
+		this.#elementCache.clear();
+		this.#retiredHandles = [];
+		void releaseHandles(released);
 	}
 
 	/** Best-effort `Page.stopLoading` so an abandoned navigation cannot stall later ops. */
@@ -1900,6 +2122,8 @@ export class WorkerCore {
 	async #close(): Promise<void> {
 		this.#unsub();
 		this.#clearElementCache();
+		void releaseHandle(this.#ariaSnapshotDocument);
+		this.#ariaSnapshotDocument = undefined;
 		const page = this.#page;
 		if (this.#dialogHandler && page && !page.isClosed()) page.off("dialog", this.#dialogHandler);
 		// The worker is shutting down and reports `closed` below regardless: a page that will not close is either

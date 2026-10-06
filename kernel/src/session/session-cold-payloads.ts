@@ -24,13 +24,14 @@
  * or externalizes comes back truncated or restored from the blob store, and a replayed reasoning
  * signature persistence drops does not come back.
  */
-import { errorMessage, isRecord } from "@veyyon/utils";
+import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
+import { isBlobRef, isTextBlobRef } from "./blob-store";
 import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
 
 /**
- * Lines shorter than this stay in memory. A cold entry costs a stub and the handle that reads it,
- * about a hundred bytes; below a kilobyte the saving does not cover a read-back's parse.
+ * Lines shorter than this stay in memory. A cold entry costs the fields recording where its line
+ * is and the handle that reads it; below a kilobyte the saving does not cover a read-back's parse.
  */
 export const MIN_COLD_LINE_BYTES = 1024;
 
@@ -67,56 +68,202 @@ interface ColdFile {
 	cold: number;
 }
 
-/** Where one cold entry's line is, and which of its fields were moved out. */
-interface ColdStub {
-	file: ColdFile;
-	readonly offset: number;
-	readonly length: number;
-	readonly entry: SessionEntry;
+/**
+ * Which fields were moved out of a cold entry and out of its message stand-in, as lists shared by
+ * every entry with the same moved fields, so a cold entry holds one reference for both.
+ */
+interface ColdLayout {
 	/** The entry's fields replaced by accessors. */
 	readonly keys: readonly string[];
-	/**
-	 * A message entry's stand-in for its message: the message's small values, and an accessor for
-	 * each field in `messageKeys`. `entry.message` returns it without reading the line back.
-	 */
-	readonly message: Record<string, unknown> | undefined;
+	/** The stand-in's fields replaced by accessors; empty when the entry has no stand-in. */
 	readonly messageKeys: readonly string[];
+}
+
+/** What {@link ColdEntrySlot.state} reads off a cold entry for a read-back. */
+interface ColdState {
+	readonly file: ColdFile;
+	readonly offset: number;
+	readonly length: number;
+	readonly layout: ColdLayout;
+	readonly standIn: Record<string, unknown> | undefined;
 }
 
 /** Parse one session line and restore what persistence moved out of it. */
 export type ColdLineRestore = (line: string) => SessionEntry;
 
-/** The fields of `record` outside `resident` whose values are objects or long strings. */
-function largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>): string[] {
-	const keys: string[] = [];
-	for (const key of Object.keys(record)) {
-		if (resident.has(key)) continue;
-		const value = record[key];
-		if (
-			typeof value === "string"
-				? value.length >= MIN_COLD_STRING_LENGTH
-				: typeof value === "object" && value !== null
-		) {
-			keys.push(key);
-		}
-	}
-	return keys;
+/** A node of the trie key lists are shared through: one edge per field name, in the record's key order. */
+interface KeyListNode {
+	/** The field names on the path from the root to this node, one list shared by every record. */
+	readonly keys: readonly string[];
+	next: Map<string, KeyListNode> | undefined;
+	/** The layouts whose entry list is `keys`, keyed by their stand-in list. */
+	layouts: Map<readonly string[], ColdLayout> | undefined;
+}
+
+/**
+ * Whether a field value outside the resident set moves out of memory: an object, a long string or
+ * a blob reference. A reference is short, but the load restores it to the payload it names, so an
+ * entry cooled before that restore keeps none in memory.
+ */
+function isLarge(value: unknown): boolean {
+	return typeof value === "string"
+		? value.length >= MIN_COLD_STRING_LENGTH || isTextBlobRef(value) || isBlobRef(value)
+		: typeof value === "object" && value !== null;
 }
 
 function defineValue(target: Record<string, unknown>, key: string, value: unknown): void {
 	Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
 }
 
-export class ColdEntryPayloads {
+/** A base whose constructor returns its argument, so a subclass installs its fields on that object. */
+class ReturnsTarget {
+	constructor(target: object) {
+		// biome-ignore lint/correctness/noConstructorReturn: `new ColdEntrySlot(entry)` installs its fields on the entry itself.
+		return target;
+	}
+}
+
+/**
+ * Where a cold entry's line is and which of its fields were moved out, held in private fields
+ * installed on the entry itself. A private field is invisible to `Object.keys`, `Reflect.ownKeys`,
+ * `JSON.stringify`, `structuredClone` and every descriptor walk. The five fields cost the entry
+ * about 32 bytes of out-of-line storage, where an 80-byte record object holding them and a field
+ * naming it cost 3.2 MiB more for the 70,844 cold entries of an opened 108,163-entry session, and
+ * a `WeakMap` keyed by every cold object cost 4 MiB more than that record object for the 69,498
+ * cold objects of a resumed session. `#file` and `#layout` are undefined while the entry is warm.
+ */
+class ColdEntrySlot extends ReturnsTarget {
+	#file: ColdFile | undefined;
+	#offset = 0;
+	#length = 0;
+	#layout: ColdLayout | undefined;
 	/**
-	 * Keyed by the cold entry and by its message stand-in. Weak, so an entry the session no longer
-	 * holds takes its stub, and in time its handle, with it.
+	 * A message entry's stand-in for its message: the message's small values, and an accessor for
+	 * each field in `messageKeys`. `entry.message` returns it without reading the line back.
 	 */
-	readonly #stubs = new WeakMap<object, ColdStub>();
+	#standIn: Record<string, unknown> | undefined;
+
+	/** The moved fields of `target` when it is a cold entry, or undefined. */
+	static layoutOf(target: object): ColdLayout | undefined {
+		return #file in target ? (target as ColdEntrySlot).#layout : undefined;
+	}
+
+	/** The stand-in a cold message entry's `message` returns, or undefined. */
+	static standInOf(target: object): Record<string, unknown> | undefined {
+		return #file in target ? (target as ColdEntrySlot).#standIn : undefined;
+	}
+
+	/** Everything a read-back of `entry` needs, or undefined when it is warm. */
+	static state(entry: object): ColdState | undefined {
+		if (!(#file in entry)) return undefined;
+		const slot = entry as ColdEntrySlot;
+		const file = slot.#file;
+		if (file === undefined || slot.#layout === undefined) return undefined;
+		return { file, offset: slot.#offset, length: slot.#length, layout: slot.#layout, standIn: slot.#standIn };
+	}
+
+	static cool(
+		entry: object,
+		file: ColdFile,
+		offset: number,
+		length: number,
+		layout: ColdLayout,
+		standIn: Record<string, unknown> | undefined,
+	): void {
+		const slot = #file in entry ? (entry as ColdEntrySlot) : new ColdEntrySlot(entry);
+		slot.#file = file;
+		slot.#offset = offset;
+		slot.#length = length;
+		slot.#layout = layout;
+		slot.#standIn = standIn;
+	}
+
+	/** Mark `entry` warm, releasing what its cold fields named. */
+	static warm(entry: object): void {
+		if (!(#file in entry)) return;
+		const slot = entry as ColdEntrySlot;
+		slot.#file = undefined;
+		slot.#layout = undefined;
+		slot.#standIn = undefined;
+	}
+
+	/** Point `entry` at `to` when it reads through `from`; false when it does not. */
+	static moveFile(entry: object, from: ColdFile, to: ColdFile): boolean {
+		if (!(#file in entry) || (entry as ColdEntrySlot).#file !== from) return false;
+		(entry as ColdEntrySlot).#file = to;
+		return true;
+	}
+}
+
+/** The cold entry a message stand-in belongs to, in a private field installed on the stand-in. */
+class StandInSlot extends ReturnsTarget {
+	#entry: object | undefined;
+
+	static entryOf(target: object): object | undefined {
+		return #entry in target ? (target as StandInSlot).#entry : undefined;
+	}
+
+	static set(standIn: object, entry: object | undefined): void {
+		if (#entry in standIn) (standIn as StandInSlot).#entry = entry;
+		else if (entry !== undefined) new StandInSlot(standIn).#entry = entry;
+	}
+}
+
+/**
+ * The fields of `target` held behind accessors when it is a cold entry or a cold entry's message
+ * stand-in, or `undefined` when it is neither. A walk that skips them reads the resident values
+ * without reading the entry's line back; a cold entry's `message` is resident in this sense, since
+ * its getter returns the stand-in.
+ */
+export function coldFieldsOf(target: object): readonly string[] | undefined {
+	const layout = ColdEntrySlot.layoutOf(target);
+	if (layout !== undefined) return layout.keys;
+	const entry = StandInSlot.entryOf(target);
+	return entry === undefined ? undefined : ColdEntrySlot.layoutOf(entry)?.messageKeys;
+}
+
+/**
+ * Read the line of the cold `entry` back as a load restores it, and check that it is the entry
+ * the line was recorded for.
+ */
+function readBack(entry: SessionEntry, state: ColdState): Record<string, unknown> {
+	const { file, offset, length, standIn } = state;
+	const line = file.reader.read(offset, length);
+	let restored: Record<string, unknown>;
+	try {
+		restored = file.restore(line) as unknown as Record<string, unknown>;
+	} catch (err) {
+		throw new Error(
+			`Session entry ${entry.id} could not be read back from bytes ${offset}-${offset + length} of session object ${file.reader.identity}: ${errorMessage(err)}`,
+		);
+	}
+	if (
+		restored.id !== entry.id ||
+		restored.type !== entry.type ||
+		(standIn !== undefined && !isRecord(restored.message))
+	) {
+		throw new Error(
+			`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${offset}-${offset + length} of session object ${file.reader.identity}`,
+		);
+	}
+	return restored;
+}
+
+/**
+ * `entry` as a load restores its line when it is cold, or undefined when it is warm. The entry
+ * stays cold: its accessors keep what they read in memory, so a reader that visits each entry of
+ * the history once, such as a spend tally, reads through this instead.
+ */
+export function readColdEntry(entry: SessionEntry): SessionEntry | undefined {
+	const state = ColdEntrySlot.state(entry);
+	return state === undefined ? undefined : (readBack(entry, state) as unknown as SessionEntry);
+}
+
+export class ColdEntryPayloads {
 	/** One accessor pair per field name, shared by every entry cooled on that field. */
 	readonly #accessors = new Map<string, PropertyDescriptor>();
-	/** Key lists shared by every entry with the same cooled fields. */
-	readonly #keySets = new Map<string, readonly string[]>();
+	/** Key lists shared by every record with the same cooled fields, walked as each record is scanned. */
+	readonly #keyLists: KeyListNode = { keys: NO_FIELDS, next: undefined, layouts: undefined };
 	/** The file object new cold entries are recorded against. */
 	#current: ColdFile | undefined;
 	/** The accessor pair every cold message entry's `message` is replaced by, built on first use. */
@@ -162,9 +309,7 @@ export class ColdEntryPayloads {
 		}
 		const next: ColdFile = { reader, restore: previous.restore, cold: 0 };
 		for (const entry of entries) {
-			const stub = this.#stubs.get(entry);
-			if (stub?.file !== previous) continue;
-			stub.file = next;
+			if (!ColdEntrySlot.moveFile(entry, previous, next)) continue;
 			previous.cold -= 1;
 			next.cold += 1;
 		}
@@ -180,30 +325,36 @@ export class ColdEntryPayloads {
 	 */
 	cool(entry: SessionEntry, offset: number, length: number): boolean {
 		const file = this.#current;
-		if (file === undefined || length < MIN_COLD_LINE_BYTES || this.#stubs.has(entry)) return false;
+		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdEntrySlot.layoutOf(entry) !== undefined)
+			return false;
 		const record = entry as unknown as Record<string, unknown>;
 		const original = entry.type === "message" ? record.message : undefined;
 		const nested = isRecord(original) ? original : undefined;
-		const keys = largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
-		const movedFromMessage = nested === undefined ? NO_FIELDS : largeKeys(nested, NO_KEYS);
-		if (keys.length === 0 && movedFromMessage.length === 0) return false;
+		const entryNode = this.#largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
+		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#largeKeys(nested, NO_KEYS).keys;
+		if (entryNode.keys.length === 0 && movedFromMessage.length === 0) return false;
 		let message: Record<string, unknown> | undefined;
 		if (nested !== undefined && movedFromMessage.length > 0) {
-			// Built in the original's key order, so the entry serializes as it did.
+			// Built in the original's key order, so the entry serializes as it did. `movedFromMessage`
+			// lists its keys in that order, so one cursor marks each moved key as the walk reaches it.
+			// `for...in` reads the key list cached on the object's structure instead of copying one;
+			// `Object.hasOwn` drops a key an enumerable prototype property adds to that walk.
 			message = {};
-			for (const key of Object.keys(nested)) {
-				if (movedFromMessage.includes(key)) Object.defineProperty(message, key, this.#accessor(key));
-				else message[key] = nested[key];
+			let moved = 0;
+			for (const key in nested) {
+				if (!Object.hasOwn(nested, key)) continue;
+				if (key === movedFromMessage[moved]) {
+					Object.defineProperty(message, key, this.#accessor(key));
+					moved += 1;
+				} else message[key] = nested[key];
 			}
 		}
-		const shared = keys.length === 0 ? NO_FIELDS : this.#sharedKeys(keys);
-		const messageKeys = message === undefined ? NO_FIELDS : this.#sharedKeys(movedFromMessage);
-		for (const key of shared) Object.defineProperty(record, key, this.#accessor(key));
-		const stub: ColdStub = { file, offset, length, entry, keys: shared, message, messageKeys };
-		this.#stubs.set(entry, stub);
+		const layout = this.#layout(entryNode, message === undefined ? NO_FIELDS : movedFromMessage);
+		for (const key of layout.keys) Object.defineProperty(record, key, this.#accessor(key));
+		ColdEntrySlot.cool(entry, file, offset, length, layout, message);
 		if (message !== undefined) {
 			Object.defineProperty(record, "message", this.#messageAccessor());
-			this.#stubs.set(message, stub);
+			StandInSlot.set(message, entry);
 		}
 		file.cold += 1;
 		return true;
@@ -217,7 +368,8 @@ export class ColdEntryPayloads {
 	 */
 	coolWritten(entry: SessionEntry, line: string, offset: number, length: number): boolean {
 		const file = this.#current;
-		if (file === undefined || length < MIN_COLD_LINE_BYTES || this.#stubs.has(entry)) return false;
+		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdEntrySlot.layoutOf(entry) !== undefined)
+			return false;
 		let written: string | undefined;
 		try {
 			written = file.reader.read(offset, length);
@@ -237,39 +389,22 @@ export class ColdEntryPayloads {
 	 * into memory. A warm entry is left as it is.
 	 */
 	warm(receiver: object): void {
-		const stub = this.#stubs.get(receiver);
-		if (stub === undefined) return;
-		const { entry, message } = stub;
-		const line = stub.file.reader.read(stub.offset, stub.length);
-		let restored: Record<string, unknown>;
-		try {
-			restored = stub.file.restore(line) as unknown as Record<string, unknown>;
-		} catch (err) {
-			throw new Error(
-				`Session entry ${entry.id} could not be read back from bytes ${stub.offset}-${stub.offset + stub.length} of session object ${stub.file.reader.identity}: ${errorMessage(err)}`,
-			);
-		}
-		const restoredMessage = restored.message;
-		if (
-			restored.id !== entry.id ||
-			restored.type !== entry.type ||
-			(message !== undefined && !isRecord(restoredMessage))
-		) {
-			throw new Error(
-				`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${stub.offset}-${stub.offset + stub.length} of session object ${stub.file.reader.identity}`,
-			);
-		}
-		// Deleted first, so a throw above leaves the entry cold and readable again.
-		this.#stubs.delete(entry);
+		const entry = (StandInSlot.entryOf(receiver) ?? receiver) as SessionEntry;
+		const state = ColdEntrySlot.state(entry);
+		if (state === undefined) return;
+		const { file, layout, standIn } = state;
+		const restored = readBack(entry, state);
+		// Cleared first, so a throw above leaves the entry cold and readable again.
+		ColdEntrySlot.warm(entry);
 		const record = entry as unknown as Record<string, unknown>;
-		for (const key of stub.keys) defineValue(record, key, restored[key]);
-		if (message !== undefined) {
-			this.#stubs.delete(message);
-			const from = restoredMessage as Record<string, unknown>;
-			for (const key of stub.messageKeys) defineValue(message, key, from[key]);
-			defineValue(record, "message", message);
+		for (const key of layout.keys) defineValue(record, key, restored[key]);
+		if (standIn !== undefined) {
+			StandInSlot.set(standIn, undefined);
+			const from = restored.message as Record<string, unknown>;
+			for (const key of layout.messageKeys) defineValue(standIn, key, from[key]);
+			defineValue(record, "message", standIn);
 		}
-		this.#release(stub.file);
+		this.#release(file);
 	}
 
 	#replaceCurrent(next: ColdFile): void {
@@ -285,12 +420,36 @@ export class ColdEntryPayloads {
 		file.reader.close();
 	}
 
-	#sharedKeys(keys: readonly string[]): readonly string[] {
-		const name = keys.join("\0");
-		const known = this.#keySets.get(name);
-		if (known !== undefined) return known;
-		this.#keySets.set(name, keys);
-		return keys;
+	/**
+	 * The fields of `record` outside `resident` that {@link isLarge} moves, as the trie node whose
+	 * list every record with those fields shares. The walk follows the trie as it finds each field,
+	 * so a record whose list exists allocates no list and builds no lookup key; `for...in` with
+	 * `Object.hasOwn` reads the own keys in `Object.keys` order without copying them into an array.
+	 */
+	#largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>): KeyListNode {
+		let node = this.#keyLists;
+		for (const key in record) {
+			if (resident.has(key) || !isLarge(record[key]) || !Object.hasOwn(record, key)) continue;
+			let next = node.next?.get(key);
+			if (next === undefined) {
+				next = { keys: [...node.keys, key], next: undefined, layouts: undefined };
+				node.next ??= new Map();
+				node.next.set(key, next);
+			}
+			node = next;
+		}
+		return node;
+	}
+
+	/** The layout every entry shares whose moved fields are `keys` and whose stand-in's are `messageKeys`. */
+	#layout(keys: KeyListNode, messageKeys: readonly string[]): ColdLayout {
+		keys.layouts ??= new Map();
+		let layout = keys.layouts.get(messageKeys);
+		if (layout === undefined) {
+			layout = { keys: keys.keys, messageKeys };
+			keys.layouts.set(messageKeys, layout);
+		}
+		return layout;
 	}
 
 	/**
@@ -320,17 +479,16 @@ export class ColdEntryPayloads {
 	/**
 	 * The accessor pair a cold message entry's `message` is replaced by: the getter returns the
 	 * stand-in without reading the line back, and the setter reads it back first, so an assignment
-	 * leaves no stub behind it.
+	 * leaves no cold state behind it.
 	 */
 	#messageAccessor(): PropertyDescriptor {
 		if (this.#messageDescriptor !== undefined) return this.#messageDescriptor;
-		const stubs = this.#stubs;
 		const payloads = this;
 		this.#messageDescriptor = {
 			configurable: true,
 			enumerable: true,
 			get(this: SessionEntry): unknown {
-				const message = stubs.get(this)?.message;
+				const message = ColdEntrySlot.standInOf(this);
 				if (message === undefined) throw new Error(`Cold session entry ${this.id} lost its message stand-in`);
 				return message;
 			},

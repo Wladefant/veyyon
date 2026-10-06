@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { buildModel } from "@veyyon/catalog/build";
 import {
-	createOpenAICodexCompatibilityMetadata,
 	getOpenAICodexTransportDetails,
 	resetOpenAICodexHistoryAfterCompaction,
-} from "../src/providers/openai-codex-responses";
+} from "../src/providers/openai-codex/session-state";
+import { createOpenAICodexCompatibilityMetadata } from "../src/providers/openai-codex-responses";
 
 describe("openai-codex turn-state lifecycle", () => {
 	const model = buildModel({

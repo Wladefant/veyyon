@@ -5,8 +5,8 @@ import type {
 	AgentToolUpdateCallback,
 	CustomMessage,
 } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, lazy, prompt, untilAborted } from "@veyyon/utils";
-import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { ToolError } from "../core/tool-errors";

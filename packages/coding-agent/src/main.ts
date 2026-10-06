@@ -53,7 +53,7 @@ import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-fla
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage, type InitialMessageResult } from "./cli/initial-message";
 import { type StartupPrologue, takeStartupPrologue } from "./cli/prologue-handoff";
-import { selectSession } from "./cli/session-picker";
+import type { selectSession } from "./cli/session-picker";
 import { applySessionWorkdir, applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease, type ReleaseInfo, runAutoUpdate } from "./cli/update-cli";
 import { missingCredentialsMessage } from "./config/missing-credentials";
@@ -84,11 +84,12 @@ import {
 } from "./discovery/helpers";
 import { injectVeyyonExtensionCliRoots } from "./discovery/veyyon-extension-roots";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
-import type { ExtensionUIContext, LoadExtensionsResult } from "./extensibility/extensions/types";
+import type { LoadExtensionsResult } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import type { PrintModeOptions } from "./modes/print-mode";
+import type { RpcModeOptions } from "./modes/rpc/rpc-mode";
 import { CURRENT_SETUP_VERSION, resolveOnboardingGeneration } from "./modes/setup-version";
 import { setLaunchTip, updateInstalledTip } from "./modes/terminal/components/dialogs/launch-tip";
 import type * as firstFrameModule from "./modes/terminal/first-frame";
@@ -100,7 +101,7 @@ import { installTelegramNativeControlHost } from "./native-control/telegram-cont
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { createAgentSession, discoverAuthStorage } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
-import type { InteractiveSessionFactory } from "./session/background-sessions";
+import type { AttachableSession, NextSessionFactory } from "./session/background-sessions";
 import { rootBudgetGroupOwnerId, sessionCpuExecHooks } from "./session/cpu-limit";
 import { loadSessionExtensions } from "./session/factory-extensions";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "./session/factory-options";
@@ -116,11 +117,7 @@ import { EventBus } from "./utils/event-bus";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
 type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<void>;
-type RunRpcMode = (
-	session: AgentSession,
-	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
-	eventBus?: EventBus,
-) => Promise<never>;
+type RunRpcMode = (attached: AttachableSession, options: RpcModeOptions) => Promise<never>;
 
 export function writeStartupNotice(parsedArgs: Pick<Args, "mode">, text: string): void {
 	(parsedArgs.mode === "json" ? process.stderr : process.stdout).write(text);
@@ -650,8 +647,6 @@ function showStartupNotifications(mode: InteractiveMode, notifs: readonly (Inter
 
 /** Send a startup prompt, showing a failure in the transcript instead of ending the launch. */
 async function promptAtStartup(mode: InteractiveMode, send: () => Promise<boolean>): Promise<void> {
-	// A prompt leaves rest: take the held reading before the prompt appends its message.
-	mode.takeAtRestReading();
 	try {
 		using _keepalive = new EventLoopKeepalive();
 		await send();
@@ -1848,8 +1843,9 @@ async function pickResumedSession(launch: RootLaunch, cwd: string): Promise<Sess
 			process.exit(EXIT_OK);
 		}
 	}
+	const pick = launch.deps.selectSession ?? (await import("./cli/session-picker")).selectSession;
 	pauseStartupWatchdog();
-	const selected = await logger.time("selectSession", launch.deps.selectSession ?? selectSession, folderSessions, {
+	const selected = await logger.time("selectSession", pick, folderSessions, {
 		allSessions: preloadedAllSessions,
 	});
 	resumeStartupWatchdog();
@@ -2161,13 +2157,14 @@ function installPersistedAgentReviver(
 }
 
 /**
- * `/new` while a turn is in flight moves the UI here instead of aborting.
- * Overridden against the launch options: a fresh SessionManager so the
- * running turn keeps writing its own transcript, and no inherited
- * provider state, which `AgentSession.newSession` also drops when it
- * resets in place. `mcpManager` is passed so the new session reuses the
- * connected servers rather than re-discovering them; each session holds the
- * manager, and the last one disposed disconnects it.
+ * A handoff to the background attaches the host to a session built here
+ * instead of aborting the turn in flight: the terminal's `/new`, an RPC
+ * `new_session` with `background: true`. Overridden against the launch
+ * options: a fresh SessionManager so the running turn keeps writing its own
+ * transcript, and no inherited provider state, which `AgentSession.newSession`
+ * also drops when it resets in place. `mcpManager` is passed so the new session
+ * reuses the connected servers rather than re-discovering them; each session
+ * holds the manager, and the last one disposed disconnects it.
  */
 function nextSessionFactory(
 	sessionOptions: CreateAgentSessionOptions,
@@ -2175,11 +2172,11 @@ function nextSessionFactory(
 	sessionDir: string | undefined,
 	mcpManager: MCPManager | undefined,
 	createSession: LaunchSessionCreator,
-): InteractiveSessionFactory {
+): NextSessionFactory {
 	return async () => {
 		const activeCwd = getProjectDir();
 		const nextSessionManager = SessionManager.create(activeCwd, sessionDir);
-		const { session: next } = await createSession({
+		return await createSession({
 			...sessionOptions,
 			cwd: activeCwd,
 			...shared,
@@ -2189,7 +2186,6 @@ function nextSessionFactory(
 			providerPromptCacheKey: undefined,
 			providerPromptCacheKeySource: undefined,
 		});
-		return next;
 	};
 }
 
@@ -2230,7 +2226,7 @@ interface StartedLaunch {
 	readonly eventBus: EventBus;
 	readonly initialArgs: Args;
 	readonly prompt: InitialMessageResult;
-	readonly createNextSession: InteractiveSessionFactory;
+	readonly createNextSession: NextSessionFactory;
 }
 
 async function runRpcLaunch(mode: "rpc" | "rpc-ui", started: StartedLaunch): Promise<void> {
@@ -2238,7 +2234,11 @@ async function runRpcLaunch(mode: "rpc" | "rpc-ui", started: StartedLaunch): Pro
 	const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 	stopStartupWatchdog();
 	const { created } = started;
-	await runRpcMode(created.session, mode === "rpc-ui" ? created.setToolUIContext : undefined, started.eventBus);
+	await runRpcMode(created, {
+		ui: mode === "rpc-ui",
+		eventBus: started.eventBus,
+		createNextSession: started.createNextSession,
+	});
 }
 
 async function runInteractiveLaunch(launch: RootLaunch, started: StartedLaunch): Promise<void> {
@@ -2260,8 +2260,13 @@ async function runInteractiveLaunch(launch: RootLaunch, started: StartedLaunch):
 	}
 
 	if ($env.VEYYON_TIMING) {
+		const exitAfterTimings = logger.shouldExitAfterTimings();
+		// The launch card's terminal routes stderr into the log while it holds the screen, so a run that
+		// exits here stops it first and the tree reaches the stderr it was requested on. A run that goes
+		// on into the TUI keeps the routing: its tree is appended to the log.
+		if (exitAfterTimings) (await loadFirstFrame()).takeFirstFrame()?.ui.stop();
 		logger.printTimings();
-		if (logger.shouldExitAfterTimings()) {
+		if (exitAfterTimings) {
 			process.exit(EXIT_OK);
 		}
 	}
@@ -2318,10 +2323,7 @@ async function runSessionLaunch(
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
-	const created = await createSession(
-		{ ...sessionOptions, ...shared, deferAtRestReading: launch.isInteractive },
-		launch.isInteractive,
-	);
+	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
 	const { session } = created;
 	// Publish the in-process native capability before interactive commands can
 	// activate an external adapter. This starts no poller or socket; an

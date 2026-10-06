@@ -171,6 +171,10 @@ async function runAndEnd(
 	return { pid, aliveBefore };
 }
 
+function textOf(r: { content: readonly { type: string; text?: string }[] }): string {
+	return r.content.map(c => (c.type === "text" ? (c.text ?? "") : "")).join("");
+}
+
 describe("aborting a command reaps its descendants", () => {
 	/**
 	 * The base case: one `sh` grandchild that outlives its parent's exit unless
@@ -287,10 +291,10 @@ describe("session disposal evicts and aborts owned bash sessions", () => {
 
 		await tool.execute("warmup", { command: "export VEYYON_LIFETIME_PROBE=held" });
 		const warm = await tool.execute("warm_state", { command: "echo $VEYYON_LIFETIME_PROBE" });
-		expect(warm.content[0].text).toContain("held");
+		expect(textOf(warm)).toContain("held");
 		await disposeBashSessionsByOwner(ownerId);
 		const result = await tool.execute("after_dispose", { command: "echo $VEYYON_LIFETIME_PROBE; echo state_read" });
-		expect(result.content[0].text).toContain("state_read");
-		expect(result.content[0].text).not.toContain("held");
+		expect(textOf(result)).toContain("state_read");
+		expect(textOf(result)).not.toContain("held");
 	});
 });

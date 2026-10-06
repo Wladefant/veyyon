@@ -6,12 +6,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { ImageContent, Model, TextContent, TSchema } from "@veyyon/ai";
+import { Type } from "@veyyon/ai/utils/schema/arktype";
 import { factoryExportMissingMessage, moduleImportFailedMessage } from "@veyyon/kernel/loader/load-failure";
 import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
 import * as TypeBox from "@veyyon/kernel/registry/typebox";
 import { errorMessage, getAgentDir, hasFsCode, isEacces, isEnoent, logger, reportFault } from "@veyyon/utils";
 import type { KeyId } from "@veyyon/utils/keys";
-import { Type } from "arktype";
 import {
 	canonicalProjectRoot,
 	describeProjectExecutable,

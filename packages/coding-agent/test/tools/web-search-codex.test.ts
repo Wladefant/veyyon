@@ -3,6 +3,7 @@ import type { Api, AuthStorage, FetchImpl, Model } from "@veyyon/ai";
 import * as catalogModels from "@veyyon/catalog/models";
 import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import { searchCodex } from "@veyyon/coding-agent/tools/web/search/providers/codex";
+import { SearchProviderError } from "@veyyon/coding-agent/tools/web/search/types";
 
 type CapturedRequest = {
 	url: string;
@@ -359,6 +360,20 @@ describe("searchCodex model selection", () => {
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
 	});
 
+	it("stops at the first bundled default when Codex fails for a reason other than the model", async () => {
+		delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
+		let calls = 0;
+		const fetchMock: FetchImpl = () => {
+			calls += 1;
+			return Promise.resolve(new Response("upstream failure", { status: 500 }));
+		};
+
+		await expect(searchCodex(makeSearchParams("default codex failure", fetchMock))).rejects.toThrow(
+			"Codex API error (500).",
+		);
+		expect(calls).toBe(1);
+	});
+
 	it("keeps hosted web_search top-level for every bundled Codex model", async () => {
 		// Sweep the catalog so a new Lite SKU cannot silently relocate the hosted tool.
 		const modelIds = new Set([
@@ -417,6 +432,33 @@ describe("searchCodex model selection", () => {
 			"requested model is not supported",
 		);
 		expect(calls).toBe(1);
+	});
+
+	// A 401 or a quota body rotates the credential before the error surfaces, which the fake auth store
+	// here does not model; a 403 is classified without rotating.
+	it("maps a failed response to a classified auth error first, then to the unsupported-model or status error", async () => {
+		process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = "gpt-5.5";
+		const cases: Array<{ status: number; body: string; message: string }> = [
+			{
+				status: 403,
+				body: '{"detail":"The requested model is not supported."}',
+				message: "codex: 403 forbidden",
+			},
+			{
+				status: 400,
+				body: '{"detail":"The requested model is not supported."}',
+				message: "codex: requested model is not supported",
+			},
+			{ status: 500, body: "upstream failure", message: "Codex API error (500)." },
+		];
+		for (const { status, body, message } of cases) {
+			const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status }));
+			const error = await searchCodex(makeSearchParams("failed response", fetchMock)).catch(
+				(caught: unknown) => caught,
+			);
+			expect(error).toBeInstanceOf(SearchProviderError);
+			expect(error).toMatchObject({ provider: "codex", status, message });
+		}
 	});
 
 	it("forces web_search tool choice and extracts markdown link citations when annotations are absent", async () => {

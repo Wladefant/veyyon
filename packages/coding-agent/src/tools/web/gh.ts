@@ -9,7 +9,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
-
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import {
 	clamp,
 	DAY_MS,
@@ -29,7 +29,6 @@ import {
 import { isProbablyBinaryHeader } from "@veyyon/utils/binary";
 import { formatBytes } from "@veyyon/utils/format";
 import { parseImageMetadata } from "@veyyon/utils/mime";
-import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import * as git from "../../utils/git";
 import { loadImageAttachmentInput, webpExclusionForModel } from "../../utils/image-loading";

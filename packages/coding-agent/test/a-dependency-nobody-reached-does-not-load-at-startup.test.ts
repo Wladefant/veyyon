@@ -76,7 +76,6 @@ const EAGER_AT_STARTUP = [
 	"diff",
 	"handlebars",
 	"lru-cache",
-	"marked",
 	"smol-toml",
 	"yaml",
 ];

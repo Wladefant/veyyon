@@ -1,12 +1,12 @@
 import type { Api, ApiKey, AssistantMessage, Context, Model, SimpleStreamOptions } from "@veyyon/ai";
 import { completeSimple } from "@veyyon/ai/stream";
-import { validateToolCall } from "@veyyon/ai/utils/validation";
-import { lazy } from "@veyyon/utils/abortable";
-import { isRecord } from "@veyyon/utils/type-guards";
 // The owners, not the barrel. `type` is `@veyyon/ai`'s re-export of arktype, so
 // naming arktype is naming the same module; `validateToolCall` is one function
 // over a tool list. Together they were costing the whole streaming stack.
-import { type as t } from "arktype";
+import { type as t } from "@veyyon/ai/utils/schema/arktype";
+import { validateToolCall } from "@veyyon/ai/utils/validation";
+import { lazy } from "@veyyon/utils/abortable";
+import { isRecord } from "@veyyon/utils/type-guards";
 import type { ChangelogCategory, ConventionalAnalysis } from "./types";
 import { extractTextContent, extractToolCall, normalizeAnalysis, parseJsonPayload } from "./utils";
 

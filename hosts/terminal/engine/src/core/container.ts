@@ -20,7 +20,7 @@ export class Container implements Component, MouseRoutable {
 	// reference at the same width — which, per the Component render contract,
 	// proves the rows are byte-identical. Cleared on any child-list change and
 	// on invalidate().
-	#memoLines: string[] | undefined;
+	#memoLines: readonly string[] | undefined;
 	#memoChildLines: (readonly string[])[] = [];
 	#memoWidth = -1;
 
@@ -109,10 +109,29 @@ export class Container implements Component, MouseRoutable {
 		}
 		this.#memoWidth = width;
 		if (unchanged) return this.#memoLines!;
-		const lines: string[] = [];
+		// A render result is never mutated (the Component render contract), so when one child
+		// holds every row its array is this container's render as it stands. A streaming message
+		// body beside empty slots is that shape, and copying its rows walked the whole block on
+		// every frame.
+		let sole = -1;
 		for (let i = 0; i < count; i++) {
-			const childLines = refs[i]!;
-			for (let j = 0; j < childLines.length; j++) lines.push(childLines[j]!);
+			if (refs[i]!.length === 0) continue;
+			if (sole !== -1) {
+				sole = -2;
+				break;
+			}
+			sole = i;
+		}
+		let lines: readonly string[];
+		if (sole >= 0) {
+			lines = refs[sole]!;
+		} else {
+			const joined: string[] = [];
+			for (let i = 0; i < count; i++) {
+				const childLines = refs[i]!;
+				for (let j = 0; j < childLines.length; j++) joined.push(childLines[j]!);
+			}
+			lines = joined;
 		}
 		this.#memoLines = lines;
 		return lines;

@@ -50,7 +50,7 @@ export function renderKeyValues(
 }
 
 export function renderCodeBlock(code?: string | null, lang = "bash", title?: string): string {
-	if (!code || !code.trim()) return "";
+	if (!code?.trim()) return "";
 	const trimmed = code.trim();
 	if (title) return `\n## ${title}\n\n\`\`\`${lang}\n${trimmed}\n\`\`\`\n`;
 	return `\`\`\`${lang}\n${trimmed}\n\`\`\`\n\n`;

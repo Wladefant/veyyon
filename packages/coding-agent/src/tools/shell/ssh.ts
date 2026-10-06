@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy, prompt } from "@veyyon/utils";
-import { type } from "arktype";
 import { loadCapability } from "../../discovery";
 import type { SSHHost } from "../../discovery/capability/ssh";
 import { sshCapability } from "../../discovery/capability/ssh";

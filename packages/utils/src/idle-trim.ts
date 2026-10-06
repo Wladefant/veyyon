@@ -1,3 +1,4 @@
+import { releaseFreeHeapPages } from "@veyyon/natives";
 import { type ActivitySignal, processActivity } from "./activity-signal";
 import * as logger from "./logger";
 import { rearmingTimeout } from "./rearming-timeout";
@@ -34,11 +35,14 @@ export interface IdleTrimOptions {
 }
 
 /**
- * Deletes the engine's compiled code, runs a full collection and releases free malloc pages.
+ * Deletes the engine's compiled code, runs a full collection and releases the free pages of the
+ * engine's heaps, then returns the free pages of the C allocator's arenas, which `Bun.shrink()`
+ * leaves mapped: native work on the addon's worker threads leaves its peak resident there.
  * `Bun.shrink()` has no `node:*` equivalent: V8 exposes no call that discards compiled code.
  */
 export function trimEngine(): void {
 	Bun.shrink();
+	releaseFreeHeapPages();
 }
 
 /** Timer handle the trim arms. `cancel`, when present, is invoked on stop(). */
