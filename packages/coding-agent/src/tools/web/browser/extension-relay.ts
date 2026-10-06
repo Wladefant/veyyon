@@ -53,8 +53,11 @@ const POPUP_SANDBOX_POLICY =
 /**
  * Runs in every document of a controlled tab so nothing opens a new tab: `window.open` returns null, forms
  * (`submit()`, `requestSubmit()`, submit events, `formtarget`), `<base target>` and links (also inside shadow
- * DOM, and ctrl/meta/shift/middle clicks) stay in the same tab, where the request gate judges them. Best
- * effort: a path that is not script-visible can still open a tab, which the relay then removes unattached.
+ * DOM, and ctrl/meta/shift/middle clicks) stay in the same tab, where the request gate judges them. It also
+ * refuses to create a worker or register a service worker: Chrome offers no Fetch gate on either (measured
+ * 2026-10-06: `Fetch.enable` is not found on a worker session, and a service worker is never auto-attached),
+ * so their requests could not be judged. Best effort: a path that is not script-visible can still open a tab,
+ * which the relay then removes unattached.
  */
 const POPUP_GUARD_SOURCE = `(() => {
   const key = "__veyyonPopupGuard";
@@ -96,6 +99,10 @@ const POPUP_GUARD_SOURCE = `(() => {
   };
   addEventListener("click", onLink, true);
   addEventListener("auxclick", onLink, true);
+  if (navigator.serviceWorker) navigator.serviceWorker.register = () => Promise.reject(new DOMException("Service workers are disabled in a controlled tab.", "SecurityError"));
+  for (const name of ["Worker", "SharedWorker"]) {
+    if (window[name]) window[name] = function () { throw new DOMException("Workers are disabled in a controlled tab.", "SecurityError"); };
+  }
 })();`;
 
 export interface NavigationAudit {
@@ -203,7 +210,14 @@ function isLocalNetworkUrl(url: string): boolean {
 	const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 	if (isIPv4(bare)) {
 		const [a, b] = bare.split(".").map(Number);
-		return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+		return (
+			a === 0 ||
+			a === 10 ||
+			a === 127 ||
+			(a === 169 && b === 254) ||
+			(a === 172 && b >= 16 && b <= 31) ||
+			(a === 192 && b === 168)
+		);
 	}
 	if (isIPv6(bare)) return /^(?:::1?|f[cd]|fe[89ab])/i.test(bare);
 	return bare === "localhost" || bare.endsWith(".localhost") || bare.endsWith(".local");
@@ -585,15 +599,17 @@ export class ExtensionRelay {
 	): Promise<void> {
 		const debuggee = { tabId: tab.tabId, sessionId: attached.sessionId };
 		try {
-			await this.#enableFetchGate(debuggee);
+			await this.#enableFetchGate(debuggee, !(attached.targetInfo?.type ?? "").endsWith("worker"));
 			await this.#call("chrome.debugger.sendCommand", [debuggee, "Target.setAutoAttach", AUTO_ATTACH]);
 		} catch (error) {
 			this.#childSessions.delete(attached.sessionId);
 			const targetId = attached.targetInfo?.targetId;
 			if (targetId !== undefined) {
-				await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Target.closeTarget", { targetId }]).catch(
-					closeError => this.#log("could not close an ungated target", { error: errorText(closeError) }),
-				);
+				await this.#call("chrome.debugger.sendCommand", [
+					{ tabId: tab.tabId },
+					"Target.closeTarget",
+					{ targetId },
+				]).catch(closeError => this.#log("could not close an ungated target", { error: errorText(closeError) }));
 			}
 			throw error;
 		}
@@ -610,17 +626,23 @@ export class ExtensionRelay {
 	 * happen at the new tab. Two layers stop it at the source instead: the guard script, and a sandbox
 	 * header (no `allow-popups`) on every document response, which Chrome enforces for paths no script sees.
 	 */
-	async #enableFetchGate(debuggee: { tabId: number; sessionId?: string }): Promise<void> {
+	async #enableFetchGate(debuggee: { tabId: number; sessionId?: string }, hasDocuments: boolean): Promise<void> {
 		await this.#call("chrome.debugger.sendCommand", [
 			debuggee,
 			"Fetch.enable",
 			{ patterns: [{ urlPattern: "*", requestStage: "Request" }] },
 		]);
+		// Workers have no document: the Page and Network domains do not exist on them, so only pages and
+		// frames get the popup guard and the service-worker bypass.
+		if (!hasDocuments) return;
 		await this.#call("chrome.debugger.sendCommand", [
 			debuggee,
 			"Page.addScriptToEvaluateOnNewDocument",
 			{ source: POPUP_GUARD_SOURCE, runImmediately: true },
 		]);
+		// A service worker answers a page's requests from its own context, which the debugger gate of this
+		// tab never sees. Pages go around it, so every request they make is paused and judged here.
+		await this.#call("chrome.debugger.sendCommand", [debuggee, "Network.setBypassServiceWorker", { bypass: true }]);
 	}
 
 	/**
@@ -733,7 +755,7 @@ export class ExtensionRelay {
 		await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
 		let mainFrameId: string;
 		try {
-			await this.#enableFetchGate({ tabId });
+			await this.#enableFetchGate({ tabId }, true);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.setAutoAttach", AUTO_ATTACH]);
 			// Chrome names a page's main frame after its target. Needed to tell its document from a sub-frame's.
 			const info = targetInfoSchema(
@@ -742,8 +764,10 @@ export class ExtensionRelay {
 			if (info instanceof type.errors) throw new Error("Chrome did not name the main frame of the tab.");
 			mainFrameId = info.targetInfo.targetId;
 		} catch (error) {
-			// Fail closed: a tab we cannot gate is never exposed.
+			// Fail closed: a tab we cannot gate is never exposed. A detach alone leaves a page that has
+			// already loaded running with no gate, so the tab is removed as well.
 			this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
+			this.#fireAndForget("chrome.tabs.remove", [tabId]);
 			throw error;
 		}
 		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, mainFrameId, url: "about:blank", title: "" };
