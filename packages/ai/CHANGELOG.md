@@ -12,6 +12,7 @@
 
 ### Changed
 
+- GitLab Duo builds the stream options its Anthropic, Responses and Chat Completions routes share once, and Claude usage builds its account-wide 5-hour and 7-day limits in one place for the usage endpoint and the rate-limit headers; requests and limits are unchanged.
 - `EventStream`'s iterator `return` passes its value to the generator as `undefined` rather than `void`; behavior is unchanged.
 - The in-band tag scanners find a held-back partial tag by comparing in place at the positions holding the tag's first character instead of slicing every candidate prefix on each delta, cutting the leaked-thinking scan of a 60,000-char answer at 24-char deltas from 2.6 ms to 0.4 ms with identical holds across every text and tag over a three-symbol alphabet.
 - The output-loop guard compares a streamed tail's candidate repeats char by char in place instead of slicing both sides of every candidate length on each delta, cutting its cost on a 200,000-char non-looping stream from 228 ms to 26 ms at 12-char deltas with identical verdicts across 200,000 generated tails.
