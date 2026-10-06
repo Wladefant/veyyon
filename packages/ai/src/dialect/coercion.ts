@@ -3,7 +3,7 @@ import * as logger from "@veyyon/utils/logger";
 import { errorMessage, getOwnProperty, isRecord, setSafeProperty } from "@veyyon/utils/type-guards";
 import type { ToolCall } from "../types";
 import { toolWireSchema } from "../utils/schema";
-import type { InbandScanEvent, InbandTool } from "./types";
+import type { InbandScanEvent, InbandTool, InbandToolEnd } from "./types";
 
 export interface ToolArgShape {
 	stringArgs: Set<string>;
@@ -338,7 +338,10 @@ export function getOwnArg(args: Record<string, unknown>, key: string): unknown {
 	return getOwnProperty(args, key);
 }
 
-/** Complete an announced call with arguments recovered from a truncated or malformed body. */
+/**
+ * Complete an announced call with arguments recovered from a malformed body or, `unterminated`, from a
+ * body the stream ended inside.
+ */
 export function emitBestEffortToolEnd(
 	started: boolean,
 	id: string,
@@ -346,19 +349,14 @@ export function emitBestEffortToolEnd(
 	body: string,
 	rawBlock: string,
 	events: InbandScanEvent[],
+	unterminated = false,
 ): void {
 	if (!started) return;
-	// `name` was captured early from a PARTIAL body (it may be a prefix like "r" of "read");
-	// re-derive the fuller name from the current body when possible.
-	let args: unknown;
-	try {
-		const partial = parseStreamingJson<{ name?: unknown; arguments?: unknown }>(body);
-		if (typeof partial.name === "string" && partial.name.length > name.length) name = partial.name;
-		args = partial.arguments;
-	} catch {
-		args = undefined;
-	}
-	events.push({ type: "toolEnd", id, name, arguments: recordOrEmpty(args), rawBlock });
+	// A body that recovers to a non-object (`null`, a number) has no arguments to recover.
+	const partial = recordOrEmpty(parseStreamingJson<unknown>(body));
+	const end: InbandToolEnd = { type: "toolEnd", id, name, arguments: recordOrEmpty(partial.arguments), rawBlock };
+	if (unterminated) end.unterminated = true;
+	events.push(end);
 }
 
 /**

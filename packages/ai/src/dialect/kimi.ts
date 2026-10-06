@@ -1,9 +1,11 @@
+import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { Message, ToolCall } from "../types";
 import {
 	normalizeKimiFunctionName,
 	parseToolArgsText,
 	partialSuffixOverlapAny,
+	recordOrEmpty,
 	scanThinkingText,
 	ThinkingSection,
 } from "./coercion";
@@ -90,9 +92,23 @@ export class KimiInbandScanner implements InbandScanner {
 				continue;
 			}
 
-			if (!this.#consumeArgs(final, events)) break;
+			if (!this.#consumeArgs(events)) break;
 		}
 		if (final && this.#state === "thinking") this.#endThinking(events);
+		if (final && this.#state === "args") {
+			// The stream ended inside an announced call: its truncated arguments are auto-closed.
+			events.push({
+				type: "toolEnd",
+				id: this.#id,
+				name: this.#name,
+				arguments: recordOrEmpty(parseStreamingJson(this.#buffer)),
+				rawBlock: `${this.#rawBlock}${this.#buffer}`,
+				unterminated: true,
+			});
+			this.#resetCall();
+			this.#buffer = "";
+			this.#state = "outside";
+		}
 		return events;
 	}
 
@@ -180,30 +196,25 @@ export class KimiInbandScanner implements InbandScanner {
 		return true;
 	}
 
-	#consumeArgs(final: boolean, events: InbandScanEvent[]): boolean {
+	#consumeArgs(events: InbandScanEvent[]): boolean {
 		const end = this.#buffer.indexOf(KIMI_CALL_END);
-		if (end === -1) {
-			if (final) this.#dropBufferedCall();
-			return false;
-		}
+		if (end === -1) return false;
 
-		const rawArgsBlock = this.#buffer.slice(0, end);
-		const rawArgs = rawArgsBlock.trim();
-		events.push({
-			type: "toolEnd",
-			id: this.#id,
-			name: this.#name,
-			arguments: this.#parseArgs(rawArgs),
-			rawBlock: `${this.#rawBlock}${rawArgsBlock}${KIMI_CALL_END}`,
-		});
+		this.#endCall(this.#buffer.slice(0, end), events);
 		this.#buffer = this.#buffer.slice(end + KIMI_CALL_END.length);
-		this.#resetCall();
 		this.#state = "section";
 		return true;
 	}
 
-	#parseArgs(rawArgs: string): Record<string, unknown> {
-		return parseToolArgsText(rawArgs, { source: "kimi", tool: this.#name });
+	#endCall(rawArgs: string, events: InbandScanEvent[]): void {
+		events.push({
+			type: "toolEnd",
+			id: this.#id,
+			name: this.#name,
+			arguments: parseToolArgsText(rawArgs.trim(), { source: "kimi", tool: this.#name }),
+			rawBlock: `${this.#rawBlock}${rawArgs}${KIMI_CALL_END}`,
+		});
+		this.#resetCall();
 	}
 
 	#nextTokenIndex(): number {

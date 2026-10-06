@@ -23,6 +23,7 @@ import type {
 	InbandScanEvent,
 	InbandScanner,
 	InbandScannerOptions,
+	InbandToolEnd,
 } from "./types";
 import { THINK_CLOSE, THINK_OPEN } from "./wire-tags";
 
@@ -90,8 +91,8 @@ class PiNativeInbandScanner implements InbandScanner {
 		}
 		if (final) {
 			if (this.#state === "thinking") this.#endThinking(events);
-			// An unterminated call at end of stream is dropped (mirrors GLM/hermes).
-			this.#call = null;
+			// The stream ended inside an announced call: it ends with the body read so far.
+			if (this.#call) this.#endCall(this.#call, events, true);
 			this.#state = "outside";
 			this.#buffer = "";
 		}
@@ -209,6 +210,11 @@ class PiNativeInbandScanner implements InbandScanner {
 		appendBody(call, combined.slice(call.body.length, close), events);
 		this.#buffer = combined.slice(close + call.closer.length);
 		call.rawBlock += call.closer;
+		this.#endCall(call, events);
+		return true;
+	}
+
+	#endCall(call: OpenCall, events: InbandScanEvent[], unterminated = false): void {
 		const args = finalizeCall(call);
 		if (call.bodyMode === "inline" && call.inlineKey !== null) {
 			// Flush the delta the trailing-newline holdback kept out of the stream.
@@ -218,10 +224,17 @@ class PiNativeInbandScanner implements InbandScanner {
 				events.push({ type: "toolArgDelta", id: call.id, name: call.name, key: call.inlineKey, delta: tail });
 			}
 		}
-		events.push({ type: "toolEnd", id: call.id, name: call.name, arguments: args, rawBlock: call.rawBlock });
+		const end: InbandToolEnd = {
+			type: "toolEnd",
+			id: call.id,
+			name: call.name,
+			arguments: args,
+			rawBlock: call.rawBlock,
+		};
+		if (unterminated) end.unterminated = true;
+		events.push(end);
 		this.#call = null;
 		this.#state = "outside";
-		return true;
 	}
 }
 

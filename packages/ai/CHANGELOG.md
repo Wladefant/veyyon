@@ -9,6 +9,7 @@
 ### Added
 
 - `@veyyon/ai/utils/schema/arktype` exports `type`, `scope` and `Type` stand-ins that evaluate the `arktype` package on their first call, construction or property read, plus `loadArktype`, `configureArktype`, which holds a configuration until the first `loadArktype` applies it, and `arktypeRelease`, which reads the installed release from package metadata; every arktype value import in the package goes through it, so a process that configures ArkType and builds no schema evaluates none of arktype's 115 modules.
+- `@veyyon/ai/dialect` exports `InbandToolEnd`, the `toolEnd` scan event, whose `unterminated: true` marks a call the stream ended inside; the Kimi and DSML leaked-markup healers drop such a call.
 
 ### Changed
 
@@ -50,6 +51,7 @@
 - The Gemini usage reader takes the Gemini CLI headers from `@veyyon/catalog/wire/gemini-headers` instead of the Cloud Code Assist client, so a launch no longer evaluates that client and its validation helper (44 KiB of source).
 - The Anthropic session-state key and fast-mode reset, the Claude device id, the Codex session-state readers, the OpenAI cache-key normalizers, the Gemini thought-signature accounting and the Azure deployment map are defined in leaf modules, and `providers/server-compaction-transport` loads `providers/openai-compaction` on the first server-side compaction, so a caller of any of them no longer evaluates the Anthropic, Codex, Google or OpenAI shared modules; `providers/register-builtins` exports `loadOpenAICodexResponses`, the one loader of the Codex client.
 - `discoverAuthStorage` serves credentials from the shared-store connection it checked for seeding instead of opening the shared database a second time, which takes one open, schema check and close (1.1 ms median of 300) off each launch that uses the shared store.
+- The Hermes and Qwen3 dialects share one in-band scanner, `dialect/json-tool-call-scanner.ts`.
 
 ### Fixed
 
@@ -65,6 +67,10 @@
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
 - An OpenAI-compatible request whose `tool_choice` the endpoint rejects with a 400 (`only "auto" is supported for 'tool_choice'`, `Thinking mode does not support this tool_choice`) retries once without that form, and the session leaves the form out for that model afterwards.
+- A Hermes in-band tool call is announced once its name has finished streaming, so the terminal no longer opens the call's card under a partial name such as `search` for `search_files`.
+- A Qwen3 tool call cut off by the end of the stream no longer repeats its body as visible text after the call, and a Hermes or Qwen3 `<tool_call>` block that names no call is shown as text instead of dropped.
+- Hermes and Harmony end a reasoning section, and Harmony ends an announced tool call, when the stream ends inside it with no text held back, instead of leaving it open.
+- An in-band tool call the stream ends inside now ends with the arguments read before the cut in the Anthropic, DeepSeek, GLM, Harmony, Kimi, MiniMax, pi-native and XML dialects, instead of staying open or ending with no arguments.
 
 ## [1.5.4] - 2026-09-24
 

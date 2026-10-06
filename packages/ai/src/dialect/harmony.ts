@@ -1,6 +1,7 @@
+import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { Message, ToolCall } from "../types";
-import { mintToolCallId, parseToolArgsText, partialSuffixOverlapAny } from "./coercion";
+import { mintToolCallId, parseToolArgsText, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
 import {
 	assistantTranscriptParts,
 	collectToolResultRun,
@@ -14,6 +15,7 @@ import type {
 	DialectToolResult,
 	InbandScanEvent,
 	InbandScanner,
+	InbandToolEnd,
 } from "./types";
 
 const START = "<|start|>";
@@ -112,10 +114,6 @@ class HarmonyInbandScanner implements InbandScanner {
 				const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, BODY_TOKENS);
 				this.#emitBody(this.#buffer.slice(0, this.#buffer.length - hold), events);
 				this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
-				if (final && this.#buffer.length === 0) {
-					this.#finishBody(events);
-					this.#state = "outside";
-				}
 				break;
 			}
 
@@ -145,6 +143,13 @@ class HarmonyInbandScanner implements InbandScanner {
 
 			if (this.#mode === "tool") this.#rawBlock += next.token;
 			this.#buffer = this.#buffer.slice(next.index + next.token.length);
+		}
+		// A body whose text was all emitted before the stream ended leaves nothing in the buffer for
+		// the loop to finish it with: its thinking section or announced call still ends here, a call
+		// with its truncated arguments auto-closed.
+		if (final && this.#state === "body") {
+			this.#finishBody(events, true);
+			this.#state = "outside";
 		}
 		return events;
 	}
@@ -195,23 +200,23 @@ class HarmonyInbandScanner implements InbandScanner {
 		}
 	}
 
-	#finishBody(events: InbandScanEvent[]): void {
+	#finishBody(events: InbandScanEvent[], cut = false): void {
 		if (this.#mode === "thinking") {
 			events.push({ type: "thinkingEnd", thinking: this.#thinking });
 		} else if (this.#mode === "tool" && this.#name.length > 0) {
-			events.push({
+			const end: InbandToolEnd = {
 				type: "toolEnd",
 				id: this.#id,
 				name: this.#name,
-				arguments: this.#parseArgs(),
+				arguments: cut
+					? recordOrEmpty(parseStreamingJson(this.#toolArgs))
+					: parseToolArgsText(this.#toolArgs, { source: "harmony", tool: this.#name }),
 				rawBlock: this.#rawBlock,
-			});
+			};
+			if (cut) end.unterminated = true;
+			events.push(end);
 		}
 		this.#clearBody();
-	}
-
-	#parseArgs(): Record<string, unknown> {
-		return parseToolArgsText(this.#toolArgs, { source: "harmony", tool: this.#name });
 	}
 
 	#clearBody(resetRawBlock = true): void {
