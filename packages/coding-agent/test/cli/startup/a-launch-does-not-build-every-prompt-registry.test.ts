@@ -293,11 +293,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * which this walk never counted. Its only static imports are type-only.
  * `test/architecture/a-launch-evaluates-arktype-only-when-a-schema-is-built.test.ts` pins the cut.
  *
+ * 1468 to 1474: six modules split out of modules already here, each importing only what its source
+ * did. `ai/src/dialect/json-tool-call-scanner.ts` is the `<tool_call>` JSON scanner `hermes.ts` and
+ * `qwen3.ts` shared by copy. `session/startup-credential-relay.ts`, `session/startup-identity.ts`,
+ * `session/startup-request-hooks.ts` and `config/openai-websockets-mode.ts` are session startup steps
+ * that left `sdk.ts`, and `session/tool-discovery.ts` left `session/factory-tools.ts`. No module left
+ * and none arrived through a new import.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1468;
+const LAUNCH_REACH_CEILING = 1474;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -314,8 +321,11 @@ const LAUNCH_REACH_CEILING = 1468;
  * so a launch builds no ICU time zone cache. `logger.ts` and `log-file.ts`, already here, read through
  * it, and its one import is `bun:ffi`. The launch count above is unchanged: the session's local day
  * moved from `coding-agent/src/utils/local-date.ts`, which left, to the same module.
+ *
+ * 523 to 524: `ai/src/dialect/json-tool-call-scanner.ts`, for the reason the launch ceiling above
+ * records.
  */
-const ASSEMBLER_REACH_CEILING = 523;
+const ASSEMBLER_REACH_CEILING = 524;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();
