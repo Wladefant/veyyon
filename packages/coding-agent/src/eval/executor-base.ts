@@ -689,6 +689,8 @@ export interface ManagedKernelSession<TKernel extends SessionKernel = SessionKer
 
 export interface StartingManagedKernelSession<TKernel extends SessionKernel = SessionKernel> extends SessionOwnerState {
 	promise: Promise<ManagedKernelSession<TKernel>>;
+	/** Callers currently awaiting this startup, by owner key. An owner leaves only with its last waiter. */
+	waiters: Map<string, number>;
 }
 
 export interface KernelSessionPoolOptions<
@@ -746,10 +748,11 @@ export class KernelSessionPool<
 			return existing;
 		}
 
+		const ownerKey = options.kernelOwnerId ?? sessionId;
 		const inFlight = this.#startingSessions.get(sessionKey);
 		if (inFlight) {
 			attachSessionOwner(inFlight, sessionId, options.kernelOwnerId);
-			return await waitForPromiseWithCancellation(inFlight.promise, options, this.#cancelledErrorClass);
+			return await this.#awaitStartup(sessionKey, inFlight, ownerKey, options);
 		}
 
 		let startingSession!: StartingManagedKernelSession<TKernel>;
@@ -760,9 +763,18 @@ export class KernelSessionPool<
 				sessionId,
 				cwd,
 				kernel,
-				ownerIds: new Set(startingSession.ownerIds),
+				ownerIds: startingSession.ownerIds,
 				hasFallbackOwner: startingSession.hasFallbackOwner,
 			};
+			if (startingSession.ownerIds.size === 0 && startingSession.waiters.size === 0) {
+				// Every owner left while the kernel was starting. Leave the starting map first so a
+				// caller arriving during the release starts a fresh kernel instead of joining this one.
+				if (this.#startingSessions.get(sessionKey) === startingSession) {
+					this.#startingSessions.delete(sessionKey);
+				}
+				await releaseKernel(kernel, `${this.#options.logLabel}-startup-owner-cancelled`);
+				return session;
+			}
 			if (this.#startingSessions.get(sessionKey) === startingSession) {
 				this.#sessions.set(sessionKey, session);
 			}
@@ -773,15 +785,47 @@ export class KernelSessionPool<
 			ownerIds: new Set(),
 			hasFallbackOwner: false,
 			promise: startPromise,
+			waiters: new Map(),
 		};
 		attachSessionOwner(startingSession, sessionId, options.kernelOwnerId);
 		this.#startingSessions.set(sessionKey, startingSession);
+		void startPromise
+			.finally(() => {
+				if (this.#startingSessions.get(sessionKey) === startingSession) {
+					this.#startingSessions.delete(sessionKey);
+				}
+			})
+			.catch(() => {});
+		return await this.#awaitStartup(sessionKey, startingSession, ownerKey, options);
+	}
+
+	async #awaitStartup(
+		sessionKey: string,
+		starting: StartingManagedKernelSession<TKernel>,
+		ownerKey: string,
+		options: TOptions,
+	): Promise<ManagedKernelSession<TKernel>> {
+		starting.waiters.set(ownerKey, (starting.waiters.get(ownerKey) ?? 0) + 1);
+		let left = true;
+		const leave = (): number => {
+			left = false;
+			const remaining = (starting.waiters.get(ownerKey) ?? 1) - 1;
+			if (remaining > 0) starting.waiters.set(ownerKey, remaining);
+			else starting.waiters.delete(ownerKey);
+			return remaining;
+		};
 		try {
-			return await waitForPromiseWithCancellation(startPromise, options, this.#cancelledErrorClass);
-		} finally {
-			if (this.#startingSessions.get(sessionKey) === startingSession) {
-				this.#startingSessions.delete(sessionKey);
+			return await waitForPromiseWithCancellation(starting.promise, options, this.#cancelledErrorClass);
+		} catch (error) {
+			// Another caller with the same owner may still be waiting; the owner stays until the last one leaves.
+			if (leave() === 0) starting.ownerIds.delete(ownerKey);
+			const session = this.#sessions.get(sessionKey);
+			if (session?.ownerIds === starting.ownerIds && session.ownerIds.size === 0 && starting.waiters.size === 0) {
+				await this.resetSession(sessionKey);
 			}
+			throw error;
+		} finally {
+			if (left) leave();
 		}
 	}
 

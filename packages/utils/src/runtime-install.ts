@@ -380,6 +380,8 @@ async function runRuntimeInstall(runtimeDir: string): Promise<void> {
 		env: { ...Bun.env, BUN_BE_BUN: "1" },
 		stdout: "pipe",
 		stderr: "pipe",
+		windowsHide: true,
+		timeout: 120_000,
 	});
 	const [stdout, stderr, exitCode] = await Promise.all([
 		readPipeText(proc.stdout as ReadableStream<Uint8Array> | null),

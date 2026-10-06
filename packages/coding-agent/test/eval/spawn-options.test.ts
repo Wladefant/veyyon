@@ -12,9 +12,8 @@ import {
  * controlling-terminal problem, so a flipped branch reintroduces a deadlock or a
  * SIGTTIN stop:
  *
- *  - shouldHideKernelWindow must hide the window ONLY on Windows AND only when the
- *    host has no inheritable console (hiding when a console exists detaches the
- *    child and can deadlock NumPy's native import / break SIGINT recovery).
+ *  - shouldHideKernelWindow must hide every Windows kernel window, including when
+ *    the host has an inheritable console.
  *  - shouldDetachKernel must detach (setsid) on every non-Windows platform so a
  *    shell in user code cannot steal Veyyon's controlling terminal.
  *  - consoleAttachedViaTTY is the OR-of-three-streams fallback.
@@ -23,12 +22,12 @@ import {
  */
 
 describe("shouldHideKernelWindow", () => {
-	it("hides only on Windows when the host has no inheritable console", () => {
+	it("hides on Windows when the host has no inheritable console", () => {
 		expect(shouldHideKernelWindow({ platform: "win32", hostHasInheritableConsole: false })).toBe(true);
 	});
 
-	it("does not hide on Windows when a console is inheritable", () => {
-		expect(shouldHideKernelWindow({ platform: "win32", hostHasInheritableConsole: true })).toBe(false);
+	it("hides on Windows when a console is inheritable", () => {
+		expect(shouldHideKernelWindow({ platform: "win32", hostHasInheritableConsole: true })).toBe(true);
 	});
 
 	it("never hides off Windows regardless of console state", () => {

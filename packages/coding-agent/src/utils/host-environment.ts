@@ -53,6 +53,7 @@ async function runGpuProbe(cmd: string[], budgetMs: number): Promise<string | nu
 			// SIGKILL so a probe ignoring SIGTERM (PATH wrapper, wedged WMI) still
 			// dies at the deadline and lets getCachedGpu reach the null-cache write.
 			killSignal: "SIGKILL",
+			windowsHide: true,
 		});
 		const stdoutReader = proc.stdout.getReader();
 		let stdout = "";

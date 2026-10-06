@@ -4,6 +4,7 @@
  * Uses brush-core via native bindings for shell execution.
  */
 import { ExponentialYield } from "@veyyon/agent-core/utils/yield";
+import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
 import { type MinimizerOptions, Shell, type ShellRunResult } from "@veyyon/natives";
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
@@ -672,3 +673,53 @@ function buildSessionKey(
 		"\n",
 	);
 }
+
+/**
+ * Dispose persistent Shell instances owned by `ownerId` (e.g. session id).
+ *
+ * An agent session ending aborts and evicts its persistent Shell instances so
+ * child processes and native sessions do not leak.
+ */
+export async function disposeBashSessionsByOwner(ownerId: string): Promise<void> {
+	if (!ownerId) return;
+	const keysToDispose: string[] = [];
+	for (const key of shellSessions.keys()) {
+		const keyOwner = key.split("\n")[0];
+		if (keyOwner === ownerId || keyOwner.startsWith(`${ownerId}:`)) {
+			keysToDispose.push(key);
+		}
+	}
+	const abortPromises: Promise<void>[] = [];
+	for (const key of keysToDispose) {
+		const shell = shellSessions.get(key);
+		shellSessions.delete(key);
+		brokenShellSessions.delete(key);
+		shellSessionsInUse.delete(key);
+		shellSessionQuarantines.delete(key);
+		if (shell) {
+			abortPromises.push(shell.abort().catch(() => undefined));
+		}
+	}
+	await Promise.allSettled(abortPromises);
+}
+
+/**
+ * Dispose all persistent Shell instances and retained background shells.
+ * For testing and complete harness teardown.
+ */
+export async function disposeAllBashSessions(): Promise<void> {
+	const shells = [...shellSessions.values(), ...retainedShells];
+	shellSessions.clear();
+	brokenShellSessions.clear();
+	shellSessionsInUse.clear();
+	shellSessionQuarantines.clear();
+	retainedShells.clear();
+	await Promise.allSettled(shells.map(s => s.abort().catch(() => undefined)));
+}
+
+registerOwnedResourceDisposer({
+	name: "bash-shell-sessions",
+	scope: "session",
+	timeoutMs: 3_000,
+	dispose: ownerId => disposeBashSessionsByOwner(ownerId),
+});

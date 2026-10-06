@@ -12,32 +12,14 @@ import { dlopen, FFIType } from "bun:ffi";
  * Decide whether the long-lived Python kernel subprocess should be spawned
  * with `windowsHide: true`.
  *
- * On Windows, Bun maps `windowsHide: true` to the `CREATE_NO_WINDOW` flag,
- * which detaches the child from any inherited console. The Python kernel
- * runs user code that imports NumPy/pandas; those native extensions
- * (`numpy/_core/_multiarray_umath.pyd` + bundled OpenBLAS/SLEEF thread-pool
- * init) can deadlock inside `LoadLibraryExW` when no console is attached,
- * and a console-less child cannot receive SIGINT via
- * `GenerateConsoleCtrlEvent` (the recovery path the host relies on). See
- * issue #1960.
- *
- * So on Windows we hide only when the host itself has no console to share.
- * In any launch where a console is attached — even one with every stdio
- * stream redirected — the kernel inherits the parent's console, matching
- * `python.exe` invoked from `cmd.exe`, which keeps native imports and
- * SIGINT recovery working.
- *
- * Short-lived helper subprocesses elsewhere in the codebase (LSP probes,
- * git, plugin installs) keep `windowsHide: true` because they don't load
- * complex native modules and the brief console flash would be user-visible
- * noise.
+ * Windows children never allocate a visible console. Cancellation can escalate
+ * to runner shutdown when a console-free kernel cannot receive SIGINT.
  */
 export function shouldHideKernelWindow(opts: {
 	platform: NodeJS.Platform;
 	hostHasInheritableConsole: boolean;
 }): boolean {
-	if (opts.platform !== "win32") return false;
-	return !opts.hostHasInheritableConsole;
+	return opts.platform === "win32";
 }
 
 /**
