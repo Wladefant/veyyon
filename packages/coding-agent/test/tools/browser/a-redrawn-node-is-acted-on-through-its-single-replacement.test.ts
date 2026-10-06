@@ -124,7 +124,9 @@ describe("withRelocation acts on the replacement only when the node left a docum
 		const failure = new Error("Waiting for selector `button` failed: Timeout 30000ms exceeded");
 		const relocator = relocatorTo([fakeNode(true, "replacement")]);
 
-		await expect(withRelocation(handleFor(fakeNode(false, failure)), relocator.relocation, act)).rejects.toBe(failure);
+		await expect(withRelocation(handleFor(fakeNode(false, failure)), relocator.relocation, act)).rejects.toBe(
+			failure,
+		);
 		expect(relocator.relocations).toBe(0);
 	});
 
@@ -144,16 +146,19 @@ describe("withRelocation acts on the replacement only when the node left a docum
 		expect(relocator.relocations).toBe(0);
 	});
 
-	it.each(PUPPETEER_DETACHED_MESSAGES)("acts once on the replacement after %p from a node that left", async message => {
-		const original = fakeNode(false, new Error(`Protocol error: ${message}`));
-		const replacement = fakeNode(true, "replacement");
-		const relocator = relocatorTo([replacement]);
+	it.each(PUPPETEER_DETACHED_MESSAGES)(
+		"acts once on the replacement after %p from a node that left",
+		async message => {
+			const original = fakeNode(false, new Error(`Protocol error: ${message}`));
+			const replacement = fakeNode(true, "replacement");
+			const relocator = relocatorTo([replacement]);
 
-		expect(await withRelocation(handleFor(original), relocator.relocation, act)).toBe("replacement");
-		expect(relocator.relocations).toBe(1);
-		expect(replacement).toMatchObject({ actions: 1, disposals: 1 });
-		expect(original.disposals).toBe(0);
-	});
+			expect(await withRelocation(handleFor(original), relocator.relocation, act)).toBe("replacement");
+			expect(relocator.relocations).toBe(1);
+			expect(replacement).toMatchObject({ actions: 1, disposals: 1 });
+			expect(original.disposals).toBe(0);
+		},
+	);
 });
 
 describe("withRelocation gives up within its bound and names the last cause", () => {
