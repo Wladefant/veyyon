@@ -378,6 +378,23 @@ describe("policy at the relay", () => {
 		expect(exposed).toHaveLength(0);
 	});
 
+	test("a client cannot undo the relay's guard script, CSP sandbox or service-worker bypass", async () => {
+		const { ext, cdp } = await connected([]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const before = ext.callsOf("chrome.debugger.sendCommand").length;
+		for (const method of [
+			"Page.setBypassCSP",
+			"Page.removeScriptToEvaluateOnNewDocument",
+			"Page.addScriptToEvaluateOnNewDocument",
+			"Network.setBypassServiceWorker",
+		]) {
+			const reply = await cdp.send(method, {}, sessionId);
+			expect(reply.error?.message).toMatch(/blocked|allowlist/);
+		}
+		expect(ext.callsOf("chrome.debugger.sendCommand")).toHaveLength(before);
+	});
+
 	test("the popup guard sent to every tab covers forms, base target and shadow-DOM links", async () => {
 		const { ext, cdp } = await connected(["https://staging.example.com"]);
 		await cdp.send("Target.createTarget", { url: "about:blank" });

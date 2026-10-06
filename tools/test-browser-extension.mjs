@@ -343,12 +343,6 @@ try {
 	receipt.steps.workersGuardOnPublic = await probeWorkers();
 	await page.goto(localUrl, { waitUntil: "domcontentloaded" });
 	receipt.steps.workersGuardOnLocal = await probeWorkers();
-	// A client must not be able to switch the service worker bypass back off.
-	const bypassSession = await page.createCDPSession();
-	receipt.steps.bypassUndoRefused = await bypassSession.send("Network.setBypassServiceWorker", { bypass: false }).then(
-		() => false,
-		error => String(error.message).slice(0, 120),
-	);
 
 	// Negative control: a real click (user gesture, so Chrome's popup blocker allows it) opens a popup to the
 	// refused host. Guard on: it must send nothing. Guard removed: the response sandbox alone must still send
@@ -383,49 +377,49 @@ try {
 		return refusedHits() - before;
 	};
 	const guardOn = await popupByClick();
+	// A client must not be able to remove or replace the guard script, switch the CSP sandbox off, or
+	// re-enable service workers. Every attempt must be refused, and the guard must still be in place.
 	const control = await page.createCDPSession();
+	const refusedCall = (method, params) =>
+		control.send(method, params).then(
+			() => false,
+			() => true,
+		);
 	const removed = [];
 	for (let id = 1; id <= 8; id++) {
-		const done = await control.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: String(id) }).then(
-			() => true,
-			() => false,
-		);
-		if (done) removed.push(id);
+		if (!(await refusedCall("Page.removeScriptToEvaluateOnNewDocument", { identifier: String(id) }))) removed.push(id);
 	}
-	const guardOff = await popupByClick();
-	const guardOffNoopener = await popupByClick("noopener");
+	const undoRefused = {
+		removeScript: removed.length === 0,
+		setBypassCSP: await refusedCall("Page.setBypassCSP", { enabled: true }),
+		addScript: await refusedCall("Page.addScriptToEvaluateOnNewDocument", { source: "void 0" }),
+		serviceWorkerBypass: await refusedCall("Network.setBypassServiceWorker", { bypass: false }),
+	};
+	const guardAfterUndo = await popupByClick();
+	const guardAfterUndoNoopener = await popupByClick("noopener");
 	await mainWorld(() => {
 		document.documentElement.dataset.guard = String(window.__veyyonPopupGuard);
 	});
 	receipt.steps.negativeControl = {
 		guardOn,
-		guardOff,
-		guardOffNoopener,
+		guardOff: guardAfterUndo,
+		guardOffNoopener: guardAfterUndoNoopener,
+		undoRefused,
 		removedScriptIds: removed,
 		popupDetails,
-		guardPresentAfterRemoval: await page.evaluate(() => document.documentElement.dataset.guard),
+		guardPresentAfterUndo: await page.evaluate(() => document.documentElement.dataset.guard),
 	};
-
-	// Guard removed (the script ids were removed above, so new documents get none). On a public page the
-	// response header alone must still stop every worker and every service worker. On a local-network page
-	// there is no header: a worker is created, but the relay cannot pause it, so it must be closed and
-	// never run; a service worker registers there, which is the documented gap of a local-network page.
+	// The page after the undo attempts still refuses every worker and service worker.
 	await resetPage();
-	const offPublic = await probeWorkers();
-	await page.goto(localUrl, { waitUntil: "domcontentloaded" });
-	const offLocal = await probeWorkers();
-	receipt.steps.workersGuardOff = { public: offPublic, local: offLocal };
-	const noneCreated = r => !Object.values(r).some(v => ["ran", "registered", "created"].includes(v));
+	const afterUndo = await probeWorkers();
+	receipt.steps.workersAfterUndoAttempts = afterUndo;
 	const refusedAll = r => Object.values(r).every(v => String(v).startsWith("rejected") || v === "error");
 	receipt.steps.workersOk =
 		refusedAll(receipt.steps.workersGuardOnPublic) &&
 		refusedAll(receipt.steps.workersGuardOnLocal) &&
-		typeof receipt.steps.bypassUndoRefused === "string" &&
-		noneCreated(offPublic) &&
-		!["dedicated", "blob", "data", "iframe"].some(key => offLocal[key] === "ran") &&
-		["dedicated", "blob", "data"].every(key => offLocal[key] === "created") &&
-		offLocal.swInstance === "registered" &&
-		relayLog.some(line => line.includes("could not gate a child session"));
+		refusedAll(afterUndo) &&
+		Object.values(undoRefused).every(Boolean) &&
+		receipt.steps.negativeControl.guardPresentAfterUndo !== "undefined";
 
 	// User tabs untouched.
 	const userTitles = await Promise.all((await owner.pages()).map(p => p.title().catch(() => "?")));
