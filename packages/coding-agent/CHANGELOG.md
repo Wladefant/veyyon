@@ -203,6 +203,7 @@
 
 ### Fixed
 
+- A non-recursive discovery scan reads only the files directly inside its directory, so a helper module under `tools/<name>/` no longer registers as a custom tool named for its file, and a file below `commands/`, `rules/`, `prompts/` or `instructions/` (`rules/archive/old.md`) no longer loads as a command, rule, prompt or instruction.
 - `VEYYON_TIMING=x` on an interactive launch stops the launch card's terminal before it prints, so the startup timing tree reaches stderr instead of only the log file, and the startup bench's `ready:load` and `ready:boot` arms report samples again.
 - A tool card in a rebuilt transcript serializes its call's arguments through one accessor shared by every block instead of a getter allocated per block, so a drawn tool turn keeps one closure and two scopes instead of two and four (`bash`: 0.9 closures and 1.85 scopes per turn instead of 1.9 and 3.85).
 - The terminal components barrel exports `HOOK_EDITOR_TEXT_PAD_COLS`, `computeModalDims`, `sizingForArea` and the other modal sizing names again, which it dropped when they moved to `chrome/modal-geometry.ts`.

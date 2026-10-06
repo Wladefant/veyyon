@@ -599,12 +599,15 @@ export async function loadFilesFromDir<T>(
 	// Use native glob for fast scanning with gitignore support
 	let matches: Array<{ path: string }>;
 	try {
+		// The native glob matches a simple pattern such as `*.md` at every depth unless told
+		// otherwise, so the non-recursive default has to reach it.
 		const result = await glob({
 			pattern,
 			path: dir,
 			gitignore: true,
 			hidden: false,
 			fileType: FileType.File,
+			recursive,
 		});
 		matches = result.matches;
 	} catch {
