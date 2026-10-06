@@ -395,6 +395,24 @@ try {
 		addScript: await refusedCall("Page.addScriptToEvaluateOnNewDocument", { source: "void 0" }),
 		serviceWorkerBypass: await refusedCall("Network.setBypassServiceWorker", { bypass: false }),
 	};
+	// An isolated world has its own Worker and ServiceWorkerContainer; the relay must guard it too.
+	const isolatedProbe = await (async () => {
+		const frameId = (await control.send("Page.getFrameTree")).frameTree.frame.id;
+		const { executionContextId } = await control.send("Page.createIsolatedWorld", { frameId, worldName: "probe" });
+		const { result } = await control.send("Runtime.evaluate", {
+			contextId: executionContextId,
+			awaitPromise: true,
+			returnByValue: true,
+			expression: `(async () => {
+				const out = {};
+				try { out.worker = typeof Worker === "function" ? "present" : "removed"; } catch { out.worker = "removed"; }
+				try { await navigator.serviceWorker.register("/sw.js"); out.sw = "registered"; } catch (e) { out.sw = "rejected:" + e.name; }
+				return out;
+			})()`,
+		});
+		return result.value;
+	})().catch(error => ({ error: String(error.message).slice(0, 120) }));
+	receipt.steps.isolatedWorldProbe = isolatedProbe;
 	const guardAfterUndo = await popupByClick();
 	const guardAfterUndoNoopener = await popupByClick("noopener");
 	await mainWorld(() => {
@@ -419,6 +437,8 @@ try {
 		refusedAll(receipt.steps.workersGuardOnLocal) &&
 		refusedAll(afterUndo) &&
 		Object.values(undoRefused).every(Boolean) &&
+		isolatedProbe.worker === "removed" &&
+		String(isolatedProbe.sw).startsWith("rejected") &&
 		receipt.steps.negativeControl.guardPresentAfterUndo !== "undefined";
 
 	// User tabs untouched.

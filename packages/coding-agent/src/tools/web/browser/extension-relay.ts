@@ -878,7 +878,23 @@ export class ExtensionRelay {
 		if (method === "Page.navigate" && typeof params.url === "string") this.#checkNavigationOrThrow(tabId, params.url);
 		const debuggee = rootTab !== undefined ? { tabId } : { tabId, sessionId };
 		const result = await this.#call("chrome.debugger.sendCommand", [debuggee, method, params]);
+		if (method === "Page.createIsolatedWorld") await this.#guardIsolatedWorld(debuggee, result);
 		return result ?? {};
+	}
+
+	/**
+	 * An isolated world has its own `Worker` and `ServiceWorkerContainer`, which the document guard script
+	 * (main world only) never reaches. Puppeteer needs these worlds for ordinary work, so run the guard in
+	 * each one before the client hears its context id. If that fails the command fails: no unguarded world.
+	 */
+	async #guardIsolatedWorld(debuggee: { tabId: number; sessionId?: string }, created: unknown): Promise<void> {
+		const contextId = (created as { executionContextId?: unknown } | undefined)?.executionContextId;
+		if (typeof contextId !== "number") throw new Error("Isolated world refused: no context id to guard.");
+		await this.#call("chrome.debugger.sendCommand", [
+			debuggee,
+			"Runtime.evaluate",
+			{ expression: POPUP_GUARD_SOURCE, contextId },
+		]);
 	}
 
 	#checkNavigationOrThrow(tabId: number, url: string): void {

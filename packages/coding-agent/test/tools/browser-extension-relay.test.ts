@@ -68,6 +68,7 @@ class FakeExtension {
 		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++ };
 		if (target === "Fetch.getResponseBody") result = { body: "<h1>hi</h1>", base64Encoded: false };
 		if (target === "Target.getTargetInfo") result = { targetInfo: { targetId: MAIN_FRAME_ID } };
+		if (target === "Page.createIsolatedWorld") result = { executionContextId: 77 };
 		this.#ws.send(JSON.stringify({ id: message.id, result }));
 	}
 
@@ -393,6 +394,30 @@ describe("policy at the relay", () => {
 			expect(reply.error?.message).toMatch(/blocked|allowlist/);
 		}
 		expect(ext.callsOf("chrome.debugger.sendCommand")).toHaveLength(before);
+	});
+
+	test("an isolated world gets the guard script before the client hears its context id", async () => {
+		const { ext, cdp } = await connected([]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const reply = await cdp.send("Page.createIsolatedWorld", { frameId: "f", worldName: "w" }, sessionId);
+		expect(reply.result).toMatchObject({ executionContextId: 77 });
+		const calls = ext.callsOf("chrome.debugger.sendCommand").map(call => call.params);
+		const created = calls.findIndex(params => params[1] === "Page.createIsolatedWorld");
+		const guarded = calls.findIndex(params => params[1] === "Runtime.evaluate");
+		expect(created).toBeGreaterThanOrEqual(0);
+		expect(guarded).toBeGreaterThan(created);
+		expect(calls[guarded][2]).toMatchObject({ contextId: 77 });
+		expect(String((calls[guarded][2] as { expression: string }).expression)).toContain("ServiceWorkerContainer");
+	});
+
+	test("an isolated world the relay cannot guard is refused", async () => {
+		const { ext, cdp } = await connected([]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		ext.failNext("Runtime.evaluate");
+		const reply = await cdp.send("Page.createIsolatedWorld", { frameId: "f" }, sessionId);
+		expect(reply.error).toBeDefined();
 	});
 
 	test("the popup guard sent to every tab covers forms, base target and shadow-DOM links", async () => {
