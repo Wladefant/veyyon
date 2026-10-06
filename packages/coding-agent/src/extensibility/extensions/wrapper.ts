@@ -359,21 +359,6 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 		}
 
 		const uiContext = this.#runner.getUIContext();
-		// Observable waiting state, published for the whole process rather than
-		// kept as a private boolean here. A blocked agent's status is `running`
-		// (it is mid-turn), so nothing downstream can otherwise tell an agent
-		// stopped at a prompt from an agent grinding through a build: the runtime
-		// budget charges it the operator's reading time and the dashboard renders
-		// it as busy. Set immediately before the await and cleared in the
-		// `finally` that also covers the throw, so no abort, refusal or dialog
-		// error can leave it stuck on.
-		if (requester) {
-			AgentRegistry.global().setPendingApproval(requester, {
-				toolName: this.#tool.name,
-				...(this.#gate.reason ? { reason: this.#gate.reason } : {}),
-				since: Date.now(),
-			});
-		}
 		// A tool the model called several times in one batch raises one approval
 		// prompt per call, and only the first can reach the surface: the dialog
 		// host presents one at a time and queues the rest. The standing grant was
@@ -484,6 +469,22 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 		requester: string | undefined,
 		release: () => void,
 	): Promise<string | undefined> {
+		// Observable waiting state, published for the whole process rather than
+		// kept as a private boolean here. A blocked agent's status is `running`
+		// (it is mid-turn), so nothing downstream can otherwise tell an agent
+		// stopped at a prompt from an agent grinding through a build: the runtime
+		// budget charges it the operator's reading time and the dashboard renders
+		// it as busy. Opened immediately before the card and closed in the
+		// `finally` that also covers the throw, so no abort, refusal or dialog
+		// error can leave it open. A call queued behind another card of this tool
+		// opens none while it waits: that card's wait already marks the agent.
+		const closeWait = requester
+			? AgentRegistry.global().openApprovalWait(requester, {
+					toolName: this.#tool.name,
+					...(this.#gate.reason ? { reason: this.#gate.reason } : {}),
+					since: Date.now(),
+				})
+			: undefined;
 		let choice: string | undefined;
 		try {
 			choice = await uiContext.select(
@@ -495,7 +496,7 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 			await this.#resolve(false, err instanceof Error ? err.message : "approval aborted");
 			throw err;
 		} finally {
-			if (requester) AgentRegistry.global().setPendingApproval(requester, undefined);
+			closeWait?.();
 			// Cleanup lives in the finally, not after the try: a dialog surface
 			// that dies mid-prompt must still release the calls queued behind
 			// it, or the batch waits on a promise nobody will ever settle and

@@ -210,6 +210,7 @@
 
 ### Fixed
 
+- An agent with several approval cards open at once stays marked as waiting until its last card closes, instead of showing as working once its first card is answered, so the agent dashboard draws it as blocked and the runtime budget excludes the operator's reading time across the whole span, counted once.
 - A non-recursive discovery scan reads only the files directly inside its directory, so a helper module under `tools/<name>/` no longer registers as a custom tool named for its file, and a file below `commands/`, `rules/`, `prompts/` or `instructions/` (`rules/archive/old.md`) no longer loads as a command, rule, prompt or instruction.
 - `VEYYON_TIMING=x` on an interactive launch stops the launch card's terminal before it prints, so the startup timing tree reaches stderr instead of only the log file, and the startup bench's `ready:load` and `ready:boot` arms report samples again.
 - A tool card in a rebuilt transcript serializes its call's arguments through one accessor shared by every block instead of a getter allocated per block, so a drawn tool turn keeps one closure and two scopes instead of two and four (`bash`: 0.9 closures and 1.85 scopes per turn instead of 1.9 and 3.85).
