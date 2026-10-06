@@ -208,6 +208,7 @@
 - The profile, `~/.agent` and extension-package providers load `commands/`, `rules/`, `prompts/` and `tools/` through one shared loader per layout, and an unreadable `tools/` directory in the profile reports a discovery warning, as the other three layouts already did.
 - An extension tool call resolves its approval policy, raises its approval card, sends `tool_call` and rewrites its result in four steps instead of one 350-line method; approval, vetting and results are unchanged.
 - The secret obfuscator validates its registry, installs plain and regex entries, builds regex replacements and restores placeholders in single-purpose methods, and its message, content and provider-context walks share one identity-preserving map; no user-visible change.
+- Structure search resolves its scope, merges overlapping targets, groups matches, renders each file, lays out the result and fits it to the inline budget in single-purpose functions instead of one 280-line closure; no user-visible change.
 
 ### Fixed
 
