@@ -14,11 +14,12 @@
  * signature) are each written with the failure they fix.
  */
 
-import type { AssistantMessage } from "@veyyon/ai";
+import type { AssistantMessage, ImageContent, TextContent } from "@veyyon/ai";
 import { stringifyJson } from "@veyyon/utils/json";
 import { countTokens } from "../tokenizer";
 import type { AgentMessage } from "../types";
 import { LEGACY_FRAME_TOKEN_ESTIMATE } from "./legacy-snapcompact-archive";
+import type { CompactionSummaryMessage } from "./messages";
 
 /**
  * Image content has no tokenizer representation; charge a fixed estimate
@@ -88,17 +89,9 @@ const tokenEstimateCache = new WeakMap<AgentMessage, TokenEstimateSlots>();
 export function estimateTokens(message: AgentMessage, options?: { excludeEncryptedReasoning?: boolean }): number {
 	const noReasoning = Boolean(options?.excludeEncryptedReasoning);
 	const cached = tokenEstimateCache.get(message);
-	// A cached number is checked with one walk that tokenizes nothing: the sink folds fragment
-	// lengths instead of keeping the strings.
 	if (cached !== undefined) {
-		const value = noReasoning ? cached.noReasoningValue : cached.defaultValue;
-		if (value !== UNMEASURED) {
-			let shape = 0;
-			const extra = walkCountedFragments(message, options, text => {
-				shape = (shape * 31 + text.length) | 0;
-			});
-			if ((noReasoning ? cached.noReasoningShape : cached.defaultShape) === ((shape * 31 + extra) | 0)) return value;
-		}
+		const value = cachedEstimate(message, options, cached);
+		if (value !== undefined) return value;
 	}
 	// A message measured for the first time, or whose shape moved, is walked once: the same walk
 	// collects the fragments to tokenize and folds the digest the next check compares against.
@@ -128,6 +121,27 @@ export function estimateTokens(message: AgentMessage, options?: { excludeEncrypt
 }
 
 /**
+ * The cached estimate, when the message still has the shape it was measured at. Checked with one
+ * walk that tokenizes nothing: the sink folds fragment lengths instead of keeping the strings.
+ */
+function cachedEstimate(
+	message: AgentMessage,
+	options: { excludeEncryptedReasoning?: boolean } | undefined,
+	cached: TokenEstimateSlots,
+): number | undefined {
+	const noReasoning = Boolean(options?.excludeEncryptedReasoning);
+	const value = noReasoning ? cached.noReasoningValue : cached.defaultValue;
+	if (value === UNMEASURED) return undefined;
+	let shape = 0;
+	const extra = walkCountedFragments(message, options, text => {
+		shape = (shape * 31 + text.length) | 0;
+	});
+	return (noReasoning ? cached.noReasoningShape : cached.defaultShape) === ((shape * 31 + extra) | 0)
+		? value
+		: undefined;
+}
+
+/**
  * Roles a host application contributes through the `CustomAgentMessages`
  * augmentation, and the string fields each one carries. This module compiles
  * without them in `AgentMessage`, so they are matched on the role string rather
@@ -154,6 +168,91 @@ const HOST_ROLE_TEXT_FIELDS: Record<string, readonly string[]> = {
 };
 
 /**
+ * A content body every content-bearing role shares: a string as it is, text blocks as their text.
+ * Returns the charge for its images, which a tokenizer cannot measure.
+ */
+function walkContent(content: string | readonly (TextContent | ImageContent)[], sink: (text: string) => void): number {
+	if (typeof content === "string") {
+		sink(content);
+		return 0;
+	}
+	let extra = 0;
+	// A body persisted by an older build can be neither a string nor an array; it counts nothing.
+	if (!Array.isArray(content)) return extra;
+	for (const block of content) {
+		if (block.type === "text" && block.text) sink(block.text);
+		else if (block.type === "image") extra += IMAGE_TOKEN_ESTIMATE;
+	}
+	return extra;
+}
+
+/** A host `fileMention`: each file's path and body, and a fixed charge for a mentioned image. */
+function walkFileMention(message: object, sink: (text: string) => void): number {
+	const files: unknown = Reflect.get(message, "files");
+	if (!Array.isArray(files)) return 0;
+	let extra = 0;
+	for (const file of files) {
+		if (typeof file !== "object" || file === null) continue;
+		if ("path" in file && typeof file.path === "string") sink(file.path);
+		if ("content" in file && typeof file.content === "string") sink(file.content);
+		// A mentioned image rides as an `ImageContent` beside a placeholder body,
+		// and is billed like any other inline image.
+		if ("image" in file && file.image) extra += IMAGE_TOKEN_ESTIMATE;
+	}
+	return extra;
+}
+
+function walkAssistant(
+	message: AssistantMessage,
+	options: { excludeEncryptedReasoning?: boolean } | undefined,
+	sink: (text: string) => void,
+): void {
+	for (const block of message.content) {
+		switch (block.type) {
+			case "text":
+				sink(block.text);
+				break;
+			case "thinking":
+				sink(block.thinking);
+				// Providers charge for the opaque signature/reasoning payload that
+				// rides alongside the thinking text (OpenAI Responses encrypted
+				// reasoning items, Anthropic signed thinking blocks, etc.). Without
+				// counting it, this estimator can read ~half of the provider-reported
+				// usage on thinking-heavy turns — see #2275 for the resulting
+				// compaction-trigger / post-check metric divergence. The compaction
+				// floor excludes it (its local byte size diverges from provider billing).
+				if (block.thinkingSignature && !options?.excludeEncryptedReasoning) sink(block.thinkingSignature);
+				break;
+			case "toolCall":
+				sink(block.name);
+				sink(stringifyJson(block.arguments) ?? "null");
+				break;
+			case "redactedThinking":
+				// Encrypted reasoning blob the provider still bills for on replay;
+				// excluded from the compaction floor for the same reason as above.
+				if (!options?.excludeEncryptedReasoning) sink(block.data);
+				break;
+		}
+	}
+}
+
+/** A compaction summary's text blocks, and a fixed charge for each legacy snapcompact frame. */
+function walkCompactionSummary(message: CompactionSummaryMessage, sink: (text: string) => void): number {
+	sink(message.summary);
+	if (message.blocks) {
+		let extra = 0;
+		for (const block of message.blocks) {
+			if (block.type === "text") sink(block.text);
+			else extra += LEGACY_FRAME_TOKEN_ESTIMATE;
+		}
+		return extra;
+	}
+	// Legacy snapcompact frames rendered at large sizes; providers bill the
+	// downscaled cap. Only old persisted summaries still carry these.
+	return (message.images?.length ?? 0) * LEGACY_FRAME_TOKEN_ESTIMATE;
+}
+
+/**
  * The one walk over everything a message's estimate counts: every counted text
  * fragment goes to `sink`, and the return value is the token charge for content
  * a tokenizer cannot measure (images, legacy frames).
@@ -169,81 +268,26 @@ function walkCountedFragments(
 	options: { excludeEncryptedReasoning?: boolean } | undefined,
 	sink: (text: string) => void,
 ): number {
-	let extra = 0;
-	const hostRole = (message as { role?: string }).role;
-	const textFields = hostRole === undefined ? undefined : HOST_ROLE_TEXT_FIELDS[hostRole];
+	const hostRole: string = message.role;
+	const textFields = HOST_ROLE_TEXT_FIELDS[hostRole];
 	if (textFields) {
-		const record = message as unknown as Record<string, unknown>;
 		for (const field of textFields) {
-			const value = record[field];
+			const value: unknown = Reflect.get(message, field);
 			if (typeof value === "string") sink(value);
 		}
 		return 0;
 	}
-	if (hostRole === "fileMention") {
-		const files = (message as unknown as { files?: readonly unknown[] }).files;
-		for (const entry of files ?? []) {
-			const file = entry as { path?: unknown; content?: unknown; image?: unknown };
-			if (typeof file.path === "string") sink(file.path);
-			if (typeof file.content === "string") sink(file.content);
-			// A mentioned image rides as an `ImageContent` beside a placeholder body,
-			// and is billed like any other inline image.
-			if (file.image) extra += IMAGE_TOKEN_ESTIMATE;
-		}
-		return extra;
-	}
+	if (hostRole === "fileMention") return walkFileMention(message, sink);
 
 	switch (message.role) {
-		case "user": {
-			const content = (message as { content: string | Array<{ type: string; text?: string }> }).content;
-			if (typeof content === "string") {
-				sink(content);
-			} else if (Array.isArray(content)) {
-				for (const block of content) {
-					if (block.type === "text" && block.text) {
-						sink(block.text);
-					} else if (block.type === "image") {
-						// A user message is the MOST common way an image enters a session
-						// (paste, drag, `/image`), and its images counted as zero here while
-						// every other content-bearing role counted them. A screenshot-heavy
-						// session therefore under-reported its own context to the compaction
-						// trigger, the pruning budgets, and the operator's context meter — the
-						// same defect the `developer` case below records having been fixed,
-						// left in place on the role it matters most for.
-						extra += IMAGE_TOKEN_ESTIMATE;
-					}
-				}
-			}
-			break;
-		}
-		case "assistant": {
-			const assistant = message as AssistantMessage;
-			for (const block of assistant.content) {
-				if (block.type === "text") {
-					sink(block.text);
-				} else if (block.type === "thinking") {
-					sink(block.thinking);
-					// Providers charge for the opaque signature/reasoning payload that
-					// rides alongside the thinking text (OpenAI Responses encrypted
-					// reasoning items, Anthropic signed thinking blocks, etc.). Without
-					// counting it, this estimator can read ~half of the provider-reported
-					// usage on thinking-heavy turns — see #2275 for the resulting
-					// compaction-trigger / post-check metric divergence. The compaction
-					// floor excludes it (its local byte size diverges from provider billing).
-					if (block.thinkingSignature && !options?.excludeEncryptedReasoning) {
-						sink(block.thinkingSignature);
-					}
-				} else if (block.type === "toolCall") {
-					sink(block.name);
-					sink(stringifyJson(block.arguments) ?? "null");
-				} else if (block.type === "redactedThinking") {
-					// Encrypted reasoning blob the provider still bills for on replay;
-					// excluded from the compaction floor for the same reason as above.
-					if (!options?.excludeEncryptedReasoning) sink(block.data);
-				}
-			}
-			break;
-		}
+		// A user message is the MOST common way an image enters a session
+		// (paste, drag, `/image`), and its images counted as zero here while
+		// every other content-bearing role counted them. A screenshot-heavy
+		// session therefore under-reported its own context to the compaction
+		// trigger, the pruning budgets, and the operator's context meter — the
+		// same defect the `developer` case below records having been fixed,
+		// left in place on the role it matters most for.
+		case "user":
 		// `developer` shares the user-message content shape (string | text/image
 		// blocks) and carries real content: synthetic auto-continue prompts are
 		// stored as full developer messages, some with normalized images. It was
@@ -255,40 +299,17 @@ function walkCountedFragments(
 		case "developer":
 		case "custom":
 		case "hookMessage":
-		case "toolResult": {
-			if (typeof message.content === "string") {
-				sink(message.content);
-			} else {
-				for (const block of message.content) {
-					if (block.type === "text" && block.text) {
-						sink(block.text);
-					} else if (block.type === "image") {
-						extra += IMAGE_TOKEN_ESTIMATE;
-					}
-				}
-			}
-			break;
-		}
+		case "toolResult":
+			return walkContent(message.content, sink);
+		case "assistant":
+			walkAssistant(message, options, sink);
+			return 0;
 		case "branchSummary":
-		case "compactionSummary": {
 			sink(message.summary);
-			if (message.role === "compactionSummary") {
-				if (message.blocks) {
-					for (const block of message.blocks) {
-						if (block.type === "text") sink(block.text);
-						else extra += LEGACY_FRAME_TOKEN_ESTIMATE;
-					}
-				} else if (message.images) {
-					// Legacy snapcompact frames rendered at large sizes; providers bill the
-					// downscaled cap. Only old persisted summaries still carry these.
-					extra += message.images.length * LEGACY_FRAME_TOKEN_ESTIMATE;
-				}
-			}
-			break;
-		}
+			return 0;
+		case "compactionSummary":
+			return walkCompactionSummary(message, sink);
 		default:
 			return 0;
 	}
-
-	return extra;
 }
