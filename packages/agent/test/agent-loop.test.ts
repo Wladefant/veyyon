@@ -922,6 +922,43 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("leaves a schema-owned `i` argument to the tool under intent tracing", async () => {
+		const toolSchema = type({ label: "string", i: "string" });
+		const executedParams: unknown[] = [];
+		const tool: AgentTool<typeof toolSchema, { label: string; i: string }> = {
+			name: "demo",
+			label: "Demo",
+			description: "Demo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executedParams.push(params);
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "demo", arguments: { label: "x", i: "INDEX" } }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, intentTracing: true };
+
+		const stream = agentLoop([createUserMessage("run demo")], context, config, undefined, mock.stream);
+		for await (const _ of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+		const assistant = messages.find(
+			message => message.role === "assistant" && message.content.some(content => content.type === "toolCall"),
+		) as AssistantMessage | undefined;
+		const toolCall = assistant?.content.find(content => content.type === "toolCall");
+
+		expect(executedParams).toEqual([{ label: "x", i: "INDEX" }]);
+		// The tool's own value is not a harness intent label.
+		expect(toolCall?.type === "toolCall" ? toolCall.intent : "missing").toBeUndefined();
+	});
+
 	it("repairs malformed JSON then strips intent before tool execution", async () => {
 		const toolSchema = type({ value: "string" });
 		const executedParams: Record<string, unknown>[] = [];
