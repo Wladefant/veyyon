@@ -147,7 +147,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 				if (currentWaiter) {
 					currentWaiter.resolve({ value: undefined, done: true });
 				}
-				return gen.return(value as void);
+				return gen.return(value as undefined);
 			},
 			throw: async (err?: unknown) => {
 				if (currentWaiter) {
