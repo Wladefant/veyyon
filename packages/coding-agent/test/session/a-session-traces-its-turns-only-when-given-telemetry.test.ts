@@ -8,8 +8,9 @@
  * registered an OTEL tracer provider for its own spans received the agent's spans with no telemetry config.
  *
  * THE CLASS. A session that traces a turn its caller did not opt into, and a session that traces with a
- * secret or caller-sanitized text left in a span. `createAgentSession` is the one place a session's telemetry
- * config is built: a spawned agent, an advisor, and the compaction and setup oneshots derive theirs from it,
+ * secret or caller-sanitized text left in a span. `sessionTelemetry` in `session/startup-request-hooks.ts`,
+ * which `createAgentSession` calls, is the one place a session's telemetry config is built: a spawned
+ * agent, an advisor, and the compaction and setup oneshots derive theirs from it,
  * and derive none from an absent one (`task/executor-agent-reminders.test.ts` and `advisor/advise-tool.test.ts`
  * pin that for the spawned agent and the advisor). Each case drives a real turn through `createAgentSession`
  * against one global tracer provider, so the exporter that records nothing for a session with no config is the

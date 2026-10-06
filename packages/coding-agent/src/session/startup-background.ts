@@ -1,6 +1,7 @@
 /**
  * Work a session starts in the background once it exists, so its first frame and first request do
- * not wait on it: the Codex websocket prewarm and the language server warmup.
+ * not wait on it: the Codex websocket prewarm, the language server warmup and the memory backend's
+ * hydration.
  */
 
 import type { Model, ProviderSessionState } from "@veyyon/ai";
@@ -11,7 +12,10 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { LspStartupServerInfo, LspWarmupResult } from "../lsp";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
+import { resolveMemoryBackend } from "../memory/backend";
 import type { EventBus } from "../utils/event-bus";
+import type { AgentSession } from "./agent-session";
+import type { CreateAgentSessionOptions } from "./factory-options";
 
 /** What {@link prewarmCodexTransport} reads. */
 export interface CodexPrewarmInput {
@@ -116,4 +120,43 @@ async function warmUpLspServers(
 		event = { type: "failed", error: errorText };
 	}
 	if (!quiet) input.eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
+}
+
+/** What {@link deferMemoryStartup} reads. */
+export interface MemoryStartupInput {
+	session: AgentSession;
+	settings: Settings;
+	modelRegistry: ModelRegistry;
+	agentDir: string;
+	taskDepth: number;
+	options: Pick<CreateAgentSessionOptions, "parentHindsightSessionState" | "parentMnemopiSessionState">;
+}
+
+/**
+ * Start the memory backend as work the session's first turn awaits. The start is hydration, not boot:
+ * it opens a database and installs this session's state, and no frame reads either. Every tool call and
+ * spawn is inside a turn, while the first frame paints without it. A failed start is logged and the
+ * session runs on.
+ */
+export function deferMemoryStartup(input: MemoryStartupInput): void {
+	input.session.deferStartupWork(
+		logger
+			.time("startMemoryStartupTask", () => startMemoryBackend(input))
+			.catch(error => {
+				logger.warn("memory backend startup failed", { error: errorMessage(error) });
+			}),
+	);
+}
+
+async function startMemoryBackend(input: MemoryStartupInput): Promise<void> {
+	const memoryBackend = await resolveMemoryBackend(input.settings);
+	await memoryBackend.start({
+		session: input.session,
+		settings: input.settings,
+		modelRegistry: input.modelRegistry,
+		agentDir: input.agentDir,
+		taskDepth: input.taskDepth,
+		parentHindsightSessionState: input.options.parentHindsightSessionState,
+		parentMnemopiSessionState: input.options.parentMnemopiSessionState,
+	});
 }

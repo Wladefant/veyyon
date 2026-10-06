@@ -69,6 +69,8 @@ export interface SessionToolSession {
 	setActiveToolNames(names: Iterable<string>): void;
 	/** Install the running host's out-of-band notification delivery, read by `notify`. */
 	setNotifier(notify: HostNotifier): void;
+	/** The model the session runs on now: the agent's once it exists, else the startup model. */
+	activeModel(): Model | undefined;
 	/** The model the session runs on now, formatted as `provider/id`. */
 	activeModelString(): string | undefined;
 }
@@ -284,6 +286,7 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 		setNotifier: notify => {
 			notifier = notify;
 		},
+		activeModel,
 		activeModelString,
 	};
 }

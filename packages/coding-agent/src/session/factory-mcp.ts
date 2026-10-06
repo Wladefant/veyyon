@@ -19,6 +19,7 @@ import type { EventBus } from "../utils/event-bus";
 import type { AgentSession } from "./agent-session";
 import { sessionCpuExecHooks } from "./cpu-limit";
 import type { McpNotificationEntry } from "./factory-notices";
+import { type CreateAgentSessionOptions, isInProcessChildSession } from "./factory-options";
 
 export type DeferredMCPActivation = {
 	mcpDiscoveryEnabled: boolean;
@@ -227,6 +228,65 @@ export async function startSessionMCP(inputs: SessionMCPStartupInputs): Promise<
 		logger.error("MCP tool load failed", { path, error });
 	}
 	return { manager: result.manager, tools: result.tools.map(loaded => loaded.tool) };
+}
+
+/** What {@link openSessionMCP} reads. */
+export interface SessionMCPInputs extends Omit<SessionMCPStartupInputs, "deferred" | "hasUI"> {
+	/**
+	 * `mcpManager` is the manager of the session that created this one, used as given; `enableMCP: false`
+	 * turns MCP off; `toolNames` are the requested tools, whose MCP members are pending while a deferred
+	 * discovery connects. A top-level session installs its manager as the process-wide one; a spawned
+	 * agent already has its parent's.
+	 */
+	options: Pick<CreateAgentSessionOptions, "mcpManager" | "enableMCP" | "hasUI" | "toolNames" | "parentTaskPrefix">;
+	/** The MCP tool selection the restored session recorded, pending the same way. */
+	restoredSelectedToolNames: readonly string[];
+}
+
+/** A session's MCP manager and what its startup produced. */
+export interface SessionMCP {
+	/** The handed-down manager, or one startup created. Undefined when MCP is off. */
+	readonly manager: MCPManager | undefined;
+	/** The manager startup created, which routes its change callbacks to the session. */
+	readonly createdManager: MCPManager | undefined;
+	/** Tools connected before the session exists. */
+	readonly tools: CustomTool[];
+	/** Whether discovery connects once the session exists. */
+	readonly deferred: boolean;
+	/** The MCP tool names registered as pending until a deferred discovery connects. */
+	readonly pendingToolNames: string[];
+	readonly startDeferred: StartDeferredMCPDiscovery | undefined;
+	/** Reads the manager's per-server instructions as the prompt renders them. */
+	readonly serverInstructions: (() => Map<string, string>) | undefined;
+}
+
+/**
+ * The session's MCP manager: the handed-down one, else one created here. A session with a UI
+ * creates its manager now and connects its servers once the session exists, so no server delays
+ * first paint; any other session connects them now.
+ */
+export async function openSessionMCP(inputs: SessionMCPInputs): Promise<SessionMCP> {
+	const { options } = inputs;
+	let manager = options.mcpManager;
+	let started: SessionMCPStartup | undefined;
+	const hasUI = options.hasUI === true;
+	const create = (options.enableMCP ?? true) && !manager;
+	const deferred = create && hasUI;
+	if (create) {
+		started = await startSessionMCP({ ...inputs, hasUI, deferred });
+		manager = started.manager;
+	}
+	if (manager && !isInProcessChildSession(options)) MCPManager.setInstance(manager);
+	const instructionsOf = manager;
+	return {
+		manager,
+		createdManager: started?.manager,
+		tools: started?.tools ?? [],
+		deferred,
+		pendingToolNames: deferred ? collectPendingMCPToolNames(options.toolNames, inputs.restoredSelectedToolNames) : [],
+		startDeferred: started?.startDeferred,
+		serverInstructions: instructionsOf && (() => clipMCPServerInstructions(instructionsOf.getServerInstructions())),
+	};
 }
 
 async function connectDeferredMCP(

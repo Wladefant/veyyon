@@ -28,6 +28,7 @@ import { padding } from "@veyyon/utils/padding";
 import { visibleWidth } from "@veyyon/utils/width";
 import { advisorStatusNextStep } from "../../../advisor/messages";
 import { shouldEnableAppendOnlyContext } from "../../../config/append-only-context-mode";
+import { openaiWebsocketPreference } from "../../../config/openai-websockets-mode";
 import { type LoadedCustomShare, loadCustomShare } from "../../../export/custom-share";
 import { shareSession } from "../../../export/share";
 import type { CompactOptions } from "../../../extensibility/extensions/types";
@@ -307,9 +308,9 @@ export class CommandController {
 			info += `${theme.fg("dim", "No model selected")}\n`;
 		} else {
 			const authMode = resolveProviderAuthMode(this.ctx.session.modelRegistry.authStorage, model.provider);
-			const openaiWebsocketSetting = this.ctx.settings.get("providers.openaiWebsockets") ?? "auto";
-			const preferOpenAICodexWebsockets =
-				openaiWebsocketSetting === "on" ? true : openaiWebsocketSetting === "off" ? false : undefined;
+			const preferOpenAICodexWebsockets = openaiWebsocketPreference(
+				this.ctx.settings.get("providers.openaiWebsockets"),
+			);
 			const credentialSource = this.ctx.session.modelRegistry.authStorage.describeCredentialSource(
 				model.provider,
 				stats.sessionId,
