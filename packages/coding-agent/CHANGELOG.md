@@ -207,6 +207,7 @@
 - A session checks whether a message is already on its branch against a sorted typed array of the branch's message timestamps, comparing persistence keys only for entries with the same timestamp, instead of a `Set` of every message's persistence key, so after two turns on a resumed 600-turn synthetic session the persistence collaborator retains 688 bytes of heap and a 43 KiB typed array instead of 516 KiB of heap, and a 5,000-message branch's index adds 125 KiB to the heap instead of 1,182 KiB.
 - The profile, `~/.agent` and extension-package providers load `commands/`, `rules/`, `prompts/` and `tools/` through one shared loader per layout, and an unreadable `tools/` directory in the profile reports a discovery warning, as the other three layouts already did.
 - An extension tool call resolves its approval policy, raises its approval card, sends `tool_call` and rewrites its result in four steps instead of one 350-line method; approval, vetting and results are unchanged.
+- The secret obfuscator validates its registry, installs plain and regex entries, builds regex replacements and restores placeholders in single-purpose methods, and its message, content and provider-context walks share one identity-preserving map; no user-visible change.
 
 ### Fixed
 
