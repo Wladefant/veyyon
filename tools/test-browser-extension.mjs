@@ -13,6 +13,8 @@ import os from "node:os";
 import path from "node:path";
 import puppeteer from "puppeteer-core";
 import { setAgentDir } from "../packages/utils/src/dirs.ts";
+import { spyOn } from "bun:test";
+import { logger } from "@veyyon/utils";
 import {
 	EXTENSION_PROTOCOL_VERSION,
 	PLAYWRIGHT_EXTENSION_ID,
@@ -27,6 +29,12 @@ if (!unpacked || !chrome) throw new Error("Set VEYYON_EXT_UNPACKED and PUPPETEER
 const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-ext-live-agent-"));
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-ext-live-profile-"));
 setAgentDir(agentDir);
+
+// The relay logs why it closed or refused something at debug level. Keep those lines (already redacted).
+const relayLog = [];
+spyOn(logger, "debug").mockImplementation((message, fields) => {
+	relayLog.push(`${message} ${JSON.stringify(fields ?? {})}`.slice(0, 300));
+});
 
 const receipt = {
 	head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim(),
@@ -44,6 +52,14 @@ const web = Bun.serve({
 	port: 0,
 	fetch: request => {
 		const host = request.headers.get("host") ?? "?";
+		const { pathname } = new URL(request.url);
+		// Scripts for the worker cases. Fetching them is not a hit on a refused host, so they are not counted.
+		if (pathname === "/worker.js") {
+			return new Response("postMessage('worker-ran')", { headers: { "content-type": "text/javascript" } });
+		}
+		if (pathname === "/sw.js") {
+			return new Response("self.addEventListener('fetch', () => {})", { headers: { "content-type": "text/javascript" } });
+		}
 		hits.set(host, (hits.get(host) ?? 0) + 1);
 		return new Response(
 			`<!doctype html><title>before</title><body style="margin:20px;font:20px sans-serif">
@@ -73,6 +89,7 @@ try {
 			"--no-first-run",
 			`--host-resolver-rules=MAP ${pageHost} 127.0.0.1, MAP ${farHost} 127.0.0.1`,
 			"--disable-features=LocalNetworkAccessChecks",
+			`--unsafely-treat-insecure-origin-as-secure=http://${pageHost}:${web.port}`,
 		],
 	});
 	// A "user tab" that Veyyon must not touch.
@@ -269,6 +286,64 @@ try {
 	receipt.steps.audits = audits;
 	receipt.steps.refusedPopupTabsLeft = (await owner.pages()).filter(p => p.url().includes("127.0.0.2")).length;
 
+	// Workers and service workers (https://github.com/Wladefant/veyyon/issues/493). Chrome has no Fetch gate
+	// for either, so a controlled tab must not create one, from any realm or by any constructor path.
+	// qa.test is treated as a secure context (a service worker needs one) and is a public host, so it gets
+	// the response header; localhost is a secure context too but a local-network page, so it does not.
+	const localUrl = `http://localhost:${web.port}/`;
+	const probeWorkers = async () => {
+		await mainWorld(() => {
+			const out = document.documentElement.dataset;
+			for (const key of Object.keys(out)) delete out[key];
+			const watch = (key, make) => {
+				try {
+					const worker = make();
+					out[key] = "created";
+					worker.onmessage = () => {
+						out[key] = "ran";
+					};
+					worker.onerror = () => {
+						out[key] = "error";
+					};
+				} catch (error) {
+					out[key] = `rejected:${error.name}`;
+				}
+			};
+			watch("dedicated", () => new Worker("/worker.js"));
+			watch("blob", () => new Worker(URL.createObjectURL(new Blob(["postMessage(1)"], { type: "text/javascript" }))));
+			watch("data", () => new Worker("data:text/javascript,postMessage(1)"));
+			watch("shared", () => new SharedWorker("/worker.js"));
+			const frame = document.createElement("iframe");
+			frame.srcdoc = "<!doctype html>";
+			frame.onload = () => watch("iframe", () => new frame.contentWindow.Worker("/worker.js"));
+			document.body.append(frame);
+			const register = (key, call) => {
+				if (!navigator.serviceWorker) {
+					out[key] = "no serviceWorker API";
+					return;
+				}
+				call().then(
+					() => {
+						out[key] = "registered";
+					},
+					error => {
+						out[key] = `rejected:${error.name}`;
+					},
+				);
+			};
+			register("swInstance", () => navigator.serviceWorker.register("/sw.js"));
+			register("swPrototype", () =>
+				ServiceWorkerContainer.prototype.register.call(navigator.serviceWorker, "/sw.js"),
+			);
+		});
+		await sleep(3000);
+		return page.evaluate(() => ({ ...document.documentElement.dataset }));
+	};
+	await resetPage();
+	receipt.steps.workersGuardOnPublic = await probeWorkers();
+	await page.goto(localUrl, { waitUntil: "domcontentloaded" });
+	receipt.steps.workersGuardOnLocal = await probeWorkers();
+
 	// Negative control: a real click (user gesture, so Chrome's popup blocker allows it) opens a popup to the
 	// refused host. Guard on: it must send nothing. Guard removed: the response sandbox alone must still send
 	// nothing, also for a `noopener` popup that no auto-attach reaches. Before the sandbox existed, the
@@ -302,28 +377,69 @@ try {
 		return refusedHits() - before;
 	};
 	const guardOn = await popupByClick();
+	// A client must not be able to remove or replace the guard script, switch the CSP sandbox off, or
+	// re-enable service workers. Every attempt must be refused, and the guard must still be in place.
 	const control = await page.createCDPSession();
+	const refusedCall = (method, params) =>
+		control.send(method, params).then(
+			() => false,
+			() => true,
+		);
 	const removed = [];
 	for (let id = 1; id <= 8; id++) {
-		const done = await control.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: String(id) }).then(
-			() => true,
-			() => false,
-		);
-		if (done) removed.push(id);
+		if (!(await refusedCall("Page.removeScriptToEvaluateOnNewDocument", { identifier: String(id) }))) removed.push(id);
 	}
-	const guardOff = await popupByClick();
-	const guardOffNoopener = await popupByClick("noopener");
+	const undoRefused = {
+		removeScript: removed.length === 0,
+		setBypassCSP: await refusedCall("Page.setBypassCSP", { enabled: true }),
+		addScript: await refusedCall("Page.addScriptToEvaluateOnNewDocument", { source: "void 0" }),
+		serviceWorkerBypass: await refusedCall("Network.setBypassServiceWorker", { bypass: false }),
+	};
+	// An isolated world has its own Worker and ServiceWorkerContainer; the relay must guard it too.
+	const isolatedProbe = await (async () => {
+		const frameId = (await control.send("Page.getFrameTree")).frameTree.frame.id;
+		const { executionContextId } = await control.send("Page.createIsolatedWorld", { frameId, worldName: "probe" });
+		const { result } = await control.send("Runtime.evaluate", {
+			contextId: executionContextId,
+			awaitPromise: true,
+			returnByValue: true,
+			expression: `(async () => {
+				const out = {};
+				try { out.worker = typeof Worker === "function" ? "present" : "removed"; } catch { out.worker = "removed"; }
+				try { await navigator.serviceWorker.register("/sw.js"); out.sw = "registered"; } catch (e) { out.sw = "rejected:" + e.name; }
+				return out;
+			})()`,
+		});
+		return result.value;
+	})().catch(error => ({ error: String(error.message).slice(0, 120) }));
+	receipt.steps.isolatedWorldProbe = isolatedProbe;
+	const guardAfterUndo = await popupByClick();
+	const guardAfterUndoNoopener = await popupByClick("noopener");
 	await mainWorld(() => {
 		document.documentElement.dataset.guard = String(window.__veyyonPopupGuard);
 	});
 	receipt.steps.negativeControl = {
 		guardOn,
-		guardOff,
-		guardOffNoopener,
+		guardOff: guardAfterUndo,
+		guardOffNoopener: guardAfterUndoNoopener,
+		undoRefused,
 		removedScriptIds: removed,
 		popupDetails,
-		guardPresentAfterRemoval: await page.evaluate(() => document.documentElement.dataset.guard),
+		guardPresentAfterUndo: await page.evaluate(() => document.documentElement.dataset.guard),
 	};
+	// The page after the undo attempts still refuses every worker and service worker.
+	await resetPage();
+	const afterUndo = await probeWorkers();
+	receipt.steps.workersAfterUndoAttempts = afterUndo;
+	const refusedAll = r => Object.values(r).every(v => String(v).startsWith("rejected") || v === "error");
+	receipt.steps.workersOk =
+		refusedAll(receipt.steps.workersGuardOnPublic) &&
+		refusedAll(receipt.steps.workersGuardOnLocal) &&
+		refusedAll(afterUndo) &&
+		Object.values(undoRefused).every(Boolean) &&
+		isolatedProbe.worker === "removed" &&
+		String(isolatedProbe.sw).startsWith("rejected") &&
+		receipt.steps.negativeControl.guardPresentAfterUndo !== "undefined";
 
 	// User tabs untouched.
 	const userTitles = await Promise.all((await owner.pages()).map(p => p.title().catch(() => "?")));
@@ -354,6 +470,7 @@ try {
 	const detached = await relay.disconnect();
 	lap("disconnect", t5);
 	receipt.steps.detachedTabs = detached;
+	receipt.steps.relayLog = relayLog.slice(0, 20);
 	receipt.ok =
 		receipt.steps.titleBefore === "before" &&
 		receipt.steps.titleAfter === "clicked:QA-live" &&
@@ -364,7 +481,8 @@ try {
 		receipt.steps.refusedHostRequestsReceived === 0 &&
 		receipt.steps.negativeControl.guardOn === 0 &&
 		receipt.steps.negativeControl.guardOff === 0 &&
-		receipt.steps.negativeControl.guardOffNoopener === 0;
+		receipt.steps.negativeControl.guardOffNoopener === 0 &&
+		receipt.steps.workersOk === true;
 } catch (error) {
 	receipt.error = String(error?.message ?? error);
 	receipt.ok = false;

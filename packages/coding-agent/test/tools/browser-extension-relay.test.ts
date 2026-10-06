@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vm from "node:vm";
 import {
 	buildConnectUrl,
 	ExtensionRelay,
@@ -67,6 +68,7 @@ class FakeExtension {
 		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++ };
 		if (target === "Fetch.getResponseBody") result = { body: "<h1>hi</h1>", base64Encoded: false };
 		if (target === "Target.getTargetInfo") result = { targetInfo: { targetId: MAIN_FRAME_ID } };
+		if (target === "Page.createIsolatedWorld") result = { executionContextId: 77 };
 		this.#ws.send(JSON.stringify({ id: message.id, result }));
 	}
 
@@ -371,9 +373,69 @@ describe("policy at the relay", () => {
 						"Target.setAutoAttach",
 						"Target.getTargetInfo",
 						"Page.addScriptToEvaluateOnNewDocument",
+						"Network.setBypassServiceWorker",
 					].includes(String(call.params[1])),
 			);
 		expect(exposed).toHaveLength(0);
+	});
+
+	test("a client cannot undo the relay's guard script, CSP sandbox or service-worker bypass", async () => {
+		const { ext, cdp } = await connected([]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const before = ext.callsOf("chrome.debugger.sendCommand").length;
+		for (const method of [
+			"Page.setBypassCSP",
+			"Page.removeScriptToEvaluateOnNewDocument",
+			"Page.addScriptToEvaluateOnNewDocument",
+			"Network.setBypassServiceWorker",
+		]) {
+			const reply = await cdp.send(method, {}, sessionId);
+			expect(reply.error?.message).toMatch(/blocked|allowlist/);
+		}
+		expect(ext.callsOf("chrome.debugger.sendCommand")).toHaveLength(before);
+	});
+
+	test("an isolated world gets the guard script before the client hears its context id", async () => {
+		const { ext, cdp } = await connected([]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const reply = await cdp.send("Page.createIsolatedWorld", { frameId: "f", worldName: "w" }, sessionId);
+		expect(reply.result).toMatchObject({ executionContextId: 77 });
+		const calls = ext.callsOf("chrome.debugger.sendCommand").map(call => call.params);
+		const created = calls.findIndex(params => params[1] === "Page.createIsolatedWorld");
+		const guarded = calls.findIndex(params => params[1] === "Runtime.evaluate");
+		expect(created).toBeGreaterThanOrEqual(0);
+		expect(guarded).toBeGreaterThan(created);
+		expect(calls[guarded][2]).toMatchObject({ contextId: 77 });
+		expect(String((calls[guarded][2] as { expression: string }).expression)).toContain("ServiceWorkerContainer");
+	});
+
+	test("an isolated world the relay cannot guard is refused", async () => {
+		const { ext, cdp } = await connected([]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		ext.failNext("Runtime.evaluate");
+		// Pipelined: the client names the next context id before the guard has finished.
+		const [reply, early] = await Promise.all([
+			cdp.send("Page.createIsolatedWorld", { frameId: "f" }, sessionId),
+			cdp.send("Runtime.evaluate", { expression: "1", contextId: 77 }, sessionId),
+		]);
+		expect(reply.error).toBeDefined();
+		expect(early.error?.message).toContain("could not be guarded");
+		const later = await cdp.send(
+			"Runtime.callFunctionOn",
+			{ executionContextId: 77, functionDeclaration: "()=>1" },
+			sessionId,
+		);
+		expect(later.error?.message).toContain("could not be guarded");
+		const evaluated = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(
+				call =>
+					call.params[1] === "Runtime.evaluate" && (call.params[2] as { contextId?: number }).contextId === 77,
+			);
+		expect(evaluated).toHaveLength(1);
 	});
 
 	test("the popup guard sent to every tab covers forms, base target and shadow-DOM links", async () => {
@@ -476,7 +538,12 @@ describe("policy at the relay", () => {
 			ext.emit("chrome.debugger.onEvent", [
 				{ tabId: 100 },
 				"Fetch.requestPaused",
-				{ requestId: `p${index}`, request: { url: `https://${host}/` }, resourceType: "Document", frameId: MAIN_FRAME_ID },
+				{
+					requestId: `p${index}`,
+					request: { url: `https://${host}/` },
+					resourceType: "Document",
+					frameId: MAIN_FRAME_ID,
+				},
 			]);
 		}
 		await until(
@@ -485,7 +552,9 @@ describe("policy at the relay", () => {
 					.length === hosts.length,
 			"public continues",
 		);
-		for (const call of ext.callsOf("chrome.debugger.sendCommand").filter(c => c.params[1] === "Fetch.continueRequest")) {
+		for (const call of ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(c => c.params[1] === "Fetch.continueRequest")) {
 			expect(Reflect.get(call.params[2] as object, "interceptResponse")).toBe(true);
 		}
 		const before = ext.callsOf("chrome.debugger.sendCommand").length;
@@ -493,7 +562,12 @@ describe("policy at the relay", () => {
 			ext.emit("chrome.debugger.onEvent", [
 				{ tabId: 100 },
 				"Fetch.requestPaused",
-				{ requestId: `q${index}`, request: { url: `http://${host}/` }, resourceType: "Document", frameId: MAIN_FRAME_ID },
+				{
+					requestId: `q${index}`,
+					request: { url: `http://${host}/` },
+					resourceType: "Document",
+					frameId: MAIN_FRAME_ID,
+				},
 			]);
 		}
 		await until(
@@ -549,6 +623,7 @@ describe("policy at the relay", () => {
 		expect(csp).not.toContain("allow-popups");
 		expect(csp).toContain("allow-same-origin");
 		expect(csp).toContain("allow-scripts");
+		expect(csp).toContain("worker-src 'none'");
 	});
 
 	test("a redirect response is continued without a body fetch", async () => {
@@ -673,6 +748,7 @@ describe("policy at the relay", () => {
 		expect(childCalls).toEqual([
 			"Fetch.enable",
 			"Page.addScriptToEvaluateOnNewDocument",
+			"Network.setBypassServiceWorker",
 			"Target.setAutoAttach",
 			"Runtime.runIfWaitingForDebugger",
 		]);
@@ -710,6 +786,131 @@ describe("policy at the relay", () => {
 			expect(methods).not.toContain("Target.detachFromTarget");
 			expect(cdp.events.some(event => event.params?.sessionId === "child-2")).toBe(false);
 		}
+	});
+
+	test("a worker that cannot be gated fails closed like a frame, and a gated worker gets no document commands", async () => {
+		for (const workerType of ["worker", "shared_worker", "service_worker"]) {
+			const { ext, cdp } = await connected(["https://staging.example.com"]);
+			await cdp.send("Target.createTarget", { url: "about:blank" });
+			const before = ext.calls.length;
+			ext.failNext("Fetch.enable");
+			ext.emit("chrome.debugger.onEvent", [
+				{ tabId: 100 },
+				"Target.attachedToTarget",
+				{ sessionId: "worker-1", waitingForDebugger: true, targetInfo: { type: workerType, targetId: "W-1" } },
+			]);
+			await until(
+				() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Target.closeTarget"),
+				`the close for ${workerType}`,
+			);
+			const methods = ext.calls.slice(before).map(call => String(call.params[1]));
+			expect(methods).not.toContain("Runtime.runIfWaitingForDebugger");
+			expect(methods).not.toContain("Target.detachFromTarget");
+			expect(methods).not.toContain("chrome.debugger.detach");
+			expect(cdp.events.some(event => event.params?.sessionId === "worker-1")).toBe(false);
+			await relay?.close();
+			relay = undefined;
+		}
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.emit("chrome.debugger.onEvent", [
+			{ tabId: 100 },
+			"Target.attachedToTarget",
+			{ sessionId: "worker-2", waitingForDebugger: true, targetInfo: { type: "worker", targetId: "W-2" } },
+		]);
+		await until(
+			() =>
+				ext
+					.callsOf("chrome.debugger.sendCommand")
+					.some(call => call.params[1] === "Runtime.runIfWaitingForDebugger"),
+			"the worker resume",
+		);
+		const onWorker = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(call => JSON.stringify(call.params[0]) === JSON.stringify({ tabId: 100, sessionId: "worker-2" }))
+			.map(call => call.params[1]);
+		expect(onWorker).toEqual(["Fetch.enable", "Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"]);
+	});
+
+	test("a tab that cannot be gated is removed, not just detached, so an ungated page does not keep running", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		ext.failNext("Fetch.enable");
+		const reply = await cdp.send("Target.createTarget", { url: "about:blank" });
+		expect(reply.error).toBeDefined();
+		await until(() => ext.callsOf("chrome.tabs.remove").length > 0, "the tab removal");
+		expect(ext.callsOf("chrome.tabs.remove")[0]?.params).toEqual([100]);
+		expect(ext.callsOf("chrome.debugger.detach")[0]?.params).toEqual([{ tabId: 100 }]);
+	});
+
+	test("an adopted popup that cannot be gated is removed", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.failNext("Page.addScriptToEvaluateOnNewDocument");
+		ext.emit("chrome.tabs.onCreated", [{ id: 200, openerTabId: 100, pendingUrl: "https://staging.example.com/" }]);
+		await until(() => ext.callsOf("chrome.tabs.remove").some(call => call.params[0] === 200), "the popup removal");
+	});
+
+	test("the guard script refuses service workers through the prototype too, and removes the worker constructors", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const injected = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.find(call => call.params[1] === "Page.addScriptToEvaluateOnNewDocument");
+		const source = String((injected?.params[2] as { source: string } | undefined)?.source);
+		class ServiceWorkerContainer {
+			register(): Promise<string> {
+				return Promise.resolve("native register reached");
+			}
+		}
+		class Stub {
+			observe(): void {}
+		}
+		const page: Record<string, unknown> = {
+			DOMException,
+			ServiceWorkerContainer,
+			HTMLFormElement: Stub,
+			Element: Stub,
+			MutationObserver: Stub,
+			Worker: class {},
+			SharedWorker: class {},
+			navigator: { serviceWorker: new ServiceWorkerContainer() },
+			document: { querySelectorAll: () => [], addEventListener: () => {} },
+			addEventListener: () => {},
+		};
+		page.window = page;
+		vm.runInNewContext(source, page);
+		const container = (page.navigator as { serviceWorker: ServiceWorkerContainer }).serviceWorker;
+		await expect(container.register()).rejects.toMatchObject({ name: "SecurityError" });
+		await expect(ServiceWorkerContainer.prototype.register.call(container)).rejects.toMatchObject({
+			name: "SecurityError",
+		});
+		expect(vm.runInNewContext("typeof Worker + typeof SharedWorker", page)).toBe("undefinedundefined");
+	});
+
+	test("a client cannot undo the service worker bypass", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const before = ext.callsOf("chrome.debugger.sendCommand").length;
+		const reply = await cdp.send("Network.setBypassServiceWorker", { bypass: false }, sessionId);
+		expect(reply.error).toBeDefined();
+		expect(ext.callsOf("chrome.debugger.sendCommand")).toHaveLength(before);
+	});
+
+	test("pages bypass service workers; a tab that refuses the bypass is removed", async () => {
+		const { ext, cdp } = await connected(["https://staging.example.com"]);
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const bypass = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.find(call => call.params[1] === "Network.setBypassServiceWorker");
+		expect(bypass?.params).toEqual([{ tabId: 100 }, "Network.setBypassServiceWorker", { bypass: true }]);
+		ext.failNext("Network.setBypassServiceWorker");
+		const refused = await cdp.send("Target.createTarget", { url: "about:blank" });
+		expect(refused.error).toBeDefined();
+		await until(
+			() => ext.callsOf("chrome.tabs.remove").some(call => call.params[0] === 101),
+			"the removal of the ungated tab",
+		);
 	});
 });
 
