@@ -3,6 +3,7 @@ import * as logger from "@veyyon/utils/logger";
 import { errorMessage, getOwnProperty, isRecord, setSafeProperty } from "@veyyon/utils/type-guards";
 import type { ToolCall } from "../types";
 import { toolWireSchema } from "../utils/schema";
+import type { FencedThinkingScanner } from "./fenced-thinking";
 import type { InbandScanEvent, InbandTool, InbandToolEnd } from "./types";
 
 export interface ToolArgShape {
@@ -158,6 +159,21 @@ export function findFirstTag(text: string, tags: readonly string[]): TagMatch | 
 }
 
 /**
+ * Emit `buffer` as one text event, except a suffix that could be the start of one of `tags`, which
+ * is returned to stay held until more text arrives. With `final` set nothing is held.
+ */
+export function emitTextHoldingPartialTag(
+	buffer: string,
+	tags: readonly string[],
+	final: boolean,
+	events: InbandScanEvent[],
+): string {
+	const emitEnd = final ? buffer.length : buffer.length - partialSuffixOverlapAny(buffer, tags);
+	if (emitEnd > 0) events.push({ type: "text", text: buffer.slice(0, emitEnd) });
+	return buffer.slice(emitEnd);
+}
+
+/**
  * One step of a scanner's outside-of-any-block state: the text before the first
  * of `tags` is emitted as a text event and the buffer advances past the tag.
  * With no tag present the whole buffer is emitted, except a suffix that could be
@@ -172,12 +188,7 @@ export function scanOutsideText(
 	events: InbandScanEvent[],
 ): { buffer: string; tag: string | null } {
 	const match = findFirstTag(buffer, tags);
-	if (!match) {
-		const hold = final ? 0 : partialSuffixOverlapAny(buffer, tags);
-		const emitEnd = buffer.length - hold;
-		if (emitEnd > 0) events.push({ type: "text", text: buffer.slice(0, emitEnd) });
-		return { buffer: buffer.slice(emitEnd), tag: null };
-	}
+	if (!match) return { buffer: emitTextHoldingPartialTag(buffer, tags, final, events), tag: null };
 	if (match.index > 0) events.push({ type: "text", text: buffer.slice(0, match.index) });
 	return { buffer: buffer.slice(match.index + match.tag.length), tag: match.tag };
 }
@@ -232,6 +243,27 @@ export function scanThinkingText(
 	section.delta(buffer.slice(0, close), events);
 	section.end(events);
 	return { buffer: buffer.slice(close + closeTag.length), closed: true };
+}
+
+/**
+ * The {@link scanThinkingText} step for a ` ```thinking ` section, whose close `fenced` matches
+ * around nested code fences: the text `fenced` releases is streamed into `section`, which ends when
+ * the closing fence arrives or the stream does. `closed` is true on either. The returned buffer is
+ * the text after the closing fence, and empty while the section stays open, since `fenced` holds
+ * any undecided tail itself.
+ */
+export function scanFencedThinking(
+	fenced: FencedThinkingScanner,
+	buffer: string,
+	final: boolean,
+	section: ThinkingSection,
+	events: InbandScanEvent[],
+): { buffer: string; closed: boolean } {
+	const result = fenced.feed(buffer, final);
+	section.delta(result.thinking, events);
+	const closed = result.closed || final;
+	if (closed) section.end(events);
+	return { buffer: result.closed ? result.rest : "", closed };
 }
 
 export function normalizeKimiFunctionName(rawId: string): string {

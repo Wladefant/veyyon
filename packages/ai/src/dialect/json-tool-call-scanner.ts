@@ -56,8 +56,9 @@ export class JsonToolCallScanner implements InbandScanner {
 			else this.#consumeTool(final, events);
 			if (this.#state === state) break;
 		}
-		// A section whose text was all emitted before the stream ended leaves nothing in the buffer
-		// for the loop to close it with.
+		// A block the stream ends right after its opener leaves nothing in the buffer for the loop to
+		// end it with: a tool block is emitted as the opener text it was, a thinking section is closed.
+		if (final && this.#state === "tool") this.#consumeTool(final, events);
 		if (final && this.#state === "thinking") {
 			this.#thinking.end(events);
 			this.#state = "outside";

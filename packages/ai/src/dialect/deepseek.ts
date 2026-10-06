@@ -1,7 +1,13 @@
 import { parseJsonWithRepair, parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { Message, ToolCall } from "../types";
-import { mintToolCallId, parseToolArgsText, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
+import {
+	emitTextHoldingPartialTag,
+	mintToolCallId,
+	parseToolArgsText,
+	partialSuffixOverlapAny,
+	recordOrEmpty,
+} from "./coercion";
 import {
 	assistantTranscriptParts,
 	collectToolResultRun,
@@ -183,10 +189,7 @@ export class DeepSeekInbandScanner implements InbandScanner {
 			}
 			const match = findEarliestToken(this.#buffer, OUTSIDE_TOKENS);
 			if (!match) {
-				const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, OUTSIDE_TOKENS);
-				const emit = this.#buffer.slice(0, this.#buffer.length - hold);
-				if (emit.length > 0) events.push({ type: "text", text: emit });
-				this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+				this.#buffer = emitTextHoldingPartialTag(this.#buffer, OUTSIDE_TOKENS, final, events);
 				return;
 			}
 			if (match.index > 0) events.push({ type: "text", text: this.#buffer.slice(0, match.index) });

@@ -78,8 +78,12 @@ const SHAKE_CEILING = 16;
  * `<tool_call>` JSON scanner the `hermes` and `qwen3` dialects share; both dialects were already on this
  * closure. It imports only `./coercion` and `./wire-tags`, both already here, so the growth is that one
  * file and no subtree.
+ *
+ * RE-MEASURED 2026-10-06 again at 197. The one new module is `ai/dialect/bracket-walk.ts`, the bracket
+ * walk that splits call arguments, which `gemini.ts` and `gemma.ts` each spelled inline before. It
+ * imports nothing, so the growth is that one file and no subtree.
  */
-const PRUNING_CEILING = 196;
+const PRUNING_CEILING = 197;
 
 /**
  * The engine and the remote summarizer both took `ProviderHttpError` from the `@veyyon/ai/error` barrel,
@@ -150,8 +154,12 @@ const PRUNING_CEILING = 196;
  * `ai/dialect/json-tool-call-scanner.ts`, the `<tool_call>` JSON scanner the `hermes` and `qwen3` dialects
  * share. It imports only `./coercion` and `./wire-tags`, both already on the engine's reach, so the growth
  * is that one file and no subtree; the remote summarizer reaches no dialect.
+ *
+ * RE-MEASURED 2026-10-06 again: engine 306, remote summarizer 101. The one new module is
+ * `ai/dialect/bracket-walk.ts`, the bracket walk `gemini.ts` and `gemma.ts` split call arguments with.
+ * It imports nothing, so the growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 305;
+const COMPACTION_ENGINE_CEILING = 306;
 const REMOTE_SUMMARIZER_CEILING = 101;
 
 describe("the estimator is a leaf", () => {

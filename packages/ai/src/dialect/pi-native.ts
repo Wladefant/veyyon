@@ -3,6 +3,7 @@ import type { ToolCall } from "../types";
 import {
 	buildArgShapes,
 	coerceValue,
+	emitTextHoldingPartialTag,
 	getArrayItemSchema,
 	getObjectProperties,
 	getOwnArg,
@@ -38,6 +39,8 @@ import { THINK_CLOSE, THINK_OPEN } from "./wire-tags";
  */
 const PI_CALL_OPEN = "<call:";
 const PI_CALL_CLOSE_PREFIX = "</call:";
+const OUTSIDE_TAGS = [PI_CALL_OPEN] as const;
+const OUTSIDE_TAGS_THINK = [PI_CALL_OPEN, THINK_OPEN] as const;
 
 type State = "outside" | "thinking" | "opentag" | "body";
 
@@ -100,15 +103,12 @@ class PiNativeInbandScanner implements InbandScanner {
 	}
 
 	#consumeOutside(final: boolean, events: InbandScanEvent[]): boolean {
-		const holdTags = this.#parseThinking ? [PI_CALL_OPEN, THINK_OPEN] : [PI_CALL_OPEN];
 		const call = this.#buffer.indexOf(PI_CALL_OPEN);
 		const think = this.#parseThinking ? this.#buffer.indexOf(THINK_OPEN) : -1;
 		const start = call === -1 ? think : think === -1 ? call : Math.min(call, think);
 		if (start === -1) {
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, holdTags);
-			const emit = this.#buffer.slice(0, this.#buffer.length - hold);
-			if (emit.length > 0) events.push({ type: "text", text: emit });
-			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+			const tags = this.#parseThinking ? OUTSIDE_TAGS_THINK : OUTSIDE_TAGS;
+			this.#buffer = emitTextHoldingPartialTag(this.#buffer, tags, final, events);
 			return false;
 		}
 		if (start > 0) events.push({ type: "text", text: this.#buffer.slice(0, start) });

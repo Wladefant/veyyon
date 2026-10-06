@@ -269,6 +269,13 @@ describe("the modules that were repointed stay cut", () => {
 	 * already on every one of these reaches, take the local time from it. Its only import is `bun:ffi`, so
 	 * no consumer gained an edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-10-06: `shared-llm.ts` 211 -> 212 by the one module `ai/dialect/bracket-walk.ts`,
+	 * a zero-import leaf holding the bracket-depth walk that splits call arguments. `dialect/gemini.ts`
+	 * and `dialect/gemma.ts`, already on this reach, each walked brackets inline and now take the walk
+	 * from that owner. The leaf imports nothing, so no consumer gained an edge to a subsystem it did not
+	 * already reach.
+	 */
 	it.each([
 		["agent/src/proxy.ts", 149],
 		["apps/stats/src/parser.ts", 126],
@@ -289,7 +296,7 @@ describe("the modules that were repointed stay cut", () => {
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		["coding-agent/src/commit/shared-llm.ts", 211],
+		["coding-agent/src/commit/shared-llm.ts", 212],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

@@ -300,11 +300,14 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * that left `sdk.ts`, and `session/tool-discovery.ts` left `session/factory-tools.ts`. No module left
  * and none arrived through a new import.
  *
+ * 1474 to 1475: `ai/src/dialect/bracket-walk.ts`, the zero-import bracket walk `gemini.ts` and
+ * `gemma.ts` split call arguments with instead of each spelling it inline.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1474;
+const LAUNCH_REACH_CEILING = 1475;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -324,8 +327,10 @@ const LAUNCH_REACH_CEILING = 1474;
  *
  * 523 to 524: `ai/src/dialect/json-tool-call-scanner.ts`, for the reason the launch ceiling above
  * records.
+ *
+ * 524 to 525: `ai/src/dialect/bracket-walk.ts`, for the reason the launch ceiling above records.
  */
-const ASSEMBLER_REACH_CEILING = 524;
+const ASSEMBLER_REACH_CEILING = 525;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

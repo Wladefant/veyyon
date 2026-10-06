@@ -1,7 +1,13 @@
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { Message, ToolCall } from "../types";
-import { mintToolCallId, parseToolArgsText, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
+import {
+	emitTextHoldingPartialTag,
+	mintToolCallId,
+	parseToolArgsText,
+	partialSuffixOverlapAny,
+	recordOrEmpty,
+} from "./coercion";
 import {
 	assistantTranscriptParts,
 	collectToolResultRun,
@@ -69,10 +75,7 @@ class HarmonyInbandScanner implements InbandScanner {
 			if (this.#state === "outside") {
 				const next = findNextToken(this.#buffer, ALL_TOKENS);
 				if (!next) {
-					const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, ALL_TOKENS);
-					const emit = this.#buffer.slice(0, this.#buffer.length - hold);
-					if (emit.length > 0) events.push({ type: "text", text: emit });
-					this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+					this.#buffer = emitTextHoldingPartialTag(this.#buffer, ALL_TOKENS, final, events);
 					break;
 				}
 

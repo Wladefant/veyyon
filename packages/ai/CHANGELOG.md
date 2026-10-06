@@ -53,6 +53,7 @@
 - The Anthropic session-state key and fast-mode reset, the Claude device id, the Codex session-state readers, the OpenAI cache-key normalizers, the Gemini thought-signature accounting and the Azure deployment map are defined in leaf modules, and `providers/server-compaction-transport` loads `providers/openai-compaction` on the first server-side compaction, so a caller of any of them no longer evaluates the Anthropic, Codex, Google or OpenAI shared modules; `providers/register-builtins` exports `loadOpenAICodexResponses`, the one loader of the Codex client.
 - `discoverAuthStorage` serves credentials from the shared-store connection it checked for seeding instead of opening the shared database a second time, which takes one open, schema check and close (1.1 ms median of 300) off each launch that uses the shared store.
 - The Hermes and Qwen3 dialects share one in-band scanner, `dialect/json-tool-call-scanner.ts`.
+- The Gemini and Gemma scanners split call arguments through one bracket walk, `dialect/bracket-walk.ts`, and the DeepSeek, Gemini, Harmony, Kimi, pi-native and leaked-reasoning scanners hold a partial tag and stream a fenced reasoning section through shared helpers in `dialect/coercion.ts`; apart from the two stream-end fixes below, the events they emit are unchanged.
 
 ### Fixed
 
@@ -72,6 +73,8 @@
 - A Qwen3 tool call cut off by the end of the stream no longer repeats its body as visible text after the call, and a Hermes or Qwen3 `<tool_call>` block that names no call is shown as text instead of dropped.
 - Hermes and Harmony end a reasoning section, and Harmony ends an announced tool call, when the stream ends inside it with no text held back, instead of leaving it open.
 - An in-band tool call the stream ends inside now ends with the arguments read before the cut in the Anthropic, DeepSeek, GLM, Harmony, Kimi, MiniMax, pi-native and XML dialects, instead of staying open or ending with no arguments.
+- The leaked-reasoning healer ends a tag-closed reasoning section the stream ends inside when no text is held back, instead of leaving it open.
+- A Hermes or Qwen3 reply that ends on a bare `<tool_call>` shows the tag as text instead of dropping it.
 
 ## [1.5.4] - 2026-09-24
 

@@ -2,6 +2,7 @@ import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { Message, ToolCall } from "../types";
 import {
+	emitTextHoldingPartialTag,
 	normalizeKimiFunctionName,
 	parseToolArgsText,
 	partialSuffixOverlapAny,
@@ -119,10 +120,7 @@ export class KimiInbandScanner implements InbandScanner {
 		if (thinkStart !== -1 && (start === -1 || thinkStart < start)) start = thinkStart;
 		if (start === -1) {
 			const tags = this.#parseThinking ? TOKENS_THINK : TOKENS;
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, tags);
-			const emitEnd = this.#buffer.length - hold;
-			if (emitEnd > 0) events.push({ type: "text", text: this.#buffer.slice(0, emitEnd) });
-			this.#buffer = this.#buffer.slice(emitEnd);
+			this.#buffer = emitTextHoldingPartialTag(this.#buffer, tags, final, events);
 			return false;
 		}
 
