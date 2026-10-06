@@ -719,7 +719,7 @@ export async function loadPromptDirs(dirs: readonly ScopedConfigDir[], provider:
 	return mergeLoadResults(results);
 }
 
-const CUSTOM_TOOL_EXTENSIONS = ["json", "md", "ts", "js", "sh", "bash", "py"];
+const CUSTOM_TOOL_EXTENSIONS = ["json", "md", "ts", "js", "sh", "bash", "py"]; // not-a-tool-name: file extensions
 
 /**
  * Load `<dir>/tools` of every directory: one tool per `.json`/`.md` descriptor or executable

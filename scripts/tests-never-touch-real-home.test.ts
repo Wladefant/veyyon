@@ -202,10 +202,10 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 			"`realBash` is `REAL_BASH`, which is `Bun.env.SHELL` when it names bash and otherwise the literal `/bin/bash`, guarded by an `existsSync` that returns early. It runs the operator's bash with `--noprofile --norc` against a snapshot file the test wrote, which is the point: a snapshot of a login shell cannot be taken with a fake shell.",
 	},
 	{
-		file: "packages/coding-agent/test/tools/browser-tab-evaluate.test.ts",
+		file: "packages/coding-agent/test/tools/browser/chromium.ts",
 		rule: "unresolved-spawn-target",
 		reason:
-			"`executable` is whatever `ensureChromiumExecutable()` resolved, and the spawn is a `--version` probe whose only purpose is deciding whether to skip: CI hosts hold the downloaded Chromium but lack the system libraries to exec it. A probe that must ask the real binary cannot be written against a literal path.",
+			"`executable` is whatever `ensureChromiumExecutable()` resolved, and the spawn is a `--version` probe whose only purpose is deciding whether to skip: CI hosts hold the downloaded Chromium but lack the system libraries to exec it. Every suite that launches Chromium imports `CHROMIUM_AVAILABLE` from this module rather than probing on its own. A probe that must ask the real binary cannot be written against a literal path.",
 	},
 	{
 		file: "packages/coding-agent/test/core/python-runner-integration.test.ts",
