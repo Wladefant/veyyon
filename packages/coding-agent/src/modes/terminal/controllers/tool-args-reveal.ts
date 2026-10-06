@@ -2,7 +2,7 @@ import type { Component } from "@veyyon/tui";
 import { parseStreamingJson, parseStreamingJsonThrottled, STREAMING_JSON_PARSE_MIN_GROWTH } from "@veyyon/utils";
 import type { ArgotSession } from "argot";
 import { expandToolArguments } from "../../../argot-wire";
-import { RevealPacer, STREAMING_REVEAL_FRAME_MS } from "./streaming-reveal";
+import { RevealFrameClock, RevealPacer } from "./streaming-reveal";
 
 /** Minimal component surface the reveal pushes frames into. */
 type ToolArgsRevealComponent = Component & {
@@ -598,7 +598,7 @@ export class ToolArgsRevealController {
 	readonly #getSmoothStreaming: () => boolean;
 	readonly #requestRender: (component: Component) => void;
 	readonly #entries = new Map<string, RevealEntry>();
-	#timer: NodeJS.Timeout | undefined;
+	readonly #clock = new RevealFrameClock(() => this.#tick());
 
 	constructor(options: ToolArgsRevealControllerOptions) {
 		this.#getSmoothStreaming = options.getSmoothStreaming;
@@ -677,7 +677,7 @@ export class ToolArgsRevealController {
 	 *  text snaps to the full message at message_end. */
 	finish(id: string): void {
 		this.#entries.delete(id);
-		if (this.#entries.size === 0) this.#stopTimer();
+		if (this.#entries.size === 0) this.#clock.stop();
 	}
 
 	/** Snap every live entry to its full received stream and clear. Used at
@@ -690,37 +690,23 @@ export class ToolArgsRevealController {
 			}
 		}
 		this.#entries.clear();
-		this.#stopTimer();
+		this.#clock.stop();
 	}
 
 	/** Clear without pushing (teardown). */
 	stop(): void {
 		this.#entries.clear();
-		this.#stopTimer();
+		this.#clock.stop();
 	}
 
 	#syncTimer(): void {
 		for (const entry of this.#entries.values()) {
 			if (entry.revealed < entry.target.length) {
-				this.#startTimer();
+				this.#clock.start();
 				return;
 			}
 		}
-		this.#stopTimer();
-	}
-
-	#startTimer(): void {
-		if (this.#timer) return;
-		this.#timer = setInterval(() => {
-			this.#tick();
-		}, STREAMING_REVEAL_FRAME_MS);
-		this.#timer.unref?.();
-	}
-
-	#stopTimer(): void {
-		if (!this.#timer) return;
-		clearInterval(this.#timer);
-		this.#timer = undefined;
+		this.#clock.stop();
 	}
 
 	#tick(): void {
@@ -746,6 +732,6 @@ export class ToolArgsRevealController {
 		}
 		for (const component of rendered) this.#requestRender(component);
 		// Every entry caught up (or unbound); setTarget restarts on growth.
-		if (!backlogged) this.#stopTimer();
+		if (!backlogged) this.#clock.stop();
 	}
 }

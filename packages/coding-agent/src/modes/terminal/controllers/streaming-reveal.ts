@@ -7,6 +7,27 @@ import type { AssistantMessageComponent } from "../components/transcript/assista
 
 export const STREAMING_REVEAL_FRAME_MS = 1000 / 30;
 
+/** An interval at {@link STREAMING_REVEAL_FRAME_MS} that runs while started and holds no process open. */
+export class RevealFrameClock {
+	readonly #tick: () => void;
+	#timer: NodeJS.Timeout | undefined;
+
+	constructor(tick: () => void) {
+		this.#tick = tick;
+	}
+
+	start(): void {
+		if (this.#timer) return;
+		this.#timer = setInterval(this.#tick, STREAMING_REVEAL_FRAME_MS);
+		this.#timer.unref?.();
+	}
+
+	stop(): void {
+		clearInterval(this.#timer);
+		this.#timer = undefined;
+	}
+}
+
 /** Lead the reveal holds behind arrivals until the gap between them is measured, and the window a
  *  stream's first chunk reveals over, in ms. */
 const INITIAL_LEAD_MS = 250;
@@ -347,7 +368,7 @@ export class StreamingRevealController {
 	readonly #requestRender: (component: Component) => void;
 	#target: AssistantMessageView | undefined;
 	#component: StreamingRevealComponent | undefined;
-	#timer: NodeJS.Timeout | undefined;
+	readonly #clock = new RevealFrameClock(() => this.#tick());
 	#revealed = 0;
 	#pacer = new RevealPacer();
 	/** When the newest target was set; the next tick counts any units it added as arriving then. */
@@ -425,7 +446,7 @@ export class StreamingRevealController {
 			// assistant text before EventController renders the separate tool card.
 			this.#revealed = this.#visibleUnits(message);
 			this.#pending = false;
-			this.#stopTimer();
+			this.#clock.stop();
 			this.#component.updateContent(this.#build(message, this.#revealed), {
 				transient: true,
 			});
@@ -436,11 +457,11 @@ export class StreamingRevealController {
 		// work for every provider delta between two frames.
 		this.#arrivedAt = performance.now();
 		this.#pending = true;
-		this.#startTimer();
+		this.#clock.start();
 	}
 
 	stop(): void {
-		this.#stopTimer();
+		this.#clock.stop();
 		this.#target = undefined;
 		this.#component = undefined;
 		this.#revealed = 0;
@@ -495,24 +516,10 @@ export class StreamingRevealController {
 
 	#syncTimer(total = this.#target ? this.#visibleUnits(this.#target) : 0): void {
 		if (!this.#target || !this.#component || this.#revealed >= total) {
-			this.#stopTimer();
+			this.#clock.stop();
 			return;
 		}
-		this.#startTimer();
-	}
-
-	#startTimer(): void {
-		if (this.#timer) return;
-		this.#timer = setInterval(() => {
-			this.#tick();
-		}, STREAMING_REVEAL_FRAME_MS);
-		this.#timer.unref?.();
-	}
-
-	#stopTimer(): void {
-		if (!this.#timer) return;
-		clearInterval(this.#timer);
-		this.#timer = undefined;
+		this.#clock.start();
 	}
 
 	#tick(): void {
@@ -538,7 +545,7 @@ export class StreamingRevealController {
 			if (step > 0) this.#requestRender(component);
 		}
 		if (this.#revealed >= total) {
-			this.#stopTimer();
+			this.#clock.stop();
 		}
 	}
 }
