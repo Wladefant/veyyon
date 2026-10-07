@@ -174,6 +174,7 @@
 - `stream.ts` reaches the GitLab Duo Workflow provider through the lazy loader in `register-builtins.ts`, so a process loads its 3,000-line protocol client on the first `gitlab-duo-agent` turn instead of at startup.
 - 15 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
+- The auth gateway's chat-completions, messages, Responses and pi-native routes read the body, resolve the credential and answer the turn through one shared request path; every response is unchanged.
 - `calculateRateLimitBackoffMs` takes a `RateLimitBackoffContext` (`"credential-park"` or `"selector-suppression"`) that sets the cost of an unreadable failure: 30 minutes for a credential park, 5 minutes for a selector suppression.
 - Every retry loop in the package takes its exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `auth-storage.ts` is split into single-concern modules under `src/auth-storage/` with no change to its exports or behavior.
