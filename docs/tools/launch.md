@@ -95,6 +95,8 @@ All project clients may observe the same managed process. Input is one shared st
 ## Cross-instance lifecycle
 Every veyyon session registers its process in the canonical project scope of its profile. The first `launch` call starts a detached broker over a private socket; later `launch` calls from any registered veyyon process of the same profile connect to the same broker and see the same names, logs, and state.
 
+Each process-shared client also registers its owner in the canonical project it contacts, before connecting to the broker. This keeps launched processes alive after a workdir change, even when Main started elsewhere. Closing the shared clients removes only their registrations.
+
 Runtime data lives under `~/.veyyon/profiles/<profile>/run/daemons/<project-key>/`, where `<project-key>` is a hash of the profile's agent directory and the project directory:
 
 | Path | What it holds |
@@ -110,7 +112,11 @@ Runtime data lives under `~/.veyyon/profiles/<profile>/run/daemons/<project-key>
 
 These names are a contract between separate processes, so they are declared in exactly one place in the source (`src/launch/paths.ts`) and every reader and writer asks it for a path. Renaming one is a break for any broker already running against the old layout.
 
-After the last tool socket disconnects, the broker checks the project-presence records. Live veyyon PIDs keep non-persistent managed processes running even when those veyyon instances have not called `launch`; dead PIDs are removed. Once no veyyon process remains, the broker waits three seconds, stops every non-persistent managed process, and exits. This PID check still works when an veyyon process is killed without JavaScript cleanup.
+A process-shared client destroys its socket after no pending requests remain for its idle grace period (default 3,000 ms). It retains the client object in memory. New calls reconnect automatically. Independent clients keep their sockets until closed, unless their caller sets `idleDisconnectMs`.
+
+After the last tool socket disconnects, the broker evaluates managed processes. An idle empty broker manages no nonterminal processes. It ignores live project presence and exits after its idle grace period.
+
+When active non-persistent processes exist, live veyyon PIDs keep them running even when those sessions make no active launch calls. Dead PIDs are removed. Once every veyyon process exits, the broker waits three seconds, stops non-persistent managed processes, and exits. This PID check works even if a veyyon process dies without cleanup.
 
 `persist: true` explicitly opts a managed process out of last-client teardown. A broker with a live persistent process remains available without clients until another veyyon reconnects and stops it, or until the persistent process ends on its own. The non-persistent processes beside it are still stopped at the idle grace, recorded as `terminated-by=idle-reaper`; once the persistent process ends, the broker re-arms the same grace and exits. Broker recovery terminates stale recorded children and preserves their records as exited instead of adopting an unknown process state.
 

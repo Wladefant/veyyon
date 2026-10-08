@@ -6,6 +6,7 @@ import { isEexist, isEnoent, postmortem, ptree } from "@veyyon/utils";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonBrokerTokenPath, daemonRuntimeDir } from "./paths";
+import { type DaemonProjectPresence, registerDaemonProjectPresence } from "./presence";
 import {
 	DAEMON_BROKER_WORKER_ARG,
 	DAEMON_CLEANUP_WAIT_ENV,
@@ -39,6 +40,8 @@ export interface DaemonBrokerClientOptions {
 	runtimeDir?: string;
 	/** Last-client shutdown grace override in milliseconds. */
 	idleGraceMs?: number;
+	/** Socket inactivity grace. Independent clients retain their socket unless this is set. */
+	idleDisconnectMs?: number;
 	/** Exited process retention TTL before purge in milliseconds (0 = never clean up). */
 	cleanupWaitMs?: number;
 	/**
@@ -132,6 +135,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	readonly #endpoint: string;
 	readonly #token: string;
 	readonly #idleGraceMs: number | undefined;
+	readonly #idleDisconnectMs: number | undefined;
 	readonly #cleanupWaitMs: number | undefined;
 	readonly #adoptSpawnedPid: ((pid: number) => void) | undefined;
 	readonly #pending = new Map<string, PendingRequest>();
@@ -139,6 +143,8 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	#connectPromise: Promise<void> | undefined;
 	#buffer = "";
 	#closed = false;
+	#requestsInFlight = 0;
+	#idleTimer: NodeJS.Timeout | undefined;
 
 	constructor(projectDir: string, runtimeDir: string, token: string, options: DaemonBrokerClientOptions) {
 		this.projectDir = projectDir;
@@ -146,6 +152,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		this.#endpoint = daemonBrokerEndpoint(runtimeDir);
 		this.#token = token;
 		this.#idleGraceMs = options.idleGraceMs;
+		this.#idleDisconnectMs = options.idleDisconnectMs;
 		this.#adoptSpawnedPid = options.adoptSpawnedPid;
 		this.#cleanupWaitMs = options.cleanupWaitMs;
 	}
@@ -153,37 +160,45 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	async request(operation: DaemonOperation, signal?: AbortSignal): Promise<DaemonRpcResult> {
 		if (this.#closed) throw new Error("Daemon broker client is closed");
 		if (signal?.aborted) throw new Error("Daemon broker request aborted");
-		await this.#connect();
-		const socket = this.#socket;
-		if (!socket || socket.destroyed) throw new Error("Daemon broker socket is unavailable");
+		clearTimeout(this.#idleTimer);
+		this.#requestsInFlight++;
+		try {
+			await this.#connect();
+			const socket = this.#socket;
+			if (!socket || socket.destroyed) throw new Error("Daemon broker socket is unavailable");
 
-		const id = crypto.randomUUID();
-		const { promise, resolve, reject } = Promise.withResolvers<DaemonRpcResult>();
-		const timer = setTimeout(() => {
-			const pending = this.#pending.get(id);
-			if (!pending) return;
-			this.#pending.delete(id);
-			pending.removeAbort?.();
-			reject(new Error(`Daemon ${operation.op} request timed out`));
-		}, requestTimeoutMs(operation));
-		const pending: PendingRequest = { operation, resolve, reject, timer };
-		if (signal) {
-			const abort = (): void => {
-				if (!this.#pending.delete(id)) return;
-				clearTimeout(timer);
-				reject(new Error("Daemon broker request aborted"));
-			};
-			signal.addEventListener("abort", abort, { once: true });
-			pending.removeAbort = () => signal.removeEventListener("abort", abort);
+			const id = crypto.randomUUID();
+			const { promise, resolve, reject } = Promise.withResolvers<DaemonRpcResult>();
+			const timer = setTimeout(() => {
+				const pending = this.#pending.get(id);
+				if (!pending) return;
+				this.#pending.delete(id);
+				pending.removeAbort?.();
+				reject(new Error(`Daemon ${operation.op} request timed out`));
+			}, requestTimeoutMs(operation));
+			const pending: PendingRequest = { operation, resolve, reject, timer };
+			if (signal) {
+				const abort = (): void => {
+					if (!this.#pending.delete(id)) return;
+					clearTimeout(timer);
+					reject(new Error("Daemon broker request aborted"));
+				};
+				signal.addEventListener("abort", abort, { once: true });
+				pending.removeAbort = () => signal.removeEventListener("abort", abort);
+			}
+			this.#pending.set(id, pending);
+			socket.write(`${JSON.stringify({ id, token: this.#token, operation })}\n`);
+			return await promise;
+		} finally {
+			this.#requestsInFlight--;
+			this.#scheduleIdleDisconnect();
 		}
-		this.#pending.set(id, pending);
-		socket.write(`${JSON.stringify({ id, token: this.#token, operation })}\n`);
-		return promise;
 	}
 
 	close(): void {
 		if (this.#closed) return;
 		this.#closed = true;
+		clearTimeout(this.#idleTimer);
 		this.#socket?.destroy();
 		this.#socket = undefined;
 		this.#rejectPending(new Error("Daemon broker client closed"));
@@ -252,7 +267,8 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			// The close handler rejects pending requests with one stable error.
 		});
 		socket.on("close", () => {
-			if (this.#socket === socket) this.#socket = undefined;
+			if (this.#socket !== socket) return;
+			this.#socket = undefined;
 			this.#rejectPending(new Error("Daemon broker connection closed"));
 		});
 	}
@@ -290,6 +306,22 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		}
 	}
 
+	#scheduleIdleDisconnect(): void {
+		if (this.#closed || this.#requestsInFlight > 0 || !this.#socket || this.#idleDisconnectMs === undefined) return;
+		const grace = this.#idleDisconnectMs;
+		this.#idleTimer = setTimeout(
+			() => {
+				this.#idleTimer = undefined;
+				if (this.#requestsInFlight > 0) return;
+				const socket = this.#socket;
+				this.#socket = undefined;
+				socket?.destroy();
+			},
+			Number.isFinite(grace) && grace >= 0 ? grace : 3_000,
+		);
+		this.#idleTimer.unref();
+	}
+
 	#rejectPending(error: Error): void {
 		for (const pending of this.#pending.values()) {
 			clearTimeout(pending.timer);
@@ -300,7 +332,12 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	}
 }
 
-const sharedClients = new Map<string, Promise<DaemonBrokerClient>>();
+interface SharedDaemonClient {
+	client: DaemonBrokerClient;
+	presence: DaemonProjectPresence;
+}
+
+const sharedClients = new Map<string, Promise<SharedDaemonClient>>();
 let cancelExitCleanup: (() => void) | undefined;
 
 /** Create an independent socket connection to one project's shared daemon broker. */
@@ -324,7 +361,20 @@ export async function daemonClientForProject(
 	if (!pending) {
 		const cleanupWaitMs =
 			options.cleanupWaitMs ?? (isSettingsInitialized() ? Settings.instance.get("launch.cleanupWaitMs") : undefined);
-		pending = createDaemonBrokerClient(canonical, { ...options, cleanupWaitMs });
+		pending = (async () => {
+			const presence = await registerDaemonProjectPresence(canonical, options.runtimeDir);
+			try {
+				const client = await createDaemonBrokerClient(canonical, {
+					...options,
+					cleanupWaitMs,
+					idleDisconnectMs: options.idleDisconnectMs ?? options.idleGraceMs ?? 3_000,
+				});
+				return { client, presence };
+			} catch (error) {
+				await presence.close();
+				throw error;
+			}
+		})();
 		sharedClients.set(canonical, pending);
 		// A connection that fails is not cached. `createDaemonBrokerClient` reads
 		// the runtime token and canonicalizes the project directory, and both fail
@@ -340,7 +390,7 @@ export async function daemonClientForProject(
 			cancelExitCleanup = postmortem.register("daemon-broker-clients", () => closeDaemonClients());
 		}
 	}
-	return pending;
+	return (await pending).client;
 }
 
 /** Close every project broker connection held by this veyyon process. */
@@ -349,9 +399,13 @@ export async function closeDaemonClients(): Promise<void> {
 	sharedClients.clear();
 	// One connection that never resolved must not strand the rest: settle every
 	// entry and close the ones that produced a client.
-	for (const result of await Promise.allSettled(pending)) {
-		if (result.status === "fulfilled") result.value.close();
-	}
+	await Promise.all(
+		(await Promise.allSettled(pending)).map(async result => {
+			if (result.status !== "fulfilled") return;
+			result.value.client.close();
+			await result.value.presence.close();
+		}),
+	);
 	cancelExitCleanup?.();
 	cancelExitCleanup = undefined;
 }
