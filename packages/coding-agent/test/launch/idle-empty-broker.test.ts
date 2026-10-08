@@ -6,7 +6,7 @@ import { isProcessAlive } from "../../../utils/src/process-liveness";
 import { enterIsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { closeDaemonClients, daemonClientForProject } from "../../src/launch/client";
 import { daemonBrokerLeasePath } from "../../src/launch/paths";
-import { registerDaemonProjectPresence } from "../../src/launch/presence";
+import { hasLiveDaemonProjectPresence, registerDaemonProjectPresence } from "../../src/launch/presence";
 
 test("an empty broker exits while its Main stays alive and its cached client reconnects", async () => {
 	const isolation = enterIsolatedConfigRoot("idle-empty-broker");
@@ -85,14 +85,17 @@ test("a shared client preserves a daemon outside Main's startup project through 
 		expect(pid).toBeDefined();
 		const waiting = await client.request({ op: "wait", name: "service", for: "exit", timeoutMs: 600 });
 		expect(waiting.op === "wait" && waiting.timedOut).toBeTrue();
+		expect(await hasLiveDaemonProjectPresence(runtimeDir)).toBeTrue();
 		// Separate broker and child processes require the real platform clock.
 		await Bun.sleep(600);
 		const described = await client.request({ op: "describe", name: "service" });
 		expect(described.op === "describe" && described.daemon.pid === pid).toBeTrue();
+		expect(described.op === "describe" && described.daemon.state === "running").toBeTrue();
 		expect(pid !== undefined && isProcessAlive(pid)).toBeTrue();
 	} finally {
 		await client.request({ op: "shutdown" }).catch(() => {});
 		await closeDaemonClients();
+		expect(await hasLiveDaemonProjectPresence(runtimeDir)).toBeFalse();
 		await presence.close();
 		isolation.restore();
 		await fs.rm(project, { recursive: true, force: true });

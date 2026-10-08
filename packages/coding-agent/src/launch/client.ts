@@ -6,6 +6,7 @@ import { isEexist, isEnoent, postmortem, ptree } from "@veyyon/utils";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonBrokerTokenPath, daemonRuntimeDir } from "./paths";
+import { type DaemonProjectPresence, registerDaemonProjectPresence } from "./presence";
 import {
 	DAEMON_BROKER_WORKER_ARG,
 	DAEMON_CLEANUP_WAIT_ENV,
@@ -331,7 +332,12 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	}
 }
 
-const sharedClients = new Map<string, Promise<DaemonBrokerClient>>();
+interface SharedDaemonClient {
+	client: DaemonBrokerClient;
+	presence: DaemonProjectPresence;
+}
+
+const sharedClients = new Map<string, Promise<SharedDaemonClient>>();
 let cancelExitCleanup: (() => void) | undefined;
 
 /** Create an independent socket connection to one project's shared daemon broker. */
@@ -355,11 +361,20 @@ export async function daemonClientForProject(
 	if (!pending) {
 		const cleanupWaitMs =
 			options.cleanupWaitMs ?? (isSettingsInitialized() ? Settings.instance.get("launch.cleanupWaitMs") : undefined);
-		pending = createDaemonBrokerClient(canonical, {
-			...options,
-			cleanupWaitMs,
-			idleDisconnectMs: options.idleDisconnectMs ?? options.idleGraceMs ?? 3_000,
-		});
+		pending = (async () => {
+			const presence = await registerDaemonProjectPresence(canonical, options.runtimeDir);
+			try {
+				const client = await createDaemonBrokerClient(canonical, {
+					...options,
+					cleanupWaitMs,
+					idleDisconnectMs: options.idleDisconnectMs ?? options.idleGraceMs ?? 3_000,
+				});
+				return { client, presence };
+			} catch (error) {
+				await presence.close();
+				throw error;
+			}
+		})();
 		sharedClients.set(canonical, pending);
 		// A connection that fails is not cached. `createDaemonBrokerClient` reads
 		// the runtime token and canonicalizes the project directory, and both fail
@@ -375,7 +390,7 @@ export async function daemonClientForProject(
 			cancelExitCleanup = postmortem.register("daemon-broker-clients", () => closeDaemonClients());
 		}
 	}
-	return pending;
+	return (await pending).client;
 }
 
 /** Close every project broker connection held by this veyyon process. */
@@ -384,9 +399,13 @@ export async function closeDaemonClients(): Promise<void> {
 	sharedClients.clear();
 	// One connection that never resolved must not strand the rest: settle every
 	// entry and close the ones that produced a client.
-	for (const result of await Promise.allSettled(pending)) {
-		if (result.status === "fulfilled") result.value.close();
-	}
+	await Promise.all(
+		(await Promise.allSettled(pending)).map(async result => {
+			if (result.status !== "fulfilled") return;
+			result.value.client.close();
+			await result.value.presence.close();
+		}),
+	);
 	cancelExitCleanup?.();
 	cancelExitCleanup = undefined;
 }
