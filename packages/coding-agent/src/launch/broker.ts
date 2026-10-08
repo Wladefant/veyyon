@@ -1302,7 +1302,12 @@ export class DaemonBroker {
 			this.#idleTimer = undefined;
 			void (async () => {
 				if (this.#clients.size > 0 || this.#shuttingDown) return;
-				if (await hasLiveDaemonProjectPresence(this.#runtimeDir)) {
+				// Presence protects running daemons, not an empty broker for every
+				// project a long-lived Main has ever contacted.
+				const liveDaemon = Array.from(this.#records.values()).some(
+					record => !record.spec.detached && !terminalState(record.snapshot.state),
+				);
+				if (liveDaemon && (await hasLiveDaemonProjectPresence(this.#runtimeDir))) {
 					this.#scheduleIdleShutdown();
 					return;
 				}
@@ -1314,7 +1319,7 @@ export class DaemonBroker {
 					await this.shutdown({
 						owner: "idle-reaper",
 						reason:
-							"the last veyyon client disconnected and the idle grace elapsed with no persistent daemon or live project presence remaining",
+							"the last tool socket disconnected and the idle grace elapsed with no persistent daemon and no running daemon protected by live project presence",
 						at: Date.now(),
 					});
 					return;
