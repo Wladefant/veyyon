@@ -58,11 +58,12 @@ test("an empty broker exits while its Main stays alive and its cached client rec
 	}
 }, 30000);
 
-test("idle sockets preserve a running daemon with live project presence and pending waits", async () => {
+test("a shared client preserves a daemon outside Main's startup project through idle sockets and pending waits", async () => {
 	const isolation = enterIsolatedConfigRoot("idle-running-broker");
 	const project = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-running-project-"));
 	const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-running-runtime-"));
-	const presence = await registerDaemonProjectPresence(project, runtimeDir);
+	const startupProject = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-startup-project-"));
+	const presence = await registerDaemonProjectPresence(startupProject);
 	const client = await daemonClientForProject(project, { runtimeDir, idleGraceMs: 100 });
 	try {
 		const started = await client.request({
@@ -96,5 +97,6 @@ test("idle sockets preserve a running daemon with live project presence and pend
 		isolation.restore();
 		await fs.rm(project, { recursive: true, force: true });
 		await fs.rm(runtimeDir, { recursive: true, force: true });
+		await fs.rm(startupProject, { recursive: true, force: true });
 	}
 }, 30000);

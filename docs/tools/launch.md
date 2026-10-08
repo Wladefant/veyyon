@@ -95,6 +95,8 @@ All project clients may observe the same managed process. Input is one shared st
 ## Cross-instance lifecycle
 Every veyyon session registers its process in the canonical project scope of its profile. The first `launch` call starts a detached broker over a private socket; later `launch` calls from any registered veyyon process of the same profile connect to the same broker and see the same names, logs, and state.
 
+Each process-shared client also registers its owner in the project it contacts. This keeps launched processes alive after a workdir change, even when Main started elsewhere. Closing the shared clients removes those registrations.
+
 Runtime data lives under `~/.veyyon/profiles/<profile>/run/daemons/<project-key>/`, where `<project-key>` is a hash of the profile's agent directory and the project directory:
 
 | Path | What it holds |
