@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- On Windows, embedded shell pipe readers (`read_output`, `read_output_buffered`, `read_output_bytes`) drain output using `PeekNamedPipe` readiness polling and direct synchronous reads instead of delegating to Tokio's shared blocking thread pool, preventing output loss and timeouts when the blocking pool is saturated ([#493](https://github.com/Wladefant/super-board/issues/493)).
+- On Windows, embedded shell pipe readers use `PeekNamedPipe` readiness polling instead of Tokio's shared blocking pool. Ready reads yield and check cancellation. This prevents output loss under blocking-pool saturation ([#515](https://github.com/Wladefant/veyyon/issues/515)).
 - Windows embedded `kill` refuses real signals to the host and its observed ancestors, treats signal zero as a non-delivering probe, and rejects younger processes that reuse ancestor PIDs ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - On Windows, embedded utilities accept MSYS and WSL drive aliases, preserving Unicode path components in file, script and in-place-edit operands ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - On Windows, embedded `fd` and `find` print and match forward-slash paths while filesystem actions still use the original paths ([#107](https://github.com/Wladefant/veyyon/issues/107)).
