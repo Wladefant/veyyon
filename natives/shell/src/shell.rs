@@ -1557,8 +1557,16 @@ async fn read_pipe_chunk_windows(
 	use std::{io::Read as _, os::windows::io::AsRawHandle};
 
 	loop {
+		if cancel_token.is_cancelled() {
+			return Ok(None);
+		}
 		match check_pipe_readiness(reader.as_raw_handle()) {
 			PipeReadiness::Ready(avail) => {
+				// A ready pipe must not monopolize a single-worker runtime.
+				tokio::task::yield_now().await;
+				if cancel_token.is_cancelled() {
+					return Ok(None);
+				}
 				let to_read = avail.min(buf.len());
 				match reader.read(&mut buf[..to_read]) {
 					Ok(0) => return Ok(None),

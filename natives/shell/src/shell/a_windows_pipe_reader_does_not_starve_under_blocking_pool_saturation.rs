@@ -215,3 +215,44 @@ fn execute_shell_echo_does_not_starve_when_blocking_pool_is_saturated() {
 
 	teardown_starvation(rt, starve_writers, starve_handles);
 }
+
+#[test]
+fn ready_pipe_honors_an_already_cancelled_token() {
+	use std::io::Write as _;
+	let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+	let (mut reader, mut writer) = super::pipe_to_files("ready-cancel").unwrap();
+	writer.write_all(b"x").unwrap();
+	let cancel = tokio_util::sync::CancellationToken::new();
+	cancel.cancel();
+	let mut buffer = [0u8; 1];
+	let mut polls = 0;
+	let result = runtime.block_on(super::read_pipe_chunk_windows(
+		&mut reader, &mut buffer, &cancel, &mut polls,
+	)).unwrap();
+	assert_eq!(result, None, "ready bytes must not bypass cancellation");
+}
+
+#[test]
+fn continuously_ready_pipe_yields_to_other_tasks() {
+	use std::io::Write as _;
+	let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+	let (mut reader, mut writer) = super::pipe_to_files("ready-fairness").unwrap();
+	let cancel = tokio_util::sync::CancellationToken::new();
+	runtime.block_on(async {
+		let task_cancel = cancel.clone();
+		let cancelling_task = tokio::spawn(async move { task_cancel.cancel(); });
+		let mut buffer = [0u8; 1];
+		let mut polls = 0;
+		let mut observed_cancel = false;
+		for _ in 0..100 {
+			writer.write_all(b"x").unwrap();
+			if super::read_pipe_chunk_windows(&mut reader, &mut buffer, &cancel, &mut polls)
+				.await.unwrap().is_none() {
+				observed_cancel = true;
+				break;
+			}
+		}
+		cancelling_task.await.unwrap();
+		assert!(observed_cancel, "continuously ready reads must yield to cancellation tasks");
+	});
+}
