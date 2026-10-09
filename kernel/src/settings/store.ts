@@ -914,7 +914,8 @@ export class SettingsStore {
 			} else if (allowed) {
 				changed.push({ path: key, before, after });
 				outcomes.push({ path: key, status: "applied" });
-				if (!events.has(root!)) events.set(root!, this.get(root!));
+				// Merged objects can share a layer's object, which the activation below mutates.
+				if (!events.has(root!)) events.set(root!, structuredClone(this.get(root!)));
 			} else {
 				restartRequired.push(key);
 				outcomes.push({
