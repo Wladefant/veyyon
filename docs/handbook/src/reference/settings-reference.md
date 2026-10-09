@@ -646,6 +646,8 @@ veyyon config get compaction.threshold
 |---|---|---|---|---|
 | `accounts.loadBalancing` | Account Load Balancing | boolean | `false` | Off: only the account you chose is used, and a session waits out its quota window. On: when that account hits its quota or rate limit, continue on another account of the same provider and say so. A revoked account always fails over regardless, with a notice. |
 
+For Antigravity, a provider-confirmed quota failure permits failover even when the account is pinned, if load balancing is on. The pin stays selected. A predicted quota hold alone does not override a pin.
+
 ### Services
 
 | Key | Setting | Type | Default | What it does |

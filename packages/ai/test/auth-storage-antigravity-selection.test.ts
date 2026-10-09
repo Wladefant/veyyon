@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { withAuth } from "@veyyon/ai/auth-retry";
 import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import type { OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
@@ -128,6 +129,48 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 			await removeWithRetries(tempDir);
 			tempDir = "";
 		}
+	});
+
+	test("confirmed Gemini quota failure moves a pinned request to a sibling without losing the pin", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const storage = authStorage;
+		const provider = "google-antigravity";
+		const sessionId = "confirmed-quota-pin";
+		await storage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const selectedId = storage.listStoredCredentials(provider)[0]!.id;
+		expect(storage.pinSessionCredential(provider, sessionId, selectedId)).toBe(true);
+		usageByAccount.set(
+			"acct-a",
+			createAntigravityReport({
+				accountId: "acct-a",
+				projectId: "proj-a",
+				windows: [{ counter: "google", usedFraction: 1, resetInMs: HOUR_MS }],
+			}),
+		);
+		// A usage prediction must not displace the pin before the provider refuses it.
+		expect(await storage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		const attempts: string[] = [];
+		const quota = Object.assign(
+			new Error(
+				'Cloud Code Assist API error (429): {"error":{"message":"Individual quota reached","status":"RESOURCE_EXHAUSTED","details":[{"reason":"QUOTA_EXHAUSTED"}]}}',
+			),
+			{ status: 429 },
+		);
+		const result = await withAuth(
+			storage.resolver(provider, { sessionId, modelId: "gemini-3.8-flash" }),
+			async key => {
+				attempts.push(key);
+				if (key === "api-acct-a") throw quota;
+				return "ACCOUNT-B-OK";
+			},
+		);
+		expect(result).toBe("ACCOUNT-B-OK");
+		expect(attempts).toEqual(["api-acct-a", "api-acct-b"]);
+		expect(storage.sessionCredentialRouting(provider, sessionId)?.selectedCredentialId).toBe(selectedId);
+		expect(await storage.getApiKey(provider, sessionId, { modelId: "claude-sonnet-4-5" })).toBe("api-acct-a");
 	});
 
 	test("blocks exhausted Antigravity Gemini counter without blocking healthy Claude counter", async () => {
