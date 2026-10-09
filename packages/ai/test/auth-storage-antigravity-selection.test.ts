@@ -306,4 +306,58 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		const loaded = counts.get("api-acct-loaded") ?? 0;
 		expect(fresh).toBeGreaterThan(loaded);
 	});
+
+	test("peer extended quota block preserves confirmed rotation while explicit clear defends pin from predicted holds", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const storageX = authStorage;
+		const provider = "google-antigravity";
+		const pinnedSessionId = "session-pinned-a";
+
+		await storageX.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const stored = storageX.listStoredCredentials(provider);
+		const credentialIdA = stored[0]!.id;
+
+		expect(storageX.pinSessionCredential(provider, pinnedSessionId, credentialIdA)).toBe(true);
+		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+
+		await storageX.markUsageLimitReached(provider, pinnedSessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: HOUR_MS,
+		});
+
+		const storageY = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: p => (p === "google-antigravity" ? usageProvider : undefined),
+			rankingStrategyResolver: p => (p === "google-antigravity" ? antigravityRankingStrategy : undefined),
+		});
+		await storageY.reload();
+
+		await storageY.markUsageLimitReached(provider, undefined, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: 2 * HOUR_MS,
+		});
+
+		expect(storageX.sessionCredentialRouting(provider, pinnedSessionId)?.selectedCredentialId).toBe(credentialIdA);
+		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+
+		storageX.clearCredentialBlocks(provider, credentialIdA);
+		usageByAccount.set(
+			"acct-a",
+			createAntigravityReport({
+				accountId: "acct-a",
+				projectId: "proj-a",
+				windows: [{ counter: "google", usedFraction: 1, resetInMs: 8 * HOUR_MS }],
+			}),
+		);
+		await storageX.invalidateUsageCache(provider);
+
+		const unpinnedSessionId = "session-unpinned-different";
+		expect(await storageX.getApiKey(provider, unpinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+	});
 });

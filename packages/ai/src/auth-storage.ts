@@ -303,7 +303,7 @@ export class AuthStorage {
 	/** Temporary rate-limit blocks, in memory and persisted. */
 	readonly #blocks: CredentialBlocks;
 	/** Provider-confirmed Antigravity quota holds, distinct from usage-report predictions. */
-	#confirmedAntigravityQuota = new Map<string, number>();
+	#confirmedAntigravityQuota = new Set<string>();
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
@@ -1310,6 +1310,9 @@ export class AuthStorage {
 		}
 		this.#routing.clearProviderSessionCredentials(provider);
 		this.#blocks.clearProviderBlocks(provider);
+		if (provider === "google-antigravity") {
+			this.#confirmedAntigravityQuota.clear();
+		}
 	}
 
 	/** Updates credential at index in-place (used for OAuth token refresh) */
@@ -3198,10 +3201,7 @@ export class AuthStorage {
 		if (targetIndex >= 0) {
 			this.#blocks.markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
 			if (provider === "google-antigravity") {
-				this.#confirmedAntigravityQuota.set(
-					`${targetCredentialId}:${blockScope ?? ""}`,
-					this.#blocks.getCredentialBlockedUntil(provider, providerKey, targetIndex, blockScope) ?? blockedUntil,
-				);
+				this.#confirmedAntigravityQuota.add(`${targetCredentialId}:${blockScope ?? ""}`);
 			}
 		}
 
@@ -3485,10 +3485,8 @@ export class AuthStorage {
 		if (provider === "google-antigravity" && movementAllowed && chosenIndex !== undefined) {
 			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
 			const quotaKey = `${chosenId}:${blockScope ?? ""}`;
-			const confirmedUntil = this.#confirmedAntigravityQuota.get(quotaKey);
-			if (confirmedUntil !== undefined) {
-				const heldUntil = this.#blocks.getCredentialBlockedUntil(provider, providerKey, chosenIndex, blockScope);
-				if (confirmedUntil > Date.now() && heldUntil === confirmedUntil) {
+			if (this.#confirmedAntigravityQuota.has(quotaKey)) {
+				if (this.#blocks.isCredentialBlocked(provider, providerKey, chosenIndex, blockScope)) {
 					// A real provider refusal permits movement; a predicted hold alone does not.
 					chosenIndex = undefined;
 				} else {
@@ -4611,6 +4609,14 @@ export class AuthStorage {
 		// also retires the auth-death mark: the provider, not a mark this process made, gets to say
 		// whether the grant still works.
 		this.#authDeadCredentials.delete(credentialId);
+		if (provider === "google-antigravity") {
+			const prefix = `${credentialId}:`;
+			for (const key of this.#confirmedAntigravityQuota) {
+				if (key.startsWith(prefix)) {
+					this.#confirmedAntigravityQuota.delete(key);
+				}
+			}
+		}
 
 		const stored = this.#getStoredCredentials(provider);
 		const index = stored.findIndex(entry => entry.id === credentialId);
