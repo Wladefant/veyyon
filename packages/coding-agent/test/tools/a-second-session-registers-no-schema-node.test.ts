@@ -20,6 +20,7 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { loadArktype } from "@veyyon/ai/utils/schema/arktype";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -34,6 +35,9 @@ const profile = TempDir.createSync("@schema-node-profile-");
 fs.writeFileSync(path.join(profile.path(), "ssh.json"), JSON.stringify({ hosts: { build: { host: "192.0.2.10" } } }));
 afterAll(() => profile.removeSync());
 
+// ArkType creates `$ark` when it evaluates, which the module tools import it through defers to the
+// first schema built.
+loadArktype();
 const registry = (globalThis as unknown as { $ark: { nodesByRegisteredId: Record<string, unknown> } }).$ark;
 const registeredNodes = (): number => Object.keys(registry.nodesByRegisteredId).length;
 

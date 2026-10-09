@@ -16,9 +16,10 @@
  * ArkType types costs ~18ms, which only broker request/response paths ever
  * need — the boot path must not pay it.
  */
-import { type Type, type } from "arktype";
+import type { Type } from "arktype";
 import { REMOTE_REFRESH_SENTINEL } from "../auth-storage";
 import { usageWireSchemas } from "../usage/report-wire";
+import { type } from "../utils/schema/arktype";
 import type {
 	CredentialBlockRequest,
 	CredentialBlockResponse,

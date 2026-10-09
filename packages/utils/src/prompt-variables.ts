@@ -280,7 +280,9 @@ export function analyzeTemplate(template: string, options: AnalyzeOptions = {}):
 
 	const required: TemplateVariable[] = [];
 	const optional: TemplateVariable[] = [];
-	for (const [name, list] of Array.from(sightings).sort(([a], [b]) => a.localeCompare(b))) {
+	// Code-unit order, as `paths` below: `localeCompare` builds the ICU collator on its first call,
+	// 0.2 ms and 2.2 MiB of mapped collation data at launch, for names that are identifiers.
+	for (const [name, list] of Array.from(sightings).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
 		const paths = Array.from(new Set(list.map(s => s.path))).sort();
 		const printed = list.filter(s => s.use === "interpolated");
 		const requiredWhen = dedupeGuardSets(printed.map(s => s.guards));

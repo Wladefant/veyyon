@@ -35,15 +35,13 @@ import type { AccountInventory, AccountRow } from "../../../../session/account-i
 import { accountsForProvider, selectedButRotated } from "../../../../session/account-inventory";
 import { theme } from "../../../../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
+import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
-	computeModalDims,
-	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
-	sizingForArea,
 } from "../chrome/modal-shell";
 import { fit } from "../chrome/overlay-box";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";

@@ -1,6 +1,7 @@
 import { AI_PROMPTS } from "../prompts/registry";
 import type { Message, ToolCall } from "../types";
-import { mintToolCallId, scanOutsideText, setToolArg, ThinkingSection } from "./coercion";
+import { matchClose, splitTopLevel, topLevelIndexOf } from "./bracket-walk";
+import { mintToolCallId, scanFencedThinking, scanOutsideText, setToolArg, ThinkingSection } from "./coercion";
 import { FencedThinkingScanner } from "./fenced-thinking";
 import {
 	assistantTranscriptParts,
@@ -105,14 +106,11 @@ class GeminiInbandScanner implements InbandScanner {
 	}
 
 	#consumeThinking(final: boolean, events: InbandScanEvent[]): void {
-		const result = this.#fenced!.feed(this.#buffer, final);
-		this.#buffer = result.closed ? result.rest : "";
-		this.#thinking.delta(result.thinking, events);
-		if (result.closed || final) {
-			this.#thinking.end(events);
-			this.#state = "outside";
-			this.#fenced = undefined;
-		}
+		const { buffer, closed } = scanFencedThinking(this.#fenced!, this.#buffer, final, this.#thinking, events);
+		this.#buffer = buffer;
+		if (!closed) return;
+		this.#state = "outside";
+		this.#fenced = undefined;
 	}
 
 	#consumeTool(final: boolean, events: InbandScanEvent[]): void {
@@ -144,19 +142,15 @@ function parseGeminiCalls(body: string): ParsedCall[] {
 	let i = 0;
 	const n = body.length;
 	while (i < n) {
-		const ch = body[i]!;
-		if (ch === '"' || ch === "'") {
-			i = skipString(body, i);
+		const skipped = skipPythonSpan(body, i);
+		if (skipped !== -1) {
+			i = skipped;
 			continue;
 		}
-		if (ch === "#") {
-			i = skipComment(body, i);
-			continue;
-		}
-		if (ch === "(") {
+		if (body[i] === "(") {
 			const name = identBefore(body, i);
 			if (name && name !== "print") {
-				const end = matchParen(body, i);
+				const end = matchClose(body, i, "(", ")", skipPythonSpan);
 				if (end !== -1) {
 					calls.push({ name, arguments: parsePyArgs(body.slice(i + 1, end)) });
 					i = end + 1;
@@ -179,25 +173,11 @@ function identBefore(body: string, parenIndex: number): string | undefined {
 	return /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
 }
 
-/** Index of the `)` matching the `(` at `openIndex`, skipping string contents. */
-function matchParen(body: string, openIndex: number): number {
-	let depth = 0;
-	let i = openIndex;
-	const n = body.length;
-	while (i < n) {
-		const ch = body[i]!;
-		if (ch === '"' || ch === "'") {
-			i = skipString(body, i);
-			continue;
-		}
-		if (ch === "#") {
-			i = skipComment(body, i);
-			continue;
-		}
-		if (ch === "(") depth++;
-		else if (ch === ")" && --depth === 0) return i;
-		i++;
-	}
+/** Python string literals and `#` comments: the spans a bracket walk over a call body skips. */
+function skipPythonSpan(text: string, i: number): number {
+	const ch = text[i];
+	if (ch === '"' || ch === "'") return skipString(text, i);
+	if (ch === "#") return skipComment(text, i);
 	return -1;
 }
 
@@ -255,10 +235,10 @@ function stripComments(body: string): string {
 
 function parsePyArgs(text: string): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
-	for (const segment of splitTopLevel(stripComments(text), ",")) {
+	for (const segment of splitTopLevel(stripComments(text), ",", skipPythonSpan)) {
 		const trimmed = segment.trim();
 		if (trimmed.length === 0) continue;
-		const eq = topLevelIndexOf(trimmed, "=");
+		const eq = topLevelIndexOf(trimmed, "=", skipPythonSpan);
 		if (eq === -1) continue; // positional args are not part of the convention
 		const key = trimmed.slice(0, eq).trim();
 		if (!/^[A-Za-z_]\w*$/.test(key)) continue;
@@ -287,7 +267,7 @@ function parsePyValue(raw: string): unknown {
 
 function parseList(t: string): unknown[] {
 	const inner = t.slice(1, t.endsWith("]") ? t.length - 1 : t.length);
-	return splitTopLevel(stripComments(inner), ",")
+	return splitTopLevel(stripComments(inner), ",", skipPythonSpan)
 		.map(part => part.trim())
 		.filter(part => part.length > 0)
 		.map(parsePyValue);
@@ -296,10 +276,10 @@ function parseList(t: string): unknown[] {
 function parseDict(t: string): Record<string, unknown> {
 	const inner = t.slice(1, t.endsWith("}") ? t.length - 1 : t.length);
 	const out: Record<string, unknown> = {};
-	for (const segment of splitTopLevel(stripComments(inner), ",")) {
+	for (const segment of splitTopLevel(stripComments(inner), ",", skipPythonSpan)) {
 		const trimmed = segment.trim();
 		if (trimmed.length === 0) continue;
-		const colon = topLevelIndexOf(trimmed, ":");
+		const colon = topLevelIndexOf(trimmed, ":", skipPythonSpan);
 		if (colon === -1) continue;
 		const keyRaw = trimmed.slice(0, colon).trim();
 		const key = stringPrefixLength(keyRaw) !== undefined ? decodeString(keyRaw) : keyRaw;
@@ -425,58 +405,6 @@ function unescapePythonString(s: string): string {
 		}
 	}
 	return out;
-}
-
-/** Split on `sep` at bracket depth 0, skipping string literals. */
-function splitTopLevel(text: string, sep: string): string[] {
-	const parts: string[] = [];
-	let depth = 0;
-	let start = 0;
-	let i = 0;
-	const n = text.length;
-	while (i < n) {
-		const ch = text[i]!;
-		if (ch === '"' || ch === "'") {
-			i = skipString(text, i);
-			continue;
-		}
-		if (ch === "#") {
-			i = skipComment(text, i);
-			continue;
-		}
-		if (ch === "(" || ch === "[" || ch === "{") depth++;
-		else if (ch === ")" || ch === "]" || ch === "}") depth--;
-		else if (depth === 0 && ch === sep) {
-			parts.push(text.slice(start, i));
-			start = i + 1;
-		}
-		i++;
-	}
-	parts.push(text.slice(start));
-	return parts;
-}
-
-/** First index of `ch` at bracket depth 0, skipping string literals. */
-function topLevelIndexOf(text: string, ch: string): number {
-	let depth = 0;
-	let i = 0;
-	const n = text.length;
-	while (i < n) {
-		const c = text[i]!;
-		if (c === '"' || c === "'") {
-			i = skipString(text, i);
-			continue;
-		}
-		if (c === "#") {
-			i = skipComment(text, i);
-			continue;
-		}
-		if (c === "(" || c === "[" || c === "{") depth++;
-		else if (c === ")" || c === "]" || c === "}") depth--;
-		else if (depth === 0 && c === ch) return i;
-		i++;
-	}
-	return -1;
 }
 
 function renderToolCall(call: ToolCall, options: DialectRenderOptions = {}): string {

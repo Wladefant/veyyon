@@ -105,6 +105,14 @@ In session mode:
 - if execution fails because the subprocess died, the kernel is replaced and the code is retried once
 - concurrent resets for the same session key coalesce: a reset already in flight is awaited instead of starting another, and runs queued behind it proceed on the freshly-restarted kernel
 
+
+## Kernel ownership and teardown
+
+The last owner releases the kernel on session disposal. Shared kernels remain alive while another owner uses them.
+Cancelled startup must release a kernel that becomes ready after cancellation.
+Python runners monitor their host process. On Windows, each runner owns a kill-on-close job containing its descendants.
+Host death, runner exit, and forced shutdown therefore stop the owned tree, not only the wrapper.
+Kernel spawns always hide Windows console windows.
 ## 4) Environment/session variable injection
 
 Kernel startup and per-execution environment patching can receive:

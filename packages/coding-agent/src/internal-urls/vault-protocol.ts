@@ -258,6 +258,7 @@ export async function spawnObsidian(
 		cmd: [bin, ...args],
 		stdout: "pipe",
 		stderr: "pipe",
+		windowsHide: true,
 	});
 	adoptIntoPrimarySessionCpuBudget(proc.pid);
 	const stdout = readPipeText(proc.stdout);

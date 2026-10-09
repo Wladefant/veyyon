@@ -19,9 +19,10 @@ import type {
 	ToolTier,
 } from "@veyyon/agent-core";
 import type { Static } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { formatCount, lazy, prompt } from "@veyyon/utils";
 import type { ToolViewRenderer } from "@veyyon/view";
-import { type } from "arktype";
+import type { type as arktype } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { MAIN_AGENT_ID } from "../../registry/agent-registry";
 import {
@@ -96,7 +97,7 @@ function textResult(text: string, details: VibeToolDetails): AgentToolResult<Vib
 	return { content: [{ type: "text", text }], details };
 }
 
-abstract class BaseVibeTool<TSchema extends type.Any> implements AgentTool<TSchema, VibeToolDetails> {
+abstract class BaseVibeTool<TSchema extends arktype.Any> implements AgentTool<TSchema, VibeToolDetails> {
 	readonly strict = true;
 	readonly description: string;
 	readonly view: ToolViewRenderer<Static<TSchema>, AgentToolResult<VibeToolDetails, TSchema>>;

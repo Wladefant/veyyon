@@ -208,6 +208,8 @@ async function installOnnxRuntimeCudaProviders(packageDir: string, runtimeDir: s
 		env: { ...Bun.env, BUN_BE_BUN: "1", ONNXRUNTIME_NODE_INSTALL: ONNX_RUNTIME_CUDA_INSTALL },
 		stdout: "pipe",
 		stderr: "pipe",
+		windowsHide: true,
+		timeout: 60_000,
 	});
 	const [stdout, stderr, exitCode] = await Promise.all([
 		readPipeText(proc.stdout as ReadableStream<Uint8Array> | null),

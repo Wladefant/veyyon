@@ -9,6 +9,7 @@
 - 12 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The extraction client waits between fallback models through `scheduler.wait` from `node:timers/promises`, the wait its rate-limit retries use; the delay is unchanged.
+- The binary vector store and in-memory binary index hold their connection flag, table initializer and backing arrays in `#private` fields; behavior is unchanged.
 
 ## [1.5.0] - 2026-09-18
 

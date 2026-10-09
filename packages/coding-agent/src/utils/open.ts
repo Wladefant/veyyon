@@ -96,7 +96,7 @@ export function openPath(urlOrPath: string): void {
 	}
 	let child: Bun.Subprocess | undefined;
 	try {
-		child = Bun.spawn(cmd, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+		child = Bun.spawn(cmd, { stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true });
 	} catch (error) {
 		// Spawn threw synchronously (missing binary, denied exec, sandbox
 		// restriction, …). Best-effort: log so the failure isn't invisible while

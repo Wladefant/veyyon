@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { clampLow, lazy } from "@veyyon/utils";
-import { type } from "arktype";
 import { MNEMOPI_MEMORY_EDIT_OPERATIONS } from "../../memory/mnemopi/verbs";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";

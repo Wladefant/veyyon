@@ -181,7 +181,7 @@ interface AssemblyCursor {
 	row: number;
 	/** End of the leading rows byte-identical to the previous render. */
 	stableRows: number;
-	/** Whether every block so far reused its rows at the same offset, leaving the persistent array untouched up to `row`. */
+	/** Whether every row emitted so far equals the row the previous render held at the same index, leaving the persistent array untouched up to `row`. */
 	chainStable: boolean;
 	/** First unfinalized child of this render, or -1 while none has been found. */
 	liveStartIndex: number;
@@ -554,10 +554,9 @@ export class TranscriptContainer
 		this.#segments = EMPTY_SEGMENTS;
 		const stableFloorBefore = this.#stableRowsFloor;
 		this.#stableRowsFloor = 0;
-		// Stability requires the same width and, per segment, the same block at
-		// the same offset returning the same array reference. The first
-		// divergence truncates the persistent array there; everything after
-		// re-pushes.
+		// Stability requires the same width and, row by row, the same string at
+		// the same index as the previous render. The first divergence truncates
+		// the persistent array there; everything after re-pushes.
 		cursor.chainStable = this.#renderWidth === width;
 		this.#renderWidth = width;
 		// Entry-unstable (width change): the divergence truncation inside the
@@ -702,7 +701,7 @@ export class TranscriptContainer
 			const compactable = finalized && previous?.finalized !== false && previous?.version === version;
 
 			let sep = 0;
-			if (contribution.length === 0) this.#placeEmptyBlock(i, reused, lines);
+			if (contribution.length === 0) this.#placeEmptyBlock(i);
 			else sep = this.#placeBlockRows(i, child, reused, raw, contribution, lines);
 			const rowCount = sep + contribution.length;
 			segments[i] = reuseOrCreateSegment(
@@ -725,21 +724,16 @@ export class TranscriptContainer
 
 	/**
 	 * Empty (or stripped-to-nothing) children contribute nothing and never
-	 * affect spacing. An empty still-live child still gates the commit
-	 * boundary at its position: if it later gains rows, it pushes
+	 * affect spacing, so the stable chain runs on through them: the rows below
+	 * are compared where they land. An empty still-live child still gates the
+	 * commit boundary at its position: if it later gains rows, it pushes
 	 * everything below it.
 	 */
-	#placeEmptyBlock(index: number, reused: BlockSegment | undefined, lines: string[]): void {
+	#placeEmptyBlock(index: number): void {
 		const cursor = this.#cursor;
-		const row = cursor.row;
 		if (index === cursor.liveStartIndex) {
-			this.#nativeScrollbackLiveRegionStart = row;
+			this.#nativeScrollbackLiveRegionStart = cursor.row;
 		}
-		if (cursor.chainStable && !(reused !== undefined && reused.rowCount === 0 && reused.startRow === row)) {
-			cursor.chainStable = false;
-			lines.length = row;
-		}
-		if (cursor.chainStable) cursor.stableRows = row;
 	}
 
 	/**
@@ -747,6 +741,13 @@ export class TranscriptContainer
 	 * return the separator's row count. Rows the stable chain proves unchanged
 	 * stay in place; the first divergence truncates the frame there and every
 	 * row from it on is pushed.
+	 *
+	 * A block that re-rendered (a streaming answer growing at its tail) still
+	 * repeats most of its previous rows, so while the chain is stable its rows
+	 * are compared with the ones the last frame holds at the same positions and
+	 * the chain runs on through every identical row. The engine then re-reads
+	 * the rows from the first difference down rather than every row of a reply
+	 * that streams in one block.
 	 */
 	#placeBlockRows(
 		index: number,
@@ -784,17 +785,29 @@ export class TranscriptContainer
 		}
 
 		const rowCount = sep + contribution.length;
-		const stable = cursor.chainStable && reused !== undefined && reused.startRow === row && reused.sep === sep;
-		if (stable) {
-			cursor.stableRows = row + rowCount;
-		} else {
-			if (cursor.chainStable) {
-				cursor.chainStable = false;
-				lines.length = row;
-			}
-			if (sep) lines.push("");
-			for (let j = 0; j < contribution.length; j++) lines.push(contribution[j]!);
+		const end = row + rowCount;
+		if (cursor.chainStable && reused !== undefined && reused.startRow === row && reused.sep === sep) {
+			cursor.stableRows = end;
+			return sep;
 		}
+		let at = row;
+		if (cursor.chainStable) {
+			const held = Math.min(lines.length, end);
+			if (sep && at < held && lines[at] === "") at++;
+			if (at - row === sep) {
+				const base = row + sep;
+				while (at < held && lines[at] === contribution[at - base]) at++;
+			}
+			cursor.stableRows = at;
+			if (at === end) return sep;
+			cursor.chainStable = false;
+			lines.length = at;
+		}
+		if (at === row && sep) {
+			lines.push("");
+			at++;
+		}
+		for (let j = at - row - sep; j < contribution.length; j++) lines.push(contribution[j]!);
 		return sep;
 	}
 

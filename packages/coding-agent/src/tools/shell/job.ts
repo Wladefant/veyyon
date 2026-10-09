@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, lazy, prompt } from "@veyyon/utils";
-import { type } from "arktype";
 import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../../async";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";

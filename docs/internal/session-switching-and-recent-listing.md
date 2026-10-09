@@ -34,10 +34,10 @@ It focuses on current implementation behavior, including fallback paths and cave
 There are two different listing pipelines:
 
 1. `getRecentSessions(sessionDir, limit = 4)` (welcome/summary view)
-   - Runs the same per-file scan as `list` without the status tail: a 4KB prefix, escalating once to a bounded 1 MiB read (`SESSION_LIST_ESCALATED_PREFIX_BYTES`) when the prefix hides the first user message in a larger file. Unchanged files are served from the directory's `.session-list-index.json`.
+   - Stats every file, then scans files newest first by `mtime` and stops once `limit` non-blank sessions are found; files sharing one `mtime` are scanned together so the header-timestamp and path tiebreaks apply. Each scan is the per-file scan of `list` without the status tail: a 4KB prefix, escalating once to a bounded 1 MiB read (`SESSION_LIST_ESCALATED_PREFIX_BYTES`) when the prefix hides the first user message in a larger file. The directory's `.session-list-index.json` is neither read nor written.
    - Skips blank sessions (no title and no user message), so the launch's own empty file never appears.
    - Returns lightweight `RecentSessionInfo` (`path`, `name`, `timeAgo`); `name` and `timeAgo` are computed eagerly (`sessionDisplayName` / `formatTimeAgo`), not lazy getters.
-   - Sorts by file `mtime` descending, then header timestamp, then path.
+   - Returns the first `limit` rows of the order `list` uses: file `mtime` descending, then header timestamp, then path.
 
 2. `SessionManager.list(...)` / `SessionManager.listAll()` (resume pickers and ID matching)
    - Reads a 4KB prefix plus, for `list`/`listAll` (which pass `withStatus`), a bounded 32 KiB tail in one `readTextSlices(...)` call per file, not the full JSONL file; when the prefix contains no user message in a larger file, one bounded escalated read of up to 1 MiB recovers the display fields.
@@ -71,7 +71,7 @@ For `SessionInfo` list entries:
    - a breadcrumb naming a spawned agent's transcript is resolved to its interactive root session
 3. If the breadcrumb cwd matches the current cwd (resolved path compare), use the breadcrumb session
 4. Otherwise, if the breadcrumb's cwd is absent (moved/renamed dir; an unreachable cwd is not absent) and the current directory has no sessions of its own, re-root the breadcrumb session into the current directory (`SessionManager.open` + `moveTo`) instead of starting fresh
-5. Otherwise use the newest file by mtime in the session dir (`findMostRecentSession`)
+5. Otherwise use the newest session in the session dir (`findMostRecentSession`: the first row of `list`'s order, found by scanning files newest first by mtime and stopping at the first readable one)
 6. If none found, create a new session
 
 Terminal ID derivation prefers TTY path and falls back to env-based identifiers (`ZELLIJ_PANE_ID`, `TMUX_PANE`, `CMUX_SURFACE_ID`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`, `TERM_SESSION_ID`, `WT_SESSION`).
@@ -164,7 +164,7 @@ Empty-list render behavior:
 
 ## Runtime switch execution (`AgentSession.switchSession`)
 
-`switchSession(sessionPath)` is the core in-process switch path. It runs inside `#runScopeTransition`.
+`switchSession(sessionPath)` is the core in-process switch path. It runs inside `SessionScope.run` (`session/runtime/session-scope.ts`), which starts it after every cwd and session transition started before it.
 
 Lifecycle/state transition:
 
@@ -182,7 +182,7 @@ Lifecycle/state transition:
    - updates session file pointer and writes terminal breadcrumb
    - keeps payloads of record-only entries unreachable from the branch on disk
    - if the file is missing or empty: initializes a new session at that path and rewrites header
-10. reassert the recorded cwd when reachable; when the cwd changed, rescope cwd-bound runtime state (`#rescopeToCwd`) and wire path roots
+10. reassert the recorded cwd when reachable; when the cwd changed, rescope cwd-bound runtime state (`SessionScope.rescope`) and wire path roots
 11. for a different session: clear the fresh provider session id and adopt the target header's prompt cache key; update `agent.sessionId` (`ProviderSessions.sync()`) and rekey memory
 12. rebuild display context via `buildDisplaySessionContext()`
 13. restore persisted/discovered MCP tool selections, rebuild active tools/system prompt when discovery is enabled, and rehydrate checkpoint state from the branch
@@ -262,4 +262,4 @@ Switch/open also throws on I/O failures (permission errors, rewrite failures, et
 - First match in modified-descending order wins; there is no ambiguity UI if multiple sessions share a prefix.
 - Prefix-listing metadata is intentionally lightweight, so search text may not include messages outside the scanned window (the first 4KB, or the 1 MiB escalated read), and each text field is cut to 4,096 characters.
 
-*Verified against `9a035acb63` on 2026-09-30.*
+*Verified against `42d40c0cd4` on 2026-10-05.*

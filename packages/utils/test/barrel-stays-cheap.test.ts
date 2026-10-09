@@ -105,8 +105,15 @@ const reachable = moduleReach(BARREL);
  * close a cycle with `prompt-variables.ts`. The first imports nothing that runs and the second only
  * the `handlebars/runtime` package entry, so the barrel pays two modules and no edge, and a binary
  * session evaluates no Handlebars compiler module.
+ *
+ * RE-MEASURED 2026-10-04 at 91. The new module is `local-time.ts`, which reads an instant's local
+ * calendar and clock fields from the C library's `localtime_r` so the logger's line stamps and day
+ * file name build no ICU time zone cache before a launch is ready. `logger.ts` is exported from the
+ * barrel and `log-file.ts` is on its graph, and both read through it, so a subpath cannot move it off
+ * the graph. Its one import is `bun:ffi`, which `process-liveness.ts` and `stderr-guard.ts` already
+ * import: `moduleReach("local-time.ts")` is 1, so the barrel pays one module and no edge.
  */
-const BARREL_CEILING = 90;
+const BARREL_CEILING = 91;
 
 describe("the @veyyon/utils barrel", () => {
 	/** The number that multiplies by six hundred realms. */

@@ -9,9 +9,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { AgentTool } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { isRecord, lazy } from "@veyyon/utils";
 import type { TextBlockView, ViewSpan, ViewTone } from "@veyyon/view";
-import { type } from "arktype";
 import { subprocessToolRegistry } from "../../task/subprocess-tool-registry";
 import type { ReviewFinding } from "../../task/types";
 import type { ThemeColor } from "../../theme/theme";

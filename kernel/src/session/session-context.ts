@@ -196,7 +196,12 @@ function emptySessionContext(): SessionContext {
 	};
 }
 
-export function walkBranchPath(byId: Map<string, SessionEntry>, leaf?: SessionEntry): SessionEntry[] {
+/** Where a branch walk finds an entry by id: `SessionEntryIndex`, or a `Map` built for one walk. */
+export interface SessionEntryLookup {
+	get(id: string): SessionEntry | undefined;
+}
+
+export function walkBranchPath(byId: SessionEntryLookup, leaf?: SessionEntry): SessionEntry[] {
 	const path: SessionEntry[] = [];
 	const seen = new Set<string>();
 	let current = leaf;
@@ -220,7 +225,7 @@ export function walkBranchPath(byId: Map<string, SessionEntry>, leaf?: SessionEn
 export function resolveContextLeaf(
 	entries: readonly SessionEntry[],
 	leafId: string | null | undefined,
-	byId: ReadonlyMap<string, SessionEntry>,
+	byId: SessionEntryLookup,
 ): SessionEntry | undefined {
 	if (leafId === null) return undefined;
 	return (leafId ? byId.get(leafId) : undefined) ?? entries[entries.length - 1];
@@ -229,17 +234,15 @@ export function resolveContextLeaf(
 export function buildSessionContext(
 	entries: SessionEntry[],
 	leafId?: string | null,
-	byId?: Map<string, SessionEntry>,
+	byId?: SessionEntryLookup,
 	options?: BuildSessionContextOptions,
 ): SessionContext {
 	if (leafId === null) return emptySessionContext();
 
-	// Build uuid index if not available
 	if (!byId) {
-		byId = new Map<string, SessionEntry>();
-		for (const entry of entries) {
-			byId.set(entry.id, entry);
-		}
+		const built = new Map<string, SessionEntry>();
+		for (const entry of entries) built.set(entry.id, entry);
+		byId = built;
 	}
 
 	const leaf = resolveContextLeaf(entries, leafId, byId);

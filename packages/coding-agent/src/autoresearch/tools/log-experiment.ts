@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, formatCount, lazy, truncate } from "@veyyon/utils";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { TextBlockView, ViewSpan, ViewTone } from "@veyyon/view";
-import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import * as git from "../../utils/git";
 import { leaveArm } from "../arm-model";

@@ -34,15 +34,13 @@ import {
 	getConfiguredThinkingLevelMetadata,
 } from "../../../../thinking";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
+import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
-	computeModalDims,
-	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
-	sizingForArea,
 } from "../chrome/modal-shell";
 import { fit } from "../chrome/overlay-box";
 import { renderSegmentTrack } from "../chrome/segment-track";

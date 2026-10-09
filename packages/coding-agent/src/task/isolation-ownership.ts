@@ -34,6 +34,9 @@ export const ISOLATION_OWNER_FILE = ".veyyon-owner.json";
  */
 export const REGISTRATION_OWNER_FILE = "veyyon-owner";
 
+/** Where to find the manual recovery steps for a slot that fail-closed refusal left in place. */
+export const SLOT_RECOVERY_HINT = 'see docs/tools/task.md, "Slot left after a crash during setup"';
+
 export interface IsolationOwnerRecord {
 	pid: number;
 	startIdentity: string | null;
@@ -118,7 +121,6 @@ export async function readRetainedMountBackend(dir: string): Promise<natives.Iso
 	throw new Error(`Invalid retained mount metadata in ${dir}: unknown backend ${backend}`);
 }
 
-/**
 /**
  * Write a process ownership record during atomic slot claim before native
  * backend initialization.
@@ -403,12 +405,16 @@ export const ISOLATION_CLAIM_FILE = ".veyyon-isolation-claim.json";
 
 /**
  * Claim `baseDir` for the calling process. The directory is built under a
- * private sibling name with its marker already inside, then renamed into place,
- * so the slot never exists unmarked. Rename onto an occupied slot fails, which
+ * private directory outside the scanned root with its marker already inside,
+ * then renamed into place. Rename onto an occupied slot fails, which
  * refuses replacement; the private name is removed on any failure.
+ * The caller holds the lifecycle lock through this publication and native setup.
  */
 export async function claimIsolationSlot(baseDir: string): Promise<void> {
-	const staging = `${baseDir}.claim-${process.pid}-${Math.floor(Math.random() * 2 ** 32).toString(16)}`;
+	const staging = path.join(
+		path.dirname(await getIsolationLifecycleLockPath(baseDir)),
+		`${path.basename(baseDir)}.claim-${crypto.randomUUID()}`,
+	);
 	await fs.mkdir(staging);
 	try {
 		const marker = { pid: process.pid, startIdentity: getProcessStartIdentity(process.pid) };

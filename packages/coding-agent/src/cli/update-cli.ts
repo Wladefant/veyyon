@@ -1660,7 +1660,7 @@ export interface SourceUpdateStepResult {
 export type SourceUpdateExec = (step: SourceUpdateStep) => Promise<SourceUpdateStepResult>;
 
 const defaultSourceUpdateExec: SourceUpdateExec = async step => {
-	const proc = Bun.spawn(step.command, { cwd: step.cwd, stdout: "pipe", stderr: "pipe" });
+	const proc = Bun.spawn(step.command, { cwd: step.cwd, stdout: "pipe", stderr: "pipe", windowsHide: true });
 	const [stdout, stderr, exitCode] = await Promise.all([
 		readPipeText(proc.stdout),
 		readPipeText(proc.stderr),

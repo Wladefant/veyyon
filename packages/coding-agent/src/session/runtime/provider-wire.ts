@@ -19,7 +19,7 @@
  * 5. The caller's transform when one is configured, secret obfuscation otherwise.
  */
 import type { Context, Model } from "@veyyon/ai";
-import { elidedSignatureBytes, signaturePolicy } from "@veyyon/ai/providers/google-shared";
+import { elidedSignatureBytes, signaturePolicy } from "@veyyon/ai/providers/google-thought-signatures";
 import type { Settings } from "../../config/settings";
 import type { SecretRuntimeLease } from "../agent-session-types";
 import { replaceLostBlobPayloads } from "../messages";

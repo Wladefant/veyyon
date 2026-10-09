@@ -95,6 +95,12 @@ describe("Provider Video Handling Sweep", () => {
 			"cursor-liveness.ts",
 			"gateway-schema-type.ts", // ArkType `type` parser for the gateway request schemas; no message content.
 			"openai-configuration-update.ts", // Reasoning-effort transition bookkeeping for cached Responses prefixes; no message content.
+			"openai-stable-ids.ts", // Stable item-id bookkeeping for Responses replay; no message content converter.
+			"google-thought-signatures.ts", // Thought-signature bookkeeping for Gemini replay; no message content converter.
+			"server-compaction-transport.ts", // Server compaction request transport; no message content converter.
+			"claude-device-id.ts", // Claude device identity helper; no message content.
+			"anthropic-session-state.ts", // Anthropic per-session provider state; no message content converter.
+			"azure-deployment-names.ts", // Azure deployment name resolution; no message content.
 		]);
 
 		const uncovered = tsFiles.filter(file => !testedOrAccountedFor.has(file));

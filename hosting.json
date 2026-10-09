@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "project": "veyyon",
+  "stage": "greenfield",
+  "dns": {
+    "provider": "none"
+  },
+  "components": [],
+  "supabase": {
+    "in_use": false
+  },
+  "next_migration_step": null,
+  "exempt": {
+    "reason": "CLI harness with no web hosting or cloud services"
+  }
+}

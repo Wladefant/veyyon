@@ -23,6 +23,7 @@ async function spawnCapture(cmd: string[], options: { input?: string; timeoutMs?
 		stdout: "pipe",
 		stderr: "ignore",
 		stdin: options.input !== undefined ? Buffer.from(options.input) : "ignore",
+		windowsHide: true,
 	});
 	let timedOut = false;
 	const timer = setTimeout(() => {
@@ -218,6 +219,7 @@ async function runPowerShell(args: readonly string[], failureLog: string): Promi
 			stdout: "pipe",
 			stderr: "ignore",
 			stdin: "ignore",
+			windowsHide: true,
 		});
 		const timer = setTimeout(() => proc.kill(), POWERSHELL_TIMEOUT_MS);
 		let stdout = "";

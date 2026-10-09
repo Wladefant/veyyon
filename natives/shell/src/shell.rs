@@ -23,7 +23,7 @@ use brush_core::{
 use bytes::Bytes;
 use clap::Parser;
 use flume::Sender;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use tokio::io::AsyncReadExt as _;
 use tokio::{sync::Mutex as TokioMutex, time};
 use tokio_util::sync::CancellationToken;
@@ -1502,6 +1502,115 @@ async fn run_shell_command_streams(
 	Ok((result, working_dir))
 }
 
+#[cfg(windows)]
+enum PipeReadiness {
+	Ready(usize),
+	Empty,
+	Eof,
+	NotAPipe,
+}
+
+#[cfg(windows)]
+fn check_pipe_readiness(handle: std::os::windows::io::RawHandle) -> PipeReadiness {
+	use windows_sys::Win32::{
+		Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED, GetLastError},
+		System::Pipes::PeekNamedPipe,
+	};
+
+	let mut bytes_available = 0u32;
+	// SAFETY: handle is an open OS handle and lpTotalBytesAvail points to a local u32.
+	let res = unsafe {
+		PeekNamedPipe(
+			handle as _,
+			std::ptr::null_mut(),
+			0,
+			std::ptr::null_mut(),
+			&mut bytes_available,
+			std::ptr::null_mut(),
+		)
+	};
+
+	if res != 0 {
+		if bytes_available > 0 {
+			PipeReadiness::Ready(bytes_available as usize)
+		} else {
+			PipeReadiness::Empty
+		}
+	} else {
+		// SAFETY: GetLastError queries the thread-local last Win32 error code.
+		let err = unsafe { GetLastError() };
+		if err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED || err == ERROR_NO_DATA {
+			PipeReadiness::Eof
+		} else {
+			PipeReadiness::NotAPipe
+		}
+	}
+}
+
+#[cfg(windows)]
+async fn read_pipe_chunk_windows(
+	reader: &mut fs::File,
+	buf: &mut [u8],
+	cancel_token: &CancellationToken,
+	poll_count: &mut u32,
+) -> io::Result<Option<usize>> {
+	use std::{io::Read as _, os::windows::io::AsRawHandle};
+
+	loop {
+		if cancel_token.is_cancelled() {
+			return Ok(None);
+		}
+		match check_pipe_readiness(reader.as_raw_handle()) {
+			PipeReadiness::Ready(avail) => {
+				// A ready pipe must not monopolize a single-worker runtime.
+				tokio::task::yield_now().await;
+				if cancel_token.is_cancelled() {
+					return Ok(None);
+				}
+				let to_read = avail.min(buf.len());
+				match reader.read(&mut buf[..to_read]) {
+					Ok(0) => return Ok(None),
+					Ok(n) => {
+						*poll_count = 0;
+						return Ok(Some(n));
+					}
+					Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+					Err(e) if e.raw_os_error() == Some(109) => return Ok(None),
+					Err(e) => return Err(e),
+				}
+			}
+			PipeReadiness::Empty => {
+				if *poll_count == 0 {
+					tokio::select! {
+						() = cancel_token.cancelled() => return Ok(None),
+						() = tokio::task::yield_now() => {}
+					}
+				} else {
+					let delay = match *poll_count {
+						1..=5 => Duration::from_millis(1),
+						6..=20 => Duration::from_millis(2),
+						_ => Duration::from_millis(5),
+					};
+					tokio::select! {
+						() = cancel_token.cancelled() => return Ok(None),
+						() = time::sleep(delay) => {}
+					}
+				}
+				*poll_count = poll_count.saturating_add(1);
+			}
+			PipeReadiness::Eof => return Ok(None),
+			PipeReadiness::NotAPipe => {
+				match reader.read(buf) {
+					Ok(0) => return Ok(None),
+					Ok(n) => return Ok(Some(n)),
+					Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+					Err(e) => return Err(e),
+				}
+			}
+		}
+	}
+}
+
 async fn read_output_bytes(
 	reader: fs::File,
 	sink: Option<Sender<Bytes>>,
@@ -1514,7 +1623,11 @@ async fn read_output_bytes(
 	let Ok(reader) = register_nonblocking_pipe(reader) else {
 		return;
 	};
-	#[cfg(not(unix))]
+	#[cfg(windows)]
+	let mut reader = reader;
+	#[cfg(windows)]
+	let mut poll_count = 0u32;
+	#[cfg(not(any(unix, windows)))]
 	let mut reader = tokio::fs::File::from_std(reader);
 
 	loop {
@@ -1535,7 +1648,13 @@ async fn read_output_bytes(
 				Err(_would_block) => continue,
 			}
 		};
-		#[cfg(not(unix))]
+		#[cfg(windows)]
+		let Ok(Some(n)) =
+			read_pipe_chunk_windows(&mut reader, &mut buf, &cancel_token, &mut poll_count).await
+		else {
+			break;
+		};
+		#[cfg(not(any(unix, windows)))]
 		let n = {
 			let read_future = reader.read(&mut buf);
 			tokio::pin!(read_future);
@@ -1834,9 +1953,13 @@ async fn read_output(
 	let Ok(reader) = register_nonblocking_pipe(reader) else {
 		return;
 	};
-	#[cfg(not(unix))]
+	#[cfg(windows)]
+	let mut reader = reader;
+	#[cfg(windows)]
+	let mut poll_count = 0u32;
+	#[cfg(not(any(unix, windows)))]
 	let reader = tokio::fs::File::from_std(reader);
-	#[cfg(not(unix))]
+	#[cfg(not(any(unix, windows)))]
 	tokio::pin!(reader);
 
 	loop {
@@ -1856,7 +1979,13 @@ async fn read_output(
 				Err(_would_block) => continue,
 			}
 		};
-		#[cfg(not(unix))]
+		#[cfg(windows)]
+		let Ok(Some(n)) =
+			read_pipe_chunk_windows(&mut reader, &mut buf, &cancel_token, &mut poll_count).await
+		else {
+			break;
+		};
+		#[cfg(not(any(unix, windows)))]
 		let n = {
 			let read_future = reader.read(&mut buf);
 			tokio::pin!(read_future);
@@ -1903,9 +2032,13 @@ async fn read_output_buffered(
 	let Ok(reader) = register_nonblocking_pipe(reader) else {
 		return BufferedOutput { text: String::new(), input_bytes: 0, exceeded: true };
 	};
-	#[cfg(not(unix))]
+	#[cfg(windows)]
+	let mut reader = reader;
+	#[cfg(windows)]
+	let mut poll_count = 0u32;
+	#[cfg(not(any(unix, windows)))]
 	let reader = tokio::fs::File::from_std(reader);
-	#[cfg(not(unix))]
+	#[cfg(not(any(unix, windows)))]
 	tokio::pin!(reader);
 
 	loop {
@@ -1925,7 +2058,13 @@ async fn read_output_buffered(
 				Err(_would_block) => continue,
 			}
 		};
-		#[cfg(not(unix))]
+		#[cfg(windows)]
+		let Ok(Some(n)) =
+			read_pipe_chunk_windows(&mut reader, &mut buf, &cancel_token, &mut poll_count).await
+		else {
+			break;
+		};
+		#[cfg(not(any(unix, windows)))]
 		let n = {
 			let read_future = reader.read(&mut buf);
 			tokio::pin!(read_future);
@@ -4335,7 +4474,6 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(matches!(reason, AbortReason::Signal));
 	}
 
-	#[cfg(unix)]
 	#[tokio::test]
 	async fn read_output_stops_when_cancelled_before_pipe_eof() {
 		let (reader, _writer) = pipe_to_files("test").expect("test pipe should be created");
@@ -4925,3 +5063,5 @@ mod a_signal_never_reaches_the_host_or_its_ancestors;
 
 #[cfg(all(test, windows))]
 mod a_windows_signal_preserves_its_host_and_ancestry;
+#[cfg(all(test, windows))]
+mod a_windows_pipe_reader_does_not_starve_under_blocking_pool_saturation;

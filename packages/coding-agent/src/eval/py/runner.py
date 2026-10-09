@@ -49,6 +49,92 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
+
+def _guard_host_lifetime() -> None:
+    """Bind this runner and its descendants to the host's lifetime."""
+    parent_pid = os.getppid()
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        dll = ctypes.WinDLL("kernel32", use_last_error=True)
+        dll.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        dll.OpenProcess.restype = wintypes.HANDLE
+        dll.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        dll.CreateJobObjectW.restype = wintypes.HANDLE
+        dll.GetCurrentProcess.restype = wintypes.HANDLE
+        dll.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        dll.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        dll.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        dll.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        class BasicLimit(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class ExtendedLimit(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimit),
+                ("IoInfo", ctypes.c_uint64 * 6),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        # Only this process owns the handle. Children cannot inherit it.
+        job = dll.CreateJobObjectW(None, None)
+        limits = ExtendedLimit()
+        limits.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not dll.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            error = ctypes.get_last_error()
+            dll.CloseHandle(job)
+            raise ctypes.WinError(error)
+        if not dll.AssignProcessToJobObject(job, dll.GetCurrentProcess()):
+            error = ctypes.get_last_error()
+            dll.CloseHandle(job)
+            raise ctypes.WinError(error)
+        parent = dll.OpenProcess(0x100000, False, parent_pid)  # SYNCHRONIZE, pinned process identity
+        if not parent:
+            os._exit(1)
+
+        def watch() -> None:
+            try:
+                while dll.WaitForSingleObject(parent, 500) == 258:
+                    pass
+            finally:
+                dll.CloseHandle(parent)
+            os._exit(0)  # Closing our job handle also ends every descendant.
+    else:
+        import atexit
+
+        def end_owned_group() -> None:
+            # The host starts POSIX kernels detached. Never signal an inherited group.
+            if os.getpgrp() == os.getpid():
+                os.killpg(os.getpid(), signal.SIGKILL)
+
+        atexit.register(end_owned_group)
+        def watch() -> None:
+            while os.getppid() == parent_pid:
+                time.sleep(0.5)
+            end_owned_group()
+            os._exit(0)
+
+    threading.Thread(target=watch, name="veyyon-host-lifetime", daemon=True).start()
+
+
+
 # ---------------------------------------------------------------------------
 # Frame writer
 # ---------------------------------------------------------------------------
@@ -580,6 +666,7 @@ def _magic_pip(args: str) -> None:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     installed_packages: list[str] = []
 
@@ -784,6 +871,7 @@ def _run_shell_body(body: str, *, shell_arg: str) -> int:
         [shell_arg, "-c", body],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     _stream_process_output(proc)
     proc.wait()
@@ -826,6 +914,7 @@ def __veyyon_shell(cmd: str) -> _ShellResult:
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     capture = _BoundedTextCapture(
         _SHELL_RESULT_CAPTURE_BYTES, _SHELL_OUTPUT_MAX_LINES, _process_output_encoding()
@@ -1163,34 +1252,6 @@ def _apply_request_runtime(req: dict) -> None:
                 os.environ.pop(key, None)
 
 
-def _start_parent_watchdog() -> None:
-    """Self-terminate when the host process dies.
-
-    The main loop only exits when stdin EOFs, which only happens once user
-    code finishes and the next ``readline`` call returns. If the host gets
-    SIGKILL mid-execution (or any way that skips graceful shutdown) the
-    runner would otherwise outlive its parent and keep holding kernel
-    state. Poll ``os.getppid()`` instead and ``os._exit`` the moment we get
-    reparented \u2014 covers POSIX hosts. Windows has no reliable ppid
-    equivalent; there we still bail out on the next stdin read.
-    """
-    if os.name != "posix":
-        return
-    original_ppid = os.getppid()
-    if original_ppid <= 1:
-        return
-
-    def watch() -> None:
-        while True:
-            try:
-                if os.getppid() != original_ppid:
-                    os._exit(0)
-            except Exception:
-                return
-            time.sleep(10)
-
-    thread = threading.Thread(target=watch, name="veyyon-parent-watchdog", daemon=True)
-    thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -1323,7 +1384,7 @@ async def _main_async() -> None:
     sys.stdout = _StreamProxy("stdout")
     sys.stderr = _StreamProxy("stderr")
     _install_idle_sigint()
-    _start_parent_watchdog()
+    _guard_host_lifetime()
     _start_capture_drain()
 
     stdin = sys.__stdin__

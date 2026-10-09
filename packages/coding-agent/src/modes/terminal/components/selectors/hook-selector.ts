@@ -32,16 +32,14 @@ import {
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
+import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
-	computeModalDims,
-	MODAL_SIZING_MEDIUM,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
-	sizingForArea,
 } from "../chrome/modal-shell";
 import { renderSliderLines } from "../chrome/segment-track";
 import { stripInlineMarkdown } from "../dialogs/plan-toc";

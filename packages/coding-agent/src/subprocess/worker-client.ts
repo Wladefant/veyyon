@@ -397,13 +397,17 @@ export function createWorkerHandle<Inbound, Outbound>(
 			if (proc.pid && proc.pid !== process.pid) {
 				if (process.platform === "win32") {
 					try {
-						spawnSync("taskkill.exe", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+						spawnSync("taskkill.exe", ["/PID", String(proc.pid), "/T", "/F"], {
+							stdio: "ignore",
+							windowsHide: true,
+							timeout: 5000,
+						});
 					} catch {
 						// Already gone.
 					}
 				} else {
 					try {
-						spawnSync("pkill", ["-KILL", "-P", String(proc.pid)], { stdio: "ignore" });
+						spawnSync("pkill", ["-KILL", "-P", String(proc.pid)], { stdio: "ignore", timeout: 5000 });
 					} catch {
 						// Already gone or pkill not available.
 					}

@@ -73,6 +73,8 @@ One-shot shell (`executeShell`) always creates and drops a fresh session per cal
 - Reader decodes UTF-8 incrementally; invalid byte sequences emit `U+FFFD` replacement chunks.
 - The command runs with `ProcessGroupPolicy::NewProcessGroup`.
 - After the foreground command completes, the reader drains until EOF, 250ms of idle output, or 2s maximum; reader shutdown then gets a 250ms timeout.
+- On Unix, pipe reading uses `AsyncFd` non-blocking readiness. On Windows, pipe reading uses `PeekNamedPipe` readiness polling with cancellation-aware async wait and synchronous short reads of available bytes, bypassing Tokio's `spawn_blocking` pool to prevent starvation when blocking worker threads are occupied.
+- Windows readers also yield and check cancellation when bytes are ready, so continuous output cannot starve other tasks on a single-worker runtime.
 - Optional minimizer configuration can capture and rewrite output. When minimization occurs, the result includes `minimized` with filter name, replacement text, original text, and byte counts.
 - Consumers are responsible for persisting or displaying minimizer artifacts; the native result only carries the data.
 

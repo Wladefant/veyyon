@@ -265,7 +265,7 @@ This component is wired by `CommandController.handleBashCommand()` and fed from 
 
 - Interceptor only blocks commands when suggested tool is currently available in context.
 - If artifact allocation fails, truncation still occurs but no `artifact://` back-reference is available.
-- Shell session cache has no explicit eviction in this module; lifetime is process-scoped.
+- Shell session cache is scoped by session key and evicted on session disposal via `disposeBashSessionsByOwner` registered with the kernel's `OwnedResourceDisposer`.
 - PTY and non-PTY timeout surfaces differ:
   - PTY exposes explicit `timedOut` result field,
   - non-PTY maps timeout into `cancelled + annotation` summary.

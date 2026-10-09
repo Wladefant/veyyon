@@ -31,10 +31,14 @@
 - `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
 - `TUIOptions.activity` sets the `ActivitySignal` the TUI attaches to between `start()` and `stop()`; the default is `processActivity`.
 - A full-width overlay that is not fullscreen, such as the `/autoresearch status` run screen, replaces the rows of an inline Kitty image drawn with Unicode placeholders instead of letting the image cover it; a narrower overlay still leaves those rows untouched ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- `RenderSignature`, every input besides the text that a `Markdown` render's rows depend on, is exported from `@veyyon/tui/components/markdown`.
+- `TUI.reusedRows(child)`, read inside `onBeforeCompose`, returns the rows a component-scoped frame keeps for a root child it does not re-render, and `undefined` when the frame renders the child or outside the sizing pass.
 
 ### Changed
 
 - The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
+- `Input`, `Editor` and `wordWrapLine` take the shared grapheme segmenter on first use instead of when their module loads, so loading them builds no `Intl.Segmenter`.
+- The frame throttle and the terminal hosts' settle windows are in `core/frame-pacing.ts` instead of `core/tui.ts`; frame timing is unchanged.
 - 23 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
 - The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.
@@ -48,12 +52,16 @@
 - A `Markdown` render with no background style ends each row, and each blank padding row, at its ink instead of padding it with spaces to the render width, so writing a resumed 38 MB transcript's first frame sends 7.05M characters instead of 8.11M and the frame holds 133.0 MiB of heap instead of 135.0 MiB.
 - The prepared-frame cache keeps each composed row's fitted string and its source in two arrays instead of one `{ raw, width, line }` record per row, so a resumed 600-turn session holds 31,652 fewer objects and 105.4 MiB of heap instead of 107.0 MiB.
 - The scroll tape records scrolled-off rows only while `tui.scrollIsolation` is on and counts them otherwise, and turning scroll isolation on after the first paint replays the history into the tape, so a session with scroll isolation off holds none of the up to 20,000 row strings the tape kept.
+- A streaming `Markdown` render checks that its text still extends the frozen prefix by reference against the text the prefix was frozen from before comparing characters, and a `Container` with one child that draws rows returns that child's rows instead of copying them, so rendering each delta of a 1,000,000-character reply costs 49.8 ms in total instead of 70.4 ms and of a 400,000-character reply 14.1 ms instead of 19.0 ms (median of four).
+- The `Markdown` render cache is keyed by the text a component holds and compares the layout on lookup instead of keying on a new string that spells the text and the layout, so a cached message is held once instead of twice: after 135 turns of 3,000-character replies the session holds 18.0 MiB of strings and objects instead of 18.6 MiB, growing 10.4 KiB per turn instead of 15.0 KiB, and serving 100 cached messages to a rebuilt transcript takes 0.033 ms instead of 0.26 ms.
+- A `Loader` whose spinner frames are single same-width grapheme clusters lays its message out against one shared frame, so a spinner tick that changes no message re-wraps nothing and costs 90 ns instead of 1,950 ns, and a streamed 4,000-character turn spends 255 ms of main-thread CPU instead of 264 ms (median of six).
 
 ### Fixed
 
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - After a resize under the `alt-arrows` scroll transport, the engine replays the transcript once instead of on every later frame, so a resumed 600-turn session at rest spends 0.06 CPU seconds per 10 seconds after a resize instead of 6.85 (median of three).
 - A frame in which two or more root children report rows dropped from native scrollback splices each child's rows out of the committed record at that child's own start, from the last child back, instead of splicing their sum at the topmost child's start, so the record no longer diverges from the terminal and forces a transcript replay on the next frame.
+- A streamed `Markdown` lexes each frame's tail from a copy of its own and drops its stream state when it seals, so a 206,000-character streamed answer holds 2.0 MiB of heap while it streams instead of 76.3 MiB, and the same heap as one render of its text once sealed.
 
 ## [1.5.4] - 2026-09-24
 

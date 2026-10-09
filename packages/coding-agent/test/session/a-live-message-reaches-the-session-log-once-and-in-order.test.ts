@@ -1,8 +1,8 @@
 /**
  * WHY: a live message reaches the session log through one collaborator, `MessagePersistence`, and
  * three defects share its boundary: a message written out of order (a later `message_end` whose
- * display finished first lands ahead of an earlier one), a message written twice (the branch key
- * index goes stale and misses an entry that is already there), and a message never written or
+ * display finished first lands ahead of an earlier one), a message written twice (the branch
+ * index goes stale or misses an entry that is already there), and a message never written or
  * written when it must not be (a released or failed write stalls the queue, a refusal or a replayed
  * rewind result reaches the log). Each case drives the real collaborator against a real in-memory
  * `SessionManager` and reads the branch it wrote.
@@ -10,18 +10,34 @@
  * The class this closes is a live message that reaches the log out of order, more than once, or
  * against the rule that filters it, at the boundary every write passes through.
  *
+ * The branch index is a sorted array of message timestamps that only filters: a lookup it reports
+ * absent never reads the branch. So the cases that would turn its miss into a second write are
+ * pinned here: a timestamp appended out of order, appends past the room the index left, two
+ * timestamps that print alike without being the same number, and a message with no timestamp. A
+ * fresh process measures the bytes it holds per logged message (`fixtures/persistence-index-heap.ts`).
+ *
  * What it does not catch: which `AgentSession` event routes a message here (the session suites
  * `agent-session-persisted-keys-cache` and `session/persistence-fault-recovery` pin that), and the
  * assistant study telemetry filter, whose level table `gran-5-turn-metrics-persistence` and
  * `gran-6-request-params-persistence` pin.
  */
 import { describe, expect, it } from "bun:test";
+import { execFile } from "node:child_process";
+import * as path from "node:path";
+import { promisify } from "node:util";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import type { InstrumentationLevel } from "@veyyon/ai/instrumentation";
 import type { PendingContextSnapshot } from "@veyyon/coding-agent/session/agent-session-types";
 import { MessagePersistence } from "@veyyon/coding-agent/session/runtime/message-persistence";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { PersistenceIndexHeap } from "../fixtures/persistence-index-heap";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+
+const run = promisify(execFile);
+const INDEX_HEAP_FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "persistence-index-heap.ts");
+/** Messages on the branch the index heap is measured over. */
+const INDEXED_MESSAGES = 5_000;
 
 /** Fails the test instead of hanging it when a write or a waiter never settles. */
 async function within<T>(promise: Promise<T>, label: string, ms = 1_000): Promise<T> {
@@ -282,6 +298,85 @@ describe("a message offered for the log", () => {
 		const loggedBasic = logged(basic.store)[0];
 		expect(loggedBasic?.role === "toolResult" ? loggedBasic.metrics?.durationMs : undefined).toBe(2);
 	});
+});
+
+describe("the branch index a lookup reads", () => {
+	it("finds a message an append placed before, between and after the timestamps it holds", () => {
+		const { store, persistence } = harness();
+		const offered = [user("a", 500), assistant("b", 100), toolResult("c", 900), user("d", 300), toolResult("e", 300)];
+		for (const message of offered) persistence.persistIfMissing(message);
+		for (const message of offered) persistence.persistIfMissing({ ...message });
+		persistence.persistIfMissing(user("f", 300));
+		expect(labels(store)).toEqual(["user:a", "assistant:b", "tool:c", "user:d", "tool:e", "user:f"]);
+	});
+
+	it("finds every message once appends outgrow the room the index left", () => {
+		const { store, persistence } = harness();
+		const offered = Array.from({ length: 300 }, (_, index) => user(`m${index}`, 10_000 - index * 7));
+		for (const message of offered) persistence.persistIfMissing(message);
+		for (const message of offered) persistence.persistIfMissing({ ...message });
+		expect(labels(store)).toEqual(offered.map((_, index) => `user:m${index}`));
+	});
+
+	it("finds every message of a branch logged out of timestamp order before the index was built", () => {
+		const { store, persistence } = harness();
+		const loggedAt = [900, 100, 500, 300, 700, 200];
+		for (const [index, at] of loggedAt.entries()) store.appendMessage(user(`m${index}`, at));
+		for (const [index, at] of loggedAt.entries()) persistence.persistIfMissing(user(`m${index}`, at));
+		expect(labels(store)).toEqual(loggedAt.map((_, index) => `user:m${index}`));
+	});
+
+	for (const [name, loggedAt, offeredAt] of [
+		["negative zero against zero", -0, 0],
+		["a string timestamp from a hand-edited log against its number", "1700" as unknown as number, 1700],
+		["a number against the string timestamp a hand-edited log offers", 1700, "1700" as unknown as number],
+	] as const) {
+		it(`finds a message the store logged whose timestamp prints like the offered one: ${name}`, () => {
+			const { store, persistence } = harness();
+			persistence.persistIfMissing(user("indexed", 1));
+			store.appendMessage(user("same", loggedAt));
+			persistence.persistIfMissing(user("same", offeredAt));
+			expect(labels(store)).toEqual(["user:indexed", "user:same"]);
+		});
+
+		it(`finds a message it logged itself whose timestamp prints like the offered one: ${name}`, () => {
+			const { store, persistence } = harness();
+			persistence.persistIfMissing(user("indexed", 1));
+			persistence.persistIfMissing(user("same", loggedAt));
+			persistence.persistIfMissing(user("same", offeredAt));
+			expect(labels(store)).toEqual(["user:indexed", "user:same"]);
+		});
+	}
+
+	it("finds a logged message that has no timestamp", () => {
+		const { store, persistence } = harness();
+		const untimed = { role: "user", content: "untimed" } as unknown as UserMessage;
+		persistence.persistIfMissing(user("indexed", 1));
+		persistence.persistIfMissing(untimed);
+		persistence.persistIfMissing({ ...untimed });
+		expect(labels(store)).toEqual(["user:indexed", "user:untimed"]);
+	});
+
+	it("holds a few bytes a logged message, not a key string each", async () => {
+		const { env, cleanup } = hermeticSpawnEnv();
+		let heap: PersistenceIndexHeap;
+		try {
+			const { stdout, stderr } = await run(process.execPath, [INDEX_HEAP_FIXTURE, String(INDEXED_MESSAGES)], {
+				// A file run earlier may leave the runner in a deleted directory, which the child would inherit.
+				cwd: import.meta.dirname,
+				env,
+				timeout: 25_000,
+				killSignal: "SIGKILL",
+			});
+			expect(stderr).toBe("");
+			heap = JSON.parse(stdout) as PersistenceIndexHeap;
+		} finally {
+			cleanup();
+		}
+		expect(heap.messages).toBe(INDEXED_MESSAGES);
+		// A sorted array of numbers measured 25 bytes a message; a set of key strings, 242.
+		expect(heap.retained).toBeLessThan(INDEXED_MESSAGES * 64);
+	}, 30_000);
 });
 
 describe("the context snapshot a logged assistant turn carries", () => {

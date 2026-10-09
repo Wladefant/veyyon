@@ -9,6 +9,7 @@
 - The edit prompt states the same line, block, and Markdown-section boundaries in fewer words and removes redundant examples.
 - Bare `- ` bullet body rows are now auto-accepted as literal content with a warning when the hunk is unambiguously a Markdown bullet list (every `-` row bullet-shaped and no unified-diff `+new` counterpart rows) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 03e6564c05626854890e9067b5ffeae2c952718e).
 - Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
+- Patch recovery evaluates the `diff` package when it first maps an edit from a stale snapshot onto the current file instead of when the module loads; behavior is unchanged.
 
 ## [1.5.0] - 2026-09-18
 

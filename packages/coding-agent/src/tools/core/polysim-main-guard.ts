@@ -305,6 +305,7 @@ export function defaultResolvePrBase(
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
 			timeout: 5000,
+			windowsHide: true,
 		}).trim();
 		return output || { error: "gh pr view printed no base branch" };
 	} catch (error) {

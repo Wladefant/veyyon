@@ -248,7 +248,7 @@ describe("usage history", () => {
 			{
 				recordedAt: Date.now(),
 				provider: PROVIDER,
-				accountKey: "digest",
+				accountKey: "0123456789abcdef0123456789abcdef",
 				limitId: "five",
 				label: "Five hour",
 				usedFraction: 0.1,

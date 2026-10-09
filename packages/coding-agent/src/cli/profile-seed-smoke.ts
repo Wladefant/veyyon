@@ -42,7 +42,7 @@ export async function smokeTestProfileSeed(): Promise<void> {
 		execFile(
 			executable,
 			args,
-			{ cwd: spawn.cwd, env, timeout: SMOKE_TEST_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+			{ cwd: spawn.cwd, env, timeout: SMOKE_TEST_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true },
 			(error, stdout, stderr) => {
 				const code = error && "code" in error && typeof error.code === "number" ? error.code : error ? null : 0;
 				resolve({ code, stdout: String(stdout), stderr: String(stderr) });

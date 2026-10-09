@@ -121,8 +121,11 @@ function runtimeImportsOf(relative: string): string[] {
  * provider definition in `./registry`, which the store already reaches for provider identity. The same wave
  * took the barrel imports out of `registry/oauth/openai-codex.ts` and `usage/*-reset.ts`, which had pulled
  * the whole streaming engine (308 modules) back in; the two named cuts below still hold.
+ *
+ * RAISED FROM 244 TO 246 for the santhreal sync (2026-10): `@veyyon/utils/local-time` and the `bun:ffi`-free
+ * leaves it brings into the logger closure. Each is a leaf with no subtree of its own.
  */
-const AUTH_STORAGE_CEILING = 244;
+const AUTH_STORAGE_CEILING = 246;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc
@@ -182,8 +185,19 @@ const AUTH_STORAGE_CEILING = 244;
  * 83 since 2026-09-29, measured: `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`.
  * `catalog/build.ts`, already in this closure, returns each model's resolved compat record through it,
  * so it adds one module and no subtree.
+ *
+ * 84 since 2026-10-01, measured: `catalog/catalog-spans.ts`, the zero-import leaf that indexes each
+ * provider's byte range in `models.json`. `catalog/models.ts`, already in this closure, parses one
+ * provider's span through it instead of the whole document, so it adds one module and no subtree.
+ *
+ * 85 since 2026-10-05, measured: `@veyyon/utils/local-time`, which reads the local clock through the C
+ * library's `localtime_r` so naming a log file builds no ICU time zone cache. `@veyyon/utils/logger` and
+ * `@veyyon/utils/log-file`, already in this closure, take the local time from it, and its only import is
+ * `bun:ffi`, so it adds one module and no subtree.
+ *
+ * 93 since the santhreal sync (2026-10): `@veyyon/utils/local-time`, as above. Its only import is `bun:ffi`.
  */
-const ENV_API_KEY_CEILING = 92;
+const ENV_API_KEY_CEILING = 93;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

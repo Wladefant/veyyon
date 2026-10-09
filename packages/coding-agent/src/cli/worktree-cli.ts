@@ -8,8 +8,8 @@
  *     `<parent-repo>/.git/worktrees/<name>/`.
  *   - **Task-isolation dirs** (`task/worktree.ts`): a wrapper dir with a
  *     compact `m` subdir mounted/cloned by `natives.isoStart`. Legacy `merged`
- *     subdirs are still recognized. These are ephemeral; `ensureIsolation`
- *     removes the base before re-creating it, so leftovers are crashed runs.
+ *     subdirs are still recognized. Setup preserves occupied slots and only
+ *     reclaims dead marker-only reservations.
  *
  * Legacy entries from before the encoding change keep working because git still
  * tracks them by branch name. This command exists to GC them on demand.
@@ -31,6 +31,7 @@ import {
 	RETAINED_BACKEND_FILE,
 	readIsolationOwner,
 	readRetainedMountBackend,
+	SLOT_RECOVERY_HINT,
 	tryWithIsolationLifecycleLock,
 } from "../task/isolation-ownership";
 import { isTaskIsolationDir, removeLinkedWorktreeRegistrations, TASK_ISOLATION_MOUNT_PREFIX } from "../task/worktree";
@@ -74,6 +75,9 @@ export interface WorktreeEntry {
 	undeterminedReason?: string;
 }
 
+// Keep scan identities out of the public JSON listing.
+const scannedIdentity = new WeakMap<WorktreeEntry, Stats>();
+
 export interface ListWorktreesOptions {
 	json: boolean;
 }
@@ -87,6 +91,7 @@ export interface ClearWorktreesOptions {
 }
 
 async function stopRetainedMount(dir: string): Promise<void> {
+	if (await isolationClaimIsLive(dir)) throw new Error("Live isolation claim; workspace left intact.");
 	const backend = await readRetainedMountBackend(dir);
 	if (backend === undefined) return;
 	if (backend === natives.IsoBackendKind.Projfs) {
@@ -178,6 +183,15 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 				const lockResult = await tryWithIsolationLifecycleLock(target.path, async () => {
 					const stat = await statPath(target.path);
 					if (!stat?.found) return;
+					const expected = scannedIdentity.get(target);
+					if (
+						!expected ||
+						stat.found.dev !== expected.dev ||
+						stat.found.ino !== expected.ino ||
+						stat.found.birthtimeMs !== expected.birthtimeMs
+					) {
+						throw new Error("Isolation slot changed since scan; workspace left intact.");
+					}
 
 					if (await isAbandonedEmptyReservation(target.path)) {
 						await fs.rm(target.path, { recursive: true, force: true });
@@ -194,7 +208,9 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<vo
 								`Missing retained backend metadata in ${target.path}; refusing removal (active live owner PID ${owner.pid})`,
 							);
 						}
-						throw new Error(`Missing retained backend metadata in ${target.path}; refusing removal`);
+						throw new Error(
+							`Missing retained backend metadata in ${target.path}; refusing removal (${SLOT_RECOVERY_HINT})`,
+						);
 					}
 					if (
 						owner &&
@@ -307,6 +323,7 @@ async function scanWorktrees(): Promise<WorktreeEntry[]> {
 
 		const direct = await classifyDir(dir);
 		if (direct) {
+			scannedIdentity.set(direct, stat.found);
 			entries.push(direct);
 			continue;
 		}
@@ -331,6 +348,7 @@ async function scanWorktrees(): Promise<WorktreeEntry[]> {
 			const childClassified = await classifyDir(childDir);
 			if (childClassified) {
 				entries.push(childClassified);
+				scannedIdentity.set(childClassified, childStat.found);
 				nested += 1;
 			}
 		}

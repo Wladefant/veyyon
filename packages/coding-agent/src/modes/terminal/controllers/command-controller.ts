@@ -31,29 +31,21 @@ import { padding } from "@veyyon/utils/padding";
 import { visibleWidth } from "@veyyon/utils/width";
 import { advisorStatusNextStep } from "../../../advisor/messages";
 import { shouldEnableAppendOnlyContext } from "../../../config/append-only-context-mode";
+import { openaiWebsocketPreference } from "../../../config/openai-websockets-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../../exec/bash-executor";
 import { type LoadedCustomShare, loadCustomShare } from "../../../export/custom-share";
 import { shareSession } from "../../../export/share";
 import type { CompactOptions } from "../../../extensibility/extensions/types";
 import { buildMemoryPayloadForDisplay, resolveMemoryBackend } from "../../../memory/backend";
-import {
-	diffMentalModelContent,
-	type HindsightApi,
-	type HindsightSessionState,
-	loadHindsightConfig,
-	reloadMentalModelsForSession,
-	resolveSeedsForScope,
-	seedAlreadyExists,
-	summarizeMentalModel,
-} from "../../../memory/hindsight";
+import type * as hindsightModule from "../../../memory/hindsight";
+import type { HindsightApi, HindsightSessionState } from "../../../memory/hindsight";
 import { compactionActionLabel, resolveCompactionKind } from "../../../presentation/summary-builder";
 import { formatProviderName } from "../../../session/account-format";
-import type { AgentSession } from "../../../session/agent-session";
 import type { AsyncJobSnapshotItem } from "../../../session/agent-session-types";
+import { type AttachableSession, backgroundHandoff } from "../../../session/background-sessions";
 import { computeContextBreakdown } from "../../../session/context-usage";
 import type { OutputSummary } from "../../../session/streaming-output";
 import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
-import { interactiveSecretPort, runSecretCommandForSurface } from "../../../slash-commands/helpers/secret";
 import { getMarkdownTheme } from "../../../theme/markdown-theme";
 import { getSymbolTheme, theme } from "../../../theme/theme";
 import { outputMeta } from "../../../tools/core/output-meta";
@@ -75,7 +67,7 @@ import { buildHotkeysMarkdown } from "../utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../utils/tools-markdown";
 import { showMarkdownPanel } from "./command-controller-shared";
 /**
- * The slice of the interactive context this controller uses: 33 members of the
+ * The slice of the interactive context this controller uses: 37 members of the
  * 215 `InteractiveModeContext` requires. See `CollabHostContext` for why the
  * full interface cannot be used as a parameter type: nothing but the real TUI
  * can satisfy it, so every test has to cast a stub into place unchecked.
@@ -93,6 +85,7 @@ export type CommandControllerContext = Pick<
 	| "editorContainer"
 	| "flushCompactionQueue"
 	| "focusActiveEditorArea"
+	| "initHooksAndCustomTools"
 	| "keybindings"
 	| "lspServers"
 	| "mcpManager"
@@ -120,6 +113,13 @@ export type CommandControllerContext = Pick<
 	| "updateEditorBorderColor"
 	| "withBtwSessionMove"
 >;
+
+let hindsight: Promise<typeof hindsightModule> | undefined;
+/** The Hindsight mental-model helpers load on the first `/memory mm` call, not with the controller. */
+function loadHindsight(): Promise<typeof hindsightModule> {
+	hindsight ??= import("../../../memory/hindsight");
+	return hindsight;
+}
 
 export class CommandController {
 	constructor(private readonly ctx: CommandControllerContext) {}
@@ -313,9 +313,9 @@ export class CommandController {
 			info += `${theme.fg("dim", "No model selected")}\n`;
 		} else {
 			const authMode = resolveProviderAuthMode(this.ctx.session.modelRegistry.authStorage, model.provider);
-			const openaiWebsocketSetting = this.ctx.settings.get("providers.openaiWebsockets") ?? "auto";
-			const preferOpenAICodexWebsockets =
-				openaiWebsocketSetting === "on" ? true : openaiWebsocketSetting === "off" ? false : undefined;
+			const preferOpenAICodexWebsockets = openaiWebsocketPreference(
+				this.ctx.settings.get("providers.openaiWebsockets"),
+			);
 			const credentialSource = this.ctx.session.modelRegistry.authStorage.describeCredentialSource(
 				model.provider,
 				stats.sessionId,
@@ -547,7 +547,10 @@ export class CommandController {
 	 * what is stored, and a chip exists to be trusted at a glance or not at all.
 	 */
 	showSecretList(): void {
-		void runSecretCommandForSurface("list", interactiveSecretPort(this.ctx))
+		void import("../../../slash-commands/helpers/secret")
+			.then(({ interactiveSecretPort, runSecretCommandForSurface }) =>
+				runSecretCommandForSurface("list", interactiveSecretPort(this.ctx)),
+			)
 			.then(outcome => this.ctx.showStatus(outcome.message))
 			.catch(error => this.ctx.showWarning(errorMessage(error)));
 	}
@@ -668,6 +671,7 @@ export class CommandController {
 	async #mmList(state: HindsightSessionState): Promise<void> {
 		const client: HindsightApi = state.client;
 		try {
+			const { summarizeMentalModel } = await loadHindsight();
 			const response = await client.listMentalModels(state.bankId, { detail: "metadata" });
 			const items = response.items ?? [];
 			if (items.length === 0) {
@@ -707,6 +711,7 @@ export class CommandController {
 
 	async #mmRefresh(state: HindsightSessionState, id: string | undefined): Promise<void> {
 		try {
+			const { reloadMentalModelsForSession } = await loadHindsight();
 			if (id) {
 				// Single-model refresh is explicit operator intent: bypass the
 				// auto-refresh filter so curated/manual models can still be
@@ -759,6 +764,7 @@ export class CommandController {
 
 	async #mmHistory(state: HindsightSessionState, id: string): Promise<void> {
 		try {
+			const { diffMentalModelContent } = await loadHindsight();
 			const [model, history] = await Promise.all([
 				state.client.getMentalModel(state.bankId, id, { detail: "content" }),
 				state.client.getMentalModelHistory(state.bankId, id),
@@ -792,6 +798,7 @@ export class CommandController {
 
 	async #mmSeed(state: HindsightSessionState): Promise<void> {
 		try {
+			const { loadHindsightConfig, resolveSeedsForScope, seedAlreadyExists } = await loadHindsight();
 			const config = loadHindsightConfig(this.ctx.settings);
 			const seeds = resolveSeedsForScope(
 				{
@@ -834,6 +841,7 @@ export class CommandController {
 	}
 
 	async #mmReload(state: HindsightSessionState): Promise<void> {
+		const { reloadMentalModelsForSession } = await loadHindsight();
 		const ok = await reloadMentalModelsForSession(state.session);
 		if (ok) {
 			this.ctx.showStatus("Mental-model cache reloaded.");
@@ -844,6 +852,7 @@ export class CommandController {
 
 	async #mmDelete(state: HindsightSessionState, id: string): Promise<void> {
 		try {
+			const { reloadMentalModelsForSession } = await loadHindsight();
 			const removed = await state.client.deleteMentalModel(state.bankId, id);
 			if (!removed) {
 				this.ctx.showError(`Mental model not found: ${id}`);
@@ -877,7 +886,7 @@ export class CommandController {
 		const createNextSession = this.ctx.createNextSession;
 		if (!createNextSession || options || !this.ctx.session.isStreaming) return false;
 		if (!this.ctx.settings.get("session.newKeepsBackground")) return false;
-		let next: AgentSession;
+		let next: AttachableSession;
 		try {
 			next = await createNextSession();
 		} catch (error) {
@@ -886,7 +895,7 @@ export class CommandController {
 			logger.warn("Falling back to an in-place new session", { error: errorMessage(error) });
 			return false;
 		}
-		const kept = this.ctx.attachMainSession(next);
+		const kept = this.ctx.attachMainSession(next.session, next);
 		this.ctx.resetObserverRegistry();
 		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 		this.ctx.statusLine.invalidate();
@@ -894,21 +903,14 @@ export class CommandController {
 		this.ctx.updateEditorBorderColor();
 		this.ctx.clearTransientSessionUi();
 		this.ctx.resetTranscript();
-		const displaced =
-			kept.displaced.length > 0
-				? `; stopped ${kept.displaced.join(", ")} (background limit ${this.ctx.settings.get("session.backgroundLimit")})`
-				: "";
+		const handoff = backgroundHandoff(kept, this.ctx.settings.get("session.backgroundLimit"));
 		this.ctx.present([
 			new Spacer(1),
-			new Text(
-				theme.fg(
-					"accent",
-					`${theme.status.success} New session started — ${kept.sessionId} keeps running${displaced}`,
-				),
-				1,
-				1,
-			),
+			new Text(theme.fg("accent", `${theme.status.success} New session started — ${handoff.message}`), 1, 1),
 		]);
+		// The new session has not been displayed before: install this screen's
+		// dialogs, notifier and extension UI on it, as launch does for the first.
+		await this.ctx.initHooksAndCustomTools();
 		await this.ctx.reloadTodos();
 		this.ctx.ui.requestRender(true, { clearScrollback: true });
 		return true;
@@ -1327,6 +1329,8 @@ export class CommandController {
 			this.ctx[slot]?.setComplete(undefined, false);
 			this.ctx.showError(`${failure}: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
+		// A `!` or `%` command may have moved the tree, and an idle row has no other reason to look.
+		this.ctx.statusLine.refreshGitStatus();
 	}
 
 	async handleCompactCommand(

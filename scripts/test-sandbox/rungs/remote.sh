@@ -295,7 +295,11 @@ run_remote() {
 	# The container is named and force-removed afterwards. `docker run` under
 	# `timeout` detaches on SIGTERM rather than stopping the container, so without
 	# the explicit removal a wedged suite would survive its own deadline and go on
-	# holding 24 cores.
+	# holding its cores.
+	#
+	# `--cpus` defaults to 24 or the remote's core count, whichever is smaller: docker
+	# rejects a `--cpus` above the host's count, so a fixed 24 failed every run on a
+	# smaller box. The remote shell evaluates the clamp.
 	local cname remote_cmd
 	cname="veyyon-sandbox-$$-$(date +%s)"
 	remote_cmd="$(printf '%s ' \
@@ -307,7 +311,7 @@ run_remote() {
 		"--cap-drop=ALL" \
 		"--security-opt=no-new-privileges" \
 		"--pids-limit ${VEYYON_SANDBOX_REMOTE_PIDS:-8192}" \
-		"--cpus ${VEYYON_SANDBOX_REMOTE_CPUS:-24}" \
+		"--cpus ${VEYYON_SANDBOX_REMOTE_CPUS:-\$(( \$(nproc) < 24 ? \$(nproc) : 24 ))}" \
 		"--memory ${VEYYON_SANDBOX_REMOTE_MEMORY:-32g}" \
 		"--mount $(printf '%q' "${repo_mount}")" \
 		"--tmpfs /home:rw,nosuid,nodev,exec,mode=0755" \

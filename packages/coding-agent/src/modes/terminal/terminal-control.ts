@@ -1,24 +1,41 @@
-import { serveTerminalControl } from "../../launch/terminal-control";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
 import type { InteractiveMode } from "./interactive-mode";
 
 /** Deliver to the existing REPL, never create a second AgentSession or transcript writer. */
 export function startTerminalControl(mode: InteractiveMode): Promise<() => void> {
 	let revision = "";
 	let entries: { entryId: string; text: string }[] = [];
+	// Cursor into the journal: how many entries were converted and the id of the last one. A leaf
+	// change then costs the new entries only. A shorter journal or a different id at the cursor
+	// means entries were rewritten or removed, and one full pass rebuilds the list.
+	let converted = 0;
+	let lastConvertedId: string | undefined;
+	const convert = (entry: SessionEntry): { entryId: string; text: string }[] => {
+		if (entry.type !== "message" || entry.message.role !== "assistant") return [];
+		const content = mode.session.displayAssistantContent(entry.message.content);
+		const text = content
+			.filter(block => block.type === "text")
+			.map(block => block.text)
+			.join("\n")
+			.trim();
+		return text ? [{ entryId: entry.id, text }] : [];
+	};
 	const history = (): { entryId: string; text: string }[] => {
 		const next = `${mode.sessionManager.getSessionId()}:${mode.sessionManager.getLeafId()}`;
 		if (revision === next) return entries;
 		revision = next;
-		entries = mode.sessionManager.getEntries().flatMap(entry => {
-			if (entry.type !== "message" || entry.message.role !== "assistant") return [];
-			const content = mode.session.displayAssistantContent(entry.message.content);
-			const text = content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n")
-				.trim();
-			return text ? [{ entryId: entry.id, text }] : [];
-		});
+		const journal = mode.sessionManager.getEntries();
+		const intact = converted > 0 && journal.length >= converted && journal[converted - 1]?.id === lastConvertedId;
+		if (!intact) {
+			converted = 0;
+			entries = [];
+		}
+		const appended = journal.slice(converted).flatMap(convert);
+		converted = journal.length;
+		lastConvertedId = journal.at(-1)?.id;
+		// An unchanged list keeps its identity: the subscriber compares by reference.
+		if (appended.length || !intact) entries = entries.concat(appended);
 		return entries;
 	};
 	return serveTerminalControl({
@@ -39,7 +56,7 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 				return "steered";
 			}
 			const submit = mode.onInputCallback;
-			if (!submit) throw new Error("Terminal is not ready for input; delivery not accepted");
+			if (!submit) throw new TerminalNotReadyError("Terminal is not ready for input; delivery not accepted");
 			// A promise resolver accepts only one input. Reserve it synchronously before acknowledging.
 			mode.onInputCallback = undefined;
 			submit(mode.startPendingSubmission({ text }));

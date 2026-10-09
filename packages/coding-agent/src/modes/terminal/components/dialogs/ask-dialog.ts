@@ -34,9 +34,8 @@ import { ASK_OTHER_OPTION_LABEL } from "../../../../tools/agent/ask-option-label
 import { getTabBarTheme } from "../../shared";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
+import { computeModalDims, HOOK_EDITOR_TEXT_PAD_COLS, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
-	computeModalDims,
-	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	minModalChromeRows,
@@ -45,7 +44,6 @@ import {
 } from "../chrome/modal-shell";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 import { handleTabSwitchKey, hoverBandAt } from "../selectors/selector-helpers";
-import { HOOK_EDITOR_TEXT_PAD_COLS } from "./hook-editor";
 
 const SUBMIT_OPTION = "Submit";
 

@@ -18,32 +18,13 @@ describe("shouldDetachKernel", () => {
 	});
 });
 
-/**
- * `shouldHideKernelWindow` decides whether the long-lived Python kernel
- * subprocess is spawned with `windowsHide: true`. On Windows, Bun maps that
- * option to `CREATE_NO_WINDOW`, which detaches the child from any inherited
- * console — breaking both (a) `LoadLibraryExW` for NumPy/pandas native
- * extensions and (b) SIGINT delivery via `GenerateConsoleCtrlEvent`. See
- * issue #1960. The tests below pin the three layered concerns the PR review
- * surfaced:
- *
- * 1. `shouldHideKernelWindow` — pure predicate over a single boolean.
- * 2. `consoleAttachedViaTTY` — the TTY-OR fallback used when the Win32 FFI
- *    probe is unavailable; covers the partial-redirection cases.
- * 3. `hostHasInheritableConsole` — the integration boundary. Off-Windows it
- *    short-circuits to the TTY fallback; on Windows it is expected to
- *    consult `kernel32!GetConsoleWindow()` first, which is the authoritative
- *    signal even for the all-stdio-redirected case.
- */
+/** Windows kernels never allocate visible console windows. */
 describe("shouldHideKernelWindow", () => {
-	it("inherits the host console on Windows when one is attached", () => {
-		// Reporter's repro: veyyon launched in Windows Terminal, host has a
-		// console, kernel must inherit so `import pandas` doesn't deadlock in
-		// `_multiarray_umath` and SIGINT can recover the cell.
-		expect(shouldHideKernelWindow({ platform: "win32", hostHasInheritableConsole: true })).toBe(false);
+	it("hides on Windows even when the host has a console", () => {
+		expect(shouldHideKernelWindow({ platform: "win32", hostHasInheritableConsole: true })).toBe(true);
 	});
 
-	it("hides on Windows only when the host has no console at all (true service / daemon)", () => {
+	it("hides on Windows when the host has no console", () => {
 		// CREATE_NO_WINDOW here suppresses the console window Windows would
 		// otherwise auto-allocate for the console-app Python kernel.
 		expect(shouldHideKernelWindow({ platform: "win32", hostHasInheritableConsole: false })).toBe(true);
