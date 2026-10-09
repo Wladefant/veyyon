@@ -132,6 +132,7 @@ export class RegisteredToolAdapter implements AgentTool<TSchema, unknown, unknow
 	declare parameters: TSchema;
 	declare label: string;
 	declare strict: boolean;
+	interruptible?: boolean | ((args: Partial<Static<TSchema>>) => boolean);
 
 	// `theme` stays unknown to satisfy the default AgentTool TTheme; the
 	// constructor narrows it once when bridging to the definition's Theme.
@@ -175,6 +176,9 @@ export class RegisteredToolAdapter implements AgentTool<TSchema, unknown, unknow
 		}
 		if (registeredTool.definition.view) {
 			this.view = registeredTool.definition.view;
+		}
+		if (registeredTool.definition.interruptible !== undefined) {
+			this.interruptible = registeredTool.definition.interruptible;
 		}
 	}
 
@@ -627,6 +631,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 	declare parameters: TParameters;
 	declare label: string;
 	declare strict: boolean;
+	interruptible?: boolean | ((args: Partial<Static<TParameters>>) => boolean);
 	#entry: ToolExecutionEntryName;
 	#sessionPolicy: (() => ToolPolicyFrame | undefined) | undefined;
 
@@ -650,6 +655,9 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		this.#entry = entry;
 		this.#sessionPolicy = sessionPolicy;
 		applyToolProxy(tool, this);
+		if (tool.interruptible !== undefined) {
+			this.interruptible = tool.interruptible;
+		}
 	}
 
 	/**

@@ -23,7 +23,11 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { CustomToolAdapter } from "@veyyon/coding-agent/extensibility/custom-tools/wrapper";
-import { RegisteredToolAdapter } from "@veyyon/coding-agent/extensibility/extensions/wrapper";
+import {
+	ExtensionToolWrapper,
+	RegisteredToolAdapter,
+	wrapRegisteredTool,
+} from "@veyyon/coding-agent/extensibility/extensions/wrapper";
 import { Type } from "@veyyon/kernel/registry/typebox";
 
 /** What a tool's `execute` saw, recorded by position rather than by name. */
@@ -107,6 +111,98 @@ describe("extension tools (pi.registerTool)", () => {
 		await wrapper.execute("call-2", { input: "x" }, undefined, undefined, { marker: "from-caller" } as never);
 
 		expect(tool.observed?.fifth).toBe(CONTEXT_MARKER);
+	});
+
+	/**
+	 * An extension tool's interruptible predicate survives the adapter so the
+	 * agent loop can abort long-running waits for queued steering messages.
+	 */
+	it("forwards interruptible predicate surviving adapter for waiting and non-waiting arguments", () => {
+		const QUESTION_PARAMETERS = Type.Object({
+			action: Type.String(),
+			wait: Type.Optional(Type.Boolean()),
+		});
+		const predicate = (args: { action?: string; wait?: boolean }) => args?.wait === true;
+		const registeredTool = {
+			definition: {
+				name: "telegram_question",
+				label: "Telegram Question",
+				description: "ask or wait for a question",
+				parameters: QUESTION_PARAMETERS,
+				interruptible: predicate,
+				execute: async () => OK,
+			},
+			extensionPath: "test-extension.ts",
+		};
+
+		const adapter = new RegisteredToolAdapter(
+			registeredTool as never,
+			{ createContext: () => CONTEXT_MARKER } as never,
+		);
+		const wrapped = wrapRegisteredTool(registeredTool as never, { createContext: () => CONTEXT_MARKER } as never);
+		const sessionWrapped = new ExtensionToolWrapper(adapter);
+
+		// Predicate survives adapter unchanged
+		expect(adapter.interruptible).toBe(predicate);
+		expect(wrapped.interruptible).toBe(predicate);
+		expect(sessionWrapped.interruptible).toBe(predicate);
+		expect(typeof adapter.interruptible).toBe("function");
+		expect(typeof wrapped.interruptible).toBe("function");
+		expect(typeof sessionWrapped.interruptible).toBe("function");
+
+		// Resolves correctly for waiting arguments
+		expect((adapter.interruptible as (args: unknown) => boolean)({ action: "wait", wait: true })).toBe(true);
+		expect((wrapped.interruptible as (args: unknown) => boolean)({ action: "wait", wait: true })).toBe(true);
+		expect((sessionWrapped.interruptible as (args: unknown) => boolean)({ action: "wait", wait: true })).toBe(true);
+
+		// Resolves correctly for non-waiting arguments
+		expect((adapter.interruptible as (args: unknown) => boolean)({ action: "get", wait: false })).toBe(false);
+		expect((wrapped.interruptible as (args: unknown) => boolean)({ action: "get", wait: false })).toBe(false);
+		expect((sessionWrapped.interruptible as (args: unknown) => boolean)({ action: "get", wait: false })).toBe(false);
+		expect((adapter.interruptible as (args: unknown) => boolean)({ action: "get" })).toBe(false);
+		expect((wrapped.interruptible as (args: unknown) => boolean)({ action: "get" })).toBe(false);
+		expect((sessionWrapped.interruptible as (args: unknown) => boolean)({ action: "get" })).toBe(false);
+	});
+
+	it("preserves boolean and absent interruptible declarations through adapter", () => {
+		const boolTool = {
+			definition: {
+				name: "always_interruptible",
+				label: "Always Interruptible",
+				description: "interruptible tool",
+				parameters: PARAMETERS,
+				interruptible: true,
+				execute: async () => OK,
+			},
+			extensionPath: "test-extension.ts",
+		};
+		const plainTool = {
+			definition: {
+				name: "plain_tool",
+				label: "Plain Tool",
+				description: "plain tool",
+				parameters: PARAMETERS,
+				execute: async () => OK,
+			},
+			extensionPath: "test-extension.ts",
+		};
+
+		const boolAdapter = new RegisteredToolAdapter(
+			boolTool as never,
+			{ createContext: () => CONTEXT_MARKER } as never,
+		);
+		const plainAdapter = new RegisteredToolAdapter(
+			plainTool as never,
+			{ createContext: () => CONTEXT_MARKER } as never,
+		);
+
+		const boolWrapped = new ExtensionToolWrapper(boolAdapter);
+		const plainWrapped = new ExtensionToolWrapper(plainAdapter);
+
+		expect(boolAdapter.interruptible).toBe(true);
+		expect(boolWrapped.interruptible).toBe(true);
+		expect(plainAdapter.interruptible).toBeUndefined();
+		expect(plainWrapped.interruptible).toBeUndefined();
 	});
 });
 

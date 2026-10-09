@@ -202,6 +202,24 @@ pi.registerTool({
 });
 ```
 
+Set `interruptible` when a tool call waits on external input. The property accepts a boolean or a per-call predicate. The agent loop aborts interruptible calls to deliver queued steering messages.
+
+```ts
+pi.registerTool({
+  name: "poll_messages",
+  label: "Poll Messages",
+  description: "Poll messages with optional wait",
+  parameters: z.object({
+    wait: z.boolean().default(true).describe("Wait for messages"),
+  }),
+  interruptible: (args) => args.wait === true,
+  async execute(toolCallId, params, signal, onUpdate, ctx) {
+    // observe signal to return early on steering interrupt
+    return { content: [{ type: "text", text: "ok" }] };
+  },
+});
+```
+
 ## Subscribing to events
 
 ```ts
