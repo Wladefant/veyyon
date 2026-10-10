@@ -302,6 +302,8 @@ export class AuthStorage {
 	#oauthBearerFingerprints: Map<string, Map<number, string[]>> = new Map();
 	/** Temporary rate-limit blocks, in memory and persisted. */
 	readonly #blocks: CredentialBlocks;
+	/** Provider-confirmed Antigravity quota holds, distinct from usage-report predictions. */
+	#confirmedAntigravityQuota = new Map<string, number>();
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
@@ -1308,6 +1310,9 @@ export class AuthStorage {
 		}
 		this.#routing.clearProviderSessionCredentials(provider);
 		this.#blocks.clearProviderBlocks(provider);
+		if (provider === "google-antigravity") {
+			this.#confirmedAntigravityQuota.clear();
+		}
 	}
 
 	/** Updates credential at index in-place (used for OAuth token refresh) */
@@ -3195,6 +3200,11 @@ export class AuthStorage {
 		);
 		if (targetIndex >= 0) {
 			this.#blocks.markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
+			if (provider === "google-antigravity") {
+				const confirmationKey = `${targetCredentialId}:${blockScope ?? ""}`;
+				const confirmedUntil = this.#confirmedAntigravityQuota.get(confirmationKey) ?? 0;
+				this.#confirmedAntigravityQuota.set(confirmationKey, Math.max(confirmedUntil, blockedUntil));
+			}
 		}
 
 		const siblings = this.#getCredentialsForProvider(provider)
@@ -3468,12 +3478,28 @@ export class AuthStorage {
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&
 			!this.#blocks.isCredentialBlocked(provider, providerKey, sessionPreferredIndex, blockScope);
-		// The explicitly chosen account, which outranks every automatic decision below:
+		// The explicitly chosen account outranks predictions, but not a confirmed Antigravity refusal:
 		// ranking may reorder around it, a hold may not displace it, and the strict pass may not skip
 		// it. `sessionPreferredIndex` is not the same thing — it also carries sticky routing, which is
 		// a record of what served last rather than anything anybody asked for.
-		const chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
+		let chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
 		const movementAllowed = this.#loadBalancingEnabled();
+		if (provider === "google-antigravity" && movementAllowed && chosenIndex !== undefined) {
+			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
+			const quotaKey = `${chosenId}:${blockScope ?? ""}`;
+			const confirmedUntil = this.#confirmedAntigravityQuota.get(quotaKey);
+			if (confirmedUntil !== undefined) {
+				if (
+					confirmedUntil > Date.now() &&
+					this.#blocks.isCredentialBlocked(provider, providerKey, chosenIndex, blockScope)
+				) {
+					// A real provider refusal permits movement; a predicted hold alone does not.
+					chosenIndex = undefined;
+				} else {
+					this.#confirmedAntigravityQuota.delete(quotaKey);
+				}
+			}
+		}
 		const sessionPinIsExplicit = chosenIndex !== undefined;
 		const rankDespitePin = movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement;
 		const sessionPreferredUsage =
@@ -3664,7 +3690,7 @@ export class AuthStorage {
 		);
 
 		// The strict pass tries a usable account before an exhausted one, which is what makes quota
-		// fallback work. An explicitly chosen account is exempt from it: a hold is our own prediction,
+		// fallback work. A chosen account without a confirmed refusal is exempt: a hold can be a prediction,
 		// and skipping the chosen account over a prediction is what left a redeemed limit reset
 		// unable to spend the very account it belonged to. With movement off the home account is
 		// exempt for the same reason — it is the one account allowed to serve, blocked or not. Every
@@ -4589,6 +4615,14 @@ export class AuthStorage {
 		// also retires the auth-death mark: the provider, not a mark this process made, gets to say
 		// whether the grant still works.
 		this.#authDeadCredentials.delete(credentialId);
+		if (provider === "google-antigravity") {
+			const prefix = `${credentialId}:`;
+			for (const key of this.#confirmedAntigravityQuota.keys()) {
+				if (key.startsWith(prefix)) {
+					this.#confirmedAntigravityQuota.delete(key);
+				}
+			}
+		}
 
 		const stored = this.#getStoredCredentials(provider);
 		const index = stored.findIndex(entry => entry.id === credentialId);

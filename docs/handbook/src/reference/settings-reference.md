@@ -646,6 +646,11 @@ veyyon config get compaction.threshold
 |---|---|---|---|---|
 | `accounts.loadBalancing` | Account Load Balancing | boolean | `false` | Off: only the account you chose is used, and a session waits out its quota window. On: when that account hits its quota or rate limit, continue on another account of the same provider and say so. A revoked account always fails over regardless, with a notice. |
 
+For Antigravity, a provider-confirmed quota failure permits failover even when the account is pinned, if load balancing is on. The pin stays selected. A predicted quota hold alone does not override a pin.
+Another process can extend the hold without restoring the exhausted account's pin exemption. Clearing the account's holds explicitly permits a new attempt on that pin.
+The confirmed refusal expires at its own deadline. A later prediction from another process cannot renew that confirmation.
+A later confirmed refusal can extend this deadline, but a shorter retry delay cannot shorten an existing confirmed hold.
+
 ### Services
 
 | Key | Setting | Type | Default | What it does |

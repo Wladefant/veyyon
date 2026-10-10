@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { withAuth } from "@veyyon/ai/auth-retry";
 import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import type { OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
@@ -128,6 +129,48 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 			await removeWithRetries(tempDir);
 			tempDir = "";
 		}
+	});
+
+	test("confirmed Gemini quota failure moves a pinned request to a sibling without losing the pin", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const storage = authStorage;
+		const provider = "google-antigravity";
+		const sessionId = "confirmed-quota-pin";
+		await storage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const selectedId = storage.listStoredCredentials(provider)[0]!.id;
+		expect(storage.pinSessionCredential(provider, sessionId, selectedId)).toBe(true);
+		usageByAccount.set(
+			"acct-a",
+			createAntigravityReport({
+				accountId: "acct-a",
+				projectId: "proj-a",
+				windows: [{ counter: "google", usedFraction: 1, resetInMs: HOUR_MS }],
+			}),
+		);
+		// A usage prediction must not displace the pin before the provider refuses it.
+		expect(await storage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		const attempts: string[] = [];
+		const quota = Object.assign(
+			new Error(
+				'Cloud Code Assist API error (429): {"error":{"message":"Individual quota reached","status":"RESOURCE_EXHAUSTED","details":[{"reason":"QUOTA_EXHAUSTED"}]}}',
+			),
+			{ status: 429 },
+		);
+		const result = await withAuth(
+			storage.resolver(provider, { sessionId, modelId: "gemini-3.8-flash" }),
+			async key => {
+				attempts.push(key);
+				if (key === "api-acct-a") throw quota;
+				return "ACCOUNT-B-OK";
+			},
+		);
+		expect(result).toBe("ACCOUNT-B-OK");
+		expect(attempts).toEqual(["api-acct-a", "api-acct-b"]);
+		expect(storage.sessionCredentialRouting(provider, sessionId)?.selectedCredentialId).toBe(selectedId);
+		expect(await storage.getApiKey(provider, sessionId, { modelId: "claude-sonnet-4-5" })).toBe("api-acct-a");
 	});
 
 	test("blocks exhausted Antigravity Gemini counter without blocking healthy Claude counter", async () => {
@@ -262,5 +305,169 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		const fresh = counts.get("api-acct-fresh") ?? 0;
 		const loaded = counts.get("api-acct-loaded") ?? 0;
 		expect(fresh).toBeGreaterThan(loaded);
+	});
+
+	test("peer extended quota block preserves confirmed rotation while explicit clear defends pin from predicted holds", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const storageX = authStorage;
+		const provider = "google-antigravity";
+		const pinnedSessionId = "session-pinned-a";
+
+		await storageX.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const stored = storageX.listStoredCredentials(provider);
+		const credentialIdA = stored[0]!.id;
+
+		expect(storageX.pinSessionCredential(provider, pinnedSessionId, credentialIdA)).toBe(true);
+		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+
+		await storageX.markUsageLimitReached(provider, pinnedSessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: HOUR_MS,
+		});
+
+		const storageY = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: p => (p === "google-antigravity" ? usageProvider : undefined),
+			rankingStrategyResolver: p => (p === "google-antigravity" ? antigravityRankingStrategy : undefined),
+		});
+		await storageY.reload();
+
+		await storageY.markUsageLimitReached(provider, undefined, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: 2 * HOUR_MS,
+		});
+
+		expect(storageX.sessionCredentialRouting(provider, pinnedSessionId)?.selectedCredentialId).toBe(credentialIdA);
+		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+
+		storageX.clearCredentialBlocks(provider, credentialIdA);
+		usageByAccount.set(
+			"acct-a",
+			createAntigravityReport({
+				accountId: "acct-a",
+				projectId: "proj-a",
+				windows: [{ counter: "google", usedFraction: 1, resetInMs: 8 * HOUR_MS }],
+			}),
+		);
+		await storageX.invalidateUsageCache(provider);
+
+		const unpinnedSessionId = "session-unpinned-different";
+		expect(await storageX.getApiKey(provider, unpinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+	});
+
+	test("expired confirmation does not promote a later peer prediction", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const storageX = authStorage;
+		const provider = "google-antigravity";
+		const sessionId = "expired-confirmation-pin";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await storageX.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const credentialIdA = storageX.listStoredCredentials(provider)[0]!.id;
+		expect(storageX.pinSessionCredential(provider, sessionId, credentialIdA)).toBe(true);
+		expect(await storageX.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		await storageX.markUsageLimitReached(provider, sessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: 1000,
+		});
+
+		now += 2000;
+		usageByAccount.set(
+			"acct-a",
+			createAntigravityReport({
+				accountId: "acct-a",
+				projectId: "proj-a",
+				windows: [{ counter: "google", usedFraction: 1, resetInMs: 8 * HOUR_MS }],
+			}),
+		);
+		const storageY = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: p => (p === provider ? usageProvider : undefined),
+			rankingStrategyResolver: p => (p === provider ? antigravityRankingStrategy : undefined),
+		});
+		await storageY.reload();
+		expect(await storageY.getApiKey(provider, "peer-prediction", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+		expect(await storageX.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+	});
+
+	test("shorter confirmed refusal preserves the existing confirmation deadline", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const sessionId = "decreasing-confirmation-pin";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const credentialIdA = authStorage.listStoredCredentials(provider)[0]!.id;
+		expect(authStorage.pinSessionCredential(provider, sessionId, credentialIdA)).toBe(true);
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		for (const retryAfterMs of [HOUR_MS, 1000]) {
+			await authStorage.markUsageLimitReached(provider, sessionId, {
+				credentialId: credentialIdA,
+				modelId: "gemini-3.8-flash",
+				retryAfterMs,
+			});
+		}
+		now += 2000;
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+	});
+
+	test("shorter confirmed refusal completing later preserves the live deadline", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const sessionId = "delayed-confirmation-pin";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const credentialIdA = authStorage.listStoredCredentials(provider)[0]!.id;
+		expect(authStorage.pinSessionCredential(provider, sessionId, credentialIdA)).toBe(true);
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		let releaseReport!: () => void;
+		let reportEntered!: () => void;
+		const delayedReport = new Promise<null>(resolve => {
+			releaseReport = () => resolve(null);
+		});
+		const enteredReport = new Promise<void>(resolve => {
+			reportEntered = resolve;
+		});
+		let delayNextReport = true;
+		Object.assign(store, {
+			async getUsageReport(): Promise<UsageReport | null> {
+				if (!delayNextReport) return null;
+				delayNextReport = false;
+				reportEntered();
+				return delayedReport;
+			},
+		});
+		const shortRefusal = authStorage.markUsageLimitReached(provider, sessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: 1000,
+		});
+		await enteredReport;
+		await authStorage.markUsageLimitReached(provider, sessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: HOUR_MS,
+		});
+		now += 2000;
+		releaseReport();
+		await shortRefusal;
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
 	});
 });
