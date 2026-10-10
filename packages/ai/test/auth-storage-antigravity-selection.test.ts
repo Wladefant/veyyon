@@ -360,4 +360,43 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		expect(await storageX.getApiKey(provider, unpinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
 		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
 	});
+
+	test("expired confirmation does not promote a later peer prediction", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const storageX = authStorage;
+		const provider = "google-antigravity";
+		const sessionId = "expired-confirmation-pin";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await storageX.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const credentialIdA = storageX.listStoredCredentials(provider)[0]!.id;
+		expect(storageX.pinSessionCredential(provider, sessionId, credentialIdA)).toBe(true);
+		expect(await storageX.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		await storageX.markUsageLimitReached(provider, sessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: 1000,
+		});
+
+		now += 2000;
+		usageByAccount.set(
+			"acct-a",
+			createAntigravityReport({
+				accountId: "acct-a",
+				projectId: "proj-a",
+				windows: [{ counter: "google", usedFraction: 1, resetInMs: 8 * HOUR_MS }],
+			}),
+		);
+		const storageY = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: p => (p === provider ? usageProvider : undefined),
+			rankingStrategyResolver: p => (p === provider ? antigravityRankingStrategy : undefined),
+		});
+		await storageY.reload();
+		expect(await storageY.getApiKey(provider, "peer-prediction", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+		expect(await storageX.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+	});
 });

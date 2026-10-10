@@ -648,6 +648,7 @@ veyyon config get compaction.threshold
 
 For Antigravity, a provider-confirmed quota failure permits failover even when the account is pinned, if load balancing is on. The pin stays selected. A predicted quota hold alone does not override a pin.
 Another process can extend the hold without restoring the exhausted account's pin exemption. Clearing the account's holds explicitly permits a new attempt on that pin.
+The confirmed refusal expires at its own deadline. A later prediction from another process cannot renew that confirmation.
 
 ### Services
 

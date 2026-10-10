@@ -303,7 +303,7 @@ export class AuthStorage {
 	/** Temporary rate-limit blocks, in memory and persisted. */
 	readonly #blocks: CredentialBlocks;
 	/** Provider-confirmed Antigravity quota holds, distinct from usage-report predictions. */
-	#confirmedAntigravityQuota = new Set<string>();
+	#confirmedAntigravityQuota = new Map<string, number>();
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
@@ -3201,7 +3201,7 @@ export class AuthStorage {
 		if (targetIndex >= 0) {
 			this.#blocks.markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
 			if (provider === "google-antigravity") {
-				this.#confirmedAntigravityQuota.add(`${targetCredentialId}:${blockScope ?? ""}`);
+				this.#confirmedAntigravityQuota.set(`${targetCredentialId}:${blockScope ?? ""}`, blockedUntil);
 			}
 		}
 
@@ -3485,8 +3485,12 @@ export class AuthStorage {
 		if (provider === "google-antigravity" && movementAllowed && chosenIndex !== undefined) {
 			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
 			const quotaKey = `${chosenId}:${blockScope ?? ""}`;
-			if (this.#confirmedAntigravityQuota.has(quotaKey)) {
-				if (this.#blocks.isCredentialBlocked(provider, providerKey, chosenIndex, blockScope)) {
+			const confirmedUntil = this.#confirmedAntigravityQuota.get(quotaKey);
+			if (confirmedUntil !== undefined) {
+				if (
+					confirmedUntil > Date.now() &&
+					this.#blocks.isCredentialBlocked(provider, providerKey, chosenIndex, blockScope)
+				) {
 					// A real provider refusal permits movement; a predicted hold alone does not.
 					chosenIndex = undefined;
 				} else {
@@ -4611,7 +4615,7 @@ export class AuthStorage {
 		this.#authDeadCredentials.delete(credentialId);
 		if (provider === "google-antigravity") {
 			const prefix = `${credentialId}:`;
-			for (const key of this.#confirmedAntigravityQuota) {
+			for (const key of this.#confirmedAntigravityQuota.keys()) {
 				if (key.startsWith(prefix)) {
 					this.#confirmedAntigravityQuota.delete(key);
 				}
