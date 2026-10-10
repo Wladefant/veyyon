@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Changed
 
 - The edit prompt states the same line, block, and Markdown-section boundaries in fewer words and removes redundant examples.
