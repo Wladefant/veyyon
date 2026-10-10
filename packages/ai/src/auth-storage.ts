@@ -371,7 +371,11 @@ export class AuthStorage {
 		}
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
 		this.#purgeLegacyUsageHistory();
-		this.#routing = new CredentialRouting(this.#store, provider => this.#getStoredCredentials(provider));
+		this.#routing = new CredentialRouting(
+			this.#store,
+			provider => this.#getStoredCredentials(provider),
+			() => this.isLoadBalancingEnabled(),
+		);
 		this.#blocks = new CredentialBlocks(
 			this.#store,
 			provider => this.#getStoredCredentials(provider),
@@ -502,7 +506,7 @@ export class AuthStorage {
 	}
 
 	/** Whether exhaustion-driven movement between accounts is allowed right now. */
-	#loadBalancingEnabled(): boolean {
+	isLoadBalancingEnabled(): boolean {
 		const setting = this.#loadBalancing;
 		return typeof setting === "function" ? setting() : setting;
 	}
@@ -716,7 +720,7 @@ export class AuthStorage {
 	 */
 	#getCredentialOrder(providerKey: string, sessionId: string | undefined, total: number): number[] {
 		if (total <= 1) return [0];
-		if (!this.#loadBalancingEnabled()) return Array.from({ length: total }, (_, i) => i);
+		if (!this.isLoadBalancingEnabled()) return Array.from({ length: total }, (_, i) => i);
 		const start = sessionId ? getHashedIndex(sessionId, total) : this.#getNextRoundRobinIndex(providerKey, total);
 		const order: number[] = [];
 		for (let i = 0; i < total; i++) {
@@ -860,7 +864,7 @@ export class AuthStorage {
 	 */
 	#homeIndex(provider: string, sessionId: string | undefined, type: AuthCredential["type"]): number | undefined {
 		const chosen = this.#explicitChoiceIndex(provider, sessionId, type);
-		if (chosen !== undefined || this.#loadBalancingEnabled()) return chosen;
+		if (chosen !== undefined || this.isLoadBalancingEnabled()) return chosen;
 		const sticky = this.#routing.getStickySessionCredential(provider, sessionId);
 		if (sticky?.type !== type) return undefined;
 		const credentialId = this.#getStoredCredentials(provider)[sticky.index]?.id;
@@ -869,11 +873,15 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Choose the account a provider uses, for every session and every profile on this machine.
+	 * Choose the account a provider uses.
 	 *
-	 * GLOBAL, not session-scoped, because the credentials are: they live in one shared database
-	 * that every profile reads, so a choice recorded per session evaporates on the next `veyyon`
-	 * and a choice recorded per profile would disagree with the account list it was made from.
+	 * When `accounts.loadBalancing` is enabled (true), the choice is session-only: it pins the
+	 * account to the current session (`options.sessionId`), leaving global provider selection
+	 * empty so other sessions and profiles remain free to balance across accounts. If no session is
+	 * provided, no selection is recorded.
+	 *
+	 * When `accounts.loadBalancing` is disabled (false), the choice is machine-wide: it writes
+	 * the global choice to the store so every session and profile defaults to this account.
 	 *
 	 * PER PROVIDER, deliberately. Several providers serve one session at the same time (the main
 	 * model, agent roles, web search), so there is no single "current account" to switch:
@@ -951,7 +959,7 @@ export class AuthStorage {
 		if (
 			sticky &&
 			stickyEntry &&
-			(!this.#loadBalancingEnabled() || this.#credentialUsableNow(provider, stickyEntry, sticky.index)) &&
+			(!this.isLoadBalancingEnabled() || this.#credentialUsableNow(provider, stickyEntry, sticky.index)) &&
 			!this.#authDeadCredentials.has(stickyEntry.id)
 		) {
 			routing.activeCredentialId = stickyEntry.id;
@@ -1007,7 +1015,7 @@ export class AuthStorage {
 			const providerKey = getProviderTypeKey(provider, type);
 			// The same arithmetic `#getCredentialOrder` runs, without advancing the cursor. With
 			// movement off there is no arithmetic: storage order, as the selector uses.
-			const start = !this.#loadBalancingEnabled()
+			const start = !this.isLoadBalancingEnabled()
 				? 0
 				: sessionId
 					? getHashedIndex(sessionId, candidates.length)
@@ -1157,7 +1165,7 @@ export class AuthStorage {
 		blockScope?: string,
 	): C[] {
 		const present = candidates.filter((candidate): candidate is C => candidate !== undefined);
-		if (!this.#loadBalancingEnabled()) {
+		if (!this.isLoadBalancingEnabled()) {
 			const stored = this.#getStoredCredentials(provider);
 			const refused = (candidate: C): boolean => {
 				const id = stored[candidate.index]?.id;
@@ -1272,7 +1280,7 @@ export class AuthStorage {
 		// A headroom contest is a move by another name: whichever key has the most quota left wins,
 		// so the key changes as usage shifts. With movement off it does not run; the first key in
 		// storage order serves until the operator chooses another.
-		if (!strategy || !this.#loadBalancingEnabled()) {
+		if (!strategy || !this.isLoadBalancingEnabled()) {
 			const ordered = this.#orderByBlockAvailability(
 				provider,
 				providerKey,
@@ -3216,7 +3224,7 @@ export class AuthStorage {
 		const siblingBlockedUntil = (index: number): number | undefined =>
 			this.#blocks.getCredentialBlockedUntil(provider, providerKey, index, blockScope);
 
-		if (!this.#loadBalancingEnabled()) {
+		if (!this.isLoadBalancingEnabled()) {
 			// The block above still stands: the window really is exhausted, and recording that is
 			// what lets the account list say when it comes back. What load balancing gates is the
 			// MOVE. With it off the caller waits for this account's own window instead of spending
@@ -3483,7 +3491,7 @@ export class AuthStorage {
 		// it. `sessionPreferredIndex` is not the same thing — it also carries sticky routing, which is
 		// a record of what served last rather than anything anybody asked for.
 		let chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
-		const movementAllowed = this.#loadBalancingEnabled();
+		const movementAllowed = this.isLoadBalancingEnabled();
 		if (provider === "google-antigravity" && movementAllowed && chosenIndex !== undefined) {
 			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
 			const quotaKey = `${chosenId}:${blockScope ?? ""}`;

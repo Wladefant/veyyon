@@ -758,4 +758,5 @@ Shared policy: section 14 of [the default policy](https://github.com/Wladefant/s
 
 Newest first. One `When X, do Y` line per operator correction, at most 20. The same mistake twice means rewrite the line, not add one. Over 20: merge duplicates, drop outdated lines, show the operator.
 
+- When accounts.loadBalancing is true, pin explicit account choice to the current session only instead of persisting machine-wide, and state this session only in UI and command text.
 - When a release needs CI, do enable the workflows only for that run and disable them right after
