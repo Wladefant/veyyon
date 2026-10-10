@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Breaking Changes
 
 - `once` is removed; `lazy(build)` returns a `Lazy<T>` whose `value` getter calls `build` on the first read and returns that result afterwards, and `typeof held.value` states the built type without building it.

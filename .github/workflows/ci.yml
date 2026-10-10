@@ -665,6 +665,7 @@ jobs:
          - name: Build release binary
            env:
               RELEASE_TARGETS: ${{ matrix.target_id }}
+              VEYYON_OFFICIAL_RELEASE: '1'
            run: bun run ci:release:build-binaries
          # Windows binary is cross-built on Linux, so we have no Windows runner
          # to smoke it on. Cross-build correctness is verified via the napi

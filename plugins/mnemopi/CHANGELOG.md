@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Changed
 
 - 12 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.

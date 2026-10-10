@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Changed
 
 - Added the `providers.githubCopilot.oauthClientId` setting; `/usage` shows Copilot premium requests as unknown because GitHub bills Copilot in credits ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Fixed
 
 - Included generated assistant images in the wire content contract.
