@@ -90,8 +90,28 @@ Staleness checks occur at two points:
 - **Build time:** Before embedding a variant, `findStaleAddon` scans binary bytes for the expected sentinel. A missing sentinel fails the build with `staleAddonMessage`.
 - **Load time:** `evaluateLoadedBindings` reads the sentinel from loaded bindings (`accept`, `warn`, or `throw`). An installed package throws if the version does not match `package.json`. Workspace source executions log a single warning.
 
+### Windows shell capture under concurrency
+
+Shell capture must keep complete stdout and stderr when more than eight commands
+run in parallel. The regression saturates eight blocking workers and runs twelve
+printing commands in one process.
+
+The Windows readers poll pipe readiness without using Tokio's blocking pool.
+Otherwise eight silent reads can fill that pool. Printing commands then finish
+before their queued readers run, which returns empty output despite exit zero.
+
+After a command ends, the idle drain deadline can cancel a reader before it runs.
+Cancellation must still drain bytes already in the pipe, without waiting for new
+bytes. This also applies to buffered output and separate stdout/stderr streams.
+
+Rebuild the addon and embed it when building the executable. A version sentinel
+does not distinguish two builds with the same version. Replacing the extracted
+cache alone does not update an executable whose embedded archive contains older
+bytes.
+
 ### CPU ISA variant selection
 
 On x64 platforms, the loader selects `modern` (AVX2) when supported by the host and `baseline` otherwise. Detection states are `supported`, `unsupported`, or `unknown`. If host detection fails, `unknown` selects `baseline` without caching the result.
 
 The classifier is implemented in `native/loader-state.js` (runtime) and `scripts/host-detect.ts` (build). `native-avx2-classify.test.ts` validates parity between both implementations.
+

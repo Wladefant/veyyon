@@ -49,7 +49,7 @@ Starting a newer reload supersedes older in-flight reloads, including while the 
 request is still reading or when later edits restore the original values.
 A superseded request rejects without changing live routing; retry the command to read the current files.
 
-**Hot-reloadable:** non-startup `modelRoles.<role>` values, `agent.agents` lane
+**Hot-reloadable:** non-startup `modelRoles.<role>` values (including `modelRoles.advisor`), `agent.agents` lane
 settings (including nested `model` and `thinkingLevel`), `agent.model`,
 `agent.sharedModel`, `agent.thinkingLevel`, and `agent.maxConcurrency`. A raised
 `agent.maxConcurrency` admits lanes already queued for a slot at once; a lowered one
@@ -68,8 +68,8 @@ spawn, it runs the same reload. A rejected reload (a malformed file, an invalid 
 save in flight) does not fail the spawn: the spawn keeps the active routing, the warning is
 logged once per file state, and the next spawn retries.
 
-**Restart-only:** `defaultEffort`, `modelRoles.default`, `modelRoles.advisor`, and
-all settings outside the routing set above. If the current default or advisor role
+**Restart-only:** `defaultEffort`, `modelRoles.default`, and
+all settings outside the routing set above. If the current default role
 references another role (`@role`), this narrow reload retains the entire role map
 to avoid changing a startup-bound target indirectly; direct lane settings can still apply.
 `pickInitialThinkingLevel` captures `defaultEffort` at startup and
@@ -86,8 +86,9 @@ Malformed/invalid edits still apply **nothing**. SDK callers receive the same
 `outcomes`, plus `changed` and `restartRequired` arrays.
 
 **Read-once versus per-use:** SDK startup resolves the default role and initial
-effort into the session's established model/thinking binding. Advisor construction
-also establishes a runtime that settings-store notifications do not rebind.
+effort into the session's established model/thinking binding. An established advisor
+runtime re-resolves its model when reload changes `modelRoles.advisor` or an alias
+target, rebuilding the advisor without rebinding Main or existing forks.
 The task/eval/vibe dispatchers instead invoke `resolveAgentModel` and
 `resolveAgentThinkingLevel` per spawn; the executor forks that same dispatch snapshot
 for the child. Reload preserves the existing latest-started generation guard for

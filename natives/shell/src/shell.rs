@@ -1518,7 +1518,8 @@ fn check_pipe_readiness(handle: std::os::windows::io::RawHandle) -> PipeReadines
 	};
 
 	let mut bytes_available = 0u32;
-	// SAFETY: handle is an open OS handle and lpTotalBytesAvail points to a local u32.
+	// SAFETY: handle is an open OS handle and lpTotalBytesAvail points to a local
+	// u32.
 	let res = unsafe {
 		PeekNamedPipe(
 			handle as _,
@@ -1555,7 +1556,6 @@ async fn read_pipe_chunk_windows(
 	poll_count: &mut u32,
 ) -> io::Result<Option<usize>> {
 	use std::{io::Read as _, os::windows::io::AsRawHandle};
-
 	loop {
 		if cancel_token.is_cancelled() {
 			return Ok(None);
@@ -1573,12 +1573,12 @@ async fn read_pipe_chunk_windows(
 					Ok(n) => {
 						*poll_count = 0;
 						return Ok(Some(n));
-					}
-					Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+					},
+					Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
 					Err(e) if e.raw_os_error() == Some(109) => return Ok(None),
 					Err(e) => return Err(e),
 				}
-			}
+			},
 			PipeReadiness::Empty => {
 				if *poll_count == 0 {
 					tokio::select! {
@@ -1597,16 +1597,53 @@ async fn read_pipe_chunk_windows(
 					}
 				}
 				*poll_count = poll_count.saturating_add(1);
-			}
+			},
 			PipeReadiness::Eof => return Ok(None),
-			PipeReadiness::NotAPipe => {
-				match reader.read(buf) {
-					Ok(0) => return Ok(None),
-					Ok(n) => return Ok(Some(n)),
-					Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-					Err(e) => return Err(e),
+			PipeReadiness::NotAPipe => match reader.read(buf) {
+				Ok(0) => return Ok(None),
+				Ok(n) => return Ok(Some(n)),
+				Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
+				Err(e) => return Err(e),
+			},
+		}
+	}
+}
+
+#[cfg(windows)]
+async fn read_output_pipe_chunk_windows(
+	reader: &mut fs::File,
+	buf: &mut [u8],
+	cancel_token: &CancellationToken,
+	poll_count: &mut u32,
+	drain_remaining: &mut Option<usize>,
+) -> io::Result<Option<usize>> {
+	use std::{io::Read as _, os::windows::io::AsRawHandle};
+
+	let chunk = read_pipe_chunk_windows(reader, buf, cancel_token, poll_count).await?;
+	if chunk.is_some() || !cancel_token.is_cancelled() {
+		return Ok(chunk);
+	}
+	if *drain_remaining == Some(0) {
+		return Ok(None);
+	}
+
+	// The post-exit deadline may fire before a queued reader runs. Snapshot the
+	// pending bytes so later background writes cannot extend the cancellation.
+	loop {
+		match check_pipe_readiness(reader.as_raw_handle()) {
+			PipeReadiness::Ready(available) => {
+				let remaining = drain_remaining.get_or_insert(available);
+				let to_read = available.min(buf.len()).min(*remaining);
+				match reader.read(&mut buf[..to_read]) {
+					Ok(n) => {
+						*remaining -= n;
+						return Ok((n != 0).then_some(n));
+					},
+					Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
+					Err(error) => return Err(error),
 				}
-			}
+			},
+			PipeReadiness::Empty | PipeReadiness::Eof | PipeReadiness::NotAPipe => return Ok(None),
 		}
 	}
 }
@@ -1627,6 +1664,8 @@ async fn read_output_bytes(
 	let mut reader = reader;
 	#[cfg(windows)]
 	let mut poll_count = 0u32;
+	#[cfg(windows)]
+	let mut drain_remaining = None;
 	#[cfg(not(any(unix, windows)))]
 	let mut reader = tokio::fs::File::from_std(reader);
 
@@ -1649,8 +1688,14 @@ async fn read_output_bytes(
 			}
 		};
 		#[cfg(windows)]
-		let Ok(Some(n)) =
-			read_pipe_chunk_windows(&mut reader, &mut buf, &cancel_token, &mut poll_count).await
+		let Ok(Some(n)) = read_output_pipe_chunk_windows(
+			&mut reader,
+			&mut buf,
+			&cancel_token,
+			&mut poll_count,
+			&mut drain_remaining,
+		)
+		.await
 		else {
 			break;
 		};
@@ -1957,6 +2002,8 @@ async fn read_output(
 	let mut reader = reader;
 	#[cfg(windows)]
 	let mut poll_count = 0u32;
+	#[cfg(windows)]
+	let mut drain_remaining = None;
 	#[cfg(not(any(unix, windows)))]
 	let reader = tokio::fs::File::from_std(reader);
 	#[cfg(not(any(unix, windows)))]
@@ -1980,8 +2027,14 @@ async fn read_output(
 			}
 		};
 		#[cfg(windows)]
-		let Ok(Some(n)) =
-			read_pipe_chunk_windows(&mut reader, &mut buf, &cancel_token, &mut poll_count).await
+		let Ok(Some(n)) = read_output_pipe_chunk_windows(
+			&mut reader,
+			&mut buf,
+			&cancel_token,
+			&mut poll_count,
+			&mut drain_remaining,
+		)
+		.await
 		else {
 			break;
 		};
@@ -2036,6 +2089,8 @@ async fn read_output_buffered(
 	let mut reader = reader;
 	#[cfg(windows)]
 	let mut poll_count = 0u32;
+	#[cfg(windows)]
+	let mut drain_remaining = None;
 	#[cfg(not(any(unix, windows)))]
 	let reader = tokio::fs::File::from_std(reader);
 	#[cfg(not(any(unix, windows)))]
@@ -2059,8 +2114,14 @@ async fn read_output_buffered(
 			}
 		};
 		#[cfg(windows)]
-		let Ok(Some(n)) =
-			read_pipe_chunk_windows(&mut reader, &mut buf, &cancel_token, &mut poll_count).await
+		let Ok(Some(n)) = read_output_pipe_chunk_windows(
+			&mut reader,
+			&mut buf,
+			&cancel_token,
+			&mut poll_count,
+			&mut drain_remaining,
+		)
+		.await
 		else {
 			break;
 		};
@@ -5062,6 +5123,6 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 mod a_signal_never_reaches_the_host_or_its_ancestors;
 
 #[cfg(all(test, windows))]
-mod a_windows_signal_preserves_its_host_and_ancestry;
-#[cfg(all(test, windows))]
 mod a_windows_pipe_reader_does_not_starve_under_blocking_pool_saturation;
+#[cfg(all(test, windows))]
+mod a_windows_signal_preserves_its_host_and_ancestry;

@@ -291,6 +291,7 @@ pi.registerTool({
   hidden: false,
   defaultInactive: false,
   deferrable: false,
+  interruptible: false,
   async execute(_id, _params, signal, onUpdate, ctx) {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "Cancelled" }] };
@@ -310,7 +311,7 @@ pi.registerTool({
 });
 ```
 
-`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools. `ToolDefinition` also supports optional `hidden`, `defaultInactive`, `deferrable`, `approval`, `mcpServerName`, `mcpToolName`, `view`, `renderCall`, and `renderResult` fields.
+`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools. `ToolDefinition` also supports optional `hidden`, `defaultInactive`, `deferrable`, `interruptible`, `approval`, `mcpServerName`, `mcpToolName`, `view`, `renderCall`, and `renderResult` fields.
 
 ## UI integration points
 
