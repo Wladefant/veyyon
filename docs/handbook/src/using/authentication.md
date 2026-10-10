@@ -90,6 +90,11 @@ Anthropic          personal                    main model  (opus-5)
 Your choice is kept, not discarded. Once the limit resets, traffic returns to the account you picked
 with no further action.
 
+Antigravity meters Gemini separately from Claude and GPT. `/usage` reports capacity for each family,
+not one provider-wide total. A Gemini quota error names the account and its reset time.
+With load balancing on, Veyyon checks the sibling accounts for that model family and retries an
+available account before returning the error. Claude quota exhaustion does not block Gemini.
+
 ## When a login is signed out for you
 
 A stored login can stop working without you doing anything: the provider revokes the grant, or a
