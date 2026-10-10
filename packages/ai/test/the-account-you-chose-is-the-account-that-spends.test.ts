@@ -81,7 +81,11 @@ describe("the account that was chosen", () => {
 	 * Two OAuth accounts on a real store, the first one held. `choose: false` records no choice at
 	 * all, which is what the automatic arms need: with nobody named, the product decides.
 	 */
-	async function twoAccountsFirstHeld(options?: { loadBalancing?: boolean; choose?: boolean; sessionId?: string }): Promise<{
+	async function twoAccountsFirstHeld(options?: {
+		loadBalancing?: boolean;
+		choose?: boolean;
+		sessionId?: string;
+	}): Promise<{
 		storage: AuthStorage;
 		heldId: number;
 	}> {

@@ -413,19 +413,31 @@ describe("/account use makes the durable choice from both paths", () => {
 			},
 			showWarning: () => {},
 		};
-		const onUseAccount = (row: { provider: string; credentialId: number; providerLabel: string; accountLabel?: string; email?: string }) => {
+		const onUseAccount = (row: {
+			provider: string;
+			credentialId: number;
+			providerLabel: string;
+			accountLabel?: string;
+			email?: string;
+		}) => {
 			if (authStorage!.selectProviderCredential(row.provider, row.credentialId, { sessionId: SESSION_ID })) {
-				const scope =
-					(typeof authStorage!.isLoadBalancingEnabled === "function"
+				const scope = (
+					typeof authStorage!.isLoadBalancingEnabled === "function"
 						? authStorage!.isLoadBalancingEnabled()
-						: loadBalancingSetting)
-						? "for this session only"
-						: "everywhere on this machine";
+						: loadBalancingSetting
+				)
+					? "for this session only"
+					: "everywhere on this machine";
 				cardCtx.showStatus(`${row.providerLabel}: now using ${row.accountLabel ?? row.email} ${scope}`);
 			}
 		};
 
-		onUseAccount({ provider: PROVIDER, credentialId: personalId, providerLabel: "Unit Accounts", accountLabel: "personal@example.com" });
+		onUseAccount({
+			provider: PROVIDER,
+			credentialId: personalId,
+			providerLabel: "Unit Accounts",
+			accountLabel: "personal@example.com",
+		});
 		expect(cardStatus).toBe("Unit Accounts: now using personal@example.com for this session only");
 		expect(chosen()).toBeUndefined();
 		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(personalId);
@@ -441,7 +453,12 @@ describe("/account use makes the durable choice from both paths", () => {
 		expect(chosen()).toBe(workId);
 		expect(authStorage.sessionCredentialRouting(PROVIDER, "other-session")?.selectedCredentialId).toBe(workId);
 
-		onUseAccount({ provider: PROVIDER, credentialId: personalId, providerLabel: "Unit Accounts", accountLabel: "personal@example.com" });
+		onUseAccount({
+			provider: PROVIDER,
+			credentialId: personalId,
+			providerLabel: "Unit Accounts",
+			accountLabel: "personal@example.com",
+		});
 		expect(cardStatus).toBe("Unit Accounts: now using personal@example.com everywhere on this machine");
 		expect(chosen()).toBe(personalId);
 	});

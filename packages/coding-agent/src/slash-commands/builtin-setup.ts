@@ -282,12 +282,13 @@ export async function useProviderAccount(
 	if (!authStorage.selectProviderCredential(provider, row.credentialId, { sessionId: session.sessionId })) {
 		return { ok: false, message: `Could not switch to ${label}: that account is no longer stored.` };
 	}
-	const scope =
-		(typeof authStorage.isLoadBalancingEnabled === "function"
+	const scope = (
+		typeof authStorage.isLoadBalancingEnabled === "function"
 			? authStorage.isLoadBalancingEnabled()
-			: session.settings.get("accounts.loadBalancing") === true)
-			? "for this session only"
-			: "everywhere on this machine";
+			: session.settings.get("accounts.loadBalancing") === true
+	)
+		? "for this session only"
+		: "everywhere on this machine";
 	return {
 		ok: true,
 		message: `${row.providerLabel}: now using ${label} ${scope}.`,

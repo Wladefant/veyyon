@@ -253,7 +253,9 @@ describe("an account choice outlives the session that made it", () => {
 		expect(balancingStorage.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
 		expect(balancingStorage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 		expect(balancingStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(chosenId);
-		expect(balancingStorage.sessionCredentialRouting(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId).toBeUndefined();
+		expect(
+			balancingStorage.sessionCredentialRouting(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId,
+		).toBeUndefined();
 		expect(balancingStorage.sessionCredentialRouting(PROVIDER, undefined)?.selectedCredentialId).toBeUndefined();
 		expect(await balancingStorage.getApiKey(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
 

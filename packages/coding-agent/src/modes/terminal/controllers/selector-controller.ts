@@ -1457,15 +1457,14 @@ export class SelectorController {
 			{
 				onUseAccount: row => {
 					if (authStorage.selectProviderCredential(row.provider, row.credentialId, { sessionId })) {
-						const scope =
-							(typeof authStorage.isLoadBalancingEnabled === "function"
+						const scope = (
+							typeof authStorage.isLoadBalancingEnabled === "function"
 								? authStorage.isLoadBalancingEnabled()
-								: this.ctx.session.settings.get("accounts.loadBalancing") === true)
-								? "for this session only"
-								: "everywhere on this machine";
-						this.ctx.showStatus(
-							`${row.providerLabel}: now using ${accountDisplayLabel(row)} ${scope}`,
-						);
+								: this.ctx.session.settings.get("accounts.loadBalancing") === true
+						)
+							? "for this session only"
+							: "everywhere on this machine";
+						this.ctx.showStatus(`${row.providerLabel}: now using ${accountDisplayLabel(row)} ${scope}`);
 					} else {
 						// The credential vanished between render and keypress (a peer logged it out).
 						// Say so; a silent no-op reads as the key being broken.
