@@ -12,6 +12,11 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Background job completions reach only their owning lane. Main's read-only `job list` still shows all jobs without acknowledging another lane's delivery.
+- Idle advisor concerns wait for the next Main turn instead of starting a turn.
+- Terminal transcript entries carry operator and tool activity for Telegram's background-only reply filter ([audit](https://github.com/Wladefant/super-board/issues/747)).
+- Completion delivery retains detached owners for retry and rechecks disposal after formatting. Terminal yield results clear Telegram turn activity.
+- Queued completion retries retain their original owner after the job's inspection entry expires.
 - `/reload-config` applies changed advisor models without restarting Main or existing workers ([Refs](https://github.com/Wladefant/veyyon/issues/519)).
 - Process-shared launch clients release idle sockets and reconnect on demand. Empty brokers exit even while Main stays alive, instead of accumulating across worktrees. Each shared client retains project presence so daemons outside Main's startup directory survive idle disconnects ([Refs](https://github.com/Wladefant/veyyon/issues/513)).
 - Cancelled eval startup now releases a kernel when its last owner leaves. Python runners stop when their host dies and release descendants through a Windows job. Windows child launches hide console windows ([Refs](https://github.com/Wladefant/veyyon/issues/508)).
