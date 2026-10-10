@@ -4,7 +4,7 @@ Send and receive short text messages between the agents running in this process.
 `Main` is the main agent; a spawned agent's ID is its task name (e.g. `AuthLoader`). `op: "list"` shows every peer with status, unread count, and recent activity. Address peers by their exact roster ID; NEVER invent names.
 
 # Other sessions
-`to: "session:<sessionId>"` sends a notice to another Veyyon session on this machine, and `to: "session:all"` to every other live session. The notice is stored on disk. The session reads it at its next step or turn and shows it to its lanes. The receipt says `queued` and whether the session is `live` or `offline`. There is no reply channel and no wake of an idle session. Use it for warnings that must not be lost, for example "VPS frozen, no docker commands". Keep the text under 8 KB.
+`to: "session:<sessionId>"` sends a notice to another Veyyon session on this machine, and `to: "session:all"` to every other live session. The notice is stored on disk. The session reads it at its next step or turn and shows it to its lanes, with your name, the send time and the delivery time. A notice that the session reads more than 2 hours after you sent it (`ttlMinutes` changes the limit, at most 1440) is not shown to it; you get a "Not delivered" notice instead. The receipt says `queued` and whether the session is `live` or `offline`. There is no reply channel and no wake of an idle session. Use it for warnings that must not be lost, for example "VPS frozen, no docker commands". Keep the text under 8 KB.
 
 # Sending
 - **Fire and forget.** `op: "send"` never blocks and returns a receipt (`delivered` or `failed`). A `failed` receipt means the peer is gone; do not retry.

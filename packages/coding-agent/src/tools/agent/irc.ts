@@ -13,7 +13,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, formatDuration, lazy, prompt } from "@veyyon/utils";
-import { sendSessionNotice } from "../../launch/session-notices";
+import { DEFAULT_DELIVERY_TTL_MS, sendSessionNotice } from "../../launch/session-notices";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
@@ -37,6 +37,9 @@ const ircSchema = lazy(() =>
 		"from?": type("string").describe("wait: only accept a message from this agent id"),
 		"timeoutMs?": type("number").describe("wait: timeout in milliseconds (0 waits indefinitely)"),
 		"peek?": type("boolean").describe("inbox: list messages without consuming them"),
+		"ttlMinutes?": type("number").describe(
+			"send to session:<id>: minutes the notice stays deliverable (default 120, max 1440); later it expires undelivered",
+		),
 	}),
 );
 
@@ -149,16 +152,28 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 	}
 
 	/** A durable notice for another session, or `all` of them; see `launch/session-notices.ts`. */
-	#executeSessionNotice(senderId: string, target: string, message: string): AgentToolResult<IrcDetails> {
+	#executeSessionNotice(
+		senderId: string,
+		target: string,
+		message: string,
+		ttlMinutes?: number,
+	): AgentToolResult<IrcDetails> {
 		const from = this.session.getSessionId?.() ?? senderId;
 		const to = `session:${target}`;
 		try {
-			const receipts = sendSessionNotice({ from, to: target, body: message });
+			const receipts = sendSessionNotice({
+				from,
+				to: target,
+				body: message,
+				ttlMs: ttlMinutes === undefined ? undefined : ttlMinutes * 60_000,
+			});
+			const limit = Math.round((ttlMinutes === undefined ? DEFAULT_DELIVERY_TTL_MS / 60_000 : ttlMinutes) * 10) / 10;
 			const lines =
 				receipts.length === 0
 					? ["No other live session to notify."]
 					: [
-							`Queued for ${receipts.length} session(s); each reads it at its next step or turn:`,
+							`Queued for ${receipts.length} session(s); each reads it at its next step or turn, with your name and the send time. ` +
+								`If it is not read within ${limit} min it expires: it is not injected and you get a "Not delivered" notice:`,
 							...receipts.map(receipt => `- session:${receipt.to}: queued (${receipt.route}), id ${receipt.id}`),
 						];
 			return {
@@ -202,7 +217,12 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 					from: senderId,
 				});
 			}
-			return this.#executeSessionNotice(senderId, requested.slice("session:".length).trim(), message);
+			return this.#executeSessionNotice(
+				senderId,
+				requested.slice("session:".length).trim(),
+				message,
+				params.ttlMinutes,
+			);
 		}
 		if (to === senderId) {
 			return errorResult("Cannot send an IRC message to yourself.", { op: "send", from: senderId, to });

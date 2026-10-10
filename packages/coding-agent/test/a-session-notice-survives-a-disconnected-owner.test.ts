@@ -21,10 +21,12 @@ import {
 	ackSessionNotices,
 	CLAIM_STALE_MS,
 	claimSessionNotices,
+	formatNoticeMessage,
 	MAX_NOTICE_BODY,
 	NOTICE_TTL_MS,
 	noticeState,
 	registerSessionNoticeQueue,
+	type SessionNotice,
 	sendSessionNotice,
 } from "../src/launch/session-notices";
 import { serveTerminalControl } from "../src/launch/terminal-control";
@@ -314,6 +316,8 @@ describe("a session reading its notices", () => {
 		expect(records).toHaveLength(1);
 		expect(JSON.stringify(records[0])).toContain("VPS frozen, no docker");
 		expect(JSON.stringify(records[0])).toContain("other-session");
+		expect(JSON.stringify(records[0])).toContain("Sent: ");
+		expect(JSON.stringify(records[0])).toContain("Delivered: ");
 		expect(messages.indexOf(records[0]!)).toBeLessThan(messages.findIndex(message => message.role === "user"));
 		expect(created.calls()).toBe(1);
 		expect(noticeState(created.sessionId, receipt!.id, root)).toBe("delivered");
@@ -380,5 +384,110 @@ describe("a session reading its notices", () => {
 		await created.session.waitForIdle();
 		expect(noticeRecords(created.session.agent.state.messages)).toHaveLength(0);
 		expect(IrcBus.global().log()).toHaveLength(0);
+	});
+});
+
+describe("the header of a delivered notice", () => {
+	const sentAt = Date.UTC(2026, 9, 10, 14, 5); // 16:05 in Europe/Berlin (CEST, UTC+2)
+	const notice = (): SessionNotice => ({
+		version: 1,
+		id: "000000000000000-000000-00000000-0000-0000-0000-000000000000",
+		from: "01a0a6a4",
+		to: "target",
+		body: "VPS frozen, no docker",
+		ts: sentAt,
+	});
+
+	it("names the sender and both times in Europe/Berlin and UTC on an immediate delivery", () => {
+		const text = formatNoticeMessage(notice(), sentAt + 5000);
+		expect(text).toBe(
+			[
+				"[Notice from session `01a0a6a4`]",
+				"Sent: 2026-10-10 16:05 Europe/Berlin (14:05 UTC)",
+				"Delivered: 2026-10-10 16:05 Europe/Berlin (14:05 UTC)",
+				"",
+				"VPS frozen, no docker",
+			].join("\n"),
+		);
+	});
+
+	it("states how late a delayed delivery is", () => {
+		const text = formatNoticeMessage(notice(), Date.UTC(2026, 9, 10, 15, 40));
+		expect(text).toContain("Sent: 2026-10-10 16:05 Europe/Berlin (14:05 UTC)");
+		expect(text).toContain("Delivered: 2026-10-10 17:40 Europe/Berlin (15:40 UTC), 1h35 late");
+		expect(formatNoticeMessage(notice(), sentAt + 12 * 60_000)).toContain("12 min late");
+	});
+
+	it("reaches the model with the header, and a late notice says it is late", () => {
+		registerSessionNoticeQueue("target", root);
+		const [receipt] = sendSessionNotice({ from: "other-session", to: "target", body: "stop builds", root });
+		const file = path.join(queueDirectory("target"), `${receipt!.id}.json`);
+		const stored = JSON.parse(fs.readFileSync(file, "utf8")) as SessionNotice;
+		stored.ts = Date.now() - 95 * 60_000 - 5000; // sent 95 min ago, read now
+		fs.writeFileSync(file, JSON.stringify(stored));
+
+		const [claimed] = claimSessionNotices("target", root);
+		const text = formatNoticeMessage(claimed!, Date.now());
+		expect(text).toContain("Notice from session `other-session`");
+		expect(text).toContain("Europe/Berlin");
+		expect(text).toContain("1h35 late");
+		expect(text.endsWith("stop builds")).toBe(true);
+	});
+});
+
+describe("a notice that waited too long", () => {
+	const HOUR = 60 * 60 * 1000;
+
+	it("is not injected past the default 2 h limit and reads as expired to the sender", () => {
+		registerSessionNoticeQueue("target", root);
+		const [receipt] = sendSessionNotice({ from: "sender", to: "target", body: "stale warning", root });
+		const later = Date.now() + 2 * HOUR + 1000;
+		expect(claimSessionNotices("target", root, later)).toEqual([]);
+		expect(noticeState("target", receipt!.id, root)).toBe("expired");
+	});
+
+	it("is still injected just inside the limit", () => {
+		registerSessionNoticeQueue("target", root);
+		const [receipt] = sendSessionNotice({ from: "sender", to: "target", body: "fresh enough", root });
+		const later = Date.now() + 2 * HOUR - 60_000;
+		expect(takeAll("target", later).map(item => item.body)).toEqual(["fresh enough"]);
+		expect(noticeState("target", receipt!.id, root)).toBe("delivered");
+	});
+
+	it("honours a per-message limit, shorter or longer than the default", () => {
+		registerSessionNoticeQueue("target", root);
+		const [short] = sendSessionNotice({ from: "sender", to: "target", body: "short", ttlMs: 10 * 60_000, root });
+		const [long] = sendSessionNotice({ from: "sender", to: "target", body: "long", ttlMs: 5 * HOUR, root });
+		const later = Date.now() + 3 * HOUR;
+		expect(takeAll("target", later).map(item => item.body)).toEqual(["long"]);
+		expect(noticeState("target", short!.id, root)).toBe("expired");
+		expect(noticeState("target", long!.id, root)).toBe("delivered");
+		expect(() => sendSessionNotice({ from: "sender", to: "target", body: "x", ttlMs: 0, root })).toThrow(
+			"ttl must be positive",
+		);
+	});
+
+	it("tells the sender 'not delivered' at its next read, without a loop", () => {
+		registerSessionNoticeQueue("target", root);
+		registerSessionNoticeQueue("sender", root);
+		const [receipt] = sendSessionNotice({ from: "sender", to: "target", body: "stale warning", root });
+		claimSessionNotices("target", root, Date.now() + 3 * HOUR);
+
+		const reports = takeAll("sender", Date.now() + 3 * HOUR);
+		expect(reports).toHaveLength(1);
+		expect(reports[0]?.from).toBe("delivery-status");
+		expect(reports[0]?.body).toContain("Not delivered");
+		expect(reports[0]?.body).toContain(receipt!.id);
+		expect(reports[0]?.body).toContain("Europe/Berlin");
+		// The report itself does not expire into another report.
+		expect(claimSessionNotices("target", root, Date.now() + 9 * HOUR)).toEqual([]);
+		expect(claimSessionNotices("sender", root, Date.now() + 9 * HOUR)).toEqual([]);
+	});
+
+	it("does not fail when the sender has no queue to report to", () => {
+		registerSessionNoticeQueue("target", root);
+		const [receipt] = sendSessionNotice({ from: "free label!", to: "target", body: "stale", root });
+		expect(claimSessionNotices("target", root, Date.now() + 3 * HOUR)).toEqual([]);
+		expect(noticeState("target", receipt!.id, root)).toBe("expired");
 	});
 });

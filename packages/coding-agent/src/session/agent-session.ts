@@ -229,6 +229,7 @@ import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-ur
 import {
 	ackSessionNotices,
 	claimSessionNotices,
+	formatNoticeMessage,
 	registerSessionNoticeQueue,
 	type SessionNotice,
 } from "../launch/session-notices";
@@ -8935,7 +8936,7 @@ export class AgentSession {
 			const record: CustomMessage = {
 				role: "custom",
 				customType: "session:notice",
-				content: `[Notice from session \`${notice.from}\`]\n\n${notice.body}`,
+				content: formatNoticeMessage(notice, Date.now()),
 				display: true,
 				details: { id: notice.id, from: notice.from, message: notice.body },
 				attribution: "agent",

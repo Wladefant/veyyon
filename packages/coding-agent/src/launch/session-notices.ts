@@ -30,6 +30,10 @@ export interface SessionNotice {
 	to: string;
 	body: string;
 	ts: number;
+	/** Delivery limit in ms; absent means {@link DEFAULT_DELIVERY_TTL_MS}. */
+	ttlMs?: number;
+	/** `status` marks a delivery report from the system; it never produces a report itself. */
+	kind?: "status";
 }
 
 export interface SessionNoticeReceipt {
@@ -39,10 +43,14 @@ export interface SessionNoticeReceipt {
 	route: "live" | "offline";
 }
 
-export type NoticeState = "queued" | "claimed" | "delivered" | "unknown";
+export type NoticeState = "queued" | "claimed" | "delivered" | "expired" | "unknown";
 
-/** A notice older than this is dropped unread: a warning about a freeze is wrong a day later. */
+/** A notice older than this is dropped unread: a warning about a freeze is wrong a day later. Also the cap on `ttlMs`. */
 export const NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
+/** A notice older than this when its recipient reads it is not injected, unless the sender set `ttlMs`. */
+export const DEFAULT_DELIVERY_TTL_MS = 2 * 60 * 60 * 1000;
+/** Delivery that lags the send by at least this long is reported as late. */
+const LATE_AFTER_MS = 60_000;
 export const MAX_NOTICE_BODY = 8 * 1024;
 const MAX_PENDING_PER_SESSION = 100;
 /** A claim not acknowledged within this long is offered again. */
@@ -163,12 +171,16 @@ export function sendSessionNotice(args: {
 	from: string;
 	to: string;
 	body: string;
+	/** Delivery limit in ms; a notice older than this when its recipient reads it is not injected. Default 2 h, at most 24 h. */
+	ttlMs?: number;
 	root?: string;
 }): SessionNoticeReceipt[] {
 	const root = args.root ?? getConfigRootDir();
 	const body = args.body.trim();
 	if (!body) throw new Error("Notice body is empty");
 	if (Buffer.byteLength(body) > MAX_NOTICE_BODY) throw new Error(`Notice body exceeds ${MAX_NOTICE_BODY} bytes`);
+	if (args.ttlMs !== undefined && !(args.ttlMs > 0)) throw new Error("Notice ttl must be positive");
+	const ttlMs = args.ttlMs === undefined ? undefined : Math.min(args.ttlMs, NOTICE_TTL_MS);
 	if (args.to !== "all" && args.to === args.from) throw new Error("Cannot send a notice to your own session");
 	const live = new Set(listLiveSessionIds(root));
 	const targets = args.to === "all" ? [...live].filter(id => id !== args.from) : [args.to];
@@ -183,15 +195,63 @@ export function sendSessionNotice(args: {
 		if (pendingNames(directory, now).length >= MAX_PENDING_PER_SESSION) {
 			throw new Error(`Session ${to} has ${MAX_PENDING_PER_SESSION} unread notices; not queuing more`);
 		}
-		const id = `${now.toString().padStart(TIMESTAMP_DIGITS, "0")}-${(noticeSequence++).toString().padStart(6, "0")}-${crypto.randomUUID()}`;
-		const notice: SessionNotice = { version: 1, id, from: args.from, to, body, ts: now };
-		// Written under a dot name, then renamed: a reader never sees half a notice.
-		const temporary = path.join(directory, `.${id}.tmp`);
-		fs.writeFileSync(temporary, JSON.stringify(notice), { mode: 0o600 });
-		fs.renameSync(temporary, path.join(directory, `${id}.json`));
+		const id = writeNotice(directory, { from: args.from, to, body, ts: now, ttlMs });
 		receipts.push({ to, id, route: live.has(to) ? "live" : "offline" });
 	}
 	return receipts;
+}
+
+/** Write one notice file into a queue directory and return its id. */
+function writeNotice(
+	directory: string,
+	fields: { from: string; to: string; body: string; ts: number; ttlMs?: number; kind?: "status" },
+): string {
+	const id = `${fields.ts.toString().padStart(TIMESTAMP_DIGITS, "0")}-${(noticeSequence++).toString().padStart(6, "0")}-${crypto.randomUUID()}`;
+	const notice: SessionNotice = { version: 1, id, ...fields };
+	if (notice.ttlMs === undefined) delete notice.ttlMs;
+	if (notice.kind === undefined) delete notice.kind;
+	// Written under a dot name, then renamed: a reader never sees half a notice.
+	const temporary = path.join(directory, `.${id}.tmp`);
+	fs.writeFileSync(temporary, JSON.stringify(notice), { mode: 0o600 });
+	fs.renameSync(temporary, path.join(directory, `${id}.json`));
+	return id;
+}
+
+function deliveryTtlMs(notice: SessionNotice): number {
+	return typeof notice.ttlMs === "number" && notice.ttlMs > 0
+		? Math.min(notice.ttlMs, NOTICE_TTL_MS)
+		: DEFAULT_DELIVERY_TTL_MS;
+}
+
+/**
+ * Move a notice past its delivery limit to `expired/` (the sender's receipt reads `expired`) and queue a
+ * status notice for the sender, so it learns on its next turn that the message never reached the model.
+ * A status notice is never reported on in turn.
+ */
+function expireNotice(file: string, notice: SessionNotice, directory: string, root: string, now: number): void {
+	try {
+		const expired = path.join(directory, "expired");
+		fs.mkdirSync(expired, { recursive: true, mode: 0o700 });
+		fs.renameSync(file, path.join(expired, path.basename(file)));
+	} catch {
+		fs.rmSync(file, { force: true });
+	}
+	if (notice.kind === "status" || !isValidSessionId(notice.from) || notice.from === notice.to) return;
+	try {
+		const senderQueue = queueDir(root, notice.from);
+		if (!fs.existsSync(senderQueue)) return;
+		const limit = Math.round(deliveryTtlMs(notice) / 60_000);
+		writeNotice(senderQueue, {
+			from: "delivery-status",
+			to: notice.from,
+			ts: now,
+			kind: "status",
+			body:
+				`Not delivered: your notice ${notice.id} to session ${notice.to} expired. ` +
+				`It was sent ${formatTimes(notice.ts)} and read ${formatTimes(now)}, past its ${limit} min limit, ` +
+				"so the recipient never saw it. Send it again if it still matters.",
+		});
+	} catch {}
 }
 
 /**
@@ -201,8 +261,10 @@ export function sendSessionNotice(args: {
  * acknowledged (a crash in between) is offered again after {@link CLAIM_STALE_MS}, so delivery is
  * at least once. The caller drops a repeat by notice id.
  *
- * A file that cannot be moved stays in the queue for the next call and never stops the others. Expired
- * and unreadable notices are discarded. Old files in `claimed/` and `delivered/` are pruned on every
+ * A notice older than its delivery limit (`ttlMs`, default {@link DEFAULT_DELIVERY_TTL_MS}) is not
+ * returned: it moves to `expired/` and the sender gets a status notice. A late notice would mislead.
+ * A file that cannot be moved stays in the queue for the next call and never stops the others. Unreadable
+ * notices are discarded. Old files in `claimed/`, `delivered/` and `expired/` are pruned on every
  * call, also when nothing is pending.
  */
 export function claimSessionNotices(sessionId: string, root = getConfigRootDir(), now = Date.now()): SessionNotice[] {
@@ -210,6 +272,7 @@ export function claimSessionNotices(sessionId: string, root = getConfigRootDir()
 	const claimed = path.join(directory, "claimed");
 	purgeExpired(claimed, now);
 	pruneByAge(path.join(directory, "delivered"), now);
+	pruneByAge(path.join(directory, "expired"), now);
 	const read = (file: string): SessionNotice | undefined => {
 		try {
 			const notice = JSON.parse(fs.readFileSync(file, "utf8")) as SessionNotice;
@@ -253,8 +316,13 @@ export function claimSessionNotices(sessionId: string, root = getConfigRootDir()
 			fs.utimesSync(target, new Date(now), new Date(now)); // rename keeps the old mtime; staleness counts from the claim
 		} catch {}
 		const notice = read(target);
-		if (notice) taken.push(notice);
-		else fs.rmSync(target, { force: true });
+		if (!notice) {
+			fs.rmSync(target, { force: true });
+		} else if (now - notice.ts > deliveryTtlMs(notice)) {
+			expireNotice(target, notice, directory, root, now);
+		} else {
+			taken.push(notice);
+		}
 	}
 	return taken;
 }
@@ -278,7 +346,8 @@ export function ackSessionNotices(sessionId: string, ids: Iterable<string>, root
 
 /**
  * The sender's receipt: `delivered` once the notice is in the recipient's turn, `claimed` while the
- * recipient holds it, `queued` while it waits, `unknown` if it never existed or has expired.
+ * recipient holds it, `queued` while it waits, `expired` when it outlived its delivery limit and was
+ * not injected, `unknown` if it never existed or was purged.
  */
 export function noticeState(to: string, id: string, root = getConfigRootDir()): NoticeState {
 	const directory = queueDir(root, to);
@@ -286,5 +355,49 @@ export function noticeState(to: string, id: string, root = getConfigRootDir()): 
 	if (fs.existsSync(path.join(directory, "delivered", `${id}.json`))) return "delivered";
 	if (fs.existsSync(path.join(directory, "claimed", `${id}.json`))) return "claimed";
 	if (fs.existsSync(path.join(directory, `${id}.json`))) return "queued";
+	if (fs.existsSync(path.join(directory, "expired", `${id}.json`))) return "expired";
 	return "unknown";
+}
+
+const NOTICE_ZONE = "Europe/Berlin";
+
+function formatClock(ms: number, timeZone: string): string {
+	const parts = new Intl.DateTimeFormat("sv-SE", {
+		timeZone,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		hourCycle: "h23",
+	}).format(new Date(ms));
+	return parts.replace(/\u00a0/g, " ");
+}
+
+function formatTimes(ms: number): string {
+	const berlin = formatClock(ms, NOTICE_ZONE);
+	const utc = formatClock(ms, "UTC");
+	return `${berlin} ${NOTICE_ZONE} (${utc.slice(11)} UTC)`;
+}
+
+function formatLate(ms: number): string {
+	const minutes = Math.round(ms / 60_000);
+	const hours = Math.floor(minutes / 60);
+	return hours > 0 ? `${hours}h${String(minutes % 60).padStart(2, "0")} late` : `${minutes} min late`;
+}
+
+/**
+ * The text a recipient reads for a delivered notice: who sent it, when it was sent and when it was
+ * delivered (Europe/Berlin and UTC), and how late it is when delivery lagged the send by a minute or more.
+ */
+export function formatNoticeMessage(notice: SessionNotice, deliveredAt: number): string {
+	const delay = deliveredAt - notice.ts;
+	const late = delay >= LATE_AFTER_MS ? `, ${formatLate(delay)}` : "";
+	return [
+		`[Notice from session \`${notice.from}\`]`,
+		`Sent: ${formatTimes(notice.ts)}`,
+		`Delivered: ${formatTimes(deliveredAt)}${late}`,
+		"",
+		notice.body,
+	].join("\n");
 }
