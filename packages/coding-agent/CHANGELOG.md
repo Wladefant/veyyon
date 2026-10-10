@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
+
 ## [1.5.6] - 2026-10-10
 
 ### Changed

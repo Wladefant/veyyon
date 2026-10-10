@@ -226,6 +226,7 @@ import type { GoalAbortReason, GoalModeState, GoalTokenUsage } from "../goals/st
 // handler and reaches several hundred modules, and both of these are declared in
 // `local-protocol`, which reaches seven.
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls/local-protocol";
+import { consumeSessionNotices, type SessionNotice } from "../launch/session-notices";
 import { resolveMemoryBackend } from "../memory/backend";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
@@ -568,6 +569,8 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 
 /** Bound on draining post-prompt work before a /btw branch; a hung task must not hold the promotion forever. */
 const BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
+/** Least time between two scans of the notice queue at step boundaries. */
+const SESSION_NOTICE_SCAN_MS = 1000;
 
 /**
  * Emit a warn-level log for a turn that ended in a provider error so recurring
@@ -1240,6 +1243,7 @@ export class AgentSession {
 	// Incoming IRC records received while a turn was streaming. Parent IRCs enter the steering
 	// queue; peer IRCs wait here as interrupts and drain as asides at the next boundary.
 	readonly #ircInbox = new IrcInbox();
+	#lastNoticeScanAt = 0;
 	/** Provider session ids, the inherited prompt cache key, and the transport state they route. */
 	readonly #providerSessions: ProviderSessions;
 	#isDisposed = false;
@@ -1856,6 +1860,7 @@ export class AgentSession {
 		// `job poll` / `irc wait` can return early before the boundary drains them.
 		this.agent.hasIrcInterrupts = () => this.#ircInbox.hasInterrupts;
 		this.agent.setAsideMessageProvider(() => {
+			this.#pullSessionNotices(false);
 			const pendingIrc = this.#ircInbox.takeAll();
 			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
 			thunks.push(...this.yieldQueue.drainLazy());
@@ -5585,6 +5590,7 @@ export class AgentSession {
 			takeHeldAtRestReading(this);
 			// Flush any pending bash and Python results before the new prompt
 			this.#executions.flush();
+			this.#pullSessionNotices(true);
 			this.#flushPendingIrcAsides();
 
 			// A new user prompt does not reset stop-time reminder suppression. Replaying
@@ -8851,6 +8857,50 @@ export class AgentSession {
 			// sessionManager persistence via #handleAgentEvent.
 			this.agent.emitExternalEvent({ type: "message_start", message: record });
 			this.agent.emitExternalEvent({ type: "message_end", message: record });
+		}
+	}
+
+	/**
+	 * Take the notices other sessions queued for this one (`launch/session-notices.ts`) and hand each
+	 * to the model as a `session:notice` record, plus to every running lane over the IrcBus: a notice
+	 * addressed to a session is for the lanes it runs too.
+	 *
+	 * Runs at the start of every prompt and, at most once a second, at each step boundary. Only the
+	 * driving session reads its queue; a spawned one gets the notice from the bus.
+	 */
+	#pullSessionNotices(force: boolean): void {
+		if (this.#isDisposed || this.#isSpawned) return;
+		const now = Date.now();
+		if (!force && now - this.#lastNoticeScanAt < SESSION_NOTICE_SCAN_MS) return;
+		this.#lastNoticeScanAt = now;
+		let notices: SessionNotice[];
+		try {
+			notices = consumeSessionNotices(this.sessionManager.getSessionId());
+		} catch (error) {
+			logger.warn("Reading session notices failed", { error: errorMessage(error) });
+			return;
+		}
+		const agentId = this.#config.agentId;
+		for (const notice of notices) {
+			const record: CustomMessage = {
+				role: "custom",
+				customType: "session:notice",
+				content: `[Notice from session \`${notice.from}\`]\n\n${notice.body}`,
+				display: true,
+				details: { id: notice.id, from: notice.from, message: notice.body },
+				attribution: "agent",
+				timestamp: notice.ts,
+			};
+			void this.#emitSessionEvent({ type: "irc_message", message: record });
+			this.#ircInbox.queueAside(record);
+			if (!agentId) continue;
+			const registry = AgentRegistry.global();
+			for (const lane of registry.listVisibleTo(agentId)) {
+				if (lane.status !== "running" || lane.kind === "main") continue;
+				void IrcBus.global()
+					.send({ from: agentId, to: lane.id, body: record.content as string })
+					.catch(error => logger.warn("Session notice relay failed", { to: lane.id, error: errorMessage(error) }));
+			}
 		}
 	}
 

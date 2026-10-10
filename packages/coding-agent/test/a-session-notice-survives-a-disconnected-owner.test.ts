@@ -1,0 +1,240 @@
+// WHY: on 2026-10-10 a warning for another session went through the terminal pipe once and failed the
+// second time with "Terminal owner disconnected"; the target session's lanes never saw it. A notice is a
+// file, so a dropped socket, a missing owner or a busy session cannot lose it.
+// Covers the queue (connected owner, no owner, broadcast, once-only, bounds) and the session that
+// reads it at the start of its next prompt and forwards it to its running lanes.
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { createMockModel } from "@veyyon/ai/providers/mock";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import * as utils from "@veyyon/utils";
+import { Snowflake, TempDir } from "@veyyon/utils";
+import { type } from "arktype";
+import { ModelRegistry } from "../src/config/model-registry";
+import { Settings } from "../src/config/settings";
+import {
+	consumeSessionNotices,
+	MAX_NOTICE_BODY,
+	NOTICE_TTL_MS,
+	noticeState,
+	sendSessionNotice,
+} from "../src/launch/session-notices";
+import { serveTerminalControl } from "../src/launch/terminal-control";
+import { AgentRegistry } from "../src/registry/agent-registry";
+import { AgentSession } from "../src/session/agent-session";
+import { IrcBus } from "../src/task/irc-bus";
+
+let temp: TempDir;
+let root: string;
+const closers: Array<() => void> = [];
+
+beforeEach(() => {
+	temp = TempDir.createSync("@veyyon-notices-");
+	root = temp.path();
+});
+
+afterEach(async () => {
+	for (const close of closers.splice(0)) close();
+	await temp.remove();
+});
+
+/** A live terminal owner for `sessionId`, registered the way a real one is. */
+async function liveOwner(sessionId: string): Promise<() => void> {
+	const close = await serveTerminalControl(
+		{
+			identity: () => ({ sessionId, cwd: root, sessionFile: path.join(root, `${sessionId}.jsonl`) }),
+			deliver: async () => "started",
+			abort: async () => false,
+			history: () => [],
+			subscribe: () => () => {},
+		},
+		root,
+	);
+	closers.push(close);
+	return close;
+}
+
+describe("the notice queue", () => {
+	it("delivers to a connected session at its next read, once, and the sender sees the receipt", async () => {
+		await liveOwner("target");
+
+		const [receipt] = sendSessionNotice({ from: "sender", to: "target", body: "VPS frozen, no docker", root });
+		expect(receipt?.route).toBe("live");
+		expect(noticeState("target", receipt!.id, root)).toBe("queued");
+
+		const first = consumeSessionNotices("target", root);
+		expect(first.map(notice => [notice.from, notice.body])).toEqual([["sender", "VPS frozen, no docker"]]);
+		expect(noticeState("target", receipt!.id, root)).toBe("delivered");
+		expect(consumeSessionNotices("target", root)).toEqual([]);
+	});
+
+	it("delivers to a session whose owner is gone, at its next turn", async () => {
+		const close = await liveOwner("target");
+		close(); // the owner disconnects: the pipe that failed on 2026-10-10 is no longer there
+		// close() removes the record asynchronously; removing it here makes "owner gone" deterministic.
+		const records = path.join(root, "run", "terminals");
+		for (const name of fs.readdirSync(records)) fs.rmSync(path.join(records, name), { force: true });
+
+		const [receipt] = sendSessionNotice({ from: "sender", to: "target", body: "stop the deploy", root });
+		expect(receipt?.route).toBe("offline");
+		expect(noticeState("target", receipt!.id, root)).toBe("queued");
+
+		expect(consumeSessionNotices("target", root).map(notice => notice.body)).toEqual(["stop the deploy"]);
+	});
+
+	it("broadcasts to every other live session and never to the sender", async () => {
+		await liveOwner("sender");
+		await liveOwner("one");
+		await liveOwner("two");
+
+		const receipts = sendSessionNotice({ from: "sender", to: "all", body: "freeze", root });
+
+		expect(receipts.map(receipt => receipt.to).sort()).toEqual(["one", "two"]);
+		expect(consumeSessionNotices("one", root)).toHaveLength(1);
+		expect(consumeSessionNotices("two", root)).toHaveLength(1);
+		expect(consumeSessionNotices("sender", root)).toEqual([]);
+	});
+
+	it("keeps order and never hands one notice to two readers", () => {
+		const ids = ["a", "b", "c"].map(body => sendSessionNotice({ from: "s", to: "target", body, root })[0]!.id);
+		const first = consumeSessionNotices("target", root);
+		const second = consumeSessionNotices("target", root);
+		expect(first.map(notice => notice.body)).toEqual(["a", "b", "c"]);
+		expect(first.map(notice => notice.id)).toEqual(ids);
+		expect(second).toEqual([]);
+	});
+
+	it("drops an expired notice unread and refuses unsafe or oversized input", () => {
+		const [receipt] = sendSessionNotice({ from: "s", to: "target", body: "old", root });
+		const aged = Date.now() + NOTICE_TTL_MS + 1000;
+		expect(consumeSessionNotices("target", root, aged)).toEqual([]);
+		expect(noticeState("target", receipt!.id, root)).toBe("unknown"); // discarded, never shown
+
+		expect(() => sendSessionNotice({ from: "s", to: "../escape", body: "x", root })).toThrow("Invalid session id");
+		expect(() => sendSessionNotice({ from: "s", to: "target", body: "x".repeat(MAX_NOTICE_BODY + 1), root })).toThrow(
+			"exceeds",
+		);
+		expect(() => sendSessionNotice({ from: "s", to: "s", body: "x", root })).toThrow("own session");
+		expect(fs.existsSync(path.join(root, "run", "escape"))).toBe(false);
+	});
+
+	it("does not read a notice that names another session", () => {
+		const directory = path.join(root, "run", "notices", "target");
+		fs.mkdirSync(directory, { recursive: true });
+		fs.writeFileSync(
+			path.join(directory, "x.json"),
+			JSON.stringify({ version: 1, id: "x", from: "s", to: "other", body: "misfiled", ts: Date.now() }),
+		);
+		expect(consumeSessionNotices("target", root)).toEqual([]);
+	});
+});
+
+describe("a session reading its notices", () => {
+	let session: AgentSession | undefined;
+	let auth: AuthStorage | undefined;
+
+	beforeEach(() => {
+		IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		spyOn(utils, "getConfigRootDir").mockReturnValue(root);
+	});
+
+	afterEach(async () => {
+		await session?.dispose();
+		session = undefined;
+		auth?.close();
+		auth = undefined;
+	});
+
+	async function createSession(): Promise<{ session: AgentSession; sessionId: string; calls: () => number }> {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled anthropic model to exist");
+		const mock = createMockModel({ responses: [{ content: ["noted"] }] });
+		const readTool: AgentTool = {
+			name: "read",
+			label: "read",
+			description: "Fake read",
+			parameters: type({}),
+			async execute() {
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		};
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [readTool], messages: [] },
+			streamFn: mock.stream,
+		});
+		auth = await AuthStorage.create(temp.join(`auth-${Snowflake.next()}.db`));
+		auth.setRuntimeApiKey("anthropic", "test-key");
+		const sessionManager = SessionManager.inMemory();
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			modelRegistry: new ModelRegistry(auth, temp.join(`models-${Snowflake.next()}.yml`)),
+			toolRegistry: new Map<string, AgentTool>([["read", readTool]]),
+			builtInToolNames: ["read"],
+			agentId: "Main",
+		});
+		return { session, sessionId: sessionManager.getSessionId(), calls: () => mock.calls.length };
+	}
+
+	const noticeRecords = (messages: readonly AgentMessage[]) =>
+		messages.filter(message => message.role === "custom" && message.customType === "session:notice");
+
+	it("shows a notice queued while it was disconnected in the next prompt, ahead of the user's text", async () => {
+		const created = await createSession();
+		sendSessionNotice({ from: "other-session", to: created.sessionId, body: "VPS frozen, no docker", root });
+
+		await created.session.prompt("carry on");
+		await created.session.waitForIdle();
+
+		const messages = created.session.agent.state.messages;
+		const records = noticeRecords(messages);
+		expect(records).toHaveLength(1);
+		expect(JSON.stringify(records[0])).toContain("VPS frozen, no docker");
+		expect(JSON.stringify(records[0])).toContain("other-session");
+		expect(messages.indexOf(records[0]!)).toBeLessThan(messages.findIndex(message => message.role === "user"));
+		expect(created.calls()).toBe(1);
+
+		await created.session.prompt("again");
+		await created.session.waitForIdle();
+		expect(noticeRecords(created.session.agent.state.messages)).toHaveLength(1); // not delivered twice
+	});
+
+	it("forwards the notice to the lanes the session is running", async () => {
+		const created = await createSession();
+		const registry = AgentRegistry.global();
+		registry.register({ id: "Main", displayName: "Main", kind: "main", session: null, status: "running" });
+		registry.register({
+			id: "ImageWidgetFinish",
+			displayName: "ImageWidgetFinish",
+			kind: "sub",
+			parentId: "Main",
+			session: null,
+			status: "running",
+		});
+		sendSessionNotice({ from: "other-session", to: created.sessionId, body: "no builds now", root });
+
+		await created.session.prompt("carry on");
+		await created.session.waitForIdle();
+
+		const toLane = IrcBus.global()
+			.log()
+			.filter(entry => entry.message.to === "ImageWidgetFinish");
+		expect(toLane).toHaveLength(1);
+		expect(toLane[0]?.message.body).toContain("no builds now");
+	});
+
+	it("negative control: with nothing queued, no notice record and no lane traffic appear", async () => {
+		const created = await createSession();
+		await created.session.prompt("carry on");
+		await created.session.waitForIdle();
+		expect(noticeRecords(created.session.agent.state.messages)).toHaveLength(0);
+		expect(IrcBus.global().log()).toHaveLength(0);
+	});
+});

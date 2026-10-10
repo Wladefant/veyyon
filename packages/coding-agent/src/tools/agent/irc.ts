@@ -13,6 +13,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, formatDuration, lazy, prompt } from "@veyyon/utils";
+import { sendSessionNotice } from "../../launch/session-notices";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
@@ -29,7 +30,7 @@ export { isIrcEnabled };
 const ircSchema = lazy(() =>
 	type({
 		op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
-		"to?": type("string").describe('send: recipient agent id or "all"'),
+		"to?": type("string").describe('send: recipient agent id, "all", "session:<id>" or "session:all"'),
 		"message?": type("string").describe("send: message body"),
 		"replyTo?": type("string").describe("send: message id being answered"),
 		"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
@@ -147,6 +148,32 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		}
 	}
 
+	/** A durable notice for another session, or `all` of them; see `launch/session-notices.ts`. */
+	#executeSessionNotice(senderId: string, target: string, message: string): AgentToolResult<IrcDetails> {
+		const from = this.session.getSessionId?.() ?? senderId;
+		const to = `session:${target}`;
+		try {
+			const receipts = sendSessionNotice({ from, to: target, body: message });
+			const lines =
+				receipts.length === 0
+					? ["No other live session to notify."]
+					: [
+							`Queued for ${receipts.length} session(s); each reads it at its next step or turn:`,
+							...receipts.map(receipt => `- session:${receipt.to}: queued (${receipt.route}), id ${receipt.id}`),
+						];
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: {
+					op: "send",
+					from: senderId,
+					to,
+				},
+			};
+		} catch (error) {
+			return errorResult(errorMessage(error), { op: "send", from: senderId, to });
+		}
+	}
+
 	async #executeSend(
 		registry: AgentRegistry,
 		senderId: string,
@@ -167,6 +194,15 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		const to = registry.resolveId(requested, registry.scopeOf(senderId))?.id ?? requested;
 		if (!message) {
 			return errorResult('`message` is required for op="send".', { op: "send", from: senderId });
+		}
+		if (requested.startsWith("session:")) {
+			if (params.await) {
+				return errorResult("`await` is invalid with a session notice — there is no reply channel.", {
+					op: "send",
+					from: senderId,
+				});
+			}
+			return this.#executeSessionNotice(senderId, requested.slice("session:".length).trim(), message);
 		}
 		if (to === senderId) {
 			return errorResult("Cannot send an IRC message to yourself.", { op: "send", from: senderId, to });

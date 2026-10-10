@@ -98,3 +98,10 @@
 - Wake-on-message is the only resume primitive: messaging a parked agent revives it (same `ensureLive` path the agent dashboard uses when you open one). The task tool has no `resume` parameter.
 - Message ids are Snowflakes; pass them as `replyTo` to thread an answer to a specific message.
 - Persistence is per recipient history: the sender gets receipts in the tool result; the recipient sees the injected `irc:incoming` message in its own transcript (visible via `history://<id>`).
+
+## Cross-session notices
+- `to: "session:<sessionId>"` or `to: "session:all"` (every other live session) queues a durable notice instead of an in-process message. `await` is refused.
+- Code: `packages/coding-agent/src/launch/session-notices.ts`. One file per notice under `<config root>/run/notices/<sessionId>/`, written atomically. The recipient moves a file to `delivered/` before it reads it, so a notice is delivered once; the sender's receipt is that file. Notices expire after 24 hours, bodies are limited to 8 KB, and a session holds at most 100 unread ones.
+- The driving session of the recipient reads its queue at the start of every prompt and, at most once a second, at each step boundary (`AgentSession.#pullSessionNotices`). It adds each notice to its context as a `session:notice` message and sends it to every running lane over the `IrcBus`.
+- It does not wake an idle session: the notice waits for the next turn. A session with no live terminal owner still gets the notice. The queue lives under the active profile's config root, like `run/terminals`, so sessions of different profiles do not see each other.
+- Why a file: the terminal control pipe reaches the main agent of one live terminal only, and a request on a dropped socket fails with `Terminal owner disconnected` and is not retried. See [Wladefant/veyyon#537](https://github.com/Wladefant/veyyon/issues/537).
