@@ -2079,7 +2079,7 @@ export class AgentSession {
 			provider: {
 				streamFn: config.advisorStreamFn,
 				preferWebsockets: config.preferWebsockets,
-				onPayload: config.onPayload,
+				payloadHook: config.payloadHook,
 				onResponse: this.#onResponse,
 				onSseEvent: this.#onSseEvent,
 				transformProviderContext: this.#wire.transform,
@@ -4792,7 +4792,7 @@ export class AgentSession {
 		provider = "anthropic",
 	): Promise<SimpleStreamOptions> {
 		const runtime = await this.leaseSecretRuntime();
-		const sessionOnPayload = this.#config.onPayload;
+		const sessionOnPayload = this.#config.payloadHook?.();
 		const sessionOnResponse = this.#onResponse;
 		const sessionMetadata = this.agent.metadataForProvider(provider);
 		const sessionOnSseEvent = this.#onSseEvent;
@@ -9347,7 +9347,7 @@ export class AgentSession {
 				metadata: this.agent.metadataForProvider(model.provider),
 				convertToLlm,
 				resolveObfuscateProviderText: () => this.#secrets.snapshotProviderTextRedactor(),
-				onPayload: this.#config.onPayload,
+				onPayload: this.#config.payloadHook?.(),
 				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 				// Same per-provider concurrency cap rationale as the compaction
 				// path above (chatgpt-codex review on #3751).

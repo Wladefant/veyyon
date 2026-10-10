@@ -213,6 +213,9 @@ const CONTROLLER_ENTRY_POINTS = {
 	attachTo: "inert",
 	dispose: "inert",
 	resetTranscriptAnchors: "inert",
+	// Unlinks components a rebuild already detached and the arguments of settled calls; it only
+	// reads `settledToolCalls`, so a settled call stays settled and nothing is mounted.
+	releaseDetachedTranscriptAnchors: "inert",
 	inheritDisplaceableTodo: "inert",
 	sendCompletionNotification: "inert",
 } as const;
