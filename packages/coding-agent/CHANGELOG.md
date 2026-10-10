@@ -12,6 +12,7 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Pending CLI startup and automatic extension discovery now keep the event loop alive. An unexpected early loop exit reports an error instead of silently returning success ([Refs](https://github.com/Wladefant/veyyon/issues/533)).
 - `/reload-config` applies changed advisor models without restarting Main or existing workers ([Refs](https://github.com/Wladefant/veyyon/issues/519)).
 - Process-shared launch clients release idle sockets and reconnect on demand. Empty brokers exit even while Main stays alive, instead of accumulating across worktrees. Each shared client retains project presence so daemons outside Main's startup directory survive idle disconnects ([Refs](https://github.com/Wladefant/veyyon/issues/513)).
 - Cancelled eval startup now releases a kernel when its last owner leaves. Python runners stop when their host dies and release descendants through a Windows job. Windows child launches hide console windows ([Refs](https://github.com/Wladefant/veyyon/issues/508)).

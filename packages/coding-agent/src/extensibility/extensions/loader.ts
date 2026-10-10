@@ -10,7 +10,7 @@ import { Type } from "@veyyon/ai/utils/schema/arktype";
 import { factoryExportMissingMessage, moduleImportFailedMessage } from "@veyyon/kernel/loader/load-failure";
 import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
 import * as TypeBox from "@veyyon/kernel/registry/typebox";
-import { errorMessage, getAgentDir, hasFsCode, isEacces, isEnoent, logger, reportFault } from "@veyyon/utils";
+import { DAY_MS, errorMessage, getAgentDir, hasFsCode, isEacces, isEnoent, logger, reportFault } from "@veyyon/utils";
 import type { KeyId } from "@veyyon/utils/keys";
 import {
 	canonicalProjectRoot,
@@ -663,6 +663,21 @@ async function resolveExtensionEntries(dir: string): Promise<string[] | null> {
  * the booted profile's hooks and extension modules.
  */
 export async function discoverExtensionPaths(
+	configuredPaths: string[],
+	cwd: string,
+	disabledExtensionIds?: string[],
+	agentDir?: string,
+): Promise<string[]> {
+	// Promises and unref'ed discovery work do not keep Bun's event loop alive.
+	const keepalive = setInterval(() => {}, DAY_MS);
+	try {
+		return await discoverExtensionPathsInner(configuredPaths, cwd, disabledExtensionIds, agentDir);
+	} finally {
+		clearInterval(keepalive);
+	}
+}
+
+async function discoverExtensionPathsInner(
 	configuredPaths: string[],
 	cwd: string,
 	disabledExtensionIds?: string[],
