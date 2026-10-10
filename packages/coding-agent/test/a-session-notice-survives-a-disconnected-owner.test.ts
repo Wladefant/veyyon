@@ -172,6 +172,17 @@ describe("the notice queue under failure", () => {
 		expect(fs.existsSync(path.join(queueDirectory("target"), `${ids[1]}.json`))).toBe(true);
 	});
 
+	it("a notice that waited longer than the stale limit is not re-claimable by a second reader at once", () => {
+		registerSessionNoticeQueue("target", root);
+		const [receipt] = sendSessionNotice({ from: "s", to: "target", body: "late", root });
+		const pending = path.join(queueDirectory("target"), `${receipt!.id}.json`);
+		const aged = new Date(Date.now() - CLAIM_STALE_MS - 5000);
+		fs.utimesSync(pending, aged, aged); // rename keeps this mtime, so the claim would look stale at once
+
+		expect(claimSessionNotices("target", root)).toHaveLength(1);
+		expect(claimSessionNotices("target", root)).toEqual([]);
+	});
+
 	it("offers an unacknowledged claim again once it is stale, and never before", () => {
 		registerSessionNoticeQueue("target", root);
 		const [receipt] = sendSessionNotice({ from: "s", to: "target", body: "warn", root });

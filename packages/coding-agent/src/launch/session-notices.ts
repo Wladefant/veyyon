@@ -249,6 +249,9 @@ export function claimSessionNotices(sessionId: string, root = getConfigRootDir()
 		} catch {
 			continue; // another reader won it (ENOENT) or the move failed: it stays queued and the rest go on
 		}
+		try {
+			fs.utimesSync(target, new Date(now), new Date(now)); // rename keeps the old mtime; staleness counts from the claim
+		} catch {}
 		const notice = read(target);
 		if (notice) taken.push(notice);
 		else fs.rmSync(target, { force: true });
