@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { AsyncJobManager } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
 import { createOwnedAsyncJobManager } from "../../src/session/async-jobs";
 
@@ -85,6 +86,31 @@ describe("background completion owner routing", () => {
 			expect(live).toEqual([id]);
 		} finally {
 			release.resolve();
+			await manager.dispose();
+		}
+	});
+	it("keeps the delivery owner after the inspection entry expires", async () => {
+		// The native delivery loop uses Bun.sleep. Await its retry event rather than a test delay.
+		const delivered = Promise.withResolvers<void>();
+		let firstAttempt = true;
+		const received: (string | undefined)[] = [];
+		const manager = new AsyncJobManager({
+			retentionMs: 1,
+			onJobComplete: (_id, _text, job) => {
+				if (firstAttempt) {
+					firstAttempt = false;
+					throw new Error("owner detached");
+				}
+				received.push(job?.ownerId);
+				delivered.resolve();
+			},
+		});
+		try {
+			const id = manager.register("launch", "expired inspection", async () => "exit", { ownerId: "Lane" });
+			await delivered.promise;
+			expect(manager.getJob(id)).toBeUndefined();
+			expect(received).toEqual(["Lane"]);
+		} finally {
 			await manager.dispose();
 		}
 	});

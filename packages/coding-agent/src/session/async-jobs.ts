@@ -42,6 +42,7 @@ export interface OwnedAsyncJobsInput {
  * Jobs without an owner use the creating session. A missing owner never falls back to Main.
  * A missing or disposed owner retains its completion for the manager's delivery retry.
  * Formatting can await artifact I/O, so delivery resolves the live owner again afterward.
+ * The manager retains the original job identity while delivery waits, even after inspection expires.
  * Suppressed delivery never reaches any owner.
  */
 export function createOwnedAsyncJobManager(input: OwnedAsyncJobsInput): AsyncJobManager | undefined {
