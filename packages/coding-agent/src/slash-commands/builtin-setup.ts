@@ -220,13 +220,13 @@ export async function credentialedProviderIds(session: AgentSession): Promise<st
 }
 
 /**
- * `/account use <provider> <account>`: make one account the machine-wide choice for its provider.
+ * `/account use <provider> <account>`: choose which account of a provider serves traffic.
  *
  * The text twin of pressing `enter` on the account card, for the callers that have no card to
- * press: ACP clients, `--print`, and anything driving veyyon from a script. It writes the SAME
- * durable per-provider selection the card writes rather than a session pin, because a caller that
- * cannot see the card also cannot see a choice that quietly expires with the session.
- *
+ * press: ACP clients, `--print`, and anything driving veyyon from a script. It follows the same
+ * shared policy as the account card: with `accounts.loadBalancing` enabled, the choice pins that
+ * account for this session only without writing a global selection. With load balancing off, it
+ * writes the durable machine-wide per-provider selection so all sessions and profiles default to it.
  * An account is named by any of the things an account surface prints for it — the name it was
  * given, its email, its account id, or the label the card renders — matched case-insensitively,
  * exact before prefix. A prefix matching two accounts is REFUSED with both named: picking either
@@ -282,9 +282,16 @@ export async function useProviderAccount(
 	if (!authStorage.selectProviderCredential(provider, row.credentialId, { sessionId: session.sessionId })) {
 		return { ok: false, message: `Could not switch to ${label}: that account is no longer stored.` };
 	}
+	const scope = (
+		typeof authStorage.isLoadBalancingEnabled === "function"
+			? authStorage.isLoadBalancingEnabled()
+			: session.settings.get("accounts.loadBalancing") === true
+	)
+		? "for this session only"
+		: "everywhere on this machine";
 	return {
 		ok: true,
-		message: `${row.providerLabel}: now using ${label} everywhere on this machine.`,
+		message: `${row.providerLabel}: now using ${label} ${scope}.`,
 	};
 }
 

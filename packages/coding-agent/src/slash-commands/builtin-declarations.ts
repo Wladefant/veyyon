@@ -146,7 +146,8 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{ name: "switch", description: "Open the account manager focused on one provider", usage: "[provider]" },
 			{
 				name: "use",
-				description: "Switch a provider to one account, everywhere on this machine",
+				description:
+					"Switch a provider to one account for this session (or everywhere on this machine with load balancing off)",
 				usage: "<provider> <account>",
 			},
 			{ name: "name", description: "Name this session's active account for its provider", usage: "<text>" },

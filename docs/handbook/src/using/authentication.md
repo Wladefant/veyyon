@@ -34,6 +34,12 @@ From that card you press `enter` to use the selected account, `n` to name it, `r
 health, `u` to open its usage, `x` twice to log it out, and `a` to add another account for the same
 provider. `/account manager` opens the same card.
 
+When `accounts.loadBalancing` is on, pressing `enter` on an account row or running
+`/account use <provider> <account>` selects that account for your current session only. Global provider
+selection stays empty so other sessions and profiles continue to balance across your accounts. When
+load balancing is off, selecting an account saves it machine-wide as the default choice across all
+profiles and sessions on this machine.
+
 The last row of the list is `+ add another … account`. It is a position in the list like any other:
 arrow down past your last account to land on it, and press `enter` there to start a login. The
 mouse works on the card as well. Click an account to select it, click that last row to start the

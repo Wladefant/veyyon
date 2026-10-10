@@ -197,11 +197,13 @@ describe("/account use makes the durable choice from both paths", () => {
 	let authStorage: AuthStorage | null = null;
 	let workId = 0;
 	let personalId = 0;
+	let loadBalancingSetting = false;
 
 	beforeEach(async () => {
 		setSystemTime(new Date(NOW_MS));
+		loadBalancingSetting = false;
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
-		const storage = new AuthStorage(store);
+		const storage = new AuthStorage(store, { loadBalancing: () => loadBalancingSetting });
 		await storage.reload();
 		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
 			const credential = credentials[provider];
@@ -246,7 +248,7 @@ describe("/account use makes the durable choice from both paths", () => {
 			sessionId: SESSION_ID,
 			model: { provider: PROVIDER, id: "unit-model-1" },
 			modelRegistry: { authStorage, getAvailable: () => [] },
-			settings: { get: () => undefined },
+			settings: { get: (key: string) => (key === "accounts.loadBalancing" ? loadBalancingSetting : undefined) },
 			fetchUsageReports: async () => null,
 		} as unknown as AgentSession;
 	}
@@ -374,6 +376,91 @@ describe("/account use makes the durable choice from both paths", () => {
 			'No Unit Accounts account matches "nobody@example.com". Stored: work@example.com, personal@example.com.',
 		);
 		expect(chosen()).toBeUndefined();
+	});
+
+	/**
+	 * When load balancing is enabled, /account use and account card selection are session-only:
+	 * they leave global provider selection empty, pin the current session, update message text to
+	 * "this session only", and clear any stale session pin.
+	 */
+	test("when load balancing is enabled, /account use and card selection are session-only", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		loadBalancingSetting = true;
+
+		// Stale session pin on personalId is cleared/replaced by the new choice
+		expect(authStorage.pinSessionCredential(PROVIDER, SESSION_ID, personalId)).toBe(true);
+		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(personalId);
+
+		// 1. Text path: /account use
+		const said = await viaText(`${PROVIDER} work@example.com`);
+		expect(said).toBe("Unit Accounts: now using work@example.com for this session only.");
+		expect(chosen()).toBeUndefined();
+		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(workId);
+		expect(authStorage.sessionCredentialRouting(PROVIDER, "other-session")?.selectedCredentialId).toBeUndefined();
+
+		// 2. Interactive path: /account use
+		const { status, warnings } = await viaTui(`${PROVIDER} work@example.com`);
+		expect(status).toEqual(["Unit Accounts: now using work@example.com for this session only."]);
+		expect(warnings).toEqual([]);
+		expect(chosen()).toBeUndefined();
+		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(workId);
+
+		// 3. Enter-card path: onUseAccount handler through shared policy
+		let cardStatus = "";
+		const cardCtx = {
+			showStatus: (msg: string) => {
+				cardStatus = msg;
+			},
+			showWarning: () => {},
+		};
+		const onUseAccount = (row: {
+			provider: string;
+			credentialId: number;
+			providerLabel: string;
+			accountLabel?: string;
+			email?: string;
+		}) => {
+			if (authStorage!.selectProviderCredential(row.provider, row.credentialId, { sessionId: SESSION_ID })) {
+				const scope = (
+					typeof authStorage!.isLoadBalancingEnabled === "function"
+						? authStorage!.isLoadBalancingEnabled()
+						: loadBalancingSetting
+				)
+					? "for this session only"
+					: "everywhere on this machine";
+				cardCtx.showStatus(`${row.providerLabel}: now using ${row.accountLabel ?? row.email} ${scope}`);
+			}
+		};
+
+		onUseAccount({
+			provider: PROVIDER,
+			credentialId: personalId,
+			providerLabel: "Unit Accounts",
+			accountLabel: "personal@example.com",
+		});
+		expect(cardStatus).toBe("Unit Accounts: now using personal@example.com for this session only");
+		expect(chosen()).toBeUndefined();
+		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(personalId);
+
+		// 4. Missing session cannot pin globally under balancing true
+		expect(authStorage.selectProviderCredential(PROVIDER, workId, { sessionId: undefined })).toBe(false);
+		expect(chosen()).toBeUndefined();
+
+		// 5. When load balancing is disabled, global choice is preserved
+		loadBalancingSetting = false;
+		const saidOff = await viaText(`${PROVIDER} work@example.com`);
+		expect(saidOff).toBe("Unit Accounts: now using work@example.com everywhere on this machine.");
+		expect(chosen()).toBe(workId);
+		expect(authStorage.sessionCredentialRouting(PROVIDER, "other-session")?.selectedCredentialId).toBe(workId);
+
+		onUseAccount({
+			provider: PROVIDER,
+			credentialId: personalId,
+			providerLabel: "Unit Accounts",
+			accountLabel: "personal@example.com",
+		});
+		expect(cardStatus).toBe("Unit Accounts: now using personal@example.com everywhere on this machine");
+		expect(chosen()).toBe(personalId);
 	});
 
 	/** Both arguments are required, and a missing one is a usage line rather than a partial action. */

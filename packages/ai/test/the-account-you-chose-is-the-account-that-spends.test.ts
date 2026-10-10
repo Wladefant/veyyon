@@ -81,7 +81,11 @@ describe("the account that was chosen", () => {
 	 * Two OAuth accounts on a real store, the first one held. `choose: false` records no choice at
 	 * all, which is what the automatic arms need: with nobody named, the product decides.
 	 */
-	async function twoAccountsFirstHeld(options?: { loadBalancing?: boolean; choose?: boolean }): Promise<{
+	async function twoAccountsFirstHeld(options?: {
+		loadBalancing?: boolean;
+		choose?: boolean;
+		sessionId?: string;
+	}): Promise<{
 		storage: AuthStorage;
 		heldId: number;
 	}> {
@@ -95,7 +99,7 @@ describe("the account that was chosen", () => {
 		await storage.reload();
 		const heldId = store.listAuthCredentials(PROVIDER)[0]!.id;
 		if (options?.choose !== false) {
-			expect(storage.selectProviderCredential(PROVIDER, heldId)).toBe(true);
+			expect(storage.selectProviderCredential(PROVIDER, heldId, { sessionId: options?.sessionId })).toBe(true);
 		}
 		storage.upsertCredentialBlock({
 			credentialId: heldId,
@@ -120,7 +124,7 @@ describe("the account that was chosen", () => {
 	it("spends it while a hold is on it even with account movement ON", async () => {
 		// The choice overrides the automation, not the other way round. Movement on means the product
 		// may move among accounts nobody named; it never means a choice can be overruled.
-		const { storage } = await twoAccountsFirstHeld({ loadBalancing: true });
+		const { storage } = await twoAccountsFirstHeld({ loadBalancing: true, sessionId: "session-1" });
 		try {
 			expect(await storage.getApiKey(PROVIDER, "session-1")).toBe("access-chosen");
 		} finally {
@@ -176,7 +180,7 @@ describe("the account that was chosen", () => {
 	});
 
 	it("can have its hold lifted, and the lift survives a reload", async () => {
-		const { storage, heldId } = await twoAccountsFirstHeld({ loadBalancing: true });
+		const { storage, heldId } = await twoAccountsFirstHeld({ loadBalancing: false });
 		try {
 			expect(storage.credentialBlockedUntil(PROVIDER, OAUTH_KEY, 0)).toBe(HOLD_UNTIL_MS);
 			storage.clearCredentialBlocks(PROVIDER, heldId);
@@ -187,7 +191,7 @@ describe("the account that was chosen", () => {
 			storage.close();
 		}
 
-		const reopened = new AuthStorage(await SqliteAuthCredentialStore.open(dbPath), { loadBalancing: true });
+		const reopened = new AuthStorage(await SqliteAuthCredentialStore.open(dbPath), { loadBalancing: false });
 		await reopened.reload();
 		try {
 			expect(reopened.credentialBlockedUntil(PROVIDER, OAUTH_KEY, 0)).toBeUndefined();
@@ -200,7 +204,7 @@ describe("the account that was chosen", () => {
 		// The same class on the other credential type: the override must live where accounts are
 		// ordered, not in the OAuth path alone, or half the product still overrules the choice.
 		const store = await SqliteAuthCredentialStore.open(dbPath);
-		const storage = new AuthStorage(store, { loadBalancing: true });
+		const storage = new AuthStorage(store, { loadBalancing: false });
 		await storage.set(PROVIDER, [
 			{ type: "api_key", key: "key-chosen" },
 			{ type: "api_key", key: "key-sibling" },
