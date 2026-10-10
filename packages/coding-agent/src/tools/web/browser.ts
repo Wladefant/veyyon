@@ -47,7 +47,9 @@ const appSchema = lazy(() =>
 		"extension?": type("boolean").describe(
 			"drive the operator's own signed-in Chrome through the Playwright Extension (no remote-debugging port)",
 		),
-		"instance?": type("string").describe("with extension: which stored Chrome profile token to use (alias of instance_id)"),
+		"instance?": type("string").describe(
+			"with extension: which stored Chrome profile token to use (alias of instance_id)",
+		),
 		"instance_id?": type("string").describe("with extension: which stored Chrome profile token to use"),
 		"profile?": type("string").describe("with extension: Chrome --profile-directory name"),
 	}),
