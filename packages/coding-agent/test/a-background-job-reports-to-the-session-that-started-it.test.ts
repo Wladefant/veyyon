@@ -28,9 +28,11 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { type AsyncJob, AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { closeDaemonClients } from "@veyyon/coding-agent/launch/client";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { CreateAgentSessionOptions } from "@veyyon/coding-agent/session/factory-options";
+import { resetLaunchExitWatchesForTests } from "@veyyon/coding-agent/tools/shell/launch-exit-watch";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
@@ -185,7 +187,7 @@ describe("a background job reports to the session that started it", () => {
 		expectDelivered(toSecond, []);
 	}, 60000);
 
-	it("delivers a spawned agent's job to the later session that spawned it", async () => {
+	it("delivers a spawned agent's job only to that agent", async () => {
 		const first = await startSession();
 		const second = await startSession();
 		const childId = `Child-${Snowflake.next()}`;
@@ -195,14 +197,48 @@ describe("a background job reports to the session that started it", () => {
 			taskDepth: 1,
 			asyncJobManager: second.asyncJobManager,
 		});
-		const settled = watchDeliveries(first, second);
+		const settled = watchDeliveries(first, second, child);
 
 		expect(child.asyncJobManager).toBe(second.asyncJobManager);
 		const childJob = await startBackground(child, "child");
-		const [toFirst, toSecond] = await settled([childJob]);
+		const [toFirst, toSecond, toChild] = await settled([childJob]);
 
-		expectDelivered(toSecond, [childJob]);
+		expectDelivered(toSecond, []);
+		expectDelivered(toChild, [childJob]);
 		expectDelivered(toFirst, []);
+	}, 60000);
+
+	it("a lane-owned launch exit reaches the lane without enqueueing a Main completion", async () => {
+		const main = await startSession();
+		const childId = `LaunchChild-${Snowflake.next()}`;
+		const child = await startSession({
+			parentTaskPrefix: childId,
+			agentId: childId,
+			taskDepth: 1,
+			asyncJobManager: main.asyncJobManager,
+		});
+		const settled = watchDeliveries(main, child);
+		const launch = child.getToolByName("launch")!;
+		const script = path.join(tempDirs.at(-1)!, "finite.js");
+		fs.writeFileSync(script, 'console.log("LANE EXIT");');
+		try {
+			await launch.execute("lane-launch", {
+				op: "start",
+				name: "lane-finite",
+				application: process.execPath,
+				args: [script],
+				pty: false,
+			});
+			const job = main.asyncJobManager!.getAllJobs().find(job => job.type === "launch")!;
+			expect(job.ownerId).toBe(childId);
+			const [toMain, toChild] = await settled([job]);
+			expectDelivered(toMain, []);
+			expectDelivered(toChild, [job]);
+			expect(await jobToolIds(main)).toContain(job.id);
+		} finally {
+			resetLaunchExitWatchesForTests();
+			await closeDaemonClients();
+		}
 	}, 60000);
 
 	it("falls back to the process manager for a spawned agent given no manager", async () => {

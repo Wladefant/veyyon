@@ -814,7 +814,10 @@ class SessionStartup {
 			options,
 			settings: this.#settings,
 			sessionManager,
-			target: () => this.#session,
+			target: ownerId =>
+				ownerId === undefined || ownerId === this.#identity.id
+					? this.#session
+					: (this.#agentRegistry.get(ownerId)?.session ?? undefined),
 		});
 		this.#scopedAsyncJobManager = sessionAsyncJobManager(this.#asyncJobManager, options);
 		this.#agentRegistry = options.agentRegistry ?? AgentRegistry.global();
@@ -1586,7 +1589,7 @@ class SessionStartup {
 
 	/** Register the session's yield queues, attach it to its registry ref, and order its disposal. */
 	#attachSession(session: AgentSession): void {
-		const jobs = this.#asyncJobManager;
+		const jobs = this.#scopedAsyncJobManager;
 		if (jobs) {
 			session.yieldQueue.register<AsyncResultEntry>("async-result", {
 				isStale: entry => jobs.isDeliverySuppressed(entry.jobId),

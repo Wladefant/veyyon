@@ -30,39 +30,37 @@ export interface OwnedAsyncJobsInput {
 	options: Pick<CreateAgentSessionOptions, "parentTaskPrefix">;
 	settings: Settings;
 	sessionManager: Pick<SessionManager, "allocateArtifactPath">;
-	target: () => AsyncFollowUpTarget | undefined;
+	target: (ownerId?: string) => AsyncFollowUpTarget | undefined;
 }
 
 /**
  * A new AsyncJobManager when this session owns one, else undefined.
  *
- * Every top-level session owns one, and its `onJobComplete` delivers to that session and no other.
- * A second top-level session in the same process (the foreground session after a `/new` handoff,
- * the agent-creation architect) therefore runs background work of its own, and a job it starts
- * reports to it rather than to the session that happened to be built first. A spawned agent owns
- * none: it runs its jobs on the manager of the session that spawned it, so their results reach
- * that conversation. A job that finishes before the session exists, or whose delivery was
- * suppressed while its output was formatted, is not delivered.
+ * Every top-level session owns one. Its callback resolves each job's owner in the live registry.
+ * Spawned agents share the manager for inspection, but receive only their own completions.
+ * Jobs without an owner use the creating session. A missing owner never falls back to Main.
+ * A job that finishes before its target exists, or whose delivery is suppressed while its output
+ * is formatted, is not delivered.
  */
 export function createOwnedAsyncJobManager(input: OwnedAsyncJobsInput): AsyncJobManager | undefined {
 	if (isInProcessChildSession(input.options)) return undefined;
 	const manager: AsyncJobManager = new AsyncJobManager({
 		maxRunningJobs: Math.min(100, Math.max(1, input.settings.get("async.maxJobs") ?? 100)),
 		onJobComplete: async (jobId, result, job) => {
-			const target = input.target();
+			const target = input.target(job?.ownerId);
 			if (!target || manager.isDeliverySuppressed(jobId)) return;
 			const followUp = await formatAsyncResultForFollowUp(result, jobOutputMeta(job), input.sessionManager);
 			if (manager.isDeliverySuppressed(jobId)) return;
-			target.deliverAsyncJobResult(jobId, followUp, job);
+			await target.deliverAsyncJobResult(jobId, followUp, job);
 		},
 	});
 	return manager;
 }
 
 /**
- * The manager a session runs its jobs on: the one it owns, else, for a spawned agent, the one its
- * spawner handed over, so a result reaches the conversation that spawned it. The process-wide
- * instance is the fallback for an SDK caller that passes a parent prefix and no manager.
+ * The manager a session runs its jobs on: the one it owns, else the one its spawner handed over.
+ * Sharing the manager keeps all jobs visible to inspection without sharing completion turns.
+ * The process-wide instance is the fallback for an SDK caller passing a parent prefix alone.
  */
 export function sessionAsyncJobManager(
 	owned: AsyncJobManager | undefined,

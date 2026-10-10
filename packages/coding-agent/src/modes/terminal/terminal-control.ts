@@ -2,16 +2,70 @@ import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
 import type { InteractiveMode } from "./interactive-mode";
 
+export interface TerminalTurnProvenance {
+	hasOperatorMessage: boolean;
+	hasSubstantiveToolCall: boolean;
+	toolNames: string[];
+	isMain: boolean;
+}
+
+/**
+ * Persisted assistant text carries its turn's operator and tool activity to forwarding clients.
+ * A terminal answer clears that activity. Tool-use messages keep it for the next model response.
+ */
+export function createTerminalTranscriptProjector() {
+	let hasOperatorMessage = false;
+	const toolNames = new Set<string>();
+	return {
+		reset() {
+			hasOperatorMessage = false;
+			toolNames.clear();
+		},
+		observe(entry: SessionEntry) {
+			if (entry.type === "custom_message") {
+				if (entry.attribution === "user") hasOperatorMessage = true;
+				return undefined;
+			}
+			if (entry.type !== "message") return undefined;
+			const message = entry.message;
+			if (message.role === "user") {
+				if (message.attribution !== "agent") hasOperatorMessage = true;
+				return undefined;
+			}
+			if (message.role !== "assistant") return undefined;
+			for (const block of message.content) {
+				if (block.type === "toolCall") toolNames.add(block.name);
+			}
+			const turn = {
+				hasOperatorMessage,
+				hasSubstantiveToolCall: [...toolNames].some(name => name !== "job" && name !== "poll"),
+				toolNames: [...toolNames],
+				isMain: true,
+			};
+			if (message.stopReason !== "toolUse") this.reset();
+			return turn;
+		},
+	};
+}
+
+type TerminalTranscriptText = {
+	entryId: string;
+	text: string;
+	turn?: TerminalTurnProvenance;
+};
+
 /** Deliver to the existing REPL, never create a second AgentSession or transcript writer. */
 export function startTerminalControl(mode: InteractiveMode): Promise<() => void> {
 	let revision = "";
-	let entries: { entryId: string; text: string }[] = [];
+	let entries: TerminalTranscriptText[] = [];
 	// Cursor into the journal: how many entries were converted and the id of the last one. A leaf
 	// change then costs the new entries only. A shorter journal or a different id at the cursor
 	// means entries were rewritten or removed, and one full pass rebuilds the list.
 	let converted = 0;
 	let lastConvertedId: string | undefined;
-	const convert = (entry: SessionEntry): { entryId: string; text: string }[] => {
+	const projector = createTerminalTranscriptProjector();
+	const convert = (entry: SessionEntry): TerminalTranscriptText[] => {
+		const turn = projector.observe(entry);
 		if (entry.type !== "message" || entry.message.role !== "assistant") return [];
 		const content = mode.session.displayAssistantContent(entry.message.content);
 		const text = content
@@ -19,9 +73,9 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 			.map(block => block.text)
 			.join("\n")
 			.trim();
-		return text ? [{ entryId: entry.id, text }] : [];
+		return text ? [{ entryId: entry.id, text, turn }] : [];
 	};
-	const history = (): { entryId: string; text: string }[] => {
+	const history = (): TerminalTranscriptText[] => {
 		const next = `${mode.sessionManager.getSessionId()}:${mode.sessionManager.getLeafId()}`;
 		if (revision === next) return entries;
 		revision = next;
@@ -30,6 +84,7 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 		if (!intact) {
 			converted = 0;
 			entries = [];
+			projector.reset();
 		}
 		const appended = journal.slice(converted).flatMap(convert);
 		converted = journal.length;
