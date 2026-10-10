@@ -3201,7 +3201,9 @@ export class AuthStorage {
 		if (targetIndex >= 0) {
 			this.#blocks.markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
 			if (provider === "google-antigravity") {
-				this.#confirmedAntigravityQuota.set(`${targetCredentialId}:${blockScope ?? ""}`, blockedUntil);
+				const confirmationKey = `${targetCredentialId}:${blockScope ?? ""}`;
+				const confirmedUntil = this.#confirmedAntigravityQuota.get(confirmationKey) ?? 0;
+				this.#confirmedAntigravityQuota.set(confirmationKey, Math.max(confirmedUntil, blockedUntil));
 			}
 		}
 

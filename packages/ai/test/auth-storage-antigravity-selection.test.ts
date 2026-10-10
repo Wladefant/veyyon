@@ -399,4 +399,75 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		expect(await storageY.getApiKey(provider, "peer-prediction", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
 		expect(await storageX.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
 	});
+
+	test("shorter confirmed refusal preserves the existing confirmation deadline", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const sessionId = "decreasing-confirmation-pin";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const credentialIdA = authStorage.listStoredCredentials(provider)[0]!.id;
+		expect(authStorage.pinSessionCredential(provider, sessionId, credentialIdA)).toBe(true);
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		for (const retryAfterMs of [HOUR_MS, 1000]) {
+			await authStorage.markUsageLimitReached(provider, sessionId, {
+				credentialId: credentialIdA,
+				modelId: "gemini-3.8-flash",
+				retryAfterMs,
+			});
+		}
+		now += 2000;
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+	});
+
+	test("shorter confirmed refusal completing later preserves the live deadline", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const sessionId = "delayed-confirmation-pin";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const credentialIdA = authStorage.listStoredCredentials(provider)[0]!.id;
+		expect(authStorage.pinSessionCredential(provider, sessionId, credentialIdA)).toBe(true);
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+		let releaseReport!: () => void;
+		let reportEntered!: () => void;
+		const delayedReport = new Promise<null>(resolve => {
+			releaseReport = () => resolve(null);
+		});
+		const enteredReport = new Promise<void>(resolve => {
+			reportEntered = resolve;
+		});
+		let delayNextReport = true;
+		Object.assign(store, {
+			async getUsageReport(): Promise<UsageReport | null> {
+				if (!delayNextReport) return null;
+				delayNextReport = false;
+				reportEntered();
+				return delayedReport;
+			},
+		});
+		const shortRefusal = authStorage.markUsageLimitReached(provider, sessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: 1000,
+		});
+		await enteredReport;
+		await authStorage.markUsageLimitReached(provider, sessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: HOUR_MS,
+		});
+		now += 2000;
+		releaseReport();
+		await shortRefusal;
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+	});
 });
