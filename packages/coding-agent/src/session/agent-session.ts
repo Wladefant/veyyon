@@ -226,6 +226,13 @@ import type { GoalAbortReason, GoalModeState, GoalTokenUsage } from "../goals/st
 // handler and reaches several hundred modules, and both of these are declared in
 // `local-protocol`, which reaches seven.
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls/local-protocol";
+import {
+	ackSessionNotices,
+	claimSessionNotices,
+	formatNoticeMessage,
+	registerSessionNoticeQueue,
+	type SessionNotice,
+} from "../launch/session-notices";
 import { resolveMemoryBackend } from "../memory/backend";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
@@ -568,6 +575,10 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 
 /** Bound on draining post-prompt work before a /btw branch; a hung task must not hold the promotion forever. */
 const BTW_BRANCH_POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
+/** Least time between two scans of the notice queue at step boundaries. */
+const SESSION_NOTICE_SCAN_MS = 1000;
+/** Notice ids a session remembers to drop a re-offered claim; older ones have long left `claimed/`. */
+const MAX_SEEN_NOTICE_IDS = 512;
 
 /**
  * Emit a warn-level log for a turn that ended in a provider error so recurring
@@ -1240,6 +1251,10 @@ export class AgentSession {
 	// Incoming IRC records received while a turn was streaming. Parent IRCs enter the steering
 	// queue; peer IRCs wait here as interrupts and drain as asides at the next boundary.
 	readonly #ircInbox = new IrcInbox();
+	#lastNoticeScanAt = 0;
+	/** Notice ids waiting in the inbox for their turn, and ids already in a turn; repeats of a re-offered claim are dropped by these. */
+	readonly #noticesInInbox = new Set<string>();
+	readonly #noticesSeen = new Set<string>();
 	/** Provider session ids, the inherited prompt cache key, and the transport state they route. */
 	readonly #providerSessions: ProviderSessions;
 	#isDisposed = false;
@@ -1463,7 +1478,7 @@ export class AgentSession {
 		if (this.#isDisposed || this.isStreaming) return;
 		if (this.#ircInbox.isEmpty) return;
 		if (this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
-		const records = this.#ircInbox.takeAll();
+		const records = this.#takeIrcRecords();
 		if (this.#planMode.enabled) {
 			// Plan mode: fold stranded IRC asides into context without waking an
 			// autonomous turn. Convergence to ask/resolve stays user-driven.
@@ -1856,7 +1871,8 @@ export class AgentSession {
 		// `job poll` / `irc wait` can return early before the boundary drains them.
 		this.agent.hasIrcInterrupts = () => this.#ircInbox.hasInterrupts;
 		this.agent.setAsideMessageProvider(() => {
-			const pendingIrc = this.#ircInbox.takeAll();
+			this.#pullSessionNotices(false);
+			const pendingIrc = this.#takeIrcRecords();
 			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
 			thunks.push(...this.yieldQueue.drainLazy());
 			// Mid-run todo reconciliation — evaluated at injection time so a turn
@@ -5585,6 +5601,7 @@ export class AgentSession {
 			takeHeldAtRestReading(this);
 			// Flush any pending bash and Python results before the new prompt
 			this.#executions.flush();
+			this.#pullSessionNotices(true);
 			this.#flushPendingIrcAsides();
 
 			// A new user prompt does not reset stop-time reminder suppression. Replaying
@@ -8844,13 +8861,98 @@ export class AgentSession {
 	 * of the next prompt so the model still sees them.
 	 */
 	#flushPendingIrcAsides(): void {
-		const records = this.#ircInbox.takeAll();
+		const records = this.#takeIrcRecords();
 		for (const record of records) {
 			// emitExternalEvent on message_end appends to agent state and dispatches
 			// to all session listeners, which in turn handle TUI rendering and
 			// sessionManager persistence via #handleAgentEvent.
 			this.agent.emitExternalEvent({ type: "message_start", message: record });
 			this.agent.emitExternalEvent({ type: "message_end", message: record });
+		}
+	}
+
+	/**
+	 * Every waiting IRC record, leaving the queues empty. Notices from other sessions are acknowledged
+	 * here, at the moment they leave the inbox for the turn, so a notice is delivered only once it is in
+	 * the turn. A crash before this point leaves the claim in `claimed/`, and it is offered again.
+	 */
+	#takeIrcRecords(): CustomMessage[] {
+		const records = this.#ircInbox.takeAll();
+		const noticeIds: string[] = [];
+		for (const record of records) {
+			const id = record.customType === "session:notice" ? Reflect.get(record.details ?? {}, "id") : undefined;
+			if (typeof id !== "string") continue;
+			noticeIds.push(id);
+			this.#noticesInInbox.delete(id);
+			this.#noticesSeen.add(id);
+			if (this.#noticesSeen.size > MAX_SEEN_NOTICE_IDS) {
+				for (const oldest of this.#noticesSeen) {
+					this.#noticesSeen.delete(oldest);
+					break;
+				}
+			}
+		}
+		if (noticeIds.length === 0) return records;
+		try {
+			ackSessionNotices(this.sessionManager.getSessionId(), noticeIds);
+		} catch (error) {
+			logger.warn("Acknowledging session notices failed", { error: errorMessage(error) });
+		}
+		return records;
+	}
+
+	/**
+	 * Claim the notices other sessions queued for this one (`launch/session-notices.ts`) and hand each
+	 * to the model as a `session:notice` record, plus to every running lane over the IrcBus: a notice
+	 * addressed to a session is for the lanes it runs too.
+	 *
+	 * Runs at the start of every prompt and, at most once a second, at each step boundary. Only the
+	 * driving session reads its queue; a spawned one gets the notice from the bus. Delivery is at least
+	 * once: a claim offered again is dropped here by notice id.
+	 */
+	#pullSessionNotices(force: boolean): void {
+		if (this.#isDisposed || this.#isSpawned) return;
+		const now = Date.now();
+		if (!force && now - this.#lastNoticeScanAt < SESSION_NOTICE_SCAN_MS) return;
+		this.#lastNoticeScanAt = now;
+		const sessionId = this.sessionManager.getSessionId();
+		let notices: SessionNotice[];
+		try {
+			registerSessionNoticeQueue(sessionId);
+			notices = claimSessionNotices(sessionId);
+		} catch (error) {
+			logger.warn("Reading session notices failed", { error: errorMessage(error) });
+			return;
+		}
+		const agentId = this.#config.agentId;
+		for (const notice of notices) {
+			if (this.#noticesInInbox.has(notice.id)) continue; // claimed again while still waiting for its turn
+			if (this.#noticesSeen.has(notice.id)) {
+				try {
+					ackSessionNotices(sessionId, [notice.id]); // an earlier acknowledgement did not land
+				} catch {}
+				continue;
+			}
+			const record: CustomMessage = {
+				role: "custom",
+				customType: "session:notice",
+				content: formatNoticeMessage(notice, Date.now()),
+				display: true,
+				details: { id: notice.id, from: notice.from, message: notice.body },
+				attribution: "agent",
+				timestamp: notice.ts,
+			};
+			void this.#emitSessionEvent({ type: "irc_message", message: record });
+			this.#ircInbox.queueAside(record);
+			this.#noticesInInbox.add(notice.id);
+			if (!agentId) continue;
+			const registry = AgentRegistry.global();
+			for (const lane of registry.listVisibleTo(agentId)) {
+				if (lane.status !== "running" || lane.kind === "main") continue;
+				void IrcBus.global()
+					.send({ from: agentId, to: lane.id, body: record.content as string })
+					.catch(error => logger.warn("Session notice relay failed", { to: lane.id, error: errorMessage(error) }));
+			}
 		}
 	}
 

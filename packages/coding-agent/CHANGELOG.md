@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
+- A delivered cross-session notice carries a header with the sender, the send and delivery times (Europe/Berlin and UTC) and the delay when it is late. A notice older than 2 hours (`ttlMinutes` on the send sets another limit) is not injected; the sender gets a "Not delivered" notice ([Refs](https://github.com/Wladefant/veyyon/pull/539)).
+
 ## [1.5.6] - 2026-10-10
 
 ### Changed
