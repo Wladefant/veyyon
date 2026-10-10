@@ -56,4 +56,29 @@ describe("terminal final reply provenance", () => {
 			isMain: true,
 		});
 	});
+	it("ends provenance at a successful terminal yield result", () => {
+		const projector = createTerminalTranscriptProjector();
+		projector.observe(entry({ role: "user", content: "operator prompt" }));
+		projector.observe(answer(["yield"], "toolUse"));
+		projector.observe(
+			entry({ role: "toolResult", toolName: "yield", isError: false, details: { status: "success" } }),
+		);
+		projector.observe(entry({ role: "user", attribution: "agent", content: "job finished" }));
+		expect(projector.observe(answer())).toEqual({
+			hasOperatorMessage: false,
+			hasSubstantiveToolCall: false,
+			toolNames: [],
+			isMain: true,
+		});
+	});
+	it.each([
+		{ isError: true, details: undefined },
+		{ isError: false, details: { status: "success", type: ["section"] } },
+	])("keeps provenance after a nonterminal yield result %j", result => {
+		const projector = createTerminalTranscriptProjector();
+		projector.observe(entry({ role: "user", content: "operator prompt" }));
+		projector.observe(answer(["yield"], "toolUse"));
+		projector.observe(entry({ role: "toolResult", toolName: "yield", ...result }));
+		expect(projector.observe(answer())?.hasOperatorMessage).toBe(true);
+	});
 });

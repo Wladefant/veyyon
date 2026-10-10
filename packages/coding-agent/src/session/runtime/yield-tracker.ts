@@ -89,7 +89,7 @@ export class YieldTracker {
  * Whether a tool result ends the run: a `yield` that did not fail, unless its details hold
  * `status: "success"` with a non-empty `type` list of strings.
  */
-function isTerminalYieldToolResult(event: YieldToolResult): boolean {
+export function isTerminalYieldToolResult(event: YieldToolResult): boolean {
 	if (event.toolName !== TOOL.yield || event.isError) return false;
 	const details = event.result?.details;
 	if (!details || typeof details !== "object") return true;

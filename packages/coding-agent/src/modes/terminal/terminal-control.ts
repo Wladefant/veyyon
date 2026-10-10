@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
+import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import type { InteractiveMode } from "./interactive-mode";
 
 export interface TerminalTurnProvenance {
@@ -11,7 +12,7 @@ export interface TerminalTurnProvenance {
 
 /**
  * Persisted assistant text carries its turn's operator and tool activity to forwarding clients.
- * A terminal answer clears that activity. Tool-use messages keep it for the next model response.
+ * A terminal answer or successful terminal yield clears activity. Other tool calls keep it.
  */
 export function createTerminalTranscriptProjector() {
 	let hasOperatorMessage = false;
@@ -30,6 +31,17 @@ export function createTerminalTranscriptProjector() {
 			const message = entry.message;
 			if (message.role === "user") {
 				if (message.attribution !== "agent") hasOperatorMessage = true;
+				return undefined;
+			}
+			if (message.role === "toolResult") {
+				if (
+					isTerminalYieldToolResult({
+						toolName: message.toolName,
+						isError: message.isError,
+						result: { details: message.details },
+					})
+				)
+					this.reset();
 				return undefined;
 			}
 			if (message.role !== "assistant") return undefined;
