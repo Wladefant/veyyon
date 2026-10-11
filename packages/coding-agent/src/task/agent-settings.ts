@@ -52,8 +52,11 @@ export function nextSpawnId(scope: string): string {
 	return `${scope}:${next}`;
 }
 
-/** Opus and Astra entries a routine Flash/Luna spawn must never reach through its retry chain. */
-const EXPENSIVE_ROUTINE_TAIL = /(?:^|[^a-z0-9-])(?:[a-z-]+\/)?(?:claude-opus|gpt-6-astra)/i;
+/**
+ * Entries a routine Flash/Luna spawn must never reach through its retry chain: any Opus or Astra
+ * name, and any wildcard pattern, because a wildcard can resolve to one of them.
+ */
+const EXPENSIVE_ROUTINE_TAIL = /opus|astra|[*?]/i;
 
 function shareTaskModelPools(
 	patterns: string[],

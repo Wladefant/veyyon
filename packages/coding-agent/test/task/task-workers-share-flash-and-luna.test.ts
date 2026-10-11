@@ -189,7 +189,7 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		const opus = "anthropic/claude-opus-5-5";
 		const astra = "openai-codex/gpt-6-astra";
 		const withExpensiveTail = Settings.isolated({
-			"agent.agents": { task: { model: [antigravityFlash, luna, fallback, opus, astra] } },
+			"agent.agents": { task: { model: [antigravityFlash, luna, fallback, opus, astra, "anthropic/*", "claude-opus"] } },
 		});
 		const resolve = (spawnId: string) =>
 			resolveAgentModel({ settings: withExpensiveTail, agentName: "task", taskDepth: 1, spawnId, modelRegistry: registry })
