@@ -3133,6 +3133,31 @@ export class AuthStorage {
 	}
 
 	/**
+	 * One line naming the exhausted account, when it resets, and what the balancer does next.
+	 * Account label only (never a token); `available` counts unblocked siblings for the same model scope.
+	 */
+	#formatQuotaMessage(
+		provider: string,
+		credentialId: number,
+		blockedUntilMs: number,
+		detail: { modelId?: string; available: number; siblingRetryAtMs?: number; balancing: boolean },
+	): string {
+		const account = this.#accountNoticeLabel(provider, credentialId);
+		const scope = detail.modelId ? ` for ${detail.modelId}` : "";
+		const head = `Quota reached on ${provider} account ${account}${scope}; resets ${new Date(blockedUntilMs).toISOString()}.`;
+		const others = `${detail.available} other account${detail.available === 1 ? "" : "s"} available`;
+		if (!detail.balancing) {
+			return `${head} ${others} but load balancing is off, so Veyyon waits for this account.`;
+		}
+		if (detail.available > 0) return `${head} ${others}; balancer will try it next.`;
+		const next =
+			detail.siblingRetryAtMs === undefined
+				? "no sibling account exists"
+				: `the earliest sibling resets ${new Date(detail.siblingRetryAtMs).toISOString()}`;
+		return `${head} 0 other accounts available; ${next}.`;
+	}
+
+	/**
 	 * Marks the current session's credential as temporarily blocked due to usage limits.
 	 * Uses usage reports to determine accurate reset time when available.
 	 * Returns whether a sibling credential is available now; when none is, also
@@ -3256,16 +3281,34 @@ export class AuthStorage {
 					});
 				}
 			}
-			return { switched: false, retryAtMs: blockedUntil };
+			return {
+				switched: false,
+				retryAtMs: blockedUntil,
+				quotaMessage: this.#formatQuotaMessage(provider, targetCredentialId, blockedUntil, {
+					modelId: options?.modelId,
+					available: idleSiblings,
+					balancing: false,
+				}),
+			};
 		}
 
 		let retryAtMs: number | undefined;
+		let available = 0;
 		for (const candidate of siblings) {
 			const candidateBlockedUntil = siblingBlockedUntil(candidate.index);
-			if (candidateBlockedUntil === undefined) return { switched: true };
+			if (candidateBlockedUntil === undefined) {
+				available += 1;
+				continue;
+			}
 			if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) retryAtMs = candidateBlockedUntil;
 		}
-		return { switched: false, retryAtMs };
+		const quotaMessage = this.#formatQuotaMessage(provider, targetCredentialId, blockedUntil, {
+			modelId: options?.modelId,
+			available,
+			siblingRetryAtMs: retryAtMs,
+			balancing: true,
+		});
+		return available > 0 ? { switched: true, quotaMessage } : { switched: false, retryAtMs, quotaMessage };
 	}
 
 	/**

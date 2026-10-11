@@ -95,18 +95,23 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 			["acct-a", 1, 0],
 			["acct-b", 0.83, 1],
 		] as const) {
-			usageByAccount.set(accountId, createAntigravityReport({
+			usageByAccount.set(
 				accountId,
-				projectId: `proj-${accountId}`,
-				windows: [
-					{ counter: "google", usedFraction: gemini, resetInMs: HOUR_MS },
-					{ counter: "claude-gpt", usedFraction: claude, resetInMs: HOUR_MS },
-				],
-			}));
+				createAntigravityReport({
+					accountId,
+					projectId: `proj-${accountId}`,
+					windows: [
+						{ counter: "google", usedFraction: gemini, resetInMs: HOUR_MS },
+						{ counter: "claude-gpt", usedFraction: claude, resetInMs: HOUR_MS },
+					],
+				}),
+			);
 		}
-		expect(await authStorage.getApiKey("google-antigravity", "family-scoped", {
-			modelId: "gemini-3.8-flash",
-		})).toBe("api-acct-b");
+		expect(
+			await authStorage.getApiKey("google-antigravity", "family-scoped", {
+				modelId: "gemini-3.8-flash",
+			}),
+		).toBe("api-acct-b");
 		const accountA = authStorage.listStoredCredentials("google-antigravity")[0]!.id;
 		authStorage.pinSessionCredential("google-antigravity", "quota-message", accountA);
 		await authStorage.getApiKey("google-antigravity", "quota-message", { modelId: "gemini-3.8-flash" });
@@ -119,9 +124,11 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		expect(outcome.quotaMessage).toContain("a@example.com");
 		expect(outcome.quotaMessage).toContain("1 other account available");
 		expect(outcome.quotaMessage).toContain("balancer will try");
-		expect(await authStorage.getApiKey("google-antigravity", "quota-message", {
-			modelId: "gemini-3.8-flash",
-		})).toBe("api-acct-b");
+		expect(
+			await authStorage.getApiKey("google-antigravity", "quota-message", {
+				modelId: "gemini-3.8-flash",
+			}),
+		).toBe("api-acct-b");
 	});
 
 	let tempDir = "";
