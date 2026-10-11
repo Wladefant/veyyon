@@ -1526,6 +1526,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			// The spawned child runs one level below this session; depth rows key
 			// on the CHILD's depth, matching the executor's `childDepth`.
 			taskDepth: taskDepth + 1,
+			spawnId: `${toolCallId}:${spawnIndex}`,
 		});
 		if (resolvedModel.unresolved) {
 			const { source, value, depth } = resolvedModel.unresolved;

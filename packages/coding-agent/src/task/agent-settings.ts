@@ -11,6 +11,7 @@
  * Import this instead of reading `agent.*` keys directly.
  */
 
+import { createHash } from "node:crypto";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { isRecord, logger } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
@@ -29,6 +30,23 @@ import { retiredBy, settingsSchemaPaths } from "../config/settings-schema";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { currentAgentName, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
 import type { AgentDefinition } from "./types";
+
+const SHARED_TASK_MODEL_POOLS = ["google/gemini-3.8-flash", "openai-codex/gpt-6-luna"] as const;
+
+function shareTaskModelPools(patterns: string[], agentName: string, spawnId: string | undefined): string[] {
+	if (spawnId === undefined || !["deep", "qa-verifier"].includes(currentAgentName(agentName))) return patterns;
+	const flashIndex = patterns.findIndex(pattern => pattern.toLowerCase().includes(SHARED_TASK_MODEL_POOLS[0]));
+	const lunaIndex = patterns.findIndex(pattern => pattern.toLowerCase().includes(SHARED_TASK_MODEL_POOLS[1]));
+	if (flashIndex < 0 || lunaIndex < 0) return patterns;
+
+	const selectedFirst = createHash("sha256").update(spawnId).digest()[0] & 1 ? flashIndex : lunaIndex;
+	const selectedSecond = selectedFirst === flashIndex ? lunaIndex : flashIndex;
+	return [
+		patterns[selectedFirst]!,
+		patterns[selectedSecond]!,
+		...patterns.filter((_, index) => index !== flashIndex && index !== lunaIndex),
+	];
+}
 
 /**
  * How hard this session pushes work out to agents.
@@ -882,8 +900,10 @@ export function resolveAgentModel(options: {
 	 * spawn — reads the agent's own row.
 	 */
 	taskDepth?: number;
+	/** Stable spawn identity for stateless task worker pool selection. */
+	spawnId?: string;
 }): ResolvedAgentModel {
-	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth } = options;
+	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth, spawnId } = options;
 
 	reportSupersededAgentRows(settings);
 	reportRejectedAgentModelSettings(settings);
@@ -899,7 +919,8 @@ export function resolveAgentModel(options: {
 		if (Array.isArray(raw) && raw.length === 0) continue;
 		const depthFields = layer.depth !== undefined ? { depth: layer.depth } : {};
 		const patterns = resolveConfiguredModelPatterns(raw, settings);
-		if (patterns.length > 0) return { patterns, source: layer.source, ...depthFields };
+		if (patterns.length > 0)
+			return { patterns: shareTaskModelPools(patterns, agentName, spawnId), source: layer.source, ...depthFields };
 		return {
 			patterns: [],
 			source: layer.source,
@@ -910,7 +931,10 @@ export function resolveAgentModel(options: {
 
 	const recorded = settings.getModelRole(AGENT_DEFAULT_MODEL_ROLE)?.trim();
 	const fallback = recorded || fallbackModelPattern?.trim() || "";
-	return { patterns: resolveConfiguredModelPatterns(fallback, settings), source: "default" };
+	return {
+		patterns: shareTaskModelPools(resolveConfiguredModelPatterns(fallback, settings), agentName, spawnId),
+		source: "default",
+	};
 }
 
 /**

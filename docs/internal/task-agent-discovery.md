@@ -19,6 +19,11 @@ It covers runtime behavior as implemented today, including precedence, invalid-d
 
 ---
 
+## Shared task worker pools
+
+When `task` or `qa-verifier` resolves a chain containing both `google/gemini-3.8-flash` and `openai-codex/gpt-6-luna`, Veyyon hashes the task tool call ID and item index to choose which model comes first. This gives each spawn a stable choice without stored counters. The other configured candidates keep their order after the selected pair, so provider errors and exhaustion still use the remaining fallback chain. Other agent types and chains without both models keep their configured order. The task tool passes its identity to `resolveAgentModel`; model surfaces that resolve without a spawn identity do not apply this selection.
+
+
 ## Agent definition shape
 
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
