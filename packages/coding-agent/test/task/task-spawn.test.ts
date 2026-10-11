@@ -245,6 +245,40 @@ describe("task spawn routing", () => {
 		expect(spy.mock.calls[0]?.[0]?.parentThinkingLevel).toBeUndefined();
 	});
 
+	it("uses the task spawn identity to select the shared pool's first model", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("SharedPoolTask"));
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"agent.agents": {
+				task: { model: ["google/gemini-3.8-flash", "openai-codex/gpt-6-luna", "anthropic/claude-sonnet-4"] },
+			},
+		});
+		const tool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				hasUI: false,
+				settings,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+			}),
+		);
+		await tool.execute("tc-profile-policy", {
+			agent: "task",
+			name: "SharedPoolTask",
+			task: "Use the shared pool.",
+		} as TaskParams);
+
+		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual([
+			"openai-codex/gpt-6-luna",
+			"google/gemini-3.8-flash",
+			"anthropic/claude-sonnet-4",
+		]);
+	});
+
 	it("returns immediately on spawn and delivers the follow-up hint when the job completes", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],

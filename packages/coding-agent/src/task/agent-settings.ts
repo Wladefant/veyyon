@@ -11,6 +11,7 @@
  * Import this instead of reading `agent.*` keys directly.
  */
 
+import { createHash } from "node:crypto";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { isRecord, logger } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
@@ -29,6 +30,58 @@ import { retiredBy, settingsSchemaPaths } from "../config/settings-schema";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { currentAgentName, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
 import type { AgentDefinition } from "./types";
+
+/** Matches the literal Google provider and the live `google-antigravity` provider. */
+const SHARED_FLASH_POOL = /(?:^|[^a-z0-9-])google(?:-antigravity)?\/gemini-3\.8-flash/i;
+const SHARED_LUNA_POOL = /(?:^|[^a-z0-9-])openai-codex\/gpt-6-luna/i;
+
+/** The one reader of cooldowns the retry ladder records: a model registry's selector suppression. */
+export interface SelectorSuppression {
+	isSelectorSuppressed(selector: string): boolean;
+}
+
+const spawnCounters = new Map<string, number>();
+
+/**
+ * A stable, unique identity for a spawn made outside the task tool (eval `agent()`, vibe workers).
+ * The counter is per scope so one session's spawns alternate independently of any other.
+ */
+export function nextSpawnId(scope: string): string {
+	const next = (spawnCounters.get(scope) ?? 0) + 1;
+	spawnCounters.set(scope, next);
+	return `${scope}:${next}`;
+}
+
+/**
+ * Entries a routine Flash/Luna spawn must never reach through its retry chain: any Opus or Astra
+ * name, and any wildcard pattern, because a wildcard can resolve to one of them.
+ */
+const EXPENSIVE_ROUTINE_TAIL = /opus|astra|[*?]/i;
+
+function shareTaskModelPools(
+	patterns: string[],
+	agentName: string,
+	spawnId: string | undefined,
+	suppression: SelectorSuppression | undefined,
+): string[] {
+	if (spawnId === undefined || !["deep", "qa-verifier"].includes(currentAgentName(agentName))) return patterns;
+	const flashIndex = patterns.findIndex(pattern => SHARED_FLASH_POOL.test(pattern));
+	const lunaIndex = patterns.findIndex(pattern => SHARED_LUNA_POOL.test(pattern));
+	if (flashIndex < 0 || lunaIndex < 0) return patterns;
+
+	let selectedFirst = createHash("sha256").update(spawnId).digest()[0] & 1 ? flashIndex : lunaIndex;
+	// A pool in cooldown is skipped at the first selection, not only at retry. When both are
+	// suppressed the hash decides, so the retry ladder keeps its own order.
+	const flashDown = suppression?.isSelectorSuppressed(patterns[flashIndex]!) === true;
+	const lunaDown = suppression?.isSelectorSuppressed(patterns[lunaIndex]!) === true;
+	if (flashDown !== lunaDown) selectedFirst = flashDown ? lunaIndex : flashIndex;
+	const selectedSecond = selectedFirst === flashIndex ? lunaIndex : flashIndex;
+	// A routine spawn must never reach an expensive entry through the retry ladder, including when
+	// both pools return 429 after the child started, so the entry is dropped before the child runs.
+	const tail = patterns.filter((_, index) => index !== flashIndex && index !== lunaIndex);
+	const safeTail = tail.filter(pattern => !EXPENSIVE_ROUTINE_TAIL.test(pattern));
+	return [patterns[selectedFirst]!, patterns[selectedSecond]!, ...safeTail];
+}
 
 /**
  * How hard this session pushes work out to agents.
@@ -882,8 +935,12 @@ export function resolveAgentModel(options: {
 	 * spawn — reads the agent's own row.
 	 */
 	taskDepth?: number;
+	/** Stable spawn identity for stateless task worker pool selection. */
+	spawnId?: string;
+	/** Model registry whose selector suppression (recorded 429 cooldowns) steers the pool split. */
+	modelRegistry?: SelectorSuppression;
 }): ResolvedAgentModel {
-	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth } = options;
+	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth, spawnId, modelRegistry } = options;
 
 	reportSupersededAgentRows(settings);
 	reportRejectedAgentModelSettings(settings);
@@ -899,7 +956,12 @@ export function resolveAgentModel(options: {
 		if (Array.isArray(raw) && raw.length === 0) continue;
 		const depthFields = layer.depth !== undefined ? { depth: layer.depth } : {};
 		const patterns = resolveConfiguredModelPatterns(raw, settings);
-		if (patterns.length > 0) return { patterns, source: layer.source, ...depthFields };
+		if (patterns.length > 0)
+			return {
+				patterns: shareTaskModelPools(patterns, agentName, spawnId, modelRegistry),
+				source: layer.source,
+				...depthFields,
+			};
 		return {
 			patterns: [],
 			source: layer.source,
@@ -910,7 +972,15 @@ export function resolveAgentModel(options: {
 
 	const recorded = settings.getModelRole(AGENT_DEFAULT_MODEL_ROLE)?.trim();
 	const fallback = recorded || fallbackModelPattern?.trim() || "";
-	return { patterns: resolveConfiguredModelPatterns(fallback, settings), source: "default" };
+	return {
+		patterns: shareTaskModelPools(
+			resolveConfiguredModelPatterns(fallback, settings),
+			agentName,
+			spawnId,
+			modelRegistry,
+		),
+		source: "default",
+	};
 }
 
 /**
