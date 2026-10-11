@@ -75,4 +75,33 @@ describe("task workers share Flash and GPT-6 Luna", () => {
 			fallback,
 		]);
 	});
+
+	it("keeps the split at deeper configured depths and starts a fresh split for new spawns", () => {
+		const deepTask = Settings.isolated({
+			"agent.agents": { task: { agents: { agents: { model: [flash, luna, fallback] } } } },
+		});
+		const deepQa = Settings.isolated({
+			"agent.agents": { "qa-verifier": { agents: { agents: { model: [flash, luna, fallback] } } } },
+		});
+		for (const [agentName, settings] of [
+			["task", deepTask],
+			["qa-verifier", deepQa],
+		] as const) {
+			const counts: Record<string, number> = {};
+			for (let index = 0; index < 100; index++) {
+				const resolved = resolveAgentModel({
+					settings,
+					agentName,
+					taskDepth: 3,
+					spawnId: `reset-${index}`,
+				});
+				counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
+				expect(resolved.patterns.slice(2)).toEqual([fallback]);
+			}
+			expect(counts[flash]).toBeGreaterThanOrEqual(40);
+			expect(counts[flash]).toBeLessThanOrEqual(60);
+			expect(counts[luna]).toBeGreaterThanOrEqual(40);
+			expect(counts[luna]).toBeLessThanOrEqual(60);
+		}
+	});
 });
