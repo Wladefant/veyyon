@@ -476,6 +476,12 @@ export interface ProviderWindowStat {
  * one is what binds.
  */
 function meterForLimit(report: UsageReport, limit: UsageLimit): string | undefined {
+	if (report.provider === "google-antigravity") {
+		// Gemini and Claude/GPT are independent quota counters; one exhausted must not hide the other.
+		const counter = limit.id.toLowerCase().split(":")[1];
+		if (counter === "google") return "gemini";
+		return counter === "claude-gpt" ? counter : undefined;
+	}
 	if (report.provider !== "openai-codex") return undefined;
 	const tier = limit.scope.tier?.trim().toLowerCase();
 	if (tier) return tier;

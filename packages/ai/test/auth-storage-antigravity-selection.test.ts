@@ -23,7 +23,7 @@ import { removeWithRetries } from "../../utils/src/temp";
 const HOUR_MS = 60 * 60 * 1000;
 
 type AntigravityWindowSpec = {
-	counter: "google" | "anthropic" | "openai" | "default";
+	counter: "google" | "claude-gpt" | "anthropic" | "openai" | "default";
 	usedFraction: number;
 	resetInMs: number;
 };
@@ -85,6 +85,52 @@ function createCredential(accountId: string, projectId: string, email: string): 
 }
 
 describe("AuthStorage google-antigravity oauth ranking", () => {
+	test("Gemini selects the 83-percent-used sibling despite its exhausted Claude quota", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		await authStorage.set("google-antigravity", [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		for (const [accountId, gemini, claude] of [
+			["acct-a", 1, 0],
+			["acct-b", 0.83, 1],
+		] as const) {
+			usageByAccount.set(
+				accountId,
+				createAntigravityReport({
+					accountId,
+					projectId: `proj-${accountId}`,
+					windows: [
+						{ counter: "google", usedFraction: gemini, resetInMs: HOUR_MS },
+						{ counter: "claude-gpt", usedFraction: claude, resetInMs: HOUR_MS },
+					],
+				}),
+			);
+		}
+		expect(
+			await authStorage.getApiKey("google-antigravity", "family-scoped", {
+				modelId: "gemini-3.8-flash",
+			}),
+		).toBe("api-acct-b");
+		const accountA = authStorage.listStoredCredentials("google-antigravity")[0]!.id;
+		authStorage.pinSessionCredential("google-antigravity", "quota-message", accountA);
+		await authStorage.getApiKey("google-antigravity", "quota-message", { modelId: "gemini-3.8-flash" });
+		const outcome = await authStorage.markUsageLimitReached("google-antigravity", "quota-message", {
+			credentialId: accountA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: HOUR_MS,
+		});
+		expect(outcome.switched).toBe(true);
+		expect(outcome.quotaMessage).toContain("a@example.com");
+		expect(outcome.quotaMessage).toContain("1 other account available");
+		expect(outcome.quotaMessage).toContain("balancer will try");
+		expect(
+			await authStorage.getApiKey("google-antigravity", "quota-message", {
+				modelId: "gemini-3.8-flash",
+			}),
+		).toBe("api-acct-b");
+	});
+
 	let tempDir = "";
 	let store: AuthCredentialStore | null = null;
 	let authStorage: AuthStorage | null = null;
