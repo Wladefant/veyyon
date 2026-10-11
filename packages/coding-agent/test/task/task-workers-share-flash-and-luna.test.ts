@@ -185,7 +185,7 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		registry.clearSuppressedSelectors();
 	});
 
-	it("never falls through to Opus or Astra when both pools are suppressed", () => {
+	it("never puts Opus or Astra in a routine chain, healthy or suppressed", () => {
 		const opus = "anthropic/claude-opus-5-5";
 		const astra = "openai-codex/gpt-6-astra";
 		const withExpensiveTail = Settings.isolated({
@@ -196,7 +196,7 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 				.patterns;
 
 		registry.clearSuppressedSelectors();
-		expect(resolve("tail-0").slice(2)).toEqual([fallback, opus, astra]);
+		expect(resolve("tail-0").slice(2)).toEqual([fallback]);
 
 		registry.suppressSelector(luna, Date.now() + 60_000);
 		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
