@@ -52,6 +52,9 @@ export function nextSpawnId(scope: string): string {
 	return `${scope}:${next}`;
 }
 
+/** Opus and Astra entries a routine spawn must not reach when the Flash and Luna pools are both down. */
+const EXPENSIVE_ROUTINE_TAIL = /(?:^|[^a-z0-9-])(?:[a-z-]+\/)?(?:claude-opus|gpt-6-astra)/i;
+
 function shareTaskModelPools(
 	patterns: string[],
 	agentName: string,
@@ -70,11 +73,11 @@ function shareTaskModelPools(
 	const lunaDown = suppression?.isSelectorSuppressed(patterns[lunaIndex]!) === true;
 	if (flashDown !== lunaDown) selectedFirst = flashDown ? lunaIndex : flashIndex;
 	const selectedSecond = selectedFirst === flashIndex ? lunaIndex : flashIndex;
-	return [
-		patterns[selectedFirst]!,
-		patterns[selectedSecond]!,
-		...patterns.filter((_, index) => index !== flashIndex && index !== lunaIndex),
-	];
+	// Both routine pools are cooling down: the retry ladder would walk straight into the tail, so
+	// a routine spawn must not reach an expensive entry there. It waits on its cheap candidates.
+	const tail = patterns.filter((_, index) => index !== flashIndex && index !== lunaIndex);
+	const safeTail = flashDown && lunaDown ? tail.filter(pattern => !EXPENSIVE_ROUTINE_TAIL.test(pattern)) : tail;
+	return [patterns[selectedFirst]!, patterns[selectedSecond]!, ...safeTail];
 }
 
 /**

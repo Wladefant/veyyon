@@ -184,4 +184,25 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		expect(counts[luna]).toBeGreaterThanOrEqual(40);
 		registry.clearSuppressedSelectors();
 	});
+
+	it("never falls through to Opus or Astra when both pools are suppressed", () => {
+		const opus = "anthropic/claude-opus-5-5";
+		const astra = "openai-codex/gpt-6-astra";
+		const withExpensiveTail = Settings.isolated({
+			"agent.agents": { task: { model: [antigravityFlash, luna, fallback, opus, astra] } },
+		});
+		const resolve = (spawnId: string) =>
+			resolveAgentModel({ settings: withExpensiveTail, agentName: "task", taskDepth: 1, spawnId, modelRegistry: registry })
+				.patterns;
+
+		registry.clearSuppressedSelectors();
+		expect(resolve("tail-0").slice(2)).toEqual([fallback, opus, astra]);
+
+		registry.suppressSelector(luna, Date.now() + 60_000);
+		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
+		const exhausted = resolve("tail-1");
+		expect(exhausted.slice(0, 2).sort()).toEqual([antigravityFlash, luna].sort());
+		expect(exhausted.slice(2)).toEqual([fallback]);
+		registry.clearSuppressedSelectors();
+	});
 });
