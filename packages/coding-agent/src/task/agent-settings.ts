@@ -31,15 +31,44 @@ import type { ConfiguredThinkingLevel } from "../thinking";
 import { currentAgentName, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
 import type { AgentDefinition } from "./types";
 
-const SHARED_TASK_MODEL_POOLS = ["google/gemini-3.8-flash", "openai-codex/gpt-6-luna"] as const;
+/** Matches the literal Google provider and the live `google-antigravity` provider. */
+const SHARED_FLASH_POOL = /(?:^|[^a-z0-9-])google(?:-antigravity)?\/gemini-3\.8-flash/i;
+const SHARED_LUNA_POOL = /(?:^|[^a-z0-9-])openai-codex\/gpt-6-luna/i;
 
-function shareTaskModelPools(patterns: string[], agentName: string, spawnId: string | undefined): string[] {
+/** The one reader of cooldowns the retry ladder records: a model registry's selector suppression. */
+export interface SelectorSuppression {
+	isSelectorSuppressed(selector: string): boolean;
+}
+
+const spawnCounters = new Map<string, number>();
+
+/**
+ * A stable, unique identity for a spawn made outside the task tool (eval `agent()`, vibe workers).
+ * The counter is per scope so one session's spawns alternate independently of any other.
+ */
+export function nextSpawnId(scope: string): string {
+	const next = (spawnCounters.get(scope) ?? 0) + 1;
+	spawnCounters.set(scope, next);
+	return `${scope}:${next}`;
+}
+
+function shareTaskModelPools(
+	patterns: string[],
+	agentName: string,
+	spawnId: string | undefined,
+	suppression: SelectorSuppression | undefined,
+): string[] {
 	if (spawnId === undefined || !["deep", "qa-verifier"].includes(currentAgentName(agentName))) return patterns;
-	const flashIndex = patterns.findIndex(pattern => pattern.toLowerCase().includes(SHARED_TASK_MODEL_POOLS[0]));
-	const lunaIndex = patterns.findIndex(pattern => pattern.toLowerCase().includes(SHARED_TASK_MODEL_POOLS[1]));
+	const flashIndex = patterns.findIndex(pattern => SHARED_FLASH_POOL.test(pattern));
+	const lunaIndex = patterns.findIndex(pattern => SHARED_LUNA_POOL.test(pattern));
 	if (flashIndex < 0 || lunaIndex < 0) return patterns;
 
-	const selectedFirst = createHash("sha256").update(spawnId).digest()[0] & 1 ? flashIndex : lunaIndex;
+	let selectedFirst = createHash("sha256").update(spawnId).digest()[0] & 1 ? flashIndex : lunaIndex;
+	// A pool in cooldown is skipped at the first selection, not only at retry. When both are
+	// suppressed the hash decides, so the retry ladder keeps its own order.
+	const flashDown = suppression?.isSelectorSuppressed(patterns[flashIndex]!) === true;
+	const lunaDown = suppression?.isSelectorSuppressed(patterns[lunaIndex]!) === true;
+	if (flashDown !== lunaDown) selectedFirst = flashDown ? lunaIndex : flashIndex;
 	const selectedSecond = selectedFirst === flashIndex ? lunaIndex : flashIndex;
 	return [
 		patterns[selectedFirst]!,
@@ -902,8 +931,10 @@ export function resolveAgentModel(options: {
 	taskDepth?: number;
 	/** Stable spawn identity for stateless task worker pool selection. */
 	spawnId?: string;
+	/** Model registry whose selector suppression (recorded 429 cooldowns) steers the pool split. */
+	modelRegistry?: SelectorSuppression;
 }): ResolvedAgentModel {
-	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth, spawnId } = options;
+	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth, spawnId, modelRegistry } = options;
 
 	reportSupersededAgentRows(settings);
 	reportRejectedAgentModelSettings(settings);
@@ -920,7 +951,11 @@ export function resolveAgentModel(options: {
 		const depthFields = layer.depth !== undefined ? { depth: layer.depth } : {};
 		const patterns = resolveConfiguredModelPatterns(raw, settings);
 		if (patterns.length > 0)
-			return { patterns: shareTaskModelPools(patterns, agentName, spawnId), source: layer.source, ...depthFields };
+			return {
+				patterns: shareTaskModelPools(patterns, agentName, spawnId, modelRegistry),
+				source: layer.source,
+				...depthFields,
+			};
 		return {
 			patterns: [],
 			source: layer.source,
@@ -932,7 +967,12 @@ export function resolveAgentModel(options: {
 	const recorded = settings.getModelRole(AGENT_DEFAULT_MODEL_ROLE)?.trim();
 	const fallback = recorded || fallbackModelPattern?.trim() || "";
 	return {
-		patterns: shareTaskModelPools(resolveConfiguredModelPatterns(fallback, settings), agentName, spawnId),
+		patterns: shareTaskModelPools(
+			resolveConfiguredModelPatterns(fallback, settings),
+			agentName,
+			spawnId,
+			modelRegistry,
+		),
 		source: "default",
 	};
 }

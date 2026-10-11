@@ -1,4 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { TempDir } from "@veyyon/utils";
+import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { resolveAgentModel } from "../../src/task/agent-settings";
 
@@ -103,5 +107,81 @@ describe("task workers share Flash and GPT-6 Luna", () => {
 			expect(counts[luna]).toBeGreaterThanOrEqual(40);
 			expect(counts[luna]).toBeLessThanOrEqual(60);
 		}
+	});
+});
+
+describe("the Flash and Luna share follows quota suppression and the live provider name", () => {
+	const antigravityFlash = "google-antigravity/gemini-3.8-flash";
+	const luna = "openai-codex/gpt-6-luna";
+	const fallback = "anthropic/claude-sonnet-4";
+	const settings = Settings.isolated({
+		"agent.agents": { task: { model: [antigravityFlash, luna, fallback] } },
+	});
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let registry: ModelRegistry;
+
+	beforeAll(async () => {
+		tempDir = TempDir.createSync("@veyyon-share-suppression-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		registry = new ModelRegistry(authStorage);
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		tempDir.removeSync();
+	});
+
+	function firstChoices(): Record<string, number> {
+		const counts: Record<string, number> = {};
+		for (let index = 0; index < 100; index++) {
+			const resolved = resolveAgentModel({
+				settings,
+				agentName: "task",
+				taskDepth: 1,
+				spawnId: `quota-${index}`,
+				modelRegistry: registry,
+			});
+			expect(resolved.patterns.slice(2)).toEqual([fallback]);
+			counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
+		}
+		return counts;
+	}
+
+	it("splits the live google-antigravity provider name against Luna", () => {
+		registry.clearSuppressedSelectors();
+		const counts = firstChoices();
+		expect(counts[antigravityFlash]).toBeGreaterThanOrEqual(40);
+		expect(counts[antigravityFlash]).toBeLessThanOrEqual(60);
+		expect(counts[luna]).toBeGreaterThanOrEqual(40);
+		expect(counts[luna]).toBeLessThanOrEqual(60);
+	});
+
+	it("starts new spawns on the other pool while one is suppressed, and restores the split after reset", () => {
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(luna, Date.now() + 60_000);
+		const lunaDown = firstChoices();
+		expect(lunaDown[antigravityFlash]).toBe(100);
+
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
+		const flashDown = firstChoices();
+		expect(flashDown[luna]).toBe(100);
+
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(luna, Date.now() - 1);
+		const afterReset = firstChoices();
+		expect(afterReset[antigravityFlash]).toBeGreaterThanOrEqual(40);
+		expect(afterReset[antigravityFlash]).toBeLessThanOrEqual(60);
+	});
+
+	it("keeps the hash split when both pools are suppressed", () => {
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(luna, Date.now() + 60_000);
+		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
+		const counts = firstChoices();
+		expect(counts[antigravityFlash]).toBeGreaterThanOrEqual(40);
+		expect(counts[luna]).toBeGreaterThanOrEqual(40);
+		registry.clearSuppressedSelectors();
 	});
 });
