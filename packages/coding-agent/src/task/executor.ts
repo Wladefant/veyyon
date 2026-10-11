@@ -83,6 +83,7 @@ import {
 	resolveAgentPruneBudget,
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
+import { reportProviderError } from "./provider-error-reporter";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
 import { YIELD_TOOL_NAME } from "./subprocess-tool-registry";
 import {
@@ -1041,6 +1042,9 @@ function resolveTurnEnd(session: AgentSession, monitor: AgentRunMonitor, failure
 	const lastAssistant = session.getLastAssistantMessage();
 	if (lastAssistant?.stopReason === "error") {
 		failure ??= lastAssistant.errorMessage || "Agent failed";
+		if (lastAssistant.errorMessage) {
+			reportProviderError(`${lastAssistant.provider}/${lastAssistant.model}`, lastAssistant.errorMessage);
+		}
 	}
 	// A budget stop that produced no yield cut the turn short even though no signal named it: the
 	// stop cancels the free-running turn, the forced wrap-up reminder is the child's last chance,
