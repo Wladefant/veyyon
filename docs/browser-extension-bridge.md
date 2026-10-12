@@ -36,25 +36,12 @@ The `tab.*` helpers, `observe`, `screenshot` and the rest of the `browser` tool 
 2. Requests with a foreign `Host` or `Origin` header get `403`.
 3. Three random secrets guard three paths: the extension path, the CDP path and the control path. Each is 32 random bytes. The comparison is timing-safe. A secret never appears in a log line, an error, or tool output.
 4. The extension token is per Chrome profile. It lives in `~/.veyyon/profiles/<name>/agent/browser-extension/` with mode `0600`.
-5. Navigation is deny by default. Only origins on the allowlist load. `about:blank` is always allowed.
-6. These hosts are refused even when the allowlist names them: any host containing `zaraprptkegxqpvnsubu`, any host containing `akamai-iad-prod`, and `polysimulator.com` with its subdomains.
+5. Navigation allows HTTP and HTTPS origins by default. `about:blank` is allowed.
+6. These hosts are refused even when reached by navigation: any host containing `zaraprptkegxqpvnsubu`, any host containing `akamai-iad-prod`, and `polysimulator.com` with its subdomains.
 7. A page that reaches a refused origin by redirect is sent back to `about:blank`.
 8. Commands that export profile data are blocked: `Page.printToPDF`, `Network.getAllCookies`, `Network.getCookies`, `Storage.getCookies`.
 9. The relay logs the origin of each navigation decision. It logs no path, no query, no page content.
 10. `Browser.close` never closes the operator's Chrome. It only drops the client socket.
-
-### Allowlist
-
-Put origins in `~/.veyyon/profiles/<name>/agent/browser-extension/policy.json`:
-
-```json
-{ "allow": ["https://staging.example.com", "docs.example.org", "*.cdn.example.net"] }
-```
-
-Add more with `VEYYON_BROWSER_EXTENSION_ALLOW` (comma separated).
-An entry with a scheme (`https://host`) matches that origin only.
-An entry without a scheme matches the host on any scheme.
-`*.host` matches subdomains, not `host` itself.
 
 ### Popup guard: best effort
 Chrome loads a popup tab before the debugger can attach to it. The relay therefore installs a guard in every controlled document. `window.open` returns `null`. `form.submit()`, `form.requestSubmit()`, submit events and `formtarget` are forced to the same tab. A `<base target>` is rewritten. Links open in place, also inside shadow DOM and on ctrl, meta, shift or middle click. Same-tab requests then pass the request gate before they leave Chrome.
@@ -71,8 +58,7 @@ Limit: a page on loopback, a private range, `.local` or `.localhost` is not sand
 5. Click the extension icon. Click "Status".
 6. Copy the token that the status page shows.
 7. In a terminal, run `veyyon browser-extension set-token`. Paste the token. Press Enter.
-8. Create the allowlist file named above. List only the sites Veyyon may open.
-9. Run `veyyon browser-extension status`. It prints the token state and the allowlist path. It never prints the token.
+8. Run `veyyon browser-extension status`. It prints the token state and running relay. It never prints the token.
 
 After this, a session that opens `browser` with `app: {"extension": true}` connects by itself.
 Chrome still shows its "started debugging this browser" bar on the controlled tab.
@@ -83,8 +69,7 @@ That is expected.
 | Command | Effect |
 |---|---|
 | `veyyon browser-extension set-token` | Store the token (read from stdin). |
-| `veyyon browser-extension status` | Show token state, the allowlist file path, and the running relay. |
-| `veyyon browser-extension disconnect` | Detach every controlled tab and drop the extension. |
+| `veyyon browser-extension status` | Show token state and the running relay. |
 | `veyyon browser-extension clear-token` | Delete the stored token. |
 
 Add `--instance <name>` to use a second Chrome profile.

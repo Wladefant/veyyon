@@ -2,15 +2,12 @@
  * Security policy for the `app.extension` browser backend.
  *
  * The backend drives the operator's signed-in Chrome through the Playwright Extension. These
- * rules keep a local process or a web page from steering that browser, and keep an agent away
- * from hosts it was not given. Everything here is pure except `loadExtensionPolicy`, which
- * reads one JSON file and one environment variable.
+ * rules keep a local process or a web page from steering that browser. HTTP and HTTPS navigation
+ * is open except for production hosts.
  */
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@veyyon/utils";
-import { type } from "arktype";
 
 /** The extension id of Playwright Extension 0.4.0 in the Chrome Web Store. */
 export const PLAYWRIGHT_EXTENSION_ID = "mmlmfjhmonkocbjadbfplnigmagldckm";
@@ -21,8 +18,6 @@ export const EXTENSION_PROTOCOL_VERSION = 2;
 /** Environment variable with extra allowed origins, comma separated. */
 export const EXTENSION_ALLOW_ENV = "VEYYON_BROWSER_EXTENSION_ALLOW";
 
-/**
- * Hosts and fragments that are never reachable, whatever the allowlist says. The two ids are
  * matched anywhere in the host; the domains are matched exactly (a staging subdomain can still
  * be allowed).
  */
@@ -74,10 +69,6 @@ const DENIED_CDP_METHODS: ReadonlySet<string> = new Set([
 
 export type PolicyDecision = { allowed: true } | { allowed: false; reason: string };
 
-export interface ExtensionPolicy {
-	/** Allowed origins (`https://host`) and host patterns (`host`, `*.host`). */
-	readonly allow: readonly string[];
-}
 
 /** True for `127.0.0.1`, `[::1]`, `::1` and `localhost`. */
 export function isLoopbackHost(host: string): boolean {
@@ -123,50 +114,12 @@ export function normalizeHost(hostname: string): string {
 	return hostname.toLowerCase().replace(/\.+$/, "");
 }
 
-/** The normalized host of a URL, or undefined when the text is not a URL. */
-function hostOf(rawUrl: string): string | undefined {
-	try {
-		return normalizeHost(new URL(rawUrl).hostname);
-	} catch {
-		return undefined;
-	}
-}
-
-/** True when the URL points at a production host. Used for subresources, which are not allowlist-checked. */
-export function isProductionUrl(rawUrl: string): boolean {
-	const host = hostOf(rawUrl);
-	return host !== undefined && isProductionHost(host);
-}
-
-function isProductionHost(host: string): boolean {
-	if (PRODUCTION_HOSTS.includes(host)) return true;
-	return PRODUCTION_HOST_FRAGMENTS.some(fragment => host.includes(fragment));
-}
-
-/** The origin of `url` built from the normalized host, so a trailing dot or a default port cannot change the match. */
-function normalizedOrigin(url: URL): string {
-	const host = normalizeHost(url.hostname);
-	const bracketed = host.includes(":") ? `[${host}]` : host;
-	return `${url.protocol}//${bracketed}${url.port ? `:${url.port}` : ""}`;
-}
-
-function patternMatches(pattern: string, url: URL): boolean {
-	const entry = pattern.trim().toLowerCase();
-	if (entry.length === 0) return false;
-	const host = normalizeHost(url.hostname);
-	if (entry.includes("://")) return normalizedOrigin(url) === entry.replace(/\/+$/, "");
-	if (entry.startsWith("*.")) {
-		const suffix = normalizeHost(entry.slice(1));
-		return host.endsWith(`.${suffix.replace(/^\./, "")}`);
-	}
-	return host === normalizeHost(entry);
-}
 
 /**
- * Decide whether the browser may load `rawUrl`. Default deny: only `about:blank` and entries of the
- * allowlist pass, and production hosts never pass.
+ * Decide whether the browser may load `rawUrl`. HTTP and HTTPS URLs pass unless they target a
+ * refused production host. `about:blank` is always allowed.
  */
-export function checkNavigation(policy: ExtensionPolicy, rawUrl: string): PolicyDecision {
+export function checkNavigation(rawUrl: string): PolicyDecision {
 	if (rawUrl === "about:blank") return { allowed: true };
 	let url: URL;
 	try {
@@ -177,15 +130,11 @@ export function checkNavigation(policy: ExtensionPolicy, rawUrl: string): Policy
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
 		return { allowed: false, reason: `The extension backend does not load ${url.protocol} URLs.` };
 	}
-	const host = hostOf(rawUrl);
-	if (host !== undefined && isProductionHost(host)) {
+	const host = normalizeHost(url.hostname);
+	if (isProductionHost(host)) {
 		return { allowed: false, reason: `${host} is a production host and is never allowed.` };
 	}
-	if (policy.allow.some(entry => patternMatches(entry, url))) return { allowed: true };
-	return {
-		allowed: false,
-		reason: `${url.origin} is not on the extension allowlist. Add it to ${EXTENSION_ALLOW_ENV} or to allow[] in ${policyFilePath()}.`,
-	};
+	return { allowed: true };
 }
 
 /**
@@ -206,25 +155,7 @@ export function extensionStateDir(): string {
 	return path.join(getAgentDir(), "browser-extension");
 }
 
-export function policyFilePath(): string {
-	return path.join(extensionStateDir(), "policy.json");
-}
 
-const policyFileSchema = type({ "allow?": "string[]" });
-
-/** Read the allowlist from the policy file and the environment. A bad file is an error, not an empty list. */
-export function loadExtensionPolicy(env: NodeJS.ProcessEnv = process.env): ExtensionPolicy {
-	const allow: string[] = [];
-	const file = policyFilePath();
-	if (fs.existsSync(file)) {
-		const parsed = policyFileSchema(JSON.parse(fs.readFileSync(file, "utf8")));
-		if (parsed instanceof type.errors) throw new Error(`${file} is not valid: ${parsed.summary}`);
-		allow.push(...(parsed.allow ?? []));
-	}
-	const fromEnv = env[EXTENSION_ALLOW_ENV];
-	if (fromEnv) allow.push(...fromEnv.split(",").map(entry => entry.trim()));
-	return { allow: allow.filter(entry => entry.length > 0) };
-}
 
 /** Name used in file names for one Chrome profile. Only letters, digits, dot, dash and underscore survive. */
 export function instanceFileName(instance: string | undefined): string {
@@ -244,29 +175,6 @@ export function writeExtensionToken(instance: string | undefined, token: string)
 }
 
 export function readExtensionToken(instance: string | undefined): string | undefined {
-	const file = tokenFilePath(instance);
-	if (!fs.existsSync(file)) return undefined;
-	const token = fs.readFileSync(file, "utf8").trim();
-	return token.length > 0 ? token : undefined;
-}
-
-export function hasExtensionToken(instance: string | undefined): boolean {
-	return readExtensionToken(instance) !== undefined;
-}
-
-/** Remove the stored token. Returns whether one existed. */
-export function removeExtensionToken(instance: string | undefined): boolean {
-	const file = tokenFilePath(instance);
-	if (!fs.existsSync(file)) return false;
-	fs.rmSync(file, { force: true });
-	return true;
-}
-
-/** Replace every known secret in `text` with a marker. Defence in depth for anything that logs. */
-export function redactSecrets(text: string, secrets: readonly string[]): string {
-	let out = text;
-	for (const secret of secrets) {
-		if (secret.length >= 8) out = out.split(secret).join("[redacted]");
 	}
 	return out;
 }
