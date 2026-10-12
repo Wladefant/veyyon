@@ -66,22 +66,29 @@ test_failures=0
 run_bucket() {
   local mode="$1"
   echo "CLOUDFLARE_TEST_BUCKET_START $mode"
-  local bucket_output
-  bucket_output="$(bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts "$mode" --full 2>&1)" || {
-    printf '%s\n' "$bucket_output"
-    return 1
-  }
-  printf '%s\n' "$bucket_output"
+  local bucket_log
+  bucket_log="$(mktemp)"
+  local bucket_status=0
+  if bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts "$mode" --full 2>&1 | tee "$bucket_log"; then
+    :
+  else
+    bucket_status=$?
+  fi
   read -r bucket_passes bucket_failures < <(
     awk '
       /^[[:space:]]*[0-9]+ pass$/ { passes += $1 }
       /^[[:space:]]*[0-9]+ fail$/ { failures += $1 }
       END { printf "%d %d\n", passes, failures }
-    ' <<< "$bucket_output"
+    ' "$bucket_log"
   )
   test_passes=$((test_passes + bucket_passes))
   test_failures=$((test_failures + bucket_failures))
   echo "CLOUDFLARE_TEST_BUCKET_END $mode pass=$bucket_passes fail=$bucket_failures"
+  rm -f "$bucket_log"
+  if (( bucket_status != 0 )); then
+    echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=$bucket_status" >&2
+    return "$bucket_status"
+  fi
 }
 echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
 worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
