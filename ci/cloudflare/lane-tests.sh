@@ -58,10 +58,13 @@ export VEYYON_TEST_CONCURRENCY=2
 # Use the existing bubblewrap rung; Workers Builds cannot start Docker containers.
 bash -n scripts/test-sandbox/guest/build-guest.sh
 proof_tools="$repo_root/.cf-proof-tools"
-mkdir -p "$proof_tools/packages" "$proof_tools/root" "$proof_tools/bin"
+mkdir -p "$proof_tools/packages" "$proof_tools/root" "$proof_tools/bin" \
+  "$proof_tools/lists/partial" "$proof_tools/cache/archives/partial"
 (
   cd "$proof_tools/packages"
-  timeout 120 apt-get download bubblewrap fakeroot libfakeroot cpio
+  apt_options=(-o "Dir::State::Lists=$proof_tools/lists" -o "Dir::Cache=$proof_tools/cache")
+  timeout 120 apt-get "${apt_options[@]}" update
+  timeout 120 apt-get "${apt_options[@]}" download bubblewrap fakeroot libfakeroot cpio
   for package in ./*.deb; do
     dpkg-deb -x "$package" "$proof_tools/root"
   done
