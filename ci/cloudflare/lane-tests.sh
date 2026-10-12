@@ -55,19 +55,29 @@ bun run ci:build:native
 export CI=true
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_TEST_CONCURRENCY=2
-# Workers Builds has a Docker daemon but no prebuilt Veyyon test guest.
+# Use the existing bubblewrap rung; Workers Builds cannot start Docker containers.
 bash -n scripts/test-sandbox/guest/build-guest.sh
-VEYYON_SANDBOX_USERLAND_ONLY=1 bash scripts/test-sandbox/run.sh --rung=docker --build
-docker run --rm --network=none --cap-drop=MKNOD \
-  --mount "type=bind,src=$repo_root,dst=/repo,readonly" \
-  --entrypoint /usr/bin/fakeroot "veyyon-test-guest:$expected_bun" /bin/sh -ceu '
-    mkdir -p /tmp/device-proof/dev
-    cd /tmp/device-proof
+proof_tools="$repo_root/.cf-proof-tools"
+mkdir -p "$proof_tools/packages" "$proof_tools/root" "$proof_tools/bin"
+(
+  cd "$proof_tools/packages"
+  timeout 120 apt-get download bubblewrap fakeroot libfakeroot cpio
+  for package in ./*.deb; do
+    dpkg-deb -x "$package" "$proof_tools/root"
+  done
+)
+export PATH="$proof_tools/root/usr/bin:$PATH"
+cp -L "$(command -v bun)" "$proof_tools/bin/bun"
+fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-sysv.so" \
+  -f "$proof_tools/root/usr/bin/faked-sysv" /bin/sh -ceu '
+    proof_dir="$(mktemp -d)"
+    mkdir -p "$proof_dir/dev"
+    cd "$proof_dir"
     mknod -m 600 dev/console c 5 1
     mknod -m 666 dev/null c 1 3
-    find . -print0 | cpio --null -o --format=newc > /tmp/device-proof.cpio
-    python3 /repo/ci/cloudflare/device-node-check.py /tmp/device-proof.cpio
-  '
+    find . -print0 | cpio --null -o --format=newc > "${proof_dir}.cpio"
+    python3 "$1" "${proof_dir}.cpio"
+  ' _ "$repo_root/ci/cloudflare/device-node-check.py"
 focused_tests=(
   cloud/checkpoints/worker.test.ts
   packages/coding-agent/test/cloud-checkpoints.test.ts
@@ -77,7 +87,7 @@ focused_tests=(
   packages/coding-agent/test/cli/session-command-alias-reaches-stats.test.ts
 )
 echo "CLOUDFLARE_TEST_START ${focused_tests[*]}"
-test_output="$(bash scripts/test-sandbox/run.sh bun test "${focused_tests[@]}" 2>&1)" || {
+test_output="$(bash scripts/test-sandbox/run.sh --rung=bwrap "$proof_tools/bin/bun" test "${focused_tests[@]}" 2>&1)" || {
   printf '%s\n' "$test_output"
   exit 1
 }
