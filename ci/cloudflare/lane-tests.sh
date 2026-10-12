@@ -67,7 +67,7 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 if ! command -v cargo-zigbuild >/dev/null 2>&1; then
   cargo +nightly-2026-04-29 install --locked cargo-zigbuild
 fi
-zig --version
+zig version
 cargo-zigbuild --version
 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
   TARGET_VARIANTS='baseline modern' bun run ci:build:native
