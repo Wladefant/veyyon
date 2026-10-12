@@ -11,11 +11,10 @@ if [[ "$mode" != "windows-proof" && "$mode" != "full" ]]; then
 fi
 
 echo "=== Veyyon Cloudflare Linux Release ($mode) ==="
-
 cleanup() {
   local exit_code=$?
   if [[ -d "$repo_root/.cf-llvm-tools/packages" ]]; then
-    rm -rf "$repo_root/.cf-llvm-tools/packages" "$repo_root/.cf-llvm-tools/lists" "$repo_root/.cf-llvm-tools/cache"
+    rm -rf "$repo_root/.cf-llvm-tools/packages" "$repo_root/.cf-llvm-tools/lists" "$repo_root/.cf-llvm-tools/cache" || true
   fi
   exit "$exit_code"
 }
@@ -101,26 +100,78 @@ if ! command -v clang >/dev/null 2>&1 || (! command -v lld >/dev/null 2>&1 && ! 
       cd "$llvm_tools/packages"
       apt_options=(-o "Dir::State::Lists=$llvm_tools/lists" -o "Dir::Cache=$llvm_tools/cache")
       timeout 120 apt-get "${apt_options[@]}" update 2>/dev/null || true
-      timeout 120 apt-get "${apt_options[@]}" download clang lld llvm 2>/dev/null || true
-      for pkg in ./*.deb; do
-        [[ -f "$pkg" ]] && dpkg-deb -x "$pkg" "$llvm_tools/root" 2>/dev/null || true
+      packages=(
+        clang-18 lld-18 llvm-18 libclang-common-18-dev libclang-cpp18 libllvm18 liblld-18
+        clang-17 lld-17 llvm-17 libclang-common-17-dev libclang-cpp17 libllvm17
+        clang lld llvm
+      )
+      for pkg in "${packages[@]}"; do
+        timeout 60 apt-get "${apt_options[@]}" download "$pkg" 2>/dev/null || true
+      done
+      for deb in ./*.deb; do
+        [[ -f "$deb" ]] && dpkg-deb -x "$deb" "$llvm_tools/root" 2>/dev/null || true
       done
     )
-    if [[ -d "$llvm_tools/root/usr/bin" ]]; then
-      export PATH="$llvm_tools/root/usr/bin:$PATH"
-      if [[ -d "$llvm_tools/root/usr/lib" ]]; then
-        export LD_LIBRARY_PATH="$llvm_tools/root/usr/lib:${LD_LIBRARY_PATH:-}"
+    for bindir in "$llvm_tools/root/usr/lib/llvm-18/bin" \
+                  "$llvm_tools/root/usr/lib/llvm-17/bin" \
+                  "$llvm_tools/root/usr/bin"; do
+      if [[ -d "$bindir" ]]; then
+        export PATH="$bindir:$PATH"
       fi
-    fi
+    done
+    for libdir in "$llvm_tools/root/usr/lib/llvm-18/lib" \
+                  "$llvm_tools/root/usr/lib/llvm-17/lib" \
+                  "$llvm_tools/root/usr/lib/x86_64-linux-gnu" \
+                  "$llvm_tools/root/usr/lib" \
+                  "$llvm_tools/root/lib/x86_64-linux-gnu"; do
+      if [[ -d "$libdir" ]]; then
+        export LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}"
+      fi
+    done
   else
     echo "WARN: Neither sudo nor apt-get package extraction available; checking existing toolchain."
   fi
 fi
 
-if command -v lld >/dev/null 2>&1 && ! command -v lld-link >/dev/null 2>&1; then
-  ln -sf "$(command -v lld)" "$HOME/.local/bin/lld-link"
-  export PATH="$HOME/.local/bin:$PATH"
+mkdir -p "$HOME/.local/bin"
+if ! command -v clang >/dev/null 2>&1; then
+  clang_target="$(find "$repo_root/.cf-llvm-tools/root" -type f \( -name "clang-[0-9]*" -o -name "clang" \) -perm -111 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$clang_target" ]]; then
+    ln -sf "$clang_target" "$HOME/.local/bin/clang"
+  fi
 fi
+if command -v clang >/dev/null 2>&1; then
+  ln -sf "$(command -v clang)" "$HOME/.local/bin/clang-cl"
+fi
+
+if ! command -v lld >/dev/null 2>&1; then
+  lld_target="$(find "$repo_root/.cf-llvm-tools/root" -type f \( -name "lld-[0-9]*" -o -name "lld" \) -perm -111 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$lld_target" ]]; then
+    ln -sf "$lld_target" "$HOME/.local/bin/lld"
+  fi
+fi
+
+if ! command -v lld-link >/dev/null 2>&1; then
+  lld_link_target="$(find "$repo_root/.cf-llvm-tools/root" -type f -name "lld-link*" -perm -111 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$lld_link_target" ]]; then
+    ln -sf "$lld_link_target" "$HOME/.local/bin/lld-link"
+  elif command -v lld >/dev/null 2>&1; then
+    ln -sf "$(command -v lld)" "$HOME/.local/bin/lld-link"
+  fi
+fi
+
+if ! command -v lld-link >/dev/null 2>&1; then
+  rust_sysroot="$(rustc --print sysroot 2>/dev/null || true)"
+  if [[ -n "$rust_sysroot" ]]; then
+    rust_lld="$(find "$rust_sysroot" -name "rust-lld" -perm -111 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$rust_lld" ]]; then
+      echo "Using toolchain rust-lld ($rust_lld) for lld-link..."
+      ln -sf "$rust_lld" "$HOME/.local/bin/lld-link"
+      ln -sf "$rust_lld" "$HOME/.local/bin/lld"
+    fi
+  fi
+fi
+export PATH="$HOME/.local/bin:$PATH"
 
 if ! command -v clang >/dev/null 2>&1 || (! command -v lld >/dev/null 2>&1 && ! command -v lld-link >/dev/null 2>&1); then
   echo "ERROR: clang and lld/lld-link are required by cargo-xwin for MSVC cross-compilation." >&2
@@ -132,7 +183,14 @@ lld-link --version 2>/dev/null || lld --version | head -n 1
 # 4. cargo-xwin installation & public SDK acquisition license acceptance
 if ! command -v cargo-xwin >/dev/null 2>&1; then
   echo "Installing cargo-xwin..."
-  cargo install --locked cargo-xwin
+  xwin_version="0.18.6"
+  if curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/rust-cross/cargo-xwin/releases/download/v${xwin_version}/cargo-xwin-v${xwin_version}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/cargo-xwin.tar.gz 2>/dev/null; then
+    tar -xzf /tmp/cargo-xwin.tar.gz -C "$HOME/.local/bin"
+    rm -f /tmp/cargo-xwin.tar.gz
+    chmod +x "$HOME/.local/bin/cargo-xwin"
+  else
+    cargo install --locked cargo-xwin
+  fi
 fi
 cargo-xwin --version
 
