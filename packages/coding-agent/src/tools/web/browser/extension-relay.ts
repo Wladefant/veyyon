@@ -242,9 +242,9 @@ export class ExtensionRelay {
 	readonly #tabs = new Map<number, OwnedTab>();
 	/** Chrome's own child session ids (iframes, workers) to the tab that owns them. */
 	readonly #childSessions = new Map<string, number>();
-	/** Per debuggee: the isolated-world creation in flight, so later commands wait for its guard. */
+	/** Per Chrome debuggee: isolated-world creation in flight, so later commands wait for its guard. */
 	readonly #worldLocks = new Map<string, Promise<void>>();
-	/** Isolated worlds (`tab:session:contextId`) the guard script has not run in; commands on them are refused. */
+	/** Isolated worlds (`debuggee:contextId`) whose guard failed; commands on them are refused. */
 	readonly #unguardedWorlds = new Set<string>();
 	readonly #pending = new Map<number, PendingCall>();
 	#extension: ServerWebSocket<SocketData> | undefined;
@@ -881,7 +881,7 @@ export class ExtensionRelay {
 		if (!blocked.allowed) throw new Error(blocked.reason);
 		if (method === "Page.navigate" && typeof params.url === "string") this.#checkNavigationOrThrow(tabId, params.url);
 		const debuggee = rootTab !== undefined ? { tabId } : { tabId, sessionId };
-		const key = `${tabId}:${sessionId}`;
+		const key = rootTab !== undefined ? `${tabId}:root` : `${tabId}:${sessionId}`;
 		if (method === "Page.createIsolatedWorld") {
 			// Creation, guard run and the client's reply are one step. The next command of this session
 			// waits for it, so a pipelined command cannot reach a world before the guard has.

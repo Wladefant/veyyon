@@ -438,6 +438,39 @@ describe("policy at the relay", () => {
 		expect(evaluated).toHaveLength(1);
 	});
 
+	test("a second root session cannot use an isolated world the relay failed to guard", async () => {
+		const { ext, cdp } = await connected([]);
+		const target = await cdp.send("Target.createTarget", { url: "about:blank" });
+		const firstSessionId = String(
+			cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
+		);
+		ext.failNext("Runtime.evaluate");
+		const created = await cdp.send("Page.createIsolatedWorld", { frameId: "f" }, firstSessionId);
+		expect(created.error).toBeDefined();
+		const attached = await cdp.send("Target.attachToTarget", {
+			targetId: String(target.result?.targetId),
+			flatten: true,
+		});
+		const secondSessionId = String(attached.result?.sessionId);
+		const evaluated = await cdp.send(
+			"Runtime.evaluate",
+			{ expression: "1", contextId: 77 },
+			secondSessionId,
+		);
+		expect(evaluated.error?.message).toContain("could not be guarded");
+		const clientEvaluations = ext
+			.callsOf("chrome.debugger.sendCommand")
+			.filter(
+				call =>
+					call.params[1] === "Runtime.evaluate" &&
+					call.params[2] !== null &&
+					typeof call.params[2] === "object" &&
+					"contextId" in call.params[2] &&
+					call.params[2].contextId === 77,
+			);
+		expect(clientEvaluations).toHaveLength(1);
+	});
+
 	test("the popup guard sent to every tab covers forms, base target and shadow-DOM links", async () => {
 		const { ext, cdp } = await connected(["https://staging.example.com"]);
 		await cdp.send("Target.createTarget", { url: "about:blank" });
