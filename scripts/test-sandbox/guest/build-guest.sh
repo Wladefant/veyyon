@@ -55,8 +55,10 @@ GUEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 REPO_ROOT="$(cd -- "${GUEST_DIR}/../../.." && /bin/pwd -P)"
 BUILD_DIR="${GUEST_DIR}/.build"
 
-# shellcheck source=scripts/bun-version.sh
-source "${REPO_ROOT}/scripts/bun-version.sh"
+if [ -z "${BUN_VERSION:-}" ]; then
+	# shellcheck source=scripts/bun-version.sh
+	source "${REPO_ROOT}/scripts/bun-version.sh"
+fi
 GUEST_IMAGE="veyyon-test-guest:${BUN_VERSION}"
 KERNEL_IMAGE="veyyon-test-kernel:alpine3.21"
 
@@ -112,7 +114,7 @@ fi
 
 if [ "$CAN_BOOT_MICROVM" = 0 ]; then
 	log "building guest userland (${GUEST_IMAGE})"
-	docker build --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
+	docker build --network=host --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
 	rm -f "${BUILD_DIR}/boot-verified" "${BUILD_DIR}/vmlinuz" "${BUILD_DIR}/rootfs.img"
 	printf '%s' "$STAMP" > "${BUILD_DIR}/stamp"
 	log "done. The docker rung is ready; the microvm rung will report itself unavailable."
@@ -141,11 +143,12 @@ trap - EXIT
 
 # --- 2. guest userland ------------------------------------------------------
 log "building guest userland (${GUEST_IMAGE})"
-docker build --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
+docker build --network=host --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
 
 # --- 3. initramfs -----------------------------------------------------------
 # Built by a root process inside the guest image itself, over its own filesystem,
-# so ownership survives into the archive and the /dev/console node can be created.
+# so ownership survives into the archive; fakeroot supplies device-node metadata
+# without granting the container CAP_MKNOD.
 #
 # Two subtleties, both of which cost a boot to discover:
 #
@@ -198,12 +201,13 @@ docker run --rm \
 		# Mount points the guest init needs to exist and be empty.
 		mkdir -p /mnt/repo-lower /mnt/ovl /run /tmp
 
-		# Staged device nodes, appended below.
+		# Stage the device nodes and both cpio archives in one fakeroot session so
+		# cpio records their character-device metadata without CAP_MKNOD.
 		rm -rf /stage
 		mkdir -p /stage/dev
+		fakeroot /bin/sh -eu > /out/rootfs.img.tmp <<FAKEROOT
 		mknod -m 0600 /stage/dev/console c 5 1
 		mknod -m 0666 /stage/dev/null c 1 3
-
 		{
 			cd /
 			find . -xdev \
@@ -217,10 +221,11 @@ docker run --rm \
 			| cpio --quiet -o -H newc
 			cd /stage
 			find . -mindepth 1 -print | cpio --quiet -o -H newc
-		} > /out/rootfs.img.tmp
-
+		}
+FAKEROOT
 		mv /out/rootfs.img.tmp /out/rootfs.img
 		chown "$HOST_UID:$HOST_GID" /out/rootfs.img
+
 	' >&2
 
 rm -rf "${BUILD_DIR}/modules"
