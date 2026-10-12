@@ -35,7 +35,10 @@ export function filterCheckpointFiles(files: CheckpointFile[]): CheckpointFile[]
 			!excluded.test(file.path.replaceAll("\\", "/")),
 	);
 }
-export async function encryptCheckpointBundle(bundle: CheckpointBundle, key: Uint8Array): Promise<Uint8Array> {
+export async function encryptCheckpointBundle(
+	bundle: CheckpointBundle,
+	key: Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
 	if (key.byteLength !== 32) throw new Error("Checkpoint encryption key must be 32 bytes");
 	const iv = crypto.getRandomValues(new Uint8Array(12));
 	const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
@@ -47,7 +50,10 @@ export async function encryptCheckpointBundle(bundle: CheckpointBundle, key: Uin
 	result.set(encrypted, 13);
 	return result;
 }
-export async function decryptCheckpointBundle(bytes: Uint8Array, key: Uint8Array): Promise<CheckpointBundle> {
+export async function decryptCheckpointBundle(
+	bytes: Uint8Array<ArrayBuffer>,
+	key: Uint8Array<ArrayBuffer>,
+): Promise<CheckpointBundle> {
 	if (key.byteLength !== 32 || bytes.byteLength < 30 || bytes[0] !== 1) throw new Error("Invalid checkpoint envelope");
 	const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
 	const plain = await crypto.subtle.decrypt(
@@ -60,7 +66,7 @@ export async function decryptCheckpointBundle(bytes: Uint8Array, key: Uint8Array
 export interface CheckpointClientOptions {
 	baseUrl: string;
 	token: string;
-	key: Uint8Array;
+	key: Uint8Array<ArrayBuffer>;
 	fetch?: typeof fetch;
 	timeoutMs?: number;
 }
