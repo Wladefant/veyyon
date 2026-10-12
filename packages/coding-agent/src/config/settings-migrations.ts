@@ -1047,6 +1047,22 @@ function migrateComposerPredictionsMode(raw: RawSettings): void {
 }
 
 /**
+ * model.toolCallLoopGuard.readSubsumptionThreshold tuned the redundant-read
+ * detector of the tool-call loop guard, which was removed. Drop the key (flat and
+ * nested) and every section its removal emptied.
+ */
+function dropReadSubsumptionThreshold(raw: RawSettings): void {
+	delete raw["model.toolCallLoopGuard.readSubsumptionThreshold"];
+	const modelObj = raw.model;
+	if (!isRecord(modelObj)) return;
+	const guardObj = modelObj.toolCallLoopGuard;
+	if (!isRecord(guardObj) || !("readSubsumptionThreshold" in guardObj)) return;
+	delete guardObj.readSubsumptionThreshold;
+	if (Object.keys(guardObj).length === 0) delete modelObj.toolCallLoopGuard;
+	if (Object.keys(modelObj).length === 0) delete raw.model;
+}
+
+/**
  * Every field-level migration, in the order it runs.
  *
  * Optional numeric settings once stored `-1` to mean "unset", which made -1
@@ -1095,6 +1111,7 @@ const RAW_SETTINGS_MIGRATIONS: readonly RawSettingsMigration[] = [
 	migrateServiceTier,
 	migrateArgotEncode,
 	migrateComposerPredictionsMode,
+	dropReadSubsumptionThreshold,
 ];
 
 /**

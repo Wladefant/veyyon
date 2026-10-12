@@ -160,6 +160,10 @@
 - A pi-native element body the stream ends inside closes at its first rejected `</call:NAME>`, and the text after it is scanned once, instead of being folded into the call's raw block and then scanned again.
 - A scanner from `createInbandScanner` emits nothing on a second `flush()` and scans a reply fed after `flush()` as a new scanner does, instead of DeepSeek re-emitting events on the second flush and Kimi, DeepSeek, Gemini and Gemma carrying state into the next reply; streamed turns flush once and are unchanged.
 
+### Removed
+
+- Removed read-subsumption detection and the `readSubsumptionThreshold` option from `ToolCallLoopGuard`, which detects consecutive identical tool calls only.
+
 ## [1.5.4] - 2026-09-24
 
 ### Fixed

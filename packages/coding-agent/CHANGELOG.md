@@ -12,6 +12,7 @@
 - The `lsp` tool's `incoming_calls` and `outgoing_calls` actions list the functions that call the symbol at the cursor, or that it calls, with each call site, as the language server resolved them.
 - Composer predictions show the message you are likely to send next as dim text in the empty composer after each turn, inserted by Tab and sent only by Enter; `composer.predictions.mode` selects `off` (the default, which sends no request), `chatgpt-pro`, which requests a ChatGPT Codex prediction on GPT-6 Astra or GPT-6.1 Sol only with the token of a ChatGPT Pro plan Codex login, never a routed or API-key credential, may count against that account's usage limits, and otherwise sends nothing and shows as greyed out in `/settings`, or `custom`, which uses the first model with credentials in `composer.predictions.model`, chosen from any provider in the settings model picker; a stored `composer.predictions.enabled: false` loads as `off`.
 - A composer prediction ends with a dim `· tab to accept` hint showing the configured Tab key; the hint leaves with the suggestion when you type or press Tab, and a row too narrow for both drops the hint before it hides the suggestion.
+- `read` refuses a re-read of a file whose snapshot tag is unchanged and whose requested lines are all still shown by an earlier read result in context, returning a one-line pointer to that output instead of the content; `force: true` reads anyway, and a pruned, shaken or compacted earlier result no longer counts.
 
 ### Changed
 
@@ -335,6 +336,7 @@
 - The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
 - The retired `statusLine.separator` and `statusLine.transparent` settings are gone; neither changed anything on screen, and a config file that still sets them loads unchanged.
 - 36 exported functions and constants that nothing called, and the unused Smithery Connect API client `mcp/smithery-connect.ts`, are gone; no user-visible change.
+- The `model.toolCallLoopGuard.readSubsumptionThreshold` setting and the tool-call loop guard's redundant-read steer are gone, replaced by `read` refusing reads still in context; a stored value is dropped from the config on load.
 
 ## [1.5.5] - 2026-09-25
 

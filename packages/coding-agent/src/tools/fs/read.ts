@@ -44,6 +44,7 @@ import { parseConflictUri } from "./conflict-detect";
 import { readConflictRegion, readFileConflicts } from "./read-conflicts";
 import { readArchive, readSqlite } from "./read-containers";
 import { readDirectory } from "./read-directory";
+import { refuseReadStillInContext } from "./read-in-context";
 import {
 	buildInMemoryMultiRangeResult,
 	buildInMemoryTextResult,
@@ -76,6 +77,9 @@ const readSchema = lazy(() =>
 		),
 		"limit?": type("number.integer > 0").describe(
 			"Directory listings only: max entries returned; omitted entries are reported with the limit and how to see more.",
+		),
+		"force?": type("boolean").describe(
+			"Re-read a file even when its requested lines are unchanged and still in context from an earlier read.",
 		),
 	}),
 );
@@ -175,10 +179,13 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		for (const part of parts) {
 			try {
 				// Directory params apply per entry: every delimited part re-enters
-				// execute with the same `depth`/`limit` the caller asked for.
+				// execute with the same `depth`/`limit` the caller asked for. A part is
+				// never refused as still in context: the combined result is one read of
+				// every part to supersede pruning, which would then blank the earlier
+				// result a refused part pointed back to.
 				const result = await this.execute(
 					"read-delimited-part",
-					{ path: part, depth: directory.depth, limit: directory.limit },
+					{ path: part, depth: directory.depth, limit: directory.limit, force: true },
 					signal,
 				);
 				displayReadTargets.push(result.details?.suffixResolution?.to ?? part);
@@ -405,7 +412,10 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			return readFileConflicts(this.session, resolved.absolutePath, resolved.suffixResolution, signal);
 		}
 		const outcome = await this.#readFileContent(readPath, target.path, resolved, parsed, signal);
-		return outcome.kind === "result" ? outcome.result : finishLocalRead(outcome.read, resolved.suffixResolution);
+		const result =
+			outcome.kind === "result" ? outcome.result : finishLocalRead(outcome.read, resolved.suffixResolution);
+		if (params.force === true) return result;
+		return refuseReadStillInContext(this.session, result, resolved.absolutePath, readPath) ?? result;
 	}
 
 	/** Read a member of an archive, a SQLite database or a PDF's extracted images, when the path names one. */
