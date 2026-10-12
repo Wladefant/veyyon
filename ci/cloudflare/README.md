@@ -1,6 +1,6 @@
 # Veyyon Cloudflare CI
 
-Workers Builds runs the repository's TypeScript type check and existing sharded test buckets, attempts the Rust checks, builds the production Linux x64 CLI binary, and uploads an isolated health Worker version. It does not deploy the Veyyon application.
+Workers Builds runs the repository's TypeScript check and existing sharded test buckets, attempts the Rust checks, builds the production Linux x64 CLI binary, and uploads an isolated health Worker version. It does not deploy the Veyyon application.
 
 ## Trigger configuration
 
@@ -10,8 +10,8 @@ Use a Workers Builds user token with the account-level Workers Builds Configurat
 
 ## Build behavior
 
-The lane pins Bun 1.4.0 when the Workers Builds image does not include Bun, installs dependencies from the frozen lockfile, and runs `bun run check:ts`. It then reuses the repository's `scripts/ci-test-ts.ts` shards in workspace, native, and all coding-agent buckets. The script emits total Bun test pass/fail counts and requires at least one pass and zero failures.
+The lane reads the pinned Bun version from the root `package.json`, installs that exact version if the container differs, and installs dependencies from the frozen lockfile. It runs `bun run check:ts`, then reuses `scripts/ci-test-ts.ts` in workspace, native, and every coding-agent bucket. It emits total test pass/fail counts and requires at least one pass and zero failures.
 
-The lane builds the Linux x64 production CLI through `scripts/ci-release-build-binaries.ts`. It attempts `bun run check:rs` when Cargo is available and logs the native check outcome. It uploads only the `veyyon-ci-health` Worker version. It disables Workers routes and preview URLs.
+The lane builds the Linux x64 production CLI through `scripts/ci-release-build-binaries.ts`. It runs `bun run check:rs` when Cargo is available. Cargo failures stop the build; only a missing Cargo executable is reported as an unsupported container capability. It uploads only the `veyyon-ci-health` Worker version. It disables Workers routes and preview URLs.
 
 The Worker responds with `ok` to health probes. A version upload does not activate or promote the version. It does not expose a public Worker URL or alter the application deployment path.

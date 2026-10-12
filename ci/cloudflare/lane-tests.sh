@@ -4,12 +4,14 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-if ! command -v bun >/dev/null 2>&1; then
-  echo 'Installing pinned Bun 1.4.0 for the Workers Builds container.'
-  npm install --global bun@1.4.0
+expected_bun="$(node -p "require('./package.json').packageManager.split('@')[1]")"
+if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" ]]; then
+  echo "Installing repository-pinned Bun $expected_bun for the Workers Builds container."
+  npm install --global "bun@$expected_bun"
 fi
 bun --version
 bun install --frozen-lockfile
+bun run check:ts
 
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Full output lets this runner
@@ -50,9 +52,8 @@ run_bucket coding-agent-heavy
 # compiler. This creates the shipped artifact; it does not deploy the product.
 RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
 
-# Attempt the repo's Rust/native build in the container. Keep its outcome explicit
-# while allowing a successful JS production build to remain verifiable if this
-# container lacks a supported native toolchain or system libraries.
+# The repository's Rust gate runs only when Cargo exists. Missing Cargo is an
+# explicit container limitation; once present, any real check failure is fatal.
 if (( test_passes == 0 || test_failures != 0 )); then
   echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
   echo 'Expected at least one passing test and zero failures.' >&2
@@ -60,11 +61,8 @@ if (( test_passes == 0 || test_failures != 0 )); then
 fi
 echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
 if command -v cargo >/dev/null 2>&1; then
-  if bun run check:rs; then
-    echo 'CLOUDFLARE_RUST_BUILD=passed'
-  else
-    echo 'CLOUDFLARE_RUST_BUILD=unsupported-or-failed; inspect preceding cargo diagnostics'
-  fi
+  bun run check:rs
+  echo 'CLOUDFLARE_RUST_BUILD=passed'
 else
   echo 'CLOUDFLARE_RUST_BUILD=unsupported; cargo is unavailable in the Workers Builds container'
 fi
