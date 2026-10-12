@@ -23,6 +23,7 @@ import * as path from "node:path";
 import { REQUIRED_RELEASE_ASSET_NAMES } from "./release-policy";
 
 const ciYaml = await Bun.file(path.join(import.meta.dir, "..", ".github", "workflows", "ci.yml")).text();
+const releaseLinuxScript = await Bun.file(path.join(import.meta.dir, "..", "ci", "cloudflare", "release-linux.sh")).text();
 
 /** `veyyon_natives.linux-x64-modern.node` -> `linux-x64-modern`. */
 const manifestTargets = REQUIRED_RELEASE_ASSET_NAMES.filter(
@@ -33,12 +34,34 @@ const manifestTargets = REQUIRED_RELEASE_ASSET_NAMES.filter(
 const ciTargets = [...ciYaml.matchAll(/"veyyon-natives-([\w-]+)-h\$\{hash\}"/g)].map(match => match[1]!);
 
 describe("native release artifacts", () => {
-	test("the manifest and ci.yml name the same native targets", () => {
+	test("the manifest native targets are supported by ci.yml for Linux and release-linux.sh for Windows", () => {
 		// Both lists are hand-written in different spellings, so the only thing
 		// keeping them together is this comparison.
 		expect(manifestTargets.length).toBeGreaterThan(0);
 		expect(ciTargets.length).toBeGreaterThan(0);
-		expect([...new Set(manifestTargets)].sort()).toEqual([...new Set(ciTargets)].sort());
+
+		// Linux targets are tracked in ci.yml
+		const linuxManifestTargets = manifestTargets.filter(target => !target.startsWith("win32-"));
+		for (const target of linuxManifestTargets) {
+			expect(ciTargets).toContain(target);
+		}
+
+		// Windows baseline is cross-compiled on Linux via Cloudflare release-linux.sh
+		expect(manifestTargets).toContain("win32-x64-baseline");
+		expect(releaseLinuxScript).toContain("TARGET_PLATFORM=win32");
+		expect(releaseLinuxScript).toContain("TARGET_ARCH=x64");
+		expect(releaseLinuxScript).toContain("x86_64-pc-windows-msvc");
+		expect(releaseLinuxScript).toContain("veyyon_natives.win32-x64-baseline.node");
+
+		// macOS targets are cut per operator directive
+		expect(manifestTargets).not.toContain("darwin-x64-baseline");
+		expect(manifestTargets).not.toContain("darwin-arm64");
+		expect([...new Set(manifestTargets)].sort()).toEqual([
+			"linux-arm64",
+			"linux-x64-baseline",
+			"linux-x64-modern",
+			"win32-x64-baseline",
+		]);
 	});
 
 	test("every native addon ships the checksum sidecar the installer requires", () => {

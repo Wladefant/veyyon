@@ -236,17 +236,15 @@ Release order is publication order. A version string such as `0.0.1` or `1.4.0` 
 
 Three surfaces, and all three are required.
 
-**The GitHub release.** Five platform binaries, six native addons, and a
-`.sha256` sidecar for every one of them. `scripts/release-policy.ts` holds the
-exact manifest, and a release with a missing or an extra distribution asset stays
-red.
+**The GitHub release.** Three platform binaries, four native addons, and a
+`.sha256` sidecar for every one of them (seven artifacts, fourteen assets total).
+`scripts/release-policy.ts` holds the exact manifest, and a release with a missing
+or an extra distribution asset stays red.
 
 | Platform and arch | Binary |
 | --- | --- |
 | linux x64 | `veyyon-linux-x64` |
 | linux arm64 | `veyyon-linux-arm64` |
-| macOS x64 | `veyyon-darwin-x64` |
-| macOS arm64 | `veyyon-darwin-arm64` |
 | Windows x64 | `veyyon-windows-x64.exe` |
 
 The native addons ship as `veyyon_natives.<platform>-<arch>[-variant].node` so a

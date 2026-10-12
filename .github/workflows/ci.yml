@@ -145,18 +145,8 @@ jobs:
               echo "--- generated notes ($(wc -l < release-notes-dryrun.md) lines) ---"
               cat release-notes-dryrun.md
 
-   # Compute a stable hash of every input that affects the native cdylib output,
-   # then look for any prior successful main run that already uploaded the
-   # native artifacts for this hash. Two independent outputs:
-   #   * `linux-x64-run-id` — set when BOTH linux x64 variants
-   #     (`baseline` and `modern`) are present on a prior main run, so
-   #     native-dependent TS test jobs and `native_linux_x64` can reuse it.
-   #   * `cross-platform-run-id` — set when the complete Linux x64 and
-   #     cross-platform artifact set is present and non-expired on that same
-   #     prior run, so `native_cross_platform` can skip the cold rebuild on
-   #     main pushes after dep changes have already warmed sccache there.
-   # Non-release native jobs are skipped only for complete artifact sets; the
-   # artifact retention window (see build-native action) is the effective TTL.
+   # Linux-native artifacts only. GitHub Actions no longer provides native Windows
+   # or macOS build, test, installer, or release-runtime verification.
    native_artifact_lookup:
       name: Look up cached native artifacts
       runs-on: ubuntu-22.04
@@ -203,9 +193,6 @@ jobs:
               cross_platform_required=(
                 "${linux_x64_required[@]}"
                 "veyyon-natives-linux-arm64-h${hash}"
-                "veyyon-natives-darwin-x64-baseline-h${hash}"
-                "veyyon-natives-darwin-arm64-h${hash}"
-                "veyyon-natives-win32-x64-baseline-h${hash}"
               )
               linux_x64_run_id=""
               cross_platform_run_id=""
@@ -213,8 +200,8 @@ jobs:
               # conclusion was. `--status=success` used to be here, and it made the
               # cache miss exactly when it is worth most: a red or cancelled main run
               # still built and uploaded valid addons, so a red streak charged every
-              # push six native builds again (34 of the 56 runner-minutes one main push
-              # costs, including four macOS/Windows slots against a ~20-job ceiling).
+              # Linux ARM64 is cross-compiled on Ubuntu; Windows/macOS artifacts
+              # are not part of the native artifact cache.
               # Validity comes from the source hash in the artifact NAME, not from
               # whether some unrelated test bucket passed in the same run.
               for candidate in $(gh run list \
@@ -257,9 +244,9 @@ jobs:
                 echo "No cached Linux x64 native artifacts for hash $hash; native_linux_x64 will rebuild."
               fi
               if [ -n "$cross_platform_run_id" ]; then
-                echo "Reusing cross-platform native artifacts from run $cross_platform_run_id"
+                echo "Reusing Linux ARM64 native artifacts from run $cross_platform_run_id"
               else
-                echo "No cached cross-platform native artifacts for hash $hash; native_cross_platform will rebuild on main."
+                echo "No cached Linux ARM64 native artifacts for hash $hash; native_cross_platform_cross will rebuild on main."
               fi
               {
                 echo "linux-x64-run-id=$linux_x64_run_id"
@@ -325,7 +312,6 @@ jobs:
          matrix:
             include:
                - { os: ubuntu-24.04-arm, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu }
-               - { os: ubuntu-22.04, platform: win32, arch: x64, target: x86_64-pc-windows-msvc, variant: baseline }
       runs-on: ${{ matrix.os }}
       timeout-minutes: 60
       steps:
@@ -340,28 +326,6 @@ jobs:
               glibc: ${{ matrix.platform == 'linux' && env.GLIBC_FLOOR || '' }}
               save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-   native_cross_platform_macos:
-      name: "Native: ${{ matrix.platform }} ${{ matrix.arch }}"
-      needs: [release_metadata, native_artifact_lookup]
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.native_artifact_lookup.outputs.cross-platform-run-id == '') }}
-      strategy:
-         fail-fast: false
-         matrix:
-            include:
-               - { os: macos-15-intel, platform: darwin, arch: x64, variant: baseline }
-               - { os: macos-14, platform: darwin, arch: arm64 }
-      runs-on: ${{ matrix.os }}
-      timeout-minutes: 60
-      steps:
-         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-         - uses: ./.github/actions/build-native
-           with:
-              hash: ${{ needs.native_artifact_lookup.outputs.source-hash }}
-              platform: ${{ matrix.platform }}
-              arch: ${{ matrix.arch }}
-              variant: ${{ matrix.variant }}
-              target: ${{ matrix.target }}
-              save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
    test_workspace:
       name: Test TS workspace fast
       runs-on: ubuntu-22.04
@@ -494,120 +458,36 @@ jobs:
            run: bun run ci:test:smoke
 
    install_methods:
-      # install.sh is a shipped install channel on BOTH Linux and macOS, and the
-      # gate ran on Linux only. macOS is where an installer breaks: BSD userland
-      # rather than GNU, zsh as the default login shell rather than bash, and a
-      # different completions layout. Running the same script on macos-14 is what
-      # makes "the installer works" a claim about the platforms it ships to.
-      name: "Install method smoke tests (${{ matrix.os }})"
-      # An installer end-to-end run answers a question about a RELEASE
-      # ARTIFACT, and it answers it by building the product from source on three
-      # operating systems. On an ordinary push to main nothing publishes, so the
-      # answer is not needed until the cut, and the cost is not free: this matrix
-      # takes two of the account's five concurrent macOS slots, which is the pool
-      # a release tag has to get through. One main run measured 635 minutes of
-      # queue wait against 82 minutes of execution. It still gates every release
-      # (`release_binary` needs it), and it still runs on every pull request, so
-      # an installer change is proven before it lands and again before it ships.
+      # Linux installer smoke tests remain. Native macOS installer coverage is
+      # no longer run in GitHub Actions.
+      name: Install method smoke tests (Linux)
       if: ${{ needs.release_metadata.outputs.is-release == 'true' || github.event_name != 'push' }}
       needs: [release_metadata]
-      strategy:
-         fail-fast: false
-         matrix:
-            # macos-14 is arm64 and macos-15-intel is x64. Each runner builds and
-            # installs its own architecture, so both shipped macOS binaries get
-            # their install path exercised rather than only the one the release
-            # happens to be cut on.
-            os: [ubuntu-22.04, macos-14, macos-15-intel]
-      runs-on: ${{ matrix.os }}
+      runs-on: ubuntu-22.04
       timeout-minutes: 45
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
          - uses: ./.github/actions/ensure-rust-toolchain
            with:
               toolchain: nightly-2026-04-29
-         - name: Setup sccache
-           uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-         - name: Enable sccache for cargo
-           # sccache-action exports the GHA cache URL/token; CARGO_INCREMENTAL=0
-           # keeps sccache from silently no-oping.
-           shell: bash
-           run: |
-              {
-                echo "RUSTC_WRAPPER=sccache"
-                echo "CARGO_INCREMENTAL=0"
-                echo "SCCACHE_GHA_ENABLED=true"
-              } >> "$GITHUB_ENV"
-              echo "sccache backend: GitHub Actions cache"
+         - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
          - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - name: Install method smoke tests
            run: bun run ci:test:install-methods
 
-   install_ps1_e2e:
-      # The Windows counterpart of install_methods. The function tests below
-      # cover the pure helpers and the release verify job downloads the published
-      # .exe and runs --version on it, but neither runs install.ps1 itself, so
-      # everything the installer does AROUND the binary (the vey.cmd shim, the
-      # user PATH entry, completions wired into the PowerShell profile, the
-      # doctor self-test, and uninstall reclaiming all of it) had never executed
-      # on Windows even once. -Local installs the binary built here, so this
-      # needs no published release.
-      name: Windows installer end-to-end
-      # Same rule as install_methods: a release gate and a pull-request gate, not
-      # a per-push cost. It builds the native addon and the binary on Windows,
-      # which is the longest single job in the workflow.
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' || github.event_name != 'push' }}
-      needs: [release_metadata]
-      runs-on: windows-latest
-      timeout-minutes: 30
-      steps:
-         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-         - uses: ./.github/actions/bun-install
-         - name: Build the native addon and the binary
-           # bash, not pwsh: the bun-install action puts bun on PATH for the
-           # runner's bash shell, and a pwsh step does not inherit it, so this
-           # step died with "The term 'bun' is not recognized" and took the whole
-           # Windows end-to-end job with it. Only the test step below needs pwsh.
-           shell: bash
-           run: |
-              bun --cwd=natives/bridge/bindings run build
-              bun --cwd=packages/coding-agent run build
-         - name: install.ps1 end-to-end (install, reinstall, uninstall)
-           shell: pwsh
-           env:
-              # The script refuses to run without this, because it edits the user
-              # PATH and the PowerShell profile for real (both restored after).
-              VEYYON_INSTALL_E2E: "1"
-           run: pwsh -File scripts/install-tests/e2e.test.ps1
-
-   install_ps1_functions:
-      name: Windows installer function tests
-      # install.ps1 is a shipped install channel; run its helper-function tests
-      # on a real Windows shell so the PATH-wiring logic (which never ran on the
-      # Linux runners) is actually gated. pwsh ships on windows-latest.
-      runs-on: windows-latest
-      timeout-minutes: 20
-      steps:
-         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-         - name: install.ps1 function tests
-           shell: pwsh
-           run: pwsh -File scripts/install-tests/functions.test.ps1
-
    release_binary:
       name: "Release binary: ${{ matrix.target_id }}"
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
          needs.native_linux_x64.result == 'success' && needs.native_cross_platform_cross.result ==
-         'success' && needs.native_cross_platform_macos.result == 'success' &&
+         'success' &&
          needs.test_workspace.result == 'success' &&
          needs.test_coding_agent_singleton.result == 'success' &&
          needs.test_ts_native.result == 'success' &&
          needs.test_coding_agent_buckets.result == 'success' &&
          needs.test_smoke.result == 'success' && needs.check.result == 'success' &&
-         needs.install_methods.result == 'success' &&
-         needs.install_ps1_e2e.result == 'success' &&
-         needs.install_ps1_functions.result == 'success' }}
-      needs: [release_metadata, check, native_linux_x64, native_cross_platform_cross, native_cross_platform_macos, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_buckets, test_smoke, install_methods, install_ps1_e2e, install_ps1_functions, native_artifact_lookup]
+         needs.install_methods.result == 'success' }}
+      needs: [release_metadata, check, native_linux_x64, native_cross_platform_cross, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_buckets, test_smoke, install_methods, native_artifact_lookup]
       strategy:
          fail-fast: false
          matrix:
@@ -627,20 +507,6 @@ jobs:
                     binary_path: packages/coding-agent/binaries/veyyon-linux-arm64,
                  }
                - {
-                    os: macos-15-intel,
-                    platform: darwin,
-                    arch: x64,
-                    target_id: darwin-x64,
-                    binary_path: packages/coding-agent/binaries/veyyon-darwin-x64,
-                 }
-               - {
-                    os: macos-14,
-                    platform: darwin,
-                    arch: arm64,
-                    target_id: darwin-arm64,
-                    binary_path: packages/coding-agent/binaries/veyyon-darwin-arm64,
-                 }
-               - {
                     os: ubuntu-22.04,
                     platform: win32,
                     arch: x64,
@@ -657,6 +523,7 @@ jobs:
          # retry, and the gitignored source codegen the compile reads.
          - uses: ./.github/actions/bun-install
          - name: Download native addon(s)
+           if: matrix.platform != 'win32'
            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
            with:
               pattern: veyyon-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.native_artifact_lookup.outputs.source-hash }}
@@ -667,10 +534,8 @@ jobs:
               RELEASE_TARGETS: ${{ matrix.target_id }}
               VEYYON_OFFICIAL_RELEASE: '1'
            run: bun run ci:release:build-binaries
-         # Windows binary is cross-built on Linux, so we have no Windows runner
-         # to smoke it on. Cross-build correctness is verified via the napi
-         # entry-point exports (see build-native action) and the bun
-         # `--compile --target=bun-windows-x64-*` cross-compile.
+         # Windows binary is cross-built on Linux. It is not natively runtime-verified.
+         # Canonical release building routes to ci/cloudflare/release-linux.sh full entry.
          - name: Smoke release binary
            if: matrix.platform != 'win32'
            run: |
@@ -722,9 +587,13 @@ jobs:
               path: packages/coding-agent/binaries
               merge-multiple: true
          - name: Download native addons
-           # Published as release assets so SOURCE installs stay toolchain-free:
-           # ensure-native.ts fetches `veyyon_natives.<platform>-<arch>[-variant].node`
-           # from the checkout's own release tag instead of requiring cargo.
+            # Published as release assets so SOURCE installs stay toolchain-free:
+            # ensure-native.ts fetches `veyyon_natives.<platform>-<arch>[-variant].node`
+            # from the checkout's own release tag instead of requiring cargo.
+            # Canonical release building routes to ci/cloudflare/release-linux.sh full entry,
+            # which produces Linux x64/arm64 and Windows x64 MSVC native addons.
+            # If GH release secret (GH_TOKEN with contents:write permission) is unavailable externally,
+            # publishing cannot create or update the GitHub Release draft and assets.
            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
            with:
               pattern: veyyon-natives-*-h${{ needs.native_artifact_lookup.outputs.source-hash }}
@@ -745,6 +614,8 @@ jobs:
               cat ./*.sha256
          - name: Create or resume the immutable draft release
            id: draft
+           # Exact external publishing prerequisite: GH_TOKEN secret with contents:write permission
+           # to repository Wladefant/veyyon. If unavailable, draft creation and asset upload fail closed.
            env:
               GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               RELEASE_TAG: ${{ needs.release_metadata.outputs.release-tag }}
@@ -919,56 +790,6 @@ jobs:
               cf-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
               cf-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-   release_github_verify:
-      name: Verify draft release (macOS)
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
-         needs.release_github.result == 'success' }}
-      needs: [release_metadata, release_github]
-      runs-on: macos-14
-      timeout-minutes: 20
-      permissions:
-         contents: write
-      steps:
-         - name: Download draft macOS arm64 binary and checksum sidecar
-           env:
-              GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              RELEASE_ID: ${{ needs.release_github.outputs.release-id }}
-           run: |
-              set -euo pipefail
-              download_asset() {
-                name="$1"
-                asset_id="$(
-                  gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
-                    --jq ".[] | select(.name == \"$name\") | .id"
-                )"
-                if [ -z "$asset_id" ]; then
-                  echo "::error::draft release $RELEASE_ID has no asset named $name"
-                  exit 1
-                fi
-                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
-                  -H "Accept: application/octet-stream" > "$name"
-              }
-              download_asset veyyon-darwin-arm64
-              download_asset veyyon-darwin-arm64.sha256
-              chmod +x veyyon-darwin-arm64
-         - name: Verify the published .sha256 sidecar (install.sh fails closed without it)
-           run: |
-              # install.sh refuses to install any binary whose published checksum is
-              # missing or mismatched, on every platform — so the darwin sidecar must
-              # be verified here too, not only the linux one.
-              shasum -a 256 -c veyyon-darwin-arm64.sha256
-         - name: Verify published macOS arm64 binary
-           run: |
-              runtime_dir="$(mktemp -d)"
-              # Assert the binary reports the version being released — a binary built
-              # from the wrong commit (or a failed version-embed) would otherwise run
-              # fine while reporting a stale version, and publish unnoticed.
-              expected="${{ needs.release_metadata.outputs.release-tag }}"; expected="veyyon/${expected#v}"
-              actual="$(HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./veyyon-darwin-arm64 --version)"
-              echo "reported: $actual (expected to contain: $expected)"
-              case "$actual" in *"$expected"*) : ;; *) echo "::error::published macOS binary reports '$actual', expected '$expected'"; exit 1 ;; esac
-              HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./veyyon-darwin-arm64 --smoke-test
-
    release_github_verify_linux:
       # linux-x64 is the most common `curl | sh` target, but the macOS verify job
       # above never launches it — a broken linux binary (or a native addon that
@@ -1027,89 +848,13 @@ jobs:
               case "$actual" in *"$expected"*) : ;; *) echo "::error::published linux binary reports '$actual', expected '$expected'"; exit 1 ;; esac
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./veyyon-linux-x64 --smoke-test
 
-   release_github_verify_windows:
-      # Windows is a first-class install channel (install.ps1), but neither verify
-      # job above ever launches the Windows binary — a broken .exe, a missing/wrong
-      # .sha256 sidecar (install.ps1 fails closed without it), or a native addon
-      # that will not load on Windows could publish unnoticed. Download the
-      # published asset exactly as install.ps1 does, verify the sidecar the way
-      # install.ps1 requires (Get-FileHash), then run --version and --smoke-test in
-      # a clean HOME. --smoke-test forces the core @veyyon/natives addon to load,
-      # so this is the end-to-end proof that the shipped Windows binary starts.
-      name: Verify draft release (windows-x64)
-      if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
-         needs.release_github.result == 'success' }}
-      needs: [release_metadata, release_github]
-      runs-on: windows-latest
-      # The candidate remains private, but cap a hung Windows smoke-test so it
-      # fails the transaction quickly instead of holding the draft indefinitely.
-      timeout-minutes: 15
-      permissions:
-         contents: write
-      steps:
-         - name: Download draft windows-x64 binary and checksum sidecar
-           shell: pwsh
-           env:
-              GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              RELEASE_ID: ${{ needs.release_github.outputs.release-id }}
-           run: |
-              function Get-DraftAsset([string] $Name) {
-                $assetId = gh api --paginate "repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID/assets" `
-                  --jq ".[] | select(.name == `"$Name`") | .id"
-                if ($LASTEXITCODE -ne 0) { throw "failed to list assets for draft release $env:RELEASE_ID" }
-                if ([string]::IsNullOrWhiteSpace($assetId)) {
-                  throw "draft release $env:RELEASE_ID has no asset named $Name"
-                }
-                $headers = @{
-                  Authorization = "Bearer $env:GH_TOKEN"
-                  Accept = "application/octet-stream"
-                  "X-GitHub-Api-Version" = "2022-11-28"
-                }
-                Invoke-WebRequest `
-                  -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$assetId" `
-                  -Headers $headers -OutFile $Name
-              }
-              Get-DraftAsset veyyon-windows-x64.exe
-              Get-DraftAsset veyyon-windows-x64.exe.sha256
-         - name: Verify the published .sha256 sidecar (install.ps1 fails closed without it)
-           shell: pwsh
-           run: |
-              # The sidecar is "<hash>  veyyon-windows-x64.exe"; take the leading hash
-              # token and compare it case-insensitively to the file's SHA-256, exactly
-              # as install.ps1 does. A missing or mismatched sidecar fails the release
-              # here rather than a user's install.
-              $expected = ((Get-Content -Raw veyyon-windows-x64.exe.sha256).Trim() -split '\s+')[0].ToLower()
-              if ([string]::IsNullOrWhiteSpace($expected)) { throw "published sidecar is empty/unparseable" }
-              $actual = (Get-FileHash -Path veyyon-windows-x64.exe -Algorithm SHA256).Hash.ToLower()
-              if ($actual -ne $expected) { throw "checksum mismatch: expected $expected, got $actual" }
-              Write-Host "checksum verified: $actual"
-         - name: Launch the published windows-x64 binary (forces native-addon load)
-           shell: pwsh
-           run: |
-              $runtimeDir = Join-Path $env:TEMP "veyyon-verify-$PID"
-              $env:HOME = Join-Path $runtimeDir "home"
-              $env:USERPROFILE = $env:HOME
-              $env:XDG_DATA_HOME = Join-Path $runtimeDir "xdg"
-              # Assert the reported version matches the release tag (catches a binary
-              # built from the wrong commit / a failed version-embed).
-              $expected = "veyyon/" + ("${{ needs.release_metadata.outputs.release-tag }}" -replace '^v','')
-              $actual = (& .\veyyon-windows-x64.exe --version | Out-String).Trim()
-              if ($LASTEXITCODE -ne 0) { throw "veyyon-windows-x64.exe --version failed with exit $LASTEXITCODE" }
-              Write-Host "reported: $actual (expected to contain: $expected)"
-              if ($actual -notlike "*$expected*") { throw "published Windows binary reports '$actual', expected '$expected'" }
-              & .\veyyon-windows-x64.exe --smoke-test
-              if ($LASTEXITCODE -ne 0) { throw "veyyon-windows-x64.exe --smoke-test failed with exit $LASTEXITCODE" }
-
-
    release_github_publish:
       name: Publish verified GitHub release
       if: ${{ needs.release_metadata.outputs.is-release == 'true' && !cancelled() &&
          needs.release_github.result == 'success' &&
          needs.release_site.result == 'success' &&
-         needs.release_github_verify.result == 'success' &&
-         needs.release_github_verify_linux.result == 'success' &&
-         needs.release_github_verify_windows.result == 'success' }}
-      needs: [release_metadata, release_github, release_site, release_github_verify, release_github_verify_linux, release_github_verify_windows]
+         needs.release_github_verify_linux.result == 'success' }}
+      needs: [release_metadata, release_github, release_site, release_github_verify_linux]
       runs-on: ubuntu-22.04
       timeout-minutes: 20
       permissions:
@@ -1271,15 +1016,8 @@ jobs:
    release_install_verify:
       # The half of installer verification that cannot be moved earlier, and the
       # only half left here.
-      #
-      # Everything the installer does AROUND the binary is already proven before
-      # publication and gates it: `install_methods` and `install_ps1_e2e` drive
-      # the real installers with `--local`, and `release_github_verify`,
-      # `release_github_verify_linux` and `release_github_verify_windows`
-      # download each DRAFT asset, verify its `.sha256` the way the installers do
-      # and launch the binary. `release_github_publish` refuses to publish unless
-      # all of those are green, so a broken binary or a bad sidecar never reaches
-      # a user.
+      # Linux installer coverage and Linux draft verification gate publication.
+      # Native Windows/macOS runtime verification is no longer performed.
       #
       # What is left is how the binary GETS there: `resolve_latest_tag` follows
       # `github.com/<repo>/releases/latest`, and that redirect resolves only to a
@@ -1300,9 +1038,6 @@ jobs:
             include:
                - { name: linux-x64, os: ubuntu-22.04, kind: posix }
                - { name: linux-arm64, os: ubuntu-24.04-arm, kind: posix }
-               - { name: macos-arm64, os: macos-14, kind: posix }
-               - { name: macos-x64, os: macos-15-intel, kind: posix }
-               - { name: windows-x64, os: windows-latest, kind: windows }
       runs-on: ${{ matrix.os }}
       timeout-minutes: 30
       steps:
@@ -1313,13 +1048,6 @@ jobs:
            env:
               VEYYON_EXPECTED_RELEASE_TAG: ${{ needs.release_metadata.outputs.release-tag }}
            run: bash scripts/install-tests/published-release-e2e.sh
-         - name: Install through the published Windows release
-           if: matrix.kind == 'windows'
-           shell: pwsh
-           env:
-              VEYYON_INSTALL_E2E: "1"
-              VEYYON_EXPECTED_RELEASE_TAG: ${{ needs.release_metadata.outputs.release-tag }}
-           run: pwsh -File scripts/install-tests/e2e.test.ps1 -Mode Binary
          # This job is the one release gate whose subject is already public, so a
          # red run here is not "the release did not ship". It is "the release
          # shipped and the documented install path is broken on it", and every
@@ -1386,7 +1114,7 @@ jobs:
       # casualty would report "release_binary skipped" with no cause attached.
       # scripts/release-train-alert-watches-the-train.test.ts derives this set
       # from the needs graph and fails when a new release job is not added here.
-      needs: [release_metadata, native_artifact_lookup, check, native_linux_x64, native_cross_platform_cross, native_cross_platform_macos, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_buckets, test_smoke, install_methods, install_ps1_e2e, install_ps1_functions, release_binary, release_github, release_site, release_github_verify, release_github_verify_linux, release_github_verify_windows, release_github_publish, release_site_finalize, release_install_verify]
+      needs: [release_metadata, native_artifact_lookup, check, native_linux_x64, native_cross_platform_cross, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_buckets, test_smoke, install_methods, release_binary, release_github, release_site, release_github_verify_linux, release_github_publish, release_site_finalize, release_install_verify]
       runs-on: ubuntu-22.04
       timeout-minutes: 10
       permissions:

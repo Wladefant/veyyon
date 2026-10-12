@@ -222,6 +222,60 @@ if [[ "$mode" == "full" ]]; then
   cargo-zigbuild --version
 fi
 
+# 5b. Focused Release Tests & Pre-cut Manifest Negative Control Proof
+echo "=== 5b. Focused Release Tests & Pre-cut Manifest Negative Control Proof ==="
+
+# Remote red proof against pre-cut original release-policy manifest:
+# Negative control: temporary git-show original module file replaced during isolated test and restored trap
+echo "Executing remote negative control proof against pre-cut release-policy manifest..."
+policy_file="scripts/release-policy.ts"
+policy_backup="$(mktemp)"
+cp "$policy_file" "$policy_backup"
+restore_policy() {
+  if [[ -f "$policy_backup" ]]; then
+    cp -f "$policy_backup" "$policy_file"
+    rm -f "$policy_backup"
+  fi
+}
+trap 'restore_policy; cleanup' EXIT INT TERM
+
+# Obtain pre-cut original module file from origin/main
+if ! git show origin/main:"$policy_file" > "$policy_file"; then
+  echo "ERROR: Failed to git show origin/main:$policy_file" >&2
+  exit 1
+fi
+
+# Run only new test that rejects macOS then require named assertion failure
+set +e
+negative_test_output="$(bun test scripts/release-policy.test.ts -t "rejects distribution assets outside the exact manifest, including omitted macOS artifacts" 2>&1)"
+negative_test_status=$?
+set -e
+
+restore_policy
+trap cleanup EXIT
+
+if [[ $negative_test_status -eq 0 ]]; then
+  echo "NEGATIVE_CONTROL_FAILED: Expected named assertion failure on pre-cut manifest, but test passed." >&2
+  echo "$negative_test_output" >&2
+  exit 1
+fi
+
+if ! echo "$negative_test_output" | grep -Eq "(expect\(received\)\.toEqual\(expected\)|fail|Assertion|1 fail)"; then
+  echo "NEGATIVE_CONTROL_FAILED: Expected named assertion failure in output, but got:" >&2
+  echo "$negative_test_output" >&2
+  exit 1
+fi
+echo "NEGATIVE_CONTROL_PASSED: Pre-cut manifest correctly produced named assertion failure (exit $negative_test_status)."
+
+# Run focused release tests on current implementation (expect all green)
+echo "Running focused release tests on current implementation..."
+bun test scripts/release-policy.test.ts \
+  scripts/ci-release-build-binaries.test.ts \
+  scripts/release-binaries-bytecode.test.ts \
+  scripts/release-native-artifacts-match-ci.test.ts
+
+echo "RELEASE_FOCUSED_TESTS: passed"
+
 # 6. Build Native Addons
 export CI=true
 
