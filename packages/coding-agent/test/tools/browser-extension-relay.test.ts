@@ -25,6 +25,13 @@ class FakeExtension {
 	readonly calls: Recorded[] = [];
 	#nextTab = 100;
 	readonly #failing = new Set<string>();
+	readonly #delayed = new Map<string, Promise<void>>();
+
+	delayNext(cdpMethod: string): () => void {
+		const reply = Promise.withResolvers<void>();
+		this.#delayed.set(cdpMethod, reply.promise);
+		return () => reply.resolve();
+	}
 
 	/** Make the next `chrome.debugger.sendCommand` of this CDP method fail once. */
 	failNext(cdpMethod: string): void {
@@ -34,7 +41,7 @@ class FakeExtension {
 
 	private constructor(ws: WebSocket) {
 		this.#ws = ws;
-		ws.onmessage = event => this.#onMessage(String(event.data));
+		ws.onmessage = event => void this.#onMessage(String(event.data));
 	}
 
 	static async connect(url: string): Promise<FakeExtension> {
@@ -54,12 +61,18 @@ class FakeExtension {
 		this.#ws.send(JSON.stringify({ method, params }));
 	}
 
-	#onMessage(text: string): void {
+	async #onMessage(text: string): Promise<void> {
 		const message: { id: number; method: string; params: unknown[] } = JSON.parse(text);
 		this.calls.push({ method: message.method, params: message.params });
 		// chrome.tabs.remove never answers on the real extension.
 		if (message.method === "chrome.tabs.remove") return;
 		const target = message.method === "chrome.debugger.sendCommand" ? String(message.params[1]) : "";
+		const delayed = this.#delayed.get(target);
+		if (delayed) {
+			this.#delayed.delete(target);
+			await delayed;
+			if (!this.open) return;
+		}
 		if (this.#failing.delete(target)) {
 			this.#ws.send(JSON.stringify({ id: message.id, error: { message: `${target} refused by the fake` } }));
 			return;
@@ -211,6 +224,44 @@ describe("owned connect bootstrap", () => {
 		cdp.close();
 		ext.close();
 	});
+
+	for (const failure of ["cancellation", "timeout"] as const) {
+		test(`removes only the pending bootstrap tab on ${failure} during registration`, async () => {
+			const bootstrap = {
+				extensionId: "mmlmfjhmonkocbjadbfplnigmagldckm",
+				protocolVersion: 2,
+				token: EXTENSION_TOKEN,
+				clientName: "veyyon",
+			};
+			relay = ExtensionRelay.start({ instance: "test", bootstrap });
+			const r = relay;
+			const ext = await FakeExtension.connect(r.extensionUrl);
+			const release = ext.delayNext("Fetch.enable");
+			const url = buildConnectUrl({ ...bootstrap, relayUrl: r.extensionUrl });
+			ext.emit("chrome.tabs.onCreated", [{ id: 41, url: `${url}&unrelated=1` }]);
+			ext.emit("chrome.tabs.onCreated", [{ id: 42, url }]);
+			await until(
+				() => ext.callsOf("chrome.debugger.sendCommand").some(call => call.params[1] === "Fetch.enable"),
+				"delayed bootstrap gate",
+			);
+			const controller = new AbortController();
+			const waiting = r.waitForExtension(failure === "timeout" ? 20 : 2000, controller.signal);
+			if (failure === "cancellation") controller.abort(new Error("bootstrap cancelled"));
+			await expect(waiting).rejects.toThrow(
+				failure === "cancellation" ? "bootstrap cancelled" : "The extension did not connect",
+			);
+			await r.close();
+			await until(() => !ext.open, "extension transport closure");
+			expect(ext.callsOf("chrome.tabs.remove").map(call => call.params)).toEqual([[42]]);
+			const removal = ext.calls.findIndex(call => call.method === "chrome.tabs.remove");
+			const detach = ext.calls.findIndex(call => call.method === "chrome.debugger.detach");
+			expect(detach === -1 || removal < detach).toBe(true);
+			release();
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(r.tabCount).toBe(0);
+			expect(r.closed).toBe(true);
+		});
+	}
 
 	test("removes a tab before detaching its last debugger session", async () => {
 		const { ext, cdp } = await connected();

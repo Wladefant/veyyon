@@ -239,6 +239,7 @@ export class ExtensionRelay {
 	readonly #server: Server<SocketData>;
 	readonly #clients = new Map<number, CdpClient>();
 	readonly #tabs = new Map<number, OwnedTab>();
+	readonly #pendingBootstrapTabs = new Set<number>();
 	/** Chrome's own child session ids (iframes, workers) to the tab that owns them. */
 	readonly #childSessions = new Map<string, number>();
 	/** Per Chrome debuggee: isolated-world creation in flight, so later commands wait for its guard. */
@@ -342,13 +343,16 @@ export class ExtensionRelay {
 	 */
 	async disconnect(): Promise<number> {
 		const tabs = [...this.#tabs.values()];
+		const pendingBootstrapTabs = [...this.#pendingBootstrapTabs];
+		this.#pendingBootstrapTabs.clear();
 		this.#tabs.clear();
 		this.#childSessions.clear();
 		// Removing the last tab first avoids losing the socket when debugger detach closes the extension group.
 		for (const tab of tabs) this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
+		for (const tabId of pendingBootstrapTabs) this.#fireAndForget("chrome.tabs.remove", [tabId]);
 		await Promise.all(
-			tabs.map(tab =>
-				this.#call("chrome.debugger.detach", [{ tabId: tab.tabId }], DETACH_TIMEOUT_MS).catch(() => undefined),
+			[...tabs.map(tab => tab.tabId), ...pendingBootstrapTabs].map(tabId =>
+				this.#call("chrome.debugger.detach", [{ tabId }], DETACH_TIMEOUT_MS).catch(() => undefined),
 			),
 		);
 		for (const client of this.#clients.values()) client.ws.close(1001, "relay disconnected");
@@ -545,6 +549,7 @@ export class ExtensionRelay {
 				const landing = tab.pendingUrl ?? tab.url;
 				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
 					this.#bootstrapUrl = undefined;
+					this.#pendingBootstrapTabs.add(tab.id);
 					this.#bootstrapReady = this.#registerTab(tab.id, true)
 						.then(() => {
 							this.#bootstrapTabId = tab.id;
@@ -788,9 +793,9 @@ export class ExtensionRelay {
 	// ----- Tabs and sessions ---------------------------------------------------------------
 
 	async #registerTab(tabId: number, bootstrap = false): Promise<OwnedTab> {
-		await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
 		let mainFrameId: string;
 		try {
+			await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
 			await this.#enableFetchGate({ tabId }, true);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.setAutoAttach", AUTO_ATTACH]);
 			// Chrome names a page's main frame after its target. Needed to tell its document from a sub-frame's.
@@ -801,13 +806,18 @@ export class ExtensionRelay {
 			mainFrameId = info.targetInfo.targetId;
 			if (bootstrap)
 				await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Page.navigate", { url: "about:blank" }]);
+			if (bootstrap && (this.#closed || !this.#pendingBootstrapTabs.has(tabId)))
+				throw new Error("The bootstrap registration was cancelled.");
 		} catch (error) {
 			// Fail closed: a tab we cannot gate is never exposed. A detach alone leaves a page that has
 			// already loaded running with no gate, so the tab is removed as well.
-			this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
-			this.#fireAndForget("chrome.tabs.remove", [tabId]);
+			if (!bootstrap || this.#pendingBootstrapTabs.delete(tabId)) {
+				this.#fireAndForget("chrome.tabs.remove", [tabId]);
+				this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
+			}
 			throw error;
 		}
+		if (bootstrap) this.#pendingBootstrapTabs.delete(tabId);
 		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, mainFrameId, url: "about:blank", title: "" };
 		this.#tabs.set(tabId, tab);
 		for (const client of this.#clients.values()) {

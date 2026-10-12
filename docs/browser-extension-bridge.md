@@ -34,6 +34,7 @@ The connect page is a handshake tab, not first-run onboarding.
 The relay owns only the exact connect URL that it generated for this session.
 It gates that tab, navigates it to `about:blank`, and reuses it for the first browser tab.
 Closing the browser tab removes it. A failed open removes the tab that the session created.
+The relay records ownership before registration starts. Cancellation or timeout removes that pending tab before the relay closes its transport.
 Existing Chrome tabs remain untouched.
 
 ## Security
