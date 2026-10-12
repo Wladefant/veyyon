@@ -1560,6 +1560,7 @@ export class AgentSession {
 		return this.#grantedAgents.has(agentName);
 	}
 
+
 	/**
 	 * Arm prewalk outside the normal startup path (the `/prewalk` slash command). See
 	 * {@link ModelHandoff.armPrewalk}.

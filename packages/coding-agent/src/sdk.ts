@@ -542,14 +542,13 @@ class SessionStartup {
 			});
 		this.#replenishmentEngine = engine;
 
-		const activeRoster = AgentRegistry.global()
-			.list()
-			.map(ref => ({
-				id: ref.id,
-				status: ref.status,
-				role: ref.kind,
-				task: ref.activity,
-			}));
+		const activeRoster = this.#agentRegistry.list().map(ref => ({
+			id: ref.id,
+			status: ref.status,
+			role: ref.kind,
+			agentName: ref.displayName,
+			task: ref.activity,
+		}));
 		void engine.onSessionRecovery(activeRoster).catch(err => {
 			logger.warn("TopicReplenishmentEngine: session recovery failed", {
 				error: errorMessage(err),
@@ -845,12 +844,36 @@ class SessionStartup {
 				authStorage: this.#authStorage,
 				modelRegistry: this.#modelRegistry,
 				asyncJobManager: this.#scopedAsyncJobManager,
+				onSubagentStart: record => {
+					this.#replenishmentEngine?.onWorkerStart(record);
+				},
+				onSubagentStartFailed: record => {
+					const engine = this.#replenishmentEngine;
+					if (!engine) return;
+					engine.onWorkerStartFailed(record);
+					const activeRoster = this.#agentRegistry.list().map(ref => ({
+						id: ref.id,
+						status: ref.status,
+						role: ref.kind,
+						agentName: ref.displayName,
+						task: ref.activity,
+					}));
+					void engine.replenish(activeRoster).catch(err => {
+						logger.warn("TopicReplenishmentEngine: failed task recovery failed", {
+							error: errorMessage(err),
+						});
+					});
+				},
 				onSubagentComplete: async record => {
 					const engine = this.#replenishmentEngine;
 					if (!engine) return;
-					const activeRoster = AgentRegistry.global()
-						.list()
-						.map(ref => ({ id: ref.id, status: ref.status, role: ref.kind, task: ref.activity }));
+					const activeRoster = this.#agentRegistry.list().map(ref => ({
+						id: ref.id,
+						status: ref.status,
+						role: ref.kind,
+						agentName: ref.displayName,
+						task: ref.activity,
+					}));
 					await engine.onWorkerComplete(
 						{
 							agentId: record.agentId,

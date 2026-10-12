@@ -16,6 +16,7 @@
 - Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
 - `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
 - A delivered cross-session notice carries a header with the sender, the send and delivery times (Europe/Berlin and UTC) and the delay when it is late. A notice older than 2 hours (`ttlMinutes` on the send sets another limit) is not injected; the sender gets a "Not delivered" notice ([Refs](https://github.com/Wladefant/veyyon/pull/539)).
+- Topic replenishment pauses producer dispatch while downstream verification is blocked and resumes within existing worker caps once pressure clears ([Refs https://github.com/Wladefant/veyyon/issues/549](https://github.com/Wladefant/veyyon/issues/549)).
 
 ## [1.5.6] - 2026-10-10
 
