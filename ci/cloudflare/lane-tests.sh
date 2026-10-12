@@ -52,6 +52,8 @@ fi
 bun run ci:build:native
 # Keep test execution inside this disposable Workers Builds container; the default remote rung uses SSH.
 export VEYYON_SANDBOX_REMOTE=0
+export VEYYON_SANDBOX_RUNG=docker
+export VEYYON_SANDBOX_FORWARD=VEYYON_TEST_CONCURRENCY
 # Build the repository's Docker test guest inside Workers Builds before any test bucket.
 bash scripts/test-sandbox/run.sh --rung=docker --build
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
@@ -82,7 +84,7 @@ run_bucket() {
   echo "CLOUDFLARE_TEST_BUCKET_END $mode pass=$bucket_passes fail=$bucket_failures"
 }
 echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
-worker_output="$(node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
+worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
   worker_status=$?
   printf '%s\n' "$worker_output"
   exit "$worker_status"
