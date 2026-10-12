@@ -30,36 +30,30 @@ The relay serves puppeteer a browser-level CDP endpoint.
 It turns each CDP command into the extension calls above.
 The `tab.*` helpers, `observe`, `screenshot` and the rest of the `browser` tool run unchanged on top.
 
+The connect page is a handshake tab, not first-run onboarding.
+The relay owns only the exact connect URL that it generated for this session.
+It gates that tab, navigates it to `about:blank`, and reuses it for the first browser tab.
+Closing the browser tab removes it. A failed open removes the tab that the session created.
+The relay records ownership before registration starts. Cancellation or timeout removes that pending tab before the relay closes its transport.
+Existing Chrome tabs remain untouched.
+
 ## Security
 
 1. The relay listens on `127.0.0.1` only. Any other host is refused.
 2. Requests with a foreign `Host` or `Origin` header get `403`.
 3. Three random secrets guard three paths: the extension path, the CDP path and the control path. Each is 32 random bytes. The comparison is timing-safe. A secret never appears in a log line, an error, or tool output.
 4. The extension token is per Chrome profile. It lives in `~/.veyyon/profiles/<name>/agent/browser-extension/` with mode `0600`.
-5. Navigation is deny by default. Only origins on the allowlist load. `about:blank` is always allowed.
-6. These hosts are refused even when the allowlist names them: any host containing `zaraprptkegxqpvnsubu`, any host containing `akamai-iad-prod`, and `polysimulator.com` with its subdomains.
+5. Navigation allows HTTP and HTTPS origins by default. `about:blank` is allowed.
+6. These hosts are refused even when reached by navigation: any host containing `zaraprptkegxqpvnsubu`, any host containing `akamai-iad-prod`, and `polysimulator.com` with its subdomains.
 7. A page that reaches a refused origin by redirect is sent back to `about:blank`.
 8. Commands that export profile data are blocked: `Page.printToPDF`, `Network.getAllCookies`, `Network.getCookies`, `Storage.getCookies`.
 9. The relay logs the origin of each navigation decision. It logs no path, no query, no page content.
 10. `Browser.close` never closes the operator's Chrome. It only drops the client socket.
 
-### Allowlist
-
-Put origins in `~/.veyyon/profiles/<name>/agent/browser-extension/policy.json`:
-
-```json
-{ "allow": ["https://staging.example.com", "docs.example.org", "*.cdn.example.net"] }
-```
-
-Add more with `VEYYON_BROWSER_EXTENSION_ALLOW` (comma separated).
-An entry with a scheme (`https://host`) matches that origin only.
-An entry without a scheme matches the host on any scheme.
-`*.host` matches subdomains, not `host` itself.
-
 ### Popup guard: best effort
 Chrome loads a popup tab before the debugger can attach to it. The relay therefore installs a guard in every controlled document. `window.open` returns `null`. `form.submit()`, `form.requestSubmit()`, submit events and `formtarget` are forced to the same tab. A `<base target>` is rewritten. Links open in place, also inside shadow DOM and on ctrl, meta, shift or middle click. Same-tab requests then pass the request gate before they leave Chrome.
 The relay ties isolated-world guard status and creation order to the Chrome tab, not to a single CDP client session. A second root session for the same tab therefore cannot bypass a failed guard.
-The guard is still best effort. It runs as page script, so a path with no script hook can open a tab (for example a native browser gesture such as a context-menu "open in new tab", or a page that restores the original functions from a fresh iframe). The relay removes a refused tab and never attaches to it, but one blind request, with the page's cookies, can still go out. Do not rely on the guard to protect a host that must never be contacted. Keep such hosts off the allowlist and in the production refusal list.
+The guard is still best effort. A path with no script hook can open a tab, such as a native browser gesture. The relay removes a refused tab and never attaches to it, but one request can still go out before attachment. Keep protected hosts in the production refusal list.
 The guard is not the only layer. The extension offers no browser-level target, so the relay cannot pause a new tab before it loads. Instead, for the top-level document of a controlled tab on a public host, the Fetch gate asks for the response, then answers it itself with `Content-Security-Policy: sandbox …` added and `allow-popups` left out. Chrome then refuses every popup from that document, including `noopener` ones and forms inside shadow roots, so no new tab starts and no request reaches a refused host. `allow-scripts`, `allow-same-origin`, forms, downloads and top navigation stay on; the request gate still judges each navigation. Sub-frames inherit the sandbox and are not intercepted, because intercepting a cross-site sub-frame response makes Chrome fail the navigation. A live negative control (real click, guard removed, public-looking host) measured 2 requests to a refused host before the sandbox and 0 after, for `_blank` and `noopener` popups. A popup that Chrome opens anyway is still removed after the relay attaches.
 Limit: a page on loopback, a private range, `.local` or `.localhost` is not sandboxed. A response the relay answers itself loses its address space, and Chrome's local network access check then blocks that page from reaching other local origins, which would break a local frontend that calls a local API. Such a page keeps only the guard script, so the guard limits above still apply to it.
 
@@ -72,8 +66,7 @@ Limit: a page on loopback, a private range, `.local` or `.localhost` is not sand
 5. Click the extension icon. Click "Status".
 6. Copy the token that the status page shows.
 7. In a terminal, run `veyyon browser-extension set-token`. Paste the token. Press Enter.
-8. Create the allowlist file named above. List only the sites Veyyon may open.
-9. Run `veyyon browser-extension status`. It prints the token state and the allowlist path. It never prints the token.
+8. Run `veyyon browser-extension status`. It prints the token state and running relay. It never prints the token.
 
 After this, a session that opens `browser` with `app: {"extension": true}` connects by itself.
 Chrome still shows its "started debugging this browser" bar on the controlled tab.
@@ -84,8 +77,7 @@ That is expected.
 | Command | Effect |
 |---|---|
 | `veyyon browser-extension set-token` | Store the token (read from stdin). |
-| `veyyon browser-extension status` | Show token state, the allowlist file path, and the running relay. |
-| `veyyon browser-extension disconnect` | Detach every controlled tab and drop the extension. |
+| `veyyon browser-extension status` | Show token state and the running relay. |
 | `veyyon browser-extension clear-token` | Delete the stored token. |
 
 Add `--instance <name>` to use a second Chrome profile.
