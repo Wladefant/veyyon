@@ -114,7 +114,7 @@ fi
 
 if [ "$CAN_BOOT_MICROVM" = 0 ]; then
 	log "building guest userland (${GUEST_IMAGE})"
-	docker build --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
+	docker build --network=host --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
 	rm -f "${BUILD_DIR}/boot-verified" "${BUILD_DIR}/vmlinuz" "${BUILD_DIR}/rootfs.img"
 	printf '%s' "$STAMP" > "${BUILD_DIR}/stamp"
 	log "done. The docker rung is ready; the microvm rung will report itself unavailable."
@@ -205,7 +205,7 @@ docker run --rm \
 		# cpio records their character-device metadata without CAP_MKNOD.
 		rm -rf /stage
 		mkdir -p /stage/dev
-		fakeroot /bin/sh -eu <<FAKEROOT
+		fakeroot /bin/sh -eu > /out/rootfs.img.tmp <<FAKEROOT
 		mknod -m 0600 /stage/dev/console c 5 1
 		mknod -m 0666 /stage/dev/null c 1 3
 		{
