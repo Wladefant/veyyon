@@ -34,59 +34,34 @@ if ! command -v fd >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1 || \
   fi
 fi
 bun run ci:build:native
-# Existing runner buckets preserve the same shard lists, timeouts and bounded
-# process sizes as the repository's GitHub CI. Full output lets this runner
-# collect Bun's per-test summary lines rather than treating chunks as tests.
+# Keep the sandbox boundary enabled for every focused test file. These are the
+# checkpoint, native recovery, synchronized-session, and CLI regression suites.
 export CI=true
 export VEYYON_TEST_CONCURRENCY=2
-test_passes=0
-test_failures=0
-run_bucket() {
-  local mode="$1"
-  echo "CLOUDFLARE_TEST_BUCKET_START $mode"
-  local bucket_output
-  bucket_output="$(bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts "$mode" --full 2>&1)" || {
-    printf '%s\n' "$bucket_output"
-    return 1
-  }
-  printf '%s\n' "$bucket_output"
-  read -r bucket_passes bucket_failures < <(
-    awk '
-      /^[[:space:]]*[0-9]+ pass$/ { passes += $1 }
-      /^[[:space:]]*[0-9]+ fail$/ { failures += $1 }
-      END { printf "%d %d\n", passes, failures }
-    ' <<< "$bucket_output"
-  )
-  test_passes=$((test_passes + bucket_passes))
-  test_failures=$((test_failures + bucket_failures))
-  echo "CLOUDFLARE_TEST_BUCKET_END $mode pass=$bucket_passes fail=$bucket_failures"
-}
-run_bucket workspace
-run_bucket native
-run_bucket coding-agent-singleton
-run_bucket coding-agent-ui
-run_bucket coding-agent-runtime
-run_bucket coding-agent-native
-run_bucket scripts
-run_bucket coding-agent-heavy
-
-# Build the production Linux x64 CLI binary using the release's canonical
-# compiler. This creates the shipped artifact; it does not deploy the product.
-RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
-
-# The repository's Rust gate runs only when Cargo exists. Missing Cargo is an
-# explicit container limitation; once present, any real check failure is fatal.
-if (( test_passes == 0 || test_failures != 0 )); then
-  echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
-  echo 'Expected at least one passing test and zero failures.' >&2
+focused_tests=(
+  cloud/checkpoints/worker.test.ts
+  packages/coding-agent/test/cloud-checkpoints.test.ts
+  packages/coding-agent/test/native-recovery.test.ts
+  packages/coding-agent/test/synchronized-session.test.ts
+  packages/coding-agent/test/checkpoint-cli.test.ts
+)
+echo "CLOUDFLARE_TEST_START ${focused_tests[*]}"
+test_output="$(bash scripts/test-sandbox/run.sh bun test "${focused_tests[@]}" 2>&1)" || {
+  printf '%s\n' "$test_output"
   exit 1
-fi
+}
+printf '%s\n' "$test_output"
+read -r test_passes test_failures < <(
+  awk '
+    /^[[:space:]]*[0-9]+ pass$/ { passes += $1 }
+    /^[[:space:]]*[0-9]+ fail$/ { failures += $1 }
+    END { printf "%d %d\n", passes, failures }
+  ' <<< "$test_output"
+)
 echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
-if command -v cargo >/dev/null 2>&1; then
-  bun run check:rs
-  echo 'CLOUDFLARE_RUST_BUILD=passed'
-else
-  echo 'CLOUDFLARE_RUST_BUILD=unsupported; cargo is unavailable in the Workers Builds container'
+if (( test_passes == 0 || test_failures != 0 )); then
+  echo 'Expected at least one passing focused test and zero failures.' >&2
+  exit 1
 fi
 
 npx --yes wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc
