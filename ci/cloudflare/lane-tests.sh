@@ -55,6 +55,8 @@ bun run ci:build:native
 export CI=true
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_TEST_CONCURRENCY=2
+# Workers Builds has a Docker daemon but no prebuilt Veyyon test guest.
+bash scripts/test-sandbox/run.sh --build
 focused_tests=(
   cloud/checkpoints/worker.test.ts
   packages/coding-agent/test/cloud-checkpoints.test.ts
