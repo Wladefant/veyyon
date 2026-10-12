@@ -22,7 +22,6 @@ import type { Server, ServerWebSocket } from "bun";
 import {
 	checkCdpMethod,
 	checkNavigation,
-	type ExtensionPolicy,
 	extensionStateDir,
 	generateSecret,
 	instanceFileName,
@@ -120,7 +119,8 @@ export interface NavigationAudit {
 }
 
 export interface ExtensionRelayOptions {
-	policy: ExtensionPolicy;
+	/** Exact consent URL parameters for the handshake tab opened by this caller. */
+	bootstrap?: Omit<ConnectUrlOptions, "relayUrl">;
 	/** Names the state file so several Chrome profiles do not collide. */
 	instance?: string;
 	/** Other secrets the caller holds (the extension token); they are scrubbed from every log line. */
@@ -230,7 +230,6 @@ function isLocalNetworkUrl(url: string): boolean {
 }
 
 export class ExtensionRelay {
-	readonly #policy: ExtensionPolicy;
 	readonly #instance: string | undefined;
 	readonly #scrub: string[];
 	readonly #onAudit: ((entry: NavigationAudit) => void) | undefined;
@@ -240,6 +239,7 @@ export class ExtensionRelay {
 	readonly #server: Server<SocketData>;
 	readonly #clients = new Map<number, CdpClient>();
 	readonly #tabs = new Map<number, OwnedTab>();
+	readonly #pendingBootstrapTabs = new Set<number>();
 	/** Chrome's own child session ids (iframes, workers) to the tab that owns them. */
 	readonly #childSessions = new Map<string, number>();
 	/** Per Chrome debuggee: isolated-world creation in flight, so later commands wait for its guard. */
@@ -247,6 +247,10 @@ export class ExtensionRelay {
 	/** Isolated worlds (`debuggee:contextId`) whose guard failed; commands on them are refused. */
 	readonly #unguardedWorlds = new Set<string>();
 	readonly #pending = new Map<number, PendingCall>();
+	#bootstrapUrl: string | undefined;
+	#bootstrapTabId: number | undefined;
+	#bootstrapReady: Promise<void> | undefined;
+	#ready = false;
 	#extension: ServerWebSocket<SocketData> | undefined;
 	#extensionWaiters: Array<() => void> = [];
 	#nextCallId = 1;
@@ -255,10 +259,10 @@ export class ExtensionRelay {
 	#closed = false;
 
 	private constructor(opts: ExtensionRelayOptions) {
-		this.#policy = opts.policy;
 		this.#instance = opts.instance;
 		this.#onAudit = opts.onAudit;
 		this.#scrub = [...(opts.scrub ?? [])];
+		if (opts.bootstrap) this.#scrub.push(opts.bootstrap.token);
 		this.#server = Bun.serve<SocketData>({
 			hostname: "127.0.0.1",
 			port: 0,
@@ -269,6 +273,7 @@ export class ExtensionRelay {
 				close: ws => this.#onSocketClose(ws),
 			},
 		});
+		if (opts.bootstrap) this.#bootstrapUrl = buildConnectUrl({ ...opts.bootstrap, relayUrl: this.extensionUrl });
 		this.#scrub.push(this.#relaySecret, this.#cdpSecret, this.#controlSecret);
 		this.#writeStateFile();
 	}
@@ -307,7 +312,7 @@ export class ExtensionRelay {
 
 	/** Resolve once the extension has connected. */
 	waitForExtension(timeoutMs: number, signal?: AbortSignal): Promise<void> {
-		if (this.#extension) return Promise.resolve();
+		if (this.#ready) return Promise.resolve();
 		return new Promise<void>((resolve, reject) => {
 			const done = (): void => {
 				clearTimeout(timer);
@@ -338,14 +343,18 @@ export class ExtensionRelay {
 	 */
 	async disconnect(): Promise<number> {
 		const tabs = [...this.#tabs.values()];
+		const pendingBootstrapTabs = [...this.#pendingBootstrapTabs];
+		this.#pendingBootstrapTabs.clear();
 		this.#tabs.clear();
 		this.#childSessions.clear();
+		// Removing the last tab first avoids losing the socket when debugger detach closes the extension group.
+		for (const tab of tabs) this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
+		for (const tabId of pendingBootstrapTabs) this.#fireAndForget("chrome.tabs.remove", [tabId]);
 		await Promise.all(
-			tabs.map(tab =>
-				this.#call("chrome.debugger.detach", [{ tabId: tab.tabId }], DETACH_TIMEOUT_MS).catch(() => undefined),
+			[...tabs.map(tab => tab.tabId), ...pendingBootstrapTabs].map(tabId =>
+				this.#call("chrome.debugger.detach", [{ tabId }], DETACH_TIMEOUT_MS).catch(() => undefined),
 			),
 		);
-		for (const tab of tabs) this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
 		for (const client of this.#clients.values()) client.ws.close(1001, "relay disconnected");
 		this.#clients.clear();
 		this.#extension?.close(1000, "disconnected by veyyon");
@@ -426,12 +435,17 @@ export class ExtensionRelay {
 		return new Response("not found", { status: 404 });
 	}
 
+	#markReady(): void {
+		this.#ready = true;
+		const waiters = this.#extensionWaiters;
+		this.#extensionWaiters = [];
+		for (const waiter of waiters) waiter();
+	}
+
 	#onOpen(ws: ServerWebSocket<SocketData>): void {
 		if (ws.data.role === "extension") {
 			this.#extension = ws;
-			const waiters = this.#extensionWaiters;
-			this.#extensionWaiters = [];
-			for (const waiter of waiters) waiter();
+			if (this.#bootstrapUrl === undefined) this.#markReady();
 			return;
 		}
 		const clientId = ws.data.clientId;
@@ -450,6 +464,7 @@ export class ExtensionRelay {
 	/** The extension went away (idle service worker, last tab detached, user removed it). */
 	#onExtensionGone(): void {
 		this.#extension = undefined;
+		this.#ready = false;
 		this.#tabs.clear();
 		this.#childSessions.clear();
 		for (const pending of this.#pending.values()) {
@@ -531,10 +546,26 @@ export class ExtensionRelay {
 			case "chrome.tabs.onCreated": {
 				const tab = tabSchema(params[0]);
 				if (tab instanceof type.errors) return;
-				if (tab.openerTabId === undefined || !this.#tabs.has(tab.openerTabId)) return;
 				const landing = tab.pendingUrl ?? tab.url;
+				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
+					this.#bootstrapUrl = undefined;
+					this.#pendingBootstrapTabs.add(tab.id);
+					this.#bootstrapReady = this.#registerTab(tab.id, true)
+						.then(() => {
+							this.#bootstrapTabId = tab.id;
+							this.#markReady();
+						})
+						.catch(error => {
+							this.#log("could not adopt connect tab", { error: errorText(error) });
+							throw error;
+						});
+					// The session awaits this promise. An event can arrive before that await is installed.
+					void this.#bootstrapReady.catch(() => undefined);
+					return;
+				}
+				if (tab.openerTabId === undefined || !this.#tabs.has(tab.openerTabId)) return;
 				if (landing !== undefined && landing !== "") {
-					const decision = checkNavigation(this.#policy, landing);
+					const decision = checkNavigation(landing);
 					if (!decision.allowed) {
 						this.#audit(tab.id, landing, decision);
 						this.#fireAndForget("chrome.tabs.remove", [tab.id]);
@@ -705,7 +736,7 @@ export class ExtensionRelay {
 		const url = paused.request.url;
 		let allowed: boolean;
 		if (paused.resourceType === "Document") {
-			const decision = checkNavigation(this.#policy, url);
+			const decision = checkNavigation(url);
 			if (!decision.allowed) this.#audit(source.tabId, url, decision);
 			allowed = decision.allowed;
 		} else if (url.startsWith("data:") || url.startsWith("blob:")) {
@@ -734,7 +765,7 @@ export class ExtensionRelay {
 	/** A page can navigate itself (redirect, link, script). Catch the landing and send the tab to about:blank. */
 	#onMainFrameNavigated(tab: OwnedTab, url: string): void {
 		tab.url = url;
-		const decision = checkNavigation(this.#policy, url);
+		const decision = checkNavigation(url);
 		this.#audit(tab.tabId, url, decision);
 		if (decision.allowed) return;
 		void this.#call("chrome.debugger.sendCommand", [
@@ -761,10 +792,10 @@ export class ExtensionRelay {
 
 	// ----- Tabs and sessions ---------------------------------------------------------------
 
-	async #registerTab(tabId: number): Promise<OwnedTab> {
-		await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
+	async #registerTab(tabId: number, bootstrap = false): Promise<OwnedTab> {
 		let mainFrameId: string;
 		try {
+			await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
 			await this.#enableFetchGate({ tabId }, true);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.setAutoAttach", AUTO_ATTACH]);
 			// Chrome names a page's main frame after its target. Needed to tell its document from a sub-frame's.
@@ -773,13 +804,20 @@ export class ExtensionRelay {
 			);
 			if (info instanceof type.errors) throw new Error("Chrome did not name the main frame of the tab.");
 			mainFrameId = info.targetInfo.targetId;
+			if (bootstrap)
+				await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Page.navigate", { url: "about:blank" }]);
+			if (bootstrap && (this.#closed || !this.#pendingBootstrapTabs.has(tabId)))
+				throw new Error("The bootstrap registration was cancelled.");
 		} catch (error) {
 			// Fail closed: a tab we cannot gate is never exposed. A detach alone leaves a page that has
 			// already loaded running with no gate, so the tab is removed as well.
-			this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
-			this.#fireAndForget("chrome.tabs.remove", [tabId]);
+			if (!bootstrap || this.#pendingBootstrapTabs.delete(tabId)) {
+				this.#fireAndForget("chrome.tabs.remove", [tabId]);
+				this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
+			}
 			throw error;
 		}
+		if (bootstrap) this.#pendingBootstrapTabs.delete(tabId);
 		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, mainFrameId, url: "about:blank", title: "" };
 		this.#tabs.set(tabId, tab);
 		for (const client of this.#clients.values()) {
@@ -938,7 +976,7 @@ export class ExtensionRelay {
 	}
 
 	#checkNavigationOrThrow(tabId: number, url: string): void {
-		const decision = checkNavigation(this.#policy, url);
+		const decision = checkNavigation(url);
 		this.#audit(tabId, url, decision);
 		if (!decision.allowed) throw new Error(decision.reason);
 	}
@@ -1000,9 +1038,6 @@ export class ExtensionRelay {
 			case "Target.closeTarget": {
 				const tab = this.#tabByTargetId(params.targetId);
 				if (!tab) return { success: false };
-				await this.#call("chrome.debugger.detach", [{ tabId: tab.tabId }], DETACH_TIMEOUT_MS).catch(
-					() => undefined,
-				);
 				this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
 				this.#dropTab(tab.tabId);
 				return { success: true };
@@ -1014,14 +1049,19 @@ export class ExtensionRelay {
 
 	async #createTarget(params: Record<string, unknown>): Promise<unknown> {
 		const url = typeof params.url === "string" && params.url.length > 0 ? params.url : "about:blank";
-		const decision = checkNavigation(this.#policy, url);
+		const decision = checkNavigation(url);
 		if (!decision.allowed) {
 			this.#audit(0, url, decision);
 			throw new Error(decision.reason);
 		}
-		const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
-		if (created instanceof type.errors) throw new Error("The extension returned no tab.");
-		const tab = await this.#registerTab(created.id);
+		await this.#bootstrapReady;
+		let tab = this.#bootstrapTabId === undefined ? undefined : this.#tabs.get(this.#bootstrapTabId);
+		this.#bootstrapTabId = undefined;
+		if (!tab) {
+			const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
+			if (created instanceof type.errors) throw new Error("The extension returned no tab.");
+			tab = await this.#registerTab(created.id);
+		}
 		if (url !== "about:blank") {
 			this.#audit(tab.tabId, url, decision);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Page.navigate", { url }]);

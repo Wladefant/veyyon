@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
+
+### Changed
+
+- Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
+
 ### Added
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 
