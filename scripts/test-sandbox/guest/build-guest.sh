@@ -55,8 +55,10 @@ GUEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 REPO_ROOT="$(cd -- "${GUEST_DIR}/../../.." && /bin/pwd -P)"
 BUILD_DIR="${GUEST_DIR}/.build"
 
-# shellcheck source=scripts/bun-version.sh
-source "${REPO_ROOT}/scripts/bun-version.sh"
+if [ -z "${BUN_VERSION:-}" ]; then
+	# shellcheck source=scripts/bun-version.sh
+	source "${REPO_ROOT}/scripts/bun-version.sh"
+fi
 GUEST_IMAGE="veyyon-test-guest:${BUN_VERSION}"
 KERNEL_IMAGE="veyyon-test-kernel:alpine3.21"
 
@@ -127,7 +129,7 @@ log "building kernel image (${KERNEL_IMAGE})"
 printf '%s\n' \
 	'FROM alpine:3.21' \
 	'RUN apk add --no-cache linux-virt' \
-	| docker build -t "${KERNEL_IMAGE}" -f - "${GUEST_DIR}" >&2
+	| docker build --network=host -t "${KERNEL_IMAGE}" -f - "${GUEST_DIR}" >&2
 
 log "extracting kernel and modules"
 kc="$(docker create "${KERNEL_IMAGE}" /bin/true)"
@@ -141,11 +143,12 @@ trap - EXIT
 
 # --- 2. guest userland ------------------------------------------------------
 log "building guest userland (${GUEST_IMAGE})"
-docker build --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
+docker build --network=host --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
 
 # --- 3. initramfs -----------------------------------------------------------
 # Built by a root process inside the guest image itself, over its own filesystem,
-# so ownership survives into the archive and the /dev/console node can be created.
+# so ownership survives into the archive; fakeroot supplies device-node metadata
+# without granting the container CAP_MKNOD.
 #
 # Two subtleties, both of which cost a boot to discover:
 #
@@ -198,26 +201,26 @@ docker run --rm \
 		# Mount points the guest init needs to exist and be empty.
 		mkdir -p /mnt/repo-lower /mnt/ovl /run /tmp
 
-		# Staged device nodes, appended below.
+		# Staged device nodes, appended below. BuildKit has no CAP_MKNOD, so fakeroot
+		# supplies the metadata cpio needs without requiring a privileged container.
 		rm -rf /stage
 		mkdir -p /stage/dev
-		mknod -m 0600 /stage/dev/console c 5 1
-		mknod -m 0666 /stage/dev/null c 1 3
-
-		{
-			cd /
-			find . -xdev \
-				-path ./out -prune -o \
-				-path ./stage -prune -o \
-				-path ./.dockerenv -prune -o \
-				-path ./etc/hosts -prune -o \
-				-path ./etc/hostname -prune -o \
-				-path ./etc/resolv.conf -prune -o \
-				-print \
-			| cpio --quiet -o -H newc
-			cd /stage
-			find . -mindepth 1 -print | cpio --quiet -o -H newc
-		} > /out/rootfs.img.tmp
+		fakeroot sh -c 'mknod -m 0600 /stage/dev/console c 5 1 && mknod -m 0666 /stage/dev/null c 1 3'
+		fakeroot sh -c '
+			{
+				cd /
+				find . -xdev \
+					-path ./out -prune -o \
+					-path ./.dockerenv -prune -o \
+					-path ./etc/hosts -prune -o \
+					-path ./etc/hostname -prune -o \
+					-path ./etc/resolv.conf -prune -o \
+					-print \
+				| cpio --quiet -o -H newc
+				cd /stage
+				find . -mindepth 1 -print | cpio --quiet -o -H newc
+			}
+		' > /out/rootfs.img.tmp
 
 		mv /out/rootfs.img.tmp /out/rootfs.img
 		chown "$HOST_UID:$HOST_GID" /out/rootfs.img
