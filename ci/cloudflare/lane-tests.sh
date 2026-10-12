@@ -70,7 +70,14 @@ mkdir -p "$proof_tools/packages" "$proof_tools/root" "$proof_tools/bin" \
   done
 )
 export PATH="$proof_tools/root/usr/bin:$PATH"
-cp -L "$(command -v bun)" "$proof_tools/bin/bun"
+real_bun="$(bun -p 'process.execPath')"
+cp -L "$real_bun" "$proof_tools/bin/bun"
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+  echo 'CLOUDFLARE_KVM_READ_WRITE=available'
+else
+  echo 'CLOUDFLARE_KVM_READ_WRITE=unavailable'
+fi
+command -v qemu-system-x86_64 || echo 'CLOUDFLARE_QEMU=unavailable'
 fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-sysv.so" \
   -f "$proof_tools/root/usr/bin/faked-sysv" /bin/sh -ceu '
     proof_dir="$(mktemp -d)"
@@ -90,7 +97,11 @@ focused_tests=(
   packages/coding-agent/test/cli/session-command-alias-reaches-stats.test.ts
 )
 echo "CLOUDFLARE_TEST_START ${focused_tests[*]}"
-test_output="$(bash scripts/test-sandbox/run.sh --rung=bwrap "$proof_tools/bin/bun" test "${focused_tests[@]}" 2>&1)" || {
+# Bind the checkout outside the removed account home without changing the rung.
+sandbox_root="$(mktemp -d /tmp/veyyon-checkpoints-XXXXXX)"
+ln -s "$repo_root" "$sandbox_root/repo"
+test_output="$(VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo" bash scripts/test-sandbox/run.sh \
+  --rung=bwrap "$sandbox_root/repo/.cf-proof-tools/bin/bun" test "${focused_tests[@]}" 2>&1)" || {
   printf '%s\n' "$test_output"
   exit 1
 }
