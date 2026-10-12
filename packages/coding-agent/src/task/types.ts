@@ -336,6 +336,12 @@ export interface ReviewData {
 	summary?: ReviewSummary;
 }
 
+/**
+ * Which skills a role's system prompt lists. `all` (the default) lists every skill; `none` lists
+ * none; an array lists only those names. Unlisted skills stay loadable by `skill://<name>`.
+ */
+export type SkillListSelection = "all" | "none" | string[];
+
 /** Agent definition (bundled or discovered) */
 export interface AgentDefinition {
 	name: string;
@@ -348,6 +354,13 @@ export interface AgentDefinition {
 	output?: unknown;
 	blocking?: boolean;
 	autoloadSkills?: string[];
+	/**
+	 * Name of a context-file variant (e.g. `lane`): each inherited context file `<dir>/AGENTS.md` is
+	 * replaced by `<dir>/AGENTS.<variant>.md` when that sibling exists. Absent = the full files.
+	 */
+	contextVariant?: string;
+	/** Which skills the system prompt lists; absent = all. See {@link SkillListSelection}. */
+	skillList?: SkillListSelection;
 	/** When `false`, the agent's `read` tool returns verbatim file content instead of structural summaries. */
 	readSummarize?: boolean;
 	source: AgentSource;
