@@ -1,4 +1,4 @@
-import { hostname } from "node:os";
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
 import { captureNativeCheckpoint, forkNativeCheckpoint, restoreNativeCheckpoint } from "../checkpoints/native-recovery";
@@ -20,7 +20,7 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 		if (!args.sessionFile) throw new Error("Checkpoint export requires --file <session.jsonl>");
 		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
 		const sessionId = bundle.native.sessionId;
-		const lease = await client.acquireLease(sessionId, hostname());
+		const lease = await client.acquireLease(sessionId, randomUUID());
 		try {
 			const head = await client.head(sessionId);
 			await client.commit(sessionId, bundle, head?.sequence ?? lease.headSequence);
@@ -42,7 +42,7 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 		return;
 	}
 	if (!args.output) throw new Error("Restore requires --output <new directory>");
-	await client.acquireLease(args.id, hostname());
+	await client.acquireLease(args.id, randomUUID());
 	try {
 		const id = await restoreNativeCheckpoint(bundle, resolve(args.output));
 		console.log(`Restored native session ${id} to ${resolve(args.output)}`);

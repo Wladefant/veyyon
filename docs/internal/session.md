@@ -36,6 +36,7 @@ checkpoint publication. Set `VEYYON_CHECKPOINT_SESSION` to the native session ID
 to admit a synchronized local runtime. Veyyon checks its server epoch before
 each prompt and tool call, and renews the lease every 15 seconds. Lease loss
 blocks further admission; continuing offline requires an explicit new fork.
+Each export or restore invocation uses a unique lease owner, even on one host.
 
 `veyyon session checkpoint-restore <id> --output <new-directory>` writes the
 verified journal under `sessions/session.jsonl`, artifacts beside it, referenced
