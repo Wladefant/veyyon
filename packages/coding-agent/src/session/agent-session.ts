@@ -55,6 +55,7 @@ import {
 	shouldCompact,
 	upsertFileOperations,
 } from "@veyyon/agent-core/compaction";
+import { countTokens } from "@veyyon/agent-core/tokenizer";
 import type {
 	Api,
 	AssistantMessage,
@@ -303,7 +304,7 @@ import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { isSameAssistantMessage, sanitizeAssistantForReparentedHistory } from "./agent-session-message-shapes";
-import { contextPromotionTarget, roleModelValue } from "./agent-session-model-targets";
+import { compactionModelCandidates, configuredCompactionEfforts, contextPromotionTarget, roleModelValue } from "./agent-session-model-targets";
 import { isToolOrderPermutation } from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
@@ -1190,6 +1191,7 @@ export class AgentSession {
 	// Handoff state
 	#handoffAbortController: AbortController | undefined = undefined;
 	#skipPostTurnMaintenanceAssistantTimestamp: number | undefined = undefined;
+	#lastLaneHandoffSessionId: string | undefined;
 
 	readonly #retry = new RetryRuntime(this, {
 		emitSessionEvent: event => this.#emitSessionEvent(event),
@@ -3416,7 +3418,50 @@ export class AgentSession {
 		if (mayContinueAtSettle("verification-evidence", settleState) && this.#finalize.verificationBeforeFinalize()) {
 			return true;
 		}
-		return mayContinueAtSettle("code-review", settleState) && this.#finalize.codeReviewBeforeFinalize();
+		if (mayContinueAtSettle("code-review", settleState) && this.#finalize.codeReviewBeforeFinalize()) return true;
+		return false;
+	}
+
+
+	async #maybeHandoffExpensiveAgent(activeMessages?: AgentMessage[]): Promise<boolean> {
+		const agentId = this.#config.agentId;
+		const threshold = this.settings.get("compaction.laneHandoffThresholdTokens");
+		const model = this.model;
+		if (
+			!this.#isSpawned ||
+			!agentId ||
+			AgentRegistry.global().get(agentId)?.kind !== "sub" ||
+			this.#lastLaneHandoffSessionId === this.sessionId ||
+			threshold <= 0 ||
+			!model ||
+			!/(?:^|[-/:])(?:sol|opus|sonnet|astra)(?:$|[-/:])/i.test(model.id)
+		) {
+			return false;
+		}
+		const contextTokens = this.getContextBreakdown()?.usedTokens ?? 0;
+		if (contextTokens < threshold) return false;
+		const summaryModel = compactionModelCandidates(
+			this.settings,
+			model,
+			this.modelRegistry.getAvailable(),
+		).find(candidate => this.modelRegistry.hasConfiguredAuth(candidate));
+		if (!summaryModel) return false;
+		this.#lastLaneHandoffSessionId = this.sessionId;
+		try {
+			const result = await this.handoff(
+				"Write a compact 3,000-token maximum successor brief. Include the assignment goal, current state, open steps, worktree, branch, source-observed HEAD, last test command and pass/fail counts, and important file paths. Do not invent repository metadata or test counts; say unknown when absent. Do not reproduce the source transcript.",
+				{ autoTriggered: true, compactSummary: true, preserveAgentLineage: true, summaryModel },
+			);
+			if (!result) return false;
+			if (activeMessages) activeMessages.splice(0, activeMessages.length, ...this.agent.state.messages);
+			return true;
+		} catch (error) {
+			logger.warn("Automatic expensive-agent handoff failed; retaining the current transcript", {
+				agentId,
+				error: errorMessage(error),
+			});
+			return false;
+		}
 	}
 
 	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
@@ -7403,7 +7448,7 @@ export class AgentSession {
 				throw new Error("Handoff cancelled");
 			}
 
-			const model = this.model;
+			const model = options?.summaryModel ?? this.model;
 			if (!model) {
 				throw new Error(
 					"No model selected, so the handoff summary cannot be written. Fix: in an interactive veyyon session run /model to choose one; from a terminal pass `--model <provider>/<id>`. `veyyon models` lists what this profile can reach.",
@@ -7425,10 +7470,13 @@ export class AgentSession {
 			const cacheSessionId = this.sessionId;
 			// The loop sends `promptCacheKey` (providerPromptCacheKey) and falls back to
 			// the provider session id; providers route on `promptCacheKey ?? sessionId`.
-			// Both can diverge from this.sessionId (tan/agent/shared sessions), so
+			const handoffPromptText = options?.compactSummary
+				? this.#secrets.obfuscateTextForProvider(
+						`Write only a COMPACT successor brief, at most 3,000 tokens. Use exactly these headings: # COMPACT, ## Goal, ## State, ## Open steps, ## Repository, ## Tests, ## Files. Preserve every unfinished requirement and key decision. Repository includes worktree, branch and observed HEAD. Tests includes the last observed command and pass/fail counts. Use unknown for facts not observed. Never reproduce transcript messages. This continues the same assignment: existing jobs and child agents remain running. Do not say they were cancelled.\\n\\n${customInstructions ?? ""}`,
+					)
+				: renderHandoffPrompt(this.#secrets.obfuscateTextForProvider(customInstructions));
 			// mirror exactly what the live turn populated the cache under.
 			const handoffPromptCacheKey = this.agent.promptCacheKey ?? this.agent.sessionId;
-			const handoffPromptText = renderHandoffPrompt(this.#secrets.obfuscateTextForProvider(customInstructions));
 			const handoffSnapshot: AgentMessage[] = [
 				...this.agent.state.messages,
 				{
@@ -7467,7 +7515,9 @@ export class AgentSession {
 					// Clamped per-model inside generateHandoffFromContext via
 					// resolveCompactionEffort so unsupported-effort models don't trip
 					// requireSupportedEffort.
-					thinkingLevel: this.thinkingLevel,
+					thinkingLevel: options?.summaryModel
+						? (configuredCompactionEfforts(this.settings, this.modelRegistry.getAvailable()).get(`${model.provider}/${model.id}`) ?? this.thinkingLevel)
+						: this.thinkingLevel,
 				},
 			);
 			// Append the same deterministic `<files>` block the summary strategy gets.
@@ -7477,12 +7527,23 @@ export class AgentSession {
 			const handoffFileOps = createFileOps();
 			extractFileOpsFromMessages(this.agent.state.messages, handoffFileOps);
 			const handoffFileLists = computeFileLists(handoffFileOps);
-			const handoffText = upsertFileOperations(
+			const completeHandoffText = upsertFileOperations(
 				this.#secrets.expandForDisplay(rawHandoffText),
 				handoffFileLists.readFiles,
 				handoffFileLists.modifiedFiles,
 				handoffFileOps.read,
 			);
+			const handoffText = completeHandoffText;
+			if (options?.compactSummary) {
+				if (countTokens(handoffText) > 5_000) {
+					throw new Error("COMPACT handoff exceeds the 5,000-token estimate; keeping the original transcript");
+				}
+				for (const heading of ["# COMPACT", "## Goal", "## State", "## Open steps", "## Repository", "## Tests", "## Files"]) {
+					if (!handoffText.split("\n").some(line => line.trim() === heading)) {
+						throw new Error(`COMPACT handoff is missing ${heading}; keeping the original transcript`);
+					}
+				}
+			}
 			const carriedTodoPhases = this.#todo.phases();
 
 			if (handoffSignal.aborted) {
@@ -7506,25 +7567,24 @@ export class AgentSession {
 				}
 			}
 			await this.sessionManager.flush();
-			this.#cancelOwnAsyncJobs();
+			if (!options?.preserveAgentLineage) {
+				this.#cancelOwnAsyncJobs();
+			}
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
-			// A handoff continues the work in a NEW transcript. The pre-handoff
-			// spawned agents wrote into the old one and their jobs were just cancelled;
-			// leaving them registered would list them under the new conversation.
-			await this.#rescopeAgentRegistry();
-
-			this.#checkpoint.clear();
-			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
-			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
-			// pre-loader TUI steer) so they survive into the post-handoff session instead of
+			if (!options?.preserveAgentLineage) await this.#rescopeAgentRegistry();
 			// being silently dropped. Capture is synchronous immediately before reset and
 			// restore is synchronous immediately after — no await gap — so a steer arriving
 			// later (during ensureOnDisk/Bun.write below) appends to the restored queue
 			// rather than being clobbered.
-			const preservedSteering = this.agent.peekSteeringQueue().slice();
-			const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
-			this.agent.reset();
-			this.agent.replaceQueues(preservedSteering, preservedFollowUp);
+			if (options?.preserveAgentLineage) {
+				// The tool loop still owns the streaming state and its queues.
+				this.agent.replaceMessages([]);
+			} else {
+				const preservedSteering = this.agent.peekSteeringQueue().slice();
+				const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
+				this.agent.reset();
+				this.agent.replaceQueues(preservedSteering, preservedFollowUp);
+			}
 			this.#providerSessions.freshId = undefined;
 			this.#providerSessions.sync();
 			this.#memory.rekey();
@@ -7542,6 +7602,9 @@ export class AgentSession {
 				this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: carriedTodoPhases });
 			}
 			await this.sessionManager.ensureOnDisk();
+			if (options?.preserveAgentLineage && this.#config.agentId) {
+				AgentRegistry.global().attachSession(this.#config.agentId, this, this.sessionFile);
+			}
 			let savedPath: string | undefined;
 			if (options?.autoTriggered && this.settings.get("compaction.handoffSaveToDisk")) {
 				const artifactsDir = this.sessionManager.getArtifactsDir();
@@ -7645,21 +7708,19 @@ export class AgentSession {
 		)
 			return;
 
-		const model = this.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (contextWindow <= 0) return;
-
-		const compactionSettings = this.settings.getGroup("compaction");
-		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
-			return;
-		}
-
 		const lastAssistant = [...activeMessages]
 			.reverse()
 			.find((message): message is AssistantMessage => message.role === "assistant");
 		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
-
+		if (this.#yields.findYieldMessage(activeMessages)) return;
 		if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
+		if (await this.#maybeHandoffExpensiveAgent(activeMessages)) return;
+
+		const model = this.model;
+		const contextWindow = model?.contextWindow ?? 0;
+		if (contextWindow <= 0) return;
+		const compactionSettings = this.settings.getGroup("compaction");
+		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) return;
 
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#context.estimateStoredTokens();

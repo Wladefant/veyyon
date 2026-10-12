@@ -2132,10 +2132,9 @@ function createSessionReviver(
 	const { options, sessionFile, settings } = ctx;
 	const { id, parentArtifactManager, parentSessionId } = options;
 	return async () => {
-		// Re-peek as well as re-open on every use: /move can rewrite the header after this closure was
-		// created, and a deleted recorded cwd must fail closed rather than use open()'s general
-		// interactive fallback.
-		const current = await SessionManager.peekSessionInit(sessionFile);
+		const currentSessionFile = AgentRegistry.global().get(id)?.sessionFile ?? sessionFile;
+		// Re-peek as well as re-open on every use: /move and handoff can replace the transcript.
+		const current = await SessionManager.peekSessionInit(currentSessionFile);
 		if (!current?.init) {
 			throw new Error(`Cannot revive ${id}: persisted session contract is missing`);
 		}
@@ -2144,7 +2143,7 @@ function createSessionReviver(
 		} catch {
 			throw new Error(`Cannot revive ${id}: persisted working directory is unavailable`);
 		}
-		const reopened = await SessionManager.open(sessionFile, undefined, undefined, {
+		const reopened = await SessionManager.open(currentSessionFile, undefined, undefined, {
 			initialCwd: current.cwd,
 			suppressBreadcrumb: true,
 		});

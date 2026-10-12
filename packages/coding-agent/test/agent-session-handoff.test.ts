@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage, type StreamFn, ThinkingLevel } from "@veyyon/agent-core";
+import { Agent, type AgentMessage, type AgentTool, type StreamFn, ThinkingLevel } from "@veyyon/agent-core";
+import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -13,7 +14,7 @@ import { ExtensionRunner, loadExtensions } from "@veyyon/coding-agent/extensibil
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { type } from "arktype";
 import { TempDir } from "@veyyon/utils";
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
@@ -158,7 +159,65 @@ describe("AgentSession handoff", () => {
 		try {
 			await tempDir.remove();
 		} catch {}
+		AgentRegistry.resetGlobalForTests();
 		vi.restoreAllMocks();
+	});
+
+	it("bounds automatic handoff summaries and stores only the generated brief", async () => {
+		const handoffText = [
+			"# COMPACT",
+			"## Goal\nContinue implementation",
+			"## State\nCurrent work is in progress",
+			"## Open steps\nComplete the remaining work",
+			"## Repository\nUnknown",
+			"## Tests\nUnknown",
+			"## Files\nUnknown",
+		].join("\n");
+		const handoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(handoffText);
+		session.agent.replaceMessages([
+			{
+				role: "user",
+				content: [{ type: "text", text: "UNREPLAYED_SOURCE_TRANSCRIPT" }],
+				timestamp: Date.now(),
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "Current state" }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+				usage: {
+					input: 16,
+					output: 8,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 24,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			},
+		]);
+
+		await session.handoff("Include worktree, branch, head, test counts, and paths.", {
+			autoTriggered: true,
+			compactSummary: true,
+		});
+
+		const call = handoffSpy.mock.calls[0];
+		const trailingContent = call?.[0].messages.at(-1)?.content;
+		expect(String(trailingContent)).toContain("at most 3,000 tokens");
+		expect(String(trailingContent)).toContain("observed pass/fail counts");
+		expect(session.agent.state.messages.map(message => JSON.stringify(message)).join("\n")).toContain(handoffText);
+		expect(session.agent.state.messages.map(message => JSON.stringify(message)).join("\n")).not.toContain(
+			"UNREPLAYED_SOURCE_TRANSCRIPT",
+		);
+	});
+
+	it("defaults automatic expensive-agent handoff to 150k and allows disabling it", () => {
+		expect(session.settings.get("compaction.laneHandoffThresholdTokens")).toBe(150000);
+		session.settings.set("compaction.laneHandoffThresholdTokens", 0);
+		expect(session.settings.get("compaction.laneHandoffThresholdTokens")).toBe(0);
 	});
 
 	it("does not run auto-compaction after handoff turn completes", async () => {
@@ -1626,5 +1685,180 @@ describe("AgentSession handoff", () => {
 		await expect(handoffPromise).rejects.toThrow("Handoff cancelled");
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(generateHandoffSpy.mock.calls[0]?.[2]?.streamOptions?.signal?.aborted).toBe(true);
+	});
+	it("automatically hands an expensive spawned agent to a successor before its next model call", async () => {
+		const registry = AgentRegistry.global();
+		const model = createMockModel({
+			id: "claude-sonnet-4-5",
+			provider: "anthropic",
+			responses: [
+				{ content: [{ type: "toolCall", id: "call_work", name: "work", arguments: {} }] },
+				{ content: ["tool work complete"] },
+				{ content: ["successor continuation"] },
+			],
+		});
+		const workTool: AgentTool = {
+			name: "work",
+			label: "Work",
+			description: "Complete one bounded step",
+			parameters: type("object"),
+			execute: async () => ({ content: [{ type: "text", text: "step complete" }] }),
+		};
+		await session.dispose();
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [workTool], messages: [] },
+			streamFn: model.stream,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"compaction.laneHandoffThresholdTokens": 1,
+			}),
+			modelRegistry,
+			isSpawned: true,
+			agentKind: "sub",
+			agentId: "handoff-child",
+		});
+		registry.register({
+			id: "handoff-child",
+			displayName: "Handoff child",
+			kind: "sub",
+			session,
+			sessionFile: session.sessionFile,
+		});
+		session.agent.replaceMessages([
+			{ role: "user", content: [{ type: "text", text: "SOURCE_TRANSCRIPT_SENTINEL" }], timestamp: Date.now() },
+		]);
+		const summary = [
+			"# COMPACT",
+			"## Goal\nFinish the task",
+			"## State\nThe tool step completed",
+			"## Open steps\nContinue the work",
+			"## Repository\nUnknown",
+			"## Tests\nUnknown",
+			"## Files\nUnknown",
+		].join("\n");
+		let streamingDuringSummary: boolean | undefined;
+		const summarySpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockImplementation(async () => {
+				streamingDuringSummary = session.isStreaming;
+				return summary;
+			});
+		const initialSessionId = session.sessionId;
+		const prompt = session.prompt("Perform the tool step");
+		await prompt;
+		await drainMaintenance();
+
+		expect(summarySpy).toHaveBeenCalledTimes(1);
+		expect(session.sessionId).not.toBe(initialSessionId);
+		expect(session.agent.state.messages.map(message => JSON.stringify(message)).join("\n")).toContain(summary);
+		expect(session.agent.state.messages.map(message => JSON.stringify(message)).join("\n")).not.toContain(
+			"SOURCE_TRANSCRIPT_SENTINEL",
+		);
+		expect(model.calls.length).toBeGreaterThanOrEqual(2);
+		expect(model.calls[0]?.options?.sessionId).not.toBe(model.calls[1]?.options?.sessionId);
+		expect(JSON.stringify(model.calls[1]?.context.messages)).not.toContain("SOURCE_TRANSCRIPT_SENTINEL");
+		expect(streamingDuringSummary).toBe(true);
+		expect(registry.get("handoff-child")?.session).toBe(session);
+		expect(registry.get("handoff-child")?.sessionFile).toBe(session.sessionFile);
+	});
+
+	it("does not automatically hand off when an expensive spawned agent is below threshold or disabled", async () => {
+		const registry = AgentRegistry.global();
+		const mock = createMockModel({
+			id: "claude-sonnet-4-5",
+			provider: "anthropic",
+			responses: [{ content: ["done"] }, { content: ["continued"] }],
+		});
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model: mock, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: mock.stream,
+			}),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"compaction.laneHandoffThresholdTokens": 1_000_000,
+			}),
+			modelRegistry,
+			isSpawned: true,
+			agentKind: "sub",
+			agentId: "handoff-child-negative",
+		});
+		registry.register({
+			id: "handoff-child-negative",
+			displayName: "Handoff child",
+			kind: "sub",
+			session,
+			sessionFile: session.sessionFile,
+		});
+		const summarySpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
+		await session.prompt("Small prompt");
+		await drainMaintenance();
+		session.settings.set("compaction.laneHandoffThresholdTokens", 0);
+		await session.prompt("Threshold disabled");
+		await drainMaintenance();
+		expect(summarySpy).not.toHaveBeenCalled();
+	});
+	it("does not hand off root sessions or cheap Luna subagents", async () => {
+		const summarySpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
+		const registry = AgentRegistry.global();
+		for (const candidate of [
+			{ id: "root-session", provider: "anthropic", kind: "main" as const, spawned: false },
+			{ id: "luna-child", provider: "google", kind: "sub" as const, spawned: true },
+		]) {
+			await session.dispose();
+			const mock = createMockModel({
+				id: candidate.provider === "google" ? "gemini-2.5-flash" : "claude-sonnet-4-5",
+				provider: candidate.provider,
+				responses: [{ content: ["done"] }],
+			});
+			session = new AgentSession({
+				agent: new Agent({
+					getApiKey: () => "test-key",
+					initialState: { model: mock, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: mock.stream,
+				}),
+				sessionManager,
+				settings: Settings.isolated({ "compaction.laneHandoffThresholdTokens": 1 }),
+				modelRegistry,
+				isSpawned: candidate.spawned,
+				agentKind: candidate.kind,
+				agentId: candidate.id,
+			});
+			registry.register({
+				id: candidate.id,
+				displayName: candidate.id,
+				kind: candidate.kind,
+				session,
+				sessionFile: session.sessionFile,
+			});
+			await session.prompt("Trigger threshold");
+			await drainMaintenance();
+		}
+		expect(summarySpy).not.toHaveBeenCalled();
+	});
+	it("keeps the source transcript and session when automatic summary generation fails or is oversized", async () => {
+		const sourceSessionId = session.sessionId;
+		const sourceMessages = session.agent.state.messages;
+		const summarySpy = vi.spyOn(compactionModule, "generateHandoffFromContext").mockRejectedValueOnce(
+			new Error("summary provider failed"),
+		);
+		const failed = await session.handoff(undefined, { autoTriggered: true, compactSummary: true });
+		expect(failed).toBeUndefined();
+		expect(session.sessionId).toBe(sourceSessionId);
+		expect(session.agent.state.messages).toEqual(sourceMessages);
+
+		summarySpy.mockResolvedValueOnce("x".repeat(30_000));
+		const oversized = await session.handoff(undefined, { autoTriggered: true, compactSummary: true });
+		expect(oversized).toBeUndefined();
+		expect(session.sessionId).toBe(sourceSessionId);
+		expect(session.agent.state.messages).toEqual(sourceMessages);
 	});
 });

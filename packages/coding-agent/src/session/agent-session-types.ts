@@ -452,6 +452,12 @@ export interface SessionHandoffOptions {
 	autoTriggered?: boolean;
 	signal?: AbortSignal;
 	onSwitchCancelled?: () => void;
+	/** Request a focused, bounded successor summary rather than a general summary. */
+	compactSummary?: boolean;
+	/** Keep this spawned agent's task lineage and child jobs across the transcript switch. */
+	preserveAgentLineage?: boolean;
+	/** Summary model selected by the session's configured compaction candidates. */
+	summaryModel?: Model;
 }
 
 /** Result from cycleModel() */

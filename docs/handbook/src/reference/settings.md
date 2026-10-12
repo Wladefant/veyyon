@@ -875,6 +875,7 @@ compaction:
   strategy: summary           # the sole compaction strategy
   midTurnEnabled: true        # check thresholds between tool-loop provider requests
   threshold: auto             # auto | 85% (of the model's window) | 170000 (tokens, any model)
+  laneHandoffThresholdTokens: 150000 # expensive spawned agents; 0 disables
 
 memory:
   backend: off                # off, local, hindsight, mnemopi
@@ -884,7 +885,7 @@ memory:
 |---|---|---|---|
 | `contextPromotion.enabled` | boolean | `false` | Promote to a larger-context model on overflow instead of compacting. |
 | `compaction.enabled` | boolean | `true` | Automatic conversation compaction. |
-| `compaction.midTurnEnabled` | boolean | `true` | Check thresholds at safe mid-turn tool-loop boundaries before the next provider request. |
+| `compaction.laneHandoffThresholdTokens` | number | `150000` | Context-token threshold for automatic assignment handoff on eligible expensive spawned agents. It is independent of automatic compaction; `0` disables it. |
 | `compaction.strategy` | enum | `summary` | The sole strategy. It rewrites old history into an in-place LLM summary. Stored legacy values migrate to `summary`; use `/handoff` for an explicit new-session transfer. |
 | `compaction.model` | modelChain | unset | Models for LLM compaction, tried in order, written as a comma-separated string or as a YAML list; unset inherits the model you are working with (`modelRoles.default`). Each may include a `:effort` suffix, applied on every compaction pass. A candidate that is unauthenticated, or whose window cannot hold the summary, is skipped and the next one runs. |
 | `compaction.modelFallbackStrategy` | enum | `auto` | What to try after `compaction.model` runs out. `auto` stays on models you named: the main model, its same-provider compaction sibling, then each model role. `any-model` goes further, to the largest-window model on any provider you hold credentials for, which can bill an account you were not using for this session. `configured-only` stops at the models you listed and fails with the reason. Compacting on anything but your first choice is reported in the session, once per reason. |
