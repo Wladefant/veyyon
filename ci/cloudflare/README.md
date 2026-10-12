@@ -26,9 +26,9 @@ The lane installs missing Linux test dependencies through `sudo -n` only when pa
 
 The lane installs the Rust nightly pinned by `rust-toolchain.toml`, Zig `0.16.0`, and `cargo-zigbuild`. It builds Linux x64 native addons in both `baseline` and `modern` variants against `x86_64-unknown-linux-gnu.2.17`. This matches the release workflow's glibc floor.
 
-The lane disables the external SSH rung and pins `VEYYON_SANDBOX_RUNG=bwrap`. It downloads and unpacks Bubblewrap and its test tools into a temporary directory when the Workers Builds image lacks them. It copies the real Bun executable into that directory and runs each existing test bucket through the repository's bubblewrap rung from a checkout path outside the build user's home.
+The lane disables the external SSH rung and pins `VEYYON_SANDBOX_RUNG=bwrap`. It downloads and unpacks Bubblewrap and its test tools into a temporary directory when the Workers Builds image lacks them. It copies the real Bun executable into that checkout and runs each existing test bucket through the repository's bubblewrap rung from a checkout path outside the build user's home.
 
-The bwrap test process receives only safe CI variables and `VEYYON_TEST_CONCURRENCY`. It does not receive `CLOUDFLARE_API_TOKEN`. Missing bwrap or a failed sandbox assertion is fatal. The lane does not fall back to host execution or another rung.
+The shard runner spawns child processes by the name `bun`. Each sandbox command starts through `/bin/sh` inside bwrap, adds only the checkout-mounted directory containing the copied Bun binary to the sandbox PATH, then replaces the shell with the shard runner. The host PATH does not leak into the sandbox.
 
 This lane verifies only Linux x64. It does not build `linux-arm64`, `win32-x64`, `darwin-x64`, or `darwin-arm64`. The existing GitHub Actions release matrix covers those targets.
 

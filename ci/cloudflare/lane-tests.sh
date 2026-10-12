@@ -109,6 +109,16 @@ sandbox_root="$(mktemp -d /tmp/veyyon-workers-XXXXXX)"
 ln -s "$repo_root" "$sandbox_root/repo"
 export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
 bash scripts/test-sandbox/run.sh --rung=bwrap --probe
+runtime_bin_dir="$sandbox_root/repo/.cf-proof-tools/bin"
+# Child commands resolve `bun` by name. Add only this checkout-mounted real binary
+# directory after bwrap has applied its fixed PATH, then exec the test runner.
+if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
+  'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin_dir" \
+  "$runtime_bin_dir/bun" -e \
+  'const result = Bun.spawnSync(["bun", "--version"]); if (result.exitCode !== 0) process.exit(result.exitCode ?? 1); process.stdout.write(result.stdout);'; then
+  echo "CLOUDFLARE_BWRAP_BUN_CHILD_FAILED" >&2
+  exit 1
+fi
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Full output lets this runner
 # collect Bun's per-test summary lines rather than treating chunks as tests.
@@ -122,8 +132,9 @@ run_bucket() {
   local bucket_log
   bucket_log="$(mktemp)"
   local bucket_status=0
-  if bash scripts/test-sandbox/run.sh --rung=bwrap "$sandbox_root/repo/.cf-proof-tools/bin/bun" \
-    scripts/ci-test-ts.ts "$mode" --full 2>&1 | tee "$bucket_log"; then
+  if bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
+    'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin_dir" \
+    "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" --full 2>&1 | tee "$bucket_log"; then
     :
   else
     bucket_status=$?
