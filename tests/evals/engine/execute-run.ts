@@ -140,11 +140,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<EvalRunRec
 
 	const { plan, backend } = options;
 	const clock = options.now ?? (() => Date.now());
+	const datasetDir = typeof options.options?.datasetDir === "string" ? options.options.datasetDir : undefined;
 	const context: RunContext = {
 		runId: plan.runId,
 		suite: plan.suite,
 		workDir: options.workDir,
 		runsDir: options.runsDir,
+		datasetDir,
 		signal: options.signal,
 		harnesses: options.harnesses,
 		options: {
@@ -160,7 +162,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<EvalRunRec
 	await requireRunDirectories({
 		runsDir: options.runsDir,
 		workDir: options.workDir,
-		datasetDir: typeof options.options?.datasetDir === "string" ? options.options.datasetDir : undefined,
+		datasetDir,
 	});
 
 	// A resume names a prior run. When that run has no journal, the honest outcome is a
