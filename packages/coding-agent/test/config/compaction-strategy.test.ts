@@ -71,7 +71,7 @@ describe("toAgentCompactionSettings", () => {
 		expect(result.threshold).toBe("80%");
 		expect(result.thresholdPercent).toBe(80);
 		expect(result.thresholdTokens).toBe(1000);
-		expect(result.laneHandoffThresholdTokens).toBe(150_000);
+		expect(result).toMatchObject({ laneHandoffThresholdTokens: 150_000 });
 		expect(result.keepRecentTokens).toBe(200);
 		expect(result.enabled).toBe(true);
 	});
