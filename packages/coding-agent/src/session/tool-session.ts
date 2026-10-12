@@ -53,6 +53,8 @@ export interface SessionToolSessionInputs {
 		| "authStorage"
 		| "modelRegistry"
 		| "asyncJobManager"
+		| "onSubagentStart"
+		| "onSubagentStartFailed"
 		| "onSubagentComplete"
 	>;
 }
