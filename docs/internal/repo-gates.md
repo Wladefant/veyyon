@@ -78,3 +78,7 @@ HTML. The `Site` workflow builds the handbook before deploying to Cloudflare Pag
 The mdbook version is pinned to v0.5.2. A different version renders content-hashed filenames
 differently, so CI and local builds use the same pinned version.
 *Verified against `9c904aa2db` on 2026-09-05.*
+
+## Cloudflare Workers Builds lane
+
+`ci/cloudflare/` is the remote build-and-test lane. Workers Builds triggers it for every branch except `main`; the lane runs the existing TypeScript check and test buckets, attempts the Linux native build, and builds the production CLI binary. The final step uploads a version of an isolated health Worker and does not promote it to active traffic. The lane reports the Cloudflare build UUID, elapsed time, test counts and unsupported native targets. It does not replace `ci.yml` or change the GitHub Actions gates.
