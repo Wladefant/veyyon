@@ -55,6 +55,7 @@ run_bwrap() {
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
 		--chdir "${REPO_ROOT}" \
+		--setenv PATH /usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \
 		--setenv VEYYON_TEST_HOST_HOME "${HOST_HOME}" \
 		--setenv HOME /sandbox/home \
@@ -64,4 +65,4 @@ run_bwrap() {
 }
 
 # Used by --probe to list which binaries the rung provides.
-binprobe_bwrap() { bwrap --unshare-user --ro-bind / / --tmpfs /home /bin/sh -c "$1"; }
+binprobe_bwrap() { run_bwrap /bin/sh -c "$1"; }

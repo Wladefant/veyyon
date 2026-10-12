@@ -91,6 +91,8 @@ interface AsyncJobDelivery {
 	nextAttemptAt: number;
 	lastError?: string;
 	ownerId?: string;
+	/** Keep routing identity alive after the inspection entry expires. */
+	job?: AsyncJob;
 	promise?: Promise<void>;
 }
 
@@ -678,6 +680,7 @@ export class AsyncJobManager {
 			attempt: 0,
 			nextAttemptAt: Date.now(),
 			ownerId: this.#jobs.get(jobId)?.ownerId,
+			job: this.#jobs.get(jobId),
 		});
 		this.#ensureDeliveryLoop();
 	}
@@ -727,7 +730,7 @@ export class AsyncJobManager {
 		const promise = (async () => {
 			this.#inFlightDeliveries.push(delivery);
 			try {
-				await this.#onJobComplete(delivery.jobId, delivery.text, this.#jobs.get(delivery.jobId));
+				await this.#onJobComplete(delivery.jobId, delivery.text, delivery.job);
 			} catch (error) {
 				delivery.attempt += 1;
 				delivery.lastError = errorMessage(error);
