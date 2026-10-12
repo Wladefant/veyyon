@@ -37,7 +37,7 @@ spyOn(logger, "debug").mockImplementation((message, fields) => {
 });
 
 const receipt = {
-	head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim(),
+	head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true, timeout: 30000 }).trim(),
 	steps: {},
 	timingsMs: {},
 };
@@ -87,7 +87,7 @@ try {
 		enableExtensions: [unpacked],
 		args: [
 			"--no-first-run",
-			`--host-resolver-rules=MAP ${pageHost} 127.0.0.1, MAP ${farHost} 127.0.0.1`,
+			`--host-resolver-rules=MAP ${pageHost} 127.0.0.1, MAP ${farHost} 127.0.0.1, MAP akamai-iad-prod.test 127.0.0.1`,
 			"--disable-features=LocalNetworkAccessChecks",
 			`--unsafely-treat-insecure-origin-as-secure=http://${pageHost}:${web.port}`,
 		],
@@ -105,12 +105,10 @@ try {
 	await status.close();
 
 	const audits = [];
-	relay = ExtensionRelay.start({
-		policy: { allow: [pageHost, farHost, "127.0.0.1", "localhost"] },
-		instance: "live",
+	relay = ExtensionRelay.start({ instance: "live",
 		scrub: [token],
-		onAudit: entry => audits.push(entry),
-	});
+		bootstrap: { extensionId: PLAYWRIGHT_EXTENSION_ID, protocolVersion: EXTENSION_PROTOCOL_VERSION, token, clientName: "veyyon-live-qa" },
+		onAudit: entry => audits.push(entry), });
 	const connectPage = await owner.newPage();
 	const t0 = performance.now();
 	connectPage
@@ -133,6 +131,7 @@ try {
 	const browser = await puppeteer.connect({ browserWSEndpoint: relay.cdpUrl, protocolTimeout: 30_000 });
 	const page = await browser.newPage();
 	lap("newPage", t1);
+	receipt.steps.bootstrapReused = (await owner.pages()).filter(p => p.url().includes("/connect.html")).length === 0;
 
 	const t2 = performance.now();
 	await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
@@ -169,24 +168,21 @@ try {
 	receipt.steps.screenshotBytes = png.length;
 	fs.writeFileSync(process.env.VEYYON_EXT_SHOT ?? path.join(agentDir, "live.png"), png);
 
-	// Refused origin: the relay must stop it before Chrome sees it.
-	const refused = await browser.newPage().then(
-		() => "opened",
-		error => String(error.message).slice(0, 200),
-	);
-	receipt.steps.nonAllowlistedAboutBlank = refused;
-	const blocked = await page.goto("https://example.com/", { waitUntil: "domcontentloaded" }).then(
+	// New origins need no policy entry. Keep production-host refusal separate.
+	const extraBlank = await browser.newPage();
+	await extraBlank.close();
+	receipt.steps.blankCreatedAndClosed = true;
+	const blocked = await page.goto("https://polysimulator.com/", { waitUntil: "domcontentloaded" }).then(
 		() => "navigated",
 		error => String(error.message).slice(0, 200),
 	);
-	receipt.steps.nonAllowlistedNavigation = blocked;
+	receipt.steps.productionNavigation = blocked;
 
 	await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
-	// Each case to a refused host (127.0.0.2 reaches the same server, so any request that leaves Chrome shows
-	// up in `hits` under its Host header). Refused means zero hits. Cases run one after the other.
-	const refusedBase = `http://127.0.0.2:${web.port}/`;
+	// Map a retained production-host fragment to the test server for negative controls.
+	const refusedBase = `http://akamai-iad-prod.test:${web.port}/`;
 	const crossSite = `http://${farHost}:${web.port}/`;
-	const refusedKey = `127.0.0.2:${web.port}`;
+	const refusedKey = `akamai-iad-prod.test:${web.port}`;
 	const refusedHits = () => hits.get(refusedKey) ?? 0;
 	const cases = {};
 	await page.evaluate(src => {
@@ -284,7 +280,7 @@ try {
 	receipt.steps.refusedRequestsReceivedPerCase = cases;
 	receipt.steps.refusedHostRequestsReceived = refusedHits();
 	receipt.steps.audits = audits;
-	receipt.steps.refusedPopupTabsLeft = (await owner.pages()).filter(p => p.url().includes("127.0.0.2")).length;
+	receipt.steps.refusedPopupTabsLeft = (await owner.pages()).filter(p => p.url().includes("akamai-iad-prod.test")).length;
 
 	// Workers and service workers (https://github.com/Wladefant/veyyon/issues/493). Chrome has no Fetch gate
 	// for either, so a controlled tab must not create one, from any realm or by any constructor path.
@@ -475,8 +471,10 @@ try {
 		receipt.steps.titleBefore === "before" &&
 		receipt.steps.titleAfter === "clicked:QA-live" &&
 		receipt.steps.screenshotBytes > 500 &&
-		receipt.steps.nonAllowlistedNavigation !== "navigated" &&
+		receipt.steps.productionNavigation !== "navigated" &&
 		receipt.steps.userTabStillThere === true &&
+		receipt.steps.bootstrapReused === true &&
+		receipt.steps.refusedPopupTabsLeft === 0 &&
 		receipt.steps.oopifAllowedHits > 0 &&
 		receipt.steps.refusedHostRequestsReceived === 0 &&
 		receipt.steps.negativeControl.guardOn === 0 &&

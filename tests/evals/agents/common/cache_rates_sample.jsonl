@@ -1,0 +1,4 @@
+{"timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","model":"sample-model","usage":{"model":"sample-model","credentialId":"sample-account-a","transport":"websocket","input":1000,"cacheRead":40000,"cacheWrite":0}}}
+{"timestamp":"2026-01-01T00:01:00Z","message":{"role":"assistant","model":"sample-model","usage":{"model":"sample-model","credentialId":"sample-account-b","transport":"http","input":2000,"cacheRead":10000,"cacheWrite":0}}}
+{"timestamp":"2026-01-01T00:02:00Z","type":"compaction"}
+{"timestamp":"2026-01-01T00:03:00Z","message":{"role":"assistant","model":"sample-model","usage":{"model":"sample-model","credentialId":"sample-account-a","transport":"websocket","input":500,"cacheRead":20000,"cacheWrite":500}}}

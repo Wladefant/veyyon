@@ -22,7 +22,13 @@ export interface ApiKeyResolverRegistry {
 	getApiKeyForProvider(
 		provider: string,
 		sessionId?: string,
-		options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
+		options?: {
+			baseUrl?: string;
+			modelId?: string;
+			forceRefresh?: boolean;
+			signal?: AbortSignal;
+			onCredentialSelected?: (credentialId: string) => void;
+		},
 	): Promise<string | undefined>;
 	authStorage: Pick<AuthStorage, "rotateSessionCredential">;
 	/**
@@ -50,9 +56,9 @@ export function createApiKeyResolver(
 	options: ApiKeyResolverOptions = {},
 ): ApiKeyResolver {
 	const { sessionId, baseUrl, modelId } = options;
-	return async ({ lastChance, error, signal, previousKey }) => {
+	return async ({ lastChance, error, signal, previousKey, onCredentialSelected }) => {
 		if (error === undefined) {
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, signal, onCredentialSelected });
 		}
 		if (lastChance) {
 			// Account constraint (401 / usage / account-rate-limit): rotate to a
@@ -72,8 +78,14 @@ export function createApiKeyResolver(
 				// auth decline can instead mean a peer refreshed the bearer.
 				if (AIError.isUsageLimit(error)) return undefined;
 			}
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, signal, onCredentialSelected });
 		}
-		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
+		return registry.getApiKeyForProvider(provider, sessionId, {
+			baseUrl,
+			modelId,
+			forceRefresh: true,
+			signal,
+			onCredentialSelected,
+		});
 	};
 }

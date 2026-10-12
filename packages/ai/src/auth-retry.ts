@@ -34,6 +34,8 @@ export interface ApiKeyResolveContext {
 	previousKey?: string;
 	/** Caller cancel signal, threaded into any credential refresh / rotation work. */
 	signal?: AbortSignal;
+	/** Request-local callback identifying the stored credential selected for this attempt. */
+	onCredentialSelected?: (credentialId: string) => void;
 }
 
 /**
@@ -76,27 +78,34 @@ function warnAuthRetry(message: string, fields: Record<string, unknown>): void {
  * while preparing a request and then renders an abort as a `stopReason: "aborted"`
  * assistant message; a throw raised here instead unwinds past that and surfaces the
  * user's own Ctrl-C as a crashed run. The retry driver below is where cancellation
- * has to bite, because that is the loop that would otherwise keep going.
+ * is enforced.
  */
-export async function resolveApiKeyOnce(key: ApiKey | undefined, signal?: AbortSignal): Promise<string | undefined> {
+export async function resolveApiKeyOnce(
+	key: ApiKey | undefined,
+	signal?: AbortSignal,
+	onCredentialSelected?: (credentialId: string) => void,
+): Promise<string | undefined> {
 	if (key === undefined) return undefined;
-	if (isApiKeyResolver(key)) return (await key({ lastChance: false, error: undefined, signal })) || undefined;
+	if (isApiKeyResolver(key))
+		return (await key({ lastChance: false, error: undefined, signal, onCredentialSelected })) || undefined;
 	return key;
 }
 
 /**
  * Wraps a resolver with a bearer that was already selected for this request.
  *
- * Callers that preflight credentials can pass the returned resolver to the
- * auth-retry driver without making the driver know about that preflight: the
- * first initial resolution reuses `seed`, and all later resolutions delegate to
- * `resolver`.
+ * The seed's identity travels with its bearer, not with a later selection.
  */
-export function seedApiKeyResolver(seed: string | undefined, resolver: ApiKeyResolver): ApiKeyResolver {
+export function seedApiKeyResolver(
+	seed: string | undefined,
+	resolver: ApiKeyResolver,
+	credentialId?: string,
+): ApiKeyResolver {
 	let seedPending = seed !== undefined;
 	return ctx => {
 		if (seedPending && ctx.error === undefined) {
 			seedPending = false;
+			if (credentialId !== undefined) ctx.onCredentialSelected?.(credentialId);
 			return seed;
 		}
 		return resolver(ctx);
@@ -123,11 +132,13 @@ export async function resolveRetryKey(
 	error: unknown,
 	signal?: AbortSignal,
 	previousKey?: string,
+	onCredentialSelected?: (credentialId: string) => void,
 ): Promise<string | undefined> {
 	if (signal?.aborted) return undefined;
 	try {
 		const rotateSibling = lastChance || (!lastChance && isUsageLimit(error));
-		const resolved = (await resolver({ lastChance: rotateSibling, error, signal, previousKey })) || undefined;
+		const resolved =
+			(await resolver({ lastChance: rotateSibling, error, signal, previousKey, onCredentialSelected })) || undefined;
 		if (signal?.aborted) return undefined;
 		return resolved;
 	} catch (resolveError) {
@@ -182,6 +193,7 @@ export async function resolveNextAuthRetryKey(
 	resolver: ApiKeyResolver,
 	error: unknown,
 	signal?: AbortSignal,
+	onCredentialSelected?: (credentialId: string) => void,
 ): Promise<string | undefined> {
 	if (signal?.aborted) return undefined;
 	if (state.attempts >= AUTH_RETRY_MAX_ATTEMPTS) return undefined;
@@ -189,7 +201,7 @@ export async function resolveNextAuthRetryKey(
 	if (!directRotation) {
 		if (state.legacyAuthSwitchUsed) return undefined;
 		if (!state.refreshedCurrent) {
-			const refreshed = await resolveRetryKey(resolver, false, error, signal, state.lastKey);
+			const refreshed = await resolveRetryKey(resolver, false, error, signal, state.lastKey, onCredentialSelected);
 			state.refreshedCurrent = true;
 			if (signal?.aborted) return undefined;
 			if (refreshed !== undefined) {
@@ -200,7 +212,7 @@ export async function resolveNextAuthRetryKey(
 	}
 
 	if (signal?.aborted) return undefined;
-	const rotated = await resolveRetryKey(resolver, true, error, signal, state.lastKey);
+	const rotated = await resolveRetryKey(resolver, true, error, signal, state.lastKey, onCredentialSelected);
 	if (signal?.aborted || rotated === undefined) return undefined;
 	const accepted = acceptRetryKey(state, rotated, !directRotation);
 	if (accepted !== undefined && !directRotation) state.legacyAuthSwitchUsed = true;

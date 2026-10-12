@@ -205,6 +205,61 @@ describe("task spawn routing", () => {
 		expect(runSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("reports the resolved spawn identity before execution and again at completion", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent, reviewerAgent],
+			projectAgentsDir: null,
+		});
+		const events: string[] = [];
+		const starts: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
+		const completions: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
+		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			events.push("execute");
+			return makeResult(options.id, { agent: "reviewer" });
+		});
+		const tool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({
+					"async.enabled": false,
+					"agent.agents": { reviewer: { enabled: true } },
+				}),
+				onSubagentStart: event => {
+					events.push("start");
+					starts.push(event);
+				},
+				onSubagentComplete: async record => {
+					events.push("complete");
+					completions.push(record);
+				},
+			}),
+		);
+
+		const result = await tool.execute("tc-verifier-spawn", {
+			agent: "reviewer",
+			name: "VerifierSpawn",
+			task: "Review this.",
+			ticketId: "ticket-verifier",
+			runId: "run-verifier",
+			nativeDispatchBound: true,
+		} as TaskParams);
+
+
+		expect(result.details?.results[0]?.agent).toBe("reviewer");
+		expect(runSpy).toHaveBeenCalledTimes(1);
+		expect(events).toEqual(["start", "execute", "complete"]);
+		expect(starts).toEqual([
+			{
+				agentId: "VerifierSpawn",
+				agentName: "reviewer",
+				ticketId: "ticket-verifier",
+				runId: "run-verifier",
+			},
+		]);
+		expect(completions).toHaveLength(1);
+		expect(completions[0]).toMatchObject(starts[0]!);
+	});
+
 	/**
 	 * Task dispatch reads policy at spawn time, so a model or effort change applies to the next
 	 * child without rebuilding the TaskTool — and a `agent.agents.<name>` row is the layer that

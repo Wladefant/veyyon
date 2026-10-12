@@ -14,22 +14,46 @@ import {
 	type SubagentCompleteEvent,
 	TopicReplenishmentEngine,
 } from "@veyyon/coding-agent/task/topic-replenishment";
+import { expect, test } from "bun:test";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 interface RuntimeTaskTool {
 	tool?: RuntimeTaskTool;
-	session?: { onSubagentComplete?: (event: SubagentCompleteEvent) => Promise<void> };
+	session?: {
+		onSubagentStart?: (event: { agentId: string; agentName: string; ticketId?: string; runId?: string }) => void;
+		onSubagentStartFailed?: (event: { agentId: string; agentName: string; ticketId?: string; runId?: string }) => void;
+		onSubagentComplete?: (event: SubagentCompleteEvent) => Promise<void>;
+	};
 }
 
-function completionHook(session: AgentSession): (event: SubagentCompleteEvent) => Promise<void> {
+function taskSession(session: AgentSession): NonNullable<RuntimeTaskTool["session"]> {
 	let tool = session.getToolByName("task") as RuntimeTaskTool | undefined;
 	const seen = new Set<RuntimeTaskTool>();
 	while (tool && !tool.session && tool.tool && !seen.has(tool)) {
 		seen.add(tool);
 		tool = tool.tool;
 	}
-	const hook = tool?.session?.onSubagentComplete;
+	if (!tool?.session) throw new Error("TaskTool session hooks are not reachable from the created session");
+	return tool.session;
+}
+
+function completionHook(session: AgentSession): (event: SubagentCompleteEvent) => Promise<void> {
+	const hook = taskSession(session).onSubagentComplete;
 	if (!hook) throw new Error("TaskTool completion hook is not reachable from the created session");
+	return hook;
+}
+
+function startHook(session: AgentSession): NonNullable<RuntimeTaskTool["session"]>["onSubagentStart"] {
+	const hook = taskSession(session).onSubagentStart;
+	if (!hook) throw new Error("TaskTool start hook is not reachable from the created session");
+	return hook;
+}
+
+function startFailureHook(
+	session: AgentSession,
+): NonNullable<RuntimeTaskTool["session"]>["onSubagentStartFailed"] {
+	const hook = taskSession(session).onSubagentStartFailed;
+	if (!hook) throw new Error("TaskTool start-failure hook is not reachable from the created session");
 	return hook;
 }
 
@@ -57,10 +81,10 @@ async function runChild(root: string): Promise<void> {
 				maxRamPct: 100,
 				executor: async () => undefined,
 			});
-			engine.onSessionRecovery = async () => ({ status: "no_eligible_work" }) as never;
-			engine.onWorkerComplete = async event => {
+			const originalComplete = engine.onWorkerComplete.bind(engine);
+			engine.onWorkerComplete = async (event, currentRoster, cycleOptions) => {
 				completedBy.push(event.agentId);
-				return { status: "no_eligible_work" } as never;
+				return await originalComplete(event, currentRoster, cycleOptions);
 			};
 			const created = await createAgentSession({
 				cwd: process.cwd(),
@@ -89,15 +113,33 @@ async function runChild(root: string): Promise<void> {
 				replenishmentEngine: engine,
 			});
 			sessions.push(created.session);
-			return completionHook(created.session);
+			return {
+				hook: completionHook(created.session),
+				start: startHook(created.session)!,
+				startFailed: startFailureHook(created.session)!,
+				session: created.session,
+				engine,
+			};
 		};
 
 		const firstCompletions: string[] = [];
 		const secondCompletions: string[] = [];
-		const firstHook = await create("top-level-a", firstCompletions);
-		const secondHook = await create("top-level-b", secondCompletions);
-		await firstHook({ agentId: "worker-a", agentName: "task", task: "A", status: "completed" });
+		const first = await create("top-level-a", firstCompletions);
+		const second = await create("top-level-b", secondCompletions);
+		const verifier = { agentId: "verifier-a", agentName: "qa-verifier" };
+		first.start(verifier);
+		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
+		first.startFailed(verifier);
+		assert.equal((await first.engine.replenish([])).status, "floor_satisfied");
 
+		first.start(verifier);
+		first.start({ agentId: "task-worker", agentName: "task" });
+		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
+		await first.hook({ ...verifier, task: "A", status: "completed" });
+		assert.equal((await first.engine.replenish([])).status, "floor_satisfied");
+		await second.hook({ agentId: "worker-b", agentName: "task", task: "B", status: "completed" });
+		assert.deepEqual(firstCompletions, ["verifier-a"]);
+		assert.deepEqual(secondCompletions, ["worker-b"]);
 		const deniedAgentDir = path.join(root, "denied-task-session");
 		fs.mkdirSync(deniedAgentDir, { recursive: true });
 		const deniedAuth = await AuthStorage.create(path.join(deniedAgentDir, "auth.db"));
@@ -163,8 +205,8 @@ async function runChild(root: string): Promise<void> {
 			}),
 			/blocked by user policy/,
 		);
-		await secondHook({ agentId: "worker-b", agentName: "task", task: "B", status: "completed" });
-		assert.deepEqual(firstCompletions, ["worker-a"]);
+		await first.hook({ agentId: "worker-a", agentName: "task", task: "A", status: "completed" });
+		assert.deepEqual(firstCompletions, ["verifier-a", "worker-a"]);
 		assert.deepEqual(secondCompletions, ["worker-b"]);
 	} finally {
 		for (const session of sessions.splice(0)) await session.dispose();
@@ -180,16 +222,17 @@ if (childRoot) {
 		process.exit(1);
 	});
 } else {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-session-replenishment-"));
-	try {
-		const output = execFileSync(process.execPath, [import.meta.path], {
-			cwd: process.cwd(),
-			env: { ...process.env, VEYYON_REPLENISHMENT_BOUNDARY_CHILD: root },
-			encoding: "utf8",
-		});
-		assert.equal(output.trim(), "");
-		console.log("PASS: each createAgentSession completion hook retained its own replenishment engine");
-	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	test("createAgentSession routes actual verifier spawn and completion events to its injected engine", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-session-replenishment-"));
+		try {
+			const output = execFileSync(process.execPath, [import.meta.path], {
+				cwd: process.cwd(),
+				env: { ...process.env, VEYYON_REPLENISHMENT_BOUNDARY_CHILD: root },
+				encoding: "utf8",
+			});
+			expect(output.trim()).toBe("");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 }

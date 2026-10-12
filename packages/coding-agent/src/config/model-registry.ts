@@ -3002,6 +3002,7 @@ export class ModelRegistry {
 			modelId?: string;
 			forceRefresh?: boolean;
 			signal?: AbortSignal;
+			onCredentialSelected?: (credentialId: string) => void;
 		},
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
@@ -3011,6 +3012,7 @@ export class ModelRegistry {
 			modelId: options?.modelId,
 			forceRefresh: options?.forceRefresh,
 			signal: options?.signal,
+			onCredentialSelected: options?.onCredentialSelected,
 		});
 		return apiKey === undefined && this.#isKeylessProvider(provider) ? kNoAuth : apiKey;
 	}
