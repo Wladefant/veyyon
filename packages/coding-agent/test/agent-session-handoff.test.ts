@@ -1924,11 +1924,22 @@ describe("AgentSession handoff", () => {
 		expect(mock.calls).toHaveLength(4);
 		expect(summarySpy).not.toHaveBeenCalled();
 	});
-	it.each([128_000, 512_000])(
+	it.each([128_000, 200_000, 512_000])(
 		"requires a summary candidate fitting the current context: %i tokens",
 		async capacity => {
 			await createContinuingChild({ id: `capacity-${capacity}` });
-			const candidate = createMockModel({ id: "summary-candidate", provider: "anthropic", contextWindow: capacity });
+			const candidate = createMockModel({
+				id: "summary-candidate",
+				provider: "anthropic",
+				contextWindow: capacity,
+			});
+			candidate.maxTokens = 64_000;
+			const originalBreakdown = session.getContextBreakdown.bind(session);
+			const capacitySourceId = session.sessionId;
+			vi.spyOn(session, "getContextBreakdown").mockImplementation((...args) => {
+				const breakdown = originalBreakdown(...args);
+				return session.sessionId === capacitySourceId ? { ...breakdown!, usedTokens: 150_500 } : breakdown;
+			});
 			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([candidate]);
 			session.settings.set("compaction.model", "anthropic/summary-candidate");
 			const summarySpy = vi
@@ -1939,9 +1950,13 @@ describe("AgentSession handoff", () => {
 			const sourceId = session.sessionId;
 			await session.prompt("Perform tool steps");
 			await drainMaintenance();
-			expect(summarySpy).toHaveBeenCalledTimes(capacity === 128_000 ? 0 : 1);
-			if (capacity === 128_000) expect(session.sessionId).toBe(sourceId);
-			else expect(session.sessionId).not.toBe(sourceId);
+			expect(summarySpy).toHaveBeenCalledTimes(capacity === 512_000 ? 1 : 0);
+			if (capacity === 512_000) {
+				expect(session.sessionId).not.toBe(sourceId);
+				expect(summarySpy.mock.calls[0]?.[2]?.streamOptions?.maxTokens).toBe(64_000);
+			} else {
+				expect(session.sessionId).toBe(sourceId);
+			}
 		},
 	);
 	it("keeps the source transcript when direct handoff generation fails or returns an oversized summary", async () => {

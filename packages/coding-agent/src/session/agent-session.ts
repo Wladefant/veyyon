@@ -3455,7 +3455,8 @@ export class AgentSession {
 		const summaryModel = compactionModelCandidates(this.settings, model, this.modelRegistry.getAvailable()).find(
 			candidate =>
 				candidate.contextWindow !== null &&
-				candidate.contextWindow >= contextTokens + 8_000 &&
+				candidate.maxTokens !== null &&
+				candidate.contextWindow >= contextTokens + 8_000 + candidate.maxTokens &&
 				this.modelRegistry.hasConfiguredAuth(candidate),
 		);
 		if (!summaryModel) return false;
@@ -7513,6 +7514,8 @@ export class AgentSession {
 					preferWebsockets: false,
 					serviceTier: this.#effectiveServiceTier(model),
 					hideThinkingSummary: this.agent.hideThinkingSummary,
+					// The model cap includes reasoning and is also reserved by candidate selection.
+					maxTokens: options?.compactSummary ? (model.maxTokens ?? undefined) : undefined,
 					initiatorOverride: "agent",
 					signal: handoffSignal,
 				},
