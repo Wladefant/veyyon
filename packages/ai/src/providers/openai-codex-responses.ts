@@ -2738,6 +2738,9 @@ class CodexStreamProcessor {
 		const endTurn = response && "end_turn" in response ? response.end_turn : undefined;
 
 		populateResponsesUsageFromResponse(output, usage);
+		output.usage.transport = runtime.transport === "websocket" ? "websocket" : "http";
+		output.usage.model =
+			response && "model" in response && typeof response.model === "string" ? response.model : output.model;
 		recordCodexTurnUsageDiagnostics(runtime.websocketState, usage, output.usage);
 		if (responseId) {
 			output.responseId = responseId;

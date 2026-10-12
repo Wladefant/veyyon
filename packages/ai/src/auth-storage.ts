@@ -4176,6 +4176,8 @@ export class AuthStorage {
 		// then a stored static api_key (which may be a stale broker-migrated copy) as a last resort.
 		const oauthResolved = await this.#resolveOAuthSelection(provider, sessionId, options);
 		if (oauthResolved) {
+			if (oauthResolved.credentialId !== undefined)
+				options?.onCredentialSelected?.(String(oauthResolved.credentialId));
 			return oauthResolved.apiKey;
 		}
 		const loginApiKeySelection = await this.#selectApiKeyCredential(
@@ -4186,6 +4188,8 @@ export class AuthStorage {
 		);
 		if (loginApiKeySelection) {
 			this.#recordSessionCredential(provider, sessionId, "api_key", loginApiKeySelection.index);
+			const id = this.#getStoredCredentials(provider)[loginApiKeySelection.index]?.id;
+			if (id !== undefined) options?.onCredentialSelected?.(String(id));
 			return this.#configValueResolver(loginApiKeySelection.credential.key);
 		}
 
@@ -4208,12 +4212,17 @@ export class AuthStorage {
 		);
 		if (apiKeySelection) {
 			this.#recordSessionCredential(provider, sessionId, "api_key", apiKeySelection.index);
+			const id = this.#getStoredCredentials(provider)[apiKeySelection.index]?.id;
+			if (id !== undefined) options?.onCredentialSelected?.(String(id));
 			return this.#configValueResolver(apiKeySelection.credential.key);
 		}
 
 		if (this.#chatgptWebOAuthFallback(provider)) {
 			const resolved = await this.#resolveOAuthSelection("openai-codex", sessionId, options);
-			if (resolved) return resolved.apiKey;
+			if (resolved) {
+				if (resolved.credentialId !== undefined) options?.onCredentialSelected?.(String(resolved.credentialId));
+				return resolved.apiKey;
+			}
 		}
 
 		// Fall back to custom resolver (e.g., models.json custom providers)
