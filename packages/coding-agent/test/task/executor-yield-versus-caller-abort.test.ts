@@ -28,6 +28,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
+import * as reporter from "../../src/task/provider-error-reporter";
 import {
 	createAssistantStopMessage,
 	createMockSession,
@@ -56,6 +57,27 @@ const baseOptions = {
 	modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 	enableLsp: false,
 };
+
+describe("terminal provider error notification", () => {
+	afterEach(() => vi.restoreAllMocks());
+	it("reports the failed message model once when the lane ends", async () => {
+		const body = "429 usage_limit_reached";
+		const session = createMockSession(({ state }) => {
+			state.messages.push({
+				...createAssistantStopMessage("", "error"),
+				provider: "openai-codex",
+				model: "gpt-5.6-sol",
+				errorMessage: body,
+			});
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+		const report = vi.spyOn(reporter, "reportProviderError").mockImplementation(() => {});
+		const result = await runSubprocess({ ...baseOptions, id: "terminal-provider-error" });
+		expect(result.exitCode).toBe(1);
+		expect(report).toHaveBeenCalledTimes(1);
+		expect(report).toHaveBeenCalledWith("openai-codex/gpt-5.6-sol", body);
+	});
+});
 
 describe("a caller abort after the agent has yielded", () => {
 	afterEach(() => {

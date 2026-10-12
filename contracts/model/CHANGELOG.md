@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Added
 
 - Added the Responses `supportsConfigurationUpdate` compatibility capability ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

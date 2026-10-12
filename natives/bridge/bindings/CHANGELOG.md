@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Added
 
 - `readCommitMemory()` returns the Windows system commit charge and limit and the calling process's private commit bytes in-process, and `undefined` on other platforms ([#73](https://github.com/Wladefant/veyyon/issues/73)).

@@ -77,6 +77,22 @@ describe("buildRedactionMap", () => {
 });
 
 describe("computeProviderWindowStats", () => {
+	it("keeps Gemini capacity available when the sibling Claude quota is exhausted", () => {
+		const stats = computeProviderWindowStats([
+			makeReport("google-antigravity", "a@example.test", [
+				makeLimit({ id: "google-antigravity:google:default:5h", usedFraction: 1, durationMs: FIVE_HOURS }),
+				makeLimit({ id: "google-antigravity:claude-gpt:default:5h", usedFraction: 0, durationMs: FIVE_HOURS }),
+			]),
+			makeReport("google-antigravity", "b@example.test", [
+				makeLimit({ id: "google-antigravity:google:default:5h", usedFraction: 0.83, durationMs: FIVE_HOURS }),
+				makeLimit({ id: "google-antigravity:claude-gpt:default:5h", usedFraction: 1, durationMs: FIVE_HOURS }),
+			]),
+		]);
+		expect(stats).toHaveLength(2);
+		expect(stats.find(stat => stat.meter === "gemini")?.remainingAccounts).toBeCloseTo(0.17);
+		expect(stats.find(stat => stat.meter === "claude-gpt")?.remainingAccounts).toBeCloseTo(1);
+	});
+
 	it("buckets by window duration, binds each account to its worst meter, and reports remaining capacity", () => {
 		const reports = [
 			makeReport("anthropic", "account-a@example.test", [

@@ -495,6 +495,8 @@ export class RetryRuntime {
 		// Set when a usage-limit error pinned the wait to credential
 		// availability — suppresses the generic retry-after bump below.
 		let usageLimitWaitMs: number | undefined;
+		// Account, reset time and sibling availability for a usage-limit refusal.
+		let quotaMessage: string | undefined;
 
 		if (staleOpenAIResponsesReplayError) {
 			this.#host.resetCurrentResponsesProviderSession("stale replay error");
@@ -518,6 +520,7 @@ export class RetryRuntime {
 					modelId: model.id,
 				},
 			);
+			quotaMessage = outcome.quotaMessage;
 			if (outcome.switched) {
 				switchedCredential = true;
 				delayMs = 0;
@@ -631,7 +634,7 @@ export class RetryRuntime {
 				type: "auto_retry_end",
 				success: false,
 				attempt,
-				finalError: `Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${errorMessage}`,
+				finalError: `Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). ${quotaMessage ? `${quotaMessage} ` : ""}Original error: ${errorMessage}`,
 			});
 			this.#pendingRecoveredErrors = [];
 			this.resolve();
@@ -646,7 +649,7 @@ export class RetryRuntime {
 			maxAttempts: retryPolicy.maxRetries,
 			policySource: describeRetryPolicySource(retryPolicy),
 			delayMs,
-			errorMessage,
+			errorMessage: quotaMessage ? `${errorMessage} (${quotaMessage})` : errorMessage,
 			errorId: message.errorId,
 		});
 

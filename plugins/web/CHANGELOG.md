@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Changed
 
 - Replaced `any` types in `getNested` scraper utility with `unknown` and preserved user cancellation on scrapers.

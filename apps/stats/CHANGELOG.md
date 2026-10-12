@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Fixed
 
 - Closed database connections and active sockets when stopping the stats dashboard server, and validated request identifier and limit parameters.

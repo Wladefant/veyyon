@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
+
+- Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
+- `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
+- A delivered cross-session notice carries a header with the sender, the send and delivery times (Europe/Berlin and UTC) and the delay when it is late. A notice older than 2 hours (`ttlMinutes` on the send sets another limit) is not injected; the sender gets a "Not delivered" notice ([Refs](https://github.com/Wladefant/veyyon/pull/539)).
+
+## [1.5.6] - 2026-10-10
+
 ### Changed
 
 - Added the `providers.githubCopilot.oauthClientId` setting; `/usage` shows Copilot premium requests as unknown because GitHub bills Copilot in credits ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
@@ -17,6 +26,7 @@
 - Terminal transcript entries carry operator and tool activity for Telegram's background-only reply filter ([audit](https://github.com/Wladefant/super-board/issues/747)).
 - Completion delivery retains detached owners for retry and rechecks disposal after formatting. Terminal yield results clear Telegram turn activity.
 - Queued completion retries retain their original owner after the job's inspection entry expires.
+- Pending CLI startup and automatic extension discovery now keep the event loop alive. An unexpected early loop exit reports an error instead of silently returning success ([Refs](https://github.com/Wladefant/veyyon/issues/533)).
 - `/reload-config` applies changed advisor models without restarting Main or existing workers ([Refs](https://github.com/Wladefant/veyyon/issues/519)).
 - Process-shared launch clients release idle sockets and reconnect on demand. Empty brokers exit even while Main stays alive, instead of accumulating across worktrees. Each shared client retains project presence so daemons outside Main's startup directory survive idle disconnects ([Refs](https://github.com/Wladefant/veyyon/issues/513)).
 - Cancelled eval startup now releases a kernel when its last owner leaves. Python runners stop when their host dies and release descendants through a Windows job. Windows child launches hide console windows ([Refs](https://github.com/Wladefant/veyyon/issues/508)).

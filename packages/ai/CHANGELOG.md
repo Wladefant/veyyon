@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Breaking Changes
 
 - `clearAnthropicFastModeFallback` moved from `@veyyon/ai/providers/anthropic` to `@veyyon/ai/providers/anthropic-session-state`, `deriveClaudeDeviceId` to `providers/claude-device-id`, `createOpenAICodexCompactionRequestContext`, `resetOpenAICodexHistoryAfterCompaction`, `getOpenAICodexTransportDetails`, `getOpenAICodexWebSocketDebugStats` and their option and result types from `providers/openai-codex-responses` to `providers/openai-codex/session-state`, `normalizeOpenAIPromptCacheKey` and `normalizeOpenRouterResponsesSessionId` from `providers/openai-shared` to `providers/openai-stable-ids`, and `signaturePolicy`, `sendsSignature`, `elidedSignatureBytes`, `firstRetainedAssistantIndex` and `SignaturePolicy` from `providers/google-shared` to `providers/google-thought-signatures`; the `@veyyon/ai` barrel keeps every name it exported.

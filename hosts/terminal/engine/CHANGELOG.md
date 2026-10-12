@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Breaking Changes
 
 - `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.

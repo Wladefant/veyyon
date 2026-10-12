@@ -18,6 +18,7 @@ import {
 	agentsEnabled,
 	type EnabledAgentCatalog,
 	isAgentEnabled,
+	nextSpawnId,
 	resolveAgentModel,
 	resolveAgentThinkingLevel,
 	resolveEnabledAgents,
@@ -436,6 +437,8 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 				agentModel: effectiveAgent.model,
 				fallbackModelPattern: options.session.getModelString?.(),
 				taskDepth: (options.session.taskDepth ?? 0) + 1,
+				spawnId: nextSpawnId(`eval:${options.session.getSessionId?.() ?? "session"}:${options.session.getAgentId?.() ?? MAIN_AGENT_ID}`),
+				modelRegistry: options.session.modelRegistry,
 			});
 	if ("unresolved" in resolvedModel && resolvedModel.unresolved) {
 		const { source, value, depth } = resolvedModel.unresolved;

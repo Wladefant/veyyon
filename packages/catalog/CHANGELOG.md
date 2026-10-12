@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Changed
 
 - Replaced `OPENCODE_HEADERS` with `COPILOT_IDENTITY_HEADERS`, set `COPILOT_USER_AGENT` to `veyyon/<version>`, and removed the baked `opencode/1.3.15` User-Agent from bundled Copilot models ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).

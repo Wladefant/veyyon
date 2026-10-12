@@ -698,6 +698,8 @@ export type AuthStorageOptions = {
 export interface UsageLimitMarkResult {
 	switched: boolean;
 	retryAtMs?: number;
+	/** Human-readable account, reset time and sibling availability for the refusal; no secrets. */
+	quotaMessage?: string;
 }
 
 /**

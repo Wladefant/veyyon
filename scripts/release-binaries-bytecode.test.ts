@@ -129,4 +129,12 @@ describe("release binary bytecode contract (oven-sh/bun#18416)", () => {
 			}
 		}
 	});
+
+	test("ci.yml release_binary step sets VEYYON_OFFICIAL_RELEASE for official release builds", () => {
+		const buildStepPattern =
+			/- name:\s*["']?Build release binary["']?[\s\S]*?env:\s*([\s\S]*?)run:\s*bun run ci:release:build-binaries/;
+		const match = ciYaml.match(buildStepPattern);
+		expect(match, "ci.yml must contain Build release binary step").toBeDefined();
+		expect(match![1]).toMatch(/VEYYON_OFFICIAL_RELEASE:\s*["']?1["']?/);
+	});
 });

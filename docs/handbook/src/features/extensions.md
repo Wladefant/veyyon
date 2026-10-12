@@ -43,6 +43,10 @@ Extensions can combine all of the following in one module:
 4. Session/agent/tool lifecycle events are emitted to handlers.
 5. Every tool execution is wrapped with extension interception (`tool_call` / `tool_result`).
 
+Automatic discovery keeps the process alive until its filesystem and plugin lookups finish.
+The CLI also owns its full pending command, including startup work before and after discovery.
+If the event loop ends before the CLI finishes, Veyyon reports an error and exits with a nonzero status.
+
 ```text
 Extension lifecycle (simplified)
 
