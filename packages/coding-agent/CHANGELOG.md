@@ -12,6 +12,7 @@
 - Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
 
 ### Added
+- Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 
 - Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
