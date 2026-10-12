@@ -135,14 +135,14 @@ test("only the last verifier completion resumes one producer deficit", async () 
 });
 test("a blocked pre-dispatch rollback restores the ticket's QA stage", async () => {
 	await withLedger(
-		{ qa: { prompt: "Verify the fix", state: "qa", authorization } },
+		{ qa: { prompt: "Verify the fix", state: "QA", authorization } },
 		async ledgerPath => {
 			const previousWorkflowsDir = process.env.VEYYON_WORKFLOWS_DIR;
 			process.env.VEYYON_WORKFLOWS_DIR = path.join(path.dirname(ledgerPath), "no-worker-backend");
 			try {
 				const claim = await claimNextAuthorizedTicket(ledgerPath, { workerId: "replenisher" });
 				expect(claim.claimed).toBe(true);
-				expect(claim.ticket?.previousState).toBe("qa");
+				expect(claim.ticket?.previousState).toBe("QA");
 				if (!claim.ticket?.runId) throw new Error("QA ticket was not claimed with a native run ID");
 				const ticket = claim.ticket;
 				const rollback = await rollbackClaimedTicket(ledgerPath, "qa", "Verification became blocked", {
@@ -154,10 +154,10 @@ test("a blocked pre-dispatch rollback restores the ticket's QA stage", async () 
 				const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as {
 					requests: Record<string, { state: string; history: Array<{ from_state: string; to_state: string }> }>;
 				};
-				expect(ledger.requests.qa.state).toBe("qa");
+				expect(ledger.requests.qa.state).toBe("QA");
 				expect(ledger.requests.qa.history.at(-1)).toMatchObject({
-					from_state: "qa",
-					to_state: "qa",
+					from_state: "QA",
+					to_state: "QA",
 				});
 			} finally {
 				if (previousWorkflowsDir === undefined) delete process.env.VEYYON_WORKFLOWS_DIR;

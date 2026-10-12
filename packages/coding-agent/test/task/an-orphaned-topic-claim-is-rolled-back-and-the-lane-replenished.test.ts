@@ -1081,7 +1081,10 @@ async function runTests(): Promise<void> {
 		const oldClaim = await claimNextAuthorizedTicket(ledgerPath, { workerId: "old-dispatch" });
 		assert.ok(oldClaim.ticket?.runId);
 		await recordNativeDispatch(oldClaim.ticket.runId, "agent://old-worker", ledgerPath, "reclaimed-ticket");
-		await rollbackClaimedTicket(ledgerPath, "reclaimed-ticket", "old dispatch failed");
+		await rollbackClaimedTicket(ledgerPath, "reclaimed-ticket", "old dispatch failed", {
+			runId: oldClaim.ticket.runId,
+			previousState: oldClaim.ticket.previousState,
+		});
 		const newClaim = await claimNextAuthorizedTicket(ledgerPath, { workerId: "new-dispatch" });
 		assert.ok(newClaim.ticket?.runId);
 		await recordNativeDispatch(newClaim.ticket.runId, "agent://new-worker", ledgerPath, "reclaimed-ticket");
@@ -1089,7 +1092,7 @@ async function runTests(): Promise<void> {
 			ledgerPath,
 			"reclaimed-ticket",
 			"late failure from old dispatch",
-			{ runId: oldClaim.ticket.runId },
+			{ runId: oldClaim.ticket.runId, previousState: oldClaim.ticket.previousState },
 		);
 		assert.equal(staleRollback.rolled_back, false, "A stale rollback must not release the current claim");
 		const structuredResult = {

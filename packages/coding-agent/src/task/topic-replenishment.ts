@@ -275,7 +275,7 @@ export interface ClaimedTicket {
 	prompt: string;
 	task: string;
 	state: string;
-	previousState?: string;
+	previousState: string;
 	owner: string;
 	role: string;
 	criteria: string[];
@@ -283,7 +283,7 @@ export interface ClaimedTicket {
 	head?: string;
 	authorization: string;
 	claimedAt: string;
-	runId?: string;
+	runId: string;
 	resultSchema?: Record<string, unknown>;
 	stage?: string;
 	repoRoot?: string;
@@ -894,12 +894,22 @@ export async function rollbackClaimedTicket(
 	ledgerPath: string,
 	ticketId: string,
 	reason: string,
-	options?: { lockTimeoutMs?: number; runId?: string; previousState?: string },
+	options: { lockTimeoutMs?: number; runId: string; previousState: string },
 ): Promise<{ rolled_back: boolean; error?: string }> {
-	const args = ["rollback", "--ledger", ledgerPath, "--ticket-id", ticketId, "--reason", reason];
-	if (options?.runId) args.push("--run-id", options.runId);
-	if (options?.previousState) args.push("--previous-state", options.previousState);
-	if (options?.lockTimeoutMs) {
+	const args = [
+		"rollback",
+		"--ledger",
+		ledgerPath,
+		"--ticket-id",
+		ticketId,
+		"--reason",
+		reason,
+		"--run-id",
+		options.runId,
+		"--previous-state",
+		options.previousState,
+	];
+	if (options.lockTimeoutMs) {
 		args.push("--timeout", (options.lockTimeoutMs / 1000).toFixed(1));
 	}
 	return await runLedgerBridge(args);
@@ -1100,8 +1110,8 @@ export class TopicReplenishmentEngine {
 	async rollbackClaimedTicket(
 		ticketId: string,
 		reason: string,
-		runId?: string,
-		previousState?: string,
+		runId: string,
+		previousState: string,
 	): Promise<{ rolled_back: boolean }> {
 		return await rollbackClaimedTicket(this.ledgerPath, ticketId, reason, { runId, previousState });
 	}

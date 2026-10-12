@@ -546,15 +546,17 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         if not req:
             print(json.dumps({"rolled_back": False, "error": f"Ticket {ticket_id} not found"}))
             return 0
-        if args.run_id and req.get("native_run_id") != args.run_id:
+        if not args.run_id or req.get("native_run_id") != args.run_id:
             print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native run"}))
             return 0
 
         now_iso = get_iso_now()
         from_state = req.get("state") or "implementation"
+        previous_state = args.previous_state
         to_state = (
-            args.previous_state
-            if args.previous_state in {"pending", "implementation", "qa", "review"}
+            previous_state
+            if isinstance(previous_state, str)
+            and previous_state.lower() in {"pending", "implementation", "qa", "review"}
             else "pending"
         )
         req["state"] = to_state
@@ -874,8 +876,8 @@ def main():
     p_rollback = subparsers.add_parser("rollback", help="Roll back claimed ticket on dispatch failure under FileLock")
     p_rollback.add_argument("--ledger", required=True, help="Path to ledger.json")
     p_rollback.add_argument("--ticket-id", required=True, help="Ticket ID")
-    p_rollback.add_argument("--run-id", default="", help="Native run ID that still owns the claim")
-    p_rollback.add_argument("--previous-state", default="", help="Ticket state to restore after a rejected dispatch")
+    p_rollback.add_argument("--run-id", required=True, help="Native run ID that still owns the claim")
+    p_rollback.add_argument("--previous-state", required=True, help="Ticket state to restore after a rejected dispatch")
     p_rollback.add_argument("--reason", default="", help="Reason for rolling back the claim")
     p_rollback.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
 
