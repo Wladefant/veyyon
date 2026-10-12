@@ -24,12 +24,15 @@ test("failed extension open closes only its newly created target", async () => {
 	const browser = {
 		key: "extension:test-cleanup",
 		kind: { kind: "extension" },
-		refCount: 1,
+		refCount: 0,
 		browser: {
 			wsEndpoint: () => `ws://127.0.0.1:${server.port}/stalled`,
 			newPage: async () => ownedPage,
 			targets: () => [userTarget, ownedTarget],
 			connected: true,
+			disconnect: () => {
+				closed.push("connection-disconnected");
+			},
 		},
 		stealth: { browserSession: null, override: null },
 	} as unknown as BrowserHandle;
@@ -42,7 +45,7 @@ test("failed extension open closes only its newly created target", async () => {
 				deadlineStartMs: performance.now() - 60000,
 			}),
 		).rejects.toThrow();
-		expect(closed).toEqual(["owned-new"]);
+		expect(closed).toEqual(["owned-new", "connection-disconnected"]);
 		expect(getTab(name)).toBeUndefined();
 	} finally {
 		await server.stop(true);
