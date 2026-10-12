@@ -71,6 +71,7 @@ veyyon config get compaction.threshold
 | `compaction.model` | Compaction Model | modelChain | _(unset)_ | Models used to write the compaction summary, tried in order. Inherit: the main model. A later entry is used when an earlier one is unauthenticated or its context window is too small. |
 | `compaction.modelFallbackStrategy` | Compaction Fallback | enum | `auto` | What to try after the compaction models you configured. Auto stays on models you named: the main model, its same-provider compaction sibling, and your model roles. Any authenticated model also reaches the largest window available, on any provider you have credentials for. Configured only stops at the chain and fails loudly. Values: `auto`, `any-model`, `configured-only`. |
 | `compaction.modelContextWindow` | Compaction Model Context | number | _(unset)_ | Context window in tokens to assume for the compaction model. Unset uses the compaction model's own reported window. Candidates whose window cannot fit the summarization payload are skipped loudly. |
+| `compaction.laneHandoffThresholdTokens` | Expensive Agent Handoff Threshold | number | `150000` | Start a fresh transcript for expensive spawned agents at this context size. Set to 0 to disable. |
 
 ### Roles
 
@@ -646,11 +647,6 @@ veyyon config get compaction.threshold
 |---|---|---|---|---|
 | `accounts.loadBalancing` | Account Load Balancing | boolean | `false` | Off: only the account you chose is used, and a session waits out its quota window. On: when that account hits its quota or rate limit, continue on another account of the same provider and say so. A revoked account always fails over regardless, with a notice. |
 
-For Antigravity, a provider-confirmed quota failure permits failover even when the account is pinned, if load balancing is on. The pin stays selected. A predicted quota hold alone does not override a pin.
-Another process can extend the hold without restoring the exhausted account's pin exemption. Clearing the account's holds explicitly permits a new attempt on that pin.
-The confirmed refusal expires at its own deadline. A later prediction from another process cannot renew that confirmation.
-A later confirmed refusal can extend this deadline, but a shorter retry delay cannot shorten an existing confirmed hold.
-
 ### Services
 
 | Key | Setting | Type | Default | What it does |
@@ -912,4 +908,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-363 settings in /settings, 118 configuration-file keys, 481 in all.
+364 settings in /settings, 118 configuration-file keys, 482 in all.

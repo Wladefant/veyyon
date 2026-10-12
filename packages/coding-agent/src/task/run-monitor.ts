@@ -148,6 +148,24 @@ function firstNumberField(record: Record<string, unknown>, keys: string[]): numb
 	return undefined;
 }
 
+/** Operations whose own blocking wait can be handed to a cheaper child. */
+const isDelegatableWait = (toolName: string, args: Record<string, unknown> | undefined): boolean => {
+	if (toolName === "job") {
+		if (args?.op !== undefined) return args.op === "poll" || args.op === "wait";
+		return !args?.list && !(Array.isArray(args?.cancel) && args.cancel.length > 0);
+	}
+	if (!args) return false;
+	const op = args.op;
+	if (toolName === "irc") return op === "wait" || (op === "send" && args.await === true);
+	if (toolName === "bash") {
+		const command = args.command;
+		return typeof command === "string" && /\bbuild_slot\.py\s+(?:acquire|run)\b/.test(command);
+	}
+	return false;
+};
+
+const WAIT_HINT_AFTER_MS = 300_001;
+
 /**
  * Tokens for progress display: input + output + cacheWrite per turn.
  *
@@ -320,6 +338,17 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	// cut back to that once it holds twice as much, so a delta costs one append,
 	// not a copy of the window.
 	let recentOutputTail = "";
+	const waitHintTimers = new Map<string, NodeJS.Timeout>();
+	const clearWaitHint = (toolCallId: string | undefined): void => {
+		if (toolCallId === undefined) return;
+		const timer = waitHintTimers.get(toolCallId);
+		if (timer !== undefined) clearTimeout(timer);
+		waitHintTimers.delete(toolCallId);
+	};
+	const clearWaitHints = (): void => {
+		for (const timer of waitHintTimers.values()) clearTimeout(timer);
+		waitHintTimers.clear();
+	};
 	/** `progress.recentOutput` is behind `recentOutputTail`; the next snapshot derives it. */
 	let recentOutputStale = false;
 	let streamDecoder: StreamDecoder | undefined;
@@ -362,6 +391,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	};
 
 	const abortActiveSession = (): Promise<void> => {
+		clearWaitHints();
 		const session = activeSession;
 		if (!session) return Promise.resolve();
 		activeSessionAbortPromise ??= session.abort().catch(error => {
@@ -693,14 +723,9 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		const findingKey = toolName === "report_finding" ? getReportFindingKey(data) : null;
 		if (findingKey) {
 			const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
-			if (existingIndex >= 0) {
-				existing[existingIndex] = data;
-			} else {
-				existing.push(data);
-			}
-		} else {
-			existing.push(data);
-		}
+			if (existingIndex >= 0) existing[existingIndex] = data;
+			else existing.push(data);
+		} else existing.push(data);
 		progress.extractedToolData[toolName] = existing;
 		if (toolName === YIELD_TOOL_NAME) {
 			yieldCalled = true;
@@ -711,14 +736,33 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	const onToolExecutionStart = (event: Extract<AgentEvent, { type: "tool_execution_start" }>): void => {
 		progress.toolCount++;
 		progress.currentTool = event.toolName;
-		progress.currentToolArgs = extractToolArgsPreview(toolStartArgs(event));
+		const startArgs = toolStartArgs(event);
+		progress.currentToolArgs = extractToolArgsPreview(startArgs);
 		progress.currentToolStartMs = Date.now();
 		const intent = event.intent?.trim();
 		if (intent) progress.lastIntent = intent;
 		if (event.toolName === YIELD_TOOL_NAME && !yieldCalled) yieldCallPending = true;
-		// Reset any prior in-flight task snapshot so we don't show stale
-		// nested progress when the agent enters a fresh `task` call.
 		if (event.toolName === "task") progress.inflightTaskDetails = undefined;
+		clearWaitHint(event.toolCallId);
+		const steerSession = activeSession;
+		const modelId = steerSession?.model?.id;
+		if (
+			steerSession !== null &&
+			typeof modelId === "string" &&
+			/(?:^|[-/:])(?:sol|opus|sonnet|astra)(?:$|[-/:])/i.test(modelId) &&
+			isDelegatableWait(event.toolName, startArgs)
+		) {
+			waitHintTimers.set(
+				event.toolCallId,
+				setTimeout(() => {
+					waitHintTimers.delete(event.toolCallId);
+					if (resolved || activeSession !== steerSession) return;
+					const notice =
+						"This wait has taken more than five minutes. If the wait can be delegated, hand it to a task/Luna child to poll while you continue useful work. Do not cancel the wait or make an extra request.";
+					steerSession.emitNotice("warning", notice, "lane-wait");
+				}, WAIT_HINT_AFTER_MS),
+			);
+		}
 	};
 
 	/** Move the running tool onto the recent-tools list (newest first, five kept). */
@@ -737,6 +781,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	};
 
 	const onToolExecutionEnd = (event: Extract<AgentEvent, { type: "tool_execution_end" }>): void => {
+		clearWaitHint(event.toolCallId);
 		archiveCurrentTool();
 		// The finalized TaskToolDetails will be captured below into
 		// `extractedToolData.task`; drop the in-flight snapshot so the
@@ -973,8 +1018,8 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		}
 	};
 
-	const attach = (session: AgentSession): (() => void) =>
-		session.subscribe(event => {
+	const attach = (session: AgentSession): (() => void) => {
+		const unsubscribe = session.subscribe(event => {
 			emitAgentEvent(event);
 			if (applyRetryEvent(event)) {
 				scheduleProgress(true);
@@ -995,6 +1040,11 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 				popLoopPhase();
 			}
 		});
+		return () => {
+			clearWaitHints();
+			unsubscribe();
+		};
+	};
 
 	const captureSalvage = (session: AgentSession): void => {
 		// Best-effort salvage: capture the last assistant text so
@@ -1041,9 +1091,11 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		resolveSignalAbortReason,
 		resolveAbortReasonText,
 		setActiveSession: session => {
+			if (session !== activeSession) clearWaitHints();
 			activeSession = session;
 		},
 		takeActiveSession: () => {
+			clearWaitHints();
 			const session = activeSession;
 			activeSession = null;
 			return session;
@@ -1055,6 +1107,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		scheduleProgress,
 		finish: () => {
 			resolved = true;
+			clearWaitHints();
 			listenerController.abort();
 			if (runtimeTimeoutId !== undefined) {
 				clearTimeout(runtimeTimeoutId);

@@ -10,9 +10,10 @@
   - `packages/coding-agent/src/task/discovery.ts`: discover project/user/plugin/bundled agents.
   - `packages/coding-agent/src/task/agents.ts`: bundled agent definitions and frontmatter parsing.
   - `packages/coding-agent/src/task/executor.ts`: create child sessions, run agents, collect output, hand finished sessions to the lifecycle manager.
-  - `packages/coding-agent/src/task/run-monitor.ts`: per-run progress, abort and soft request-budget enforcement, usage totals and output capture for one agent.
+  - `packages/coding-agent/src/task/run-monitor.ts`: per-run progress, abort and soft request-budget enforcement, usage totals, output capture, and timed wait hints for expensive child models.
   - `packages/coding-agent/src/task/provider-error-reporter.ts`: report terminal provider HTTP 429/402 lane errors to `model_routing.py record-error`.
   - `packages/coding-agent/src/registry/agent-lifecycle.ts`: idle-TTL parking and revival of finished agents.
+
   - `packages/coding-agent/src/registry/agent-registry.ts`: process-global agent directory (`running | idle | parked | aborted`).
   - `packages/coding-agent/src/async/job-manager.ts`: background job registration, progress, and result delivery.
   - `packages/coding-agent/src/task/parallel.ts`: `Semaphore` used for the session-scoped concurrency bound.
@@ -23,8 +24,13 @@
   - `packages/coding-agent/src/internal-urls/agent-protocol.ts`: resolve `agent://<id>` to saved agent output.
   - `packages/coding-agent/src/internal-urls/history-protocol.ts`: resolve `history://<id>` to a concise transcript.
   - `packages/coding-agent/src/tools/index.ts`: tool registration and recursion-depth gating.
+
   - `packages/coding-agent/src/sdk.ts`: child-session router/tool wiring and per-agent `AgentOutputManager`.
   - `docs/internal/task-agent-discovery.md`: deeper discovery and precedence notes.
+
+### Long waits on expensive lanes
+
+When an expensive-model child stays inside one supported wait operation for more than five minutes, the run monitor emits one operator warning. It recommends handing the wait to a `task` or Luna child when that fits. The warning does not queue steering, interrupt the tool, or make another model request. Fast operations and cheap model families receive no warning.
 
 ## Inputs
 

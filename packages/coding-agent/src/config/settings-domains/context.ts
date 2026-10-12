@@ -261,6 +261,18 @@ export const CONTEXT_SETTINGS = {
 		default: false,
 	},
 
+	"compaction.laneHandoffThresholdTokens": {
+		type: "number",
+		default: 150000,
+		ui: {
+			tab: "model",
+			group: "Compaction",
+			label: "Expensive Agent Handoff Threshold",
+			description:
+				"Start a fresh transcript for expensive spawned agents at this context size. Set to 0 to disable.",
+		},
+	},
+
 	// No default: an unset reserve tells the compaction layer the user never
 	// chose one, so small-window recovery may swap in the proportional reserve
 	// (see resolveBudgetReserveTokens). A materialized 16384 here would make

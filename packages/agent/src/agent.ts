@@ -1234,6 +1234,13 @@ export class Agent {
 				}
 				context.systemPrompt = this.#state.systemPrompt;
 				context.tools = this.#state.tools;
+				// A mid-run handoff changes provider routing without stopping this loop.
+				config.sessionId = this.#sessionId;
+				config.promptCacheKey = this.#promptCacheKey;
+				config.metadata = this.#metadataResolver ? undefined : this.#metadata;
+				config.metadataResolver = this.#metadataResolver;
+				config.providerSessionState = this.#providerSessionState;
+				config.getApiKey = this.getApiKey;
 			},
 			cursorExecHandlers: this.#cursorExecHandlers,
 			cursorOnToolResult,

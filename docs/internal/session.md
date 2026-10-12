@@ -16,6 +16,16 @@ Covers:
 
 Does not cover `/tree` UI rendering behavior beyond semantics that affect session data.
 
+## Expensive subagent handoff
+
+An expensive spawned agent can hand its assignment to a fresh transcript between provider requests after a completed turn/tool-result pair when its estimated context reaches `compaction.laneHandoffThresholdTokens` (default 150,000). Set the threshold to `0` to disable this automatic handoff. The threshold measures current context size, not cumulative usage. Luna and root sessions do not use this path.
+
+The session uses the normal handoff mechanism. It writes a bounded summary of the goal, current state, open steps, worktree and branch, observed head and test counts, and important paths. Missing repository metadata or test counts remain explicitly unknown. The successor starts from that summary only, then continues the same assignment. Failed summary generation leaves the current transcript active; queued external steering survives a successful switch.
+
+Automatic handoff runs only after a safely completed turn, before the next request. It uses the existing side-request transport and telemetry. It does not retry a failed handoff blindly.
+
+The summary model must fit the current context, an 8,000-token reserve for added instructions, and its full output limit, including reasoning. Automatic handoff skips models without a known output limit. The request explicitly uses that same model output limit. The successor keeps the persisted child initialization contract for later revival. It keeps existing jobs and descendants, refreshes provider routing, and rebases the current context estimate without stopping the active tool loop.
+
 ## Implementation Files
 
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): orchestration: tree/leaf, appends, persistence, blobs, lifecycle factories
