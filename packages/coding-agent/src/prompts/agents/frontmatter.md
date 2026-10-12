@@ -7,5 +7,7 @@ description: {{jsonStringify description}}
 {{/if}}{{#if thinkingLevel}}thinking-level: {{jsonStringify thinkingLevel}}
 {{/if}}{{#if blocking}}blocking: true
 {{/if}}{{#if autoloadSkills}}autoloadSkills: {{jsonStringify autoloadSkills}}
+{{/if}}{{#if contextVariant}}contextVariant: {{jsonStringify contextVariant}}
+{{/if}}{{#if skillList}}skillList: {{jsonStringify skillList}}
 {{/if}}---
 {{body}}

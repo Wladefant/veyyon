@@ -337,6 +337,8 @@ export interface ParsedAgentFields {
 	output?: unknown;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	autoloadSkills?: string[];
+	contextVariant?: string;
+	skillList?: "all" | "none" | string[];
 	readSummarize?: boolean;
 	blocking?: boolean;
 }
@@ -396,7 +398,32 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
 		?.map(s => s.trim())
 		.filter(Boolean);
-	return { name, description, tools, spawns, model, output, thinkingLevel, blocking, autoloadSkills, readSummarize };
+	const contextVariant =
+		typeof frontmatter.contextVariant === "string" && frontmatter.contextVariant.trim() !== ""
+			? frontmatter.contextVariant.trim()
+			: undefined;
+	let skillList: ParsedAgentFields["skillList"];
+	if (typeof frontmatter.skillList === "string" && ["all", "none"].includes(frontmatter.skillList.trim())) {
+		skillList = frontmatter.skillList.trim() as "all" | "none";
+	} else if (frontmatter.skillList !== undefined) {
+		skillList = parseArrayOrCSV(frontmatter.skillList)
+			?.map(s => s.trim())
+			.filter(Boolean);
+	}
+	return {
+		name,
+		description,
+		tools,
+		spawns,
+		model,
+		output,
+		thinkingLevel,
+		blocking,
+		autoloadSkills,
+		readSummarize,
+		contextVariant,
+		skillList,
+	};
 }
 
 // An empty directory scan is ambiguous: the directory may be genuinely empty or

@@ -746,7 +746,7 @@ platforms 404s for the rest, so keep the asset set complete.
 
 ## Change loop
 
-Shared policy: section 14 of [the default policy](https://github.com/Wladefant/super-board/blob/main/policies/default/AGENTS.md). On every change, in this order:
+Shared policy: section 14 of [the default policy](https://github.com/Wladefant/superboard/blob/main/policies/default/AGENTS.md). On every change, in this order:
 
 1. Docs first. Leave no contradiction.
 2. Tests for the behaviour, seen failing before the fix.

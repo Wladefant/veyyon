@@ -55,6 +55,8 @@ else is optional.
 | `thinkingLevel` | The effort it runs at when its roster row sets none: `off`, `minimal`, `low`, `medium`, `high`, `max`, `auto`, or `inherit`. `thinking` is accepted as a synonym. |
 | `blocking` | `true` runs the agent to completion before the parent continues. |
 | `autoloadSkills` | Skills loaded into the agent's context at spawn. |
+| `contextVariant` | A name such as `lane`. Each inherited context file `<dir>/AGENTS.md` is replaced by `<dir>/AGENTS.lane.md` when that file exists; a file with no sibling stays whole, so a variant can shrink a scope but never drop one. Absent = the full files. |
+| `skillList` | `all` (default), `none`, or a list of names: which skills the system prompt lists. Unlisted skills are hidden from the list only; `skill://<name>`, `/skill:<name>` and `autoloadSkills` still resolve them. |
 | `readSummarize` | `false` makes its `read` tool return verbatim file content instead of structural summaries. |
 | `output` | A JSON schema the agent's `yield` payload is validated against. |
 
