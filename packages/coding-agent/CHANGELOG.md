@@ -21,6 +21,7 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Guard-failed isolated worlds remain refused across CDP root sessions for the same Chrome tab ([PR 511](https://github.com/Wladefant/veyyon/pull/511)).
 - Background job completions reach only their owning lane. Main's read-only `job list` still shows all jobs without acknowledging another lane's delivery.
 - Idle advisor concerns wait for the next Main turn instead of starting a turn.
 - Terminal transcript entries carry operator and tool activity for Telegram's background-only reply filter ([audit](https://github.com/Wladefant/super-board/issues/747)).
