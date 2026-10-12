@@ -50,6 +50,10 @@ if ! rustup toolchain list | grep -Eq '^nightly-2026-04-29(-|$)'; then
     --target x86_64-unknown-linux-gnu
 fi
 bun run ci:build:native
+# Keep test execution inside this disposable Workers Builds container; the default remote rung uses SSH.
+export VEYYON_SANDBOX_REMOTE=0
+# Build the repository's Docker test guest inside Workers Builds before any test bucket.
+bash scripts/test-sandbox/run.sh --rung=docker --build
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Full output lets this runner
 # collect Bun's per-test summary lines rather than treating chunks as tests.
@@ -77,6 +81,24 @@ run_bucket() {
   test_failures=$((test_failures + bucket_failures))
   echo "CLOUDFLARE_TEST_BUCKET_END $mode pass=$bucket_passes fail=$bucket_failures"
 }
+echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
+worker_output="$(node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
+  worker_status=$?
+  printf '%s\n' "$worker_output"
+  exit "$worker_status"
+}
+printf '%s\n' "$worker_output"
+read -r worker_passes worker_failures < <(
+  awk '
+    /^# pass [0-9]+$/ { passes = $3 }
+    /^# fail [0-9]+$/ { failures = $3 }
+    END { printf "%d %d\n", passes, failures }
+  ' <<< "$worker_output"
+)
+test_passes=$((test_passes + worker_passes))
+test_failures=$((test_failures + worker_failures))
+echo "CLOUDFLARE_TEST_BUCKET_END health-worker pass=$worker_passes fail=$worker_failures"
+
 run_bucket workspace
 run_bucket native
 run_bucket coding-agent-singleton
@@ -86,23 +108,19 @@ run_bucket coding-agent-native
 run_bucket scripts
 run_bucket coding-agent-heavy
 
-# Build the production Linux x64 CLI binary using the release's canonical
-# compiler. This creates the shipped artifact; it does not deploy the product.
-RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
-
-# The repository's Rust gate runs only when Cargo exists. Missing Cargo is an
-# explicit container limitation; once present, any real check failure is fatal.
+# The shard runner parses each bucket's TAP summary; fail closed on an empty or red suite.
 if (( test_passes == 0 || test_failures != 0 )); then
   echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
   echo 'Expected at least one passing test and zero failures.' >&2
   exit 1
 fi
 echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
-if command -v cargo >/dev/null 2>&1; then
-  bun run check:rs
-  echo 'CLOUDFLARE_RUST_BUILD=passed'
-else
-  echo 'CLOUDFLARE_RUST_BUILD=unsupported; cargo is unavailable in the Workers Builds container'
-fi
+
+# Cargo comes from the pinned Rustup installation above; compiler failures are fatal.
+bun run check:rs
+echo 'CLOUDFLARE_RUST_BUILD=passed'
+
+# Build the production Linux x64 CLI binary using the release's canonical compiler.
+RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
 
 npx --yes wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc
