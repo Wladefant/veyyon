@@ -129,7 +129,7 @@ log "building kernel image (${KERNEL_IMAGE})"
 printf '%s\n' \
 	'FROM alpine:3.21' \
 	'RUN apk add --no-cache linux-virt' \
-	| docker build --network=host -t "${KERNEL_IMAGE}" -f - "${GUEST_DIR}" >&2
+	| docker build -t "${KERNEL_IMAGE}" -f - "${GUEST_DIR}" >&2
 
 log "extracting kernel and modules"
 kc="$(docker create "${KERNEL_IMAGE}" /bin/true)"
@@ -201,29 +201,31 @@ docker run --rm \
 		# Mount points the guest init needs to exist and be empty.
 		mkdir -p /mnt/repo-lower /mnt/ovl /run /tmp
 
-		# Staged device nodes, appended below. BuildKit has no CAP_MKNOD, so fakeroot
-		# supplies the metadata cpio needs without requiring a privileged container.
+		# Stage the device nodes and both cpio archives in one fakeroot session so
+		# cpio records their character-device metadata without CAP_MKNOD.
 		rm -rf /stage
 		mkdir -p /stage/dev
-		fakeroot sh -c 'mknod -m 0600 /stage/dev/console c 5 1 && mknod -m 0666 /stage/dev/null c 1 3'
-		fakeroot sh -c '
-			{
-				cd /
-				find . -xdev \
-					-path ./out -prune -o \
-					-path ./.dockerenv -prune -o \
-					-path ./etc/hosts -prune -o \
-					-path ./etc/hostname -prune -o \
-					-path ./etc/resolv.conf -prune -o \
-					-print \
-				| cpio --quiet -o -H newc
-				cd /stage
-				find . -mindepth 1 -print | cpio --quiet -o -H newc
-			}
-		' > /out/rootfs.img.tmp
-
+		fakeroot /bin/sh -eu <<FAKEROOT
+		mknod -m 0600 /stage/dev/console c 5 1
+		mknod -m 0666 /stage/dev/null c 1 3
+		{
+			cd /
+			find . -xdev \
+				-path ./out -prune -o \
+				-path ./stage -prune -o \
+				-path ./.dockerenv -prune -o \
+				-path ./etc/hosts -prune -o \
+				-path ./etc/hostname -prune -o \
+				-path ./etc/resolv.conf -prune -o \
+				-print \
+			| cpio --quiet -o -H newc
+			cd /stage
+			find . -mindepth 1 -print | cpio --quiet -o -H newc
+		}
+FAKEROOT
 		mv /out/rootfs.img.tmp /out/rootfs.img
 		chown "$HOST_UID:$HOST_GID" /out/rootfs.img
+
 	' >&2
 
 rm -rf "${BUILD_DIR}/modules"
