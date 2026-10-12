@@ -8,6 +8,7 @@ import {
 	contextVariantPath,
 	selectRoleContext,
 } from "../../src/task/role-context";
+import type { Skill } from "../../src/extensibility/skills";
 
 let dir: string;
 
@@ -19,6 +20,15 @@ afterEach(async () => {
 });
 
 const entry = (p: string, content: string) => ({ path: p, content, level: "project" as const, depth: 0 });
+
+const makeSkill = (name: string, hide = false): Skill => ({
+	name,
+	description: `${name} fixture`,
+	filePath: `${name}/SKILL.md`,
+	baseDir: name,
+	source: "test",
+	...(hide ? { hide: true } : {}),
+});
 
 describe("contextVariantPath", () => {
 	it("inserts the variant before the extension", () => {
@@ -49,7 +59,7 @@ describe("applyContextVariant", () => {
 });
 
 describe("applySkillList", () => {
-	const skills = [{ name: "a" }, { name: "b" }, { name: "c", hide: true }];
+	const skills = [makeSkill("a"), makeSkill("b"), makeSkill("c", true)];
 	it("none hides everything", () => {
 		expect(applySkillList(skills, "none").every(s => s.hide === true)).toBe(true);
 	});
@@ -114,7 +124,7 @@ describe("selectRoleContext", () => {
 
 	it("keeps the same references for an unknown role with no selection fields", async () => {
 		const files = [entry(path.join(dir, "AGENTS.md"), "x")];
-		const skills = [{ name: "keep" }];
+		const skills = [makeSkill("keep")];
 		const out = await selectRoleContext({ agent: { name: "custom-role" }, contextFiles: files, skills, cwd: dir });
 		expect(out.contextFiles).toBe(files);
 		expect(out.skills).toBe(skills);
@@ -124,7 +134,7 @@ describe("selectRoleContext", () => {
 		const full = path.join(dir, "AGENTS.md");
 		await Bun.write(full, "FULL RULES");
 		await Bun.write(path.join(dir, "AGENTS.lane.md"), "LANE RULES");
-		const skills = [{ name: "keep" }];
+		const skills = [makeSkill("keep")];
 		const out = await selectRoleContext({
 			agent: { name: "task" },
 			contextFiles: [entry(full, "FULL RULES")],
