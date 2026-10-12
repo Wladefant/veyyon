@@ -19,24 +19,41 @@ if ! command -v fd >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1 || \
   ! ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1' || \
   [[ ! -f /usr/share/vulkan/icd.d/lvp_icd.json ]]; then
   if ! command -v apt-get >/dev/null 2>&1; then
-    echo 'Required native test dependencies are missing and apt-get is unavailable.' >&2
+    echo 'CLOUDFLARE_SYSTEM_DEPS=unavailable; apt-get is not installed.'
+  elif ! command -v sudo >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; then
+    echo 'CLOUDFLARE_SYSTEM_DEPS=unavailable; required packages are missing and passwordless sudo is not available.'
+  else
+    sudo -n apt-get update
+    sudo -n apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
+      fd-find ripgrep imagemagick pkg-config libfontconfig-dev libfreetype-dev \
+      libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan1 libvulkan-dev mesa-vulkan-drivers
+    if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+      sudo -n ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+    fi
+    if command -v convert >/dev/null 2>&1 && ! command -v magick >/dev/null 2>&1; then
+      sudo -n ln -sf "$(command -v convert)" /usr/local/bin/magick
+    fi
+  fi
+fi
+
+if ! command -v rustup >/dev/null 2>&1; then
+  command -v curl >/dev/null 2>&1 || {
+    echo 'CLOUDFLARE_RUST_SETUP=failed; rustup and curl are unavailable.' >&2
     exit 1
-  fi
-  apt-get update
-  apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
-    fd-find ripgrep imagemagick pkg-config libfontconfig-dev libfreetype-dev \
-    libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan1 libvulkan-dev mesa-vulkan-drivers
-  if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
-    ln -sf "$(command -v fdfind)" /usr/local/bin/fd
-  fi
-  if command -v convert >/dev/null 2>&1 && ! command -v magick >/dev/null 2>&1; then
-    ln -sf "$(command -v convert)" /usr/local/bin/magick
-  fi
+  }
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
+if ! rustup toolchain list | grep -Eq '^nightly-2026-04-29(-|$)'; then
+  rustup toolchain install nightly-2026-04-29 --profile minimal --component rustfmt --component clippy \
+    --target x86_64-unknown-linux-gnu
 fi
 bun run ci:build:native
 # Keep the sandbox boundary enabled for every focused test file. These are the
 # checkpoint, native recovery, synchronized-session, and CLI regression suites.
 export CI=true
+export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_TEST_CONCURRENCY=2
 focused_tests=(
   cloud/checkpoints/worker.test.ts
@@ -44,6 +61,7 @@ focused_tests=(
   packages/coding-agent/test/native-recovery.test.ts
   packages/coding-agent/test/synchronized-session.test.ts
   packages/coding-agent/test/checkpoint-cli.test.ts
+  packages/coding-agent/test/cli/session-command-alias-reaches-stats.test.ts
 )
 echo "CLOUDFLARE_TEST_START ${focused_tests[*]}"
 test_output="$(bash scripts/test-sandbox/run.sh bun test "${focused_tests[@]}" 2>&1)" || {
