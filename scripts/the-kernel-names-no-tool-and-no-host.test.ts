@@ -128,10 +128,13 @@ describe("the kernel names no tool and no host", () => {
 		// compacted entry's payload in the session file until a reader asks for it; both name a file
 		// shape and no tool, host or mode. Then `session/terminal-ownership` (fork), which verifies a
 		// session file is not already owned by a live terminal writer before another process opens it.
-		expect(kernelFiles.length).toBe(68);
+		// Then `session/session-load-cooling`, which moves compacted history to disk while a large session
+		// file streams in; it names the compaction entry shapes and the session modules beside it, and no
+		// tool, host or mode.
+		expect(kernelFiles.length).toBe(69);
 		expect(concernCounts.registry).toBe(8);
 		expect(concernCounts.loader).toBe(12);
-		expect(concernCounts.session).toBe(44);
+		expect(concernCounts.session).toBe(45);
 		expect(concernCounts.settings).toBe(4);
 		expect(concernCounts.registry).toBeGreaterThan(0);
 		expect(concernCounts.loader).toBeGreaterThan(0);

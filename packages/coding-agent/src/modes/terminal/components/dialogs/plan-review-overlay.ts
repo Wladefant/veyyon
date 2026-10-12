@@ -31,9 +31,8 @@ import {
 	matchesSelectDown,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
+import { computeModalDims, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
-	computeModalDims,
-	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
 	minModalChromeRows,

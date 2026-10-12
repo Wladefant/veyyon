@@ -177,7 +177,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `session.newKeepsBackground` | /new Keeps The Old Session | boolean | `false` | What /new does while a response is still streaming. On: the old conversation keeps running in the background and the screen attaches to a new one; the status line counts background conversations. Off: the old turn is stopped and its provider stream closed before the new session starts. Takes effect at the next start. |
-| `session.backgroundLimit` | Background Session Limit | number | `3` | Most conversations /new keeps running in the background at once (1-20). A /new past the limit stops the oldest background conversation and closes its provider stream. |
+| `session.backgroundLimit` | Background Session Limit | number | `3` | Most conversations this process keeps running in the background at once (1-20), whether /new, an RPC new_session with background, or the ACP _veyyon/sessions/background method moved them there. A handoff past the limit stops the oldest background conversation and closes its provider stream. |
 
 ### Approvals
 
@@ -645,6 +645,11 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `accounts.loadBalancing` | Account Load Balancing | boolean | `false` | Off: only the account you chose is used, and a session waits out its quota window. On: when that account hits its quota or rate limit, continue on another account of the same provider and say so. A revoked account always fails over regardless, with a notice. |
+
+For Antigravity, a provider-confirmed quota failure permits failover even when the account is pinned, if load balancing is on. The pin stays selected. A predicted quota hold alone does not override a pin.
+Another process can extend the hold without restoring the exhausted account's pin exemption. Clearing the account's holds explicitly permits a new attempt on that pin.
+The confirmed refusal expires at its own deadline. A later prediction from another process cannot renew that confirmation.
+A later confirmed refusal can extend this deadline, but a shorter retry delay cannot shorten an existing confirmed hold.
 
 ### Services
 

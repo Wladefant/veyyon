@@ -20,7 +20,11 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CommandController } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { BackgroundSessions, SHUTDOWN_DRAIN_TIMEOUT_MS } from "@veyyon/coding-agent/session/background-sessions";
+import {
+	BackgroundSessions,
+	type NextSessionFactory,
+	SHUTDOWN_DRAIN_TIMEOUT_MS,
+} from "@veyyon/coding-agent/session/background-sessions";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 
 function createContainer() {
@@ -106,6 +110,8 @@ interface Harness {
 	current: FakeSession;
 	next: FakeSession;
 	attached: string[];
+	/** Attachments and screen-UI installs, in the order the flow made them. */
+	steps: string[];
 	counts: { factoryCalls: number };
 	/** Every line the flow presented, VT stripped, in order. */
 	presented(): string[];
@@ -115,11 +121,12 @@ function harness(options: { streaming: boolean; withFactory?: boolean; keepBackg
 	const current = makeSession("session-a", options.streaming);
 	const next = makeSession("session-b", false);
 	const attached: string[] = [];
+	const steps: string[] = [];
 	const counts = { factoryCalls: 0 };
 	const lines: string[] = [];
-	const createNextSession = async (): Promise<AgentSession> => {
+	const createNextSession: NextSessionFactory = async () => {
 		counts.factoryCalls++;
-		return next as unknown as AgentSession;
+		return { session: next as unknown as AgentSession, setToolUIContext: () => {}, setToolNotifier: () => {} };
 	};
 	const ctx = {
 		session: current,
@@ -132,13 +139,19 @@ function harness(options: { streaming: boolean; withFactory?: boolean; keepBackg
 				// Mirrors the shipped default so a test that omits the flag exercises what an
 				// operator who never opened /settings gets.
 				if (key === "session.newKeepsBackground") return options.keepBackground ?? false;
+				if (key === "session.backgroundLimit") return 3;
 				throw new Error(`Unexpected setting read: ${key}`);
 			},
 		},
 		createNextSession: options.withFactory === false ? undefined : createNextSession,
-		attachMainSession: (session: AgentSession) => {
-			attached.push((session as unknown as FakeSession).id);
+		attachMainSession: (session: AgentSession, bindings: unknown) => {
+			const id = (session as unknown as FakeSession).id;
+			attached.push(id);
+			steps.push(bindings ? `attach ${id} with bindings` : `attach ${id}`);
 			return BackgroundSessions.global().keep(current as unknown as AgentSession, Number.POSITIVE_INFINITY);
+		},
+		initHooksAndCustomTools: async () => {
+			steps.push("install screen UI");
 		},
 		clearTransientSessionUi: () => {},
 		resetObserverRegistry: () => {},
@@ -164,6 +177,7 @@ function harness(options: { streaming: boolean; withFactory?: boolean; keepBackg
 		current,
 		next,
 		attached,
+		steps,
 		counts,
 		presented: () => lines.filter(line => line.length > 0),
 	};
@@ -198,6 +212,20 @@ describe("/new while a turn is running", () => {
 		expect(h.current.calls.abort).toBe(0);
 		expect(h.counts.factoryCalls).toBe(1);
 		expect(h.attached).toEqual(["session-b"]);
+	});
+
+	/**
+	 * The new session has never been displayed, so it has no dialogs, notifier
+	 * or extension UI until the screen installs them through its own bindings.
+	 * Installed before the attach, they would land on the session leaving the
+	 * screen, and an `ask` from the new one would have nowhere to go.
+	 */
+	it("installs the screen's UI on the new session after attaching it with its bindings", async () => {
+		const h = harness({ streaming: true, keepBackground: true });
+
+		await h.controller.handleClearCommand();
+
+		expect(h.steps).toEqual(["attach session-b with bindings", "install screen UI"]);
 	});
 
 	it("resets in place when nothing is running, so an idle /new costs no extra session", async () => {
@@ -264,9 +292,9 @@ describe("/new while a turn is running", () => {
 		await h.controller.handleClearCommand();
 
 		const outcome = h.presented().join(" ");
-		expect(outcome).toContain("session-a");
-		expect(outcome).toContain("keeps running");
+		expect(outcome).toContain("session-a continues in the background");
 		expect(outcome).not.toContain("stopped");
+		expect(outcome).not.toContain("/new");
 	});
 
 	/**
@@ -308,7 +336,7 @@ describe("/new while a turn is running", () => {
 			const outcome = h.presented().join(" ");
 			expect(outcome).toContain("New session started");
 			expect(outcome).not.toContain("stopped");
-			expect(outcome).not.toContain("keeps running");
+			expect(outcome).not.toContain("continues in the background");
 		}
 	});
 
@@ -454,7 +482,7 @@ describe("a handed-off session", () => {
 		await entry1.settled;
 
 		expect(keeper.size).toBe(1);
-		expect(keeper.kept[0]).toBe(entry2);
+		expect(keeper.find(session.sessionManager.getSessionFile())).toBe(entry2);
 
 		let drainDone = false;
 		const drainPromise = keeper.drain(500).then(() => {
@@ -493,7 +521,7 @@ describe("a handed-off session", () => {
 		await drainPromise;
 
 		expect(keeper.size).toBe(1);
-		expect(keeper.kept[0]).toBe(entry2);
+		expect(keeper.find(session.sessionManager.getSessionFile())).toBe(entry2);
 		// The timed-out entry was reclaimed; the same object runs again under entry2.
 		expect(session.calls.dispose).toBe(0);
 

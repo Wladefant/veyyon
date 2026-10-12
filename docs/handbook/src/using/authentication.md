@@ -34,6 +34,12 @@ From that card you press `enter` to use the selected account, `n` to name it, `r
 health, `u` to open its usage, `x` twice to log it out, and `a` to add another account for the same
 provider. `/account manager` opens the same card.
 
+When `accounts.loadBalancing` is on, pressing `enter` on an account row or running
+`/account use <provider> <account>` selects that account for your current session only. Global provider
+selection stays empty so other sessions and profiles continue to balance across your accounts. When
+load balancing is off, selecting an account saves it machine-wide as the default choice across all
+profiles and sessions on this machine.
+
 The last row of the list is `+ add another … account`. It is a position in the list like any other:
 arrow down past your last account to land on it, and press `enter` there to start a login. The
 mouse works on the card as well. Click an account to select it, click that last row to start the
@@ -83,6 +89,11 @@ Anthropic          personal                    main model  (opus-5)
 
 Your choice is kept, not discarded. Once the limit resets, traffic returns to the account you picked
 with no further action.
+
+Antigravity meters Gemini separately from Claude and GPT. `/usage` reports capacity for each family,
+not one provider-wide total. A Gemini quota error names the account and its reset time.
+With load balancing on, Veyyon checks the sibling accounts for that model family and retries an
+available account before returning the error. Claude quota exhaustion does not block Gemini.
 
 ## When a login is signed out for you
 

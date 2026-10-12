@@ -6,6 +6,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { loadArktype } from "@veyyon/ai/utils/schema/arktype";
 import {
 	factoryExportMissingMessage,
 	invalidArtifactFieldMessage,
@@ -14,7 +15,6 @@ import {
 } from "@veyyon/kernel/loader/load-failure";
 import * as typebox from "@veyyon/kernel/registry/typebox";
 import { errorMessage, getAgentDir, getProjectDir, isEnoent, readdirIfPresent, reportFault } from "@veyyon/utils";
-import * as arktype from "arktype";
 import { getConfigDirs } from "../../config";
 import { pluginsRootFor } from "../../discovery/helpers";
 import { execCommand, withSessionCpuExec } from "../../exec/exec";
@@ -276,7 +276,8 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 	// Built WITHOUT `pi` and `zod` first. `pi` is the whole package barrel, which re-exports every mode and
 	// every component, `zod` is 80 modules, and this function runs on every launch to register the two
 	// bundled commands -- neither of which uses them, since they import this repository directly. So both
-	// load only when a project ships a custom command whose author expects `api.pi` or `api.zod`.
+	// load only when a project ships a custom command whose author expects `api.pi` or `api.zod`. `arktype`
+	// is a getter for the same reason: the package is evaluated when a command first reads it.
 	const bundledApi: BundledCommandAPI = {
 		cwd,
 		exec: (command: string, args: string[], execOptions) =>
@@ -287,7 +288,9 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 				withSessionCpuExec(execOptions, options.adoptSpawnedPid, options.gateSpawn, "a custom command"),
 			),
 		typebox,
-		arktype,
+		get arktype() {
+			return loadArktype();
+		},
 	};
 
 	// 1. Load bundled commands first (lowest priority - can be overridden)

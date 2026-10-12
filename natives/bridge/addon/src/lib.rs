@@ -34,6 +34,7 @@ pub mod fd;
 pub mod glob;
 pub mod glob_util;
 pub mod grep;
+pub mod heap_pages;
 pub mod highlight;
 pub mod html;
 pub mod iofs;
@@ -266,7 +267,7 @@ fn create_napi_tokio_runtime() -> Option<tokio::runtime::Runtime> {
 /// MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
 /// `natives/bridge/bindings/native/index.js` (which derives the name from
 /// `package.json#version`).
-#[napi(js_name = "__veyyonNativesV1_5_5")]
+#[napi(js_name = "__veyyonNativesV1_5_6")]
 pub const fn veyyon_natives_version_sentinel() {}
 
 /// Native module entry point: install crash diagnostics before any tool can

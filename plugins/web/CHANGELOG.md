@@ -2,10 +2,13 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Changed
 
 - Replaced `any` types in `getNested` scraper utility with `unknown` and preserved user cancellation on scrapers.
 - Firecrawl endpoint normalization strips trailing slashes through the shared `trimTrailingSlashes` helper; no behavior change.
+- The marketplace repository-link reader, key-value renderer and package-registry handler test missing values with optional chains; behavior is unchanged.
 
 ## [1.5.4] - 2026-09-24
 

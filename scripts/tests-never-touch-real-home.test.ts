@@ -166,7 +166,7 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		reason:
 			"It is the gate's own suite, and half its subject is the tripwire, which cannot be probed without naming the variable that tells the tripwire what to forbid. What it names is NOT the real config root: every occurrence sets `VEYYON_TEST_REAL_CONFIG_ROOT` to a freshly `mkdtemp`ed directory in the child it spawns, precisely so a door that turns out to be UNGUARDED writes there instead of into the operator's home — which is what makes the red proofs of the six write doors safe to run at all. Each probe removes its own root in a `finally`, and each asserts the root is empty afterwards, so an unguarded door is reported by the absence of the file rather than by damage. The real `~/.veyyon` is never resolved, opened, or written by this file.",
 	},
-	// The seven below are all `unresolved-spawn-target`: a spawn whose command argument is a
+	// The eight below are all `unresolved-spawn-target`: a spawn whose command argument is a
 	// variable, a parameter or a property, so no reader of the source alone can say what it
 	// runs. Each reason therefore has to answer the one question the analyzer could not, which
 	// is what the target actually holds at runtime. Two of them genuinely execute a file NAMED
@@ -208,6 +208,12 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 			"`executable` is whatever `ensureChromiumExecutable()` resolved, and the spawn is a `--version` probe whose only purpose is deciding whether a real-browser suite skips: CI hosts hold the downloaded Chromium but lack the system libraries to exec it. A probe that must ask the real binary cannot be written against a literal path, and every real-browser suite asks through this one helper.",
 	},
 	{
+		file: "packages/coding-agent/test/tools/browser/chromium.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			"`executable` is whatever `ensureChromiumExecutable()` resolved, and the spawn is a `--version` probe whose only purpose is deciding whether to skip: CI hosts hold the downloaded Chromium but lack the system libraries to exec it. Every suite that launches Chromium imports `CHROMIUM_AVAILABLE` from this module rather than probing on its own. A probe that must ask the real binary cannot be written against a literal path.",
+	},
+	{
 		file: "packages/coding-agent/test/core/python-runner-integration.test.ts",
 		rule: "unresolved-spawn-target",
 		reason:
@@ -224,6 +230,12 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		rule: "unresolved-spawn-target",
 		reason:
 			"Six targets, all discovery rather than execution of anything installed: `gitCmd` is the literal `git`/`git.exe` chosen by platform for one `rev-parse HEAD`; `lookupCmd` is the literal `which`/`where` chosen the same way; `override`, `resolved` and `detectedPython` are the interpreter that lookup returned, probed with `--version` only to decide whether to skip; and `python` runs the ledger bridge script that ships in `src/task/` against a lock file the test made. A python contract cannot be asserted without asking a python, and which python exists is exactly what the host has to answer.",
+	},
+	{
+		file: "packages/coding-agent/test/cli/startup/an-exiting-timing-run-prints-its-tree-on-the-terminal.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			"`wrapper.command` is `script`, the util-linux and BSD pty wrapper `ptyWrapper` in `scripts/bench-startup.ts` returns on every platform, and its arguments `exec` `process.execPath` on the repository's `cli.ts`. The suite needs a real terminal because the defect is the launch card's stderr routing, which only engages on a tty. The child runs with `HOME`, `VEYYON_CONFIG_DIR` and every XDG root under a `mkdtemp` directory inside `.captures/`, provider access denied by `denyHostProviderAccess`, and the directory removed in a `finally`; the installed binary is never named.",
 	},
 	// The four below are all `bare-config-dir-name`, and they have one shape between them:
 	// the config-dir NAME is the SUBJECT, not the isolation. Each one assigns a name, asks a

@@ -691,6 +691,9 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 
 		await authStorage.getApiKey(PROVIDER, "sess");
 		const outcome = await authStorage.markUsageLimitReached(PROVIDER, "sess", { retryAfterMs: 3_600_000 });
-		expect(outcome).toEqual({ switched: false, retryAtMs: undefined });
+		expect(outcome.switched).toBe(false);
+		expect(outcome.retryAtMs).toBeUndefined();
+		expect(outcome.quotaMessage).toContain("0 other accounts available");
+		expect(outcome.quotaMessage).toContain("no sibling account exists");
 	});
 });

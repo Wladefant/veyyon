@@ -25,17 +25,41 @@ export interface AriaSnapshotOptions {
  * on `window`; the only footprint is the `_ariaRef` markers the snapshot writes,
  * which are the price of actionable `[ref=eN]` ids.
  */
-function buildEvaluator(params: string, call: string): (...args: unknown[]) => unknown {
+function buildEvaluator(params: string, result: string): (...args: unknown[]) => unknown {
 	return new Function(
 		...params.split(",").map(p => p.trim()),
-		`var module = { exports: {} };\n${ariaBundle}\nreturn module.exports.${call};`,
+		`var module = { exports: {} };\n${ariaBundle}\nreturn ${result};`,
 	) as unknown as (...args: unknown[]) => unknown;
 }
 
 // Handles (root) must stay top-level args: Puppeteer only unwraps JSHandles
 // passed positionally to page.evaluate, never ones nested inside an object.
-const evaluateAriaSnapshot = buildEvaluator("root, request", "ariaSnapshot(root, request)");
-const evaluateResolveRef = buildEvaluator("ref", "resolveAriaRef(ref)");
+// After the snapshot, every element carrying an `_ariaRef` expando reports its
+// ref, role and name, walking open shadow roots as the snapshot does.
+const evaluateAriaSnapshot = buildEvaluator(
+	"root, request",
+	`(function () {
+	var text = module.exports.ariaSnapshot(root, request);
+	var refs = [];
+	var walk = function (scope) {
+		var all = scope.querySelectorAll("*");
+		for (var i = 0; i < all.length; i++) {
+			var marker = all[i]._ariaRef;
+			if (marker) refs.push([marker.ref, marker.role, marker.name]);
+			if (all[i].shadowRoot) walk(all[i].shadowRoot);
+		}
+	};
+	walk(document);
+	return { text: text, refs: refs };
+})()`,
+);
+const evaluateResolveRef = buildEvaluator("ref", "module.exports.resolveAriaRef(ref)");
+
+/** A snapshot's text and, for each `[ref=eN]` it prints, the ref's role and accessible name. */
+export interface AriaSnapshotCapture {
+	text: string;
+	refs: Array<[ref: string, role: string, name: string]>;
+}
 
 /**
  * Capture a Playwright-format ARIA snapshot of `root` (or the whole document when
@@ -47,9 +71,9 @@ export async function captureAriaSnapshot(
 	page: Page,
 	root: ElementHandle | null,
 	options: AriaSnapshotOptions = {},
-): Promise<string> {
+): Promise<AriaSnapshotCapture> {
 	const request = { depth: options.depth, boxes: options.boxes };
-	return (await page.evaluate(evaluateAriaSnapshot as never, root as never, request as never)) as string;
+	return (await page.evaluate(evaluateAriaSnapshot as never, root as never, request as never)) as AriaSnapshotCapture;
 }
 
 /**

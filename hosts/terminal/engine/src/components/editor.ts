@@ -50,8 +50,6 @@ function sanitizeLoadedText(text: string): string {
 	return replaceTabs(text.replace(/\r\n?/g, "\n")).replace(/[\x00-\x09\x0b-\x1f]/g, "");
 }
 
-const segmenter = getSegmenter();
-
 /**
  * Represents a chunk of text for word-wrap layout.
  * Tracks both the text content and its position in the original line.
@@ -94,7 +92,7 @@ export function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 	let inWhitespace = false;
 	let charIndex = 0;
 
-	for (const seg of segmenter.segment(line)) {
+	for (const seg of getSegmenter().segment(line)) {
 		const grapheme = seg.segment;
 		const graphemeIsWhitespace = getWordNavKind(grapheme) === "whitespace";
 
@@ -138,7 +136,7 @@ export function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 		let prefix = "";
 		let prefixWidth = 0;
 		let len = 0;
-		for (const seg of segmenter.segment(text)) {
+		for (const seg of getSegmenter().segment(text)) {
 			const grapheme = seg.segment;
 			const graphemeWidth = visibleWidth(grapheme);
 			if (prefixWidth + graphemeWidth > availableWidth) break;
@@ -150,7 +148,7 @@ export function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 		return { text: prefix, len };
 	}
 	function hasWideGrapheme(text: string): boolean {
-		for (const seg of segmenter.segment(text)) {
+		for (const seg of getSegmenter().segment(text)) {
 			if (visibleWidth(seg.segment) > 1) return true;
 		}
 		return false;
@@ -208,7 +206,7 @@ export function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 			let tokenChunkWidth = 0;
 			let tokenChunkStart = token.startIndex + consumedPrefixLen;
 			let tokenCharIndex = token.startIndex + consumedPrefixLen;
-			for (const seg of segmenter.segment(remainingText)) {
+			for (const seg of getSegmenter().segment(remainingText)) {
 				const grapheme = seg.segment;
 				const graphemeWidth = visibleWidth(grapheme);
 				if (tokenChunkWidth + graphemeWidth > maxWidth && tokenChunk) {
@@ -311,7 +309,7 @@ export function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 export function maxSegmentVisualCol(text: string, isLastSegment: boolean): number {
 	let total = 0;
 	let lastWidth = 0;
-	for (const seg of segmenter.segment(text)) {
+	for (const seg of getSegmenter().segment(text)) {
 		lastWidth = visibleWidth(seg.segment);
 		total += lastWidth;
 	}
@@ -1613,7 +1611,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		const token = this.#atomicTokenAt(line, col);
 		if (token) col = token.start;
 		if (col > 0 && col < line.length) {
-			for (const part of segmenter.segment(line)) {
+			for (const part of getSegmenter().segment(line)) {
 				if (part.index + part.segment.length > col) {
 					col = part.index;
 					break;
@@ -1863,7 +1861,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 				}
 			}
 		} else {
-			for (const seg of segmenter.segment(char)) {
+			for (const seg of getSegmenter().segment(char)) {
 				if (getWordNavKind(seg.segment) === "whitespace") {
 					isWordChunk = false;
 					break;
@@ -3249,7 +3247,7 @@ function renderTerminalCursorMarker(text: string, marker: string, maxWidth: numb
 
 	let insertAt = text.length;
 	let offset = 0;
-	for (const seg of segmenter.segment(text)) {
+	for (const seg of getSegmenter().segment(text)) {
 		if (visibleWidth(seg.segment) > 0) {
 			insertAt = offset;
 		}

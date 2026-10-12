@@ -37,7 +37,9 @@ const validators = {
 } as const;
 
 type ValidatorName = keyof typeof validators;
-const validatorNames = Object.keys(validators) as ValidatorName[];
+type Validator = (typeof validators)[ValidatorName];
+const validatorEntries = Object.entries(validators) as [ValidatorName, Validator][];
+const validatorNames = validatorEntries.map(([name]) => name);
 
 /** The exact body Command Code returns for a key on a plan without API access. */
 const COMMAND_CODE_403 = JSON.stringify({
@@ -53,9 +55,9 @@ function respond(status: number, body: string): typeof fetch {
 	return (() => Promise.resolve(new Response(body, { status }))) as unknown as typeof fetch;
 }
 
-async function errorForValidation(validator: ValidatorName, status: number, body: string): Promise<string> {
+async function errorForValidation(validate: Validator, status: number, body: string): Promise<string> {
 	try {
-		await validators[validator]({
+		await validate({
 			provider: "command-code",
 			apiKey: "sk-test-key",
 			baseUrl: "https://api.example.invalid/v1",
@@ -69,14 +71,14 @@ async function errorForValidation(validator: ValidatorName, status: number, body
 	}
 }
 
-describe.each(validatorNames)("a rejected key says why in the provider's own words (%s)", validator => {
+describe.each(validatorEntries)("a rejected key says why in the provider's own words (%s)", (_name, validate) => {
 	const validationError = (status: number, body: string): Promise<string> =>
-		errorForValidation(validator, status, body);
+		errorForValidation(validate, status, body);
 
 	it("accepts a successful response without consuming its body", async () => {
 		const response = new Response("unused success body");
 		await expect(
-			validators[validator]({
+			validate({
 				provider: "example",
 				apiKey: "test-key",
 				baseUrl: "https://api.example.invalid/v1",
@@ -99,7 +101,7 @@ describe.each(validatorNames)("a rejected key says why in the provider's own wor
 		const started = performance.now();
 		try {
 			await expect(
-				validators[validator]({
+				validate({
 					provider: "example",
 					apiKey: "test-key",
 					baseUrl: "https://api.example.invalid/v1",

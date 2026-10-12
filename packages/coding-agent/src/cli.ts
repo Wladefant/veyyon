@@ -3,7 +3,9 @@
 // terminal during its own evaluation, which is the only position from which it beats the ~33ms of
 // import below it. It reaches node builtins only. See ./cli/first-frame-replay.
 import "./cli/first-frame-replay-entry";
+import { writeSync } from "node:fs";
 import { CliUsageError } from "@veyyon/utils/cli-usage-error";
+import { DAY_MS } from "@veyyon/utils/time";
 // Subpath, NOT the "@veyyon/utils" barrel: the barrel re-exports ./env, which
 // eagerly parses the agent-directory .env at import time (env.ts). Pulling that
 // in here would load the .env BEFORE runCli() calls setProfile(), so
@@ -132,7 +134,7 @@ async function runSmokeTest(): Promise<void> {
 	// `runCli` configures ArkType jitless before any command loads a schema. A static import that
 	// reaches `arktype` from this file's graph evaluates it first, and a bundled binary then compiles
 	// every validator again at launch; `ark.config` holds the configuration at `arktype`'s evaluation.
-	const { ark } = await import("arktype");
+	const { ark } = (await import("@veyyon/ai/utils/schema/arktype")).loadArktype();
 	if (ark.config.jitless !== true) {
 		throw new Error(
 			"arktype smoke failed: ArkType is not jitless — runCli did not configure it before arktype " +
@@ -495,11 +497,13 @@ export async function runCli(argv: string[]): Promise<void> {
 	// unless it is configured jitless before `arktype` first evaluates. In the compiled binary that
 	// codegen costs about 22 ms and 11 MiB of heap per launch, and interpreted traversal validates a
 	// tool call's arguments in 3.4 µs against 3.1 µs. `arktype` is off this file's static graph, so
-	// this runs before any module builds a schema, and `runSmokeTest` fails when it does not. The auth
-	// gateway's request schemas compile regardless (`@veyyon/ai` `providers/gateway-schema-type.ts`).
+	// this runs before any module builds a schema, and `runSmokeTest` fails when it does not. The
+	// facade holds the setting until the first schema evaluates the package, so a launch that builds
+	// none evaluates no ArkType module. The auth gateway's request schemas compile regardless
+	// (`@veyyon/ai` `providers/gateway-schema-type.ts`).
 	if (isProcessEntry) {
-		const { configure } = await import("arktype/config");
-		configure({ jitless: true });
+		const { configureArktype } = await import("@veyyon/ai/utils/schema/arktype");
+		configureArktype({ jitless: true });
 	}
 
 	// Declare this module as the worker-host entry now that the active profile
@@ -632,6 +636,22 @@ export function formatCliFatal(err: unknown, opts: { stack: boolean; colors: boo
 	return `${out}\n  (set VEYYON_STACK=1 for the full stack trace)\n`;
 }
 
+/** A pending CLI promise must not masquerade as a successful empty launch. */
+export async function awaitCliCompletion(command: Promise<void>): Promise<void> {
+	const keepalive = setInterval(() => {}, DAY_MS);
+	const unfinished = () => {
+		writeSync(2, "Error: Veyyon's event loop ended before the command finished. Startup did not complete.\n");
+		process.exitCode = EXIT_FAILURE;
+	};
+	process.once("beforeExit", unfinished);
+	try {
+		await command;
+	} finally {
+		clearInterval(keepalive);
+		process.removeListener("beforeExit", unfinished);
+	}
+}
+
 // Floating call instead of top-level await: TLA forces `--bytecode` (CJS
 // lowering) builds to fail, and the entrypoint needs nothing after this.
 // The catch mirrors what an unhandled TLA rejection produced: error report to
@@ -641,7 +661,7 @@ export function formatCliFatal(err: unknown, opts: { stack: boolean; colors: boo
 // their entry with `import.meta.main === false`, so the worker-host dispatch
 // is admitted via `!Bun.isMainThread`.
 if (isProcessEntry || !Bun.isMainThread) {
-	runCli(process.argv.slice(2)).catch((err: unknown) => {
+	awaitCliCompletion(runCli(process.argv.slice(2))).catch((err: unknown) => {
 		process.stderr.write(
 			formatCliFatal(err, {
 				stack: process.env.VEYYON_STACK === "1",

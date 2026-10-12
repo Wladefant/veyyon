@@ -24,7 +24,7 @@ import {
 } from "@veyyon/utils/session-file";
 import { SessionListIndex } from "./session-list-index";
 import { computeDefaultSessionDir } from "./session-paths";
-import { FileSessionStorage, type SessionStorage } from "./session-storage";
+import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 
 /**
  * Coarse lifecycle status of a session, derived from its last persisted message.
@@ -527,17 +527,17 @@ async function scanSessionFile(
 	storage: SessionStorage,
 	withStatus: boolean,
 	index?: SessionListIndex,
+	stat?: SessionStorageStat,
 ): Promise<SessionInfo | undefined> {
 	try {
-		const stat = storage.statSync(file);
-		const cached = index?.get(file, stat.size, stat.mtime.getTime(), withStatus);
+		const { size, mtime } = stat ?? storage.statSync(file);
+		const cached = index?.get(file, size, mtime.getTime(), withStatus);
 		if (cached) return cached;
 		const [content, suffix] = await storage.readTextSlices(
 			file,
 			SESSION_LIST_PREFIX_BYTES,
 			withStatus ? SESSION_LIST_SUFFIX_BYTES : 0,
 		);
-		const { size, mtime } = stat;
 		const entries = parseJsonlLenient<Record<string, unknown>>(content);
 		const header = parseSessionListHeader(content, entries);
 		if (!header) {
@@ -604,13 +604,12 @@ async function collectSessionsFromFileStride(
 	storage: SessionStorage,
 	startIndex: number,
 	stride: number,
-	withStatus: boolean,
 	index?: SessionListIndex,
 ): Promise<SessionInfo[]> {
 	const sessions: SessionInfo[] = [];
 
 	for (let i = startIndex; i < files.length; i += stride) {
-		const session = await scanSessionFile(files[i], storage, withStatus, index);
+		const session = await scanSessionFile(files[i], storage, true, index);
 		if (session) sessions.push(session);
 	}
 
@@ -618,8 +617,8 @@ async function collectSessionsFromFileStride(
 }
 
 /**
- * Scan every file, reusing the directory's index for files that have not
- * changed since it was written.
+ * Scan every file with its status, reusing the directory's index for files
+ * that have not changed since it was written.
  *
  * `indexDir` is the directory the index belongs to. Omitting it scans every
  * file, which is what a caller listing an ad-hoc set of paths — one with no
@@ -633,7 +632,6 @@ async function collectSessionsFromFileStride(
 async function collectSessionsFromFiles(
 	files: string[],
 	storage: SessionStorage,
-	withStatus: boolean,
 	indexDir?: string,
 	persistIndex = true,
 ): Promise<SessionInfo[]> {
@@ -641,11 +639,11 @@ async function collectSessionsFromFiles(
 	const workerCount = getSessionListWorkerCount(files.length);
 	const sessions =
 		workerCount === 1
-			? await collectSessionsFromFileStride(files, storage, 0, 1, withStatus, index)
+			? await collectSessionsFromFileStride(files, storage, 0, 1, index)
 			: (
 					await Promise.all(
 						Array.from({ length: workerCount }, (_, workerIndex) =>
-							collectSessionsFromFileStride(files, storage, workerIndex, workerCount, withStatus, index),
+							collectSessionsFromFileStride(files, storage, workerIndex, workerCount, index),
 						),
 					)
 				).flat();
@@ -656,6 +654,63 @@ async function collectSessionsFromFiles(
 	}
 	sessions.sort(compareSessionsByRecency);
 	return sessions;
+}
+
+/** A session file and the stat its place in the recency order is read from. */
+interface StatedSessionFile {
+	file: string;
+	stat: SessionStorageStat;
+	/** The order's first key: {@link compareSessionsByRecency} compares this value. */
+	modifiedMs: number;
+}
+
+/**
+ * The first `limit` sessions `accept` admits, in {@link compareSessionsByRecency}
+ * order, without a tail window.
+ *
+ * The order's first key is the file mtime, which a stat answers, so files are
+ * scanned newest first and the walk stops once `limit` sessions are found. Files
+ * sharing one mtime are scanned together, because the keys that order them, the
+ * header timestamp and the path, come from the scan. The result equals the
+ * prefix of the full listing. The directory's list index is not opened: reading
+ * and parsing it costs more than the few files the walk reads, and holds a row
+ * for every session in the directory.
+ */
+async function collectNewestSessions(
+	files: string[],
+	storage: SessionStorage,
+	limit: number,
+	accept?: (info: SessionInfo) => boolean,
+): Promise<SessionInfo[]> {
+	const stated: StatedSessionFile[] = [];
+	for (const file of files) {
+		try {
+			const stat = storage.statSync(file);
+			stated.push({ file, stat, modifiedMs: finiteTime(stat.mtime, 0) });
+		} catch (error) {
+			if (!isEnoent(error)) recordUnreadableSession(file, toError(error).message);
+		}
+	}
+	stated.sort((a, b) => b.modifiedMs - a.modifiedMs);
+
+	const newest: SessionInfo[] = [];
+	let start = 0;
+	while (start < stated.length && newest.length < limit) {
+		let end = start + 1;
+		while (end < stated.length && stated[end].modifiedMs === stated[start].modifiedMs) end++;
+		const tied: SessionInfo[] = [];
+		for (let i = start; i < end; i++) {
+			const info = await scanSessionFile(stated[i].file, storage, false, undefined, stated[i].stat);
+			if (info && (!accept || accept(info))) tied.push(info);
+		}
+		tied.sort(compareSessionsByRecency);
+		for (const info of tied) {
+			if (newest.length === limit) break;
+			newest.push(info);
+		}
+		start = end;
+	}
+	return newest;
 }
 
 /**
@@ -784,15 +839,15 @@ export async function recoverOrphanedBackups(sessionDir: string, storage: Sessio
 async function scanSessionDir(
 	sessionDir: string,
 	storage: SessionStorage,
-	withStatus: boolean,
-	// Also decides whether the list index is written back: both are writes to the
-	// directory, and `listSessionsReadOnly` promises to make neither.
-	mayMutateDir = true,
+	// Whether orphaned backups are promoted. `listSessionsReadOnly` promises no
+	// write to the directory, so it passes false here and withholds the index
+	// write from `collect`.
+	mayMutateDir: boolean,
+	collect: (files: string[]) => Promise<SessionInfo[]>,
 ): Promise<SessionInfo[]> {
 	try {
 		if (mayMutateDir) await recoverOrphanedBackups(sessionDir, storage);
-		const files = storage.listFilesSync(sessionDir, `*${SESSION_FILE_EXTENSION}`);
-		return await collectSessionsFromFiles(files, storage, withStatus, sessionDir, mayMutateDir);
+		return await collect(storage.listFilesSync(sessionDir, `*${SESSION_FILE_EXTENSION}`));
 	} catch (error) {
 		// The whole-directory version of the same rule, and the worse one: this path
 		// turns "your sessions are unreadable" into "you have no sessions", which is
@@ -810,14 +865,16 @@ async function scanSessionDir(
  * file's lifecycle {@link SessionStatus}.
  */
 export function listSessions(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
-	return scanSessionDir(sessionDir, storage, true, true);
+	return scanSessionDir(sessionDir, storage, true, files => collectSessionsFromFiles(files, storage, sessionDir));
 }
 
 /**
  * List sessions without repairing orphaned backups or mutating the directory.
  */
 export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
-	return scanSessionDir(sessionDir, storage, true, false);
+	return scanSessionDir(sessionDir, storage, false, files =>
+		collectSessionsFromFiles(files, storage, sessionDir, false),
+	);
 }
 
 /**
@@ -864,7 +921,7 @@ async function scanSessionsRoot(storage: SessionStorage, includeAgentTranscripts
 		const files = includeAgentTranscripts
 			? transcripts
 			: transcripts.filter(file => isTopLevelSessionFile(sessionsRoot, file));
-		return await collectSessionsFromFiles(files, storage, true, sessionsRoot);
+		return await collectSessionsFromFiles(files, storage, sessionsRoot);
 	} catch (err) {
 		if (isEnoent(err)) return [];
 		logger.warn("Sessions directory could not be scanned; no sessions can be listed or resumed from it", {
@@ -880,8 +937,8 @@ export async function findMostRecentSession(
 	sessionDir: string,
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<string | null> {
-	const sessions = await scanSessionDir(sessionDir, storage, false);
-	return sessions[0]?.path ?? null;
+	const [newest] = await scanSessionDir(sessionDir, storage, true, files => collectNewestSessions(files, storage, 1));
+	return newest?.path ?? null;
 }
 
 /** True when a session has neither a title nor any user message — nothing a
@@ -901,14 +958,14 @@ export async function getRecentSessions(
 	limit = 4,
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<RecentSessionInfo[]> {
-	const sessions = await scanSessionDir(sessionDir, storage, false);
-	const recent: RecentSessionInfo[] = [];
-	for (const info of sessions) {
-		if (recent.length >= limit) break;
-		if (isBlankSession(info)) continue;
-		recent.push({ path: info.path, name: sessionDisplayName(info), timeAgo: formatTimeAgo(info.modified) });
-	}
-	return recent;
+	const sessions = await scanSessionDir(sessionDir, storage, true, files =>
+		collectNewestSessions(files, storage, limit, info => !isBlankSession(info)),
+	);
+	return sessions.map(info => ({
+		path: info.path,
+		name: sessionDisplayName(info),
+		timeAgo: formatTimeAgo(info.modified),
+	}));
 }
 
 function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
@@ -997,7 +1054,7 @@ async function findSessionInOtherProfiles(
 		// files and is keyed by their size and mtime; it is the same user's cache,
 		// and the alternative is re-reading every one of another profile's sessions
 		// on every id that misses here.
-		const sessions = await collectSessionsFromFiles(files, storage, true, sessionsRoot);
+		const sessions = await collectSessionsFromFiles(files, storage, sessionsRoot);
 		const match = sessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 		if (match) return { session: match, scope: "profile", profile: profile.name };
 	}

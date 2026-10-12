@@ -419,12 +419,14 @@ Environment variables are collected first, then file-defined entries are appende
 
 - `packages/coding-agent/src/secrets/audit.ts`: the expansion log: record shape, atomic-append cap, reader
 - `packages/coding-agent/src/secrets/env-keywords.ts` + `env-keywords.yml`: the Tier B keyword list and the boundary rule, one owner
+- `packages/coding-agent/src/secrets/expiry.ts`: `expiryUrgency` and `expiryWarnings`, the one classification the `STATUS` column and the startup warnings read
 - `packages/coding-agent/src/secrets/index.ts`: loading, merging, env var collection, refusal of unprotectable entries
 - `packages/coding-agent/src/secrets/obfuscator.ts`: `SecretObfuscator`, message obfuscation, runtime add/forget
 - `packages/coding-agent/src/secrets/placeholder.ts`: both placeholder forms and the rule keeping them apart
 - `packages/coding-agent/src/secrets/policy.ts`: the length rules and the rejection type, defined once
 - `packages/coding-agent/src/secrets/regex.ts`: regex literal parsing and compilation
 - `packages/coding-agent/src/secrets/secret-command.ts`: `/secret` logic, pure and session-free
+- `packages/coding-agent/src/secrets/secret-verbs.ts`: `SECRET_VERB_SPELLINGS`, the reserved words and the subcommand each names, and the completion menu derived from them
 - `packages/coding-agent/src/secrets/scope-move.ts`: `planScopeMove`: the two refusals that make a scope move safe to perform as add-then-remove
 - `packages/coding-agent/src/secrets/vault.ts`: entries, lifetimes, scopes, the store
 - `packages/coding-agent/src/secrets/vault-crypto.ts`: the key, the seal, and the threat model

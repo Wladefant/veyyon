@@ -1,6 +1,6 @@
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { ptree } from "@veyyon/utils";
 import { lazy } from "@veyyon/utils/abortable";
-import { type } from "arktype";
 import { describeTimeoutParam } from "../tools/core/tool-timeouts";
 
 // =============================================================================

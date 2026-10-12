@@ -12,9 +12,10 @@
 import * as logger from "@veyyon/utils/logger";
 import { clampLow } from "@veyyon/utils/math";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import { type Type, type } from "arktype";
+import type { Type } from "arktype";
 import type { AuthStorage, StoredCredentialBlock } from "../auth-storage";
 import { parseBind } from "../utils/parse-bind";
+import { type } from "../utils/schema/arktype";
 import { formatGenerationTag, parseGenerationTag } from "./generation-tag";
 import { AuthBrokerRefresher, type AuthBrokerRefresherSchedule } from "./refresher";
 import type {

@@ -3790,13 +3790,13 @@ function extractRepoLink(properties: MarketplaceProperty[] | undefined): string 
 	for (const prop of properties) {
 		const key = prop.key?.trim().toLowerCase();
 		const value = prop.value?.trim();
-		if (!key || !value || !value.startsWith("http")) continue;
+		if (!key || !value?.startsWith("http")) continue;
 		if (key.includes("links.source") || key.includes("repository")) return value;
 	}
 	for (const prop of properties) {
 		const key = prop.key?.trim().toLowerCase();
 		const value = prop.value?.trim();
-		if (!key || !value || !value.startsWith("http")) continue;
+		if (!key || !value?.startsWith("http")) continue;
 		if (key === "source" || key.endsWith(".source")) return value;
 	}
 	return null;

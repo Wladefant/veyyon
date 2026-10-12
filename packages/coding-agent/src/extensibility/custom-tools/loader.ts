@@ -6,6 +6,7 @@
  */
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import {
 	factoryExportMissingMessage,
 	moduleImportFailedMessage,
@@ -13,7 +14,6 @@ import {
 } from "@veyyon/kernel/loader/load-failure";
 import * as typebox from "@veyyon/kernel/registry/typebox";
 import { errorMessage, logger } from "@veyyon/utils";
-import { type } from "arktype";
 import { type DiscoveredCustomTool, loadCapability } from "../../discovery";
 import { toolCapability } from "../../discovery/capability/tool";
 import { pluginsRootFor } from "../../discovery/helpers";

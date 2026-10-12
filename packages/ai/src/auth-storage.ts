@@ -302,6 +302,8 @@ export class AuthStorage {
 	#oauthBearerFingerprints: Map<string, Map<number, string[]>> = new Map();
 	/** Temporary rate-limit blocks, in memory and persisted. */
 	readonly #blocks: CredentialBlocks;
+	/** Provider-confirmed Antigravity quota holds, distinct from usage-report predictions. */
+	#confirmedAntigravityQuota = new Map<string, number>();
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
@@ -369,7 +371,11 @@ export class AuthStorage {
 		}
 		this.#usageCache = new AuthStorageUsageCache(this.#store);
 		this.#purgeLegacyUsageHistory();
-		this.#routing = new CredentialRouting(this.#store, provider => this.#getStoredCredentials(provider));
+		this.#routing = new CredentialRouting(
+			this.#store,
+			provider => this.#getStoredCredentials(provider),
+			() => this.isLoadBalancingEnabled(),
+		);
 		this.#blocks = new CredentialBlocks(
 			this.#store,
 			provider => this.#getStoredCredentials(provider),
@@ -500,7 +506,7 @@ export class AuthStorage {
 	}
 
 	/** Whether exhaustion-driven movement between accounts is allowed right now. */
-	#loadBalancingEnabled(): boolean {
+	isLoadBalancingEnabled(): boolean {
 		const setting = this.#loadBalancing;
 		return typeof setting === "function" ? setting() : setting;
 	}
@@ -714,7 +720,7 @@ export class AuthStorage {
 	 */
 	#getCredentialOrder(providerKey: string, sessionId: string | undefined, total: number): number[] {
 		if (total <= 1) return [0];
-		if (!this.#loadBalancingEnabled()) return Array.from({ length: total }, (_, i) => i);
+		if (!this.isLoadBalancingEnabled()) return Array.from({ length: total }, (_, i) => i);
 		const start = sessionId ? getHashedIndex(sessionId, total) : this.#getNextRoundRobinIndex(providerKey, total);
 		const order: number[] = [];
 		for (let i = 0; i < total; i++) {
@@ -858,7 +864,7 @@ export class AuthStorage {
 	 */
 	#homeIndex(provider: string, sessionId: string | undefined, type: AuthCredential["type"]): number | undefined {
 		const chosen = this.#explicitChoiceIndex(provider, sessionId, type);
-		if (chosen !== undefined || this.#loadBalancingEnabled()) return chosen;
+		if (chosen !== undefined || this.isLoadBalancingEnabled()) return chosen;
 		const sticky = this.#routing.getStickySessionCredential(provider, sessionId);
 		if (sticky?.type !== type) return undefined;
 		const credentialId = this.#getStoredCredentials(provider)[sticky.index]?.id;
@@ -867,11 +873,15 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Choose the account a provider uses, for every session and every profile on this machine.
+	 * Choose the account a provider uses.
 	 *
-	 * GLOBAL, not session-scoped, because the credentials are: they live in one shared database
-	 * that every profile reads, so a choice recorded per session evaporates on the next `veyyon`
-	 * and a choice recorded per profile would disagree with the account list it was made from.
+	 * When `accounts.loadBalancing` is enabled (true), the choice is session-only: it pins the
+	 * account to the current session (`options.sessionId`), leaving global provider selection
+	 * empty so other sessions and profiles remain free to balance across accounts. If no session is
+	 * provided, no selection is recorded.
+	 *
+	 * When `accounts.loadBalancing` is disabled (false), the choice is machine-wide: it writes
+	 * the global choice to the store so every session and profile defaults to this account.
 	 *
 	 * PER PROVIDER, deliberately. Several providers serve one session at the same time (the main
 	 * model, agent roles, web search), so there is no single "current account" to switch:
@@ -949,7 +959,7 @@ export class AuthStorage {
 		if (
 			sticky &&
 			stickyEntry &&
-			(!this.#loadBalancingEnabled() || this.#credentialUsableNow(provider, stickyEntry, sticky.index)) &&
+			(!this.isLoadBalancingEnabled() || this.#credentialUsableNow(provider, stickyEntry, sticky.index)) &&
 			!this.#authDeadCredentials.has(stickyEntry.id)
 		) {
 			routing.activeCredentialId = stickyEntry.id;
@@ -1005,7 +1015,7 @@ export class AuthStorage {
 			const providerKey = getProviderTypeKey(provider, type);
 			// The same arithmetic `#getCredentialOrder` runs, without advancing the cursor. With
 			// movement off there is no arithmetic: storage order, as the selector uses.
-			const start = !this.#loadBalancingEnabled()
+			const start = !this.isLoadBalancingEnabled()
 				? 0
 				: sessionId
 					? getHashedIndex(sessionId, candidates.length)
@@ -1155,7 +1165,7 @@ export class AuthStorage {
 		blockScope?: string,
 	): C[] {
 		const present = candidates.filter((candidate): candidate is C => candidate !== undefined);
-		if (!this.#loadBalancingEnabled()) {
+		if (!this.isLoadBalancingEnabled()) {
 			const stored = this.#getStoredCredentials(provider);
 			const refused = (candidate: C): boolean => {
 				const id = stored[candidate.index]?.id;
@@ -1270,7 +1280,7 @@ export class AuthStorage {
 		// A headroom contest is a move by another name: whichever key has the most quota left wins,
 		// so the key changes as usage shifts. With movement off it does not run; the first key in
 		// storage order serves until the operator chooses another.
-		if (!strategy || !this.#loadBalancingEnabled()) {
+		if (!strategy || !this.isLoadBalancingEnabled()) {
 			const ordered = this.#orderByBlockAvailability(
 				provider,
 				providerKey,
@@ -1308,6 +1318,9 @@ export class AuthStorage {
 		}
 		this.#routing.clearProviderSessionCredentials(provider);
 		this.#blocks.clearProviderBlocks(provider);
+		if (provider === "google-antigravity") {
+			this.#confirmedAntigravityQuota.clear();
+		}
 	}
 
 	/** Updates credential at index in-place (used for OAuth token refresh) */
@@ -3120,6 +3133,31 @@ export class AuthStorage {
 	}
 
 	/**
+	 * One line naming the exhausted account, when it resets, and what the balancer does next.
+	 * Account label only (never a token); `available` counts unblocked siblings for the same model scope.
+	 */
+	#formatQuotaMessage(
+		provider: string,
+		credentialId: number,
+		blockedUntilMs: number,
+		detail: { modelId?: string; available: number; siblingRetryAtMs?: number; balancing: boolean },
+	): string {
+		const account = this.#accountNoticeLabel(provider, credentialId);
+		const scope = detail.modelId ? ` for ${detail.modelId}` : "";
+		const head = `Quota reached on ${provider} account ${account}${scope}; resets ${new Date(blockedUntilMs).toISOString()}.`;
+		const others = `${detail.available} other account${detail.available === 1 ? "" : "s"} available`;
+		if (!detail.balancing) {
+			return `${head} ${others} but load balancing is off, so Veyyon waits for this account.`;
+		}
+		if (detail.available > 0) return `${head} ${others}; balancer will try it next.`;
+		const next =
+			detail.siblingRetryAtMs === undefined
+				? "no sibling account exists"
+				: `the earliest sibling resets ${new Date(detail.siblingRetryAtMs).toISOString()}`;
+		return `${head} 0 other accounts available; ${next}.`;
+	}
+
+	/**
 	 * Marks the current session's credential as temporarily blocked due to usage limits.
 	 * Uses usage reports to determine accurate reset time when available.
 	 * Returns whether a sibling credential is available now; when none is, also
@@ -3195,6 +3233,11 @@ export class AuthStorage {
 		);
 		if (targetIndex >= 0) {
 			this.#blocks.markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
+			if (provider === "google-antigravity") {
+				const confirmationKey = `${targetCredentialId}:${blockScope ?? ""}`;
+				const confirmedUntil = this.#confirmedAntigravityQuota.get(confirmationKey) ?? 0;
+				this.#confirmedAntigravityQuota.set(confirmationKey, Math.max(confirmedUntil, blockedUntil));
+			}
 		}
 
 		const siblings = this.#getCredentialsForProvider(provider)
@@ -3206,7 +3249,7 @@ export class AuthStorage {
 		const siblingBlockedUntil = (index: number): number | undefined =>
 			this.#blocks.getCredentialBlockedUntil(provider, providerKey, index, blockScope);
 
-		if (!this.#loadBalancingEnabled()) {
+		if (!this.isLoadBalancingEnabled()) {
 			// The block above still stands: the window really is exhausted, and recording that is
 			// what lets the account list say when it comes back. What load balancing gates is the
 			// MOVE. With it off the caller waits for this account's own window instead of spending
@@ -3238,16 +3281,34 @@ export class AuthStorage {
 					});
 				}
 			}
-			return { switched: false, retryAtMs: blockedUntil };
+			return {
+				switched: false,
+				retryAtMs: blockedUntil,
+				quotaMessage: this.#formatQuotaMessage(provider, targetCredentialId, blockedUntil, {
+					modelId: options?.modelId,
+					available: idleSiblings,
+					balancing: false,
+				}),
+			};
 		}
 
 		let retryAtMs: number | undefined;
+		let available = 0;
 		for (const candidate of siblings) {
 			const candidateBlockedUntil = siblingBlockedUntil(candidate.index);
-			if (candidateBlockedUntil === undefined) return { switched: true };
+			if (candidateBlockedUntil === undefined) {
+				available += 1;
+				continue;
+			}
 			if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) retryAtMs = candidateBlockedUntil;
 		}
-		return { switched: false, retryAtMs };
+		const quotaMessage = this.#formatQuotaMessage(provider, targetCredentialId, blockedUntil, {
+			modelId: options?.modelId,
+			available,
+			siblingRetryAtMs: retryAtMs,
+			balancing: true,
+		});
+		return available > 0 ? { switched: true, quotaMessage } : { switched: false, retryAtMs, quotaMessage };
 	}
 
 	/**
@@ -3468,12 +3529,28 @@ export class AuthStorage {
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&
 			!this.#blocks.isCredentialBlocked(provider, providerKey, sessionPreferredIndex, blockScope);
-		// The explicitly chosen account, which outranks every automatic decision below:
+		// The explicitly chosen account outranks predictions, but not a confirmed Antigravity refusal:
 		// ranking may reorder around it, a hold may not displace it, and the strict pass may not skip
 		// it. `sessionPreferredIndex` is not the same thing — it also carries sticky routing, which is
 		// a record of what served last rather than anything anybody asked for.
-		const chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
-		const movementAllowed = this.#loadBalancingEnabled();
+		let chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
+		const movementAllowed = this.isLoadBalancingEnabled();
+		if (provider === "google-antigravity" && movementAllowed && chosenIndex !== undefined) {
+			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
+			const quotaKey = `${chosenId}:${blockScope ?? ""}`;
+			const confirmedUntil = this.#confirmedAntigravityQuota.get(quotaKey);
+			if (confirmedUntil !== undefined) {
+				if (
+					confirmedUntil > Date.now() &&
+					this.#blocks.isCredentialBlocked(provider, providerKey, chosenIndex, blockScope)
+				) {
+					// A real provider refusal permits movement; a predicted hold alone does not.
+					chosenIndex = undefined;
+				} else {
+					this.#confirmedAntigravityQuota.delete(quotaKey);
+				}
+			}
+		}
 		const sessionPinIsExplicit = chosenIndex !== undefined;
 		const rankDespitePin = movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement;
 		const sessionPreferredUsage =
@@ -3664,7 +3741,7 @@ export class AuthStorage {
 		);
 
 		// The strict pass tries a usable account before an exhausted one, which is what makes quota
-		// fallback work. An explicitly chosen account is exempt from it: a hold is our own prediction,
+		// fallback work. A chosen account without a confirmed refusal is exempt: a hold can be a prediction,
 		// and skipping the chosen account over a prediction is what left a redeemed limit reset
 		// unable to spend the very account it belonged to. With movement off the home account is
 		// exempt for the same reason — it is the one account allowed to serve, blocked or not. Every
@@ -4589,6 +4666,14 @@ export class AuthStorage {
 		// also retires the auth-death mark: the provider, not a mark this process made, gets to say
 		// whether the grant still works.
 		this.#authDeadCredentials.delete(credentialId);
+		if (provider === "google-antigravity") {
+			const prefix = `${credentialId}:`;
+			for (const key of this.#confirmedAntigravityQuota.keys()) {
+				if (key.startsWith(prefix)) {
+					this.#confirmedAntigravityQuota.delete(key);
+				}
+			}
+		}
 
 		const stored = this.#getStoredCredentials(provider);
 		const index = stored.findIndex(entry => entry.id === credentialId);

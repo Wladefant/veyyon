@@ -537,16 +537,29 @@ markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnv
 // render of a fresh component. This module-level cache survives across
 // component lifetimes and eliminates redundant marked.lexer + highlightCode
 // (Rust FFI) work for content/layout combinations already seen this session.
+//
+// The key is the text the component holds, by reference, and the entry holds
+// the signature its rows were laid out under. A key that spells the text and the
+// signature together is a new string the length of the text: one copy of every
+// cached message, 2.9 KiB of the 10.2 KiB of strings a 3,000-character turn of an
+// interactive session kept. One text keeps one entry, the rows of its most recent
+// render.
 
-const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
+const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message texts
 const RENDER_CACHE_MAX_SIZE = 512 * 1024;
 const RENDER_CACHE_MAX_ENTRY_SIZE = 32 * 1024;
 const EMPTY_RENDER_LINES: readonly string[] = [];
-const renderCache = new LRUCache<string, readonly string[]>({
+
+/** The rows one text rendered to, with the width, padding, theme and capabilities they were laid out under. */
+interface RenderCacheEntry extends RenderSignature {
+	lines: readonly string[];
+}
+
+const renderCache = new LRUCache<string, RenderCacheEntry>({
 	max: RENDER_CACHE_MAX,
 	maxSize: RENDER_CACHE_MAX_SIZE,
 	maxEntrySize: RENDER_CACHE_MAX_ENTRY_SIZE,
-	sizeCalculation: renderedLinesCacheSize,
+	sizeCalculation: entry => renderedLinesCacheSize(entry.lines),
 });
 
 function renderedLinesCacheSize(lines: readonly string[]): number {
@@ -567,6 +580,16 @@ const HAS_REF_DEF = /^ {0,3}\[(?:\\.|[^\]\\])+\]:/m;
 // scanned span forces a full lex.
 function canStreamLex(text: string): boolean {
 	return !HAS_REF_DEF.test(text) && !text.includes("\r");
+}
+
+// A copy of `text` in storage of its own. A slice shares the buffer of the string
+// it was cut from, and so does every token marked cuts from that slice. A streamed
+// text is a new buffer on every frame, so tail tokens frozen on one frame after
+// another each held that frame's whole text: 76 MiB for one 206,000-character
+// answer. A structured clone is rebuilt from serialized bytes, so it cannot share
+// the source buffer, and it keeps the content exact (lone surrogates included).
+function unsharedCopy(text: string): string {
+	return structuredClone(text);
 }
 
 // Untrusted model output can over-nest markdown structure: a blockquote nests
@@ -952,7 +975,8 @@ function codespanSwatch(code: string, glyph: string): string {
 	return colorSwatch(match[1], glyph);
 }
 
-interface RenderSignature {
+/** Every input besides the text that the rows of a render depend on. */
+export interface RenderSignature {
 	width: number;
 	paddingX: number;
 	paddingY: number;
@@ -1052,6 +1076,10 @@ export class Markdown implements Component {
 	// re-deriving the same string knows the prefix still is one without comparing
 	// the whole transcript again.
 	#streamPrefixSource?: string;
+	// The frozen prefix the current one was cut to extend, proven a prefix of the text both were
+	// cut from. A row cache or an exposure recorded against it is therefore a prefix of the
+	// current frozen text without comparing the transcript again.
+	#streamPrefixBase?: string;
 	// Leading whole lines of #text that need no render normalization, so a frame
 	// scans only what arrived after them (see #normalizeForRender).
 	#normalizedCleanHead?: string;
@@ -1112,10 +1140,7 @@ export class Markdown implements Component {
 			// Blank replacement: render() early-returns before #lexTokens can see
 			// the non-append edit, so drop the frozen stream state here or it
 			// outlives the content it indexed.
-			this.#streamPrefixText = undefined;
-			this.#streamPrefixTokens = undefined;
-			this.#streamPrefixLineCache = undefined;
-			this.#streamPrefixSource = undefined;
+			this.#dropFrozenPrefix();
 			this.#settledExposedText = undefined;
 		}
 		this.invalidate();
@@ -1130,12 +1155,23 @@ export class Markdown implements Component {
 
 	releaseRenderCache(): void {
 		this.invalidate();
-		// Every field below is derived from #text and rebuilt by the next render: a
-		// full lex re-freezes the stable prefix, and the row caches refill as rows render.
+		this.#dropDerivedState();
+	}
+
+	// The frozen stream prefix: its text, its tokens, its rendered rows and the
+	// text it was cut from.
+	#dropFrozenPrefix(): void {
 		this.#streamPrefixText = undefined;
 		this.#streamPrefixTokens = undefined;
 		this.#streamPrefixLineCache = undefined;
 		this.#streamPrefixSource = undefined;
+		this.#streamPrefixBase = undefined;
+	}
+
+	// Every field derived from #text that the next render rebuilds: a full lex
+	// re-freezes the stable prefix, and the row caches refill as rows render.
+	#dropDerivedState(): void {
+		this.#dropFrozenPrefix();
 		this.#normalizedCleanHead = undefined;
 		this.#streamingDiffLineCache = undefined;
 		this.#openFenceRowCache = undefined;
@@ -1149,8 +1185,10 @@ export class Markdown implements Component {
 		const next = value === true;
 		if (this.#transientRenderCache === next) return;
 		this.#transientRenderCache = next;
-		// The rows are only read while streaming; a sealed block would hold them for nothing.
-		if (!next) this.#openFenceRowCache = undefined;
+		// The derived state serves the frames of a growing text and holds strings
+		// cut from those frames. A sealed block renders from its final text, so it
+		// keeps what one render of that text keeps and nothing from the stream.
+		if (!next) this.#dropDerivedState();
 		this.invalidate();
 	}
 
@@ -1212,7 +1250,9 @@ export class Markdown implements Component {
 		) {
 			const tail = text.slice(prefix.length);
 			if (canStreamLex(tail)) {
-				const tailTokens = markdownParser.lexer(tail);
+				// The tail is lexed from a copy so the tokens frozen out of it hold the
+				// tail alone, not the whole frame's text (see unsharedCopy).
+				const tailTokens = markdownParser.lexer(unsharedCopy(tail));
 				const tokens = [...prefixTokens, ...tailTokens];
 				this.#freezeStablePrefix(text, tokens, { preserveExisting: true });
 				// `text` extends the prefix, proven just above, and the freeze only
@@ -1227,10 +1267,7 @@ export class Markdown implements Component {
 			this.#freezeStablePrefix(text, tokens, { preserveExisting: false });
 			if (this.#streamPrefixText !== undefined) this.#streamPrefixSource = text;
 		} else {
-			this.#streamPrefixText = undefined;
-			this.#streamPrefixTokens = undefined;
-			this.#streamPrefixLineCache = undefined;
-			this.#streamPrefixSource = undefined;
+			this.#dropFrozenPrefix();
 		}
 		return tokens;
 	}
@@ -1276,17 +1313,13 @@ export class Markdown implements Component {
 				if (existingText === undefined || frozenEnd > existingText.length) {
 					this.#streamPrefixText = text.slice(0, frozenEnd);
 					this.#streamPrefixTokens = tokens.slice(0, frozenCount);
+					this.#streamPrefixBase = existingText;
 				}
 				return;
 			}
 		}
 
-		if (!opts.preserveExisting) {
-			this.#streamPrefixText = undefined;
-			this.#streamPrefixTokens = undefined;
-			this.#streamPrefixLineCache = undefined;
-			this.#streamPrefixSource = undefined;
-		}
+		if (!opts.preserveExisting) this.#dropFrozenPrefix();
 	}
 
 	render(width: number): readonly string[] {
@@ -1301,6 +1334,9 @@ export class Markdown implements Component {
 		// Recomputed below by the streaming path; every other path (cache-served,
 		// empty text, non-streaming full render) exposes no settled rows.
 		this.#lastRenderSettledRows = 0;
+		// A render outside streaming reports no settled rows, which ends the exposed
+		// lineage the same way a rewind does, so its text is no longer needed.
+		if (!this.transientRenderCache) this.#settledExposedText = undefined;
 
 		// Calculate available width for content (subtract horizontal padding)
 		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
@@ -1314,35 +1350,35 @@ export class Markdown implements Component {
 			return EMPTY_RENDER_LINES;
 		}
 
-		// Replace tabs with 3 spaces for consistent rendering, then bound structural
-		// nesting depth so pathological model output can't overflow or hang the lexer.
-		const normalizedText = this.#normalizeForRender(this.#text);
 		const signature = this.#renderSignature(width, paddingX);
 
 		// L2: module-level LRU — survives component disposal/recreation across
-		// session-tree navigations. Key encodes every dimension that affects the
-		// render output so different configurations never collide.
-		// Encode terminal capability state and theme/style function output samples
-		// so that capability shifts (image protocol changes, hyperlink toggle) or
-		// caller-supplied theme/bgColor functions that mutate their output without
-		// changing object identity invalidate the cache entry.
+		// session-tree navigations. Keyed by the raw text, which render
+		// normalization below is a function of, and served only under a signature
+		// equal in every dimension that affects the rows.
+		// The signature encodes terminal capability state and theme/style function
+		// output samples so that capability shifts (image protocol changes,
+		// hyperlink toggle) or caller-supplied theme/bgColor functions that mutate
+		// their output without changing object identity miss the cache entry.
 		// bgColor probe uses \x01 (single non-printable byte): chalk/ANSI wrappers
 		// pass arbitrary bytes through verbatim, so this is safe and minimizes the
 		// risk of clashing with a function that returns text verbatim.
 		// theme.heading is used as the representative theme probe — it's required
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
-		let cacheKey: string | undefined;
 		if (!this.transientRenderCache) {
-			cacheKey = renderCacheKey(normalizedText, signature);
-			const cached = renderCache.get(cacheKey);
-			if (cached !== undefined) {
+			const cached = renderCache.get(this.#text);
+			if (cached !== undefined && sameRenderSignature(cached, signature)) {
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
 				this.#cachedText = this.#text;
 				this.#cachedWidth = width;
-				this.#cachedLines = cached;
-				return cached;
+				this.#cachedLines = cached.lines;
+				return cached.lines;
 			}
 		}
+
+		// Replace tabs with 3 spaces for consistent rendering, then bound structural
+		// nesting depth so pathological model output can't overflow or hang the lexer.
+		const normalizedText = this.#normalizeForRender(this.#text);
 
 		// Parse markdown to HTML-like tokens
 		const tokens = this.#lexTokens(normalizedText);
@@ -1370,10 +1406,10 @@ export class Markdown implements Component {
 		this.#cachedWidth = width;
 		this.#cachedLines = result;
 
-		// Update L2 module-level LRU so future instances with the same key skip
-		// the marked.lexer + highlightCode (Rust FFI) work entirely.
-		if (cacheKey !== undefined) {
-			renderCache.set(cacheKey, result);
+		// Update L2 module-level LRU so future instances with the same text and
+		// signature skip the marked.lexer + highlightCode (Rust FFI) work entirely.
+		if (!this.transientRenderCache) {
+			renderCache.set(this.#text, { ...signature, lines: result });
 		}
 
 		return result;
@@ -1420,7 +1456,7 @@ export class Markdown implements Component {
 		// that accumulator back into the cache copied every settled row twice per
 		// frame, and `push(...rows)` puts one argument on the stack per row,
 		// which a long transcript is eventually large enough to overflow.
-		const reusablePrefix = this.#matchingStreamPrefixLineCache(normalizedText, frozenText, signature);
+		const reusablePrefix = this.#matchingStreamPrefixLineCache(frozenText, signature);
 		let frozenLines: readonly string[];
 		if (reusablePrefix && reusablePrefix.tokenCount === frozenTokenCount) {
 			frozenLines = reusablePrefix.lines;
@@ -1451,7 +1487,12 @@ export class Markdown implements Component {
 		// the rewritten lineage.
 		if (frozenLines.length > 0) {
 			const exposed = this.#settledExposedText;
-			if (exposed === undefined || exposed === frozenText || frozenText.startsWith(exposed)) {
+			if (
+				exposed === undefined ||
+				exposed === frozenText ||
+				exposed === this.#streamPrefixBase ||
+				frozenText.startsWith(exposed)
+			) {
 				this.#settledExposedText = frozenText;
 				this.#lastRenderSettledRows = signature.paddingY + frozenLines.length;
 			} else {
@@ -1466,26 +1507,19 @@ export class Markdown implements Component {
 		return frozenLines.slice();
 	}
 
-	// `frozenText` is already known to be a prefix of `normalizedText`. When the
-	// entry was written for that same string — the common case, since the frozen
-	// text is reused by reference while nothing new freezes — both prefix
-	// questions are already answered and comparing the transcript again answers
-	// nothing.
-	#matchingStreamPrefixLineCache(
-		normalizedText: string,
-		frozenText: string,
-		signature: RenderSignature,
-	): StreamPrefixLineCache | undefined {
+	// `frozenText` is already known to be a prefix of `normalizedText`, so an entry
+	// whose text is a prefix of `frozenText` is a prefix of both. When the entry
+	// was written for that same string — the common case, since the frozen text is
+	// reused by reference while nothing new freezes — or for the prefix the frozen
+	// text was cut to extend, which is the case on the frame a new block freezes,
+	// that is already proven and comparing the transcript again answers nothing.
+	#matchingStreamPrefixLineCache(frozenText: string, signature: RenderSignature): StreamPrefixLineCache | undefined {
 		const cache = this.#streamPrefixLineCache;
-		if (!cache) return undefined;
-		if (
-			(cache.text !== frozenText &&
-				(!normalizedText.startsWith(cache.text) || !frozenText.startsWith(cache.text))) ||
-			!sameRenderSignature(cache, signature)
-		) {
-			return undefined;
+		if (!cache || !sameRenderSignature(cache, signature)) return undefined;
+		if (cache.text === frozenText || cache.text === this.#streamPrefixBase || frozenText.startsWith(cache.text)) {
+			return cache;
 		}
-		return cache;
+		return undefined;
 	}
 
 	#renderContentLines(
@@ -2367,10 +2401,6 @@ export class Markdown implements Component {
 		}
 		return lines;
 	}
-}
-
-function renderCacheKey(normalizedText: string, signature: RenderSignature): string {
-	return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}`;
 }
 
 function codeTokenHasClosingFence(token: Token): boolean {

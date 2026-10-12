@@ -89,7 +89,7 @@ Edge behavior from runtime:
 - `{ id?, type: "follow_up", message: string, images?: ImageContent[] }`
 - `{ id?, type: "abort" }`
 - `{ id?, type: "abort_and_prompt", message: string, images?: ImageContent[] }`
-- `{ id?, type: "new_session", parentSession?: string }`
+- `{ id?, type: "new_session", parentSession?: string, background?: boolean }`
 
 ### State
 
@@ -151,6 +151,32 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 - `{ id?, type: "get_last_assistant_text" }`
 - `{ id?, type: "set_session_name", name: string }`
 - `{ id?, type: "handoff", customInstructions?: string }`
+
+### Background conversations
+
+- `{ id?, type: "get_background_sessions" }`
+- `{ id?, type: "cancel_background_session", sessionId: string }`
+
+`new_session` with `background: true` while a turn is streaming attaches the client to a new
+session; the streaming one finishes its turn in the background and its events are no longer sent.
+With no streaming turn the session resets in place, as without `background`. `background` and
+`parentSession` cannot be combined.
+
+`switch_session` to the transcript of a background conversation re-attaches the live session with
+its turn still streaming, and the session the client was driving moves to the background. If that
+session had no turn streaming, it stays only until its background jobs finish, and is disposed at
+once when it has none.
+
+When a session moved, the response has `data.background`:
+`{ sessionId, sessionFile, streaming, displaced, message }`. `streaming` is false when the session
+that moved had no turn streaming. `displaced` lists the session ids of older conversations stopped
+to stay within `session.backgroundLimit`.
+
+`get_background_sessions` returns `{ sessions }`, each
+`{ sessionId, sessionFile, title, detachedAt, streaming, stopping }`. `cancel_background_session`
+aborts the conversation's turn, waits until it is disposed, and fails when no background
+conversation has that id. At exit, a background conversation still running after 5 seconds is
+stopped.
 
 ### Messages
 

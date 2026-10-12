@@ -22,7 +22,7 @@
  * boundary inside it neither lists a sync spawn in the block nor settles it.
  *
  * THE GAP:
- * This test calls `AgentRegistry.global().setStatus` and `setPendingApproval` rather than
+ * This test calls `AgentRegistry.global().setStatus` and `openApprovalWait` rather than
  * running a full live multi-turn IRC message delivery turn through the LLM client. The
  * unsuccessful outcomes are listed by hand (`failed`, `aborted`), since a type union cannot be
  * swept at run time; the registry statuses are swept from `AGENT_STATUSES`.
@@ -248,7 +248,7 @@ describe("an agent woken by IRC is listed in the Agents block while it runs", ()
 
 		// While still running, receive a pending approval prompt (running -> running status_changed)
 		await flushUi(() => {
-			AgentRegistry.global().setPendingApproval(id, { toolName: "bash", since: Date.now() });
+			AgentRegistry.global().openApprovalWait(id, { toolName: "bash", since: Date.now() });
 		});
 
 		// Must NOT appear in the block

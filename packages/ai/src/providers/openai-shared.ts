@@ -99,6 +99,7 @@ import type {
 	ResponseStatus,
 	ResponseStreamEvent,
 } from "./openai-responses-wire";
+import { normalizeOpenAIPromptCacheKey, normalizeOpenRouterResponsesSessionId } from "./openai-stable-ids";
 import { staleToolResultNote, transformMessages } from "./transform-messages";
 import {
 	joinTextWithImagePlaceholder,
@@ -106,6 +107,10 @@ import {
 	NON_VISION_IMAGE_PLACEHOLDER,
 	partitionVisionContent,
 } from "./vision-content";
+
+// `openai-compaction.ts` is byte-locked (`scripts/the-codex-compaction-route-is-locked.test.ts`) and imports
+// this name from here.
+export { parseAzureDeploymentNameMap } from "./azure-deployment-names";
 
 export interface OpenAIModelIdentity {
 	provider: string;
@@ -412,15 +417,6 @@ export function calculateOpenAIUsageAccounting(accounting: OpenAIUsageAccounting
 	};
 }
 
-/** Normalize a cache identity to the wire limit accepted by OpenAI-family providers. */
-export function normalizeOpenAIPromptCacheKey(sessionId: string | undefined): string | undefined {
-	return normalizeOpenAIStableId(sessionId, 64, "pc_");
-}
-
-export function normalizeOpenRouterResponsesSessionId(sessionId: string | undefined): string | undefined {
-	return normalizeOpenAIStableId(sessionId, 256, "session_");
-}
-
 /** Resolve a prompt-cache identity, falling back to the provider session unless caching is disabled. */
 export function getOpenAIPromptCacheKey(options: OpenAICacheOptions | undefined): string | undefined {
 	if (resolveCacheRetention(options?.cacheRetention) === "none") return undefined;
@@ -439,19 +435,6 @@ export function getOpenRouterResponsesSessionId(
 ): string | undefined {
 	if (resolveCacheRetention(options?.cacheRetention) === "none") return undefined;
 	return normalizeOpenRouterResponsesSessionId(options?.sessionId);
-}
-
-export function parseAzureDeploymentNameMap(value: string | undefined): Map<string, string> {
-	const map = new Map<string, string>();
-	if (!value) return map;
-	for (const entry of value.split(",")) {
-		const trimmed = entry.trim();
-		if (!trimmed) continue;
-		const [modelId, deploymentName] = trimmed.split("=", 2);
-		if (!modelId || !deploymentName) continue;
-		map.set(modelId.trim(), deploymentName.trim());
-	}
-	return map;
 }
 
 export function createOpenAIStrictToolsState(): OpenAIStrictToolsState {
@@ -1188,13 +1171,6 @@ export function isToolChoiceRejection(
 	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
 	if (status !== 400) return false;
 	return AIError.matchesToolChoiceRejectionText(rejectionText(error, capturedErrorResponse));
-}
-
-function normalizeOpenAIStableId(value: string | undefined, maxLength: number, hashPrefix: string): string | undefined {
-	if (!value || value.length === 0) return undefined;
-	const wellFormed = value.toWellFormed();
-	if (wellFormed.length <= maxLength) return wellFormed;
-	return `${hashPrefix}${Bun.hash(wellFormed).toString(36)}`;
 }
 
 export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Set([

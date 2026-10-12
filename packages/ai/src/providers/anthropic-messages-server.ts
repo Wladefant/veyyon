@@ -2,7 +2,6 @@ import { Effort } from "@veyyon/catalog/effort";
 import { emptyUsage } from "@veyyon/catalog/models";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
-import { type } from "arktype";
 import { captureRequestHeaders, resolvePromptCacheKey } from "../auth-gateway/http";
 import * as AIError from "../error";
 import type {
@@ -18,6 +17,7 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "../types";
+import { type } from "../utils/schema/arktype";
 import {
 	type AnthropicAssistantContentBlock,
 	type AnthropicMessage,

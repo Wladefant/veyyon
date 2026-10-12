@@ -285,7 +285,7 @@ describe("a conversation /new left running", () => {
 		expect(BackgroundSessions.global().size).toBe(1);
 		expect(registered(first.session)).toBe(true);
 
-		await BackgroundSessions.global().stop(first.session, "stopped by the test");
+		expect(await BackgroundSessions.global().cancel(kept.sessionId, "stopped by the test")).toBe(true);
 		await aborted.promise;
 		expect(job?.status).toBe("cancelled");
 		expect(registered(first.session)).toBe(false);

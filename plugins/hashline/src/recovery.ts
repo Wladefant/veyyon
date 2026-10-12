@@ -6,11 +6,15 @@
  * Recovery fails closed when the target changed or became ambiguous. The
  * patcher then returns a mismatch with fresh context instead of guessing.
  */
-import * as Diff from "diff";
+import { lazy } from "@veyyon/utils/abortable";
+import type * as Diff from "diff";
 import { applyEdits, collectEditAnchorLines } from "./apply";
 import { RECOVERY_EXTERNAL_WARNING, RECOVERY_LINE_REMAP_WARNING, RECOVERY_SESSION_CHAIN_WARNING } from "./messages";
 import type { SnapshotStore } from "./snapshots";
 import type { Anchor, ApplyResult, Edit } from "./types";
+
+/** The `diff` package, evaluated on the first recovery rather than when the patcher loads. */
+const diffPackage = lazy(() => require("diff") as typeof Diff);
 
 export interface RecoveryArgs {
 	path: string;
@@ -31,7 +35,7 @@ export interface RecoveryResult {
 function buildLineMap(previousText: string, currentText: string): Map<number, number> {
 	const previousLines = previousText.split("\n");
 	const currentLines = currentText.split("\n");
-	const changes = Diff.diffArrays(previousLines, currentLines);
+	const changes = diffPackage.value.diffArrays(previousLines, currentLines);
 	const map = new Map<number, number>();
 	let previousLine = 1;
 	let currentLine = 1;

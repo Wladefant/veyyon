@@ -3772,6 +3772,7 @@
 			"parseKittySequence",
 			"readImageFromClipboard",
 			"releaseEmbeddedModulePages",
+			"releaseFreeHeapPages",
 			"search",
 			"setHangulCompatJamoWidthOverride",
 			"sliceWithWidth",

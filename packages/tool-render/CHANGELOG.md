@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Fixed
 
 - Job, task and eval durations and `web_search` source ages in the HTML export and web transcript print through `formatDuration` and `formatAge` from `@veyyon/utils`, so `65000` reads `1m5s` and an age of 30 seconds reads `just now`, as in the terminal.

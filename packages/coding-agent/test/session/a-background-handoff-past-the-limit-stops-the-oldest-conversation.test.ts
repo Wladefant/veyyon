@@ -23,6 +23,8 @@ interface FakeConversation {
 	streaming(): boolean;
 	/** Ends the turn the way a finished response does. */
 	finish(): void;
+	/** Ends the stream while background jobs keep the conversation from going quiet. */
+	endStreamKeepingJobs(): void;
 }
 
 /**
@@ -40,8 +42,12 @@ function conversation(id: string, abortSettles = true): FakeConversation {
 	const session = {
 		sessionManager: {
 			getSessionId: () => id,
+			getSessionName: () => `Title of ${id}`,
 			getSessionFile: () => `/repo/sessions/${id}.jsonl`,
 			flush: async () => {},
+		},
+		get isStreaming() {
+			return running;
 		},
 		waitForIdle: () => turn.promise,
 		waitForQuiescence: () => turn.promise,
@@ -51,7 +57,16 @@ function conversation(id: string, abortSettles = true): FakeConversation {
 			if (abortSettles) end();
 		},
 	} as unknown as AgentSession;
-	return { id, aborts, session, streaming: () => running && aborts.length === 0, finish: end };
+	return {
+		id,
+		aborts,
+		session,
+		streaming: () => running && aborts.length === 0,
+		finish: end,
+		endStreamKeepingJobs: () => {
+			running = false;
+		},
+	};
 }
 
 function streamingCount(conversations: readonly FakeConversation[]): number {
@@ -79,7 +94,7 @@ describe("the background conversation limit", () => {
 			expect(streamingCount(conversations)).toBe(limit);
 
 			await Promise.all(entries.slice(0, 2).map(entry => entry.settled));
-			expect(keeper.kept.map(entry => entry.sessionId)).toEqual(conversations.slice(2).map(c => c.id));
+			expect(keeper.list().map(entry => entry.sessionId)).toEqual(conversations.slice(2).map(c => c.id));
 			for (const c of conversations.slice(2)) c.finish();
 		});
 	}
@@ -138,18 +153,82 @@ describe("stopping a background conversation", () => {
 		const only = conversation("session-a");
 		keeper.keep(only.session, 3);
 
-		await keeper.stop(only.session, "Stopped from the process manager");
+		expect(await keeper.cancel("session-a", "Stopped from the process manager")).toBe(true);
 
 		expect(only.aborts).toEqual(["Stopped from the process manager"]);
 		expect(keeper.size).toBe(0);
 	});
 
-	it("leaves a session that is not registered alone", async () => {
-		const stranger = conversation("session-a");
+	it("stops nothing and reports false for an id no conversation here has", async () => {
+		const keeper = BackgroundSessions.global();
+		const running = conversation("session-a");
+		keeper.keep(running.session, 3);
 
-		await BackgroundSessions.global().stop(stranger.session, "Stopped from the process manager");
+		expect(await keeper.cancel("session-z", "Stopped from the process manager")).toBe(false);
 
-		expect(stranger.aborts).toEqual([]);
-		stranger.finish();
+		expect(running.aborts).toEqual([]);
+		expect(keeper.size).toBe(1);
+		running.finish();
+	});
+});
+
+/**
+ * A caller that never holds the session object (an RPC or ACP client, the status line) reads the
+ * set through `list` and `describe`. Every case reads a conversation in a state a client acts on:
+ * streaming, unwinding a stop, or gone.
+ */
+describe("describing background conversations", () => {
+	afterEach(async () => {
+		await BackgroundSessions.global().drain(100);
+	});
+
+	it("lists every conversation oldest handoff first, with its transcript and title", () => {
+		const keeper = BackgroundSessions.global();
+		const conversations = [conversation("session-a"), conversation("session-b")];
+		for (const c of conversations) keeper.keep(c.session, 3);
+
+		expect(keeper.list().map(({ detachedAt: _detachedAt, ...rest }) => rest)).toEqual([
+			{
+				sessionId: "session-a",
+				sessionFile: "/repo/sessions/session-a.jsonl",
+				title: "Title of session-a",
+				streaming: true,
+				stopping: false,
+			},
+			{
+				sessionId: "session-b",
+				sessionFile: "/repo/sessions/session-b.jsonl",
+				title: "Title of session-b",
+				streaming: true,
+				stopping: false,
+			},
+		]);
+		for (const c of conversations) c.finish();
+	});
+
+	it("marks a conversation stopping while its abort unwinds, and forgets it once it ends", async () => {
+		const keeper = BackgroundSessions.global();
+		const slow = conversation("session-a", false);
+		const kept = keeper.keep(slow.session, 3);
+
+		const cancelled = keeper.cancel("session-a", "Stopped from the process manager");
+		expect(keeper.describe("session-a")).toMatchObject({ sessionId: "session-a", stopping: true });
+
+		slow.finish();
+		expect(await cancelled).toBe(true);
+		await kept.settled;
+		expect(keeper.describe("session-a")).toBeUndefined();
+		expect(keeper.list()).toEqual([]);
+	});
+
+	it("reports a conversation kept only by its background jobs as not streaming", () => {
+		const keeper = BackgroundSessions.global();
+		const jobs = conversation("session-a");
+		keeper.keep(jobs.session, 3);
+
+		jobs.endStreamKeepingJobs();
+
+		expect(keeper.describe("session-a")).toMatchObject({ streaming: false, stopping: false });
+		jobs.finish();
 	});
 });

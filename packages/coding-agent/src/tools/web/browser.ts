@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { isCancellation, lazy, prompt, stringifyJsonSafe, trimTrailingSlashes, untilAborted } from "@veyyon/utils";
-import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "../../sdk";
 import { enforceInlineByteCap } from "../../session/streaming-output";
@@ -46,6 +46,9 @@ const appSchema = lazy(() =>
 		"target?": type("string").describe("substring to pick a window"),
 		"extension?": type("boolean").describe(
 			"drive the operator's own signed-in Chrome through the Playwright Extension (no remote-debugging port)",
+		),
+		"instance?": type("string").describe(
+			"with extension: which stored Chrome profile token to use (alias of instance_id)",
 		),
 		"instance_id?": type("string").describe("with extension: which stored Chrome profile token to use"),
 		"profile?": type("string").describe("with extension: Chrome --profile-directory name"),
@@ -104,11 +107,15 @@ function resolveBrowserKind(params: BrowserParams, session: ToolSession): Browse
 		if (app.cdp_url || app.path) {
 			throw new ToolError("app.extension cannot be combined with app.cdp_url or app.path.");
 		}
+		const instanceId = app.instance ?? app.instance_id;
 		return {
 			kind: "extension",
-			...(app.instance_id ? { instanceId: app.instance_id } : {}),
+			...(instanceId ? { instanceId } : {}),
 			...(app.profile ? { profile: app.profile } : {}),
 		};
+	}
+	if (app?.instance || app?.instance_id || app?.profile) {
+		throw new ToolError("app.instance, app.instance_id, and app.profile require app.extension: true.");
 	}
 	if (app?.cdp_url) {
 		return { kind: "connected", cdpUrl: trimTrailingSlashes(app.cdp_url) };

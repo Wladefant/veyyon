@@ -7,11 +7,11 @@ import type {
 	ToolTier,
 } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import * as prompt from "@veyyon/utils/prompt";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import { type } from "arktype";
 import { isNotebookPath } from "../../edit/notebook";
 import { CONVERTIBLE_EXTENSIONS } from "../../export/markit/convertible-extensions";
 import { InternalUrlRouter, resolveLocalUrlToFile } from "../../internal-urls";

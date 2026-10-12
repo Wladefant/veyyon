@@ -241,7 +241,7 @@ export declare function __veyyonInstallTokioRuntime(): void
  * `natives/bridge/bindings/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __veyyonNativesV1_5_5(): void
+export declare function __veyyonNativesV1_5_6(): void
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -1480,6 +1480,13 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
  * such section or the platform has no implementation.
  */
 export declare function releaseEmbeddedModulePages(): number
+
+/**
+ * Returns the free pages of every C allocator arena to the kernel. Returns
+ * true when any memory was released, and false when none was or the platform
+ * allocator has no such call.
+ */
+export declare function releaseFreeHeapPages(): boolean
 
 /**
  * Search content for a pattern (one-shot, compiles pattern each time).

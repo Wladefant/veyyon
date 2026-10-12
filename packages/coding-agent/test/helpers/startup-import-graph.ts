@@ -173,9 +173,14 @@ export function buildStartupImportGraph(repoRoot: string, entry: string): Startu
 		}
 		// `with { type: "file" }` binds a path to the bundled file; the process reads its bytes only
 		// when code opens that path. The scanner does not report import attributes, so read them here.
+		// A specifier is classified per import form: one imported by path in one statement and by
+		// contents in another is both held by path and walked.
 		const pathTyped = new Set<string>();
-		for (const match of source.matchAll(/\bfrom\s*(["'])([^"']+)\1\s*with\s*\{\s*type\s*:\s*["']file["']\s*\}/g)) {
-			pathTyped.add(match[2]!);
+		const contentTyped = new Set<string>();
+		for (const match of source.matchAll(
+			/\b(?:from|import)\s*(["'])([^"']+)\1(\s*with\s*\{\s*type\s*:\s*["']file["']\s*\})?/g,
+		)) {
+			(match[3] ? pathTyped : contentTyped).add(match[2]!);
 		}
 		for (const imported of imports) {
 			if (imported.kind !== "import-statement" && imported.kind !== "require-call") continue;
@@ -211,7 +216,7 @@ export function buildStartupImportGraph(repoRoot: string, entry: string): Startu
 				continue;
 			}
 			if (pathTyped.has(spec)) byPath.add(resolved);
-			else visit(resolved);
+			if (!pathTyped.has(spec) || contentTyped.has(spec)) visit(resolved);
 		}
 	};
 

@@ -7,17 +7,24 @@
  * longer draws.
  *
  * Callers, none of which is the owner of this registry:
- * - `/new` registers the displayed session and attaches the screen to a new one,
- *   when `session.newKeepsBackground` is on. It passes `session.backgroundLimit`,
- *   and a handoff past that limit stops the oldest running conversation.
- * - `/resume` calls {@link BackgroundSessions.take} to reclaim a registered
- *   session by its transcript, so it re-attaches the live object instead of
- *   replaying that file as finished text. Its picker marks registered
- *   conversations as running and stops one in place through
- *   {@link runningConversations}.
+ * - The terminal's `/new` registers the displayed session and attaches the screen
+ *   to a new one, when `session.newKeepsBackground` is on.
+ * - An RPC client's `new_session` with `background: true`, and an ACP client's
+ *   `_veyyon/sessions/background`, register the session they were driving.
+ * - `/resume`, an RPC `switch_session` and an ACP `session/load` or
+ *   `session/resume` call {@link BackgroundSessions.take} to reclaim a registered
+ *   session by its transcript, so they re-attach the live object instead of
+ *   replaying that file as finished text.
+ * - The `/resume` picker, the RPC `get_background_sessions` and
+ *   `cancel_background_session` commands and the matching ACP methods read
+ *   {@link BackgroundSessions.list} and {@link BackgroundSessions.describe} and
+ *   stop a conversation through {@link BackgroundSessions.cancel}.
  * - The status line subscribes to the count, because a conversation spending
  *   tokens off-screen has no other surface.
  * - Shutdown calls {@link BackgroundSessions.drain}.
+ *
+ * Every handoff passes `session.backgroundLimit`, and a handoff past that limit
+ * stops the oldest running conversation.
  *
  * A registered session is disposed once it goes quiet: its loop is idle and no
  * background job it owns will wake it again. Disposal writes its `session_exit`
@@ -26,7 +33,7 @@
  * process-wide agent lifecycle and worker subprocesses stay up for the session
  * the UI moved to.
  *
- * {@link BackgroundSessions.stop} ends a registered conversation's turn through
+ * {@link BackgroundSessions.cancel} ends a registered conversation's turn through
  * the session's own abort, which closes the provider stream, and disposes it
  * without waiting for its background jobs.
  */
@@ -34,6 +41,7 @@
 import * as path from "node:path";
 import { errorMessage, logger } from "@veyyon/utils";
 import type { AgentSession } from "./agent-session";
+import type { CreateAgentSessionResult } from "./factory-options";
 
 /**
  * How long shutdown waits for handed-off background sessions to go quiet before
@@ -47,12 +55,23 @@ export const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
 export const BACKGROUND_LIMIT_STOP_REASON = "Stopped: background conversation limit reached";
 
 /**
- * Creates the session a screen attaches to when the one it was displaying is
+ * The two host bindings `createAgentSession` returns beside a session. A host
+ * that draws dialogs or delivers notifications installs them through these,
+ * because the session's tools read them from a store the session object does
+ * not expose.
+ */
+export type SessionHostBindings = Pick<CreateAgentSessionResult, "setToolUIContext" | "setToolNotifier">;
+
+/** A session a host attaches to, with its host bindings. */
+export type AttachableSession = SessionHostBindings & Pick<CreateAgentSessionResult, "session">;
+
+/**
+ * Creates the session a host attaches to when the one it was driving is
  * registered as running in the background. Built once from the options the
  * process launched with, so a session started this way carries the same model,
  * prompts, tools and extensions.
  */
-export type InteractiveSessionFactory = () => Promise<AgentSession>;
+export type NextSessionFactory = () => Promise<AttachableSession>;
 
 /** A session that is still running after the UI attached to a different one. */
 export interface KeptSession {
@@ -86,14 +105,50 @@ export class BackgroundSessions {
 
 	readonly #listeners = new Set<() => void>();
 
-	/** Sessions still finishing their turn, oldest handoff first. */
-	get kept(): readonly KeptSession[] {
-		return Array.from(this.#kept.values());
-	}
-
 	/** How many handed-off sessions have not settled yet. */
 	get size(): number {
 		return this.#kept.size;
+	}
+
+	/** The conversations running here, oldest handoff first. */
+	list(): BackgroundConversation[] {
+		return Array.from(this.#kept.values(), entry => this.#describe(entry));
+	}
+
+	/** The registered conversation with `sessionId`, if one is running here. */
+	describe(sessionId: string): BackgroundConversation | undefined {
+		const entry = this.#findById(sessionId);
+		return entry && this.#describe(entry);
+	}
+
+	/**
+	 * End the registered conversation with `sessionId` and wait until it is
+	 * disposed. Resolves `false`, and stops nothing, when no conversation here has
+	 * that id. `reason` is recorded on the aborted turn.
+	 */
+	async cancel(sessionId: string, reason: string): Promise<boolean> {
+		const entry = this.#findById(sessionId);
+		if (!entry) return false;
+		await this.#stop(entry, reason);
+		return true;
+	}
+
+	#findById(sessionId: string): KeptSession | undefined {
+		for (const entry of this.#kept.values()) {
+			if (entry.sessionId === sessionId) return entry;
+		}
+		return undefined;
+	}
+
+	#describe(entry: KeptSession): BackgroundConversation {
+		return {
+			sessionId: entry.sessionId,
+			sessionFile: entry.sessionFile,
+			title: entry.session.sessionManager.getSessionName(),
+			detachedAt: entry.detachedAt,
+			streaming: entry.session.isStreaming,
+			stopping: this.#stopping.has(entry.session),
+		};
 	}
 
 	/**
@@ -132,9 +187,7 @@ export class BackgroundSessions {
 	 * first entry rather than waiting on it twice.
 	 */
 	keep(session: AgentSession, limit: number): KeptSession {
-		if (!(limit >= 1)) {
-			throw new RangeError(`session.backgroundLimit must be at least 1, got ${limit}`);
-		}
+		assertBackgroundLimit(limit);
 		const existing = this.#kept.get(session);
 		if (existing) return existing;
 		const running = Array.from(this.#kept.values()).filter(entry => !this.#stopping.has(entry.session));
@@ -154,7 +207,7 @@ export class BackgroundSessions {
 		};
 		this.#kept.set(session, entry);
 		for (const displaced of overflow) {
-			void this.stop(displaced.session, BACKGROUND_LIMIT_STOP_REASON);
+			void this.#stop(displaced, BACKGROUND_LIMIT_STOP_REASON);
 		}
 		this.#emit();
 		return entry;
@@ -164,13 +217,11 @@ export class BackgroundSessions {
 	 * End a registered conversation's turn and wait until it is disposed.
 	 *
 	 * The session's own abort closes the provider stream; the entry then leaves
-	 * the set and is disposed, which cancels the background jobs it owns. A
-	 * session that is not registered is left alone. An abort that throws is
-	 * logged, and the wait still ends when the entry settles.
+	 * the set and is disposed, which cancels the background jobs it owns. An
+	 * abort that throws is logged, and the wait still ends when the entry settles.
 	 */
-	async stop(session: AgentSession, reason: string): Promise<void> {
-		const entry = this.#kept.get(session);
-		if (!entry) return;
+	async #stop(entry: KeptSession, reason: string): Promise<void> {
+		const { session } = entry;
 		this.#stopping.add(session);
 		try {
 			await session.abort({ reason });
@@ -214,10 +265,19 @@ export class BackgroundSessions {
 	 */
 	take(sessionFile: string): AgentSession | undefined {
 		const entry = this.find(sessionFile);
-		if (!entry) return undefined;
+		return entry && this.reclaim(entry) ? entry.session : undefined;
+	}
+
+	/**
+	 * Reclaim the session `entry` registered, unless it already ended or was
+	 * reclaimed: `false` then, and nothing changes. A reclaimed session leaves
+	 * the set and is not disposed.
+	 */
+	reclaim(entry: KeptSession): boolean {
+		if (this.#kept.get(entry.session)?.handoff !== entry.handoff) return false;
 		this.#quietWaits.get(entry.session)?.abort();
 		this.#discard(entry.session, entry.handoff);
-		return entry.session;
+		return true;
 	}
 
 	/** The registered conversation writing to `sessionFile`, if one is. */
@@ -298,12 +358,73 @@ export class BackgroundSessions {
 	}
 }
 
+/** Throw unless `limit` is a usable `session.backgroundLimit`: at least one conversation. */
+export function assertBackgroundLimit(limit: number): void {
+	if (!(limit >= 1)) {
+		throw new RangeError(`session.backgroundLimit must be at least 1, got ${limit}`);
+	}
+}
+
 async function dispose(session: AgentSession, sessionId: string): Promise<void> {
 	try {
 		await session.dispose();
 	} catch (error) {
 		logger.warn("Handed-off session failed to dispose", { sessionId, error: errorMessage(error) });
 	}
+}
+
+/**
+ * A conversation running in the background, described for a caller that never
+ * holds the session object: a status line, a session picker, an RPC or ACP client.
+ */
+export interface BackgroundConversation {
+	/** Session id at the moment it was handed off; {@link BackgroundSessions.cancel} takes it. */
+	readonly sessionId: string;
+	/** Transcript the conversation writes to, the key a resume reclaims it by. */
+	readonly sessionFile: string | undefined;
+	readonly title: string | undefined;
+	/** When it was handed off, in epoch milliseconds. */
+	readonly detachedAt: number;
+	/** True while its turn is streaming; false while only its background jobs keep it registered. */
+	readonly streaming: boolean;
+	/** True once a stop was requested and the turn is unwinding. */
+	readonly stopping: boolean;
+}
+
+/** What a host reports to its caller after a handoff. */
+export interface BackgroundHandoff {
+	/** The conversation that left the foreground. */
+	readonly sessionId: string;
+	readonly sessionFile: string | undefined;
+	/**
+	 * True when its turn was streaming at the handoff. False when it entered the background set
+	 * only to let its background jobs finish; it is disposed once they end, at once when it has none.
+	 */
+	readonly streaming: boolean;
+	/** Session ids of the older conversations the handoff stopped to stay within `session.backgroundLimit`. */
+	readonly displaced: readonly string[];
+	/** One line stating the outcome, independent of the command or request that caused the handoff. */
+	readonly message: string;
+}
+
+/**
+ * Describe `kept`, which a handoff registered under `limit`, for the caller
+ * that asked for it. Call it right after the handoff: the outcome is read from
+ * the session's state at the call. The message states that outcome without
+ * naming the command or request that caused it, so every host prints the same line.
+ */
+export function backgroundHandoff(kept: KeptSession, limit: number): BackgroundHandoff {
+	const streaming = kept.session.isStreaming;
+	const outcome = streaming ? "continues in the background" : "closes once its background jobs finish";
+	const stopped =
+		kept.displaced.length > 0 ? `; stopped ${kept.displaced.join(", ")} (background limit ${limit})` : "";
+	return {
+		sessionId: kept.sessionId,
+		sessionFile: kept.sessionFile,
+		streaming,
+		displaced: kept.displaced,
+		message: `${kept.sessionId} ${outcome}${stopped}`,
+	};
 }
 
 /** The off-screen conversations a session picker lists, addressed by transcript path. */
@@ -323,7 +444,7 @@ export function runningConversations(keeper: BackgroundSessions, reason: string)
 		isRunning: sessionFile => keeper.find(sessionFile) !== undefined,
 		stop: async sessionFile => {
 			const entry = keeper.find(sessionFile);
-			if (entry) await keeper.stop(entry.session, reason);
+			if (entry) await keeper.cancel(entry.sessionId, reason);
 		},
 	};
 }

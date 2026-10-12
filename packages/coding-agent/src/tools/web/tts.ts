@@ -7,8 +7,8 @@ import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ApiKey } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
-import { type } from "arktype";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../config/settings-instance";
 import type { CustomTool, CustomToolContext } from "../../extensibility/custom-tools/types";
@@ -28,7 +28,6 @@ import { missingXAICredentialsMessage, resolveXAIHttpCredentials, veyyonXAIUserA
 const DEFAULT_XAI_VOICE_ID = "eve" as const;
 const DEFAULT_XAI_SAMPLE_RATE = 24_000;
 const DEFAULT_XAI_BIT_RATE = 128_000;
-const XAI_MAX_TEXT_LENGTH = 15_000;
 
 // Built-in voices per xAI Tier-1 docs (2026-05-16). xAI also accepts custom voice IDs,
 // so the schema does NOT enum-restrict voice_id; this constant only drives the description.
@@ -272,7 +271,7 @@ export const ttsTool: CustomTool<typeof ttsSchema.value, TtsToolDetails> = {
 		`xai = xAI Grok Voice cloud (built-in voices: ${formatVoiceList()}; custom voice IDs accepted; MP3 or WAV). ` +
 		"auto prefers local, but routes an .mp3 request to xAI when credentials exist (only the cloud path emits MP3); " +
 		"otherwise an .mp3 path is written as a sibling .wav. xAI codec is inferred from the output_path suffix. " +
-		`Max ${XAI_MAX_TEXT_LENGTH.toLocaleString("en-US")} characters.`,
+		"Max 15,000 characters.",
 	get parameters() {
 		return ttsSchema.value;
 	},

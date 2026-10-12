@@ -527,6 +527,19 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	defaultInactive?: boolean;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
+	/**
+	 * Whether the agent loop may abort this call mid-execution to deliver a
+	 * queued steering message (instead of waiting for it to finish on its own).
+	 * Set only where the call purely *waits* and observes its abort signal
+	 * cleanly (e.g. the `job` poll), so the abort surfaces the tool's current
+	 * snapshot rather than corrupting a side effect. Honored only when
+	 * `interruptMode` is "immediate".
+	 *
+	 * - boolean: every call to the tool is (or is not) interruptible.
+	 * - function: resolved per call from the (raw, pre-validation) arguments,
+	 *   for a tool where only some operations block.
+	 */
+	interruptible?: boolean | ((args: Partial<Static<TParams>>) => boolean);
 	/** Tool approval tier. Defaults to `"exec"` when omitted.
 	 *  `"read"`: read-only operations. `"write"`: mutations. `"exec"`: code execution. */
 	approval?: ToolApproval;

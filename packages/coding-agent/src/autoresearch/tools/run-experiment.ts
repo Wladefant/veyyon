@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, formatBytes, lazy } from "@veyyon/utils";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import type { ViewSpan } from "@veyyon/view";
-import { type } from "arktype";
 import { executeBash } from "../../exec/bash-executor";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import {

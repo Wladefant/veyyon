@@ -58,3 +58,17 @@ export function createOwnedAsyncJobManager(input: OwnedAsyncJobsInput): AsyncJob
 	});
 	return manager;
 }
+
+/**
+ * The manager a session runs its jobs on: the one it owns, else, for a spawned agent, the one its
+ * spawner handed over, so a result reaches the conversation that spawned it. The process-wide
+ * instance is the fallback for an SDK caller that passes a parent prefix and no manager.
+ */
+export function sessionAsyncJobManager(
+	owned: AsyncJobManager | undefined,
+	options: Pick<CreateAgentSessionOptions, "parentTaskPrefix" | "asyncJobManager">,
+): AsyncJobManager | undefined {
+	if (owned) return owned;
+	if (!isInProcessChildSession(options)) return undefined;
+	return options.asyncJobManager ?? AsyncJobManager.instance();
+}

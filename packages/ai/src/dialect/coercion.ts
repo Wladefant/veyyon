@@ -3,7 +3,8 @@ import * as logger from "@veyyon/utils/logger";
 import { errorMessage, getOwnProperty, isRecord, setSafeProperty } from "@veyyon/utils/type-guards";
 import type { ToolCall } from "../types";
 import { toolWireSchema } from "../utils/schema";
-import type { InbandScanEvent, InbandTool } from "./types";
+import type { FencedThinkingScanner } from "./fenced-thinking";
+import type { InbandScanEvent, InbandTool, InbandToolEnd } from "./types";
 
 export interface ToolArgShape {
 	stringArgs: Set<string>;
@@ -114,10 +115,23 @@ export function mintToolCallId(): string {
 	return `ptc_${Date.now().toString(36)}_${idCounter.toString(36)}`;
 }
 
+/**
+ * The length of the longest proper prefix of `tag` that `text` ends with: the
+ * part of a tag a scanner holds back until the next delta shows whether the tag
+ * completes. Runs on every streamed delta, so it allocates nothing and compares
+ * only at positions holding the tag's first character.
+ */
 export function partialSuffixOverlap(text: string, tag: string): number {
-	const max = Math.min(text.length, tag.length - 1);
-	for (let k = max; k > 0; k--) {
-		if (text.endsWith(tag.slice(0, k))) return k;
+	const end = text.length;
+	const max = Math.min(end, tag.length - 1);
+	if (max <= 0) return 0;
+	const first = tag[0];
+	// The longest overlap starts earliest, so candidate starts are scanned left to right.
+	for (let start = text.indexOf(first, end - max); start !== -1; start = text.indexOf(first, start + 1)) {
+		const k = end - start;
+		let i = 1;
+		while (i < k && text.charCodeAt(start + i) === tag.charCodeAt(i)) i++;
+		if (i === k) return k;
 	}
 	return 0;
 }
@@ -145,6 +159,21 @@ export function findFirstTag(text: string, tags: readonly string[]): TagMatch | 
 }
 
 /**
+ * Emit `buffer` as one text event, except a suffix that could be the start of one of `tags`, which
+ * is returned to stay held until more text arrives. With `final` set nothing is held.
+ */
+export function emitTextHoldingPartialTag(
+	buffer: string,
+	tags: readonly string[],
+	final: boolean,
+	events: InbandScanEvent[],
+): string {
+	const emitEnd = final ? buffer.length : buffer.length - partialSuffixOverlapAny(buffer, tags);
+	if (emitEnd > 0) events.push({ type: "text", text: buffer.slice(0, emitEnd) });
+	return buffer.slice(emitEnd);
+}
+
+/**
  * One step of a scanner's outside-of-any-block state: the text before the first
  * of `tags` is emitted as a text event and the buffer advances past the tag.
  * With no tag present the whole buffer is emitted, except a suffix that could be
@@ -159,12 +188,7 @@ export function scanOutsideText(
 	events: InbandScanEvent[],
 ): { buffer: string; tag: string | null } {
 	const match = findFirstTag(buffer, tags);
-	if (!match) {
-		const hold = final ? 0 : partialSuffixOverlapAny(buffer, tags);
-		const emitEnd = buffer.length - hold;
-		if (emitEnd > 0) events.push({ type: "text", text: buffer.slice(0, emitEnd) });
-		return { buffer: buffer.slice(emitEnd), tag: null };
-	}
+	if (!match) return { buffer: emitTextHoldingPartialTag(buffer, tags, final, events), tag: null };
 	if (match.index > 0) events.push({ type: "text", text: buffer.slice(0, match.index) });
 	return { buffer: buffer.slice(match.index + match.tag.length), tag: match.tag };
 }
@@ -219,6 +243,27 @@ export function scanThinkingText(
 	section.delta(buffer.slice(0, close), events);
 	section.end(events);
 	return { buffer: buffer.slice(close + closeTag.length), closed: true };
+}
+
+/**
+ * The {@link scanThinkingText} step for a ` ```thinking ` section, whose close `fenced` matches
+ * around nested code fences: the text `fenced` releases is streamed into `section`, which ends when
+ * the closing fence arrives or the stream does. `closed` is true on either. The returned buffer is
+ * the text after the closing fence, and empty while the section stays open, since `fenced` holds
+ * any undecided tail itself.
+ */
+export function scanFencedThinking(
+	fenced: FencedThinkingScanner,
+	buffer: string,
+	final: boolean,
+	section: ThinkingSection,
+	events: InbandScanEvent[],
+): { buffer: string; closed: boolean } {
+	const result = fenced.feed(buffer, final);
+	section.delta(result.thinking, events);
+	const closed = result.closed || final;
+	if (closed) section.end(events);
+	return { buffer: result.closed ? result.rest : "", closed };
 }
 
 export function normalizeKimiFunctionName(rawId: string): string {
@@ -325,7 +370,10 @@ export function getOwnArg(args: Record<string, unknown>, key: string): unknown {
 	return getOwnProperty(args, key);
 }
 
-/** Complete an announced call with arguments recovered from a truncated or malformed body. */
+/**
+ * Complete an announced call with arguments recovered from a malformed body or, `unterminated`, from a
+ * body the stream ended inside.
+ */
 export function emitBestEffortToolEnd(
 	started: boolean,
 	id: string,
@@ -333,19 +381,14 @@ export function emitBestEffortToolEnd(
 	body: string,
 	rawBlock: string,
 	events: InbandScanEvent[],
+	unterminated = false,
 ): void {
 	if (!started) return;
-	// `name` was captured early from a PARTIAL body (it may be a prefix like "r" of "read");
-	// re-derive the fuller name from the current body when possible.
-	let args: unknown;
-	try {
-		const partial = parseStreamingJson<{ name?: unknown; arguments?: unknown }>(body);
-		if (typeof partial.name === "string" && partial.name.length > name.length) name = partial.name;
-		args = partial.arguments;
-	} catch {
-		args = undefined;
-	}
-	events.push({ type: "toolEnd", id, name, arguments: recordOrEmpty(args), rawBlock });
+	// A body that recovers to a non-object (`null`, a number) has no arguments to recover.
+	const partial = recordOrEmpty(parseStreamingJson<unknown>(body));
+	const end: InbandToolEnd = { type: "toolEnd", id, name, arguments: recordOrEmpty(partial.arguments), rawBlock };
+	if (unterminated) end.unterminated = true;
+	events.push(end);
 }
 
 /**

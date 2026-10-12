@@ -20,7 +20,8 @@ import { editToolView } from "./edit-view";
 import { executeHashlineSingle, hashlineEditParamsSchema } from "./hashline";
 import { type ApplyPatchParams, applyPatchSchema, expandApplyPatchToEntries } from "./modes/apply-patch";
 import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
-import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
+import { type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
+import { executePatchSingle } from "./modes/patch-execute";
 import {
 	executeReplaceSingle,
 	type ReplaceBatchParams,
@@ -44,6 +45,7 @@ export * from "./hashline";
 export * from "./match";
 export * from "./modes/apply-patch";
 export * from "./modes/patch";
+export * from "./modes/patch-execute";
 export * from "./modes/replace";
 export * from "./normalize";
 export * from "./snapshot-details";

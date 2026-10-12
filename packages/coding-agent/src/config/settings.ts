@@ -463,7 +463,7 @@ export class Settings extends SettingsStore {
 		return settingsOrThrow();
 	}
 
-	/** Reload routing and the spawn ceiling for subsequent spawns without rebinding existing agents. */
+	/** Reload advisor and spawn routing without rebinding Main or existing workers. */
 	reloadConfig() {
 		return this.reloadSelectedConfig(
 			[
@@ -479,9 +479,7 @@ export class Settings extends SettingsStore {
 					"pickInitialThinkingLevel captures it at startup and resolveAgentThinkingLevel always supplies a concrete lane, frontmatter or AGENT_DEFAULT_EFFORT value, so a reload cannot honestly change dispatched worker effort.",
 				"modelRoles.default":
 					"Main's initial provider/model selection is already bound; restart to change its configured default.",
-				"modelRoles.advisor":
-					"An established advisor runtime is not rebound by a settings reload; restart to change this role.",
-				...(["default", "advisor"].some(role => this.getModelRole(role)?.includes("@"))
+				...(this.getModelRole("default")?.includes("@")
 					? {
 							modelRoles:
 								"A startup-bound role references another role; restart to change the role map without changing its captured target.",

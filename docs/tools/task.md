@@ -11,6 +11,7 @@
   - `packages/coding-agent/src/task/agents.ts`: bundled agent definitions and frontmatter parsing.
   - `packages/coding-agent/src/task/executor.ts`: create child sessions, run agents, collect output, hand finished sessions to the lifecycle manager.
   - `packages/coding-agent/src/task/run-monitor.ts`: per-run progress, abort and soft request-budget enforcement, usage totals and output capture for one agent.
+  - `packages/coding-agent/src/task/provider-error-reporter.ts`: report terminal provider HTTP 429/402 lane errors to `model_routing.py record-error`.
   - `packages/coding-agent/src/registry/agent-lifecycle.ts`: idle-TTL parking and revival of finished agents.
   - `packages/coding-agent/src/registry/agent-registry.ts`: process-global agent directory (`running | idle | parked | aborted`).
   - `packages/coding-agent/src/async/job-manager.ts`: background job registration, progress, and result delivery.
@@ -123,6 +124,7 @@ Artifacts and side channels:
 - Subprocesses / native bindings
   - Isolation backends run through the `veyyon-natives` PAL (`natives/fs/iso`): kernel `overlay` with `fuse-overlayfs`/`fusermount[3]` fallback on Linux, APFS/Btrfs/ZFS/reflink clones, ProjFS on Windows, recursive copy as last resort.
   - Git operations for baseline capture, patch apply, worktrees, branches, stash, cherry-pick, commits.
+  - Provider error reporter spawns `python <script> record-error --model <model>` with stdin payload on provider HTTP 429/402 errors.
 - Session state (transcript, memory, jobs, checkpoints, registries)
   - Creates child `AgentSession` instances with isolated settings snapshots; finished sessions stay registered in the process-global `AgentRegistry` as `idle`/`parked` until process teardown or explicit release.
   - With `async.enabled=true`, registers one async job per spawn in `session.asyncJobManager`; completion is injected into the parent as an async-result message.
@@ -159,6 +161,14 @@ Artifacts and side channels:
 - If the child omits `yield`, `finalizeSubprocessOutput(...)` injects warnings such as `SYSTEM WARNING: Agent exited without calling yield tool after 3 reminders.`
 - `agent://<id>` resolution errors are model-visible when another tool reads them: no session, no artifacts dir, missing id, conflicting extraction syntax, or invalid JSON for extraction.
 
+- Terminal provider 429 and 402 lane errors:
+  - `reportProviderError(model, body, options?)` in `packages/coding-agent/src/task/provider-error-reporter.ts` reports HTTP 429 and 402 errors to `model_routing.py record-error`.
+  - The default script is `~/.veyyon/workflows/model_routing.py`. The environment variable `VEYYON_MODEL_ROUTING_SCRIPT` overrides this script path.
+  - If the routing script is missing, reporting is a silent no-op.
+  - The reporter ignores arbitrary numeric text and non-429/non-402 responses.
+  - The reporter spawns `python <script> record-error --model <model>` with the error body piped through stdin.
+  - The spawned process runs unreferenced with a 10-second timeout and `windowsHide: true`.
+  - Spawn and stdin failures log generic warning messages. The reporter never logs or leaks error payloads.
 ## Slot left after a crash during setup
 Isolation slots live under the worktrees directory (`VEYYON_WORKTREE_DIR`, else the `worktree.base` setting, else the profile `wt/` directory), one `t<9 hex>` directory per repository and task id. Setup mounts the backend first and writes `.veyyon-retained-backend.json` second. If the owner process dies between those two steps, the slot has an owner record (`.veyyon-owner.json`) and a mount directory (`m-<16 hex>`), but no backend record.
 

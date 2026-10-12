@@ -11,7 +11,6 @@ import {
 } from "../config/model-resolver";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import type { ExtensionReloadResult } from "../extensibility/extensions/types";
-import { PluginManager } from "../extensibility/plugins";
 import { formatProviderName } from "../session/account-format";
 import {
 	type AccountRow,
@@ -34,10 +33,7 @@ import {
 	accountRoleAnnotations,
 	renderAccountStatus,
 } from "./helpers/account-status";
-import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
-import { interactiveSecretPort, runSecretCommandForSurface } from "./helpers/secret";
-import { handleSshAcp } from "./helpers/ssh";
 import { buildUsageReportText } from "./helpers/usage-report";
 import type { ProfileCommandPort } from "./profile-command";
 import type { TuiSlashCommandHostContext, TuiSlashCommandRuntime } from "./types";
@@ -224,13 +220,13 @@ export async function credentialedProviderIds(session: AgentSession): Promise<st
 }
 
 /**
- * `/account use <provider> <account>`: make one account the machine-wide choice for its provider.
+ * `/account use <provider> <account>`: choose which account of a provider serves traffic.
  *
  * The text twin of pressing `enter` on the account card, for the callers that have no card to
- * press: ACP clients, `--print`, and anything driving veyyon from a script. It writes the SAME
- * durable per-provider selection the card writes rather than a session pin, because a caller that
- * cannot see the card also cannot see a choice that quietly expires with the session.
- *
+ * press: ACP clients, `--print`, and anything driving veyyon from a script. It follows the same
+ * shared policy as the account card: with `accounts.loadBalancing` enabled, the choice pins that
+ * account for this session only without writing a global selection. With load balancing off, it
+ * writes the durable machine-wide per-provider selection so all sessions and profiles default to it.
  * An account is named by any of the things an account surface prints for it — the name it was
  * given, its email, its account id, or the label the card renders — matched case-insensitively,
  * exact before prefix. A prefix matching two accounts is REFUSED with both named: picking either
@@ -286,9 +282,16 @@ export async function useProviderAccount(
 	if (!authStorage.selectProviderCredential(provider, row.credentialId, { sessionId: session.sessionId })) {
 		return { ok: false, message: `Could not switch to ${label}: that account is no longer stored.` };
 	}
+	const scope = (
+		typeof authStorage.isLoadBalancingEnabled === "function"
+			? authStorage.isLoadBalancingEnabled()
+			: session.settings.get("accounts.loadBalancing") === true
+	)
+		? "for this session only"
+		: "everywhere on this machine";
 	return {
 		ok: true,
-		message: `${row.providerLabel}: now using ${label} everywhere on this machine.`,
+		message: `${row.providerLabel}: now using ${label} ${scope}.`,
 	};
 }
 
@@ -706,6 +709,7 @@ export const SETUP_HANDLERS = {
 		handle: async (command, runtime) => {
 			// Let failures cross the ACP boundary. Print mode can then exit unsuccessfully and RPC
 			// can return a failed response instead of emitting error prose followed by success.
+			const { runSecretCommandForSurface } = await import("./helpers/secret");
 			const outcome = await runSecretCommandForSurface(command.args ?? "", {
 				session: runtime.session,
 				sessionManager: runtime.sessionManager,
@@ -731,6 +735,7 @@ export const SETUP_HANDLERS = {
 			const ctx = runtime.ctx;
 			ctx.editor.setText("");
 			try {
+				const { interactiveSecretPort, runSecretCommandForSurface } = await import("./helpers/secret");
 				const outcome = await runSecretCommandForSurface(command.args ?? "", interactiveSecretPort(ctx));
 				if (!outcome.cancelled) ctx.showStatus(outcome.message);
 			} catch (error) {
@@ -773,14 +778,15 @@ export const SETUP_HANDLERS = {
 		},
 	},
 	mcp: {
-		handle: handleMcpAcp,
+		// `/mcp`, `/ssh`, `/plugins` and `/secret` load their handlers on first run, not with the registry.
+		handle: async (command, runtime) => (await import("./helpers/mcp")).handleMcpAcp(command, runtime),
 		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.handleMCPCommand(command.text);
 		},
 	},
 	ssh: {
-		handle: handleSshAcp,
+		handle: async (command, runtime) => (await import("./helpers/ssh")).handleSshAcp(command, runtime),
 		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.handleSSHCommand(command.text);
@@ -814,6 +820,7 @@ export const SETUP_HANDLERS = {
 	},
 	plugins: {
 		handle: async (_command, runtime) => {
+			const { PluginManager } = await import("../extensibility/plugins");
 			const npmManager = new PluginManager();
 			const npmPlugins = await npmManager.list();
 			if (npmPlugins.length === 0) {
@@ -830,6 +837,7 @@ export const SETUP_HANDLERS = {
 		handleTui: async (_command, runtime) => {
 			runtime.ctx.editor.setText("");
 			try {
+				const { PluginManager } = await import("../extensibility/plugins");
 				const npm = new PluginManager();
 				const npmPlugins = await npm.list();
 				if (npmPlugins.length === 0) {

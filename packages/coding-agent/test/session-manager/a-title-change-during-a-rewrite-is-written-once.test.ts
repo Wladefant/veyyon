@@ -146,8 +146,9 @@ describe("a title change during a rewrite is written once", () => {
 				const { file, storage } = await overlap(publish, when);
 
 				// The publish in progress is the one the case names, so the case is not proving the other one. A
-				// queued rewrite plans after the title change, which revises the header line, so it keeps no prefix.
-				const first: Publish | undefined = when === "none" ? undefined : when === "queued" ? "whole" : publish;
+				// queued rewrite plans after the title change, which leaves the header line alone, so a tail
+				// rewrite still keeps the lines before its update.
+				const first: Publish | undefined = when === "none" ? undefined : publish;
 				expect(storage.publishes.at(0)).toBe(first);
 				const lines = fileLines(file);
 				expect(lines[0]).toMatchObject({ type: "title", title: TITLE });

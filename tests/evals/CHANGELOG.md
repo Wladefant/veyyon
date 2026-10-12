@@ -4,6 +4,8 @@ All notable changes to `@veyyon/evals` will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-10
+
 ### Added
 
 - `benches/miniwob.ts` runs a form-entry subset of MiniWoB++ through the CLI's browser tool with one model and reports success, tool calls, wall time and tokens per episode, for a before and after tree.

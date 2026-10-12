@@ -33,7 +33,7 @@ export const Shell = lazyNativeClass("Shell");
 
 // functions
 export const __veyyonInstallTokioRuntime = lazyNativeFn("__veyyonInstallTokioRuntime");
-export const __veyyonNativesV1_5_5 = lazyNativeFn("__veyyonNativesV1_5_5");
+export const __veyyonNativesV1_5_6 = lazyNativeFn("__veyyonNativesV1_5_6");
 export const astEdit = lazyNativeFn("astEdit");
 export const astGrep = lazyNativeFn("astGrep");
 export const astMatch = lazyNativeFn("astMatch");
@@ -71,6 +71,7 @@ export const parseKittySequence = lazyNativeFn("parseKittySequence");
 export const readCommitMemory = lazyNativeFn("readCommitMemory");
 export const readImageFromClipboard = lazyNativeFn("readImageFromClipboard");
 export const releaseEmbeddedModulePages = lazyNativeFn("releaseEmbeddedModulePages");
+export const releaseFreeHeapPages = lazyNativeFn("releaseFreeHeapPages");
 export const search = lazyNativeFn("search");
 export const setHangulCompatJamoWidthOverride = lazyNativeFn("setHangulCompatJamoWidthOverride");
 export const sliceWithWidth = lazyNativeFn("sliceWithWidth");

@@ -29,6 +29,7 @@ import {
 	agentModelSourceLabel,
 	agentsEnabled,
 	isAgentEnabled,
+	nextSpawnId,
 	resolveAgentModel,
 	resolveAgentThinkingLevel,
 	resolveEnabledAgents,
@@ -364,6 +365,8 @@ export class VibeSessionRegistry {
 			// The worker session runs one level below its spawner (the executor
 			// derives the same value as `childDepth`), and lane rows key on that.
 			taskDepth: (session.taskDepth ?? 0) + 1,
+			spawnId: nextSpawnId(`vibe:${session.getSessionId?.() ?? "session"}:${owner}`),
+			modelRegistry: session.modelRegistry,
 		});
 		if (resolvedModel.unresolved) {
 			const { source, value, depth } = resolvedModel.unresolved;
