@@ -107,19 +107,30 @@ test("only the last verifier completion resumes one producer deficit", async () 
 				status: "running",
 				agentName: "reviewer",
 			};
-			const completedA = { agentId: "verifier-a", agentName: "qa-verifier", status: "completed" } as const;
+			const completedA = {
+				agentId: "verifier-a",
+				agentName: "qa-verifier",
+				task: "Verify the first worker",
+				status: "completed",
+			} as const;
 			expect((await engine.onWorkerComplete(completedA, [verifierB])).status).toBe("verification_blocked");
 			expect((await engine.onWorkerComplete(completedA, [verifierB])).status).toBe("verification_blocked");
-			expect(
-				(await engine.onWorkerComplete({ agentId: "untracked", agentName: "task", status: "completed" }, [verifierB]))
-					.status,
-			).toBe("verification_blocked");
+			const untracked = {
+				agentId: "untracked",
+				agentName: "task",
+				task: "Report the untracked worker",
+				status: "completed",
+			} as const;
+			expect((await engine.onWorkerComplete(untracked, [verifierB])).status).toBe("verification_blocked");
 			expect(dispatched).toBe(0);
 
-			const resumed = await engine.onWorkerComplete(
-				{ agentId: "verifier-b", agentName: "reviewer", status: "completed" },
-				[],
-			);
+			const completedB = {
+				agentId: "verifier-b",
+				agentName: "reviewer",
+				task: "Verify the second worker",
+				status: "completed",
+			} as const;
+			const resumed = await engine.onWorkerComplete(completedB, []);
 			expect(resumed.dispatchedCount).toBe(1);
 			expect((await engine.replenish([])).status).toBe("floor_satisfied");
 			expect(dispatchedWithCycleOptions).toBe(1);
