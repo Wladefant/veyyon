@@ -49,7 +49,28 @@ if ! rustup toolchain list | grep -Eq '^nightly-2026-04-29(-|$)'; then
   rustup toolchain install nightly-2026-04-29 --profile minimal --component rustfmt --component clippy \
     --target x86_64-unknown-linux-gnu
 fi
-bun run ci:build:native
+# Match the release workflow's Linux x64 portability toolchain.
+zig_version=0.16.0
+zig_archive="$HOME/.cache/zig-x86_64-linux-${zig_version}.tar.xz"
+if ! command -v zig >/dev/null 2>&1 || [[ "$(zig version)" != "$zig_version" ]]; then
+  mkdir -p "$HOME/.cache" "$HOME/.local/bin"
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://ziglang.org/download/${zig_version}/zig-x86_64-linux-${zig_version}.tar.xz" \
+    -o "$zig_archive"
+  # SHA-256 from Zig's official download index.json for 0.16.0 x86_64-linux.
+  printf '%s  %s\n' '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00' "$zig_archive" \
+    | sha256sum --check
+  tar -xJf "$zig_archive" -C "$HOME/.cache"
+  ln -sf "$HOME/.cache/zig-x86_64-linux-${zig_version}/zig" "$HOME/.local/bin/zig"
+fi
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+if ! command -v cargo-zigbuild >/dev/null 2>&1; then
+  cargo +nightly-2026-04-29 install --locked cargo-zigbuild
+fi
+zig --version
+cargo-zigbuild --version
+CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
+  TARGET_VARIANTS='baseline modern' bun run ci:build:native
 # Keep test execution inside this disposable Workers Builds container; the default remote rung uses SSH.
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_SANDBOX_RUNG=docker
