@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { CheckpointClient } from "../src/checkpoints/cloud-checkpoints";
+import { CheckpointClient, type CheckpointFetch } from "../src/checkpoints/cloud-checkpoints";
 import { SynchronizedSession } from "../src/checkpoints/synchronized-session";
 
 test("server epoch loss blocks admission and does not reacquire silently", async () => {
 	let owns = true;
 	let acquisitions = 0;
-	const fake: typeof fetch = async input => {
+	const fake: CheckpointFetch = async input => {
 		const path = new URL(String(input)).pathname;
 		if (path.endsWith("/lease")) {
 			acquisitions++;

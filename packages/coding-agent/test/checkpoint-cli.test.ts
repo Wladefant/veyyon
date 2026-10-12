@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CheckpointFetch } from "../src/checkpoints/cloud-checkpoints";
 import { runCheckpointCommand } from "../src/cli/checkpoint-cli";
 import { Settings } from "../src/config/settings";
 
@@ -20,7 +21,7 @@ test("separate CLI invocations on one host use independent lease owners", async 
 	process.env.VEYYON_CHECKPOINT_TOKEN = "test";
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32).toString("base64");
 	const owners: string[] = [];
-	globalThis.fetch = async (input, init) => {
+	const fakeFetch: CheckpointFetch = async (input, init) => {
 		const path = new URL(String(input)).pathname;
 		if (path.endsWith("/lease")) {
 			const body: unknown = JSON.parse(String(init?.body));
@@ -39,6 +40,7 @@ test("separate CLI invocations on one host use independent lease owners", async 
 		if (path.endsWith("/head")) return Response.json(null);
 		return Response.json({ committed: true });
 	};
+	globalThis.fetch = Object.assign(fakeFetch, { preconnect: previousFetch.preconnect });
 	try {
 		await runCheckpointCommand({ action: "export", sessionFile: file });
 		await runCheckpointCommand({ action: "export", sessionFile: file });

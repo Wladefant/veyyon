@@ -17,6 +17,7 @@ const SESSION_ACTIONS = [
 
 export default class Session extends Command {
 	static description = "Study and recover a stored session";
+	static aliases = ["sessions"];
 
 	static args = {
 		action: Args.string({

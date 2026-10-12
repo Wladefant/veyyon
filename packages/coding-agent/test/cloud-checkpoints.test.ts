@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	type CheckpointBundle,
 	CheckpointClient,
+	type CheckpointFetch,
 	decryptCheckpointBundle,
 	encryptCheckpointBundle,
 	filterCheckpointFiles,
@@ -20,7 +21,7 @@ describe("cloud checkpoints", () => {
 	test("round trips ciphertext larger than the service object cap", async () => {
 		const objects = new Map<string, Uint8Array>();
 		let head: unknown = null;
-		const fake: typeof fetch = async (input, init) => {
+		const fake: CheckpointFetch = async (input, init) => {
 			const path = new URL(String(input)).pathname;
 			if (path.endsWith("/lease"))
 				return Response.json({
@@ -87,7 +88,7 @@ describe("cloud checkpoints", () => {
 		await expect(decryptCheckpointBundle(encrypted, key)).rejects.toThrow();
 	});
 	test("lease loss fences commits", async () => {
-		const fakeFetch: typeof fetch = async () =>
+		const fakeFetch: CheckpointFetch = async () =>
 			new Response(
 				JSON.stringify({
 					ownerNode: "node-a",
