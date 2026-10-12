@@ -13,6 +13,27 @@ bun --version
 bun install --frozen-lockfile
 bun run check:ts
 
+if ! command -v fd >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1 || \
+  ! command -v magick >/dev/null 2>&1 || \
+  ! pkg-config --exists cairo pango fontconfig freetype2 wayland-client xkbcommon xkbcommon-x11 2>/dev/null || \
+  ! ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1' || \
+  [[ ! -f /usr/share/vulkan/icd.d/lvp_icd.json ]]; then
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo 'Required native test dependencies are missing and apt-get is unavailable.' >&2
+    exit 1
+  fi
+  apt-get update
+  apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
+    fd-find ripgrep imagemagick pkg-config libfontconfig-dev libfreetype-dev \
+    libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan1 libvulkan-dev mesa-vulkan-drivers
+  if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+    ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+  fi
+  if command -v convert >/dev/null 2>&1 && ! command -v magick >/dev/null 2>&1; then
+    ln -sf "$(command -v convert)" /usr/local/bin/magick
+  fi
+fi
+bun run ci:build:native
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Full output lets this runner
 # collect Bun's per-test summary lines rather than treating chunks as tests.
@@ -46,6 +67,7 @@ run_bucket coding-agent-singleton
 run_bucket coding-agent-ui
 run_bucket coding-agent-runtime
 run_bucket coding-agent-native
+run_bucket scripts
 run_bucket coding-agent-heavy
 
 # Build the production Linux x64 CLI binary using the release's canonical

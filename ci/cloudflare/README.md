@@ -10,8 +10,10 @@ Use a Workers Builds user token with the account-level Workers Builds Configurat
 
 ## Build behavior
 
-The lane reads the pinned Bun version from the root `package.json`, installs that exact version if the container differs, and installs dependencies from the frozen lockfile. It runs `bun run check:ts`, then reuses `scripts/ci-test-ts.ts` in workspace, native, and every coding-agent bucket. It emits total test pass/fail counts and requires at least one pass and zero failures.
+The lane reads the pinned Bun version from the root `package.json`, installs that exact version if the container differs, and installs dependencies from the frozen lockfile. It runs `bun run check:ts`, installs the Linux dependencies required by the existing CI test environment when missing, then builds the Linux x64 native addon with `bun run ci:build:native`. It reuses `scripts/ci-test-ts.ts` in workspace, native, repo-script, and every coding-agent bucket. It emits total test pass/fail counts and requires at least one pass and zero failures.
 
 The lane builds the Linux x64 production CLI through `scripts/ci-release-build-binaries.ts`. It runs `bun run check:rs` when Cargo is available. Cargo failures stop the build; only a missing Cargo executable is reported as an unsupported container capability. It uploads only the `veyyon-ci-health` Worker version. It disables Workers routes and preview URLs.
+
+Before any test bucket starts, the shared test runner removes `CLOUDFLARE_API_TOKEN` from each child process. The deployment credential is not available to test code.
 
 The Worker responds with `ok` to health probes. A version upload does not activate or promote the version. It does not expose a public Worker URL or alter the application deployment path.

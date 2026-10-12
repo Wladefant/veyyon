@@ -515,6 +515,7 @@ export const repoScriptTests = [
 	// No source file the build reads is ignored, and no unanchored pattern names
 	// a directory that holds source.
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
+	"scripts/a-CI-build-token-never-reaches-test-children.test.ts",
 ];
 
 /**
@@ -897,9 +898,10 @@ const SCRUBBED_ENV_NAMES = new Set([
 	"GOOGLE_APPLICATION_CREDENTIALS",
 	"ANTHROPIC_OAUTH_TOKEN",
 	"XAI_OAUTH_TOKEN",
+	"CLOUDFLARE_API_TOKEN",
 ]);
 
-function isScrubbedEnvVar(key: string): boolean {
+export function isScrubbedEnvVar(key: string): boolean {
 	if (SCRUBBED_ENV_NAMES.has(key)) {
 		return true;
 	}
