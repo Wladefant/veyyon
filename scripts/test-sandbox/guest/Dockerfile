@@ -90,7 +90,7 @@ FROM oven/bun:${BUN_VERSION}-debian
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        git ca-certificates util-linux kmod procps xz-utils cpio iproute2 \
+        git ca-certificates util-linux kmod procps xz-utils cpio iproute2 fakeroot \
         ripgrep openssh-client openssh-server python3 curl ffmpeg imagemagick \
         clang mold build-essential; \
     apt-get clean; \
@@ -138,16 +138,8 @@ RUN set -eux; \
     rm -rf /var/cache/node; \
     node --version; \
     npm --version
-# The kernel opens /dev/console to give PID 1 its stdio, and it does that BEFORE
-# /init can mount devtmpfs. So this node has to exist in the initramfs itself.
-RUN set -eux; \
-    mkdir -p /dev; \
-    [ -e /dev/console ] || mknod -m 0600 /dev/console c 5 1; \
-    [ -e /dev/null ] || mknod -m 0666 /dev/null c 1 3
-# Accounts inside the guest for synthetic users (1000..1010). Their homes are created
-# on a tmpfs at boot by /init or by the sandbox docker runner; these entries exist so
-# getpwuid resolves for the host runner's UID (e.g. 1000 on desktop, 1001 on GitHub
-# Actions) and tools that query the passwd database see a valid account.
+# The kernel opens /dev/console before /init mounts devtmpfs. The build stages the
+# required device nodes in the initramfs, since BuildKit does not grant CAP_MKNOD.
 RUN set -eux; \
     for uid in $(seq 1000 1010); do \
         if ! getent group "$uid" >/dev/null; then groupadd -g "$uid" "veyyon$uid"; fi; \
