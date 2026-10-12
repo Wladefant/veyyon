@@ -122,7 +122,7 @@ run_bucket() {
   local bucket_log
   bucket_log="$(mktemp)"
   local bucket_status=0
-  if bash scripts/test-sandbox/run.sh "$sandbox_root/repo/.cf-proof-tools/bin/bun" \
+  if bash scripts/test-sandbox/run.sh --rung=bwrap "$sandbox_root/repo/.cf-proof-tools/bin/bun" \
     scripts/ci-test-ts.ts "$mode" --full 2>&1 | tee "$bucket_log"; then
     :
   else
