@@ -63,16 +63,17 @@ export async function decryptCheckpointBundle(
 	);
 	return checkpointBundle.assert(JSON.parse(new TextDecoder().decode(plain)));
 }
+export type CheckpointFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 export interface CheckpointClientOptions {
 	baseUrl: string;
 	token: string;
 	key: Uint8Array<ArrayBuffer>;
-	fetch?: typeof fetch;
+	fetch?: CheckpointFetch;
 	timeoutMs?: number;
 }
 export class CheckpointClient {
 	readonly enabled: boolean;
-	#fetch: typeof fetch;
+	#fetch: CheckpointFetch;
 	#timeout: number;
 	#leases = new Map<string, CheckpointLease>();
 	#lost = new Set<string>();
