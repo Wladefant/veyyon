@@ -1505,7 +1505,9 @@ class SessionStartup {
 			autoApprove: options.autoApprove,
 			bypassAllApprovals: options.bypassAllApprovals,
 			parentApprovalBypassed: options.parentApprovalBypassed,
-			setVerificationBlocked: blocked => this.#replenishmentEngine?.setVerificationBlocked(blocked),
+			setVerificationBlocked: async blocked => {
+				await this.#replenishmentEngine?.setVerificationBlocked(blocked);
+			},
 			evalKernelOwnerId: this.#evalKernelOwnerId,
 			// Defined only for a top-level session. AgentSession disposes only the manager it owns; a
 			// spawned agent runs on its parent's and MUST NOT tear it down.

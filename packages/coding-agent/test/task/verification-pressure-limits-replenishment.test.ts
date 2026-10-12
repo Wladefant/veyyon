@@ -5,7 +5,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "bun:test";
-import { TopicReplenishmentEngine, type NativeActorSnapshot } from "../../src/task/topic-replenishment";
+import {
+	TopicReplenishmentEngine,
+	type MemoryMeasurement,
+	type NativeActorSnapshot,
+} from "../../src/task/topic-replenishment";
 
 const authorization = {
 	status: "authorized",
@@ -109,6 +113,46 @@ test("clearing pressure dispatches one permitted deficit and ignores stale clear
 			};
 			expect(Object.values(ledger.requests).filter(request => request.state === "implementation")).toHaveLength(1);
 			expect(Object.values(ledger.requests).filter(request => request.state === "pending")).toHaveLength(1);
+		},
+	);
+});
+
+test("a block arriving during asynchronous admission prevents a later claim", async () => {
+	await withLedger(
+		{ pending: { prompt: "Implement a task", state: "pending", authorization } },
+		async ledgerPath => {
+			const admissionReached = Promise.withResolvers<void>();
+			const nextAdmission = Promise.withResolvers<MemoryMeasurement>();
+			let admissionCount = 0;
+			let dispatched = 0;
+			const engine = new TopicReplenishmentEngine({
+				ledgerPath,
+				targetCount: 1,
+				maxCeiling: 1,
+				maxRamPct: 100,
+				executor: async () => {
+					dispatched++;
+				},
+				memoryProvider: () => {
+					if (++admissionCount === 1) return { total: 100, free: 90 };
+					admissionReached.resolve();
+					return nextAdmission.promise;
+				},
+			});
+
+			const pendingReplenishment = engine.replenish([]);
+			await admissionReached.promise;
+			const pressureUpdate = engine.setVerificationBlocked(true);
+			nextAdmission.resolve({ total: 100, free: 90 });
+			const result = await pendingReplenishment;
+			await pressureUpdate;
+
+			expect(result.status).toBe("verification_blocked");
+			expect(dispatched).toBe(0);
+			const ledger = JSON.parse(await readFile(ledgerPath, "utf8")) as {
+				requests: Record<string, { state: string }>;
+			};
+			expect(ledger.requests.pending.state).toBe("pending");
 		},
 	);
 });

@@ -47,7 +47,6 @@ import type { FileSlashCommand } from "../extensibility/slash-commands";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { RetryRecoveryMode } from "../modes/retry-display";
 import type { SecretObfuscator } from "../secrets/obfuscator";
-import type { ReplenishmentOutcome } from "../task/topic-replenishment";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { TodoItem } from "../tools/agent/todo";
 import type { CustomMessage } from "./messages";
@@ -177,7 +176,7 @@ export interface AgentSessionConfig {
 	 */
 	parentApprovalBypassed?: () => boolean;
 	/** Update downstream verification pressure for native topic replenishment. */
-	setVerificationBlocked?: (blocked: boolean) => Promise<ReplenishmentOutcome | undefined>;
+	setVerificationBlocked?: (blocked: boolean) => Promise<void>;
 	/** Models to cycle through with Ctrl+P (from --models flags). */
 	scopedModels?: Array<{
 		model: Model;

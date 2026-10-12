@@ -1084,6 +1084,22 @@ export class TopicReplenishmentEngine {
 		this.#lastRoster = currentRoster;
 		return await withReplenishmentLease(this.ledgerPath, () => this.#replenishOnce(currentRoster, options));
 	}
+	#verificationBlockedOutcome(
+		reconciliation: TopicReconciliationResult,
+		memoryAdmission: MemoryAdmissionResult,
+		dispatchedTickets: ClaimedTicket[] = [],
+		blockedTopics: BlockedTopicInfo[] = [],
+	): ReplenishmentOutcome {
+		return {
+			reconciliation,
+			memoryAdmission,
+			dispatchedTickets,
+			dispatchedCount: dispatchedTickets.length,
+			blockedTopics,
+			status: "verification_blocked",
+			reason: "New producer dispatch is paused while downstream verification is blocked.",
+		};
+	}
 
 	async #replenishOnce(
 		currentRoster: readonly NativeActorSnapshot[] | Record<string, unknown>[],
@@ -1125,15 +1141,7 @@ export class TopicReplenishmentEngine {
 		}
 
 		if (this.#verificationBlocked) {
-			return {
-				reconciliation,
-				memoryAdmission,
-				dispatchedTickets: [],
-				dispatchedCount: 0,
-				blockedTopics: [],
-				status: "verification_blocked",
-				reason: "New producer dispatch is paused while downstream verification is blocked.",
-			};
+			return this.#verificationBlockedOutcome(reconciliation, memoryAdmission);
 		}
 
 		const reservations = replenishmentReservations.get(this.ledgerPath) ?? new Set<string>();
@@ -1161,6 +1169,9 @@ export class TopicReplenishmentEngine {
 				maxPct: this.maxRamPct,
 				memoryProvider: options?.memoryProvider ?? this.memoryProvider,
 			});
+			if (this.#verificationBlocked) {
+				return this.#verificationBlockedOutcome(reconciliation, memoryAdmission, dispatchedTickets, allBlockedTopics);
+			}
 			if (!stepMem.admitted) {
 				break;
 			}
@@ -1170,7 +1181,28 @@ export class TopicReplenishmentEngine {
 				activeUsefulCount: currentRunning,
 				targetCapacity: this.targetCount,
 			});
-
+			if (this.#verificationBlocked) {
+				if (claimResult.claimed && claimResult.ticket) {
+					const rollback = await this.rollbackClaimedTicket(
+						claimResult.ticket.id,
+						"Verification became blocked before producer dispatch",
+						claimResult.ticket.runId,
+					);
+					if (!rollback.rolled_back) {
+						return {
+							...this.#verificationBlockedOutcome(
+								reconciliation,
+								memoryAdmission,
+								dispatchedTickets,
+								allBlockedTopics,
+							),
+							status: "error",
+							reason: `Verification was blocked before dispatch, but claim ${claimResult.ticket.id} could not be rolled back.`,
+						};
+					}
+				}
+				return this.#verificationBlockedOutcome(reconciliation, memoryAdmission, dispatchedTickets, allBlockedTopics);
+			}
 			if (claimResult.blockedTopics) {
 				for (const bt of claimResult.blockedTopics) {
 					if (!allBlockedTopics.some(x => x.ticketId === bt.ticketId)) {
