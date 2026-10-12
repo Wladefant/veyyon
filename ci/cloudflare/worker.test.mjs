@@ -29,3 +29,8 @@ test("health Worker configuration cannot route or publish a preview", async () =
 	assert.equal(config.preview_urls, false);
 	assert.deepEqual(config.routes, []);
 });
+
+test("health Worker upload targets the shared Cloudflare CI account", async () => {
+	const config = await readJson("./wrangler.jsonc");
+	assert.equal(config.account_id, "a0d288d1c95470cd009cc6e0df7accb7");
+});

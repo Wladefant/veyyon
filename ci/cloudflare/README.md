@@ -6,7 +6,11 @@ Workers Builds runs the repository's TypeScript check and existing sharded test 
 
 `trigger.json` records the intended Workers Builds configuration. The Git integration runs on all branches except `main` and watches all paths. Its build command is `bash ci/cloudflare/lane-tests.sh`. Its deploy command is `npx wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc`. The build token and GitHub repository connection are configured in the Cloudflare account; they are not stored in this repository.
 
-Use a Workers Builds user token with the account-level Workers Builds Configuration Edit permission and the Workers Scripts Read permission. Store it outside git in the project-specific secure store and provide its working-copy path only to the authorized activation lane. Never use the broad account token for this setup.
+All Workers Builds CI for all repositories runs in Cloudflare account `a0d288d1c95470cd009cc6e0df7accb7`. The account carries the Enterprise startup credits. Do not create or use Workers Builds resources in account `259beca7f28fdcd483c1ff85104c21f4`.
+
+Use the existing user-scoped token `Cloudflare API token - polysim-builds` with Workers Builds Configuration Edit and Workers Scripts Read permissions. It is stored in the US Shared collection. Do not mint another user token. Keep its working copy outside git and do not print its value.
+
+GitHub app connections and Workers Builds triggers are managed by the rollout tracker. Do not create a second connection or trigger.
 
 ## Build behavior
 

@@ -1,4 +1,5 @@
 {
+	"account_id": "a0d288d1c95470cd009cc6e0df7accb7",
 	"name": "veyyon-ci-health",
 	"main": "worker.mjs",
 	"compatibility_date": "2026-10-12",
