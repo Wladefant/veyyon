@@ -304,7 +304,12 @@ import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { isSameAssistantMessage, sanitizeAssistantForReparentedHistory } from "./agent-session-message-shapes";
-import { compactionModelCandidates, configuredCompactionEfforts, contextPromotionTarget, roleModelValue } from "./agent-session-model-targets";
+import {
+	compactionModelCandidates,
+	configuredCompactionEfforts,
+	contextPromotionTarget,
+	roleModelValue,
+} from "./agent-session-model-targets";
 import { isToolOrderPermutation } from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
@@ -3429,7 +3434,6 @@ export class AgentSession {
 		return false;
 	}
 
-
 	async #maybeHandoffExpensiveAgent(activeMessages?: AgentMessage[]): Promise<boolean> {
 		const agentId = this.#config.agentId;
 		const threshold = this.settings.get("compaction.laneHandoffThresholdTokens");
@@ -3447,11 +3451,12 @@ export class AgentSession {
 		}
 		const contextTokens = this.getContextBreakdown()?.usedTokens ?? 0;
 		if (contextTokens < threshold) return false;
-		const summaryModel = compactionModelCandidates(
-			this.settings,
-			model,
-			this.modelRegistry.getAvailable(),
-		).find(candidate => candidate.contextWindow >= contextTokens + 8_000 && this.modelRegistry.hasConfiguredAuth(candidate));
+		const summaryModel = compactionModelCandidates(this.settings, model, this.modelRegistry.getAvailable()).find(
+			candidate =>
+				candidate.contextWindow !== null &&
+				candidate.contextWindow >= contextTokens + 8_000 &&
+				this.modelRegistry.hasConfiguredAuth(candidate),
+		);
 		if (!summaryModel) return false;
 		this.#lastLaneHandoffSessionId = this.sessionId;
 		try {
@@ -7482,6 +7487,7 @@ export class AgentSession {
 						`Write only a COMPACT successor brief, at most 3,000 tokens. Use exactly these headings: # COMPACT, ## Goal, ## State, ## Open steps, ## Repository, ## Tests, ## Files. Preserve every unfinished requirement and key decision. Repository includes worktree, branch and observed HEAD. Tests includes the last observed command and pass/fail counts. Use unknown for facts not observed. Never reproduce transcript messages. This continues the same assignment: existing jobs and child agents remain running. Do not say they were cancelled.\n\n${customInstructions ?? ""}`,
 					)
 				: renderHandoffPrompt(this.#secrets.obfuscateTextForProvider(customInstructions));
+			if (handoffPromptText === undefined) throw new Error("Handoff prompt could not be rendered");
 			// mirror exactly what the live turn populated the cache under.
 			const handoffPromptCacheKey = this.agent.promptCacheKey ?? this.agent.sessionId;
 			const handoffSnapshot: AgentMessage[] = [
@@ -7523,7 +7529,9 @@ export class AgentSession {
 					// resolveCompactionEffort so unsupported-effort models don't trip
 					// requireSupportedEffort.
 					thinkingLevel: options?.summaryModel
-						? (configuredCompactionEfforts(this.settings, this.modelRegistry.getAvailable()).get(`${model.provider}/${model.id}`) ?? this.thinkingLevel)
+						? (configuredCompactionEfforts(this.settings, this.modelRegistry.getAvailable()).get(
+								`${model.provider}/${model.id}`,
+							) ?? this.thinkingLevel)
 						: this.thinkingLevel,
 				},
 			);
@@ -7545,7 +7553,15 @@ export class AgentSession {
 				if (countTokens(handoffText) > 5_000) {
 					throw new Error("COMPACT handoff exceeds the 5,000-token estimate; keeping the original transcript");
 				}
-				for (const heading of ["# COMPACT", "## Goal", "## State", "## Open steps", "## Repository", "## Tests", "## Files"]) {
+				for (const heading of [
+					"# COMPACT",
+					"## Goal",
+					"## State",
+					"## Open steps",
+					"## Repository",
+					"## Tests",
+					"## Files",
+				]) {
 					if (!handoffText.split("\n").some(line => line.trim() === heading)) {
 						throw new Error(`COMPACT handoff is missing ${heading}; keeping the original transcript`);
 					}

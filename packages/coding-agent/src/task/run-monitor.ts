@@ -747,6 +747,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		const steerSession = activeSession;
 		const modelId = steerSession?.model?.id;
 		if (
+			steerSession !== null &&
 			typeof modelId === "string" &&
 			/(?:^|[-/:])(?:sol|opus|sonnet|astra)(?:$|[-/:])/i.test(modelId) &&
 			isDelegatableWait(event.toolName, startArgs)
