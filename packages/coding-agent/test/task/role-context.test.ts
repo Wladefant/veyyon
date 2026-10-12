@@ -60,9 +60,77 @@ describe("applySkillList", () => {
 });
 
 describe("selectRoleContext", () => {
-	it("returns the same references for a role with neither field", async () => {
+	const roles = ["task", "qa-verifier", "codex-worker", "codex-reviewer", "reviewer", "sonnet", "opus"];
+	const requiredSafety = [
+		"Production authorization",
+		"No visible windows",
+		"--no-ff",
+		"secrets",
+		"tool/shell contracts",
+	];
+
+	it.each(roles)("defaults %s to its sibling lane context", async role => {
+		const full = path.join(dir, "AGENTS.md");
+		await Bun.write(full, "FULL RULES");
+		await Bun.write(path.join(dir, "AGENTS.lane.md"), "LANE RULES\n" + requiredSafety.join("\n"));
+		const files = [entry(full, "FULL RULES")];
+		const out = await selectRoleContext({ agent: { name: role }, contextFiles: files, skills: [], cwd: dir });
+		expect(out.contextFiles?.[0]?.content).toContain("LANE RULES");
+		for (const marker of requiredSafety) expect(out.contextFiles?.[0]?.content).toContain(marker);
+	});
+
+	it.each(["missing", "empty"])("retains full files when variant is %s", async variant => {
+		const full = path.join(dir, "AGENTS.md");
+		await Bun.write(full, "FULL RULES");
+		if (variant === "empty") await Bun.write(path.join(dir, "AGENTS.lane.md"), " \n");
+		const files = [entry(full, "FULL RULES")];
+		const out = await selectRoleContext({
+			agent: { name: "task" },
+			contextFiles: files,
+			skills: [],
+			cwd: dir,
+		});
+		expect(out.contextFiles?.[0]?.content).toBe("FULL RULES");
+	});
+
+	it("lets an explicit variant override the role default", async () => {
+		const full = path.join(dir, "AGENTS.md");
+		await Bun.write(full, "FULL RULES");
+		await Bun.write(path.join(dir, "AGENTS.custom.md"), "CUSTOM RULES");
+		const out = await selectRoleContext({
+			agent: { name: "task", contextVariant: "custom" },
+			contextFiles: [entry(full, "FULL RULES")],
+			skills: [],
+			cwd: dir,
+		});
+		expect(out.contextFiles?.[0]?.content).toBe("CUSTOM RULES");
+	});
+
+	it.each(["custom-role", "main"])("leaves %s unchanged", async role => {
 		const files = [entry(path.join(dir, "AGENTS.md"), "x")];
-		const out = await selectRoleContext({ agent: { name: "task" }, contextFiles: files, skills: [], cwd: dir });
+		const out = await selectRoleContext({ agent: { name: role }, contextFiles: files, skills: [], cwd: dir });
 		expect(out.contextFiles).toBe(files);
+	});
+
+	it("keeps the same references for an unknown role with no selection fields", async () => {
+		const files = [entry(path.join(dir, "AGENTS.md"), "x")];
+		const skills = [{ name: "keep" }];
+		const out = await selectRoleContext({ agent: { name: "custom-role" }, contextFiles: files, skills, cwd: dir });
+		expect(out.contextFiles).toBe(files);
+		expect(out.skills).toBe(skills);
+	});
+
+	it("does not change the skill list when a role gets its default context", async () => {
+		const full = path.join(dir, "AGENTS.md");
+		await Bun.write(full, "FULL RULES");
+		await Bun.write(path.join(dir, "AGENTS.lane.md"), "LANE RULES");
+		const skills = [{ name: "keep" }];
+		const out = await selectRoleContext({
+			agent: { name: "task" },
+			contextFiles: [entry(full, "FULL RULES")],
+			skills,
+			cwd: dir,
+		});
+		expect(out.skills).toBe(skills);
 	});
 });
