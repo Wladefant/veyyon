@@ -71,12 +71,12 @@ zig --version
 cargo-zigbuild --version
 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
   TARGET_VARIANTS='baseline modern' bun run ci:build:native
-# Keep test execution inside this disposable Workers Builds container; the default remote rung uses SSH.
+# Run every test in the proven bubblewrap user namespace. This is a required
+# isolation boundary; no host or alternate-rung fallback is permitted.
 export VEYYON_SANDBOX_REMOTE=0
-export VEYYON_SANDBOX_RUNG=docker
+export VEYYON_SANDBOX_RUNG=bwrap
 export VEYYON_SANDBOX_FORWARD=VEYYON_TEST_CONCURRENCY
-# Build the repository's Docker test guest inside Workers Builds before any test bucket.
-bash scripts/test-sandbox/run.sh --rung=docker --build
+bash scripts/test-sandbox/run.sh --rung=bwrap --probe
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Full output lets this runner
 # collect Bun's per-test summary lines rather than treating chunks as tests.

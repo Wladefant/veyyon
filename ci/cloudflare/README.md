@@ -26,11 +26,9 @@ The lane installs missing Linux test dependencies through `sudo -n` only when pa
 
 The lane installs the Rust nightly pinned by `rust-toolchain.toml`, Zig `0.16.0`, and `cargo-zigbuild`. It builds Linux x64 native addons in both `baseline` and `modern` variants against `x86_64-unknown-linux-gnu.2.17`. This matches the release workflow's glibc floor.
 
-The lane disables the external SSH rung and pins `VEYYON_SANDBOX_RUNG=docker`. It builds the repository's Docker test guest inside Workers Builds with `bash scripts/test-sandbox/run.sh --rung=docker --build`.
+The lane disables the external SSH rung and pins `VEYYON_SANDBOX_RUNG=bwrap`. It verifies that the real Bun executable is available inside the bwrap sandbox, then runs each existing test bucket through the repository's bubblewrap rung.
 
-Docker test containers forward only safe CI variables and `VEYYON_TEST_CONCURRENCY`. They do not receive `CLOUDFLARE_API_TOKEN`.
-
-If Docker is unavailable or fails, the build fails. It does not run tests on the build host or use another rung.
+The bwrap test process receives only safe CI variables and `VEYYON_TEST_CONCURRENCY`. It does not receive `CLOUDFLARE_API_TOKEN`. Missing bwrap or a failed sandbox assertion is fatal. The lane does not fall back to host execution or another rung.
 
 This lane verifies only Linux x64. It does not build `linux-arm64`, `win32-x64`, `darwin-x64`, or `darwin-arm64`. The existing GitHub Actions release matrix covers those targets.
 
