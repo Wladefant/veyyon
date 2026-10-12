@@ -7,16 +7,12 @@ cd "$repo_root"
 # Release mode branch check: run release proof pipeline on verified release branch
 current_branch="$(git branch --show-current 2>/dev/null || true)"
 if [[ -z "$current_branch" ]]; then
-  # Cloudflare Workers Builds clones detached HEAD; resolve verified branch from git
-  current_branch="$(git name-rev --name-only HEAD 2>/dev/null | sed -E 's~^(remotes/)?(origin/)?~~; s~[~^].*~~' || true)"
-fi
-if [[ -z "$current_branch" ]] || [[ "$current_branch" == "HEAD" ]]; then
-  if git branch -a --contains HEAD 2>/dev/null | grep -q 'fix/windows-cross-release-569'; then
-    current_branch="fix/windows-cross-release-569"
-  elif git log -1 --format="%D" 2>/dev/null | grep -q 'fix/windows-cross-release-569'; then
-    current_branch="fix/windows-cross-release-569"
-  elif git status 2>/dev/null | grep -q 'fix/windows-cross-release-569'; then
-    current_branch="fix/windows-cross-release-569"
+  # Cloudflare Workers Builds clones detached HEAD; verify if HEAD matches remote release branch
+  head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+  ref_sha="$(git ls-remote origin fix/windows-cross-release-569 2>/dev/null | awk '{print $1}')"
+  if [[ -n "$head_sha" && "$head_sha" == "$ref_sha" ]]; then
+    git checkout -B fix/windows-cross-release-569 2>/dev/null || true
+    current_branch="$(git branch --show-current 2>/dev/null || true)"
   fi
 fi
 
