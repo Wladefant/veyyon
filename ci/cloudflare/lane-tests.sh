@@ -56,8 +56,18 @@ export CI=true
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_TEST_CONCURRENCY=2
 # Workers Builds has a Docker daemon but no prebuilt Veyyon test guest.
-docker build --network=host --build-arg "BUN_VERSION=$expected_bun" \
-  -t "veyyon-test-guest:$expected_bun" scripts/test-sandbox/guest
+bash -n scripts/test-sandbox/guest/build-guest.sh
+VEYYON_SANDBOX_USERLAND_ONLY=1 bash scripts/test-sandbox/run.sh --rung=docker --build
+docker run --rm --network=none --cap-drop=MKNOD \
+  --mount "type=bind,src=$repo_root,dst=/repo,readonly" \
+  --entrypoint /usr/bin/fakeroot "veyyon-test-guest:$expected_bun" /bin/sh -ceu '
+    mkdir -p /tmp/device-proof/dev
+    cd /tmp/device-proof
+    mknod -m 600 dev/console c 5 1
+    mknod -m 666 dev/null c 1 3
+    find . -print0 | cpio --null -o --format=newc > /tmp/device-proof.cpio
+    python3 /repo/ci/cloudflare/device-node-check.py /tmp/device-proof.cpio
+  '
 focused_tests=(
   cloud/checkpoints/worker.test.ts
   packages/coding-agent/test/cloud-checkpoints.test.ts
