@@ -24,6 +24,8 @@ The session uses the normal handoff mechanism. It writes a bounded summary of th
 
 Automatic handoff runs only after a safely completed turn, before the next request. It uses the existing side-request transport and telemetry. It does not retry a failed handoff blindly.
 
+The summary model must fit the current context plus an 8,000-token reserve. The successor keeps the persisted child initialization contract for later revival. It keeps existing jobs and descendants, refreshes provider routing, and rebases the current context estimate without stopping the active tool loop.
+
 ## Implementation Files
 
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): orchestration: tree/leaf, appends, persistence, blobs, lifecycle factories

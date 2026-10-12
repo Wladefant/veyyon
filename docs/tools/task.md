@@ -30,7 +30,7 @@
 
 ### Long waits on expensive lanes
 
-When an expensive-model child stays inside one supported wait operation for more than five minutes, the run monitor sends one steering hint. It recommends handing the wait to a `task` or Luna child when that fits. It does not cancel the tool or make another model request. Fast operations and cheap model families receive no hint.
+When an expensive-model child stays inside one supported wait operation for more than five minutes, the run monitor emits one operator warning. It recommends handing the wait to a `task` or Luna child when that fits. The warning does not queue steering, interrupt the tool, or make another model request. Fast operations and cheap model families receive no warning.
 
 ## Inputs
 

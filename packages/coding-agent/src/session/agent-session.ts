@@ -3444,7 +3444,7 @@ export class AgentSession {
 			this.settings,
 			model,
 			this.modelRegistry.getAvailable(),
-		).find(candidate => this.modelRegistry.hasConfiguredAuth(candidate));
+		).find(candidate => candidate.contextWindow >= contextTokens + 8_000 && this.modelRegistry.hasConfiguredAuth(candidate));
 		if (!summaryModel) return false;
 		this.#lastLaneHandoffSessionId = this.sessionId;
 		try {
@@ -7472,7 +7472,7 @@ export class AgentSession {
 			// the provider session id; providers route on `promptCacheKey ?? sessionId`.
 			const handoffPromptText = options?.compactSummary
 				? this.#secrets.obfuscateTextForProvider(
-						`Write only a COMPACT successor brief, at most 3,000 tokens. Use exactly these headings: # COMPACT, ## Goal, ## State, ## Open steps, ## Repository, ## Tests, ## Files. Preserve every unfinished requirement and key decision. Repository includes worktree, branch and observed HEAD. Tests includes the last observed command and pass/fail counts. Use unknown for facts not observed. Never reproduce transcript messages. This continues the same assignment: existing jobs and child agents remain running. Do not say they were cancelled.\\n\\n${customInstructions ?? ""}`,
+						`Write only a COMPACT successor brief, at most 3,000 tokens. Use exactly these headings: # COMPACT, ## Goal, ## State, ## Open steps, ## Repository, ## Tests, ## Files. Preserve every unfinished requirement and key decision. Repository includes worktree, branch and observed HEAD. Tests includes the last observed command and pass/fail counts. Use unknown for facts not observed. Never reproduce transcript messages. This continues the same assignment: existing jobs and child agents remain running. Do not say they were cancelled.\n\n${customInstructions ?? ""}`,
 					)
 				: renderHandoffPrompt(this.#secrets.obfuscateTextForProvider(customInstructions));
 			// mirror exactly what the live turn populated the cache under.
@@ -7570,9 +7570,23 @@ export class AgentSession {
 			if (!options?.preserveAgentLineage) {
 				this.#cancelOwnAsyncJobs();
 			}
+			const childInit = options?.preserveAgentLineage
+				? entries.findLast(entry => entry.type === "session_init")
+				: undefined;
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+			if (childInit?.type === "session_init") {
+				this.sessionManager.appendSessionInit({
+					systemPrompt: childInit.systemPrompt,
+					task: childInit.task,
+					tools: childInit.tools,
+					outputSchema: childInit.outputSchema,
+					spawns: childInit.spawns,
+					readSummarize: childInit.readSummarize,
+					maxNestedSpawnDepth: childInit.maxNestedSpawnDepth,
+				});
+			}
 			if (!options?.preserveAgentLineage) await this.#rescopeAgentRegistry();
-			// being silently dropped. Capture is synchronous immediately before reset and
+			// Keep queued steering from being silently dropped. Capture is synchronous before reset and
 			// restore is synchronous immediately after — no await gap — so a steer arriving
 			// later (during ensureOnDisk/Bun.write below) appends to the restored queue
 			// rather than being clobbered.
@@ -7589,8 +7603,10 @@ export class AgentSession {
 			this.#providerSessions.sync();
 			this.#memory.rekey();
 			this.#resetMemoryContextForNewTranscript();
-			this.#pendingNextTurnMessages = [];
-			this.#scheduledHiddenNextTurnGeneration = undefined;
+			if (!options?.preserveAgentLineage) {
+				this.#pendingNextTurnMessages = [];
+				this.#scheduledHiddenNextTurnGeneration = undefined;
+			}
 			this.#todo.resetForNewContext();
 
 			// Inject the handoff document as a custom message
@@ -7627,6 +7643,8 @@ export class AgentSession {
 			// Rebuild agent messages from session
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#checkpoint.rehydrate(this.sessionManager.getBranch());
+			if (options?.preserveAgentLineage) this.#context.rebaseAfterHistoryRewrite();
 			this.#resetAllAdvisorRuntimes();
 			this.#todo.syncFromBranch();
 			if (this.#config.extensionRunner) {

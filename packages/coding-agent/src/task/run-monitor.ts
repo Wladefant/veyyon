@@ -758,9 +758,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 					if (resolved || activeSession !== steerSession) return;
 					const notice =
 						"This wait has taken more than five minutes. If the wait can be delegated, hand it to a task/Luna child to poll while you continue useful work. Do not cancel the wait or make an extra request.";
-					void Promise.resolve()
-						.then(() => steerSession.sendUserMessage(notice, { deliverAs: "steer" }))
-						.catch(error => logger.warn("Agent wait hint failed", { error: errorMessage(error) }));
+					steerSession.emitNotice("warning", notice, "lane-wait");
 				}, WAIT_HINT_AFTER_MS),
 			);
 		}
