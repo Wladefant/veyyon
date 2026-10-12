@@ -75,14 +75,10 @@
 #                that on a host where both rungs demonstrably contain the same
 #                hostile writes. Select it deliberately with --rung=microvm.
 #
-#   3. bwrap     Bubblewrap with a mount + user namespace. Listed for hosts where
-#                it works. It does NOT work on this workstation: bubblewrap 0.9.0
-#                is installed and kernel.unprivileged_userns_clone=1, but
-#                kernel.apparmor_restrict_unprivileged_userns=1 with no bwrap
-#                profile in /etc/apparmor.d means the uid_map write is refused
-#                ("bwrap: setting up uid map: Permission denied") with or without
-#                --unshare-user. The probe detects this by RUNNING bwrap, because
-#                the sysctl alone advertises a capability the host does not grant.
+#   3. bwrap     Bubblewrap with a mount + user namespace. Works in WSL on this PC.
+#                Some Linux hosts deny the uid_map write through AppArmor despite
+#                kernel.unprivileged_userns_clone=1. The probe runs bwrap because
+#                a sysctl alone does not prove that the boundary can start.
 #
 # NOT AVAILABLE HERE: firecracker, cloud-hypervisor, podman and crun are all
 # absent, so the microVM is QEMU's microvm machine type rather than Firecracker.
@@ -304,6 +300,7 @@ Environment:
   VEYYON_SANDBOX_REPO_RO    1 to mount the repo read-only (used by the leak proof)
   VEYYON_SANDBOX_TIMEOUT    seconds before a wedged guest is killed (default 1800)
   VEYYON_SANDBOX_FORWARD    extra env var names to carry into the sandbox
+  VEYYON_SANDBOX_NODE_MODULES  Linux dependency directory to bind read-only (bwrap)
 EOF
 }
 

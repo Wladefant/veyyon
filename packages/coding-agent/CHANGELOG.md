@@ -21,6 +21,12 @@
 - Muse Code sessions send a compact hashline edit description (~3 KB less per request); all other models keep the full prompt.
 
 ### Fixed
+- Guard-failed isolated worlds remain refused across CDP root sessions for the same Chrome tab ([PR 511](https://github.com/Wladefant/veyyon/pull/511)).
+- Background job completions reach only their owning lane. Main's read-only `job list` still shows all jobs without acknowledging another lane's delivery.
+- Idle advisor concerns wait for the next Main turn instead of starting a turn.
+- Terminal transcript entries carry operator and tool activity for Telegram's background-only reply filter ([audit](https://github.com/Wladefant/super-board/issues/747)).
+- Completion delivery retains detached owners for retry and rechecks disposal after formatting. Terminal yield results clear Telegram turn activity.
+- Queued completion retries retain their original owner after the job's inspection entry expires.
 - Pending CLI startup and automatic extension discovery now keep the event loop alive. An unexpected early loop exit reports an error instead of silently returning success ([Refs](https://github.com/Wladefant/veyyon/issues/533)).
 - `/reload-config` applies changed advisor models without restarting Main or existing workers ([Refs](https://github.com/Wladefant/veyyon/issues/519)).
 - Process-shared launch clients release idle sockets and reconnect on demand. Empty brokers exit even while Main stays alive, instead of accumulating across worktrees. Each shared client retains project presence so daemons outside Main's startup directory survive idle disconnects ([Refs](https://github.com/Wladefant/veyyon/issues/513)).

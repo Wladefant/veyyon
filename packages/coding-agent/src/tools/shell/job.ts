@@ -118,8 +118,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			};
 		}
 
-		// Scope every visible operation to the calling agent. Tests / SDK
-		// consumers without an agent id see everything (legacy behavior).
+		// Poll and cancel stay owner-scoped. Read-only inspection lists every job in this manager.
 		const ownerId = this.session.getAgentId?.() ?? undefined;
 		const ownerFilter = ownerId ? { ownerId } : undefined;
 
@@ -128,9 +127,9 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			if (params.cancel?.length || params.poll?.length) {
 				throw new ToolError("`list` cannot be combined with `poll` or `cancel`.");
 			}
-			const jobs = manager.getAllJobs(ownerFilter);
+			const jobs = manager.getAllJobs();
 			const agents = this.#runningAgentsOutsideJobs();
-			return this.#buildResult(manager, jobs, [], agents);
+			return this.#buildResult(manager, jobs, [], agents, false);
 		}
 
 		const cancelIds = params.cancel ?? [];
@@ -363,7 +362,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		const covered = new Set<string>();
 		const manager = this.session.asyncJobManager;
 		if (manager) {
-			for (const job of manager.getRunningJobs(selfId ? { ownerId: selfId } : undefined)) {
+			for (const job of manager.getRunningJobs()) {
 				covered.add(job.id);
 				if (job.agentId) covered.add(job.agentId);
 			}
@@ -439,6 +438,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		}[],
 		cancelOutcomes: CancelOutcome[],
 		agents: AgentActivitySnapshot[] = [],
+		acknowledge = true,
 	): AgentToolResult<JobToolDetails> {
 		// Deduplicate by id (cancelled jobs may also appear in the watched set).
 		const seen = new Set<string>();
@@ -449,7 +449,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		});
 		const jobResults = this.#snapshotJobs(uniqueJobs);
 
-		manager.acknowledgeDeliveries(jobResults.filter(j => j.status !== "running").map(j => j.id));
+		if (acknowledge) manager.acknowledgeDeliveries(jobResults.filter(j => j.status !== "running").map(j => j.id));
 
 		const completed = jobResults.filter(j => j.status !== "running");
 		const running = jobResults.filter(j => j.status === "running");

@@ -84,6 +84,7 @@ import {
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
 import { reportProviderError } from "./provider-error-reporter";
+import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
 import { YIELD_TOOL_NAME } from "./subprocess-tool-registry";
 import {
@@ -1811,7 +1812,11 @@ const PARENT_OWNED_TOOL_NAMES: ReadonlySet<string> = new Set(["todo"]);
  * may spawn gains `task` and one at the spawn-depth limit loses it; `irc` is always carried because the
  * COOP prompt section advertises it; `exec` expands to `bash`, plus `eval` when an eval backend exists.
  */
-function resolveChildToolNames(agent: AgentDefinition, atMaxDepth: boolean, settings: Settings): string[] | undefined {
+export function resolveChildToolNames(
+	agent: AgentDefinition,
+	atMaxDepth: boolean,
+	settings: Settings,
+): string[] | undefined {
 	if (!agent.tools || agent.tools.length === 0) return undefined;
 	let toolNames = agent.tools;
 	if (agent.spawns !== undefined && !atMaxDepth && !toolNames.includes("task")) toolNames = toolNames.concat(["task"]);
@@ -1992,13 +1997,13 @@ function deriveAgentTelemetry(options: ExecutorOptions): AgentTelemetryConfig | 
 }
 
 /** The run inputs the agent's system prompt section reads. */
-type AgentPromptInputs = Pick<
+export type AgentPromptInputs = Pick<
 	ExecutorOptions,
 	"agent" | "context" | "planReference" | "worktree" | "outputSchema" | "outputSchemaOverridesAgent"
 >;
 
 /** The agent's own system prompt section; it depends only on the run's fixed inputs. */
-function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: boolean): string {
+export function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: boolean): string {
 	const { normalized: normalizedOutputSchema } = normalizeSchema(options.outputSchema);
 	return prompt.render(agentPrompts["agent/system-prompt"].text, {
 		agent: options.agent.systemPrompt,
@@ -2504,19 +2509,28 @@ async function driveChildRun(
 /**
  * Run a single agent in-process.
  */
-export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
-	const { agent, id, worktree, modelOverride, signal } = options;
+export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<SingleResult> {
+	const { agent, id, worktree, modelOverride, signal } = spawnOptions;
 	const startTime = Date.now();
-	if (signal?.aborted) return cancelledBeforeStart(options);
+	if (signal?.aborted) return cancelledBeforeStart(spawnOptions);
 
 	// An agent ALWAYS gets a durable session file — never an in-memory session that would silently lose
 	// its transcript (Law 10, no silent fallback). When the caller provides no artifacts dir, route the
 	// transcript to the durable sessions dir so the run stays studyable and revivable via
 	// history://<id> (GRAN-1).
-	const sessionFile = options.artifactsDir
-		? path.join(options.artifactsDir, sessionFileName(id))
+	const sessionFile = spawnOptions.artifactsDir
+		? path.join(spawnOptions.artifactsDir, sessionFileName(id))
 		: path.join(getSessionsDir(), sessionFileName(`${ORPHAN_AGENT_TRANSCRIPT_PREFIX}${id}`));
-	const effectiveCwd = worktree ?? options.cwd;
+	const effectiveCwd = worktree ?? spawnOptions.cwd;
+	// Both spawn paths (`task` tool, eval `agent()`) end here, so a role's context selection is
+	// applied once, on the lists they inherited, before any session option is built from them.
+	const roleContext = await selectRoleContext({
+		agent,
+		contextFiles: spawnOptions.contextFiles,
+		skills: spawnOptions.skills,
+		cwd: effectiveCwd,
+	});
+	const options: ExecutorOptions = { ...spawnOptions, ...roleContext };
 	const settings = await createSubagentSettingsForCwd(
 		options.settings ?? Settings.isolated(),
 		effectiveCwd,

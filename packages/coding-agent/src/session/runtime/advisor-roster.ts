@@ -12,7 +12,8 @@
  * - **aside**: a nit, batched into one non-interrupting card on the yield queue;
  * - **preserve**: a card recorded visibly without waking a turn, when the conversation already
  *   rests on an answer or a user interrupt suppressed auto-resume;
- * - **steer**: a concern or blocker steered into the running loop, which it wakes when idle;
+ * - **steer**: a concern or blocker steered into the running loop during active turns;
+ *   when idle, advice queues as deferred next-turn context;
  * - plan mode turns every steer into a preserved card, since only user-driven turns converge there.
  */
 
@@ -174,7 +175,7 @@ export interface AdvisorRosterHost extends AdvisorContextEnv {
 	/** Whether the conversation rests on an answer with nothing queued behind it. */
 	hasTerminalTextAnswerWithoutQueuedWork(): boolean;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	/** Steer an advice card into the primary and wake it when idle. */
+	/** Steer an advice card into the primary during active turns or queue it as deferred next-turn context when idle. */
 	steerAdvice(content: string, details: AdvisorMessageDetails): Promise<void>;
 	/** Hold a card for the next turn. */
 	parkForNextTurn(card: CustomMessage): void;
@@ -914,8 +915,9 @@ export class AdvisorRoster {
 
 	/**
 	 * Route one accepted advice note from `advisor` to the primary. Concern and
-	 * blocker interrupt the running agent through the steering channel; once the
-	 * loop has yielded, `triggerTurn` resumes it. If the loop already ended with a
+	 * blocker interrupt the running agent through the steering channel during an
+	 * active turn. When idle, advice queues as deferred next-turn context for the
+	 * next operator turn without waking the agent. If the loop already ended with a
 	 * terminal text answer and no queued work remains, the note is preserved as an
 	 * advisor card instead of waking a duplicate completion turn. After a deliberate
 	 * user interrupt auto-resume is suppressed while idle/unwinding (the note
