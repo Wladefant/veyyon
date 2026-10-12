@@ -55,10 +55,14 @@ else is optional.
 | `thinkingLevel` | The effort it runs at when its roster row sets none: `off`, `minimal`, `low`, `medium`, `high`, `max`, `auto`, or `inherit`. `thinking` is accepted as a synonym. |
 | `blocking` | `true` runs the agent to completion before the parent continues. |
 | `autoloadSkills` | Skills loaded into the agent's context at spawn. |
-| `contextVariant` | A name such as `lane`. Each inherited context file `<dir>/AGENTS.md` is replaced by `<dir>/AGENTS.lane.md` when that file exists; a file with no sibling stays whole, so a variant can shrink a scope but never drop one. Absent = the full files. |
+| `contextVariant` | A name such as `lane`. Each inherited context file `<dir>/AGENTS.md` is replaced by `<dir>/AGENTS.lane.md` when that file exists. Missing, empty or unreadable siblings keep the full file. When absent, `task`, `qa-verifier`, `codex-worker`, `codex-reviewer`, `reviewer`, `sonnet` and `opus` select `lane`. Other roles keep the full files. Set `contextVariant: full` to use a `full` sibling or keep the original. Main is unchanged. |
 | `skillList` | `all` (default), `none`, or a list of names: which skills the system prompt lists. Unlisted skills are hidden from the list only; `skill://<name>`, `/skill:<name>` and `autoloadSkills` still resolve them. |
 | `readSummarize` | `false` makes its `read` tool return verbatim file content instead of structural summaries. |
 | `output` | A JSON schema the agent's `yield` payload is validated against. |
+
+Role defaults only select operator-authored sibling files. They do not derive or delete policy text.
+Keep safety, merge rules, no-window rules and shell contracts in every lane variant.
+The skills list and tool documentation remain unchanged unless the role explicitly selects a skills list.
 
 A two-word key is read in either spelling: `thinkingLevel` and `thinking-level` reach
 the same field, and so do `autoloadSkills` and `readSummarize`. An underscore does

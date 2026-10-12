@@ -15,7 +15,7 @@ import type { AgentDefinition, SkillListSelection } from "./types";
  * to receive the parent's whole set, and the largest file (the profile `AGENTS.md`) is mostly rules
  * for Main. A role may now name a smaller variant instead of being handed the full text.
  *
- * TWO OPT-IN FIELDS on the agent definition, both absent by default (= today's behaviour):
+ * TWO FIELDS on the agent definition:
  *
  * - `contextVariant: lane` — every inherited context file `<dir>/AGENTS.md` is replaced by the
  *   sibling `<dir>/AGENTS.lane.md` when that file exists. A file with no such sibling stays whole,
@@ -26,12 +26,23 @@ import type { AgentDefinition, SkillListSelection } from "./types";
  *   list is only hidden (`hide: true`, the flag skills already use for this); `skill://<name>`,
  *   `/skill:<name>` and `autoloadSkills` still resolve it, so a brief that names a skill keeps working.
  *
- * Nothing here deletes policy: the full files stay on disk and a role without the fields still gets
- * them.
+ * Named worker roles default to the lane variant. Other roles keep the original context.
+ * Explicit fields win. Nothing here deletes policy: full files stay on disk.
  */
 
 /** A variant name is a file-name infix, so it must not be able to leave the directory. */
 const VARIANT_NAME = /^[a-z0-9][a-z0-9_-]*$/i;
+
+/** Worker defaults share the existing operator-owned lane variant, never derive policy text. */
+const LANE_CONTEXT_ROLES: Record<string, true> = {
+	task: true,
+	"qa-verifier": true,
+	"codex-worker": true,
+	"codex-reviewer": true,
+	reviewer: true,
+	sonnet: true,
+	opus: true,
+};
 
 /** The sibling file for a valid variant infix; throws if the name is not letters, digits, "-" or "_". */
 export function contextVariantPath(filePath: string, variant: string): string {
@@ -105,8 +116,8 @@ export interface RoleContext {
 }
 
 /**
- * The context files and skills a role starts from. A role with neither field returns the inputs
- * untouched (same references), so the default path costs nothing and discovers nothing extra.
+ * Unknown roles with neither field return the inputs untouched (same references).
+ * Named worker roles select the existing lane variant unless explicitly overridden.
  *
  * A child that was going to discover its own layers (`undefined`) is resolved here instead, because a
  * selection can only be applied to a list: discovery runs with the same `cwd` and `agentDir` the
@@ -116,17 +127,18 @@ export async function selectRoleContext(input: RoleContextInput): Promise<RoleCo
 	const { agent } = input;
 	let { contextFiles, skills } = input;
 	const agentDir = input.agentDir ?? getAgentDir();
+	const variant = agent.contextVariant ?? (Object.hasOwn(LANE_CONTEXT_ROLES, agent.name) ? "lane" : undefined);
 
-	if (agent.contextVariant !== undefined) {
+	if (variant !== undefined) {
 		if (contextFiles === undefined) {
 			contextFiles = await loadProjectContextFiles({ cwd: input.cwd, agentDir });
 		}
-		const { contextFiles: selected, swapped } = await applyContextVariant(contextFiles, agent.contextVariant);
+		const { contextFiles: selected, swapped } = await applyContextVariant(contextFiles, variant);
 		contextFiles = selected;
 		if (swapped === 0) {
 			logger.debug("Role asked for a context variant but no file has one; full context files kept", {
 				agent: agent.name,
-				variant: agent.contextVariant,
+				variant,
 			});
 		}
 	}
