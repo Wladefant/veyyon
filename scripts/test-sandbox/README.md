@@ -84,6 +84,31 @@ bash scripts/test-sandbox/leak-proof.sh             # the red run, every availab
 Package scripts wrap the common ones: `test:sandbox:probe`, `test:sandbox:build`,
 `test:sandbox:remote:build`, `test:sandbox:proof`.
 
+### Windows through WSL
+
+Use WSL when Windows has no available kernel sandbox. Do not run bare `bun test`.
+The bwrap guest uses Linux system paths, not the Windows PATH inherited by `wsl --exec`.
+Install the manifest's Bun version in `/usr/local/bin/bun`, outside the hidden home.
+Git and sh must also exist in the WSL distro.
+
+Put the command in a shell script to keep `$?` from expanding on Windows:
+
+```sh
+#!/bin/bash
+set -euo pipefail
+cd /mnt/c/Users/wkiri/development/<worktree>
+bash scripts/test-sandbox/run.sh --rung=bwrap bun test <paths>
+```
+
+Run that script through the PC's medium build slot:
+
+```text
+python C:/Users/wkiri/.veyyon/workflows/build_slot.py run <lane>-tests --class medium --timeout 2400 -- wsl.exe --exec /bin/bash /mnt/c/<script-path>
+```
+
+Read the Bun summary. A receipt passes only with `N pass`, `0 fail`, and `N > 0`.
+Exit status alone does not prove that tests ran.
+
 ## The remote rung
 
 Set `VEYYON_SANDBOX_REMOTE_HOST=<user>@<host-or-address>` to enable it; there is no
