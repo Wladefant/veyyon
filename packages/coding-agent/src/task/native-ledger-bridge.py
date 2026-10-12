@@ -458,6 +458,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
             "prompt": prepared_prompt,
             "task": prepared_prompt,
             "state": to_state,
+            "previousState": from_state,
             "owner": worker_id,
             "role": str(chosen_req.get("agent_role") or "task"),
             "criteria": chosen_req.get("criteria", []),
@@ -551,7 +552,12 @@ def cmd_rollback(args: argparse.Namespace) -> int:
 
         now_iso = get_iso_now()
         from_state = req.get("state") or "implementation"
-        req["state"] = "pending"
+        to_state = (
+            args.previous_state
+            if args.previous_state in {"pending", "implementation", "qa", "review"}
+            else "pending"
+        )
+        req["state"] = to_state
         req["owner"] = ""
         req["blocker"] = None
         req["updated_at"] = now_iso
@@ -563,7 +569,7 @@ def cmd_rollback(args: argparse.Namespace) -> int:
             "actor": "TopicReplenishmentEngine",
             "timestamp": now_iso,
             "from_state": from_state,
-            "to_state": "pending",
+            "to_state": to_state,
             "reason": f"Rollback: {reason}",
         })
         data["updated_at"] = now_iso
@@ -868,8 +874,9 @@ def main():
     p_rollback = subparsers.add_parser("rollback", help="Roll back claimed ticket on dispatch failure under FileLock")
     p_rollback.add_argument("--ledger", required=True, help="Path to ledger.json")
     p_rollback.add_argument("--ticket-id", required=True, help="Ticket ID")
-    p_rollback.add_argument("--reason", default="Dispatch failed", help="Failure reason")
     p_rollback.add_argument("--run-id", default="", help="Native run ID that still owns the claim")
+    p_rollback.add_argument("--previous-state", default="", help="Ticket state to restore after a rejected dispatch")
+    p_rollback.add_argument("--reason", default="", help="Reason for rolling back the claim")
     p_rollback.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
 
     p_recover = subparsers.add_parser("recover", help="Release claims owned by workers absent from the running roster")

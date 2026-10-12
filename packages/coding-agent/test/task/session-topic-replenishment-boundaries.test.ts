@@ -19,18 +19,41 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 interface RuntimeTaskTool {
 	tool?: RuntimeTaskTool;
-	session?: { onSubagentComplete?: (event: SubagentCompleteEvent) => Promise<void> };
+	session?: {
+		onSubagentStart?: (event: { agentId: string; agentName: string; ticketId?: string; runId?: string }) => void;
+		onSubagentStartFailed?: (event: { agentId: string; agentName: string; ticketId?: string; runId?: string }) => void;
+		onSubagentComplete?: (event: SubagentCompleteEvent) => Promise<void>;
+	};
 }
 
-function completionHook(session: AgentSession): (event: SubagentCompleteEvent) => Promise<void> {
+function taskSession(session: AgentSession): NonNullable<RuntimeTaskTool["session"]> {
 	let tool = session.getToolByName("task") as RuntimeTaskTool | undefined;
 	const seen = new Set<RuntimeTaskTool>();
 	while (tool && !tool.session && tool.tool && !seen.has(tool)) {
 		seen.add(tool);
 		tool = tool.tool;
 	}
-	const hook = tool?.session?.onSubagentComplete;
+	if (!tool?.session) throw new Error("TaskTool session hooks are not reachable from the created session");
+	return tool.session;
+}
+
+function completionHook(session: AgentSession): (event: SubagentCompleteEvent) => Promise<void> {
+	const hook = taskSession(session).onSubagentComplete;
 	if (!hook) throw new Error("TaskTool completion hook is not reachable from the created session");
+	return hook;
+}
+
+function startHook(session: AgentSession): NonNullable<RuntimeTaskTool["session"]>["onSubagentStart"] {
+	const hook = taskSession(session).onSubagentStart;
+	if (!hook) throw new Error("TaskTool start hook is not reachable from the created session");
+	return hook;
+}
+
+function startFailureHook(
+	session: AgentSession,
+): NonNullable<RuntimeTaskTool["session"]>["onSubagentStartFailed"] {
+	const hook = taskSession(session).onSubagentStartFailed;
+	if (!hook) throw new Error("TaskTool start-failure hook is not reachable from the created session");
 	return hook;
 }
 
@@ -58,10 +81,10 @@ async function runChild(root: string): Promise<void> {
 				maxRamPct: 100,
 				executor: async () => undefined,
 			});
-			engine.onSessionRecovery = async () => ({ status: "no_eligible_work" }) as never;
-			engine.onWorkerComplete = async event => {
+			const originalComplete = engine.onWorkerComplete.bind(engine);
+			engine.onWorkerComplete = async (event, currentRoster, cycleOptions) => {
 				completedBy.push(event.agentId);
-				return { status: "no_eligible_work" } as never;
+				return await originalComplete(event, currentRoster, cycleOptions);
 			};
 			const created = await createAgentSession({
 				cwd: process.cwd(),
@@ -88,26 +111,35 @@ async function runChild(root: string): Promise<void> {
 				enableLsp: false,
 				skipPythonPreflight: true,
 				replenishmentEngine: engine,
-				replenishmentVerificationBlocked: true,
 			});
 			sessions.push(created.session);
-			return { hook: completionHook(created.session), session: created.session, engine };
+			return {
+				hook: completionHook(created.session),
+				start: startHook(created.session)!,
+				startFailed: startFailureHook(created.session)!,
+				session: created.session,
+				engine,
+			};
 		};
 
 		const firstCompletions: string[] = [];
 		const secondCompletions: string[] = [];
 		const first = await create("top-level-a", firstCompletions);
 		const second = await create("top-level-b", secondCompletions);
+		const verifier = { agentId: "verifier-a", agentName: "qa-verifier" };
+		first.start(verifier);
 		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
-		await first.session.setVerificationBlocked(false);
+		first.startFailed(verifier);
 		assert.equal((await first.engine.replenish([])).status, "floor_satisfied");
-		await first.session.setVerificationBlocked(true);
-		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
-		await Promise.all([first.engine.setVerificationBlocked(false), first.engine.setVerificationBlocked(true)]);
-		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
-		await first.hook({ agentId: "worker-a", agentName: "task", task: "A", status: "completed" });
 
-
+		first.start(verifier);
+		first.start({ agentId: "task-worker", agentName: "task" });
+		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
+		await first.hook({ ...verifier, task: "A", status: "completed" });
+		assert.equal((await first.engine.replenish([])).status, "floor_satisfied");
+		await second.hook({ agentId: "worker-b", agentName: "task", task: "B", status: "completed" });
+		assert.deepEqual(firstCompletions, ["verifier-a"]);
+		assert.deepEqual(secondCompletions, ["worker-b"]);
 		const deniedAgentDir = path.join(root, "denied-task-session");
 		fs.mkdirSync(deniedAgentDir, { recursive: true });
 		const deniedAuth = await AuthStorage.create(path.join(deniedAgentDir, "auth.db"));
@@ -173,8 +205,8 @@ async function runChild(root: string): Promise<void> {
 			}),
 			/blocked by user policy/,
 		);
-		await second.hook({ agentId: "worker-b", agentName: "task", task: "B", status: "completed" });
-		assert.deepEqual(firstCompletions, ["worker-a"]);
+		await first.hook({ agentId: "worker-a", agentName: "task", task: "A", status: "completed" });
+		assert.deepEqual(firstCompletions, ["verifier-a", "worker-a"]);
 		assert.deepEqual(secondCompletions, ["worker-b"]);
 	} finally {
 		for (const session of sessions.splice(0)) await session.dispose();
@@ -190,7 +222,7 @@ if (childRoot) {
 		process.exit(1);
 	});
 } else {
-	test("createAgentSession exposes verification pressure on its injected replenishment engine", () => {
+	test("createAgentSession routes actual verifier spawn and completion events to its injected engine", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-session-replenishment-"));
 		try {
 			const output = execFileSync(process.execPath, [import.meta.path], {

@@ -377,6 +377,12 @@ export interface ToolSession extends ToolSessionLocalState {
 	 * Hook invoked when an agent completes, enabling automatic runtime topic replenishment.
 	 */
 	onSubagentComplete?: (record: AgentSpawnRecord) => void | Promise<void>;
+	/** Hook invoked after a task spawn's resolved agent identity is known. */
+	onSubagentStart?: (record: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId">) => void;
+	/** Clear spawn-only state when a task fails before its completion record is emitted. */
+	onSubagentStartFailed?: (
+		record: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId">,
+	) => void;
 	/** Get the ArtifactManager backing this session (shared across parent + agents). */
 	getArtifactManager?: () => ArtifactManager | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */

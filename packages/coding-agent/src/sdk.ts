@@ -539,25 +539,16 @@ class SessionStartup {
 			options.replenishmentEngine ??
 			new TopicReplenishmentEngine({
 				executor: productionExecutor,
-				verificationBlocked: options.replenishmentVerificationBlocked,
 			});
 		this.#replenishmentEngine = engine;
-		if (options.replenishmentEngine && options.replenishmentVerificationBlocked) {
-			void engine.setVerificationBlocked(true).catch(err => {
-				logger.warn("TopicReplenishmentEngine: initial verification block failed", {
-					error: errorMessage(err),
-				});
-			});
-		}
 
-		const activeRoster = AgentRegistry.global()
-			.list()
-			.map(ref => ({
-				id: ref.id,
-				status: ref.status,
-				role: ref.kind,
-				task: ref.activity,
-			}));
+		const activeRoster = this.#agentRegistry.list().map(ref => ({
+			id: ref.id,
+			status: ref.status,
+			role: ref.kind,
+			agentName: ref.displayName,
+			task: ref.activity,
+		}));
 		void engine.onSessionRecovery(activeRoster).catch(err => {
 			logger.warn("TopicReplenishmentEngine: session recovery failed", {
 				error: errorMessage(err),
@@ -853,12 +844,36 @@ class SessionStartup {
 				authStorage: this.#authStorage,
 				modelRegistry: this.#modelRegistry,
 				asyncJobManager: this.#scopedAsyncJobManager,
+				onSubagentStart: record => {
+					this.#replenishmentEngine?.onWorkerStart(record);
+				},
+				onSubagentStartFailed: record => {
+					const engine = this.#replenishmentEngine;
+					if (!engine) return;
+					engine.onWorkerStartFailed(record);
+					const activeRoster = this.#agentRegistry.list().map(ref => ({
+						id: ref.id,
+						status: ref.status,
+						role: ref.kind,
+						agentName: ref.displayName,
+						task: ref.activity,
+					}));
+					void engine.replenish(activeRoster).catch(err => {
+						logger.warn("TopicReplenishmentEngine: failed task recovery failed", {
+							error: errorMessage(err),
+						});
+					});
+				},
 				onSubagentComplete: async record => {
 					const engine = this.#replenishmentEngine;
 					if (!engine) return;
-					const activeRoster = AgentRegistry.global()
-						.list()
-						.map(ref => ({ id: ref.id, status: ref.status, role: ref.kind, task: ref.activity }));
+					const activeRoster = this.#agentRegistry.list().map(ref => ({
+						id: ref.id,
+						status: ref.status,
+						role: ref.kind,
+						agentName: ref.displayName,
+						task: ref.activity,
+					}));
 					await engine.onWorkerComplete(
 						{
 							agentId: record.agentId,
@@ -1505,9 +1520,6 @@ class SessionStartup {
 			autoApprove: options.autoApprove,
 			bypassAllApprovals: options.bypassAllApprovals,
 			parentApprovalBypassed: options.parentApprovalBypassed,
-			setVerificationBlocked: async blocked => {
-				await this.#replenishmentEngine?.setVerificationBlocked(blocked);
-			},
 			evalKernelOwnerId: this.#evalKernelOwnerId,
 			// Defined only for a top-level session. AgentSession disposes only the manager it owns; a
 			// spawned agent runs on its parent's and MUST NOT tear it down.

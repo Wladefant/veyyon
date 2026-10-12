@@ -1560,13 +1560,6 @@ export class AgentSession {
 		return this.#grantedAgents.has(agentName);
 	}
 
-	/**
-	 * Update downstream verification pressure and resume bounded replenishment
-	 * through the existing engine when pressure clears.
-	 */
-	async setVerificationBlocked(blocked: boolean): Promise<void> {
-		await this.#config.setVerificationBlocked?.(blocked);
-	}
 
 	/**
 	 * Arm prewalk outside the normal startup path (the `/prewalk` slash command). See

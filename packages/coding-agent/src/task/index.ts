@@ -1440,6 +1440,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		launchTiming?: { invokedAt: number; acquiredAt: number },
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const startTime = Date.now();
+		let startedWorker: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId"> | undefined;
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
 		const agentName = params.agent ?? "";
 		const runId = params.runId;
@@ -1825,6 +1826,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				});
 			};
 
+			startedWorker = {
+				agentId,
+				agentName: agent.name,
+				ticketId: typeof params.ticketId === "string" ? params.ticketId : undefined,
+				runId,
+			};
+			this.session.onSubagentStart?.(startedWorker);
 			let result = await runTask();
 
 			let mergeSummary = "";
@@ -1902,9 +1910,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			};
 			this.session.recordAgentSpawn?.(spawnRecord);
 			await this.session.onSubagentComplete?.(spawnRecord);
+			startedWorker = undefined;
 
 			return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 		} catch (err) {
+			if (startedWorker) this.session.onSubagentStartFailed?.(startedWorker);
 			return {
 				content: [{ type: "text", text: `Task execution failed: ${err}` }],
 				details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },

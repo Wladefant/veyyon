@@ -175,8 +175,6 @@ export interface AgentSessionConfig {
 	 * the end of its run. Consulted on every check and can only narrow.
 	 */
 	parentApprovalBypassed?: () => boolean;
-	/** Update downstream verification pressure for native topic replenishment. */
-	setVerificationBlocked?: (blocked: boolean) => Promise<void>;
 	/** Models to cycle through with Ctrl+P (from --models flags). */
 	scopedModels?: Array<{
 		model: Model;
