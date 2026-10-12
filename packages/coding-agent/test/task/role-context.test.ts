@@ -22,10 +22,16 @@ const entry = (p: string, content: string) => ({ path: p, content, level: "proje
 
 describe("contextVariantPath", () => {
 	it("inserts the variant before the extension", () => {
-		expect(contextVariantPath(path.join("a", "AGENTS.md"), "lane")).toBe(path.join("a", "AGENTS.lane.md"));
+		for (const variant of ["lane", "Lane2", "worker-core", "task_v2", "7"]) {
+			expect(contextVariantPath(path.join("a", "AGENTS.md"), variant)).toBe(
+				path.join("a", `AGENTS.${variant}.md`),
+			);
+		}
 	});
 	it("rejects a variant that could leave the directory", () => {
-		expect(() => contextVariantPath(path.join("a", "AGENTS.md"), "../x")).toThrow();
+		for (const variant of ["../x", "..\\x", "x/y", "x\\y", "..", "", "/x", "C:\\x", ".", " lane", "lane x"]) {
+			expect(() => contextVariantPath(path.join("a", "AGENTS.md"), variant)).toThrow("Invalid contextVariant");
+		}
 	});
 });
 

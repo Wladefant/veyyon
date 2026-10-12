@@ -5,10 +5,9 @@
 # probe_bwrap, run_bwrap and binprobe_bwrap and reads REPO_ROOT and HOST_HOME from
 # the driver.
 #
-# It is last on the ladder and it does not work on this workstation. The reason is
-# in the LADDER note in run.sh: AppArmor refuses the uid_map write even though the
-# sysctls advertise unprivileged user namespaces, so the probe has to RUN bwrap
-# rather than look for it on PATH.
+# It is last on the ladder. Some hosts deny the uid_map write through AppArmor
+# despite enabling unprivileged user namespaces, so the probe runs bwrap rather
+# than merely checking PATH.
 
 probe_bwrap() {
 	command -v bwrap >/dev/null 2>&1 || { skip bwrap "bubblewrap not on PATH"; return 1; }
@@ -31,7 +30,13 @@ run_bwrap() {
 	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")
 
 	local -a extra_mounts=()
-	if [ -L "${REPO_ROOT}/node_modules" ]; then
+	if [ -n "${VEYYON_SANDBOX_NODE_MODULES:-}" ]; then
+		if [ ! -d "${VEYYON_SANDBOX_NODE_MODULES}" ]; then
+			log "Linux node_modules directory does not exist: ${VEYYON_SANDBOX_NODE_MODULES}"
+			return "${RUNG_SETUP_FAILED:-126}"
+		fi
+		extra_mounts+=(--ro-bind "${VEYYON_SANDBOX_NODE_MODULES}" "${REPO_ROOT}/node_modules")
+	elif [ -L "${REPO_ROOT}/node_modules" ]; then
 		local nm_target
 		nm_target="$(readlink "${REPO_ROOT}/node_modules" 2>/dev/null || true)"
 		if [ -n "$nm_target" ] && [ -d "$nm_target" ]; then
@@ -55,6 +60,7 @@ run_bwrap() {
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
 		--chdir "${REPO_ROOT}" \
+		--setenv PATH /usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \
 		--setenv VEYYON_TEST_HOST_HOME "${HOST_HOME}" \
 		--setenv HOME /sandbox/home \
@@ -64,4 +70,4 @@ run_bwrap() {
 }
 
 # Used by --probe to list which binaries the rung provides.
-binprobe_bwrap() { bwrap --unshare-user --ro-bind / / --tmpfs /home /bin/sh -c "$1"; }
+binprobe_bwrap() { run_bwrap /bin/sh -c "$1"; }

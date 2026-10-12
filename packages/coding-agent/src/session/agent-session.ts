@@ -2162,9 +2162,16 @@ export class AgentSession {
 			hasTerminalTextAnswerWithoutQueuedWork: () => this.hasTerminalTextAnswerWithoutQueuedWork(),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			steerAdvice: async (content, details) => {
+				if (!this.isStreaming) {
+					await this.sendCustomMessage(
+						{ customType: "advisor", content, display: true, attribution: "agent", details },
+						{ deliverAs: "nextTurn", triggerTurn: false },
+					);
+					return;
+				}
 				await this.sendCustomMessage(
 					{ customType: "advisor", content, display: true, attribution: "agent", details },
-					{ deliverAs: "steer", triggerTurn: true },
+					{ deliverAs: "steer", triggerTurn: false },
 				);
 			},
 			parkForNextTurn: card => {

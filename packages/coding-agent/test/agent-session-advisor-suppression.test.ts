@@ -26,7 +26,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
+import { convertToLlm, USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
 import type { IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
@@ -297,6 +297,76 @@ describe("AgentSession advisor auto-resume suppression", () => {
 
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(2);
 		expect(mock.calls.length).toBe(1);
+	});
+
+	it("queues advice to idle Main for the next operator turn without triggering a model turn", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				createYieldMockResponse({ result: { data: { done: true } } }),
+				{ content: ["OPERATOR TURN RESULT"], stopReason: "stop" },
+			],
+		});
+		const advisorMock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "Check the yield invariants", severity: "concern" },
+						},
+					],
+				},
+			],
+			handler: { content: [], stopReason: "stop" },
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [createMockYieldTool()] },
+			streamFn: mock.stream,
+			convertToLlm,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false });
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			advisorStreamFn: advisorMock.stream,
+		});
+
+		// First turn: Primary yields and rests (idle Main).
+		await session.prompt("execute task and yield");
+		await session.waitForIdle();
+		expect(mock.calls.length).toBe(1);
+
+		// Advisor runs while Main is idle.
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("review the yielded result");
+		await session.waitForIdle();
+
+		// MUST NOT trigger a model turn while Main is idle!
+		expect(mock.calls.length).toBe(1);
+
+		// Advice should be queued as deferred context for the next operator turn.
+		await session.prompt("next operator command");
+		await session.waitForIdle();
+
+		// Now the operator prompt triggered the second model turn.
+		expect(mock.calls.length).toBe(2);
+		const lastCall = mock.calls[1];
+		const serializedMessages = JSON.stringify(lastCall?.context.messages);
+		expect(serializedMessages).toContain("Check the yield invariants");
 	});
 
 	it("waits for preserved advisor card hooks and persistence before reporting catch-up", async () => {
