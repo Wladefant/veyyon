@@ -327,6 +327,8 @@ export interface TopicReplenishmentEngineOptions {
 	maxRamPct?: number;
 	cleanupRamPct?: number;
 	memoryProvider?: MemoryMeasurementProvider;
+	/** Stop new producer dispatch while verification is blocked. */
+	verificationBlocked?: boolean;
 }
 
 export interface ReplenishmentDispatchOptions {
@@ -347,7 +349,7 @@ export interface ReplenishmentOutcome {
 	dispatchedTickets: ClaimedTicket[];
 	dispatchedCount: number;
 	blockedTopics: BlockedTopicInfo[];
-	status: "replenished" | "floor_satisfied" | "memory_limited" | "no_eligible_work" | "error";
+	status: "replenished" | "floor_satisfied" | "memory_limited" | "no_eligible_work" | "verification_blocked" | "error";
 	reason?: string;
 }
 
@@ -993,6 +995,9 @@ export class TopicReplenishmentEngine {
 	readonly maxRamPct: number;
 	readonly cleanupRamPct: number;
 	readonly memoryProvider?: MemoryMeasurementProvider;
+	#verificationBlocked: boolean;
+	#lastRoster: readonly NativeActorSnapshot[] | Record<string, unknown>[] | undefined;
+	#verificationUpdateVersion: number;
 
 	constructor(options?: TopicReplenishmentEngineOptions) {
 		this.ledgerPath = options?.ledgerPath ?? getDefaultLedgerPath();
@@ -1003,10 +1008,29 @@ export class TopicReplenishmentEngine {
 		this.maxRamPct = options?.maxRamPct ?? HARD_RAM_CEILING_PCT;
 		this.cleanupRamPct = options?.cleanupRamPct ?? CLEANUP_RAM_PCT;
 		this.memoryProvider = options?.memoryProvider;
+		this.#verificationBlocked = options?.verificationBlocked ?? false;
+		this.#verificationUpdateVersion = 0;
+		this.#lastRoster = undefined;
 	}
 
 	setNativeExecutor(executor: (ticket: ClaimedTicket) => Promise<unknown>): void {
 		this.executor = executor;
+	}
+
+	/**
+	 * Update downstream verification pressure. Clearing pressure resumes through
+	 * the existing serialized replenishment lease and reservation accounting.
+	 */
+	async setVerificationBlocked(blocked: boolean): Promise<ReplenishmentOutcome | undefined> {
+		// Publish a block immediately. Any replenishment queued behind this setter must observe it.
+		const version = ++this.#verificationUpdateVersion;
+		if (blocked) this.#verificationBlocked = true;
+		return await withReplenishmentLease(this.ledgerPath, async () => {
+			if (version !== this.#verificationUpdateVersion || this.#verificationBlocked === blocked) return undefined;
+			this.#verificationBlocked = blocked;
+			if (blocked || !this.#lastRoster) return undefined;
+			return await this.#replenishOnce(this.#lastRoster);
+		});
 	}
 
 	/**
@@ -1057,6 +1081,7 @@ export class TopicReplenishmentEngine {
 			memoryProvider?: MemoryMeasurementProvider;
 		},
 	): Promise<ReplenishmentOutcome> {
+		this.#lastRoster = currentRoster;
 		return await withReplenishmentLease(this.ledgerPath, () => this.#replenishOnce(currentRoster, options));
 	}
 
@@ -1096,6 +1121,18 @@ export class TopicReplenishmentEngine {
 				blockedTopics: [],
 				status: "memory_limited",
 				reason: memoryAdmission.reason,
+			};
+		}
+
+		if (this.#verificationBlocked) {
+			return {
+				reconciliation,
+				memoryAdmission,
+				dispatchedTickets: [],
+				dispatchedCount: 0,
+				blockedTopics: [],
+				status: "verification_blocked",
+				reason: "New producer dispatch is paused while downstream verification is blocked.",
 			};
 		}
 

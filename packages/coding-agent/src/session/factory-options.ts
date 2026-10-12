@@ -307,6 +307,8 @@ export interface CreateAgentSessionOptions {
 	parentApprovalBypassed?: () => boolean;
 	/** Topic replenishment engine instance override. */
 	replenishmentEngine?: TopicReplenishmentEngine;
+	/** Initial downstream verification pressure for native topic replenishment. */
+	replenishmentVerificationBlocked?: boolean;
 	/** Custom executor for topic replenishment. */
 	replenishmentExecutor?: (ticket: ClaimedTicket) => Promise<unknown>;
 }

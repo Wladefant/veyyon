@@ -14,6 +14,7 @@ import {
 	type SubagentCompleteEvent,
 	TopicReplenishmentEngine,
 } from "@veyyon/coding-agent/task/topic-replenishment";
+import { expect, test } from "bun:test";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 interface RuntimeTaskTool {
@@ -87,16 +88,25 @@ async function runChild(root: string): Promise<void> {
 				enableLsp: false,
 				skipPythonPreflight: true,
 				replenishmentEngine: engine,
+				replenishmentVerificationBlocked: true,
 			});
 			sessions.push(created.session);
-			return completionHook(created.session);
+			return { hook: completionHook(created.session), session: created.session, engine };
 		};
 
 		const firstCompletions: string[] = [];
 		const secondCompletions: string[] = [];
-		const firstHook = await create("top-level-a", firstCompletions);
-		const secondHook = await create("top-level-b", secondCompletions);
-		await firstHook({ agentId: "worker-a", agentName: "task", task: "A", status: "completed" });
+		const first = await create("top-level-a", firstCompletions);
+		const second = await create("top-level-b", secondCompletions);
+		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
+		await first.session.setVerificationBlocked(false);
+		assert.equal((await first.engine.replenish([])).status, "floor_satisfied");
+		await first.session.setVerificationBlocked(true);
+		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
+		await Promise.all([first.engine.setVerificationBlocked(false), first.engine.setVerificationBlocked(true)]);
+		assert.equal((await first.engine.replenish([])).status, "verification_blocked");
+		await first.hook({ agentId: "worker-a", agentName: "task", task: "A", status: "completed" });
+
 
 		const deniedAgentDir = path.join(root, "denied-task-session");
 		fs.mkdirSync(deniedAgentDir, { recursive: true });
@@ -163,7 +173,7 @@ async function runChild(root: string): Promise<void> {
 			}),
 			/blocked by user policy/,
 		);
-		await secondHook({ agentId: "worker-b", agentName: "task", task: "B", status: "completed" });
+		await second.hook({ agentId: "worker-b", agentName: "task", task: "B", status: "completed" });
 		assert.deepEqual(firstCompletions, ["worker-a"]);
 		assert.deepEqual(secondCompletions, ["worker-b"]);
 	} finally {
@@ -180,16 +190,17 @@ if (childRoot) {
 		process.exit(1);
 	});
 } else {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-session-replenishment-"));
-	try {
-		const output = execFileSync(process.execPath, [import.meta.path], {
-			cwd: process.cwd(),
-			env: { ...process.env, VEYYON_REPLENISHMENT_BOUNDARY_CHILD: root },
-			encoding: "utf8",
-		});
-		assert.equal(output.trim(), "");
-		console.log("PASS: each createAgentSession completion hook retained its own replenishment engine");
-	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+	test("createAgentSession exposes verification pressure on its injected replenishment engine", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-session-replenishment-"));
+		try {
+			const output = execFileSync(process.execPath, [import.meta.path], {
+				cwd: process.cwd(),
+				env: { ...process.env, VEYYON_REPLENISHMENT_BOUNDARY_CHILD: root },
+				encoding: "utf8",
+			});
+			expect(output.trim()).toBe("");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 }

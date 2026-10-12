@@ -1564,6 +1564,14 @@ export class AgentSession {
 	 * Arm prewalk outside the normal startup path (the `/prewalk` slash command). See
 	 * {@link ModelHandoff.armPrewalk}.
 	 */
+	/**
+	 * Update downstream verification pressure and resume bounded replenishment
+	 * through the existing engine when pressure clears.
+	 */
+	async setVerificationBlocked(blocked: boolean): Promise<void> {
+		await this.#config.setVerificationBlocked?.(blocked);
+	}
+
 	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): void {
 		this.#handoff.armPrewalk(target, thinkingLevel);
 	}

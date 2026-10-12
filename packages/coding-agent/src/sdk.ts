@@ -539,8 +539,16 @@ class SessionStartup {
 			options.replenishmentEngine ??
 			new TopicReplenishmentEngine({
 				executor: productionExecutor,
+				verificationBlocked: options.replenishmentVerificationBlocked,
 			});
 		this.#replenishmentEngine = engine;
+		if (options.replenishmentEngine && options.replenishmentVerificationBlocked) {
+			void engine.setVerificationBlocked(true).catch(err => {
+				logger.warn("TopicReplenishmentEngine: initial verification block failed", {
+					error: errorMessage(err),
+				});
+			});
+		}
 
 		const activeRoster = AgentRegistry.global()
 			.list()
@@ -1494,6 +1502,7 @@ class SessionStartup {
 			autoApprove: options.autoApprove,
 			bypassAllApprovals: options.bypassAllApprovals,
 			parentApprovalBypassed: options.parentApprovalBypassed,
+			setVerificationBlocked: blocked => this.#replenishmentEngine?.setVerificationBlocked(blocked),
 			evalKernelOwnerId: this.#evalKernelOwnerId,
 			// Defined only for a top-level session. AgentSession disposes only the manager it owns; a
 			// spawned agent runs on its parent's and MUST NOT tear it down.
