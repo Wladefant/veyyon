@@ -165,6 +165,24 @@ Directories holding task fixtures, agent container runtimes, and execution outpu
   - `agents/pier/`: Pier backend container agents (`VeyyonAgent`, `OmpAgent`, `FactoryAgent`, `HermesAgent`).
   - `agents/harbor/`: Harbor backend container agents (`VeyyonAgent`, `ProgramAgent`).
   - `agents/common/`: Shared container program executor (`container_program.py`), session token usage readers (`session_usage.py`), model catalog bootstrap helper (`model_catalog_bootstrap.py`), and arm attachment loader (`arm_attachments.py`).
+
+Account cache rates and cold-cache misses can be measured from session JSONL files with:
+
+```sh
+python tests/evals/agents/common/cache_rates.py --since 2026-10-01T00:00:00Z --until 2026-10-02T00:00:00Z path/to/session.jsonl
+```
+
+The report contains counts and aggregate token rates only, not transcript content. Time bounds include both endpoints.
+Cache hit rate is `cacheRead / (input + cacheRead + cacheWrite)` for each total, account, model, or transport group.
+A cold miss requires a preceding assistant turn in the same file and provider/model identity, with more than 30,000 cache-read tokens.
+The current turn is a miss when its cache reads are below half the preceding turn's cache reads.
+Compaction, `prompt_cache_invalidated`, an error or abort turn, an invalid timestamp, or a provider/model change breaks continuity.
+Per-account cold miss rate is misses divided by eligible turns attributed to that account.
+The preceding turn can fall before the window. Only the current turn must fall within the window.
+Numeric timestamps use milliseconds since the Unix epoch.
+Legacy records fall back to `message.model`. Missing account, transport, or model values become `unknown`.
+Missing files fail the command.
+
 - `assets/`: Ephemeral staging root for binary assets, credentials, and container programs created during evaluation runs.
 - `runs/`: Output directory where finished evaluation runs, trial artifacts, execution journals, reports, and SQLite manager databases (`_manager/evals.sqlite`) are stored.
 

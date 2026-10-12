@@ -1449,6 +1449,7 @@ describe("openai-codex streaming", () => {
 		expect(result.usage.totalTokens).toBe(185_882);
 		expect(result.usage.cost.input).toBeCloseTo(5.629, 8);
 		expect(result.usage.cost.cacheRead).toBeCloseTo(90.112, 8);
+		expect(result.usage.transport).toBe("websocket");
 	});
 
 	it("omits request-body headers and replaces stale beta headers for websocket handshakes", async () => {
@@ -2674,6 +2675,8 @@ describe("openai-codex streaming", () => {
 			providerSessionState,
 		});
 		const result = await streamResult.result();
+		expect(result.usage.transport).toBe("http");
+		expect(result.usage.model).toBe("gpt-5.3-codex-spark");
 		expect(result.role).toBe("assistant");
 		expect(fetchMock).toHaveBeenCalled();
 		const fallbackDetails = getOpenAICodexTransportDetails(model, { sessionId: "ws-session", providerSessionState });

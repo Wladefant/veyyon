@@ -218,6 +218,12 @@ export interface Usage {
 		/** Orchestration output tokens. */
 		output?: number;
 	};
+	/** Safe serving-account attribution. Never contains a bearer or account secret. */
+	credentialId?: string;
+	/** Transport that served the successful request (for example, websocket or http). */
+	transport?: string;
+	/** Model identifier that served the successful request. */
+	model?: string;
 	/** Copilot premium-request counter, when applicable. */
 	premiumRequests?: number;
 	/**

@@ -481,6 +481,19 @@ A navigable parent to child index entry: one per agent a session spawned. It let
 - `sessionFile` is the child's durable transcript path (`<parentArtifactsDir>/<agentId>.jsonl`). That file, its externalized blobs, and this index entry are retained together; GC never archives the child independently and moves it with the parent (proven in `gc-cli.test.ts`).
 - `status` is `"completed" | "failed" | "cancelled"`; `usage`/`error` are optional.
 
+### Usage attribution
+
+Usage entries may include optional `credentialId`, `transport`, and `model` fields. `credentialId`
+is the numeric storage-row ID rendered as a string for the account that served that request;
+transport and model describe the actual serving path, including Codex transport fallback. Older
+JSONL entries without these fields remain valid and readable. Attribution is request-local and
+contains no bearer, account email, or global credential mapping.
+
+`credentialId` is absent for environment, runtime, or configured keys without a stored account.
+`transport` is `websocket` or `http` for Codex, including fallback to HTTP.
+The stream records observed HTTP fetches as `http`, and gateway routing as `pi-native`.
+Providers that do not expose their transport record `unknown`, rather than a guessed transport.
+
 ### `settings_snapshot`
 
 The complete resolved Tier-A config that governed the run, keyed by dotted setting path. Written once at session start (`kind: "full"`), so a later study can reproduce the exact configuration a run used rather than guessing from current defaults. A later `kind: "diff"` snapshot may carry only keys that changed.
