@@ -434,7 +434,7 @@ export function isValidAuthorization(auth: unknown): boolean {
  * - Role "main" is an orchestrator, not a useful worker.
  */
 export function reconcileRunningTopics(
-	roster: readonly NativeActorSnapshot[] | Record<string, unknown>[],
+	roster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
 	options?: { minFloor?: number; targetCount?: number; eligibleTopics?: readonly string[] },
 ): TopicReconciliationResult {
 	const minFloor = options?.minFloor ?? DEFAULT_MIN_FLOOR;
@@ -1050,7 +1050,7 @@ export class TopicReplenishmentEngine {
 		this.#removeVerificationWorker(event);
 	}
 
-	#reconcileVerificationWorkers(currentRoster: readonly NativeActorSnapshot[] | Record<string, unknown>[]): void {
+	#reconcileVerificationWorkers(currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[]): void {
 		this.#verificationWorkers.clear();
 		for (const worker of currentRoster) {
 			if (
@@ -1137,7 +1137,7 @@ export class TopicReplenishmentEngine {
 	}
 
 	async replenish(
-		currentRoster: readonly NativeActorSnapshot[] | Record<string, unknown>[],
+		currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
 		options?: ReplenishmentCycleOptions,
 	): Promise<ReplenishmentOutcome> {
 		if (options !== undefined) this.#cycleOptions = options;
@@ -1146,7 +1146,7 @@ export class TopicReplenishmentEngine {
 	}
 
 	async #replenishOnce(
-		currentRoster: readonly NativeActorSnapshot[] | Record<string, unknown>[],
+		currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
 		options?: ReplenishmentCycleOptions,
 	): Promise<ReplenishmentOutcome> {
 		const activeExecutor = options?.dispatchWorker ?? this.executor;
@@ -1296,7 +1296,7 @@ export class TopicReplenishmentEngine {
 	 */
 	async onWorkerComplete(
 		event: SubagentCompleteEvent,
-		currentRoster: readonly NativeActorSnapshot[] | Record<string, unknown>[],
+		currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
 		options?: ReplenishmentCycleOptions,
 	): Promise<ReplenishmentOutcome> {
 		const reservations = replenishmentReservations.get(this.ledgerPath);
@@ -1341,7 +1341,7 @@ export class TopicReplenishmentEngine {
 	 * Preserves all durable work and replenishes worker pool up to floor.
 	 */
 	async onSessionRecovery(
-		currentRoster: readonly NativeActorSnapshot[] | Record<string, unknown>[],
+		currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
 		options?: ReplenishmentCycleOptions,
 	): Promise<ReplenishmentOutcome> {
 		this.#reconcileVerificationWorkers(currentRoster);
