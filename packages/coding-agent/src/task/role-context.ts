@@ -33,8 +33,11 @@ import type { AgentDefinition, SkillListSelection } from "./types";
 /** A variant name is a file-name infix, so it must not be able to leave the directory. */
 const VARIANT_NAME = /^[a-z0-9][a-z0-9_-]*$/i;
 
-/** The sibling file that holds `variant` of `filePath`: `AGENTS.md` + `lane` → `AGENTS.lane.md`. */
+/** The sibling file for a valid variant infix; throws if the name is not letters, digits, "-" or "_". */
 export function contextVariantPath(filePath: string, variant: string): string {
+	if (!VARIANT_NAME.test(variant)) {
+		throw new Error(`Invalid contextVariant "${variant}": use letters, digits, "-" or "_"`);
+	}
 	const ext = path.extname(filePath);
 	const base = path.basename(filePath, ext);
 	return path.join(path.dirname(filePath), `${base}.${variant}${ext}`);
