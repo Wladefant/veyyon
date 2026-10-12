@@ -7,9 +7,7 @@ import * as path from "node:path";
 import { ToolError } from "../../core/tool-errors";
 import {
 	EXTENSION_PROTOCOL_VERSION,
-	type ExtensionPolicy,
 	extensionStateDir,
-	loadExtensionPolicy,
 	PLAYWRIGHT_EXTENSION_ID,
 	readExtensionToken,
 } from "./extension-policy";
@@ -72,23 +70,15 @@ export async function openExtensionSession(
 			`No extension token is stored for ${instance ?? "the default profile"}. ${EXTENSION_SETUP_HINT}`,
 		);
 	}
-	let policy: ExtensionPolicy;
+	const bootstrap = {
+		extensionId: process.env.VEYYON_BROWSER_EXTENSION_ID ?? PLAYWRIGHT_EXTENSION_ID,
+		protocolVersion: EXTENSION_PROTOCOL_VERSION,
+		token,
+		clientName: "veyyon",
+	};
+	const relay = ExtensionRelay.start({ instance, scrub: [token], bootstrap });
 	try {
-		policy = loadExtensionPolicy();
-	} catch (error) {
-		throw new ToolError(
-			`The extension policy could not be read: ${error instanceof Error ? error.message : String(error)}`,
-		);
-	}
-	const relay = ExtensionRelay.start({ policy, instance, scrub: [token] });
-	try {
-		const connectUrl = buildConnectUrl({
-			extensionId: process.env.VEYYON_BROWSER_EXTENSION_ID ?? PLAYWRIGHT_EXTENSION_ID,
-			protocolVersion: EXTENSION_PROTOCOL_VERSION,
-			relayUrl: relay.extensionUrl,
-			token,
-			clientName: "veyyon",
-		});
+		const connectUrl = buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl });
 		await (opts.launchConnect ?? launchChrome)(connectUrl, kind);
 		await relay.waitForExtension(opts.timeoutMs ?? CONNECT_TIMEOUT_MS, opts.signal);
 		return relay;

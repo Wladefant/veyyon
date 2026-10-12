@@ -2,6 +2,7 @@
  * Operator commands for the `app.extension` browser backend: store the extension token, check the
  * bridge, and disconnect every controlled tab.
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Args, Command, Flags } from "@veyyon/utils/cli";
 import {
@@ -61,7 +62,11 @@ export default class BrowserExtension extends Command {
 		}),
 	};
 
+	static examples = [
+		"# Store the token copied from the extension status page (reads one line from stdin)\n  veyyon browser-extension set-token",
 		"# Check the token and any running relay\n  veyyon browser-extension status",
+		"# Detach every controlled tab and drop the extension\n  veyyon browser-extension disconnect",
+	];
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(BrowserExtension);
@@ -87,7 +92,6 @@ export default class BrowserExtension extends Command {
 				return;
 			case "status": {
 				process.stdout.write(`Token stored: ${hasExtensionToken(instance) ? "yes" : "no"}\n`);
-				process.stdout.write(`Allowlist file: ${policyFilePath()}\n`);
 				const state = readRelayState(instance);
 				if (!state) {
 					process.stdout.write("Relay: not running\n");

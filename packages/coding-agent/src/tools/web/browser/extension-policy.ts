@@ -1,11 +1,11 @@
 /**
  * Security policy for the `app.extension` browser backend.
  *
- * The backend drives the operator's signed-in Chrome through the Playwright Extension. These
- * rules keep a local process or a web page from steering that browser. HTTP and HTTPS navigation
- * is open except for production hosts.
+ * Navigation allows HTTP and HTTPS origins except for production hosts. The module also keeps
+ * transport checks, CDP restrictions, and per-profile token handling.
  */
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@veyyon/utils";
 
@@ -15,12 +15,6 @@ export const PLAYWRIGHT_EXTENSION_ID = "mmlmfjhmonkocbjadbfplnigmagldckm";
 /** The relay protocol version the pinned extension speaks (its connect page enforces it). */
 export const EXTENSION_PROTOCOL_VERSION = 2;
 
-/** Environment variable with extra allowed origins, comma separated. */
-export const EXTENSION_ALLOW_ENV = "VEYYON_BROWSER_EXTENSION_ALLOW";
-
- * matched anywhere in the host; the domains are matched exactly (a staging subdomain can still
- * be allowed).
- */
 const PRODUCTION_HOST_FRAGMENTS: readonly string[] = ["zaraprptkegxqpvnsubu", "akamai-iad-prod"];
 const PRODUCTION_HOSTS: readonly string[] = [
 	"polysimulator.com",
@@ -29,7 +23,6 @@ const PRODUCTION_HOSTS: readonly string[] = [
 	"api.polysimulator.com",
 ];
 
-/** CDP domains a session may use. Everything else (`Browser`, `Storage`, `DOMStorage`, `IndexedDB`, `Fetch`, ...) is refused. */
 const ALLOWED_CDP_DOMAINS: ReadonlySet<string> = new Set([
 	"Audits",
 	"Page",
@@ -45,8 +38,6 @@ const ALLOWED_CDP_DOMAINS: ReadonlySet<string> = new Set([
 	"Performance",
 	"Inspector",
 ]);
-
-/** Methods refused even inside an allowed domain: they export cookies, storage or page snapshots, or change downloads. */
 const DENIED_CDP_METHODS: ReadonlySet<string> = new Set([
 	"Page.printToPDF",
 	"Page.captureSnapshot",
@@ -65,9 +56,7 @@ const DENIED_CDP_METHODS: ReadonlySet<string> = new Set([
 	"Network.takeResponseBodyForInterceptionAsStream",
 	"Network.enableReportingApi",
 	"Network.setRequestInterception",
-	// The relay sets the bypass so pages cannot be answered by a service worker outside the request gate.
 	"Network.setBypassServiceWorker",
-	// The popup guard, worker removal and `worker-src 'none'` sandbox are installed by the relay; a client must not undo or replace them.
 	"Page.setBypassCSP",
 	"Page.removeScriptToEvaluateOnNewDocument",
 	"Page.addScriptToEvaluateOnNewDocument",
@@ -75,15 +64,12 @@ const DENIED_CDP_METHODS: ReadonlySet<string> = new Set([
 
 export type PolicyDecision = { allowed: true } | { allowed: false; reason: string };
 
-
-/** True for `127.0.0.1`, `[::1]`, `::1` and `localhost`. */
 export function isLoopbackHost(host: string): boolean {
 	const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 	if (bare === "::1" || bare === "localhost") return true;
 	return /^127(?:\.\d{1,3}){3}$/.test(bare);
 }
 
-/** Refuse a relay URL that does not point at the loopback interface. */
 export function assertLoopbackUrl(rawUrl: string): void {
 	let parsed: URL;
 	try {
@@ -99,12 +85,10 @@ export function assertLoopbackUrl(rawUrl: string): void {
 	}
 }
 
-/** A fresh random secret, 32 bytes as base64url. */
 export function generateSecret(): string {
 	return crypto.randomBytes(32).toString("base64url");
 }
 
-/** Compare two secrets without leaking where they differ. Missing or unequal values never match. */
 export function secretsEqual(expected: string, actual: string | undefined): boolean {
 	if (actual === undefined || actual.length === 0 || expected.length === 0) return false;
 	const a = crypto.createHash("sha256").update(expected).digest();
@@ -112,19 +96,24 @@ export function secretsEqual(expected: string, actual: string | undefined): bool
 	return crypto.timingSafeEqual(a, b);
 }
 
-/**
- * Normalize a hostname for matching: lowercase, no trailing dots. `URL` has already applied IDNA
- * (punycode) and removed the port and userinfo.
- */
 export function normalizeHost(hostname: string): string {
 	return hostname.toLowerCase().replace(/\.+$/, "");
 }
 
+function isProductionHost(host: string): boolean {
+	if (PRODUCTION_HOSTS.includes(host)) return true;
+	return PRODUCTION_HOST_FRAGMENTS.some(fragment => host.includes(fragment));
+}
 
-/**
- * Decide whether the browser may load `rawUrl`. HTTP and HTTPS URLs pass unless they target a
- * refused production host. `about:blank` is always allowed.
- */
+export function isProductionUrl(rawUrl: string): boolean {
+	try {
+		return isProductionHost(normalizeHost(new URL(rawUrl).hostname));
+	} catch {
+		return false;
+	}
+}
+
+/** Allows HTTP and HTTPS navigation except for production hosts. */
 export function checkNavigation(rawUrl: string): PolicyDecision {
 	if (rawUrl === "about:blank") return { allowed: true };
 	let url: URL;
@@ -137,16 +126,10 @@ export function checkNavigation(rawUrl: string): PolicyDecision {
 		return { allowed: false, reason: `The extension backend does not load ${url.protocol} URLs.` };
 	}
 	const host = normalizeHost(url.hostname);
-	if (isProductionHost(host)) {
-		return { allowed: false, reason: `${host} is a production host and is never allowed.` };
-	}
+	if (isProductionHost(host)) return { allowed: false, reason: `${host} is a production host and is never allowed.` };
 	return { allowed: true };
 }
 
-/**
- * Refuse a CDP command that is not on the allowlist. Default deny: a domain not listed in
- * `ALLOWED_CDP_DOMAINS` is refused, and so is every method in `DENIED_CDP_METHODS`.
- */
 export function checkCdpMethod(method: string): PolicyDecision {
 	const dot = method.indexOf(".");
 	const domain = dot < 0 ? "" : method.slice(0, dot);
@@ -161,9 +144,6 @@ export function extensionStateDir(): string {
 	return path.join(getAgentDir(), "browser-extension");
 }
 
-
-
-/** Name used in file names for one Chrome profile. Only letters, digits, dot, dash and underscore survive. */
 export function instanceFileName(instance: string | undefined): string {
 	const name = (instance ?? "default").replace(/[^A-Za-z0-9._-]/g, "_");
 	return name.length > 0 ? name : "default";
@@ -173,7 +153,6 @@ function tokenFilePath(instance: string | undefined): string {
 	return path.join(extensionStateDir(), `${instanceFileName(instance)}.token`);
 }
 
-/** Store the extension's token for one profile. The file is private to the user. */
 export function writeExtensionToken(instance: string | undefined, token: string): void {
 	const file = tokenFilePath(instance);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -181,6 +160,27 @@ export function writeExtensionToken(instance: string | undefined, token: string)
 }
 
 export function readExtensionToken(instance: string | undefined): string | undefined {
+	const file = tokenFilePath(instance);
+	if (!fs.existsSync(file)) return undefined;
+	const token = fs.readFileSync(file, "utf8").trim();
+	return token.length > 0 ? token : undefined;
+}
+
+export function hasExtensionToken(instance: string | undefined): boolean {
+	return readExtensionToken(instance) !== undefined;
+}
+
+export function removeExtensionToken(instance: string | undefined): boolean {
+	const file = tokenFilePath(instance);
+	if (!fs.existsSync(file)) return false;
+	fs.rmSync(file, { force: true });
+	return true;
+}
+
+export function redactSecrets(text: string, secrets: readonly string[]): string {
+	let out = text;
+	for (const secret of secrets) {
+		if (secret.length >= 8) out = out.split(secret).join("[redacted]");
 	}
 	return out;
 }

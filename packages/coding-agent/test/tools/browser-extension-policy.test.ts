@@ -44,7 +44,6 @@ describe("loopback guard", () => {
 	});
 });
 
-
 describe("navigation policy", () => {
 	test("allows unlisted HTTPS origins regardless of obsolete policy.json allow entries", () => {
 		fs.mkdirSync(path.join(dir, "browser-extension"), { recursive: true });
@@ -116,7 +115,6 @@ describe("navigation policy", () => {
 		expect(isProductionUrl("https://example.com/")).toBe(false);
 	});
 });
-
 
 describe("secrets", () => {
 	test("comparison needs an exact, present value", () => {

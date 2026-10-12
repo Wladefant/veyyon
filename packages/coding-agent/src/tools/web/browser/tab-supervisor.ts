@@ -3,7 +3,7 @@ import { errorMessage, isCancellation, logger, postmortem, Snowflake, workerHost
 // The owner, not the barrel: this module reaches the two discard contracts and nothing else.
 import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
 import { clampLow } from "@veyyon/utils/math";
-import type { BrowserContext } from "puppeteer-core";
+import type { BrowserContext, Page } from "puppeteer-core";
 import { callSessionTool } from "../../../eval/js/tool-bridge";
 import { logWorkerMessage } from "../../../subprocess/worker-log";
 import { raceWithTimeout } from "../../../utils/fetch-timeout";
@@ -455,6 +455,8 @@ async function openWorkerTab(
 	startedAt: number,
 ): Promise<AcquireTabResult> {
 	let heldContext = contextHeld;
+	let createdExtensionPage: Page | undefined;
+	let published = false;
 	try {
 		let initPayload: WorkerInitPayload;
 		let worker: WorkerHandle;
@@ -477,7 +479,11 @@ async function openWorkerTab(
 					opts.storageState,
 				);
 			}
-			initPayload = await buildInitPayload(browser, opts, context?.id);
+			initPayload = await buildInitPayload(browser, opts, context?.id, page => {
+				createdExtensionPage = page;
+				// Keep the connection alive until this owned page is published or removed.
+				holdBrowser(browser);
+			});
 			worker = await spawnTabWorker();
 		} catch (error) {
 			// Failing before the worker took its own hold must release the
@@ -570,11 +576,21 @@ async function openWorkerTab(
 		};
 		worker.onMessage(msg => handleTabMessage(tab, msg));
 		tabs.set(name, tab);
+		published = true;
 		return { tab, created: true, ...(stateLoaded ? { stateLoaded } : {}) };
 	} catch (error) {
 		// The tab never opened, so its hold on the context goes; the context closes if nothing else is in it.
 		if (heldContext && contextName !== undefined) await releaseNamedContext(browser, contextName);
 		throw error;
+	} finally {
+		if (createdExtensionPage) {
+			if (!published)
+				await bestEffort(
+					createdExtensionPage.close(),
+					"remove only the extension page created by this failed open",
+				);
+			await releaseBrowser(browser, { kill: false });
+		}
 	}
 }
 
@@ -910,6 +926,7 @@ async function buildInitPayload(
 	browser: PuppeteerBrowserHandle,
 	opts: AcquireTabOptions,
 	browserContextId: string | undefined,
+	onExtensionPageCreated: (page: Page) => void,
 ): Promise<WorkerInitPayload> {
 	const browserWSEndpoint = browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
@@ -930,6 +947,7 @@ async function buildInitPayload(
 		browser.kind.kind === "extension"
 			? await browser.browser.newPage()
 			: await pickElectronTarget(browser.browser, opts.target);
+	if (browser.kind.kind === "extension") onExtensionPageCreated(page);
 	const targetId = await targetIdForPage(page);
 	return {
 		mode: "attach",
