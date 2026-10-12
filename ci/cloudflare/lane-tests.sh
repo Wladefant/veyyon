@@ -71,11 +71,43 @@ zig version
 cargo-zigbuild --version
 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
   TARGET_VARIANTS='baseline modern' bun run ci:build:native
-# Run every test in the proven bubblewrap user namespace. This is a required
-# isolation boundary; no host or alternate-rung fallback is permitted.
+# Workers Builds cannot start Docker containers. Install the existing bwrap
+# rung tools into a repo-local directory without requiring root or a host fallback.
+proof_tools="$repo_root/.cf-proof-tools"
+mkdir -p "$proof_tools/packages" "$proof_tools/root" "$proof_tools/bin" \
+  "$proof_tools/lists/partial" "$proof_tools/cache/archives/partial"
+(
+  cd "$proof_tools/packages"
+  apt_options=(-o "Dir::State::Lists=$proof_tools/lists" -o "Dir::Cache=$proof_tools/cache")
+  timeout 120 apt-get "${apt_options[@]}" update
+  timeout 120 apt-get "${apt_options[@]}" download bubblewrap fakeroot libfakeroot cpio
+  for package in ./*.deb; do
+    dpkg-deb -x "$package" "$proof_tools/root"
+  done
+)
+export PATH="$proof_tools/root/usr/bin:$PATH"
+real_bun="$(bun -p 'process.execPath')"
+cp -L "$real_bun" "$proof_tools/bin/bun"
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_SANDBOX_RUNG=bwrap
 export VEYYON_SANDBOX_FORWARD=VEYYON_TEST_CONCURRENCY
+
+# Assert the exact initramfs device metadata required by the guest kernel.
+fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-sysv.so" \
+  -f "$proof_tools/root/usr/bin/faked-sysv" /bin/sh -ceu '
+    proof_dir="$(mktemp -d)"
+    mkdir -p "$proof_dir/dev"
+    cd "$proof_dir"
+    mknod -m 600 dev/console c 5 1
+    mknod -m 666 dev/null c 1 3
+    find . -print0 | cpio --null -o --format=newc > "${proof_dir}.cpio"
+    python3 "$1" "${proof_dir}.cpio"
+  ' _ "$repo_root/ci/cloudflare/device-node-check.py"
+
+# The real Bun binary and checkout symlink stay outside the build user's home.
+sandbox_root="$(mktemp -d /tmp/veyyon-workers-XXXXXX)"
+ln -s "$repo_root" "$sandbox_root/repo"
+export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
 bash scripts/test-sandbox/run.sh --rung=bwrap --probe
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Full output lets this runner
@@ -90,7 +122,8 @@ run_bucket() {
   local bucket_log
   bucket_log="$(mktemp)"
   local bucket_status=0
-  if bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts "$mode" --full 2>&1 | tee "$bucket_log"; then
+  if bash scripts/test-sandbox/run.sh "$sandbox_root/repo/.cf-proof-tools/bin/bun" \
+    scripts/ci-test-ts.ts "$mode" --full 2>&1 | tee "$bucket_log"; then
     :
   else
     bucket_status=$?
