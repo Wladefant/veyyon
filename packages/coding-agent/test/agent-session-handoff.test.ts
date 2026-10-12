@@ -1932,8 +1932,8 @@ describe("AgentSession handoff", () => {
 				id: "summary-candidate",
 				provider: "anthropic",
 				contextWindow: capacity,
+				maxTokens: 64_000,
 			});
-			candidate.maxTokens = 64_000;
 			const originalBreakdown = session.getContextBreakdown.bind(session);
 			const capacitySourceId = session.sessionId;
 			vi.spyOn(session, "getContextBreakdown").mockImplementation((...args) => {
