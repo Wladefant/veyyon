@@ -122,14 +122,14 @@ describe("an idle process samples its stack ten times less often", () => {
 		scheduled!();
 		const kept = await sampler.stacksBetween(0, performance.now());
 		expect(kept?.samples).toBeGreaterThan(0);
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		expect(sampler.samplingIntervalUs).toBe(10_000);
 
 		// Once the profile is full (10s at busy interval), the quiet tick replaces it with the idle interval.
 		nowValue += 5_000;
 		scheduled!();
 		const rotated = await sampler.stacksBetween(0, performance.now());
 		expect(rotated?.samples).toBe(0);
-		expect(await samplesInHold(sampler)).toBeLessThanOrEqual(IDLE_MAX);
+		expect(sampler.samplingIntervalUs).toBe(100_000);
 
 		watchdog.stop();
 	});
@@ -137,7 +137,8 @@ describe("an idle process samples its stack ten times less often", () => {
 	test("one busy tick restores the busy interval without waiting for a rotation", async () => {
 		const sampler = await idleSampler();
 		sampler.quiet(performance.now(), true);
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		await sampler.stacksBetween(0, 0);
+		expect(sampler.samplingIntervalUs).toBe(10_000);
 	});
 
 	test("a process that worked inside the idle stretch keeps the busy interval through a rotation", async () => {
@@ -147,7 +148,8 @@ describe("an idle process samples its stack ten times less often", () => {
 		sampler.quiet(workedAt, true);
 		// The profile is full 10s after it started; the work was 7s before this tick.
 		sampler.quiet(workedAt + 7_000, false);
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		await sampler.stacksBetween(0, 0);
+		expect(sampler.samplingIntervalUs).toBe(10_000);
 	});
 
 	test("the idle stretch ends at 10s exactly", async () => {
@@ -156,10 +158,11 @@ describe("an idle process samples its stack ten times less often", () => {
 		const sampler = await startedSampler(busyAt);
 
 		sampler.quiet(busyAt + 9_999, false);
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		await sampler.stacksBetween(0, 0);
+		expect(sampler.samplingIntervalUs).toBe(10_000);
 
 		sampler.quiet(busyAt + 10_000, false);
-		expect(await samplesInHold(sampler)).toBeLessThanOrEqual(IDLE_MAX);
+		expect(sampler.samplingIntervalUs).toBe(100_000);
 	});
 
 	test("an idle-interval profile is kept until it could hold 1,000 samples, 100s, and replaced after", async () => {

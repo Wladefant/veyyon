@@ -54,7 +54,11 @@ if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" 
 fi
 bun --version
 bun install --frozen-lockfile
-bun run check:ts
+if [[ "$shard_spec" == "1/3" ]]; then
+  bun run check:ts
+else
+  echo "CLOUDFLARE_SHARD_DEFERRED gate=check:ts shard=$shard_spec"
+fi
 phase_seconds=$SECONDS
 setup_seconds=$((setup_seconds + phase_seconds))
 echo "CLOUDFLARE_SETUP_PHASE name=dependencies-and-types seconds=$phase_seconds"

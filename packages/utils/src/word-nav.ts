@@ -67,7 +67,12 @@ export function isWordNavJoiner(grapheme: string): boolean {
 function floorToGraphemeBoundary(text: string, cursor: number): number {
 	if (cursor <= 0) return 0;
 	if (cursor >= text.length) return text.length;
-	return getSegmenter().segment(text).containing(cursor)?.index ?? text.length;
+	let boundary = 0;
+	for (const { index } of getSegmenter().segment(text)) {
+		if (index > cursor) break;
+		boundary = index;
+	}
+	return boundary;
 }
 
 /**

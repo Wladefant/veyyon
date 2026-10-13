@@ -82,6 +82,21 @@ describe("moveWordLeft / moveWordRight — exact behavior", () => {
 		expect(moveWordRight("hello", -5)).toBe(5);
 		expect(moveWordRight("hello", 999)).toBe(5);
 	});
+
+	it("advances from cluster boundaries and non-boundary positions before emoji and surrogate sequences", () => {
+		const text1 = "\ud800'\ud800,!!!👨‍👩‍👧!!!word👨‍👩‍👧日本語日本語'中_ _\ud800-";
+		expect(moveWordRight(text1, 22)).toBe(30);
+		expect(moveWordLeft(text1, 22)).toBe(18);
+
+		const text2 = "’'\ud800🇺🇸-👨‍👩‍👧🇺🇸’é";
+		expect(moveWordRight(text2, 3)).toBe(21);
+		expect(moveWordLeft(text2, 3)).toBe(2);
+
+		const family = "👨‍👩‍👧";
+		expect(moveWordRight(`word${family}`, 4)).toBe(4 + family.length);
+		expect(moveWordRight(`word${family}`, 5)).toBe(4 + family.length);
+		expect(moveWordLeft(`word${family}`, 5)).toBe(0);
+	});
 });
 
 describe("moveWordLeft / moveWordRight — invariants (fuzz)", () => {

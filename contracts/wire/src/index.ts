@@ -921,17 +921,6 @@ export const SNAPSHOT_PROGRESS_TIMEOUT_MS = 30_000;
  */
 export const TRANSCRIPT_TIMEOUT_MS = 20_000;
 
-/**
- * Default share viewer/upload base; `/share` links resolve against
- * `<base>/<id>#<key>`.
- *
- * Same caveat as {@link DEFAULT_RELAY_URL}: `share.veyyon.dev` is not yet a
- * deployed Veyyon share server. `/share` without `--server`/`share.serverUrl`
- * will fail closed on upload (network error) rather than silently reaching
- * an unintended upstream server.
- */
-export const DEFAULT_SHARE_URL = "https://share.veyyon.dev/s";
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Relay protocol (TEXT JSON control messages, fatal close codes, send bound)
 // ═══════════════════════════════════════════════════════════════════════════

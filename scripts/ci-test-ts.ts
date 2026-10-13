@@ -685,6 +685,12 @@ export function workspaceTestParallelism(pkg: string, requested: number): number
 	return workspacePackageParallelism[pkg] ?? requested;
 }
 
+const catalogExpensiveTestFiles: readonly string[] = [
+	"test/a-reference-lookup-parses-only-the-models-it-reaches.test.ts",
+	"test/classifying-a-model-id-retains-nothing.test.ts",
+	"test/a-resolved-model-keeps-the-compat-its-sources-declared.test.ts",
+];
+
 function workspaceTestCommand(
 	pkg: string,
 	parallel: number,
@@ -839,17 +845,41 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// every other workspace mode; Bun aborts in this guest while that one test
 		// requests a native allocation of 16 GiB.
 		case "workspace-cloudflare":
-			return fastWorkspacePackages.map(pkg =>
-				workspaceTestCommand(pkg, 8, {
-					env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
-					extraArgs: [
-						...onlyFailuresArgs,
-						...(pkg === "packages/utils"
-							? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
-							: []),
-					],
-				}),
-			);
+			return fastWorkspacePackages.flatMap(pkg => {
+				if (pkg === "packages/catalog") {
+					return [
+						workspaceTestCommand(pkg, 8, {
+							extraArgs: [
+								...onlyFailuresArgs,
+								...catalogExpensiveTestFiles.flatMap(file => ["--path-ignore-patterns", file]),
+							],
+						}),
+						{
+							label: `${pkg} (isolated)`,
+							cwd: pkg,
+							command: [
+								"bun",
+								"test",
+								...preloadArgs,
+								"--parallel=1",
+								...onlyFailuresArgs,
+								...catalogExpensiveTestFiles,
+							],
+						},
+					];
+				}
+				return [
+					workspaceTestCommand(pkg, 8, {
+						env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
+						extraArgs: [
+							...onlyFailuresArgs,
+							...(pkg === "packages/utils"
+								? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
+								: []),
+						],
+					}),
+				];
+			});
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
 		case "native":
@@ -1143,10 +1173,11 @@ export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestSh
 // - packages/ai: 76.8s -> shard 1
 // - packages/agent: 70.6s -> shard 1 (index 9, 9 % 3 == 0)
 // - packages/utils: 40.7s -> shard 1 (index 6, 6 % 3 == 0)
+// - packages/catalog: ~15s -> shard 1 (isolated expensive tests at parallel=1)
 //
 // Explicit shard mapping based on measured execution times (no branch mapping).
 // Shard variant mapping (total 3 shards):
-// - Shard 1: baseline (packages/ai, packages/agent, packages/utils, plus natives/bridge/bindings full suite in native mode)
+// - Shard 1: baseline (packages/ai, packages/agent, packages/utils, packages/catalog, plus natives/bridge/bindings full suite in native mode)
 // - Shard 2: modern (plugins/hashline, plus natives/bridge/bindings full suite in native mode)
 // - Shard 3: baseline (tests/simulations; native bindings excluded)
 // Remaining commands round-robin modulo unchanged; no exclusion assertion weakening.
@@ -1154,6 +1185,15 @@ const WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES: Readonly<Record<string, number>> = {
 	"plugins/hashline": 2,
 	"tests/simulations": 3,
 	"packages/ai": 1,
+	"packages/agent": 1,
+	"packages/catalog": 1,
+	"plugins/argot": 2,
+	"apps/stats": 3,
+	"packages/tool-render": 1,
+	"plugins/mode-swarm": 2,
+	"plugins/mnemopi": 3,
+	"plugins/web": 2,
+	"packages/utils": 1,
 };
 
 function extractCommandLabel(command: unknown): string {

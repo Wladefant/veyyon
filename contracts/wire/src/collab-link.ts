@@ -33,6 +33,17 @@ export const WRITE_TOKEN_BYTES = 16;
  */
 export const DEFAULT_RELAY_URL = "wss://share.veyyon.dev";
 
+/**
+ * Default share viewer/upload base; `/share` links resolve against
+ * `<base>/<id>#<key>`.
+ *
+ * Same caveat as {@link DEFAULT_RELAY_URL}: `share.veyyon.dev` is not yet a
+ * deployed Veyyon share server. `/share` without `--server`/`share.serverUrl`
+ * will fail closed on upload (network error) rather than silently reaching
+ * an unintended upstream server.
+ */
+export const DEFAULT_SHARE_URL = "https://share.veyyon.dev/s";
+
 export interface ParsedCollabLink {
 	/** wss://host[:port]/r/<roomId> — no query, no fragment. */
 	wsUrl: string;

@@ -193,10 +193,14 @@ export class StallSampler implements StallStackSource {
 	#startedAtMs = 0;
 	/** Interval of the running profile, or of the profile a queued restart begins. */
 	#intervalUs = BUSY_INTERVAL_US;
-	/** The last tick the watchdog reported busy. The tick that starts the sampler counts as one. */
 	#busyAtMs = 0;
 	/** Every profiler command runs after the previous one settles; the profiler is process-global. */
 	#chain: Promise<unknown> = Promise.resolve();
+
+	/** The interval the next profile restart will use. */
+	get samplingIntervalUs(): number {
+		return this.#intervalUs;
+	}
 
 	#post(method: string, params?: object): Promise<unknown> {
 		const session = this.#session;
