@@ -608,7 +608,7 @@ export async function runNativeCache(options = {}) {
 	}
 
 	console.log(`[native-cache] cache miss: ${key} (${restoreResult.reason})`);
-	throw new Error("NO-RESULT native-cold-miss");
+	throw new Error(`NO-RESULT native-cold-miss key=${key}: native change, no trusted artifact`);
 }
 
 const isMain =

@@ -592,7 +592,7 @@ test("reader mode fails closed on cache miss without building or uploading", asy
 				if (opts?.method === "PUT") uploaded = true;
 				return `https://${EXPECTED_ENDPOINT}/${key}`;
 			} },
-		}), /NO-RESULT native-cold-miss/);
+		}), /NO-RESULT native-cold-miss key=trusted\/[a-f0-9]{64}: native change, no trusted artifact/);
 		assert.equal(built, false);
 		assert.equal(uploaded, false);
 	} finally {
