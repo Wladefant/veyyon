@@ -649,6 +649,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * installed. Undefined in every other case, and the mode then builds its
 	 * own screen and owns the tty handover itself.
 	 */
+	readonly #firstFrame: FirstFrame | undefined = takeFirstFrame();
+
 	constructor(
 		session: AgentSession,
 		version: string,
