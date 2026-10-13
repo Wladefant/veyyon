@@ -4,6 +4,7 @@
  * caller's replacement prompt.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
@@ -98,13 +99,13 @@ export class ProjectPromptInputs {
 	#snapshot: ProjectPromptSnapshot;
 	#pending: Promise<void> = Promise.resolve();
 	readonly #options: ProjectPromptInputsOptions;
-	#skillBodies: Map<string, string>;
+	#skillDigests: Map<string, string>;
 	#reloadWarnings: string[] = [];
 
 	constructor(options: ProjectPromptInputsOptions) {
 		this.#options = options;
 		this.#snapshot = options.initial;
-		this.#skillBodies = this.#readSkillBodies(options.initial.skills);
+		this.#skillDigests = this.#readSkillDigests(options.initial.skills);
 	}
 
 	get current(): ProjectPromptSnapshot {
@@ -166,7 +167,7 @@ export class ProjectPromptInputs {
 		const current = this.#snapshot;
 		const files = new Map(current.contextFiles.map(file => [file.path, file.content]));
 		for (const skill of current.skills) {
-			files.set(skill.filePath, `${JSON.stringify(skill)}\n${this.#skillBodies.get(skill.filePath) ?? ""}`);
+			files.set(skill.filePath, `${JSON.stringify(skill)}\n${this.#skillDigests.get(skill.filePath) ?? ""}`);
 		}
 		for (const rule of [
 			...current.rulebookRules,
@@ -178,17 +179,18 @@ export class ProjectPromptInputs {
 		return files;
 	}
 
-	#readSkillBodies(skills: Skill[]): Map<string, string> {
-		const bodies = new Map<string, string>();
+	#readSkillDigests(skills: Skill[]): Map<string, string> {
+		const digests = new Map<string, string>();
 		for (const skill of skills) {
 			try {
-				if (fs.statSync(skill.filePath).isFile())
-					bodies.set(skill.filePath, fs.readFileSync(skill.filePath, "utf8"));
+				if (fs.statSync(skill.filePath).isFile()) {
+					digests.set(skill.filePath, createHash("sha256").update(fs.readFileSync(skill.filePath)).digest("hex"));
+				}
 			} catch {
 				// Caller-owned skills may not have a disk file. Discovery reports disk read failures.
 			}
 		}
-		return bodies;
+		return digests;
 	}
 
 	/** Re-discover the project when the live cwd differs from the rendered one; resolves once they agree. */
@@ -273,7 +275,7 @@ export class ProjectPromptInputs {
 			rulebookRules: buckets.rulebookRules,
 			alwaysApplyRules: buckets.alwaysApplyRules,
 		};
-		this.#skillBodies = this.#readSkillBodies(next.skills);
+		this.#skillDigests = this.#readSkillDigests(next.skills);
 		this.#options.onChange(next);
 	}
 
