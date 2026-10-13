@@ -6,7 +6,7 @@
 
 - `@veyyon/catalog/wire/kimi-code` exports `KIMI_CODE_REGIONS`, the display name, site, OAuth host and API hosts of the global (kimi.ai) and mainland China (kimi.com) Kimi Code deployments in the order the login lists them, with `kimiCodeApiKey`, which encodes a credential's deployment into its API key, and `resolveKimiCodeEndpoint`, which reads the token and API bases a request uses from that key.
 - `@veyyon/catalog/wire/codex` exports `getCodexPlanType`, which reads the lowercased ChatGPT plan (`chatgpt_plan_type`) out of a Codex access token.
-- Gemini 4 Argon (`gemini-4-argon`) is bundled for the Google provider with a 1,048,576-token context and the low, medium and high thinking levels, and Google Antigravity and Gemini CLI collapse a served `gemini-4-argon` onto the same three levels with a 65,536-token output cap.
+- Gemini 4 Argon (`gemini-4-argon`) is bundled for the Google provider with a 1,048,576-token context and the low, medium and high thinking levels, and for Google Antigravity with the same context, a 65,536-token output cap, and low, medium and high routed to the `gemini-4-argon-low`, `-medium` and `-high` deployments.
 
 ### Changed
 
@@ -31,6 +31,7 @@
 - Kimi Code model discovery with a kimi.ai credential lists models at api.kimi.ai instead of api.kimi.com, and a model on api.kimi.ai gets the Moonshot-native compat (`moonshot-mfjs` tool schemas and K2.6 `thinking.keep`) that api.kimi.com gets.
 - OpenCode gateway models send the `tool_choice` a caller sets, so the models that accept a pinned tool receive it; a model that rejects it pays one retried request per session.
 - A model the models.dev overlay enriches keeps the compat its bundled row declares, so wafer.ai GLM and Kimi models request the Z.ai thinking format and xAI OAuth models map `minimal` effort to `low` again; the model cache schema moves to v12 to drop rows that stored a resolved compat record as their declaration, which cut the cached rows of a full catalog refresh from 4.85 MB to 1.72 MB and the static model stage a launch restores from 10.8 MB to 7.8 MB and 4.79 MiB to 3.16 MiB retained.
+- Google Antigravity lists Gemini 4 Argon: the client reports version 3.0.0 instead of 2.1.4, which the endpoint served neither Argon nor the per-tier Gemini 3.8 Flash deployments; the model cache schema moves to v13 to drop lists discovered as 2.1.4.
 - The Google, Vertex and Gemini CLI transports send `thinkingLevel` to every Gemini model from 3.0 up, including Gemini 4 and the `argon` tier, instead of a `thinkingBudget` that Gemini 4 rejects with HTTP 400.
 
 ## [1.5.4] - 2026-09-24

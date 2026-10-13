@@ -226,7 +226,7 @@ A Kimi Code credential is accepted only by the deployment that issued it. Reques
 | Variable                        | Default / behavior                                                                     |
 | ------------------------------- | -------------------------------------------------------------------------------------- |
 | `VEYYON_AI_GEMINI_CLI_VERSION`  | Overrides the Gemini CLI user-agent version tag (`0.46.0` if unset)                    |
-| `VEYYON_AI_ANTIGRAVITY_VERSION` | Overrides the Antigravity / Cloud Code Assist user-agent version tag (`2.1.4` if unset) |
+| `VEYYON_AI_ANTIGRAVITY_VERSION` | Overrides the Antigravity / Cloud Code Assist user-agent version tag (`3.0.0` if unset) |
 
 ### OpenAI Codex responses (feature/debug controls)
 
