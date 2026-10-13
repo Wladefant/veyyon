@@ -5,6 +5,7 @@
 ### Fixed
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
+- Gateway privacy guards credentials split across semantic SSE deltas and withholds Cursor console/file diagnostics inside the request scope. Safe deltas stay unchanged ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
 
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 

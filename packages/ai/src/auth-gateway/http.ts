@@ -6,6 +6,7 @@
  */
 import { timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import type { Api, AssistantMessage, Model } from "../types";
+import { GatewaySemanticRedactor } from "./semantic-redaction";
 
 const JSON_HEADERS = {
 	"Content-Type": "application/json",
@@ -225,7 +226,7 @@ export function withCors(response: Response, req: Request): Response {
 	});
 }
 
-/** Redact credential material per complete SSE frame, preserving prompt delivery and cancellation. */
+/** Guard reassembled semantic deltas, then redact credentials in full JSON/SSE frames and headers. */
 export function redactResponse(response: Response, secrets: readonly string[]): Response {
 	const scrub = (text: string): string => {
 		for (const secret of [...new Set(secrets)].sort((a, b) => b.length - a.length)) {
@@ -241,20 +242,31 @@ export function redactResponse(response: Response, secrets: readonly string[]): 
 	const decoder = new TextDecoder();
 	const encoder = new TextEncoder();
 	const streaming = headers.get("content-type")?.includes("text/event-stream");
+	const semantic = new GatewaySemanticRedactor(secrets);
 	let carry = "";
 	const body = new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			try {
-				const { value, done } = await reader.read();
-				carry += decoder.decode(value, { stream: !done });
-				if (done) {
-					controller.enqueue(encoder.encode(scrub(carry)));
-					controller.close();
-				} else if (streaming) {
-					const boundary = carry.lastIndexOf("\n\n");
-					if (boundary >= 0) {
-						controller.enqueue(encoder.encode(scrub(carry.slice(0, boundary + 2))));
-						carry = carry.slice(boundary + 2);
+				for (;;) {
+					const { value, done } = await reader.read();
+					carry += decoder.decode(value, { stream: !done });
+					if (done) {
+						controller.enqueue(encoder.encode(scrub(streaming ? semantic.push(carry, true) : carry)));
+						controller.close();
+						return;
+					}
+					if (streaming) {
+						let output = "";
+						let boundary = carry.indexOf("\n\n");
+						while (boundary >= 0) {
+							output += semantic.push(carry.slice(0, boundary + 2));
+							carry = carry.slice(boundary + 2);
+							boundary = carry.indexOf("\n\n");
+						}
+						if (output) {
+							controller.enqueue(encoder.encode(scrub(output)));
+							return;
+						}
 					}
 				}
 			} catch {

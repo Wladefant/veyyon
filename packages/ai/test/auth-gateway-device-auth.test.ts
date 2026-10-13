@@ -130,4 +130,13 @@ describe("auth-gateway device bearer authentication", () => {
 			await fs.rm(logs, { recursive: true, force: true });
 		}
 	});
+	it("never uses static bearers when the live resolver throws", async () => {
+		const gw = await harness(["stale-static-token"], () => { throw new Error("device source unavailable"); });
+		try {
+			for (const token of ["device-token", "stale-static-token"]) {
+				expect((await request(gw.url, `Bearer ${token}`)).status).toBe(401);
+			}
+			expect(gw.mock.calls.length).toBe(0);
+		} finally { await gw.close(); }
+	});
 });
