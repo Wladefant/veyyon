@@ -137,3 +137,4 @@ describe("Cloudflare JUnit skip reporting", () => {
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
+});
