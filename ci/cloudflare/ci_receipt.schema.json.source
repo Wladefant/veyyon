@@ -1,0 +1,10 @@
+{
+  "source_repository": "Wladefant/superboard",
+  "source_branch": "ci/821-receipt-schema-gate",
+  "source_commit": "1e91394ae5d47a9ccc592be02d4b9c11329bdcf1",
+  "source_path": "workflows/portable/ci_receipt.schema.json",
+  "source_url": "https://github.com/Wladefant/superboard/blob/1e91394ae5d47a9ccc592be02d4b9c11329bdcf1/workflows/portable/ci_receipt.schema.json",
+  "sha256": "52627bd0cc08f7475423d9b054e7f970c82546630b1e42008f3e33c2d32b7192",
+  "pr": "https://github.com/Wladefant/superboard/pull/826",
+  "synced_at": "2026-10-13T21:46:00Z"
+}

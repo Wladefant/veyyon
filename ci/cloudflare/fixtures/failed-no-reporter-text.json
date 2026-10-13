@@ -1,43 +1,44 @@
 {
   "schema_version": "ci-receipt/v1",
   "repo": "Wladefant/veyyon",
-  "request_id": "req-failed-no-reporter-text-1",
-  "build_id": "build-failed-no-reporter-text-1",
-  "trigger_id": "a2dd8733-d34a-4789-8bea-a752ae2925e2",
-  "candidate_sha": "7ca99eff372d798f5790f1a5b293da41b53fa14e",
-  "checkout_sha": "7ca99eff372d798f5790f1a5b293da41b53fa14e",
+  "request_id": "req-20261013-failed-no-text",
+  "build_id": "build-20261013-failed-no-text",
+  "trigger_id": "trigger-cf-workers-shard-1",
+  "candidate_sha": "56326a39dee8a9c26629b4cedef5563201ad5d85",
+  "checkout_sha": "56326a39dee8a9c26629b4cedef5563201ad5d85",
   "base_sha": "d19980e65de352e00b952ae20dd4944159907459",
-  "runner_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "policy_digest": "sha256:7a35368a5c3789437d808e09f584e031dc240a63aa68b8e8f855e2e8316dfa99",
-  "selection_digest": "sha256:d86e92c46271a396e4ea472e3913de8f0b741005b632948c2b7b5c00e1215b4f",
+  "runner_digest": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+  "policy_digest": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d",
+  "selection_digest": "3a01490b4fe3287713d2fa68c92bdfb395d3889077271458e0a4f6cf70e28f32",
   "shard_id": 1,
   "expected_shards": 3,
   "status": "failed",
-  "started_at": "2026-10-13T20:30:00.000Z",
-  "ended_at": "2026-10-13T20:35:00.000Z",
+  "started_at": "2026-10-13T20:00:00.000Z",
+  "ended_at": "2026-10-13T20:01:10.000Z",
   "suites": [
     {
-      "name": "packages/utils",
-      "target_ids": ["packages/utils"],
-      "command": "bun scripts/ci-test-ts.ts workspace-cloudflare",
+      "name": "packages/failing-suite",
+      "target_ids": ["node:packages/failing-suite"],
+      "command": "bun test packages/failing-suite",
       "exit_code": 1,
       "counts": {
-        "discovered": 20,
-        "executed": 20,
-        "passed": 19,
+        "discovered": 1,
+        "executed": 1,
+        "passed": 0,
         "failed": 1,
         "skipped": 0,
-        "assertions": 45
+        "assertions": null,
+        "errors": 0
       },
       "tests": [
         {
-          "name": "packages/utils > timer > process terminates cleanly",
-          "target_id": "packages/utils",
+          "name": "test-silent-failure",
+          "target_id": "node:packages/failing-suite",
           "status": "failed",
-          "failure_text": "message unavailable"
+          "failure_text": "message unavailable",
+          "failure_kind": "failure"
         }
-      ],
-      "artifacts": []
+      ]
     }
   ]
 }

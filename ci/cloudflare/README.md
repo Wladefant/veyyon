@@ -81,8 +81,11 @@ The Worker responds with `ok` to health probes. A version upload does not activa
 Veyyon implements shard-level `ci-receipt/v1` and `ci-manifest/v1` emission across all three Cloudflare Workers CI shards.
 
 ### Receipt emission (`ci/cloudflare/shard-receipt.mjs`)
-- **Schema**: canonical `ci-receipt/v1` and `ci-manifest/v1`.
+- **Schema**: canonical `ci-receipt/v1` and `ci-manifest/v1` vendored byte-for-byte in `ci_receipt.schema.json` with sibling `.source` from Superboard PR #826 head `1e91394ae5d47a9ccc592be02d4b9c11329bdcf1` (SHA256: `52627bd0cc08f7475423d9b054e7f970c82546630b1e42008f3e33c2d32b7192`).
+- **Validator**: zero-dependency validator in `ci_receipt.mjs` with sibling `.source` from the same PR head.
 - **Counter contract**: `status="passed"` requires `executed > 0`, `passed > 0`, and `failed == 0` across all suites.
+- **Errors subset invariant**: `errors` is a subset of `failed` (`errors <= failed`), and `executed = passed + failed` (errors are never counted twice).
+- **Failure classification**: `failed > 0` (including errors) yields `failed` (FAIL) even when `passed == 0`.
 - **NO-RESULT**: suites with `executed == 0`, all skipped, xfail-only, unparseable summaries, or missing producer secrets yield explicit status `"incomplete"` (NO-RESULT), never `"passed"`.
 - **Failure text fallback**: failed tests without reporter messages record `"message unavailable"`.
 - **Producer transport**: uploads evidence via multipart/form-data with fields `receipt`, `manifest`, and binary artifacts.
@@ -113,3 +116,4 @@ Veyyon implements shard-level `ci-receipt/v1` and `ci-manifest/v1` emission acro
 - `no-result-zero-executed.json`: suite with zero executed tests.
 - `no-result-unparseable.json`: unparseable test runner output.
 - `failed-no-reporter-text.json`: failed test with `"message unavailable"` fallback.
+- `failed-error-subset.json`: failed test with `failed=1/errors=1` yielding `executed=1` (not 2) and FAIL.
