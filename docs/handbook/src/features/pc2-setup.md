@@ -53,9 +53,12 @@ A release with those changes does not exist yet. Stop before installation until 
 17. Authorize each MCP service using its own owner sign-in. Keep local paths, SSH definitions and browser-extension enrollment PC2-specific.
 18. Select the same original provider and model in Veyyon. Confirm missing device auth refuses before any provider call.
 19. Confirm both PCs recall the same existing memory through the selected Hindsight bank.
-20. Follow the handoff commands published on https://github.com/Wladefant/veyyon/issues/603. Resume only after PC2 owns the transferred session.
-21. Confirm PC1 cannot admit a prompt or tool for the transferred session. Test reverse handoff before relying on it.
-22. Turn PC1 off. Confirm local tools, the installed catalog, remote memory and the independent model gateway remain available.
+20. Stop the PC1 session. Run `veyyon session handoff <session-id> --file <stopped-session.jsonl> --to pc2` on PC1.
+21. Set `VEYYON_CHECKPOINT_NODE=pc2` in the PC2 process environment.
+22. Run `veyyon session checkpoint-restore <session-id> --output <new-directory>` on PC2.
+23. Resume the restored transcript only after ownership checks succeed.
+24. Confirm PC1 cannot admit a prompt or tool for the transferred session. Test reverse handoff before relying on it.
+25. Turn PC1 off. Confirm local tools, the installed catalog, remote memory and the independent model gateway remain available.
 
 No provider subscription sign-in on PC2 is needed for broker-backed models.
 Provider sign-ins belong to the independent credential authority and use supported owner flows.
