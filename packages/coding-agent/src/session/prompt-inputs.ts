@@ -277,6 +277,8 @@ export class ProjectPromptInputs {
 					const content = await fs.promises.readFile(file, "utf8");
 					parseFrontmatter(content, { source: file, level: "fatal" });
 				} catch (error) {
+					// Builtin rules have logical paths, not disk files.
+					if (isMissingPath(error)) continue;
 					this.#reloadWarnings.push(
 						`${file}: invalid or unreadable rule frontmatter (${error instanceof Error ? error.name : "error"})`,
 					);

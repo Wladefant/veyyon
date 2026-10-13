@@ -460,7 +460,7 @@ describe("rules reload refreshes project prompt inputs", () => {
 		expect(lines.join("\n")).toContain("keeping the previous rules and skills");
 		expect(lines.join("\n")).toContain(rulePath);
 		fs.writeFileSync(rulePath, "---\nalwaysApply: true\n---\nRECOVERED_PARSED_RULE\n");
-		await inputs.reload();
+		expect((await inputs.reload()).join("\n")).not.toContain("keeping the previous rules and skills");
 		expect(inputs.current.alwaysApplyRules.find(rule => rule.path === rulePath)?.content).toContain(
 			"RECOVERED_PARSED_RULE",
 		);
