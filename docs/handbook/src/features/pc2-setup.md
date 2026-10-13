@@ -53,7 +53,7 @@ A release with those changes does not exist yet. Stop before installation until 
 17. Authorize each MCP service using its own owner sign-in. Keep local paths, SSH definitions and browser-extension enrollment PC2-specific.
 18. Select the same original provider and model in Veyyon. Confirm missing device auth refuses before any provider call.
 19. Confirm both PCs recall the same existing memory through the selected Hindsight bank.
-20. Stop the PC1 session. Run `veyyon session handoff <session-id> --file <stopped-session.jsonl> --to pc2` on PC1.
+20. Set `VEYYON_CHECKPOINT_NODE=pc1` on PC1. Stop its session, then run `veyyon session handoff <session-id> --file <stopped-session.jsonl> --to pc2`.
 21. Set `VEYYON_CHECKPOINT_NODE=pc2` in the PC2 process environment.
 22. Run `veyyon session checkpoint-restore <session-id> --output <new-directory>` on PC2.
 23. Resume the restored transcript only after ownership checks succeed.
@@ -92,8 +92,10 @@ checkpoints:
 
 Keep the existing Hindsight scope, mission and project tags when merging reviewed configuration.
 The setup script refuses different existing settings. An identical configuration rerun changes nothing.
-It refuses credential-bearing service URLs and symlink paths.
+It refuses credential-bearing service URLs, symlinks and Windows junctions.
 It never deletes sessions, databases, files or configuration.
+An install rerun accepts only matching ownership receipts and the original binary checksum.
+It skips reinstallation and preserves existing sessions. A changed release or binary requires explicit review.
 
 ## Update and conflict procedure
 

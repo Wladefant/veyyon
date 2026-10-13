@@ -27,7 +27,7 @@ param(
     [switch]$Binary,
     [switch]$Local,
     [string]$Ref,
-    [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')]
     [string]$Repository = "santhreal/veyyon",
     [switch]$NoVerify,
     [switch]$Force,

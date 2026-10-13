@@ -2,6 +2,8 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location("install_pc2", Path(__file__).with_name("install-pc2.py"))
 installer = importlib.util.module_from_spec(spec)
@@ -65,6 +67,41 @@ class PC2InstallContract(unittest.TestCase):
             with self.assertRaises(ValueError):
                 installer.configure_pc2(root, ["openai"], "https://secret@gateway.example", "https://memory.example", "bank")
             self.assertEqual(list(Path(root).iterdir()), [])
+
+
+    def test_owned_install_rerun_preserves_sessions_and_skips_reinstall(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            binary_dir.mkdir()
+            (binary_dir / "veyyon.exe").write_bytes(b"verified release test artifact")
+            installer.record_install("v1.2.3", binary_dir, config_dir)
+            session = config_dir / "session.jsonl"
+            session.write_text("preserved session")
+            command, _ = installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertEqual(command, [])
+            self.assertEqual(session.read_text(), "preserved session")
+            (binary_dir / "veyyon.exe").write_bytes(b"changed binary")
+            with self.assertRaises(ValueError):
+                installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+
+    def test_windows_junction_attribute_refuses_before_writes(self):
+        with patch.object(Path, "lstat", return_value=SimpleNamespace(st_file_attributes=0x400, st_mode=0o040755)):
+            with self.assertRaises(ValueError):
+                installer.install_plan("v1.2.3", "bin", "config", "install.ps1")
+            with self.assertRaises(ValueError):
+                installer.configure_pc2("config", ["openai"], "https://gateway.example", "https://memory.example", "bank")
+
+    def test_configure_only_does_not_execute_installer(self):
+        with tempfile.TemporaryDirectory() as root:
+            args = ["install-pc2.py", "--version", "v1.2.3", "--install-dir", str(Path(root) / "bin"),
+                    "--config-dir", str(Path(root) / "config"), "--configure-only", "--apply",
+                    "--provider", "openai", "--gateway-url", "https://gateway.example",
+                    "--memory-url", "https://memory.example", "--bank-id", "owner"]
+            with patch.object(installer.sys, "argv", args), patch.object(installer.subprocess, "run") as run:
+                installer.main()
+                run.assert_not_called()
+            self.assertTrue((Path(root) / "config/profiles/default/agent/models.yml").exists())
 
 
 if __name__ == "__main__":
