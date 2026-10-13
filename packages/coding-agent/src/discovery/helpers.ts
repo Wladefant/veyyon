@@ -1493,7 +1493,7 @@ export async function listClaudePluginRoots(
 export function clearClaudePluginRootsCache(): void {
 	pluginRootsCache.clear();
 	for (const invalidate of pluginCacheInvalidators) invalidate();
-	preloadedPluginRoots.clear();
+	// Keep warmed snapshots available until their replacements publish atomically.
 	preloadGeneration++;
 	// Re-warm each known scope without redirecting another session's sync reads.
 	for (const [cwd, home] of preloadHomes) {
@@ -1529,10 +1529,18 @@ let preloadGeneration = 0;
  */
 export async function preloadPluginRoots(home: string, cwd: string): Promise<void> {
 	const scope = path.resolve(cwd);
-	const generation = preloadGeneration;
 	preloadHomes.set(scope, home);
-	const { roots } = await listClaudePluginRoots(home, scope);
-	if (generation === preloadGeneration) preloadedPluginRoots.set(scope, roots);
+	for (;;) {
+		const generation = preloadGeneration;
+		const { roots } = await listClaudePluginRoots(home, scope);
+		if (generation !== preloadGeneration) {
+			// Discovery may have filled the shared cache after its invalidation.
+			pluginRootsCache.clear();
+			continue;
+		}
+		preloadedPluginRoots.set(scope, roots);
+		return;
+	}
 }
 
 /**

@@ -11,12 +11,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPluginsDir, logger } from "@veyyon/utils";
 import {
+	clearClaudePluginRootsCache,
 	clearPluginRootsAndCaches,
 	getPreloadedPluginRoots,
 	injectPluginDirRoots,
 	preloadPluginRoots,
 } from "../../src/discovery/helpers";
-import { collectConfigSources } from "../../src/lsp/config";
+import * as discoveryFs from "../../src/discovery/capability/fs";
+import { collectConfigSources, loadConfig } from "../../src/lsp/config";
 import { useTrackedTempDirFactory } from "../helpers/tracked-temp-dir";
 
 // Nothing deleted these: the prefix varies per case, so this file named a directory
@@ -117,5 +119,63 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 		expect(sourcesFor(cwdA)).not.toContain(path.join(rootB, "lsp.json"));
 		expect(sourcesFor(cwdB)).toContain(path.join(rootB, "lsp.json"));
 		expect(sourcesFor(cwdB)).not.toContain(path.join(rootA, "lsp.json"));
+	});
+
+	it("awaits current plugin roots when another scope invalidates a blocked preload", async () => {
+		const cwdA = makeTempDir("plugin-invalidated-a-");
+		const cwdB = makeTempDir("plugin-invalidated-b-");
+		const homeA = makeTempDir("plugin-invalidated-home-");
+		const homeB = makeTempDir("plugin-warmed-home-");
+		const rootA = path.join(homeA, "plugin-a");
+		const rootB = path.join(homeB, "plugin-b");
+		const registryPath = path.join(getPluginsDir(homeA), "installed_plugins.json");
+		for (const [home, root, name] of [[homeA, rootA, "a"], [homeB, rootB, "b"]]) {
+			fs.mkdirSync(root, { recursive: true });
+			const pluginsDir = getPluginsDir(home);
+			fs.mkdirSync(pluginsDir, { recursive: true });
+			fs.writeFileSync(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify({
+				version: 2,
+				plugins: { [`${name}@scope-test`]: [{ scope: "user", installPath: root, version: "1.0.0" }] },
+			}));
+		}
+		fs.writeFileSync(path.join(rootA, "lsp.json"), JSON.stringify({
+			servers: { "scope-a": { command: process.execPath, fileTypes: ["scope-a"], rootMarkers: ["."] } },
+		}));
+		await preloadPluginRoots(homeB, cwdB);
+		const firstEntered = Promise.withResolvers<void>();
+		const replacementEntered = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const releaseReplacement = Promise.withResolvers<void>();
+		const readFile = discoveryFs.readFile;
+		let reads = 0;
+		vi.spyOn(discoveryFs, "readFile").mockImplementation(async filePath => {
+			if (filePath === registryPath) {
+				reads++;
+				if (reads === 1) {
+					firstEntered.resolve();
+					await releaseFirst.promise;
+				} else if (reads === 2) {
+					replacementEntered.resolve();
+					await releaseReplacement.promise;
+				}
+			}
+			return readFile(filePath);
+		});
+		const preloadA = preloadPluginRoots(homeA, cwdA);
+		try {
+			await firstEntered.promise;
+			clearClaudePluginRootsCache();
+			await replacementEntered.promise;
+			expect(getPreloadedPluginRoots(cwdB).some(root => root.path === rootB)).toBe(true);
+			releaseFirst.resolve();
+			await preloadA;
+			// A must be usable even while its background replacement remains blocked.
+			expect(getPreloadedPluginRoots(cwdA).some(root => root.path === rootA)).toBe(true);
+			expect(loadConfig(cwdA).servers["scope-a"]?.command).toBe(process.execPath);
+		} finally {
+			releaseFirst.resolve();
+			releaseReplacement.resolve();
+			await preloadA;
+		}
 	});
 });
