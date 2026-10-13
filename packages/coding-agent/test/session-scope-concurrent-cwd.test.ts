@@ -88,7 +88,7 @@ describe("SessionScope concurrent cwd and process isolation", () => {
 		expect(managerB.getCwd()).toBe(path.resolve(b1));
 		expect(process.cwd()).toBe(initialProcessCwd);
 
-		await scopeA.setCwd("../a3", { validate: true });
+		await scopeA.setCwd("../../a3", { validate: true });
 		expect(managerA.getCwd()).toBe(path.resolve(a3));
 		expect(managerB.getCwd()).toBe(path.resolve(b1));
 		expect(process.cwd()).toBe(initialProcessCwd);
@@ -96,6 +96,47 @@ describe("SessionScope concurrent cwd and process isolation", () => {
 		await scopeB.setCwd("b2", { validate: true });
 		expect(managerB.getCwd()).toBe(path.resolve(b2));
 		expect(managerA.getCwd()).toBe(path.resolve(a3));
+		expect(process.cwd()).toBe(initialProcessCwd);
+	});
+
+	it("keeps two overlapping transitions scoped while one prompt refresh is blocked", async () => {
+		const initialProcessCwd = process.cwd();
+		const dirA = makeTempDir("overlap-a-");
+		const dirB = makeTempDir("overlap-b-");
+		const destA = path.join(dirA, "destination");
+		const destB = path.join(dirB, "destination");
+		fs.mkdirSync(destA);
+		fs.mkdirSync(destB);
+		const managerA = SessionManager.inMemory(dirA);
+		const managerB = SessionManager.inMemory(dirB);
+		const hostA = createScopeHost(managerA);
+		const hostB = createScopeHost(managerB);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		hostA.refreshBaseSystemPrompt = async () => {
+			entered.resolve();
+			await release.promise;
+			expect(managerA.getCwd()).toBe(destA);
+		};
+		hostB.refreshBaseSystemPrompt = async () => {
+			expect(managerB.getCwd()).toBe(destB);
+			expect(managerA.getCwd()).toBe(destA);
+		};
+		const scopeA = new SessionScope(hostA);
+		const scopeB = new SessionScope(hostB);
+		const transitionA = scopeA.setCwd("destination", { validate: true });
+		try {
+			await Promise.race([entered.promise, transitionA.then(() => {
+				throw new Error("Transition A completed before the overlap barrier");
+			})]);
+			await scopeB.setCwd("destination", { validate: true });
+			expect(managerA.getCwd()).toBe(destA);
+			expect(managerB.getCwd()).toBe(destB);
+			expect(process.cwd()).toBe(initialProcessCwd);
+		} finally {
+			release.resolve();
+			await transitionA;
+		}
 		expect(process.cwd()).toBe(initialProcessCwd);
 	});
 

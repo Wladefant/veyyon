@@ -1493,10 +1493,11 @@ export async function listClaudePluginRoots(
 export function clearClaudePluginRootsCache(): void {
 	pluginRootsCache.clear();
 	for (const invalidate of pluginCacheInvalidators) invalidate();
-	preloadedPluginRoots = injectedPluginDirRoots.slice();
-	// Re-warm preloaded roots asynchronously so sync LSP config reads stay valid
-	if (lastPreloadHome) {
-		void preloadPluginRoots(lastPreloadHome, getProjectDir());
+	preloadedPluginRoots.clear();
+	preloadGeneration++;
+	// Re-warm each known scope without redirecting another session's sync reads.
+	for (const [cwd, home] of preloadHomes) {
+		void preloadPluginRoots(home, cwd);
 	}
 }
 
@@ -1516,27 +1517,30 @@ export function clearPluginRootsAndCaches(extraPaths?: readonly string[]): void 
 // Populated at startup by preloadPluginRoots(). Read synchronously by
 // getPreloadedPluginRoots(). Safe degradation: empty array if not warmed.
 
-let preloadedPluginRoots: ClaudePluginRoot[] = [];
+const preloadedPluginRoots = new Map<string, ClaudePluginRoot[]>();
 let injectedPluginDirRoots: ClaudePluginRoot[] = [];
-let lastPreloadHome: string | undefined;
+const preloadHomes = new Map<string, string>();
+let preloadGeneration = 0;
 
 /**
  * Populate the module-level plugin roots cache for sync consumers.
  * Call during session initialization, after dir resolution completes
  * but before any LSP config is read.
  */
-export async function preloadPluginRoots(home: string, cwd?: string): Promise<void> {
-	lastPreloadHome = home;
-	const { roots } = await listClaudePluginRoots(home, cwd);
-	preloadedPluginRoots = roots;
+export async function preloadPluginRoots(home: string, cwd: string): Promise<void> {
+	const scope = path.resolve(cwd);
+	const generation = preloadGeneration;
+	preloadHomes.set(scope, home);
+	const { roots } = await listClaudePluginRoots(home, scope);
+	if (generation === preloadGeneration) preloadedPluginRoots.set(scope, roots);
 }
 
 /**
  * Get pre-loaded plugin roots synchronously.
  * Returns empty array if preloadPluginRoots() hasn't been called.
  */
-export function getPreloadedPluginRoots(): readonly ClaudePluginRoot[] {
-	return preloadedPluginRoots;
+export function getPreloadedPluginRoots(cwd: string): readonly ClaudePluginRoot[] {
+	return preloadedPluginRoots.get(path.resolve(cwd)) ?? injectedPluginDirRoots;
 }
 
 // ── --plugin-dir injection ──────────────────────────────────────────────────
@@ -1577,11 +1581,9 @@ export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: s
 
 	// Set injected roots BEFORE populating cache so listClaudePluginRoots merges them.
 	injectedPluginDirRoots = injected;
-	lastPreloadHome = home; // ensure cache-clear re-warm fires even when injectPluginDirRoots was the startup path
 	// Clear any stale cache entries (populated before injected roots were set).
 	pluginRootsCache.clear();
 	// Rebuild — cache miss triggers fresh load that includes both user+project registries
 	// and prepends injectedPluginDirRoots at highest precedence.
-	const { roots } = await listClaudePluginRoots(home, cwd);
-	preloadedPluginRoots = roots;
+	await preloadPluginRoots(home, cwd ?? getProjectDir());
 }

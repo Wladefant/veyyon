@@ -404,7 +404,7 @@ export function collectConfigSources<T>(options: CollectConfigSourcesOptions<T>)
 	}
 
 	// Plugin configs (from marketplace/--plugin-dir roots)
-	const pluginRoots = getPreloadedPluginRoots();
+	const pluginRoots = getPreloadedPluginRoots(options.cwd);
 	for (const root of pluginRoots) {
 		for (const filename of filenames) {
 			sources.push(options.fileSource(path.join(root.path, filename)));

@@ -10,12 +10,13 @@
  * verbatim, so a session that moved without re-scoping names a directory it has left, and the model
  * reads the old project's AGENTS.md while resolving relative paths against the new one.
  */
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { applyProviderGlobalsFromSettings } from "../../config/provider-globals";
 import type { Settings } from "../../config/settings";
 import { reset as resetCapabilities } from "../../discovery/capability";
-import { clearClaudePluginRootsCache } from "../../discovery/helpers";
+import { clearClaudePluginRootsCache, preloadPluginRoots } from "../../discovery/helpers";
 
 /** The session log slice a re-root moves and records into. `SessionManager` satisfies this. */
 export interface SessionScopeStore {
@@ -103,6 +104,7 @@ export class SessionScope {
 		// Session cwd is independent of the OS cwd, including for the root session. Commands and
 		// tool paths resolve against the session store, never a process-wide directory change.
 		if (!host.isSpawned) this.#rescopeProcess();
+		await preloadPluginRoots(os.homedir(), normalizedCwd);
 		await host.refreshSecrets();
 		await host.refreshSshTool();
 		await host.refreshBaseSystemPrompt();
