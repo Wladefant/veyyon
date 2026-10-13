@@ -81,11 +81,14 @@ interface Sent {
 	options: SimpleStreamOptions | undefined;
 }
 
+/** A config endpoint that answers `payload` and records the URL of every request it served. */
 function configFetch(payload: Record<string, unknown>) {
-	return vi.fn(
-		async (_input: string | URL | Request, _init?: RequestInit) =>
-			new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } }),
-	);
+	const requests: string[] = [];
+	const serve = async (input: string | URL | Request, _init?: RequestInit) => {
+		requests.push(input instanceof Request ? input.url : String(input));
+		return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+	};
+	return Object.assign(serve, { requests });
 }
 
 const CODEX_CONFIG = {
@@ -223,7 +226,7 @@ describe("ComposerPredictor", () => {
 			const outcome = await predict(session, settings, fetchImpl);
 
 			expect(outcome).toEqual({ kind: "skipped" });
-			expect(fetchImpl).not.toHaveBeenCalled();
+			expect(fetchImpl.requests).toEqual([]);
 			expect(sent).toHaveLength(0);
 		});
 	});
@@ -280,7 +283,7 @@ describe("ComposerPredictor", () => {
 			await predict(session, settings, fetchImpl);
 
 			expect(sent.map(entry => entry.model.id)).toEqual([SECOND_CODEX_MODEL.id]);
-			expect(fetchImpl).toHaveBeenCalledTimes(1);
+			expect(fetchImpl.requests).toHaveLength(1);
 		});
 
 		it("reads the Codex config once across consecutive predictions", async () => {
@@ -293,7 +296,7 @@ describe("ComposerPredictor", () => {
 			const predictor = new ComposerPredictor(session, settings, fetchImpl);
 			await predictor.predict(new AbortController().signal);
 			await predictor.predict(new AbortController().signal);
-			expect(fetchImpl).toHaveBeenCalledTimes(1);
+			expect(fetchImpl.requests).toHaveLength(1);
 		});
 
 		it("sends a stored Pro account's token when an earlier stored account is on another plan", async () => {
@@ -354,7 +357,7 @@ describe("ComposerPredictor", () => {
 			const fetchImpl = configFetch(CODEX_CONFIG);
 			const outcome = await predict(session, settings, fetchImpl);
 			expect(outcome).toEqual({ kind: "skipped" });
-			expect(fetchImpl).not.toHaveBeenCalled();
+			expect(fetchImpl.requests).toEqual([]);
 			expect(sent).toHaveLength(0);
 		});
 
@@ -368,7 +371,7 @@ describe("ComposerPredictor", () => {
 			const outcome = await predict(session, settings, fetchImpl);
 
 			expect(outcome).toEqual({ kind: "skipped" });
-			expect(fetchImpl).not.toHaveBeenCalled();
+			expect(fetchImpl.requests).toEqual([]);
 			expect(sent).toHaveLength(0);
 		});
 
@@ -396,7 +399,7 @@ describe("ComposerPredictor", () => {
 		const outcome = await predict(session, settings, fetchImpl);
 
 		expect(outcome).toEqual({ kind: "skipped" });
-		expect(fetchImpl).not.toHaveBeenCalled();
+		expect(fetchImpl.requests).toEqual([]);
 		expect(sent).toHaveLength(0);
 	});
 
@@ -412,7 +415,7 @@ describe("ComposerPredictor", () => {
 			const outcome = await predict(session, settings, fetchImpl);
 
 			expect(outcome).toEqual({ kind: "none" });
-			expect(fetchImpl).not.toHaveBeenCalled();
+			expect(fetchImpl.requests).toEqual([]);
 			expect(sent[0]?.model.id).toBe(ANTHROPIC_MODEL.id);
 			expect(lastUserText(sent[0]?.context)).toStartWith(
 				sideChannelPrompts["side-channel/composer-prediction"].text.trim(),

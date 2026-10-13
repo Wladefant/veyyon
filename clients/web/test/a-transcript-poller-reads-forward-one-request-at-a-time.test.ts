@@ -154,14 +154,20 @@ describe("TranscriptPoller", () => {
 	});
 
 	it("counts unparseable rows and still delivers the valid ones", async () => {
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const warnings: string[] = [];
+		vi.spyOn(console, "warn").mockImplementation((message: unknown) => {
+			warnings.push(String(message));
+		});
 		const { client, poller, received } = startPoller();
 		const text = `${row("a")}{broken\n${row("b")}not json either\n`;
 		await answer(client, 0, { kind: "rows", text, newSize: text.length });
 		poller.stop();
 
 		expect(received.dropped).toEqual([2]);
-		expect(warn).toHaveBeenCalledTimes(2);
+		expect(warnings).toEqual([
+			`transcript row dropped at offset ${text.indexOf("{broken")}: {broken`,
+			`transcript row dropped at offset ${text.indexOf("not json")}: not json either`,
+		]);
 		expect(received.entries.map(entries => entries.map(entry => entry.id))).toEqual([["a", "b"]]);
 	});
 

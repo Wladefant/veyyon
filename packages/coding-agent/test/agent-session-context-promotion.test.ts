@@ -709,7 +709,11 @@ describe("AgentSession context promotion", () => {
 			},
 		});
 		const continued = Promise.withResolvers<void>();
-		const continueSpy = vi.spyOn(agent, "continue").mockImplementation(async () => continued.resolve());
+		let retries = 0;
+		vi.spyOn(agent, "continue").mockImplementation(async () => {
+			retries++;
+			continued.resolve();
+		});
 
 		session = new AgentSession({
 			agent,
@@ -724,7 +728,7 @@ describe("AgentSession context promotion", () => {
 
 		await continued.promise;
 
-		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(retries).toBe(1);
 		expect(session.model?.id).toBe(codexModel.id);
 		expect(session.agent.state.messages).not.toContain(overflowMessage);
 		expect(
