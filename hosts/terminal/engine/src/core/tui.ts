@@ -2972,10 +2972,11 @@ export class TUI extends Container {
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(windowTop, historyEnd);
 		} else if (
-			frameLength <= this.#committedRows ||
-			(frameLength - this.#committedRows < height &&
-				(prevWindowTop < this.#committedRows ||
-					this.#frameCursorMarkers.some(marker => marker.row >= this.#committedRows)))
+			frameLength - this.#committedRows < height &&
+			(prevWindowTop < this.#committedRows ||
+				this.#frameCursorMarkers.some(
+					marker => marker.row >= this.#committedRows || (frameLength <= this.#committedRows && marker.row >= 0),
+				))
 		) {
 			// Tail re-anchor (a direct terminal may instead take the
 			// divergenceRebuild full paint above when the prefix resynced):
