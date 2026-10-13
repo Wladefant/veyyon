@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path, PurePosixPath
 
-VALID_CLASSES = {"E2E", "PROVIDER_KEY", "GATEWAY", "VERTEX", "WINDOWS"}
+VALID_CLASSES = {"E2E", "GATEWAY", "LOCAL_SERVICE", "PROVIDER_KEY", "VERTEX", "WINDOWS"}
 
 
 def _report_files(report_root: Path) -> list[Path]:
