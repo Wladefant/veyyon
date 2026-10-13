@@ -36,6 +36,8 @@ unset VEYYON_RELEASE_TOKEN VEYYON_RELEASE_TAG VEYYON_RELEASE_SHA VEYYON_RELEASE_
   VEYYON_RELEASE_PUBLISH VEYYON_RELEASE_REPO
 
 
+setup_seconds=0
+SECONDS=0
 expected_bun="$(node -p "require('./package.json').packageManager.split('@')[1]")"
 if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" ]]; then
   echo "Installing repository-pinned Bun $expected_bun for the Workers Builds container."
