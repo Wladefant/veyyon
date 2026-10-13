@@ -376,6 +376,7 @@ export interface CollectConfigSourcesOptions<T> {
 	cwd: string;
 	fileSource: (filePath: string) => ConfigSource<T>;
 	pluginSource?: (root: ClaudePluginRoot) => ConfigSource<T> | null;
+	pluginRoots?: readonly ClaudePluginRoot[];
 }
 
 export function collectConfigSources<T>(options: CollectConfigSourcesOptions<T>): Array<ConfigSource<T>> {
@@ -404,7 +405,7 @@ export function collectConfigSources<T>(options: CollectConfigSourcesOptions<T>)
 	}
 
 	// Plugin configs (from marketplace/--plugin-dir roots)
-	const pluginRoots = getPreloadedPluginRoots(options.cwd);
+	const pluginRoots = options.pluginRoots ?? getPreloadedPluginRoots(options.cwd);
 	for (const root of pluginRoots) {
 		for (const filename of filenames) {
 			sources.push(options.fileSource(path.join(root.path, filename)));
@@ -513,10 +514,11 @@ function marketplaceConfigSource(root: ClaudePluginRoot): ConfigSource {
  * Configuration sources in priority order.
  * Supports both visible and hidden variants at each config location.
  */
-function getConfigSources(cwd: string): Array<ConfigSource<NormalizedConfig>> {
+function getConfigSources(cwd: string, pluginRoots?: readonly ClaudePluginRoot[]): Array<ConfigSource<NormalizedConfig>> {
 	return collectConfigSources({
 		baseName: "lsp",
 		cwd,
+		pluginRoots,
 		fileSource: fileConfigSource,
 		pluginSource: marketplaceConfigSource,
 	});
@@ -553,10 +555,10 @@ function getConfigSources(cwd: string): Array<ConfigSource<NormalizedConfig>> {
  * }
  * ```
  */
-export function loadConfig(cwd: string): LspConfig {
+export function loadConfig(cwd: string, pluginRoots?: readonly ClaudePluginRoot[]): LspConfig {
 	let mergedServers = coerceServerConfigs(DEFAULTS);
 
-	const configSources = getConfigSources(cwd).reverse();
+	const configSources = getConfigSources(cwd, pluginRoots).reverse();
 	let hasOverrides = false;
 
 	let idleTimeoutMs: number | undefined;

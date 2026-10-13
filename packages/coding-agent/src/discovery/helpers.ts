@@ -1535,7 +1535,7 @@ const preloadGenerations = new Map<string, number>();
  * Call during session initialization, after dir resolution completes
  * but before any LSP config is read.
  */
-export async function preloadPluginRoots(home: string, cwd: string): Promise<void> {
+export async function preloadPluginRoots(home: string, cwd: string): Promise<readonly ClaudePluginRoot[]> {
 	const scope = path.resolve(cwd);
 	preloadHomes.set(scope, home);
 	for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1551,16 +1551,17 @@ export async function preloadPluginRoots(home: string, cwd: string): Promise<voi
 			});
 		}
 		preloadedPluginRoots.set(scope, roots);
-		return;
+		return roots;
 	}
+	throw new Error("Plugin discovery exhausted without a completed snapshot");
 }
 
 /** Warm a cold sync view using the scope's original home, before loading LSP configuration. */
-export async function ensurePreloadedPluginRoots(cwd: string): Promise<void> {
+export async function ensurePreloadedPluginRoots(cwd: string): Promise<readonly ClaudePluginRoot[]> {
 	const scope = path.resolve(cwd);
-	if (!preloadedPluginRoots.has(scope)) {
-		await preloadPluginRoots(preloadHomes.get(scope) ?? os.homedir(), scope);
-	}
+	const warmed = preloadedPluginRoots.get(scope);
+	if (warmed) return warmed;
+	return preloadPluginRoots(preloadHomes.get(scope) ?? os.homedir(), scope);
 }
 
 /**

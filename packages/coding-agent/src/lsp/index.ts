@@ -304,8 +304,8 @@ async function getConfig(cwd: string): Promise<LspConfig> {
 	if (!configGenerations.has(cwd)) configGenerations.set(cwd, 0);
 	for (let attempt = 1; attempt <= 3; attempt++) {
 		const generation = configGenerations.get(cwd);
-		await ensurePreloadedPluginRoots(cwd);
-		const config = loadConfig(cwd);
+		const pluginRoots = await ensurePreloadedPluginRoots(cwd);
+		const config = loadConfig(cwd, pluginRoots);
 		if (generation !== configGenerations.get(cwd)) {
 			if (attempt < 3) continue;
 			return config;

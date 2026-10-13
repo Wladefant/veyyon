@@ -314,7 +314,7 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 				return warmed;
 			}
 			retryEntered.resolve();
-			await ensure(target);
+			return ensure(target);
 		});
 		const readFile = discoveryFs.readFile;
 		vi.spyOn(discoveryFs, "readFile").mockImplementation(async filePath => {
@@ -361,22 +361,28 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 			version: 2,
 			plugins: { "continuous@scope-test": [{ scope: "user", installPath: root, version: "1.0.0" }] },
 		}));
+		fs.writeFileSync(path.join(root, "lsp.json"), JSON.stringify({
+			servers: { "bounded-plugin-server": { command: process.execPath, fileTypes: ["scope"], rootMarkers: ["."] } },
+		}));
 		await preloadPluginRoots(home, cwd);
 		const ensure = pluginDiscovery.ensurePreloadedPluginRoots;
 		let attempts = 0;
 		let invalidate = true;
 		vi.spyOn(pluginDiscovery, "ensurePreloadedPluginRoots").mockImplementation(async target => {
-			await ensure(target);
+			const roots = await ensure(target);
 			if (target === cwd && invalidate) {
 				attempts++;
 				if (attempts > 3) throw new Error("LSP discovery exceeded three attempts");
 				clearClaudePluginRootsCache(cwd);
 			}
+			return roots;
 		});
 		const tool = new LspTool(makeToolSession({ cwd }));
 		const result = await tool.execute("continuous-clear", { action: "status" });
 		expect(result.details?.success).toBe(true);
 		expect(attempts).toBe(3);
+		const boundedText = result.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+		expect(boundedText).toContain("bounded-plugin-server");
 		invalidate = false;
 		fs.writeFileSync(path.join(root, "lsp.json"), JSON.stringify({
 			servers: { "after-bound-server": { command: process.execPath, fileTypes: ["scope"], rootMarkers: ["."] } },

@@ -1525,7 +1525,7 @@ function startPluginPreload(parsedArgs: Args): Promise<void> {
 	if (cliExtensions.length > 0) {
 		injectVeyyonExtensionCliRoots(cliExtensions, home, getProjectDir());
 	}
-	return pluginPreloadPromise;
+	return pluginPreloadPromise.then(() => {});
 }
 
 /** The launch's settings, and whether the profile's `session.workdir` moved the project root. */
