@@ -395,7 +395,11 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			retryAfterMs: 60_000,
 		});
 
-		expect(result).toEqual({ switched: false, retryAtMs: NOW_MS + 60_000 });
+		expect(result).toEqual({
+			switched: false,
+			retryAtMs: NOW_MS + 60_000,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+		});
 		expect(withheld).toEqual([
 			{
 				provider: PROVIDER,
@@ -495,7 +499,10 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			retryAfterMs: 60_000,
 		});
 
-		expect(result).toEqual({ switched: true });
+		expect(result).toEqual({
+			switched: true,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available; balancer will try it next.`,
+		});
 		expect(withheld).toEqual([]);
 	});
 });
