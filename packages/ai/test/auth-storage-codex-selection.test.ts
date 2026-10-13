@@ -24,11 +24,11 @@ const HOUR_MS = 60 * 60 * 1000;
 const FIVE_HOUR_MS = 5 * HOUR_MS;
 const STALE_BLOCK_GUARD_MS = 5 * 60_000 + 1;
 
-function ageCredentialBlockRows(dbPath: string): void {
+function ageCredentialBlockRows(dbPath: string, ageMs = STALE_BLOCK_GUARD_MS + 60_000): void {
 	const db = new Database(dbPath);
 	try {
 		db.prepare("UPDATE auth_credential_blocks SET updated_at = ?").run(
-			Math.floor((Date.now() - STALE_BLOCK_GUARD_MS) / 1000),
+			Math.floor((Date.now() - ageMs) / 1000),
 		);
 	} finally {
 		db.close();
@@ -1638,6 +1638,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 				remoteStore.cleanExpiredCredentialBlocks(Date.now() + STALE_BLOCK_GUARD_MS);
+				store.cleanExpiredCredentialBlocks?.(Date.now() + STALE_BLOCK_GUARD_MS);
 
 				await clientStorage.fetchUsageReports();
 

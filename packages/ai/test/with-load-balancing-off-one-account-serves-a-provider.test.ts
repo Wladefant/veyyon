@@ -129,7 +129,11 @@ describe("with load balancing off one account serves a provider", () => {
 			credentialId: firstId,
 			retryAfterMs: 60_000,
 		});
-		expect(exhausted).toEqual({ switched: false, retryAtMs: NOW_MS + 60_000 });
+		expect(exhausted).toEqual({
+			switched: false,
+			retryAtMs: NOW_MS + 60_000,
+			quotaMessage: `Quota reached on ${PROVIDER} account first@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+		});
 
 		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-first");
 		expect(await storage.getApiKey(PROVIDER, "another-session")).toBe("access-first");

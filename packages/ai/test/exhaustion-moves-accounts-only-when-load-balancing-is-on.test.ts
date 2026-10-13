@@ -122,7 +122,11 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			retryAfterMs: 30_000,
 		});
 
-		expect(result).toEqual({ switched: false, retryAtMs: NOW_MS + 30_000 });
+		expect(result).toEqual({
+			switched: false,
+			retryAtMs: NOW_MS + 30_000,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 30_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+		});
 	});
 
 	/** The same embedder opting in gets exactly what it asked for. */
@@ -136,7 +140,10 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			retryAfterMs: 30_000,
 		});
 
-		expect(result).toEqual({ switched: true });
+		expect(result).toEqual({
+			switched: true,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 30_000).toISOString()}. 1 other account available; balancer will try it next.`,
+		});
 	});
 
 	/**
@@ -156,7 +163,11 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			credentialId: siblingId,
 			retryAfterMs: 1_000,
 		});
-		expect(siblingResult).toEqual({ switched: false, retryAtMs: siblingResetMs });
+		expect(siblingResult).toEqual({
+			switched: false,
+			retryAtMs: siblingResetMs,
+			quotaMessage: `Quota reached on ${PROVIDER} account sibling@example.com; resets ${new Date(siblingResetMs).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+		});
 
 		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, targetId)).toBe(true);
 		const result = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
@@ -164,7 +175,11 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			retryAfterMs: 60_000,
 		});
 
-		expect(result).toEqual({ switched: false, retryAtMs: targetResetMs });
+		expect(result).toEqual({
+			switched: false,
+			retryAtMs: targetResetMs,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(targetResetMs).toISOString()}. 0 other accounts available but load balancing is off, so Veyyon waits for this account.`,
+		});
 		expect(result.retryAtMs).not.toBe(siblingResetMs);
 		// Recorded as blocked, which is what lets the account list say when the window returns.
 		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
@@ -187,14 +202,21 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			credentialId: targetId,
 			retryAfterMs: 30_000,
 		});
-		expect(refused).toEqual({ switched: false, retryAtMs: NOW_MS + 30_000 });
+		expect(refused).toEqual({
+			switched: false,
+			retryAtMs: NOW_MS + 30_000,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 30_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+		});
 
 		enabled = true;
 		const allowed = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 30_000,
 		});
-		expect(allowed).toEqual({ switched: true });
+		expect(allowed).toEqual({
+			switched: true,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 30_000).toISOString()}. 1 other account available; balancer will try it next.`,
+		});
 	});
 
 	/**
@@ -373,7 +395,11 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			retryAfterMs: 60_000,
 		});
 
-		expect(result).toEqual({ switched: false, retryAtMs: NOW_MS + 60_000 });
+		expect(result).toEqual({
+			switched: false,
+			retryAtMs: NOW_MS + 60_000,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+		});
 		expect(withheld).toEqual([
 			{
 				provider: PROVIDER,
@@ -473,7 +499,10 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			retryAfterMs: 60_000,
 		});
 
-		expect(result).toEqual({ switched: true });
+		expect(result).toEqual({
+			switched: true,
+			quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available; balancer will try it next.`,
+		});
 		expect(withheld).toEqual([]);
 	});
 });
