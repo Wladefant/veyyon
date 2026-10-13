@@ -78,9 +78,7 @@ const readSchema = lazy(() =>
 		"limit?": type("number.integer > 0").describe(
 			"Directory listings only: max entries returned; omitted entries are reported with the limit and how to see more.",
 		),
-		"force?": type("boolean").describe(
-			"Re-read a file even when its requested lines are unchanged and still in context from an earlier read.",
-		),
+		"force?": type("boolean").describe("Bypass a `Read refused` result."),
 	}),
 );
 

@@ -10,7 +10,6 @@ Read files, directories (optionally bounded by `depth`/`limit`), archives, SQLit
 - Several targets in one call: a semicolon-delimited list (`src/foo.ts:1-40; skill://demo/notes.md`), one section per entry, each with its own selector. Every entry is a complete target, so a later one needs its own scheme. `depth`/`limit` apply per entry.
 - `depth` — directories only. Recursion depth of the listing (1 = top level). Default 2.
 - `limit` — directories only. Maximum entries returned; the listing reports exactly what was omitted and the arguments that reveal it.
-- `force` — re-read a file whose requested lines are unchanged and still in context (see below).
 
 ## Selectors
 
@@ -32,7 +31,6 @@ A bounded range is padded with up to 1 line before (when you constrain the start
 {{#if IS_HL_MODE}}
 - File + selector → filename-only snapshot header + numbered lines: `[foo.ts#1A2B]` then `41:def alpha():`. Copy `[FILENAME#TAG]` for anchored edits; ops use bare line numbers. NEVER fabricate the tag.
 - A file that ends in a newline shows one extra numbered line with an empty body (a 2-line file `x\ny\n` reads as `1:x`, `2:y`, `3:`). That final empty line is not content: it marks the trailing newline and is the anchor you insert after to append at end of file.
-- Re-reading is refused when the file is unchanged since an earlier read and every requested line is still in your context: the result is the header plus `Read refused`, and the earlier output stays authoritative (same tag, same line numbers). Work from it. Pass `force: true` only when that earlier output is unusable, e.g. clipped or too far back to work from reliably. Lines that left context (compaction, pruning) are never refused.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - File + selector → numbered lines: `41|def alpha():`.
