@@ -17,8 +17,9 @@ if [[ -z "$current_branch" ]]; then
 fi
 
 if [[ "$current_branch" == "fix/windows-cross-release-569" ]]; then
-  echo "Release mode branch detected: $current_branch (invoking release-linux.sh windows-proof)"
-  exec bash ci/cloudflare/release-linux.sh windows-proof
+  release_mode="${VEYYON_RELEASE_MODE:-windows-proof}"
+  echo "Release mode branch detected: $current_branch (invoking release-linux.sh $release_mode)"
+  exec bash ci/cloudflare/release-linux.sh "$release_mode"
 fi
 
 expected_bun="$(node -p "require('./package.json').packageManager.split('@')[1]")"

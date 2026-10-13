@@ -348,4 +348,29 @@ fi
 echo "Running artifact proof validation..."
 bash "$repo_root/ci/cloudflare/artifact-proof.sh" "$mode"
 
+# 10. Publish as a GitHub Release (full mode, only when the scoped token is present)
+if [[ "$mode" == "full" ]]; then
+  if [[ -z "${VEYYON_RELEASE_TOKEN:-}" ]]; then
+    echo "VEYYON_RELEASE_TOKEN is not set; full distribution built and proven but not published."
+  else
+    gh_version=2.83.0
+    if ! command -v gh >/dev/null 2>&1; then
+      gh_archive="$HOME/.cache/gh_${gh_version}_linux_amd64.tar.gz"
+      mkdir -p "$HOME/.cache" "$HOME/.local/bin"
+      curl --proto '=https' --tlsv1.2 -fsSL \
+        "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz" \
+        -o "$gh_archive"
+      printf '%s  %s\n' 'a5cf6cdb40fc67751adf561126b3314044779cea81ba4f254fbe8e9a69f1676f' "$gh_archive" \
+        | sha256sum --check
+      tar -xzf "$gh_archive" -C "$HOME/.cache"
+      ln -sf "$HOME/.cache/gh_${gh_version}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+    fi
+    gh --version | head -n 1
+    git_sha="$(git rev-parse HEAD)"
+    export VEYYON_RELEASE_SHA="$git_sha"
+    export VEYYON_RELEASE_TAG="${VEYYON_RELEASE_TAG:-cf-release-test-${git_sha:0:12}}"
+    bun ci/cloudflare/publish-release.ts
+  fi
+fi
+
 echo "=== Veyyon Cloudflare Linux Release completed successfully ($mode) ==="
