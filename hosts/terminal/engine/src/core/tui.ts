@@ -2974,6 +2974,7 @@ export class TUI extends Container {
 		} else if (
 			frameLength - this.#committedRows < height &&
 			(prevWindowTop < this.#committedRows ||
+				(frameLength <= this.#committedRows && frameLength >= height) ||
 				this.#frameCursorMarkers.some(
 					marker => marker.row >= this.#committedRows || (frameLength <= this.#committedRows && marker.row >= 0),
 				))
