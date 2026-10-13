@@ -18,6 +18,7 @@ import {
 	preloadPluginRoots,
 } from "../../src/discovery/helpers";
 import * as discoveryFs from "../../src/discovery/capability/fs";
+import * as pluginDiscovery from "../../src/discovery/helpers";
 import { collectConfigSources, loadConfig } from "../../src/lsp/config";
 import { LspTool } from "../../src/lsp";
 import { makeToolSession } from "../helpers/tool-session";
@@ -279,4 +280,110 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 			expect(getPreloadedPluginRoots(cwd).some(item => item.path === root)).toBe(false);
 		});
 	}
+
+	it("retries a cold LSP lookup when global invalidation interrupts its warmed-view await", async () => {
+		const cwd = makeTempDir("lsp-config-generation-");
+		const home = makeTempDir("lsp-config-generation-home-");
+		const oldRoot = path.join(home, "old-plugin");
+		const newRoot = path.join(home, "current-plugin");
+		const registryPath = path.join(getPluginsDir(home), "installed_plugins.json");
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+		for (const [root, name] of [[oldRoot, "old-plugin-server"], [newRoot, "current-plugin-server"]]) {
+			fs.mkdirSync(root, { recursive: true });
+			fs.writeFileSync(path.join(root, "lsp.json"), JSON.stringify({
+				servers: { [name]: { command: process.execPath, fileTypes: ["scope"], rootMarkers: ["."] } },
+			}));
+		}
+		const entry = { scope: "user", installPath: oldRoot, version: "1.0.0" };
+		const registry = { version: 2, plugins: { "generation@scope-test": [entry] } };
+		fs.writeFileSync(registryPath, JSON.stringify(registry));
+		await preloadPluginRoots(home, cwd);
+		const entered = Promise.withResolvers<void>();
+		const releaseLookup = Promise.withResolvers<void>();
+		const retryEntered = Promise.withResolvers<void>();
+		const releaseDiscovery = Promise.withResolvers<void>();
+		const ensure = pluginDiscovery.ensurePreloadedPluginRoots;
+		let first = true;
+		vi.spyOn(pluginDiscovery, "ensurePreloadedPluginRoots").mockImplementation(async target => {
+			if (target !== cwd) return ensure(target);
+			if (first) {
+				first = false;
+				const warmed = ensure(target);
+				entered.resolve();
+				await releaseLookup.promise;
+				return warmed;
+			}
+			retryEntered.resolve();
+			await ensure(target);
+		});
+		const readFile = discoveryFs.readFile;
+		vi.spyOn(discoveryFs, "readFile").mockImplementation(async filePath => {
+			if (filePath === registryPath) await releaseDiscovery.promise;
+			return readFile(filePath);
+		});
+		const tool = new LspTool(makeToolSession({ cwd }));
+		const lookup = tool.execute("generation-race", { action: "status" });
+		try {
+			await entered.promise;
+			entry.installPath = newRoot;
+			fs.writeFileSync(registryPath, JSON.stringify(registry));
+			clearPluginRootsAndCaches([registryPath]);
+			releaseLookup.resolve();
+			const outcome = await Promise.race([
+				lookup.then(() => "returned-before-current-discovery"),
+				retryEntered.promise.then(() => "awaiting-current-discovery"),
+			]);
+			expect(outcome).toBe("awaiting-current-discovery");
+			releaseDiscovery.resolve();
+			const result = await lookup;
+			const text = result.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+			expect(text).toContain("current-plugin-server");
+			expect(text).not.toContain("old-plugin-server");
+			const cached = await tool.execute("generation-race-cached", { action: "status" });
+			const cachedText = cached.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+			expect(cachedText).toContain("current-plugin-server");
+			expect(cachedText).not.toContain("old-plugin-server");
+		} finally {
+			releaseLookup.resolve();
+			releaseDiscovery.resolve();
+			await lookup;
+		}
+	});
+
+	it("returns without caching after three continuously invalidated LSP discovery attempts", async () => {
+		const cwd = makeTempDir("lsp-continuous-clear-");
+		const home = makeTempDir("lsp-continuous-clear-home-");
+		const root = path.join(home, "plugin");
+		const registryPath = path.join(getPluginsDir(home), "installed_plugins.json");
+		fs.mkdirSync(root, { recursive: true });
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+		fs.writeFileSync(registryPath, JSON.stringify({
+			version: 2,
+			plugins: { "continuous@scope-test": [{ scope: "user", installPath: root, version: "1.0.0" }] },
+		}));
+		await preloadPluginRoots(home, cwd);
+		const ensure = pluginDiscovery.ensurePreloadedPluginRoots;
+		let attempts = 0;
+		let invalidate = true;
+		vi.spyOn(pluginDiscovery, "ensurePreloadedPluginRoots").mockImplementation(async target => {
+			await ensure(target);
+			if (target === cwd && invalidate) {
+				attempts++;
+				if (attempts > 3) throw new Error("LSP discovery exceeded three attempts");
+				clearClaudePluginRootsCache(cwd);
+			}
+		});
+		const tool = new LspTool(makeToolSession({ cwd }));
+		const result = await tool.execute("continuous-clear", { action: "status" });
+		expect(result.details?.success).toBe(true);
+		expect(attempts).toBe(3);
+		invalidate = false;
+		fs.writeFileSync(path.join(root, "lsp.json"), JSON.stringify({
+			servers: { "after-bound-server": { command: process.execPath, fileTypes: ["scope"], rootMarkers: ["."] } },
+		}));
+		// With no additional clear, this server can appear only if the previous result was not cached.
+		const fresh = await tool.execute("after-continuous-clear", { action: "status" });
+		const text = fresh.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+		expect(text).toContain("after-bound-server");
+	});
 });

@@ -282,22 +282,39 @@ async function notifyFileSaved(
 
 // Cache config per cwd to avoid repeated file I/O
 const configCache = new Map<string, LspConfig>();
+const configGenerations = new Map<string, number>();
 
 registerPluginCacheInvalidator(cwd => {
-	if (cwd === undefined) configCache.clear();
-	else configCache.delete(path.resolve(cwd));
+	if (cwd === undefined) {
+		configCache.clear();
+		for (const scope of configGenerations.keys()) {
+			configGenerations.set(scope, (configGenerations.get(scope) ?? 0) + 1);
+		}
+	} else {
+		const scope = path.resolve(cwd);
+		configCache.delete(scope);
+		configGenerations.set(scope, (configGenerations.get(scope) ?? 0) + 1);
+	}
 });
 
 async function getConfig(cwd: string): Promise<LspConfig> {
 	cwd = path.resolve(cwd);
-	let config = configCache.get(cwd);
-	if (!config) {
+	const cached = configCache.get(cwd);
+	if (cached) return cached;
+	if (!configGenerations.has(cwd)) configGenerations.set(cwd, 0);
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const generation = configGenerations.get(cwd);
 		await ensurePreloadedPluginRoots(cwd);
-		config = loadConfig(cwd);
+		const config = loadConfig(cwd);
+		if (generation !== configGenerations.get(cwd)) {
+			if (attempt < 3) continue;
+			return config;
+		}
 		setIdleTimeout(config.idleTimeoutMs);
 		configCache.set(cwd, config);
+		return config;
 	}
-	return config;
+	throw new Error("LSP configuration discovery exhausted without a completed attempt");
 }
 
 function isCustomLinter(serverConfig: ServerConfig): boolean {
