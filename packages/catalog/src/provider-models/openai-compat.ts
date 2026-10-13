@@ -52,7 +52,7 @@ import { filterModelsDevCatalogRows } from "./models-dev-policies";
 
 async function fetchOpenAICompatibleModels<TApi extends Api = "openai-completions">(
 	options: FetchOpenAICompatibleModelsOptions<TApi>,
-): Promise<readonly ModelSpec<TApi>[] | null> {
+): Promise<ModelSpec<TApi>[] | null> {
 	// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
 	const mod = await import("../discovery/openai-compatible");
 	return mod.fetchOpenAICompatibleModels<TApi>(options);

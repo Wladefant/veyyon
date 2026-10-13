@@ -124,7 +124,8 @@ export interface ChatGptWebModelDiscoveryResult {
  * whether prefix KV-cache reuse can engage. Here the answer gates whether a
  * ChatGPT credential leaves the machine, so a LAN address must fail.
  */
-export { normalizeChatGptWebBaseUrl } from "../provider-models/chatgpt-web";
+import { normalizeChatGptWebBaseUrl } from "../provider-models/chatgpt-web";
+export { normalizeChatGptWebBaseUrl };
 
 export function isChatGptWebLoopbackUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return false;

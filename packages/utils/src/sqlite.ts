@@ -483,6 +483,7 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 		try {
 			const { withFileLockSync } = require("./file-lock") as typeof import("./file-lock");
 			backupPath = withFileLockSync(`${recoveryFileStem(dbPath)}.recovery`, () => {
+				const currentIdentity = sqliteFileIdentity(dbPath);
 				if (failure.identity === undefined || currentIdentity === undefined) {
 					throw new Error("could not verify the corrupt database file identity");
 				}
