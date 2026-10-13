@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Wladefant/superboard/workflows/portable/ci_receipt.schema.json",
+  "title": "CI Receipt & Manifest Specification v1",
+  "description": "JSON Schema specification for ci-receipt/v1 and ci-manifest/v1 trusted build evidence contracts",
+  "oneOf": [
+    { "$ref": "#/$defs/receipt" },
+    { "$ref": "#/$defs/manifest" }
+  ],
+  "$defs": {
+    "sha40": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}$",
+      "description": "40-character hexadecimal git commit SHA"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "64-character lowercase hexadecimal SHA-256 digest"
+    },
+    "target_id": {
+      "type": "string",
+      "pattern": "^(backend:backend/|frontend:frontend/|root:|node:)[A-Za-z0-9._@+][A-Za-z0-9._/@+-]*$",
+      "description": "Target ID in format <suite>:<repo-relative path>"
+    },
+    "test_case": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "target_id": { "$ref": "#/$defs/target_id" },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "skipped", "quarantined"]
+        },
+        "assertions": { "type": ["integer", "null"], "minimum": 0 },
+        "duration_ms": { "type": ["number", "null"], "minimum": 0 },
+        "failure_text": { "type": ["string", "null"] },
+        "failure_kind": { "type": ["string", "null"], "enum": ["failure", "error", null] },
+        "quarantine": { "type": "boolean" },
+        "file_path": { "type": ["string", "null"] },
+        "line_number": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "required": ["name", "status"],
+      "additionalProperties": true
+    },
+    "suite": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "target_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/target_id" },
+          "minItems": 1
+        },
+        "command": { "type": "string" },
+        "exit_code": { "type": "integer" },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "discovered": { "type": "integer", "minimum": 0 },
+            "executed": { "type": "integer", "minimum": 0 },
+            "passed": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "assertions": { "type": ["integer", "null"], "minimum": 0 },
+            "errors": { "type": ["integer", "null"], "minimum": 0 }
+          },
+          "required": [
+            "discovered",
+            "executed",
+            "passed",
+            "failed",
+            "skipped",
+            "assertions",
+            "errors"
+          ],
+          "additionalProperties": false
+        },
+        "duration_ms": { "type": ["number", "null"], "minimum": 0 },
+        "skip_reasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "quarantined_tests": {
+          "type": "array"
+        },
+        "tests": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/test_case" }
+        }
+      },
+      "required": ["name", "target_ids", "command", "exit_code", "counts"],
+      "additionalProperties": true
+    },
+    "artifact": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "kind": { "type": "string" },
+        "content_type": { "type": "string" }
+      },
+      "required": ["sha256", "size_bytes"],
+      "additionalProperties": true
+    },
+    "quarantine_entry": {
+      "type": "object",
+      "properties": {
+        "test_name": { "type": "string" },
+        "reason": { "type": "string" },
+        "approved_by": { "type": "string" },
+        "ticket": { "type": "string" }
+      },
+      "required": ["test_name", "reason", "approved_by"],
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "type": "string", "const": "ci-receipt/v1" },
+        "repo": { "type": "string", "pattern": "^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$" },
+        "request_id": { "type": "string", "minLength": 1 },
+        "build_id": { "type": "string", "minLength": 1 },
+        "trigger_id": { "type": "string", "minLength": 1 },
+        "candidate_sha": { "$ref": "#/$defs/sha40" },
+        "checkout_sha": { "$ref": "#/$defs/sha40" },
+        "base_sha": { "$ref": "#/$defs/sha40" },
+        "runner_digest": { "$ref": "#/$defs/sha256" },
+        "policy_digest": { "$ref": "#/$defs/sha256" },
+        "selection_digest": { "$ref": "#/$defs/sha256" },
+        "shard_id": { "type": "integer", "minimum": 1 },
+        "expected_shards": { "type": "integer", "minimum": 1 },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "incomplete", "infrastructure_error"]
+        },
+        "started_at": { "type": "string" },
+        "ended_at": { "type": "string" },
+        "suites": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/suite" },
+          "minItems": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "signature": { "type": ["string", "null"] },
+        "metadata": { "type": "object" }
+      },
+      "required": [
+        "schema_version",
+        "repo",
+        "request_id",
+        "build_id",
+        "trigger_id",
+        "candidate_sha",
+        "checkout_sha",
+        "base_sha",
+        "runner_digest",
+        "policy_digest",
+        "selection_digest",
+        "shard_id",
+        "expected_shards",
+        "status",
+        "started_at",
+        "ended_at",
+        "suites"
+      ],
+      "additionalProperties": true
+    },
+    "manifest": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "type": "string", "const": "ci-manifest/v1" },
+        "repo": { "type": "string" },
+        "candidate_sha": { "$ref": "#/$defs/sha40" },
+        "build_id": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string" },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "receipt_keys": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "manifest_sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "required": [
+        "schema_version",
+        "candidate_sha",
+        "build_id",
+        "artifacts",
+        "receipt_keys"
+      ],
+      "additionalProperties": true
+    }
+  }
+}
