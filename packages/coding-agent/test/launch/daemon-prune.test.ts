@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { TempDir } from "@veyyon/utils";
 import { getProcessStartTime } from "@veyyon/utils/process-liveness";
 import {
@@ -141,6 +142,8 @@ process.stdin.on("end", () => {
 		const idx = streamBuf.indexOf(target);
 		if (idx >= 0) {
 			streamBuf = streamBuf.slice(idx + target.length);
+		} else {
+			throw new Error(`Child endpoint listener exited before outputting ${JSON.stringify(target)}: ${streamBuf}`);
 		}
 	};
 	await readUntil("ready\n");
@@ -240,6 +243,9 @@ async function spawnClientRegistrationProcess(
 	options: { gateCandidate?: boolean } = {},
 ): Promise<LiveClientRegistrationProcess> {
 	const { env, cleanup } = hermeticSpawnEnv();
+	const repoRoot = path.resolve(import.meta.dir, "../../../..");
+	const presencePath = path.resolve(import.meta.dir, "../../src/launch/presence.ts");
+	const pathsPath = path.resolve(import.meta.dir, "../../src/launch/paths.ts");
 	const childScript = `
 const fsPromises = require("node:fs/promises");
 const origMkdir = fsPromises.mkdir;
@@ -261,8 +267,8 @@ fsPromises.mkdir = async function(...args) {
 };
 
 // Exception: ts-no-dynamic-import: child process must hook require("node:fs/promises").mkdir before module resolution
-const { registerDaemonProjectPresence } = await import("./packages/coding-agent/src/launch/presence");
-const { daemonBrokerLeasePath } = await import("./packages/coding-agent/src/launch/paths");
+const { registerDaemonProjectPresence } = await import(${JSON.stringify(pathToFileURL(presencePath).href)});
+const { daemonBrokerLeasePath } = await import(${JSON.stringify(pathToFileURL(pathsPath).href)});
 const { tryWithFileLock } = await import("@veyyon/utils/file-lock");
 
 let presenceHandle = null;
@@ -309,6 +315,7 @@ process.stdout.write("ready\\n");
 `;
 
 	const child = Bun.spawn([process.execPath, "-e", childScript], {
+		cwd: repoRoot,
 		env: {
 			...env,
 			CHILD_PROJECT_DIR: projectDir,
@@ -316,7 +323,7 @@ process.stdout.write("ready\\n");
 		},
 		stdin: "pipe",
 		stdout: "pipe",
-		stderr: "ignore",
+		stderr: "pipe",
 	});
 
 	const reader = child.stdout.getReader();
@@ -330,6 +337,12 @@ process.stdout.write("ready\\n");
 		const idx = streamBuf.indexOf(target);
 		if (idx >= 0) {
 			streamBuf = streamBuf.slice(idx + target.length);
+		} else {
+			let err = "";
+			try {
+				err = (await new Response(child.stderr).text()).trim();
+			} catch {}
+			throw new Error(`Child process exited before outputting ${JSON.stringify(target)}: stdout=${streamBuf}${err ? ` stderr=${err}` : ""}`);
 		}
 	};
 
@@ -372,7 +385,11 @@ process.stdout.write("ready\\n");
 			);
 		}
 		if (!streamBuf.includes("registered\n")) {
-			throw new Error(`Child process exited without registering: ${streamBuf}`);
+			let err = "";
+			try {
+				err = (await new Response(child.stderr).text()).trim();
+			} catch {}
+			throw new Error(`Child process exited without registering: stdout=${streamBuf}${err ? ` stderr=${err}` : ""}`);
 		}
 		const idx = streamBuf.indexOf("registered\n");
 		streamBuf = streamBuf.slice(idx + "registered\n".length);

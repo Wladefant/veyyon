@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse } from "@babel/parser";
@@ -39,9 +41,58 @@ export interface LegacyRenderer {
 	readonly mergeCallAndResult?: unknown;
 }
 
-// This commit contains the approved frozen renderers, including their import adaptations.
-// Their original production commits remain recorded in each historical file's header.
-export const ORACLE_SNAPSHOT_COMMIT = "81eee11283051f29967dbfc506b297d45fd375b1";
+interface OracleFixture {
+	readonly repoRoot: string;
+	readonly commit: string;
+}
+
+let cachedFixture: OracleFixture | null = null;
+
+export function getOracleFixture(): OracleFixture {
+	if (cachedFixture) return cachedFixture;
+
+	const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-oracle-fixture-"));
+
+	process.once("exit", () => {
+		try {
+			fs.rmSync(fixtureDir, { recursive: true, force: true });
+		} catch {}
+	});
+
+	const snapshotJsonPath = path.join(import.meta.dirname, "oracle-snapshot-fixture.json");
+	const files = JSON.parse(fs.readFileSync(snapshotJsonPath, "utf-8")) as Record<string, string>;
+
+	for (const [relPath, content] of Object.entries(files)) {
+		const targetFile = path.join(fixtureDir, relPath);
+		fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+		fs.writeFileSync(targetFile, content, "utf-8");
+	}
+
+	const execGit = (args: string[]) =>
+		execFileSync("git", args, {
+			cwd: fixtureDir,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+			timeout: 30_000,
+			windowsHide: true,
+		});
+
+	execGit(["init", "--quiet", "-b", "main"]);
+	execGit(["config", "user.name", "Oracle Fixture"]);
+	execGit(["config", "user.email", "oracle@fixture.local"]);
+	execGit(["config", "commit.gpgSign", "false"]);
+	execGit(["add", "."]);
+	execGit(["commit", "--quiet", "-m", "oracle fixture", "--no-gpg-sign"]);
+
+	const commit = execGit(["rev-parse", "HEAD"]).trim();
+
+	cachedFixture = { repoRoot: fixtureDir, commit };
+	return cachedFixture;
+}
+
+const fixture = getOracleFixture();
+export const ORACLE_REPO_ROOT = fixture.repoRoot;
+export const ORACLE_SNAPSHOT_COMMIT = fixture.commit;
 export const ORACLE_SOURCE_DIRECTORY = "packages/coding-agent/test/oracles";
 export const ORACLE_CACHE_DIRECTORY = path.join(
 	import.meta.dirname,
@@ -97,7 +148,7 @@ export const ORACLE_EXPORTS: Readonly<Record<string, readonly string[]>> = {
 	"write-main-renderer": ["mainWriteToolRenderer", "mainFormatStreamingContent"],
 };
 
-const snapshotTree = readGitTree(ORACLE_SNAPSHOT_COMMIT);
+const snapshotTree = readGitTree(ORACLE_SNAPSHOT_COMMIT, ORACLE_REPO_ROOT);
 
 function blobHash(content: Buffer): string {
 	return createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex");
@@ -109,7 +160,7 @@ function getPinnedExportSources(sourcePath: string, names: readonly string[]): s
 	if (entry?.type !== "blob") {
 		throw new Error(`Pinned helper source is absent from the approved snapshot: ${sourcePath}`);
 	}
-	const sourceBuffer = readGitFileBuffer(sourcePath, ORACLE_SNAPSHOT_COMMIT);
+	const sourceBuffer = readGitFileBuffer(sourcePath, ORACLE_SNAPSHOT_COMMIT, ORACLE_REPO_ROOT);
 	if (!sourceBuffer || blobHash(sourceBuffer) !== entry.sha) {
 		throw new Error(`Pinned helper Git blob mismatch: ${sourcePath}`);
 	}
@@ -262,7 +313,7 @@ export async function loadHistoricalOracle(
 	const sourcePath = `${ORACLE_SOURCE_DIRECTORY}/${name}.ts`;
 	const entry = snapshotTree.get(sourcePath);
 	if (entry?.type !== "blob") throw new Error(`Historical oracle is absent from the pinned snapshot: ${sourcePath}`);
-	const source = readGitFileBuffer(sourcePath, ORACLE_SNAPSHOT_COMMIT);
+	const source = readGitFileBuffer(sourcePath, ORACLE_SNAPSHOT_COMMIT, ORACLE_REPO_ROOT);
 	if (!source || blobHash(source) !== entry.sha) throw new Error(`Historical oracle Git blob mismatch: ${sourcePath}`);
 
 	fs.mkdirSync(cacheDirectory, { recursive: true });

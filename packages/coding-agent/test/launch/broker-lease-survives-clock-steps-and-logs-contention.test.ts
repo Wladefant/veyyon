@@ -60,8 +60,10 @@ function brokerPing(pid: number | undefined): Handlers {
 
 /** A real live process the lease can name; resolves once it is running. */
 async function liveChild(): Promise<{ pid: number; startedAt: number; kill: () => void }> {
+	const dir = await runtime();
 	const child = Bun.spawn([process.execPath, "-e", 'console.log("up"); setInterval(() => {}, 1000)'], {
 		stdio: ["ignore", "pipe", "ignore"],
+		env: { HOME: dir },
 	});
 	await child.stdout.getReader().read();
 	const startedAt = getProcessStartTime(child.pid);
