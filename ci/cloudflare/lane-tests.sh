@@ -104,10 +104,12 @@ fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-
     python3 "$1" "${proof_dir}.cpio"
   ' _ "$repo_root/ci/cloudflare/device-node-check.py"
 
-# Keep the checkout at its real host path. The sandbox runner relocates a checkout
-# under the hidden build user's home to /srv/veyyon; an alias under /tmp makes the
-# repository itself visible to the temp-directory janitor as stale test data.
-export VEYYON_SANDBOX_REPO_ROOT="$repo_root"
+# The bwrap rung binds the requested repository path verbatim. Use an alias outside
+# the hidden build user's home and TMPDIR: a /tmp alias is scanned as repository
+# data by the test temp-directory janitor, while the real checkout is under HOME.
+sandbox_root="$(mktemp -d /var/tmp/veyyon-workers-XXXXXX)"
+ln -s "$repo_root" "$sandbox_root/repo"
+export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
 sandbox_repo_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
 if [[ -z "$sandbox_repo_root" || "$sandbox_repo_root" == /tmp || "$sandbox_repo_root" == /tmp/* ]]; then
   echo "CLOUDFLARE_BWRAP_REPO_ROOT_INVALID path=${sandbox_repo_root:-empty}" >&2
