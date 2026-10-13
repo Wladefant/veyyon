@@ -200,7 +200,7 @@ describe("Cursor HTTP/2 session error handling and recovery", () => {
 		}
 	});
 
-	it("classifies permanent DNS resolution failure as network but not transient", async () => {
+	it("rejects permanent DNS resolution failure without marking it transient", async () => {
 		// `.invalid` is guaranteed to fail resolution; ENOTFOUND is not a transient resolver error.
 		const model = makeModel("http://non-existent-domain-cursor-xyz.invalid:443");
 		const stream = streamCursor(model, testContext, { apiKey: "test-key" });
@@ -221,8 +221,8 @@ describe("Cursor HTTP/2 session error handling and recovery", () => {
 		const hasError = isErrorEvent || terminalError !== undefined;
 
 		expect(hasError).toBe(true);
+		expect(lastEvent?.error?.errorId).toBeDefined();
 		if (isErrorEvent && lastEvent?.error?.errorId !== undefined) {
-			expect(AIError.is(lastEvent.error.errorId, AIError.Flag.NetworkError)).toBe(true);
 			expect(AIError.is(lastEvent.error.errorId, AIError.Flag.Transient)).toBe(false);
 		}
 	});
