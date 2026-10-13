@@ -14,8 +14,6 @@
  */
 
 import { createHash } from "node:crypto";
-import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { SynchronizedSession } from "../checkpoints/synchronized-session";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -84,6 +82,8 @@ import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
+import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
+import { SynchronizedSession } from "../checkpoints/synchronized-session";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
 import { assistantText } from "@veyyon/ai/utils/message-text";
@@ -1569,7 +1569,6 @@ export class AgentSession {
 	agentGrantedThisTurn(agentName: string): boolean {
 		return this.#grantedAgents.has(agentName);
 	}
-
 
 	/**
 	 * Arm prewalk outside the normal startup path (the `/prewalk` slash command). See
@@ -3692,6 +3691,18 @@ export class AgentSession {
 		return this.#scope.run(() => this.#scope.rescope(cwd));
 	}
 
+	/** Re-read rule files and skills through the same discovery path as a working-directory move. */
+	reloadRules(): Promise<string[]> {
+		return this.#scope.run(async () => {
+			if (!this.#config.reloadProjectInputs) {
+				return ["Rule discovery is not configured for this session."];
+			}
+			const lines = await this.#config.reloadProjectInputs();
+			await this.refreshBaseSystemPrompt("rules-reload");
+			return lines;
+		});
+	}
+
 	/**
 	 * Re-root the live session working directory for this session only.
 	 * Updates SessionManager cwd + header, aligns process project dir, re-scopes
@@ -5461,7 +5472,9 @@ export class AgentSession {
 					return previous?.(context, signal);
 				};
 				this.#listenerReleases.push(() => {
-					void this.#cloudOwnership!.close().catch(error => logger.warn("Cloud ownership release failed", { error: errorMessage(error) }));
+					void this.#cloudOwnership!.close().catch(error =>
+						logger.warn("Cloud ownership release failed", { error: errorMessage(error) }),
+					);
 				});
 			}
 			await this.#cloudOwnership.admit();
