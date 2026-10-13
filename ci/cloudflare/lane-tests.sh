@@ -4,6 +4,22 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
+shard_branch="${WORKERS_CI_BRANCH:-}"
+case "$shard_branch" in
+  cf-ci/veyyon-workers) shard_index=1 ;;
+  cf-ci/veyyon-workers-shard-2) shard_index=2 ;;
+  cf-ci/veyyon-workers-shard-3) shard_index=3 ;;
+  *)
+    echo "CLOUDFLARE_CI_SHARD_INVALID branch=${shard_branch:-unset}; expected a registered shard branch." >&2
+    exit 1
+    ;;
+esac
+shard_spec="$shard_index/3"
+echo "CLOUDFLARE_CI_SHARD branch=$shard_branch shard=$shard_spec"
+SECONDS=0
+setup_seconds=0
+
+
 expected_bun="$(node -p "require('./package.json').packageManager.split('@')[1]")"
 if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" ]]; then
   echo "Installing repository-pinned Bun $expected_bun for the Workers Builds container."
@@ -12,6 +28,10 @@ fi
 bun --version
 bun install --frozen-lockfile
 bun run check:ts
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=dependencies-and-types seconds=$phase_seconds"
+SECONDS=0
 
 if ! command -v fd >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1 || \
   ! command -v magick >/dev/null 2>&1 || \
@@ -35,6 +55,10 @@ if ! command -v fd >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1 || \
     fi
   fi
 fi
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=system-dependencies seconds=$phase_seconds"
+SECONDS=0
 
 if ! command -v rustup >/dev/null 2>&1; then
   command -v curl >/dev/null 2>&1 || {
@@ -69,8 +93,16 @@ if ! command -v cargo-zigbuild >/dev/null 2>&1; then
 fi
 zig version
 cargo-zigbuild --version
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=rust-zig-toolchain seconds=$phase_seconds"
+SECONDS=0
 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
   TARGET_VARIANTS='baseline modern' bun run ci:build:native
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=native-addon-build seconds=$phase_seconds"
+SECONDS=0
 # Workers Builds cannot start Docker containers. Install the existing bwrap
 # rung tools into a repo-local directory without requiring root or a host fallback.
 proof_tools="$repo_root/.cf-proof-tools"
@@ -124,6 +156,10 @@ if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
   echo "CLOUDFLARE_BWRAP_BUN_CHILD_FAILED" >&2
   exit 1
 fi
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=bwrap-bootstrap seconds=$phase_seconds"
+echo "CLOUDFLARE_SETUP_TOTAL seconds=$setup_seconds"
 echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Quiet mode emits real Bun case
@@ -145,6 +181,7 @@ chunk_passes=0
 chunk_failures=0
 run_bucket() {
   local mode="$1"
+  local bucket_started_seconds=$SECONDS
   echo "CLOUDFLARE_TEST_BUCKET_START $mode"
   local bucket_report_dir="$test_report_root/$mode"
   local sandbox_report_dir="$sandbox_test_report_root/$mode"
@@ -153,11 +190,22 @@ run_bucket() {
   bucket_log="$(mktemp)"
   local bucket_status=0
   if bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
-    'export PATH="$1:$PATH"; export VEYYON_TEST_CONCURRENCY=2; shift; exec "$@"' _ "$runtime_bin_dir" \
+    'export PATH="$1:$PATH"; export VEYYON_TEST_CONCURRENCY=2; export VEYYON_CI_TEST_SHARD="$2"; shift 2; exec "$@"' _ "$runtime_bin_dir" "$shard_spec" \
     "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" "--junit-report-dir=$sandbox_report_dir" 2>&1 | tee "$bucket_log"; then
     :
   else
     bucket_status=$?
+  fi
+  if awk '/^CLOUDFLARE_CI_TEST_SHARD_DEFERRED / { found = 1 } END { exit !found }' "$bucket_log"; then
+    if (( bucket_status != 0 )); then
+      echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=$bucket_status despite deferred marker" >&2
+      rm -f "$bucket_log"
+      return "$bucket_status"
+    fi
+    awk '/^CLOUDFLARE_CI_TEST_SHARD_DEFERRED / { print }' "$bucket_log"
+    echo "CLOUDFLARE_TEST_BUCKET_DEFERRED mode=$mode shard=$shard_spec"
+    rm -f "$bucket_log"
+    return 0
   fi
   local report_status=0
   python3 ci/cloudflare/check-test-skips.py report "$bucket_report_dir" || report_status=$?
@@ -201,6 +249,8 @@ run_bucket() {
   test_reported=$((test_reported + bucket_reported))
   test_files=$((test_files + bucket_files))
   test_runs=$((test_runs + bucket_runs))
+  local bucket_elapsed_seconds=$((SECONDS - bucket_started_seconds))
+  echo "CLOUDFLARE_TEST_BUCKET_DURATION mode=$mode seconds=$bucket_elapsed_seconds"
   echo "CLOUDFLARE_TEST_BUCKET_END $mode chunks_pass=$bucket_chunk_passes chunks_fail=$bucket_chunk_failures pass=$bucket_passes fail=$bucket_failures skip=$bucket_skips todo=$bucket_todos reported=$bucket_reported files=$bucket_files runs=$bucket_runs junit_reports=$bucket_junit_reports"
   rm -f "$bucket_log"
   local bucket_tests=$((bucket_passes + bucket_failures + bucket_skips + bucket_todos))
@@ -218,36 +268,40 @@ run_bucket() {
   echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=1 summaries=$bucket_summaries" >&2
   return 1
 }
-echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
-worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
-  worker_status=$?
+if (( shard_index == 1 )); then
+  echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
+  worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
+    worker_status=$?
+    printf '%s\n' "$worker_output"
+    exit "$worker_status"
+  }
   printf '%s\n' "$worker_output"
-  exit "$worker_status"
-}
-printf '%s\n' "$worker_output"
-read -r worker_tests worker_passes worker_failures worker_skips worker_todos worker_cancelled < <(
-  awk '
-    /^# tests [0-9]+$/ { tests = $3 }
-    /^# pass [0-9]+$/ { passes = $3 }
-    /^# fail [0-9]+$/ { failures = $3 }
-    /^# skipped [0-9]+$/ { skips = $3 }
-    /^# todo [0-9]+$/ { todos = $3 }
-    /^# cancelled [0-9]+$/ { cancelled = $3 }
-    END { printf "%d %d %d %d %d %d\n", tests, passes, failures, skips, todos, cancelled }
-  ' <<< "$worker_output"
-)
-test_passes=$((test_passes + worker_passes))
-test_failures=$((test_failures + worker_failures + worker_cancelled))
-test_skips=$((test_skips + worker_skips))
-test_todos=$((test_todos + worker_todos))
-test_reported=$((test_reported + worker_tests))
-test_files=$((test_files + 1))
-test_runs=$((test_runs + 1))
-echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=1 runs=1"
-if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
-      worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
-  echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2
-  exit 1
+  read -r worker_tests worker_passes worker_failures worker_skips worker_todos worker_cancelled < <(
+    awk '
+      /^# tests [0-9]+$/ { tests = $3 }
+      /^# pass [0-9]+$/ { passes = $3 }
+      /^# fail [0-9]+$/ { failures = $3 }
+      /^# skipped [0-9]+$/ { skips = $3 }
+      /^# todo [0-9]+$/ { todos = $3 }
+      /^# cancelled [0-9]+$/ { cancelled = $3 }
+      END { printf "%d %d %d %d %d %d\n", tests, passes, failures, skips, todos, cancelled }
+    ' <<< "$worker_output"
+  )
+  test_passes=$((test_passes + worker_passes))
+  test_failures=$((test_failures + worker_failures + worker_cancelled))
+  test_skips=$((test_skips + worker_skips))
+  test_todos=$((test_todos + worker_todos))
+  test_reported=$((test_reported + worker_tests))
+  test_files=$((test_files + 1))
+  test_runs=$((test_runs + 1))
+  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=1 runs=1"
+  if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
+        worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
+    echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2
+    exit 1
+  fi
+else
+  echo "CLOUDFLARE_TEST_BUCKET_DEFERRED mode=health-worker shard=$shard_spec"
 fi
 
 # `coding-agent-heavy` aggregates the four following coding-agent buckets. Run
@@ -263,7 +317,7 @@ run_bucket scripts
 # Require real test cases and matching test-runner totals; chunk completion is reported separately.
 test_total=$((test_passes + test_failures + test_skips + test_todos))
 skip_allowlist_status=0
-if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --expected-total "$junit_test_skips"; then
+if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --shard "$shard_spec" --expected-total "$junit_test_skips"; then
   echo 'CLOUDFLARE_SKIP_ALLOWLIST=passed'
 else
   skip_allowlist_status=$?
@@ -278,15 +332,18 @@ if (( test_total == 0 || test_passes == 0 || test_failures != 0 || \
 fi
 echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures skip=$test_skips todo=$test_todos tests=$test_total reported=$test_reported files=$test_files runs=$test_runs chunks_pass=$chunk_passes chunks_fail=$chunk_failures"
 
-# Cargo comes from the pinned Rustup installation above; compiler failures are fatal.
-bun run check:rs
-echo 'CLOUDFLARE_RUST_BUILD=passed'
-
-# Build the production Linux x64 CLI binary using the release's canonical compiler.
-RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
-npx --yes wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc
-
-echo 'CLOUDFLARE_WORKER_UPLOAD=passed'
 if (( skip_allowlist_status != 0 )); then
   exit "$skip_allowlist_status"
+fi
+if (( shard_index == 1 )); then
+  # Run repository-wide release gates once across the three-shard proof set.
+  bun run check:rs
+  echo 'CLOUDFLARE_RUST_BUILD=passed'
+
+  RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
+  npx --yes wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc
+  echo 'CLOUDFLARE_WORKER_UPLOAD=passed'
+else
+  echo "CLOUDFLARE_SHARD_DEFERRED gate=check:rs shard=$shard_spec"
+  echo "CLOUDFLARE_SHARD_DEFERRED gate=release-build-and-upload shard=$shard_spec"
 fi

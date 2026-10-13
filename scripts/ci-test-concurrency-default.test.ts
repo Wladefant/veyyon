@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { testConcurrency } from "./ci-test-ts";
+import { parseCiTestShard, partitionTestCommands, testConcurrency } from "./ci-test-ts";
 
 /**
  * How many test chunks run at once.
@@ -13,10 +13,13 @@ import { testConcurrency } from "./ci-test-ts";
  */
 describe("local test concurrency", () => {
 	const original = Bun.env.VEYYON_TEST_CONCURRENCY;
+	const originalCI = Bun.env.CI;
 
 	afterEach(() => {
 		if (original === undefined) delete Bun.env.VEYYON_TEST_CONCURRENCY;
 		else Bun.env.VEYYON_TEST_CONCURRENCY = original;
+		if (originalCI === undefined) delete Bun.env.CI;
+		else Bun.env.CI = originalCI;
 	});
 
 	it("runs one chunk at a time by default, however many chunks there are", () => {
@@ -26,6 +29,16 @@ describe("local test concurrency", () => {
 		expect(testConcurrency(1)).toBe(1);
 		expect(testConcurrency(96)).toBe(1);
 		expect(testConcurrency(1000)).toBe(1);
+	});
+
+	it("defaults to one in CI but honors a safe explicit override", () => {
+		Bun.env.CI = "true";
+		delete Bun.env.VEYYON_TEST_CONCURRENCY;
+		expect(testConcurrency(96)).toBe(1);
+		Bun.env.VEYYON_TEST_CONCURRENCY = "2";
+		expect(testConcurrency(96)).toBe(2);
+		Bun.env.VEYYON_TEST_CONCURRENCY = "invalid";
+		expect(testConcurrency(96)).toBe(1);
 	});
 
 	it("honors an explicit numeric opt-in, capped at the number of chunks", () => {
@@ -48,5 +61,23 @@ describe("local test concurrency", () => {
 			Bun.env.VEYYON_TEST_CONCURRENCY = bad;
 			expect({ bad, workers: testConcurrency(96) }).toEqual({ bad, workers: 1 });
 		}
+	});
+});
+
+describe("Cloudflare test command sharding", () => {
+	const commands = Array.from({ length: 17 }, (_, index) => ({ label: `command-${index}` }));
+
+	it("assigns each command to exactly one shard", () => {
+		const shards = [1, 2, 3].map(index => partitionTestCommands(commands, { index, count: 3 }));
+		expect(shards.map(shard => shard.length)).toEqual([6, 6, 5]);
+		expect(shards.flat().map(command => command.label).sort()).toEqual(commands.map(command => command.label).sort());
+	});
+
+	it("parses one-based shard specifications and rejects invalid values", () => {
+		expect(parseCiTestShard("2/3")).toEqual({ index: 2, count: 3 });
+		expect(parseCiTestShard(undefined)).toBeUndefined();
+		expect(() => parseCiTestShard("0/3")).toThrow();
+		expect(() => parseCiTestShard("4/3")).toThrow();
+		expect(() => parseCiTestShard("2/0")).toThrow();
 	});
 });

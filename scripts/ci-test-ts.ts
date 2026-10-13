@@ -410,6 +410,7 @@ export const repoScriptTests = [
 	"scripts/record-conformance.test.ts",
 	"scripts/ci-test-real-data-guard.test.ts",
 	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/check-test-skips.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
 	"scripts/fix-changelogs.test.ts",
 	"scripts/require-changelog.test.ts",
@@ -1089,15 +1090,13 @@ function chunkTimeoutMs(): number {
 	return 600_000;
 }
 
-// The standard `CI` signal is authoritative. In CI each bucket is its own
-// memory-capped runner job (a single fat invocation gets OOM-killed at 137), so
-// chunks run sequentially within a job and parallelism happens across jobs.
-// Locally we trade memory for wall-clock and fan the chunks out across cores.
+// Each CI test bucket runs inside its own memory-capped runner job. Keep
+// command concurrency at one by default; a runner may opt in to a wider fanout
+// only after its memory headroom has been measured.
 
-// Fan-out width for the local parallel path, clamped to the command count.
-// Defaults to the machine's available parallelism; `VEYYON_TEST_CONCURRENCY`
-// overrides it — a positive integer to pick an exact width (dial down on a
-// memory-constrained laptop), or `all`/`max` to launch every chunk at once.
+// Fan-out width for test commands, clamped to the command count. The explicit
+// VEYYON_TEST_CONCURRENCY override accepts a positive integer or `all`/`max`;
+// without a valid override, the safe default is one in CI and locally.
 export function testConcurrency(total: number): number {
 	const raw = Bun.env.VEYYON_TEST_CONCURRENCY?.trim().toLowerCase();
 	if (raw === "all" || raw === "max") {
@@ -1115,6 +1114,27 @@ export function testConcurrency(total: number): number {
 	// still working on that same machine. Opt into fanout with
 	// VEYYON_TEST_CONCURRENCY=<n> (or `all`), which is what CI should set.
 	return 1;
+}
+
+export interface CiTestShard {
+	index: number;
+	count: number;
+}
+
+export function parseCiTestShard(value: string | undefined): CiTestShard | undefined {
+	if (value === undefined) return undefined;
+	const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value.trim());
+	if (!match) throw new Error(`Invalid VEYYON_CI_TEST_SHARD ${JSON.stringify(value)}; expected <index>/<count>`);
+	const index = Number(match[1]);
+	const count = Number(match[2]);
+	if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count) || index > count) {
+		throw new Error(`Invalid VEYYON_CI_TEST_SHARD ${JSON.stringify(value)}; shard index must be within its count`);
+	}
+	return { index, count };
+}
+
+export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestShard): T[] {
+	return commands.filter((_, index) => index % shard.count === shard.index - 1);
 }
 
 // ANSI styling for interactive runs only; disabled when stdout is not a TTY or
@@ -1680,10 +1700,18 @@ if (import.meta.main) {
 	}
 
 	await ensureToolViewsGenerated();
-	const testCommands = await commandsForMode(requestedMode as Mode);
-	// Ordinary CI is sequential and fail-fast. JUnit collection keeps CI sequential,
-	// but runs every child command so a failed chunk cannot hide later reports.
-	// Local runs may fan independent chunks out across cores.
+	const availableTestCommands = await commandsForMode(requestedMode as Mode);
+	const testShard = parseCiTestShard(Bun.env.VEYYON_CI_TEST_SHARD);
+	const testCommands = testShard ? partitionTestCommands(availableTestCommands, testShard) : availableTestCommands;
+	if (testShard && testCommands.length === 0) {
+		console.log(
+			`CLOUDFLARE_CI_TEST_SHARD_DEFERRED mode=${requestedMode} shard=${testShard.index}/${testShard.count} ` +
+				`available_commands=${availableTestCommands.length}`,
+		);
+	}
+	// CI may set an explicit command concurrency. JUnit collection still runs every
+	// selected command so one failed chunk cannot hide later reports. Local runs
+	// may fan independent chunks out across cores only when opted in.
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
 	// child, and the tripwire preload) are meant to make real-data writes
 	// impossible, but a safety mechanism believed to work and never checked is how
@@ -1696,7 +1724,7 @@ if (import.meta.main) {
 
 	try {
 		if (!isDryRun && testCommands.length > 1 && (!isCI() || junitReportDir)) {
-			const concurrency = isCI() ? 1 : testConcurrency(testCommands.length);
+			const concurrency = testConcurrency(testCommands.length);
 			await runTestCommandsInParallel(testCommands, concurrency);
 		} else {
 			for (const testCommand of testCommands) {
