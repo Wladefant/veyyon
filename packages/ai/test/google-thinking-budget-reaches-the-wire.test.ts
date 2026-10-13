@@ -25,7 +25,7 @@ import type { Model } from "@veyyon/ai/types";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel, getBundledModels } from "@veyyon/catalog/models";
 
-/** The efforts every row in this suite advertises. */
+/** The efforts the sentinel sweep tries on every row; a row refuses the ones it does not advertise. */
 const EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] as const;
 
 /** `it.each` widens its columns to `string`; the catalog wants the provider union. */
@@ -88,7 +88,11 @@ describe("Google thinking budgets reach the wire", () => {
 		const model = bundledRow(provider, id);
 		expect(model, `${provider}/${id} is missing from the bundled catalog`).toBeDefined();
 
-		for (const effort of EFFORTS) {
+		// Every effort the row advertises, so a ladder upstream narrows stays covered: an effort the
+		// row never offered is refused by the ladder check before the budget is ever computed.
+		const advertised = model.thinking?.efforts ?? [];
+		expect(advertised.length).toBeGreaterThan(0);
+		for (const effort of advertised) {
 			expect(() => budgetFor(model, effort)).toThrow(/does not accept a thinking budget/);
 		}
 		// The message has to be actionable, not just loud: it names the row and a way forward.
