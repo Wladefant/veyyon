@@ -98,12 +98,38 @@ describe("an idle process samples its stack ten times less often", () => {
 	test("a process idle past the stretch keeps the busy interval until its profile is full", async () => {
 		// The last busy tick was 20s ago; the profile restarted when the start settled.
 		const sampler = await startedSampler(performance.now() - 20_000);
-		sampler.quiet(performance.now() + 5_000, false);
-		// The profile was not full, so going idle queued no restart: the hold runs on the busy profile.
-		const from = performance.now();
-		holdTheLoopForMs(500);
-		const stacks = await sampler.stacksBetween(from, performance.now());
-		expect(stacks?.samples).toBeGreaterThanOrEqual(BUSY_MIN);
+		let nowValue = performance.now();
+		let scheduled: (() => void) | undefined;
+		const watchdog = new LoopWatchdog({
+			now: () => nowValue,
+			schedule: cb => {
+				scheduled = cb;
+				return {};
+			},
+			cpuUsage: () => ({ user: 0, system: 0 }),
+			stacks: sampler,
+			parkAfterMs: 1_000_000,
+		});
+		watchdog.start();
+
+		// Record initial samples so we can distinguish profile retention from replacement.
+		holdTheLoopForMs(300);
+
+		// A quiet tick 5s in: the profile is not full (10s), so going idle queues no restart.
+		nowValue += 5_000;
+		scheduled!();
+		const kept = await sampler.stacksBetween(0, performance.now());
+		expect(kept?.samples).toBeGreaterThan(0);
+		expect(await samplesInHold(sampler, 600)).toBeGreaterThanOrEqual(BUSY_MIN);
+
+		// Once the profile is full (10s at busy interval), the quiet tick replaces it with the idle interval.
+		nowValue += 5_000;
+		scheduled!();
+		const rotated = await sampler.stacksBetween(0, performance.now());
+		expect(rotated?.samples).toBe(0);
+		expect(await samplesInHold(sampler)).toBeLessThanOrEqual(IDLE_MAX);
+
+		watchdog.stop();
 	});
 
 	test("one busy tick restores the busy interval without waiting for a rotation", async () => {

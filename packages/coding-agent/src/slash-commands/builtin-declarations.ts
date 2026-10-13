@@ -147,7 +147,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{
 				name: "use",
 				description:
-					"Switch a provider to one account for this session (or everywhere on this machine with load balancing off)",
+					"Switch a provider to one account for this session (or everywhere with load balancing off)",
 				usage: "<provider> <account>",
 			},
 			{ name: "name", description: "Name this session's active account for its provider", usage: "<text>" },
