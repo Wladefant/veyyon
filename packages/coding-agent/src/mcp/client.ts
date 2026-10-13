@@ -12,8 +12,11 @@ import { describeMCPTimeout, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "./
 import { MAX_TOOL_LIST_PAGES, validateToolListPage } from "./tool-list-validation";
 import { createHttpTransport } from "./transports/http";
 import { createSseTransport } from "./transports/sse";
-import { createStdioTransport, StdioTransport } from "./transports/stdio";
 import type {
+	MCPEventDescriptor,
+	MCPEventOccurrence,
+	MCPEventsListResult,
+	MCPEventsPollResult,
 	MCPGetPromptParams,
 	MCPGetPromptResult,
 	MCPHttpServerConfig,
@@ -282,6 +285,63 @@ async function listAllPages<Result, Item>(
 
 	return items;
 }
+
+/** List event types advertised by a draft-capable server. */
+export async function listEvents(
+	connection: MCPServerConnection,
+	options?: { signal?: AbortSignal },
+): Promise<MCPEventDescriptor[]> {
+	if (!connection.capabilities.events) return [];
+	return listAllPages(connection, "events/list", "events", options, (raw: unknown) => {
+		if (!raw || typeof raw !== "object" || !Array.isArray((raw as MCPEventsListResult).events)) {
+			throw new Error(`MCP server "${connection.name}" returned an invalid events/list page`);
+		}
+		const page = raw as MCPEventsListResult;
+		for (const event of page.events) {
+			if (
+				typeof event?.name !== "string" ||
+				!Array.isArray(event.delivery) ||
+				event.delivery.some(mode => mode !== "poll" && mode !== "push" && mode !== "webhook")
+			) {
+				throw new Error(`MCP server "${connection.name}" returned an invalid event descriptor`);
+			}
+		}
+		return { items: page.events, nextCursor: page.nextCursor };
+	});
+}
+
+/** Fetch one page of events; callers own scheduling and cursor persistence. */
+export async function pollEvents(
+	connection: MCPServerConnection,
+	name: string,
+	args: Record<string, unknown>,
+	cursor: string | null,
+	options?: MCPRequestOptions,
+): Promise<MCPEventsPollResult> {
+	if (!connection.capabilities.events) throw new Error(`MCP server "${connection.name}" does not advertise events`);
+	const result = await connection.transport.request<MCPEventsPollResult>(
+		"events/poll",
+		{ name, arguments: args, cursor },
+		options,
+	);
+	if (!result || !Array.isArray(result.events)) {
+		throw new Error(`MCP server "${connection.name}" returned an invalid events/poll result`);
+	}
+	for (const event of result.events as MCPEventOccurrence[]) {
+		if (
+			typeof event?.eventId !== "string" ||
+			typeof event.name !== "string" ||
+			typeof event.timestamp !== "string" ||
+			!event.data ||
+			typeof event.data !== "object" ||
+			Array.isArray(event.data)
+		) {
+			throw new Error(`MCP server "${connection.name}" returned an invalid event occurrence`);
+		}
+	}
+	return result;
+}
+
 
 /**
  * List tools from a connected server.

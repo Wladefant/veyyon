@@ -173,6 +173,7 @@ export interface MCPServerCapabilities {
 	tools?: { listChanged?: boolean };
 	resources?: { subscribe?: boolean; listChanged?: boolean };
 	prompts?: { listChanged?: boolean };
+	events?: { listChanged?: boolean };
 	logging?: Record<string, never>;
 	experimental?: Record<string, unknown>;
 }
@@ -190,6 +191,38 @@ export interface MCPInitializeResult {
 	capabilities: MCPServerCapabilities;
 	serverInfo: MCPImplementation;
 	instructions?: string;
+}
+
+/** Draft MCP Events descriptor. */
+export interface MCPEventDescriptor {
+	name: string;
+	description?: string;
+	delivery: Array<"poll" | "push" | "webhook">;
+	inputSchema: Record<string, unknown>;
+	payloadSchema: Record<string, unknown>;
+	_meta?: Record<string, unknown>;
+}
+
+export interface MCPEventOccurrence {
+	eventId: string;
+	name: string;
+	timestamp: string;
+	data: Record<string, unknown>;
+	cursor?: string | null;
+	_meta?: Record<string, unknown>;
+}
+
+export interface MCPEventsListResult {
+	events: MCPEventDescriptor[];
+	nextCursor?: string;
+}
+
+export interface MCPEventsPollResult {
+	events: MCPEventOccurrence[];
+	cursor?: string | null;
+	truncated?: boolean;
+	hasMore?: boolean;
+	nextPollMs?: number;
 }
 
 /** MCP tool definition */

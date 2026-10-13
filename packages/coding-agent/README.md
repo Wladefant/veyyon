@@ -11,6 +11,7 @@ Package-specific references:
 - [MCP configuration guide](../../docs/handbook/src/reference/mcp-config.md)
 - [MCP runtime lifecycle](../../docs/internal/mcp-runtime-lifecycle.md)
 - [MCP server/tool authoring](../../docs/internal/mcp-server-tool-authoring.md)
+- [MCP Events draft status](./docs/mcp-events-draft.md)
 - [DEVELOPMENT](./DEVELOPMENT.md)
 
 ## Memory backends
