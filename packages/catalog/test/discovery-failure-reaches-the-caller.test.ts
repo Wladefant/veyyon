@@ -66,6 +66,7 @@ async function refreshCollecting(
 		providerId: "openai",
 		staticModels: [],
 		cacheDbPath: path.join(mkdtempSync(path.join(tmpdir(), "veyyon-catalog-failure-")), "models.db"),
+		modelsDev: { fetch: async () => null, map: () => [] },
 		fetchDynamicModels,
 		onDiscoveryFailure: failure => failures.push(failure),
 	});
