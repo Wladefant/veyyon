@@ -196,6 +196,7 @@ export function gitLabDuoWorkflowModelManagerOptions(
 							onFailure: hooks?.onFailure,
 						});
 					},
+				}
 			: undefined),
 	};
 }

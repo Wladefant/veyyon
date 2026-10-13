@@ -68,6 +68,7 @@ export function googleAntigravityModelManagerOptions(
 							onFailure: hooks?.onFailure,
 						});
 					},
+				}
 			: undefined),
 	};
 }

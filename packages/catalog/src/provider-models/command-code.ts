@@ -284,4 +284,5 @@ export function commandCodeModelManagerOptions(
 				fetch: config?.fetch,
 			});
 		},
+	};
 }
