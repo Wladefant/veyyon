@@ -114,6 +114,7 @@ jobs:
           # Full history: the base commit below has to be reachable, and the
           # fallback scan needs every commit.
           fetch-depth: 0
+          filter: blob:none
       - name: Install gitleaks
         env:
           GITLEAKS_VERSION: 8.30.0
@@ -164,6 +165,7 @@ jobs:
         with:
           # Full history so the merge-base against the base ref resolves.
           fetch-depth: 0
+          filter: blob:none
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: Require a changelog entry for changed source
         env:
@@ -209,6 +211,7 @@ jobs:
         with:
           # Full history so the base commit below is reachable for the diff.
           fetch-depth: 0
+          filter: blob:none
       # The shared install composite, not a bare `bun install`, because it also
       # materializes the gitignored `tool-views.generated.js`. Without it any
       # changed suite that reaches `src/export/html` dies at module PARSE time
@@ -301,6 +304,7 @@ jobs:
           # The release and changelog gates diff against history. A shallow clone
           # gives them one commit and they pass by having nothing to compare.
           fetch-depth: 0
+          filter: blob:none
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # The composite generates src/export/html/tool-views.generated.js. That file is
       # gitignored, and any suite reaching the html exporter dies at parse time without it.
