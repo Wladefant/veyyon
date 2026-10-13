@@ -227,6 +227,8 @@ if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + wor
   exit 1
 fi
 
+# `coding-agent-heavy` aggregates the four following coding-agent buckets. Run
+# their named CI buckets once each instead of repeating the same assertions.
 run_bucket workspace
 run_bucket native
 run_bucket coding-agent-singleton
@@ -234,7 +236,6 @@ run_bucket coding-agent-ui
 run_bucket coding-agent-runtime
 run_bucket coding-agent-native
 run_bucket scripts
-run_bucket coding-agent-heavy
 
 # Require real test cases and matching test-runner totals; chunk completion is reported separately.
 test_total=$((test_passes + test_failures + test_skips + test_todos))
