@@ -1511,12 +1511,13 @@ function rejectRpcFileArguments(parsedArgs: Args): void {
  * `--no-extensions` turns off discovery of extensions the operator did not
  * name; a path named on the command line loads in full either way.
  */
-function startPluginPreload(parsedArgs: Args): Promise<void> {
+export function startPluginPreload(parsedArgs: Args): Promise<void> {
 	const home = os.homedir();
-	const pluginPreloadPromise =
+	const pluginPreloadPromise = (
 		parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0
 			? logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs, getProjectDir())
-			: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir());
+			: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir())
+	).then(() => {});
 	// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
 	// warning before the caller reaches its await site.
 	pluginPreloadPromise.catch(() => {});
@@ -1525,7 +1526,7 @@ function startPluginPreload(parsedArgs: Args): Promise<void> {
 	if (cliExtensions.length > 0) {
 		injectVeyyonExtensionCliRoots(cliExtensions, home, getProjectDir());
 	}
-	return pluginPreloadPromise.then(() => {});
+	return pluginPreloadPromise;
 }
 
 /** The launch's settings, and whether the profile's `session.workdir` moved the project root. */
