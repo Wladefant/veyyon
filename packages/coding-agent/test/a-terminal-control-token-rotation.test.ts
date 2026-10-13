@@ -8,23 +8,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	serveTerminalControl,
+	type TerminalControlOptions,
 	type TerminalControlTarget,
 	type TerminalOwner,
 } from "../src/launch/terminal-control";
 
-/**
- * Options supported by serveTerminalControl.
- * Parent implementation will accept optional writeOwner for deterministic failure injection.
- */
-export interface TerminalControlOptions {
-	writeOwner?: (recordPath: string, record: TerminalOwner) => Promise<void>;
-}
-
-const serve = serveTerminalControl as unknown as (
-	target: TerminalControlTarget,
-	root?: string,
-	options?: TerminalControlOptions,
-) => Promise<() => void>;
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -78,7 +66,7 @@ async function createFixture(
 		...targetOverrides,
 	};
 
-	const close = await serve(target, root, options);
+	const close = await serveTerminalControl(target, root, options);
 	cleanup.push(close);
 
 	return {
