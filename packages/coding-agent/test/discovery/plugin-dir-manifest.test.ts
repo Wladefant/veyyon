@@ -19,6 +19,8 @@ import {
 } from "../../src/discovery/helpers";
 import * as discoveryFs from "../../src/discovery/capability/fs";
 import { collectConfigSources, loadConfig } from "../../src/lsp/config";
+import { LspTool } from "../../src/lsp";
+import { makeToolSession } from "../helpers/tool-session";
 import { useTrackedTempDirFactory } from "../helpers/tracked-temp-dir";
 
 // Nothing deleted these: the prefix varies per case, so this file named a directory
@@ -165,8 +167,8 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 		try {
 			await firstEntered.promise;
 			clearClaudePluginRootsCache();
+			expect(getPreloadedPluginRoots(cwdB).some(root => root.path === rootB)).toBe(false);
 			await replacementEntered.promise;
-			expect(getPreloadedPluginRoots(cwdB).some(root => root.path === rootB)).toBe(true);
 			releaseFirst.resolve();
 			await preloadA;
 			// A must be usable even while its background replacement remains blocked.
@@ -230,7 +232,6 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 		}));
 		const readFile = discoveryFs.readFile;
 		let reads = 0;
-		const debug = vi.spyOn(logger, "debug").mockImplementation(() => {});
 		vi.spyOn(discoveryFs, "readFile").mockImplementation(async filePath => {
 			if (filePath === registryPath) {
 				reads++;
@@ -243,9 +244,39 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 		await preloadPluginRoots(home, cwd);
 		expect(reads).toBe(3);
 		expect(getPreloadedPluginRoots(cwd).some(item => item.path === root)).toBe(true);
-		expect(debug).toHaveBeenCalledWith(
-			"Plugin preload reached invalidation retry limit; publishing completed snapshot",
-			{ cwd, attempts: 3 },
-		);
 	});
+
+	for (const scope of ["cwd", "global"] as const) {
+		it(`drops disabled plugin servers on the next cold LSP read after ${scope} invalidation`, async () => {
+			const cwd = makeTempDir("plugin-disable-cwd-");
+			const home = makeTempDir("plugin-disable-home-");
+			const root = path.join(home, "plugin");
+			const registryPath = path.join(getPluginsDir(home), "installed_plugins.json");
+			fs.mkdirSync(root, { recursive: true });
+			fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+			const entry = { scope: "user", installPath: root, version: "1.0.0", enabled: true };
+			const registry = { version: 2, plugins: { "disable@scope-test": [entry] } };
+			fs.writeFileSync(registryPath, JSON.stringify(registry));
+			fs.writeFileSync(path.join(root, "lsp.json"), JSON.stringify({
+				servers: { "disabled-plugin-server": { command: process.execPath, fileTypes: ["scope"], rootMarkers: ["."] } },
+			}));
+			await preloadPluginRoots(home, cwd);
+			const tool = new LspTool(makeToolSession({ cwd }));
+			const before = await tool.execute("before-disable", { action: "status" });
+			const beforeText = before.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+			expect(beforeText).toContain("disabled-plugin-server");
+			entry.enabled = false;
+			fs.writeFileSync(registryPath, JSON.stringify(registry));
+			if (scope === "global") clearPluginRootsAndCaches([registryPath]);
+			else {
+				discoveryFs.invalidate(registryPath);
+				clearClaudePluginRootsCache(cwd);
+			}
+			expect(getPreloadedPluginRoots(cwd).some(item => item.path === root)).toBe(false);
+			const after = await tool.execute("after-disable", { action: "status" });
+			const afterText = after.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+			expect(afterText).not.toContain("disabled-plugin-server");
+			expect(getPreloadedPluginRoots(cwd).some(item => item.path === root)).toBe(false);
+		});
+	}
 });

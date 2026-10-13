@@ -1305,10 +1305,10 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 
 const pluginRootsCache = new Map<string, { roots: ClaudePluginRoot[]; warnings: string[] }>();
 
-const pluginCacheInvalidators = new Set<() => void>();
+const pluginCacheInvalidators = new Set<(cwd?: string) => void>();
 
 /** Register a process-global plugin cache invalidator called whenever plugin roots are cleared. */
-export function registerPluginCacheInvalidator(invalidator: () => void): void {
+export function registerPluginCacheInvalidator(invalidator: (cwd?: string) => void): void {
 	pluginCacheInvalidators.add(invalidator);
 }
 
@@ -1492,13 +1492,14 @@ export async function listClaudePluginRoots(
  */
 export function clearClaudePluginRootsCache(cwd?: string): void {
 	pluginRootsCache.clear();
-	for (const invalidate of pluginCacheInvalidators) invalidate();
-	// Keep warmed snapshots available until their replacements publish atomically.
+	for (const invalidate of pluginCacheInvalidators) invalidate(cwd);
 	if (cwd !== undefined) {
 		const scope = path.resolve(cwd);
+		preloadedPluginRoots.delete(scope);
 		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
 		return;
 	}
+	preloadedPluginRoots.clear();
 	// Registry mutations affect every known scope; re-rooting affects only its destination.
 	for (const scope of preloadHomes.keys()) {
 		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
@@ -1551,6 +1552,14 @@ export async function preloadPluginRoots(home: string, cwd: string): Promise<voi
 		}
 		preloadedPluginRoots.set(scope, roots);
 		return;
+	}
+}
+
+/** Warm a cold sync view using the scope's original home, before loading LSP configuration. */
+export async function ensurePreloadedPluginRoots(cwd: string): Promise<void> {
+	const scope = path.resolve(cwd);
+	if (!preloadedPluginRoots.has(scope)) {
+		await preloadPluginRoots(preloadHomes.get(scope) ?? os.homedir(), scope);
 	}
 }
 
