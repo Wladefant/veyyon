@@ -88,6 +88,12 @@ describe("native recovery", () => {
 		await symlink(code, link);
 		await expect(captureNativeCheckpoint(session, [link])).rejects.toThrow(/symbolic/i);
 		await expect(captureNativeCheckpoint(session, ["../outside.ts"])).rejects.toThrow(/unsafe/i);
+		const outside = await scratch();
+		const outsideFile = join(outside, "public.txt");
+		await writeFile(outsideFile, "outside");
+		const escape = join(root, "escape");
+		await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
+		await expect(captureNativeCheckpoint(session, [join(escape, "public.txt")])).rejects.toThrow(/symbolic|escapes/i);
 	});
 	test("restore refuses overwrite and explicit fork writes a different native session id", async () => {
 		const root = await scratch();

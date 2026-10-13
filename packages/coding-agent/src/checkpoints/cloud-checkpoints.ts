@@ -12,6 +12,7 @@ const checkpointBundle = type({
 	blobs: "Record<string, string>",
 	workspace: { dirty: "string[]", files: [{ path: "string", bytes: "string" }, "[]"] },
 	pins: { bun: "string", commit: "string", runtime: "string" },
+	"handoff?": { targetNode: "string", claimToken: "string", epoch: "number" },
 });
 export interface CheckpointLease {
 	ownerNode: string;
@@ -123,21 +124,54 @@ export class CheckpointClient {
 		this.#lost.delete(sessionId);
 		return lease;
 	}
-	async transferLease(sessionId: string, targetNode: string): Promise<CheckpointLease> {
+	async claimTransfer(
+		sessionId: string,
+		targetNode: string,
+		claimToken: string,
+		expectedEpoch: number,
+		runtimeOwner: string,
+	): Promise<CheckpointLease> {
+		const lease = await this.#request<CheckpointLease>(
+			`/v1/sessions/${encodeURIComponent(sessionId)}/claim`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					targetNode,
+					claimToken,
+					epoch: expectedEpoch,
+					ownerNode: runtimeOwner,
+				}),
+			},
+		);
+		this.#leases.set(sessionId, lease);
+		this.#lost.delete(sessionId);
+		return lease;
+	}
+	async transferLease(
+		sessionId: string,
+		targetNode: string,
+		claimToken: string,
+		source?: { ownerNode: string; epoch: number },
+	): Promise<CheckpointLease> {
 		const lease = this.#leases.get(sessionId);
-		if (!lease || this.#lost.has(sessionId)) throw new Error("Checkpoint lease required for transfer");
+		if ((!lease || this.#lost.has(sessionId)) && !source) throw new Error("Checkpoint lease required for transfer");
+		const ownerNode = lease && !this.#lost.has(sessionId) ? lease.ownerNode : source!.ownerNode;
+		const epoch = lease && !this.#lost.has(sessionId) ? lease.epoch : source!.epoch;
 		if (!targetNode || targetNode.length > 128) throw new Error("A valid target node is required");
+		if (!claimToken || claimToken.length > 128) throw new Error("A valid transfer claim token is required");
 		const transferId = createHash("sha256")
-			.update(`${sessionId}:${lease.ownerNode}:${lease.epoch}:${targetNode}`)
+			.update(`${sessionId}:${ownerNode}:${epoch}:${targetNode}`)
 			.digest("hex");
 		const path = `/v1/sessions/${encodeURIComponent(sessionId)}/transfer`;
 		const init: RequestInit = {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
-				ownerNode: lease.ownerNode,
-				epoch: lease.epoch,
+				ownerNode,
+				epoch,
 				targetNode,
+				claimToken,
 				transferId,
 			}),
 		};

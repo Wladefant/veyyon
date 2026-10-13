@@ -84,6 +84,7 @@ import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-s
 import { streamSimple } from "@veyyon/ai/stream";
 import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
 import { SynchronizedSession } from "../checkpoints/synchronized-session";
+import { consumeSessionOwnershipClaim, readSessionOwnershipMarker } from "../checkpoints/session-ownership-marker";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
 import { assistantText } from "@veyyon/ai/utils/message-text";
@@ -5458,10 +5459,22 @@ export class AgentSession {
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		await this.#promptRefresh;
 		await this.#startupHydration;
-		const cloudSessionId = process.env.VEYYON_CHECKPOINT_SESSION;
-		if (this.settings.get("checkpoints.enabled") && cloudSessionId === this.sessionManager.getSessionId()) {
+		const sessionId = this.sessionManager.getSessionId();
+		const sessionFile = this.sessionManager.getSessionFile();
+		const restoredOwnership =
+			sessionFile && sessionId ? await readSessionOwnershipMarker(sessionFile, sessionId) : null;
+		const cloudSessionId = restoredOwnership?.marker.sessionId ?? process.env.VEYYON_CHECKPOINT_SESSION;
+		if (restoredOwnership && !this.settings.get("checkpoints.enabled"))
+			throw new Error("Transferred session requires checkpoints.enabled; prompt admission is blocked");
+		if (restoredOwnership && process.env.VEYYON_CHECKPOINT_NODE !== restoredOwnership.marker.targetNode)
+			throw new Error("Transferred session belongs to a different checkpoint node; prompt admission is blocked");
+		if (this.settings.get("checkpoints.enabled") && cloudSessionId && cloudSessionId === sessionId) {
 			if (!this.#cloudOwnership) {
-				this.#cloudOwnership = new SynchronizedSession(cloudSessionId, CheckpointClient.fromEnv());
+				this.#cloudOwnership = new SynchronizedSession(
+					cloudSessionId,
+					CheckpointClient.fromEnv(),
+					restoredOwnership?.marker,
+				);
 				const previous = this.agent.beforeToolCall;
 				this.agent.beforeToolCall = async (context, signal) => {
 					if (this.sessionManager.getSessionId() !== cloudSessionId) {
@@ -5478,6 +5491,17 @@ export class AgentSession {
 				});
 			}
 			await this.#cloudOwnership.admit();
+			if (restoredOwnership?.marker.claimToken) {
+				try {
+					await consumeSessionOwnershipClaim(restoredOwnership.path, restoredOwnership.marker);
+				} catch (error) {
+					await this.#cloudOwnership.close();
+					this.#cloudOwnership = undefined;
+					throw error;
+				}
+			}
+		} else if (restoredOwnership) {
+			throw new Error("Transferred session does not match its cloud authority marker; prompt admission is blocked");
 		}
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 

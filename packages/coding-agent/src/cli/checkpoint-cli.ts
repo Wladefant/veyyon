@@ -27,29 +27,46 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 		if (args.action === "handoff" && !args.targetNode)
 			throw new Error("Session handoff requires --to <destination node>");
 		if (args.action === "handoff" && !process.env.VEYYON_CHECKPOINT_NODE)
-			throw new Error("Session handoff requires VEYYON_CHECKPOINT_NODE to match the source runtime owner");
+			throw new Error("Session handoff requires VEYYON_CHECKPOINT_NODE, the stable source device label");
 		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
 		if (args.action === "handoff" && args.id && args.id !== bundle.native.sessionId)
 			throw new Error("The requested session id does not match the source file");
 		const sessionId = bundle.native.sessionId;
-		const ownerNode =
-			args.action === "handoff" ? process.env.VEYYON_CHECKPOINT_NODE! : process.env.VEYYON_CHECKPOINT_NODE || randomUUID();
+		const ownerNode = process.env.VEYYON_CHECKPOINT_NODE || randomUUID();
+		if (args.action === "handoff") {
+			const pending = await client.restore(sessionId);
+			if (pending?.handoff) {
+				if (pending.handoff.targetNode !== args.targetNode)
+					throw new Error(`A pending handoff already targets ${pending.handoff.targetNode}`);
+				const next = await client.transferLease(sessionId, args.targetNode!, pending.handoff.claimToken, {
+					ownerNode,
+					epoch: pending.handoff.epoch - 1,
+				});
+				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: args.targetNode, epoch: next.epoch }));
+				return;
+			}
+		}
 		const lease = await client.acquireLease(sessionId, ownerNode);
 		let transferred = false;
-		let committed = false;
 		try {
 			const head = await client.head(sessionId);
-			await client.commit(sessionId, bundle, head?.sequence ?? lease.headSequence);
-			committed = true;
 			if (args.action === "handoff") {
-				const next = await client.transferLease(sessionId, args.targetNode!);
+				bundle.handoff = {
+					targetNode: args.targetNode!,
+					claimToken: randomUUID(),
+					epoch: lease.epoch + 1,
+				};
+			}
+			await client.commit(sessionId, bundle, head?.sequence ?? lease.headSequence);
+			if (args.action === "handoff") {
+				const next = await client.transferLease(sessionId, args.targetNode!, bundle.handoff!.claimToken);
 				transferred = true;
-				console.log(JSON.stringify({ sessionId, transferred: true, ownerNode: next.ownerNode, epoch: next.epoch }));
+				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: args.targetNode, epoch: next.epoch }));
 			} else {
 				console.log(JSON.stringify({ sessionId, exported: true }));
 			}
 		} finally {
-			if (!transferred && (!committed || args.action !== "handoff")) await client.releaseLease(sessionId);
+			if (!transferred) await client.releaseLease(sessionId).catch(() => undefined);
 		}
 		return;
 	}
@@ -65,16 +82,10 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 		return;
 	}
 	if (!args.output) throw new Error("Restore requires --output <new directory>");
-	const ownerNode = process.env.VEYYON_CHECKPOINT_NODE || randomUUID();
-	await client.acquireLease(args.id, ownerNode);
-	let restored = false;
-	try {
-		const bundle = await client.restore(args.id);
-		if (!bundle) throw new Error(`No checkpoint exists for session ${args.id}`);
-		const id = await restoreNativeCheckpoint(bundle, resolve(args.output));
-		restored = true;
-		console.log(`Restored native session ${id} to ${resolve(args.output)}; runtime owner ${ownerNode}`);
-	} finally {
-		if (!restored) await client.releaseLease(args.id);
+	const bundle = await client.restore(args.id);
+	if (!bundle) throw new Error(`No checkpoint exists for session ${args.id}`);
+	if (bundle.handoff && process.env.VEYYON_CHECKPOINT_NODE !== bundle.handoff.targetNode)
+		throw new Error(`This checkpoint handoff targets node ${bundle.handoff.targetNode}`);
+	const id = await restoreNativeCheckpoint(bundle, resolve(args.output));
+	console.log(`Restored native session ${id} to ${resolve(args.output)}; resume acquires fenced ownership`);
 	}
-}

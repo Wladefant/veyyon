@@ -8,7 +8,7 @@ interface Namespace { idFromName(name: string): unknown; get(id: unknown): Stub 
 interface ObjectStore { get(key: string): Promise<{size:number;arrayBuffer():Promise<ArrayBuffer>} | null>; put(key:string,bytes:ArrayBuffer,options?:unknown):Promise<unknown> }
 interface Index { prepare(sql:string):{bind(...values:unknown[]):{run():Promise<unknown>;all():Promise<unknown>}} }
 interface Env { OBJECTS:ObjectStore; INDEX:Index; SESSIONS:Namespace; BUDGET:Namespace; API_TOKEN:string }
-interface Lease {ownerNode:string;epoch:number;expiresAt:string;headSequence:number;manifestHash:string}
+interface Lease {ownerNode:string;epoch:number;expiresAt:string;headSequence:number;manifestHash:string;targetNode?:string;claimHash?:string;claimEpoch?:number}
 interface Manifest {version:1;sessionId:string;sequence:number;objects:{hash:string;size:number}[]}
 interface Head {sequence:number;manifestHash:string;manifest:Manifest}
 const json=(value:unknown,status=200)=>Response.json(value,{status});
@@ -52,20 +52,38 @@ export class SessionAuthority {
  const lease:Lease={ownerNode:body.ownerNode as string,epoch:live?current.epoch:(current?.epoch??0)+1,expiresAt:new Date(Date.now()+60000).toISOString(),headSequence:head?.sequence??0,manifestHash:head?.manifestHash??""};await store.put("lease",lease);return json(lease);
  }
  if(action==="transfer"){
- const targetNode=body.targetNode;
- const transferId=body.transferId;
- if(typeof targetNode!=="string" || !targetNode.length || targetNode.length>128 || typeof transferId!=="string" || !transferId.length || transferId.length>256 || !Number.isSafeInteger(body.epoch))return json({error:"invalid transfer"},400);
- const prior=await store.get<{sourceNode:string;sourceEpoch:number;targetNode:string;targetEpoch:number}>(`transfer:${transferId}`);
+ const targetNode=body.targetNode;const claimToken=body.claimToken;const transferId=body.transferId;
+ if(typeof targetNode!=="string" || !targetNode.length || targetNode.length>128 || typeof claimToken!=="string" || !claimToken.length || claimToken.length>128 || typeof transferId!=="string" || !transferId.length || transferId.length>256 || !Number.isSafeInteger(body.epoch))return json({error:"invalid transfer"},400);
+ const claimHash=await digest(new TextEncoder().encode(claimToken));
+ const prior=await store.get<{sourceNode:string;sourceEpoch:number;targetNode:string;targetEpoch:number;claimHash:string}>(`transfer:${transferId}`);
  if(prior){
- if(prior.sourceNode!==body.ownerNode || prior.sourceEpoch!==body.epoch || prior.targetNode!==targetNode)return json({error:"transfer replay mismatch"},409);
+ if(prior.sourceNode!==body.ownerNode || prior.sourceEpoch!==body.epoch || prior.targetNode!==targetNode || prior.claimHash!==claimHash)return json({error:"transfer replay mismatch"},409);
  const active=await store.get<Lease>("lease");
- if(active?.ownerNode===targetNode && active.epoch===prior.targetEpoch && Date.parse(active.expiresAt)>Date.now())return json(active);
- return json({error:"transfer lease no longer active"},409);
+ if(active?.ownerNode===targetNode && active.epoch===prior.targetEpoch && active.claimHash===claimHash && Date.parse(active.expiresAt)>Date.now()){const {claimHash:_hash,...visible}=active;return json(visible);}
+ return json({error:"transfer claim no longer active"},409);
  }
  if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
- const next:Lease={...current,ownerNode:targetNode,epoch:current.epoch+1,expiresAt:new Date(Date.now()+60000).toISOString()};
+ const next:Lease={...current,ownerNode:targetNode,targetNode,epoch:current.epoch+1,expiresAt:new Date(Date.now()+60000).toISOString(),claimHash,claimEpoch:current.epoch+1};
  await store.put("lease",next);
- await store.put(`transfer:${transferId}`,{sourceNode:current.ownerNode,sourceEpoch:current.epoch,targetNode,targetEpoch:next.epoch});
+ await store.put(`transfer:${transferId}`,{sourceNode:current.ownerNode,sourceEpoch:current.epoch,targetNode,targetEpoch:next.epoch,claimHash});
+ const {claimHash:_hash,...visible}=next;return json(visible);
+ }
+ if(action==="claim"){
+ const targetNode=body.targetNode;const claimToken=body.claimToken;
+ if(typeof targetNode!=="string" || !targetNode.length || targetNode.length>128 || typeof claimToken!=="string" || !claimToken.length || claimToken.length>128 || !Number.isSafeInteger(body.epoch))return json({error:"invalid claim"},400);
+ const claimHash=await digest(new TextEncoder().encode(claimToken));
+ const prior=await store.get<{targetNode:string;ownerNode:string;epoch:number}>(`claim:${claimHash}`);
+ if(prior){
+ if(prior.targetNode!==targetNode || prior.ownerNode!==body.ownerNode)return json({error:"claim already used"},409);
+ const active=await store.get<Lease>("lease");
+ if(active?.ownerNode===body.ownerNode && active.epoch===prior.epoch && Date.parse(active.expiresAt)>Date.now())return json(active);
+ return json({error:"claimed lease is no longer active"},409);
+ }
+ if(!live || current.ownerNode!==targetNode || current.targetNode!==targetNode || current.epoch!==body.epoch || current.claimEpoch!==body.epoch || current.claimHash!==claimHash)return json({error:"invalid or spent transfer claim"},409);
+ const {claimHash:_hash,claimEpoch:_claimEpoch,...base}=current;
+ const next:Lease={...base,ownerNode:body.ownerNode as string,epoch:current.epoch+1,expiresAt:new Date(Date.now()+60000).toISOString()};
+ await store.put("lease",next);
+ await store.put(`claim:${claimHash}`,{targetNode,ownerNode:body.ownerNode,epoch:next.epoch});
  return json(next);
  }
  if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
@@ -104,7 +122,6 @@ export default {
  if(!env.API_TOKEN || request.headers.get("authorization")!==`Bearer ${env.API_TOKEN}`)return json({error:"unauthorized"},401);
  const url=new URL(request.url);const parts=url.pathname.split("/").filter(Boolean);
  if(parts[0]!=="v1")return json({error:"not found"},404);
- let bytes:ArrayBuffer|undefined;
  if(parts[1]==="objects" && request.method==="PUT") {const declared=Number(request.headers.get("content-length"));if(declared>8388608)return json({error:"object cap"},413);bytes=await request.arrayBuffer();if(bytes.byteLength>8388608 || !bytes.byteLength)return json({error:"object cap"},413);}
  const sessionId=parts[1]==="sessions" && /^[a-zA-Z0-9_-]{1,128}$/.test(parts[2]??"")?parts[2]:undefined;
  let units=1;
@@ -122,7 +139,7 @@ export default {
  if(bytes){if(await digest(bytes)!==hash)return json({error:"hash mismatch"},422);if(existing)return json({error:"immutable object exists"},409);await env.OBJECTS.put(hash,bytes,{onlyIf:{etagDoesNotMatch:"*"}});return new Response(null,{status:201});}
  }
  if(parts[1]==="catalog" && request.method==="GET")return json(await env.INDEX.prepare("SELECT id, sequence, manifest_hash FROM sessions LIMIT 100").bind().all());
- if(parts[1]==="sessions" && parts.length===4 && sessionId && ((parts[3]==="head" && request.method==="GET") || (["lease","renew","release","transfer","commit"].includes(parts[3]!) && request.method==="POST"))) return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId)).fetch(request);
+ if(parts[1]==="sessions" && parts.length===4 && sessionId && ((parts[3]==="head" && request.method==="GET") || (["lease","renew","release","transfer","claim","commit"].includes(parts[3]!) && request.method==="POST"))) return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId)).fetch(request);
  return json({error:"not found"},404);
  }
 };

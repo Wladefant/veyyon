@@ -2,21 +2,28 @@ import { randomUUID } from "node:crypto";
 import type { CheckpointClient, CheckpointLease } from "./cloud-checkpoints";
 /** One local runtime owns this guard. Losing its lease requires an explicit fork or transfer. */
 export class SynchronizedSession {
-	readonly ownerNode: string;
+	readonly ownerNode = randomUUID();
 	#timer?: NodeJS.Timeout;
 	#lease?: CheckpointLease;
 	#lost = false;
 	constructor(
 		readonly sessionId: string,
 		readonly client: CheckpointClient,
-		ownerNode = process.env.VEYYON_CHECKPOINT_NODE || randomUUID(),
-	) {
-		this.ownerNode = ownerNode;
-	}
+		readonly claim?: { targetNode: string; claimToken?: string; epoch: number },
+	) {}
 	async admit(): Promise<void> {
 		if (this.#lost) throw new Error("Synchronized ownership lost. Start an explicit local fork.");
 		if (!this.#lease) {
-			this.#lease = await this.client.acquireLease(this.sessionId, this.ownerNode);
+			if (this.claim) {
+				const node = process.env.VEYYON_CHECKPOINT_NODE;
+				if (!node || node !== this.claim.targetNode)
+					throw new Error("This transferred session belongs to a different checkpoint node");
+				this.#lease = this.claim.claimToken
+					? await this.client.claimTransfer(this.sessionId, node, this.claim.claimToken, this.claim.epoch, this.ownerNode)
+					: await this.client.acquireLease(this.sessionId, this.ownerNode);
+			} else {
+				this.#lease = await this.client.acquireLease(this.sessionId, this.ownerNode);
+			}
 			this.#timer = setInterval(() => {
 				void this.client.renewLease(this.sessionId).then(
 					lease => {
@@ -31,7 +38,6 @@ export class SynchronizedSession {
 			this.#timer.unref();
 		}
 		await this.client.assertWritable(this.sessionId, this.#lease.epoch);
-		// Check server epoch immediately before command admission, not only the cached expiry.
 		try {
 			this.#lease = await this.client.renewLease(this.sessionId);
 		} catch (error) {

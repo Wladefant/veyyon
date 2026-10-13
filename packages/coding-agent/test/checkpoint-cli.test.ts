@@ -88,7 +88,7 @@ test("an interrupted handoff retries without changing source or overwriting the 
 	let leaseOwner = "transfer-owner";
 	let leaseEpoch = 1;
 	let transferReplay: { transferId: string; targetNode: string } | undefined;
-	let interruptTransferResponse = true;
+	let interruptedTransferResponses = 2;
 	let interruptCommit = true;
 	const fakeFetch: CheckpointFetch = async (input, init) => {
 		const path = new URL(String(input)).pathname;
@@ -112,6 +112,10 @@ test("an interrupted handoff retries without changing source or overwriting the 
 				transferId: string;
 			};
 			if (transferReplay?.transferId === request.transferId) {
+				if (interruptedTransferResponses > 0) {
+					interruptedTransferResponses--;
+					return Response.json({ error: "ack interrupted" }, { status: 503 });
+				}
 				return Response.json({
 					ownerNode: leaseOwner,
 					epoch: leaseEpoch,
@@ -125,8 +129,8 @@ test("an interrupted handoff retries without changing source or overwriting the 
 			leaseOwner = request.targetNode;
 			leaseEpoch++;
 			transferReplay = { transferId: request.transferId, targetNode: request.targetNode };
-			if (interruptTransferResponse) {
-				interruptTransferResponse = false;
+			if (interruptedTransferResponses > 0) {
+				interruptedTransferResponses--;
 				return Response.json({ error: "ack interrupted" }, { status: 503 });
 			}
 			return Response.json({
@@ -173,6 +177,13 @@ test("an interrupted handoff retries without changing source or overwriting the 
 		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
 		await runCheckpointCommand({ action: "export", sessionFile: source });
 		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
+		await expect(runCheckpointCommand({
+			action: "handoff",
+			id: "transfer",
+			sessionFile: source,
+			targetNode: "destination",
+		})).rejects.toThrow(/503/);
+		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
 		await runCheckpointCommand({
 			action: "handoff",
 			id: "transfer",
@@ -183,6 +194,20 @@ test("an interrupted handoff retries without changing source or overwriting the 
 		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
 		process.env.VEYYON_CHECKPOINT_NODE = "destination";
 		await runCheckpointCommand({ action: "restore", id: "transfer", output: destination });
+		const ownership = JSON.parse(await Bun.file(join(destination, "sessions", "checkpoint-ownership.json")).text()) as {
+			version: number;
+			sessionId: string;
+			targetNode: string;
+			claimToken: string;
+			epoch: number;
+		};
+		expect(ownership).toMatchObject({ version: 1, sessionId: "transfer", targetNode: "destination" });
+		expect(ownership.claimToken.length).toBeGreaterThan(0);
+		expect(ownership.epoch).toBe(2);
+		const recovery = JSON.parse(await Bun.file(join(destination, "recovery.json")).text()) as {
+			checkpointTransfer: boolean;
+		};
+		expect(recovery.checkpointTransfer).toBe(true);
 		const restored = await Bun.file(join(destination, "sessions", "session.jsonl")).arrayBuffer();
 		expect(Buffer.from(restored)).toEqual(sourceBytes);
 		await expect(runCheckpointCommand({ action: "restore", id: "transfer", output: destination })).rejects.toThrow(

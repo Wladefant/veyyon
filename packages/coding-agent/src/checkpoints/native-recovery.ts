@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { blobsDirForSessionDir } from "../../../../kernel/src/session/blob-store";
 import { assertNotTerminalOwned } from "../../../../kernel/src/session/terminal-ownership";
 import { type CheckpointFile, filterCheckpointFiles } from "./cloud-checkpoints";
@@ -14,6 +14,7 @@ export interface NativeCheckpointBundle {
 	blobs: Record<string, string>;
 	workspace: { dirty: string[]; files: { path: string; bytes: string }[] };
 	pins: { bun: string; commit: string; runtime: string };
+	handoff?: { targetNode: string; claimToken: string; epoch: number };
 }
 
 const forbidden =
@@ -121,22 +122,33 @@ export async function captureNativeCheckpoint(
 				blobs[hash] = encode(await readStable(join(blobsDirForSessionDir(dirname(journalPath)), hash)));
 		}
 	}
+	const workspaceRoot = await realpath(header.cwd as string);
 	const files: CheckpointFile[] = [];
 	const dirty: string[] = [];
 	for (const input of workspacePaths) {
 		if (input.replaceAll("\\", "/").split("/").includes("..")) throw new Error("Unsafe workspace path");
 		const path = resolve(input);
+		const lexicalRelative = relative(workspaceRoot, path);
+		if (lexicalRelative === ".." || lexicalRelative.startsWith(`..${sep}`) || isAbsolute(lexicalRelative))
+			throw new Error(`Workspace path escapes its root: ${input}`);
+		let ancestor = workspaceRoot;
+		const components = lexicalRelative ? lexicalRelative.split(sep) : [];
+		for (const component of components) {
+			ancestor = join(ancestor, component);
+			if ((await lstat(ancestor)).isSymbolicLink())
+				throw new Error(`Symbolic links are not allowed in workspace paths: ${ancestor}`);
+		}
+		const canonicalPath = await realpath(path);
+		const canonicalRelative = relative(workspaceRoot, canonicalPath);
+		if (canonicalRelative === ".." || canonicalRelative.startsWith(`..${sep}`) || isAbsolute(canonicalRelative))
+			throw new Error(`Workspace path escapes its root: ${input}`);
 		const info = await lstat(path);
 		if (info.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in workspace capture: ${path}`);
 		const data = info.isDirectory() ? await walkFiles(path) : [safeRelative(basename(path))];
 		for (const rel of data) {
 			const full = info.isDirectory() ? join(path, ...rel.split("/")) : path;
 			const content = await readStable(full);
-			const relativePath = safeRelative(
-				relative(header.cwd as string, full)
-					.split(sep)
-					.join("/"),
-			);
+			const relativePath = safeRelative(relative(workspaceRoot, full).split(sep).join("/"));
 			dirty.push(relativePath);
 			files.push({ path: relativePath, content });
 		}
@@ -220,6 +232,21 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 			await mkdir(dirname(target), { recursive: true });
 			await writeFile(target, decodeBase64(file.bytes), { flag: "wx", mode: 0o600 });
 		}
+		if (
+			!fork &&
+			bundle.handoff &&
+			(!bundle.handoff.targetNode ||
+				!bundle.handoff.claimToken ||
+				!Number.isSafeInteger(bundle.handoff.epoch) ||
+				bundle.handoff.epoch < 1)
+		)
+			throw new Error("Invalid transferred-session claim");
+		if (!fork && bundle.handoff)
+			await writeFile(
+				join(staging, "sessions", "checkpoint-ownership.json"),
+				JSON.stringify({ version: 1, sessionId: newId, ...bundle.handoff }),
+				{ flag: "wx", mode: 0o600 },
+			);
 		await writeFile(
 			join(staging, "recovery.json"),
 			JSON.stringify({
@@ -229,6 +256,7 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 				pins: bundle.pins,
 				originalCwd: header.cwd,
 				restoredJobs: false,
+				checkpointTransfer: !fork && Boolean(bundle.handoff),
 			}),
 			{ flag: "wx", mode: 0o600 },
 		);
