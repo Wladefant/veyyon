@@ -85,7 +85,7 @@ afterEach(async () => {
 describe("an idle process samples its stack ten times less often", () => {
 	test("a sampler that starts samples at the busy interval", async () => {
 		const sampler = await startedSampler(performance.now());
-		expect(await samplesInHold(sampler, 600)).toBeGreaterThanOrEqual(BUSY_MIN);
+		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
 	});
 
 	test("the first rotation 10s after the last busy tick restarts at the idle interval", async () => {
@@ -101,6 +101,8 @@ describe("an idle process samples its stack ten times less often", () => {
 		let nowValue = performance.now();
 		let scheduled: (() => void) | undefined;
 		const watchdog = new LoopWatchdog({
+			intervalMs: 5_000,
+			thresholdMs: 10_000,
 			now: () => nowValue,
 			schedule: cb => {
 				scheduled = cb;
@@ -120,7 +122,7 @@ describe("an idle process samples its stack ten times less often", () => {
 		scheduled!();
 		const kept = await sampler.stacksBetween(0, performance.now());
 		expect(kept?.samples).toBeGreaterThan(0);
-		expect(await samplesInHold(sampler, 600)).toBeGreaterThanOrEqual(BUSY_MIN);
+		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
 
 		// Once the profile is full (10s at busy interval), the quiet tick replaces it with the idle interval.
 		nowValue += 5_000;

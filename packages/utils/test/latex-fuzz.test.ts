@@ -141,25 +141,25 @@ describe("latex fuzz invariants", () => {
 	// Not caught here: a constant-factor blowup that stays linear, and stack
 	// exhaustion past 8k depth, which the sibling test above covers at 10k.
 	it("degrades a nested optional-argument chain in linear time", () => {
-		const cost = (depth: number): number => {
-			const attack = `${"\\sqrt[".repeat(depth)}2${"]{x}".repeat(depth)}`;
-			let best = Number.POSITIVE_INFINITY;
-			for (let sample = 0; sample < 3; sample++) {
-				const started = performance.now();
-				expect(typeof latexToUnicode(attack)).toBe("string");
-				best = Math.min(best, performance.now() - started);
-			}
-			return best;
-		};
-		// Doubling the depth doubles linear work and quadruples quadratic work; 3
-		// separates the two shapes with room for scheduler noise.
-		// Measured smallest-first and in this order: the first call at any depth pays
-		// JIT tier-up the next does not, and `cost(8_000) / cost(4_000)` evaluates the
-		// large arm first, which charges the warmup to the numerator and hides a
-		// quadratic parser behind a ratio under 2.
-		const small = cost(4_000);
-		const large = cost(8_000);
-		expect(large / small).toBeLessThan(3);
+		const attackSmall = `${"\\sqrt[".repeat(4_000)}2${"]{x}".repeat(4_000)}`;
+		const attackLarge = `${"\\sqrt[".repeat(8_000)}2${"]{x}".repeat(8_000)}`;
+
+		// Warm up JIT tier-up on nested optional arguments so neither arm pays first-call compile cost.
+		expect(typeof latexToUnicode(attackSmall)).toBe("string");
+		expect(typeof latexToUnicode(attackLarge)).toBe("string");
+
+		let minSmall = Number.POSITIVE_INFINITY;
+		let minLarge = Number.POSITIVE_INFINITY;
+		for (let sample = 0; sample < 5; sample++) {
+			const s0 = performance.now();
+			expect(typeof latexToUnicode(attackSmall)).toBe("string");
+			minSmall = Math.min(minSmall, performance.now() - s0);
+
+			const s1 = performance.now();
+			expect(typeof latexToUnicode(attackLarge)).toBe("string");
+			minLarge = Math.min(minLarge, performance.now() - s1);
+		}
+		expect(minLarge / minSmall).toBeLessThan(3);
 	}, 30_000);
 
 	it("leaves shallow optional-argument math alone", () => {
