@@ -458,7 +458,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 		});
 
 		it("rotates credentials through runCli, emitting only redacted receipt, changing token, and enabling new ping", async () => {
-			const hermeticHome = await fs.mkdtemp(path.join(os.tmpdir(), "term-smoke-home-"));
+			const hermeticHome = await fs.mkdtemp(path.join(os.tmpdir(), "tcs-"));
 			const profileRoot = path.join(hermeticHome, ".veyyon", "profiles", "default");
 			await fs.mkdir(path.join(profileRoot, "run", "terminals"), { recursive: true });
 
