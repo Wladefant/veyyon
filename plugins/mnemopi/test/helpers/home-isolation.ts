@@ -42,13 +42,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-if (!process.env.MNEMOPI_HOME) {
-	const root = mkdtempSync(join(tmpdir(), "mnemopi-test-home-"));
-	process.env.MNEMOPI_HOME = root;
-	process.on("exit", () => {
-		rmSync(root, { recursive: true, force: true });
-	});
+const isolatedHome = mkdtempSync(join(tmpdir(), "mnemopi-test-home-"));
+if (!process.env.MNEMOPI_HOME) process.env.MNEMOPI_HOME = isolatedHome;
+// @veyyon/utils resolves logger/cache roots from VEYYON_CONFIG_DIR and XDG_*,
+// independently of MNEMOPI_HOME. Set these in the preload, before test imports
+// can initialize its cached directory resolvers or emit the first log line.
+if (!process.env.VEYYON_CONFIG_DIR) process.env.VEYYON_CONFIG_DIR = join(isolatedHome, "config");
+for (const name of ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) {
+	if (!process.env[name]) process.env[name] = join(isolatedHome, name.slice(4).toLowerCase());
 }
+process.on("exit", () => {
+	rmSync(isolatedHome, { recursive: true, force: true });
+});
 
 /**
  * The one entry a mnemopi suite creates in the shared home on purpose.
