@@ -13,7 +13,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import { TOOL } from "../../tools/core/builtin-names";
 
-export { isTerminalYieldToolResult, type YieldToolResult } from "@veyyon/wire/task-result";
+import { isTerminalYieldToolResult, type YieldToolResult } from "@veyyon/wire/task-result";
 
 export class YieldTracker {
 	/** The `yield` call that ended the run, until a settle clears it. */
