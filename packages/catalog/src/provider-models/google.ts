@@ -1,5 +1,3 @@
-import { fetchAntigravityDiscoveryModels } from "../discovery/antigravity";
-import { fetchGeminiModels } from "../discovery/gemini";
 import type { ModelManagerOptions } from "../model-manager";
 import { CLOUD_CODE_ENDPOINT } from "../provider-endpoints";
 import type { FetchImpl } from "../types";
@@ -38,8 +36,11 @@ export function googleModelManagerOptions(
 		providerId: "google",
 		...(apiKey
 			? {
-					fetchDynamicModels: hooks =>
-						fetchGeminiModels({ apiKey, fetch: config?.fetch, onFailure: hooks?.onFailure }),
+					fetchDynamicModels: async hooks => {
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchGeminiModels } = await import("../discovery/gemini");
+						return fetchGeminiModels({ apiKey, fetch: config?.fetch, onFailure: hooks?.onFailure });
+					},
 				}
 			: undefined),
 	};
@@ -57,14 +58,16 @@ export function googleAntigravityModelManagerOptions(
 		providerId: "google-antigravity",
 		...(token
 			? {
-					fetchDynamicModels: hooks =>
-						fetchAntigravityDiscoveryModels({
+					fetchDynamicModels: async hooks => {
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchAntigravityDiscoveryModels } = await import("../discovery/antigravity");
+						return fetchAntigravityDiscoveryModels({
 							token,
 							endpoint: config?.endpoint,
 							fetcher: config?.fetch,
 							onFailure: hooks?.onFailure,
-						}),
-				}
+						});
+					},
 			: undefined),
 	};
 }
@@ -79,6 +82,8 @@ export function googleGeminiCliModelManagerOptions(
 		...(token
 			? {
 					fetchDynamicModels: async hooks => {
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchAntigravityDiscoveryModels } = await import("../discovery/antigravity");
 						const models = await fetchAntigravityDiscoveryModels({
 							token,
 							endpoint,
