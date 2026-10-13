@@ -1985,22 +1985,26 @@ export class Markdown implements Component {
 	 */
 	static readonly MAX_INLINE_DEPTH = 32;
 
-	/** Append the rows of one block token to `out`. */
+	/**
+	 * Append the rows of one block token to `out`. Returns true when every appended row is laid out
+	 * within `width`: it fits, and it opens with no indent a wrap at `width` would hang. Only a quote
+	 * lays its rows out; an enclosing quote styles those rows without wrapping them again.
+	 */
 	#renderToken(
 		out: string[],
 		token: Token,
 		width: number,
 		nextTokenType?: string,
 		styleContext?: InlineStyleContext,
-	): void {
+	): boolean {
 		if (this.#renderDepth >= Markdown.MAX_RENDER_DEPTH) {
 			const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
 			if (raw) out.push(this.#applyDefaultStyle(raw.replace(/[\r\n]+/g, " ")));
-			return;
+			return false;
 		}
 		this.#renderDepth++;
 		try {
-			this.#renderTokenInner(out, token, width, nextTokenType, styleContext);
+			return this.#renderTokenInner(out, token, width, nextTokenType, styleContext);
 		} finally {
 			this.#renderDepth--;
 		}
@@ -2012,48 +2016,48 @@ export class Markdown implements Component {
 		width: number,
 		nextTokenType?: string,
 		styleContext?: InlineStyleContext,
-	): void {
+	): boolean {
 		// Display math block (own-line `$$…$$` / `\[…\]`): stack `\frac` vertically
 		// and keep `\\` row breaks, so fractions and matrices span multiple lines.
 		if (isMathToken(token)) {
 			this.#pushDisplayMath(out, token.text);
 			if (gapFollowsBlock(nextTokenType)) out.push("");
-			return;
+			return false;
 		}
 
 		switch (token.type) {
 			case "heading":
 				this.#renderHeading(out, token as Tokens.Heading, width, nextTokenType, styleContext);
-				return;
+				return false;
 			case "paragraph":
 				this.#renderParagraph(out, token as Tokens.Paragraph, width, nextTokenType, styleContext);
-				return;
+				return false;
 			case "code":
 				this.#renderCodeBlock(out, token as Tokens.Code, width, nextTokenType);
-				return;
+				return false;
 			case "list":
 				// No spacing after a list: a following space token supplies it.
 				out.push(...this.#renderList(token as ListToken, 0, styleContext));
-				return;
+				return false;
 			case "table":
 				out.push(...this.#renderTable(token as TableToken, width, nextTokenType, styleContext));
-				return;
+				return false;
 			case "blockquote":
-				this.#renderBlockquote(out, token as Tokens.Blockquote, width, nextTokenType);
-				return;
+				return this.#renderBlockquote(out, token as Tokens.Blockquote, width, nextTokenType);
 			case "hr":
 				this.#renderHr(out, token as Tokens.Hr, width, nextTokenType);
-				return;
+				return false;
 			case "html":
 				if ("raw" in token && typeof token.raw === "string") out.push(...this.#renderHtmlBlock(token.raw, width));
-				return;
+				return false;
 			case "space":
 				// Space tokens represent blank lines in markdown
 				out.push("");
-				return;
+				return false;
 			default:
 				// Handle any other token types as plain text
 				if ("text" in token && typeof token.text === "string") out.push(token.text);
+				return false;
 		}
 	}
 
@@ -2135,7 +2139,13 @@ export class Markdown implements Component {
 		if (gapFollowsBlock(nextTokenType)) out.push("");
 	}
 
-	#renderBlockquote(out: string[], token: Tokens.Blockquote, width: number, nextTokenType: string | undefined): void {
+	/** Append a quote's rows to `out`; returns whether they are laid out within `width` (see {@link #renderToken}). */
+	#renderBlockquote(
+		out: string[],
+		token: Tokens.Blockquote,
+		width: number,
+		nextTokenType: string | undefined,
+	): boolean {
 		const quoteInlineStyleContext: InlineStyleContext = {
 			applyText: (text: string) => text,
 			stylePrefix: "",
@@ -2143,20 +2153,24 @@ export class Markdown implements Component {
 		const contentWidth = quoteContentWidth(width);
 		const quoteTokens = token.tokens || [];
 		const renderedQuoteLines: string[] = [];
+		const laidOut: number[] = [];
 		for (let i = 0; i < quoteTokens.length; i++) {
-			this.#renderToken(
+			const start = renderedQuoteLines.length;
+			const rowsLaidOut = this.#renderToken(
 				renderedQuoteLines,
 				quoteTokens[i]!,
 				contentWidth,
 				quoteTokens[i + 1]?.type,
 				quoteInlineStyleContext,
 			);
+			if (rowsLaidOut) laidOut.push(start, renderedQuoteLines.length);
 		}
 		while (renderedQuoteLines.length > 0 && renderedQuoteLines[renderedQuoteLines.length - 1] === "") {
 			renderedQuoteLines.pop();
 		}
-		out.push(...this.#applyQuoteBorder(renderedQuoteLines, width));
+		const quoteLaidOut = this.#applyQuoteBorder(out, renderedQuoteLines, width, laidOut);
 		if (gapFollowsBlock(nextTokenType)) out.push("");
+		return quoteLaidOut;
 	}
 
 	/** Render a horizontal rule line themed to `width`, matching `sourceChar` when given. */
@@ -2166,15 +2180,22 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * Wrap already-rendered lines in the blockquote border and quote styling.
-	 * `width` is the full content width; the border reserves two cells and is
-	 * omitted when no content cell would remain beside it.
+	 * Append already-rendered lines to `out` in the blockquote border and quote styling, and return
+	 * whether every appended row is laid out within `width` (see {@link #renderToken}). `width` is the
+	 * full content width; the border reserves two cells and is omitted when no content cell would
+	 * remain beside it.
+	 *
+	 * `laidOut` holds `[start, end)` index pairs of lines a nested quote already laid out within the
+	 * content width. The quote styling adds escape sequences and no cells, so the wrap would return
+	 * each of those lines as it is: they are styled and bordered without it. Wrapping them again made
+	 * every enclosing quote rescan every row of the quotes inside it, so a quote nested `d` deep cost
+	 * `d` scans of each of its rows.
 	 */
-	#applyQuoteBorder(renderedLines: string[], width: number): string[] {
+	#applyQuoteBorder(out: string[], renderedLines: string[], width: number, laidOut: readonly number[] = []): boolean {
 		const quoteStyle = (text: string) => this.#theme.quote(this.#theme.italic(text));
 		const quoteStylePrefix = getStylePrefix(quoteStyle);
 		const applyQuoteStyle = (line: string): string => {
-			if (!quoteStylePrefix) {
+			if (!quoteStylePrefix || !line.includes(SGR_RESET)) {
 				return quoteStyle(line);
 			}
 			const lineWithReappliedStyle = line.replaceAll(SGR_RESET, `${SGR_RESET}${quoteStylePrefix}`);
@@ -2182,13 +2203,27 @@ export class Markdown implements Component {
 		};
 		const contentWidth = quoteContentWidth(width);
 		const border = width > QUOTE_BORDER_CELLS ? this.#theme.quoteBorder(`${this.#theme.symbols.quoteBorder} `) : "";
-		const lines: string[] = [];
-		for (const quoteLine of renderedLines) {
-			for (const wrappedLine of wrapTextWithAnsi(applyQuoteStyle(quoteLine), contentWidth)) {
-				lines.push(border + wrappedLine);
+		// The rows fit `width` only if the border fits the cells reserved for it. A bordered row opens
+		// with the border symbol, so it has an indent to hang only when the symbol leads with a blank; a
+		// row without the border is at most two cells wide, too narrow to hang one.
+		let rowsLaidOut =
+			border === "" ||
+			(visibleWidth(border) <= QUOTE_BORDER_CELLS && /^[^ \t]/.test(this.#theme.symbols.quoteBorder));
+		let run = 0;
+		for (let i = 0; i < renderedLines.length; i++) {
+			const styled = applyQuoteStyle(renderedLines[i]!);
+			while (run < laidOut.length && laidOut[run + 1]! <= i) run += 2;
+			if (run < laidOut.length && laidOut[run]! <= i) {
+				out.push(border + styled);
+				continue;
+			}
+			for (const row of wrapTextWithAnsi(styled, contentWidth)) {
+				// A cluster wider than the content width overflows the row it is alone in.
+				rowsLaidOut &&= visibleWidth(row) <= contentWidth;
+				out.push(border + row);
 			}
 		}
-		return lines;
+		return rowsLaidOut;
 	}
 
 	/**
@@ -2215,7 +2250,7 @@ export class Markdown implements Component {
 			flushText(raw.slice(lastIndex, match.index));
 			lastIndex = match.index + match[0].length;
 			if (match[1] !== undefined) {
-				lines.push(...this.#renderHtmlBlockquote(match[1], width));
+				this.#renderHtmlBlockquote(lines, match[1], width);
 			} else {
 				lines.push(this.#renderHrLine(width));
 			}
@@ -2224,12 +2259,12 @@ export class Markdown implements Component {
 		return lines;
 	}
 
-	/** Render the inner content of an HTML `<blockquote>` with quote styling. */
-	#renderHtmlBlockquote(inner: string, width: number): string[] {
+	/** Append the inner content of an HTML `<blockquote>` to `out` with quote styling. */
+	#renderHtmlBlockquote(out: string[], inner: string, width: number): void {
 		const cleaned = normalizeHtmlForTerminal(inner, createHtmlNormalizationState(), text => this.#theme.code(text));
 		const innerLines = splitTerminalLines(cleaned).map(line => line.trimEnd());
 		while (innerLines.length > 0 && innerLines[innerLines.length - 1] === "") innerLines.pop();
-		return this.#applyQuoteBorder(innerLines, width);
+		this.#applyQuoteBorder(out, innerLines, width);
 	}
 
 	#renderInlineTokens(tokens: Token[], styleContext?: InlineStyleContext): string {
