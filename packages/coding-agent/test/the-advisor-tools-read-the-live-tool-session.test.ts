@@ -31,8 +31,12 @@ import { getConflictHistory } from "@veyyon/coding-agent/tools/fs/conflict-detec
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
-/** The fields the advisor replaces. Every other field reads the primary's. */
-const ADVISOR_OVERRIDES = ["getAgentId", "getSessionId", "hasEditTool", "requireYieldTool"];
+/**
+ * The fields the advisor replaces. Every other field reads the primary's. `getLiveMessages` is
+ * cleared because the advisor runs its own conversation: a read the advisor makes must not be
+ * refused against output that only the primary's context holds.
+ */
+const ADVISOR_OVERRIDES = ["getAgentId", "getLiveMessages", "getSessionId", "hasEditTool", "requireYieldTool"];
 
 interface Launched {
 	result: CreateAgentSessionResult;
