@@ -1,5 +1,5 @@
 /**
- * The model and thinking level a session starts on.
+ * The model, thinking level and service tier a session starts on.
  *
  * Selection runs in two passes because extension providers register between them. The first
  * pass restores the session's last model or the settings default, so model-dependent setup
@@ -10,7 +10,7 @@
  */
 
 import type { ThinkingLevel } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
+import type { Model, ServiceTierByFamily } from "@veyyon/ai";
 import { getRestorableSessionModels, type SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger } from "@veyyon/utils";
@@ -33,6 +33,7 @@ import {
 	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
+import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings } from "../config/settings";
 import {
 	AUTO_THINKING,
@@ -141,6 +142,20 @@ function installPatternFallbackChain(
 		if (chainRole !== role) fallbackChains[chainRole] = existingFallbackChains[chainRole];
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
+}
+
+/** The service tier a session starts on: the tiers a resumed branch recorded, else the settings tiers. */
+export function startingServiceTierByFamily(
+	hasServiceTierEntry: boolean,
+	restoredContext: SessionContext,
+	settings: Settings,
+): ServiceTierByFamily {
+	if (hasServiceTierEntry) return restoredContext.serviceTier ?? {};
+	return buildServiceTierByFamily(
+		settings.get("tier.openai"),
+		settings.get("tier.anthropic"),
+		settings.get("tier.google"),
+	);
 }
 
 export class StartupModelSelection {

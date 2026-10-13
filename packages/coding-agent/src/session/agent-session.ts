@@ -49,7 +49,6 @@ import {
 	generateHandoffFromContext,
 	renderHandoffPrompt,
 	resolveCompactionBoundaryIndex,
-	resolveThresholdTokens,
 	type SessionMessageEntry,
 	type ShakeConfig,
 	shouldCompact,
@@ -94,8 +93,6 @@ import {
 } from "@veyyon/catalog/provider-models/service-tier";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
 import {
-	COMPACTION_CHECK_CONTINUATION,
-	COMPACTION_CHECK_NONE,
 	type CompactionCheckResult,
 	declaredContextWindow,
 } from "@veyyon/kernel/session/agent-session-compaction-policy";
@@ -118,7 +115,6 @@ import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import {
 	type BuildSessionContextOptions,
 	getEffectiveCompactionEntry,
-	getLatestCompactionEntry,
 	getRestorableSessionModels,
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
@@ -396,6 +392,7 @@ import { type ResolvedThinkingState, ThinkingRuntime } from "./runtime/thinking-
 import { TodoRuntime } from "./runtime/todo-runtime";
 import { sameToolNames, ToolDiscovery } from "./runtime/tool-discovery";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
+import { TurnContextCheck } from "./runtime/turn-context-check";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
 import { YieldTracker } from "./runtime/yield-tracker";
@@ -1058,22 +1055,6 @@ function removeAssistantMessageFromActiveContext(
 	});
 }
 
-/**
- * Put a failed assistant turn back into ACTIVE context only.
- *
- * The dead-end paths (no promotion target and compaction unavailable) pull the
- * failed turn out of context eagerly so a retry cannot replay it, and then
- * never schedule one. Only the branch is left alone there, so re-appending to
- * the session would duplicate an entry that was never dropped; the active
- * context is the half that has to be put back, because it is what the user
- * reads.
- */
-function restoreFailedAssistantTurnToActiveContext(agent: Agent, assistantMessage: AssistantMessage): void {
-	const lastMessage = agent.state.messages.at(-1);
-	if (lastMessage?.role === "assistant" && isSameAssistantMessage(lastMessage, assistantMessage)) return;
-	agent.appendMessage(assistantMessage);
-}
-
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -1167,6 +1148,24 @@ export class AgentSession {
 		},
 		closeCodexProviderSessionsForHistoryRewrite: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
 		whileDisconnectedFromAgent: run => this.#whileDisconnectedFromAgent(run),
+	});
+
+	/** The end-of-turn context check and the recovery each of its cases runs. */
+	readonly #contextCheck = new TurnContextCheck(this, {
+		promptGeneration: () => this.#promptGeneration,
+		goalMode: () => this.#goalModeState,
+		predatesLatestCompaction: message => this.#persistence.assistantPredatesLatestCompaction(message),
+		waitForPersisted: message => this.#persistence.waitFor(message),
+		discardAssistantTurn: message => this.#discardAssistantTurn(message),
+		removeAssistantFromActiveContext: message => removeAssistantMessageFromActiveContext(this.agent, message),
+		promoteContextModel: () => this.#promoteContextModel(),
+		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+		runAutoCompaction: (reason, willRetry, options) => this.#compaction.runAutoCompaction(reason, willRetry, options),
+		noticeCompactionThresholdClamp: (contextWindow, settings) =>
+			this.#compaction.noticeCompactionThresholdClamp(contextWindow, settings),
+		pruneStale: () => this.#rewrites.pruneStale(),
+		pruneOverflow: () => this.#rewrites.pruneOverflow(),
+		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 	});
 
 	// Branch summarization state
@@ -2744,7 +2743,7 @@ export class AgentSession {
 	 *
 	 * `agent_end` handling schedules post-prompt recovery work such as context
 	 * promotion continuations. It is invoked fire-and-forget by the agent's
-	 * synchronous `#emit`, and only reaches `#checkCompaction` after several
+	 * synchronous `#emit`, and only reaches the context check after several
 	 * internal awaits. `prompt()` runs `#waitForPostPromptRecovery()` the instant
 	 * `agent.prompt()` resolves, which can land before the handler registers its
 	 * tasks. Tracking the `agent_end` handler as a post-prompt task synchronously
@@ -3126,7 +3125,7 @@ export class AgentSession {
 
 	/** Run the compaction check as a tracked post-prompt task, so the recovery wait sees it. */
 	#trackedCompactionCheck(msg: AssistantMessage): Promise<CompactionCheckResult> {
-		const task = this.#checkCompaction(msg);
+		const task = this.#contextCheck.check(msg);
 		this.#postPrompt.track(task);
 		return task;
 	}
@@ -5512,7 +5511,7 @@ export class AgentSession {
 			// in-place compaction before this prompt starts its agent loop.
 			const lastAssistant = findLastAssistantMessage(this.agent.state.messages);
 			if (lastAssistant && !options?.skipCompactionCheck) {
-				await this.#checkCompaction(lastAssistant, false, false);
+				await this.#contextCheck.check(lastAssistant, false, false);
 			}
 			startupMarker("prompt:compaction-check:done");
 
@@ -7455,7 +7454,7 @@ export class AgentSession {
 
 		// Promote to a larger-context sibling before compacting, mirroring the
 		// pre-prompt (#runPrePromptCompactionIfNeeded) and post-turn threshold
-		// (#checkCompaction) paths. Without this, a long mid-turn tool loop that
+		// (`TurnContextCheck`) paths. Without this, a long mid-turn tool loop that
 		// crosses the threshold compacts the history (and can hit the no-progress
 		// dead-end on a single oversized turn) on a model that should have just
 		// been promoted to a larger window instead.
@@ -7489,348 +7488,6 @@ export class AgentSession {
 			messagesBefore,
 			messagesAfter: activeMessages.length,
 		});
-	}
-	/**
-	 * Check if context maintenance or promotion is needed and run it.
-	 * Called after agent_end and before prompt submission.
-	 *
-	 * Four cases (in order):
-	 * 1. Input overflow + promotion: promote to larger model, retry without maintenance.
-	 * 2. Input overflow + no promotion target: run context maintenance, auto-retry on same model.
-	 * 3. Output incomplete (stopReason === "length", e.g. `response.incomplete`): the
-	 *    model burned its output budget without producing an actionable deliverable
-	 *    (reasoning-only or truncated). Drop the dead turn, try promotion, otherwise
-	 *    run compaction and retry.
-	 * 4. Threshold: context over threshold, run context maintenance (no auto-retry).
-	 *
-	 * @param assistantMessage The assistant message to check
-	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
-	 * @param autoContinue Whether maintenance may schedule the agent-authored continuation prompt.
-	 * @returns whether compaction or recovery scheduled a retry, auto-continue, or
-	 *   queued-message drain that already owns the next turn. Callers MUST skip
-	 *   `session_stop` and other agent continuations when `continuationScheduled`
-	 *   is true.
-	 */
-	async #checkCompaction(
-		assistantMessage: AssistantMessage,
-		skipAbortedCheck = true,
-		autoContinue = true,
-	): Promise<CompactionCheckResult> {
-		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
-		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return COMPACTION_CHECK_NONE;
-		const contextWindow = this.model?.contextWindow ?? 0;
-		const generation = this.#promptGeneration;
-		// Skip overflow check if the message came from a different model.
-		// This handles the case where user switched from a smaller-context model (e.g. opus)
-		// to a larger-context model (e.g. codex) - the overflow error from the old model
-		// shouldn't trigger compaction for the new model.
-		const sameModel =
-			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
-		// This handles the case where an error was kept after compaction (in the "kept" region).
-		// The error shouldn't trigger another compaction since we already compacted.
-		// Example: opus fails -> switch to codex -> compact -> switch back to opus -> opus error
-		// is still in context but shouldn't trigger compaction again.
-		//
-		// Decided by position on the branch, not by timestamp. The scheduled
-		// auto-continue re-enters this check with the kept assistant
-		// (#promptWithMessage -> #checkCompaction) and its stale, pre-rewrite
-		// `usage`; a compaction entry appended in the same millisecond as that
-		// assistant's `timestamp` made a `<` comparison read it as new, the stale
-		// count re-tripped the threshold on a history with nothing left to
-		// summarize, and the "freed too little context" warning fired on a
-		// compaction that had just worked.
-		const predatesCompaction = this.#persistence.assistantPredatesLatestCompaction(assistantMessage);
-		if (sameModel && !predatesCompaction) {
-			if (AIError.isContextOverflow(assistantMessage, contextWindow)) {
-				return await this.#recoverOverflowedTurn(assistantMessage, generation, autoContinue);
-			}
-			if (assistantMessage.stopReason === "length") {
-				return await this.#recoverIncompleteTurn(assistantMessage, generation, autoContinue);
-			}
-		} else if (
-			!sameModel &&
-			autoContinue &&
-			!predatesCompaction &&
-			(await this.#retryOverflowOnPromotedModel(assistantMessage, contextWindow, generation))
-		) {
-			return COMPACTION_CHECK_CONTINUATION;
-		}
-		return await this.#maintainContextAfterTurn(
-			assistantMessage,
-			contextWindow,
-			sameModel === true,
-			predatesCompaction,
-			autoContinue,
-		);
-	}
-
-	/**
-	 * Case 1: the current model rejected the prompt as too long. Promote to a larger model and
-	 * retry, otherwise compact and retry. With neither available the failed turn goes back into
-	 * context: it is the only record that tells the user the context is too long.
-	 */
-	async #recoverOverflowedTurn(
-		assistantMessage: AssistantMessage,
-		generation: number,
-		autoContinue: boolean,
-	): Promise<CompactionCheckResult> {
-		// Clear the failed turn from active context so the retry (or the next
-		// user prompt) does not replay it. The persisted branch entry stays
-		// for now: when no recovery path runs, the user-facing transcript
-		// MUST keep the only assistant message explaining why the turn
-		// stopped. The branch entry is dropped further down, but only on the
-		// paths that actually schedule a retry/compaction.
-		removeAssistantMessageFromActiveContext(this.agent, assistantMessage);
-
-		// Try context promotion first - switch to a larger model and retry without compacting
-		if (await this.#tryContextPromotion(assistantMessage)) {
-			await this.#dropPersistedAssistantTurn(assistantMessage);
-			// Retry on the promoted (larger) model without compacting
-			this.#scheduleAgentContinue({ delayMs: 100, generation });
-			return COMPACTION_CHECK_CONTINUATION;
-		}
-
-		if (this.settings.getGroup("compaction").enabled) {
-			return await this.#runRecoveryCompactionWithRollback("overflow", assistantMessage, { autoContinue });
-		}
-		// Without this the prompt resolves with no assistant message, no error
-		// event and no branch entry, so an operator who has compaction off sees a
-		// question that produced nothing, while every other provider failure
-		// leaves its error in the transcript.
-		restoreFailedAssistantTurnToActiveContext(this.agent, assistantMessage);
-		return COMPACTION_CHECK_NONE;
-	}
-
-	/**
-	 * Case 2: a context promotion landed while the failing call was already in flight (or on a run
-	 * whose loop predates the switch), so the overflow error arrives stamped with the pre-promotion
-	 * model while `this.model` is already the promoted target. That state is not stale: drop the
-	 * dead turn and retry on the promoted model. Applies only when the current model IS the failed
-	 * model's promotion target with a strictly larger window, so stale errors from models the user
-	 * switched away from keep surfacing untouched. Returns whether it scheduled the retry.
-	 */
-	async #retryOverflowOnPromotedModel(
-		assistantMessage: AssistantMessage,
-		contextWindow: number,
-		generation: number,
-	): Promise<boolean> {
-		const currentModel = this.model;
-		if (
-			assistantMessage.stopReason !== "error" ||
-			!currentModel ||
-			contextWindow <= 0 ||
-			!this.settings.getGroup("contextPromotion").enabled
-		) {
-			return false;
-		}
-		const failedModel = this.#config.modelRegistry.find(assistantMessage.provider, assistantMessage.model);
-		if (!failedModel) return false;
-		const failedWindow = failedModel.contextWindow ?? 0;
-		const promotionTarget = contextPromotionTarget(failedModel, this.#config.modelRegistry.getAvailable());
-		if (
-			failedWindow <= 0 ||
-			contextWindow <= failedWindow ||
-			!promotionTarget ||
-			!modelsAreEqual(promotionTarget, currentModel) ||
-			!AIError.isContextOverflow(assistantMessage, failedWindow)
-		) {
-			return false;
-		}
-		removeAssistantMessageFromActiveContext(this.agent, assistantMessage);
-		await this.#dropPersistedAssistantTurn(assistantMessage);
-		logger.debug("Overflow on pre-promotion model; retrying on promoted model", {
-			failed: `${assistantMessage.provider}/${assistantMessage.model}`,
-			current: `${currentModel.provider}/${currentModel.id}`,
-		});
-		this.#scheduleAgentContinue({ delayMs: 100, generation });
-		return true;
-	}
-
-	/**
-	 * Case 3: output-side incomplete. `response.incomplete` from OpenAI Responses (and Codex) maps
-	 * to stopReason === "length": the model burned its `max_output_tokens` budget on reasoning or
-	 * text and emitted no actionable deliverable. Same recovery class as an overflow: promotion if
-	 * available, otherwise in-place compaction.
-	 */
-	async #recoverIncompleteTurn(
-		assistantMessage: AssistantMessage,
-		generation: number,
-		autoContinue: boolean,
-	): Promise<CompactionCheckResult> {
-		// Same active-context vs persisted-history split as the overflow path:
-		// clear the dead turn from agent state so it cannot be replayed, but keep
-		// it on the branch unless promotion or compaction actually runs.
-		removeAssistantMessageFromActiveContext(this.agent, assistantMessage);
-
-		if (await this.#tryContextPromotion(assistantMessage)) {
-			await this.#dropPersistedAssistantTurn(assistantMessage);
-			logger.debug("Context promotion triggered by response.incomplete (length stop)", {
-				from: `${assistantMessage.provider}/${assistantMessage.model}`,
-			});
-			this.#scheduleAgentContinue({ delayMs: 100, generation });
-			return COMPACTION_CHECK_CONTINUATION;
-		}
-
-		const compactionSettings = this.settings.getGroup("compaction");
-		if (compactionSettings.enabled) {
-			logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
-				model: `${assistantMessage.provider}/${assistantMessage.model}`,
-				strategy: compactionSettings.strategy,
-			});
-			return await this.#runRecoveryCompactionWithRollback("incomplete", assistantMessage, {
-				autoContinue,
-				triggerContextTokens: calculateContextTokens(assistantMessage.usage),
-			});
-		}
-		// Same dead end as the overflow path: the truncated turn is the only
-		// record of why the turn stopped, and the cleanup above took it out.
-		restoreFailedAssistantTurnToActiveContext(this.agent, assistantMessage);
-		logger.warn("response.incomplete with no recovery path (promotion + compaction both unavailable)", {
-			model: `${assistantMessage.provider}/${assistantMessage.model}`,
-		});
-		return COMPACTION_CHECK_NONE;
-	}
-
-	/**
-	 * Case 4: the turn succeeded but the context is getting large. Prunes stale and overflowing
-	 * tool results every turn, then promotes or compacts once the context crosses the threshold.
-	 */
-	async #maintainContextAfterTurn(
-		assistantMessage: AssistantMessage,
-		contextWindow: number,
-		sameModel: boolean,
-		predatesCompaction: boolean,
-		autoContinue: boolean,
-	): Promise<CompactionCheckResult> {
-		// Stale-result pass runs every turn, before any threshold gating: it is
-		// cheap (bails when no candidate) and independent of the compaction
-		// setting.
-		const supersedeResult = await this.#rewrites.pruneStale();
-
-		const compactionSettings = this.settings.getGroup("compaction");
-		if (!compactionSettings.enabled) return COMPACTION_CHECK_NONE;
-
-		// Skip if this was an error (non-overflow errors don't have usage data)
-		if (assistantMessage.stopReason === "error") return COMPACTION_CHECK_NONE;
-		const pruneResult = await this.#rewrites.pruneOverflow();
-		const maintenanceTokensFreed = (supersedeResult?.tokensSaved ?? 0) + (pruneResult?.tokensSaved ?? 0);
-		// An assistant that predates the latest compaction carries stale, pre-rewrite
-		// `usage`: the scheduled auto-continue re-enters this check with the kept
-		// assistant (#promptWithMessage → #checkCompaction), and its old high prompt
-		// count would re-trip the threshold on a freshly compacted history. Drop the
-		// stale provider number for those messages and let the live stored estimate
-		// (the floor applied below) drive the decision instead.
-		const assistantUsageContextTokens = predatesCompaction ? 0 : calculateContextTokens(assistantMessage.usage);
-		const storedContextTokens = this.#context.estimateStoredTokens();
-		// Pruning frees bytes for the NEXT prompt; it does not change the size of
-		// the prompt the LLM just billed for. Earlier revisions subtracted the
-		// per-turn supersede/prune `tokensSaved` from the threshold input, which
-		// let a long-running `/goal` session sit above `compaction.threshold`
-		// indefinitely whenever per-turn pruning saved enough to drop the
-		// post-prune estimate below the user-configured trigger: the visible
-		// context (anchored to the same provider billing) still showed >threshold,
-		// but `shouldCompact` no-op'd (#3174). Anchor the initial trigger on the
-		// last turn's billed context tokens, floored by the post-prune
-		// stored-conversation estimate so a payload-compression hook still cannot
-		// deflate the trigger.
-		const contextTokens = compactionContextTokens(assistantUsageContextTokens, storedContextTokens);
-		const postMaintenanceContextTokens = compactionContextTokens(
-			Math.max(0, assistantUsageContextTokens - maintenanceTokensFreed),
-			storedContextTokens,
-		);
-		const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
-		this.#compaction.noticeCompactionThresholdClamp(contextWindow, compactionSettings);
-		const shouldThresholdCompact = shouldCompact(contextTokens, contextWindow, compactionSettings);
-		logger.debug("Auto-compaction threshold decision", {
-			phase: "post-agent-end",
-			goalModeEnabled: this.#goalModeState?.enabled === true,
-			goalStatus: this.#goalModeState?.goal.status,
-			stopReason: assistantMessage.stopReason,
-			sameModel,
-			contextWindow,
-			strategy: compactionSettings.strategy,
-			thresholdTokens,
-			assistantUsageContextTokens,
-			storedContextTokens,
-			resolvedContextTokens: contextTokens,
-			postMaintenanceContextTokens,
-			maintenanceTokensFreed,
-			shouldCompact: shouldThresholdCompact,
-			contextPromotionEnabled: this.settings.get("contextPromotion.enabled") === true,
-		});
-		if (!shouldThresholdCompact) return COMPACTION_CHECK_NONE;
-		// Try promotion first — if a larger model is available, switch instead of compacting
-		if (!(await this.#tryContextPromotion(assistantMessage))) {
-			return await this.#compaction.runAutoCompaction("threshold", false, {
-				autoContinue,
-				triggerContextTokens: postMaintenanceContextTokens,
-				phase: "pre_turn",
-			});
-		}
-		logger.debug("Auto-compaction threshold satisfied but context promotion took over", {
-			contextTokens,
-			contextWindow,
-			model: `${assistantMessage.provider}/${assistantMessage.model}`,
-		});
-		return COMPACTION_CHECK_NONE;
-	}
-
-	/**
-	 * Drop a recoverable assistant turn from the persisted session branch once a
-	 * recovery path (context promotion or compaction) is committed. Waits for the
-	 * in-flight `message_end` persistence slot first so the branch entry exists
-	 * before we reparent past it. Active context removal is the caller's
-	 * responsibility — recovery paths clear it eagerly so the retry never
-	 * replays the failed turn, while no-recovery paths leave the persisted entry
-	 * (and the user-visible transcript line) in place.
-	 */
-	async #dropPersistedAssistantTurn(assistantMessage: AssistantMessage): Promise<void> {
-		await this.#persistence.waitFor(assistantMessage);
-		this.#discardAssistantTurn(assistantMessage);
-	}
-
-	/**
-	 * Drop the failed assistant turn from persisted history, run
-	 * {@link CompactionRuntime.runAutoCompaction} for an `overflow` / `incomplete` recovery, and
-	 * restore the assistant entry if compaction did not actually commit
-	 * anything (no usable model/preparation, hook cancel, compaction error,
-	 * or a no-progress automatic-continuation block before any summary was
-	 * written).
-	 *
-	 * Compaction has to see a clean branch — otherwise its `prepareCompaction`
-	 * pass would keep the failed turn in the kept region and the retry would
-	 * replay it. But a return that was not paired with a fresh compaction
-	 * summary or a successful history rewrite means no recovery is in progress,
-	 * even if queued user input gets drained next. Restoring the failed turn
-	 * before that continuation preserves the visible stop reason and rebuilds the
-	 * active assistant tail that `Agent.continue()` needs to dequeue follow-ups.
-	 */
-	async #runRecoveryCompactionWithRollback(
-		reason: "overflow" | "incomplete",
-		assistantMessage: AssistantMessage,
-		options: { autoContinue: boolean; triggerContextTokens?: number },
-	): Promise<CompactionCheckResult> {
-		const compactionEntryBefore = getLatestCompactionEntry(this.sessionManager.getBranch());
-		await this.#dropPersistedAssistantTurn(assistantMessage);
-		const result = await this.#compaction.runAutoCompaction(reason, true, {
-			autoContinue: options.autoContinue,
-			triggerContextTokens: options.triggerContextTokens,
-			phase: "mid_turn",
-		});
-		const compactionEntryAfter = getLatestCompactionEntry(this.sessionManager.getBranch());
-		if (result.historyRewritten !== true && compactionEntryAfter === compactionEntryBefore) {
-			this.#restoreFailedAssistantTurn(assistantMessage);
-		}
-		return result;
-	}
-
-	/**
-	 * Restore a failed assistant turn after a recovery attempt that dropped the
-	 * persisted entry and then committed nothing.
-	 */
-	#restoreFailedAssistantTurn(assistantMessage: AssistantMessage): void {
-		if (!isEmptyErrorTurn(assistantMessage)) this.sessionManager.appendMessage(assistantMessage);
-		restoreFailedAssistantTurnToActiveContext(this.agent, assistantMessage);
 	}
 
 	/**
@@ -7951,25 +7608,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Attempt context promotion to a larger model.
-	 * Returns true if promotion succeeded (caller should retry without compacting).
-	 */
-	async #tryContextPromotion(assistantMessage: AssistantMessage): Promise<boolean> {
-		const currentModel = this.model;
-		if (!currentModel) return false;
-		// The overflow/length error may have come from a model the user already
-		// switched away from; only promote when the failing turn was this model.
-		if (assistantMessage.provider !== currentModel.provider || assistantMessage.model !== currentModel.id)
-			return false;
-		return this.#promoteContextModel();
-	}
-
-	/**
 	 * Switch to a larger-context sibling when context promotion is enabled and a
 	 * target with a strictly larger window (and a usable key) exists. Returns true
 	 * when the model was switched, so the caller can retry without compacting.
-	 * Message-independent core shared by the post-turn overflow path
-	 * ({@link #tryContextPromotion}) and the pre-prompt threshold path
+	 * Message-independent core shared by the post-turn check ({@link TurnContextCheck})
+	 * and the pre-prompt threshold path
 	 * ({@link #runPrePromptCompactionIfNeeded}).
 	 */
 	async #promoteContextModel(): Promise<boolean> {

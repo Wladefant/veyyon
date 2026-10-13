@@ -35,7 +35,6 @@ import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mo
 import { ModelRegistry } from "./config/model-registry";
 import { openaiWebsocketPreference } from "./config/openai-websockets-mode";
 import type { PromptTemplate } from "./config/prompt-templates";
-import { buildServiceTierByFamily } from "./config/service-tier";
 import { Settings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import { initializeWithSettings } from "./discovery";
@@ -70,7 +69,7 @@ import { discoverAuthStorage } from "./session/auth-broker-config";
 import { type SessionCpuExecHooks, sessionCpuExecHooks } from "./session/cpu-limit";
 import { LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "./session/messages";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
-import { StartupModelSelection } from "./session/startup-model";
+import { StartupModelSelection, startingServiceTierByFamily } from "./session/startup-model";
 import { orderSessionDisposal } from "./session/top-level-sessions";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
@@ -1268,7 +1267,11 @@ class SessionStartup {
 		const { model, effectiveThinkingLevel } = this.#modelSelection;
 		const toolRegistry = this.#toolRegistry;
 		this.#preferWebsockets = openaiWebsocketPreference(settings.get("providers.openaiWebsockets"));
-		this.#serviceTierByFamily = this.#initialServiceTierByFamily();
+		this.#serviceTierByFamily = startingServiceTierByFamily(
+			this.#hasServiceTierEntry,
+			this.#restoredContext,
+			settings,
+		);
 		this.#sideStreamFn = wrapStreamFnWithProviderConcurrency(settings, createSettingsAwareStreamFn(settings));
 		const agent: Agent = new Agent({
 			initialState: {
@@ -1355,17 +1358,6 @@ class SessionStartup {
 			recordNewSessionDefaults(sessionManager, model, this.#modelSelection, this.#serviceTierByFamily);
 		}
 		return agent;
-	}
-
-	/** The service tier a resumed session recorded, else the settings tiers. */
-	#initialServiceTierByFamily(): ServiceTierByFamily {
-		if (this.#hasServiceTierEntry) return this.#restoredContext.serviceTier ?? {};
-		const settings = this.#settings;
-		return buildServiceTierByFamily(
-			settings.get("tier.openai"),
-			settings.get("tier.anthropic"),
-			settings.get("tier.google"),
-		);
 	}
 
 	#createSession(

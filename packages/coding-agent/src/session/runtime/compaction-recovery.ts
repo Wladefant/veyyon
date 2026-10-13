@@ -376,7 +376,7 @@ export class CompactionRecovery {
 	 * and findCutPoint can only cut at turn boundaries (never tool results), so
 	 * a single oversized recent turn (e.g. a huge tool result) leaves the
 	 * rewritten context still above threshold. Scheduling the continuation
-	 * regardless means the next agent_end re-enters #checkCompaction over the
+	 * regardless means the next agent_end re-enters TurnContextCheck.check over the
 	 * same oversized tail and re-fires forever.
 	 *
 	 * The retry only needs the rebuilt prompt to fit the window again, measured

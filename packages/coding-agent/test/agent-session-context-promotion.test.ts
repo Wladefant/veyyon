@@ -126,7 +126,7 @@ describe("AgentSession context promotion", () => {
 
 	// Deterministically drain the fire-and-forget `agent_end` handler that
 	// `emitExternalEvent` dispatches. The handler's terminal maintenance work
-	// (`#checkCompaction`) is microtask-based on the no-promotion paths, so a
+	// (`TurnContextCheck.check`) is microtask-based on the no-promotion paths, so a
 	// single macrotask turn fully flushes it; `waitForIdle` then settles any
 	// tracked continuation. Used by the negative tests, which assert that *no*
 	// promotion happened and therefore need the handler to have actually run.
