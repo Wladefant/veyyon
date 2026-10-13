@@ -1172,6 +1172,7 @@ class SessionStartup {
 				rulebookRules,
 				alwaysApplyRules,
 			},
+			supplied: this.#options,
 			getCwd: () => this.#sessionManager.getCwd(),
 			discover: liveCwd => discoverProjectInputs(liveCwd, this.#agentDir, settings, this.#options),
 			ttsrManager: this.#ttsrManager,
@@ -1189,7 +1190,11 @@ class SessionStartup {
 		toolSession.rules = next.rules;
 		if (this.#session) {
 			this.#session.replaceSkills(next.skills);
-			this.#session.replaceProjectAdvisorScope(projectAdvisorScope(next));
+			const nextAdvisorScope = projectAdvisorScope(next);
+			if (JSON.stringify(this.#advisorScope) !== JSON.stringify(nextAdvisorScope)) {
+				this.#advisorScope = nextAdvisorScope;
+				this.#session.replaceProjectAdvisorScope(nextAdvisorScope);
+			}
 		}
 		reportSkillWarnings(this.#operatorNotices, next.skillWarnings);
 		this.#ttsrManager.reportUnknownToolScopes(this.#toolRegistry.keys());
@@ -1551,6 +1556,7 @@ class SessionStartup {
 			preferWebsockets: this.#preferWebsockets,
 			convertToLlm: hooks.convertToLlm,
 			rebuildSystemPrompt: (toolNames, tools) => this.#rebuildSystemPrompt(toolNames, tools),
+			reloadProjectInputs: () => this.#promptInputs.reload(),
 			reloadSshTool: () => this.#reloadSshTool(),
 			requestedToolNames: this.#requestedToolNames,
 			setActiveToolNames: this.#tools.setActiveToolNames,

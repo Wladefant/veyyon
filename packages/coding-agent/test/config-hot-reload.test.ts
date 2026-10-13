@@ -118,7 +118,7 @@ describe("config hot reload", () => {
 		const history: string[] = [];
 		const ctx = {
 			settings,
-			session: { isCompacting: false },
+			session: { isCompacting: false, reloadRules: async () => [] },
 			sessionManager: { getCwd: () => dir },
 			editor: {
 				getExpandedText: () => draft,
@@ -164,9 +164,7 @@ describe("config hot reload", () => {
 			output: text => {
 				output.push(text);
 			},
-			get session(): never {
-				throw new Error("reload must not rebind the session");
-			},
+			session: { reloadRules: async () => [] } as unknown as AgentSession,
 			get sessionManager(): never {
 				throw new Error("reload must not touch session persistence");
 			},

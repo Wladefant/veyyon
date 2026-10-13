@@ -23,7 +23,7 @@
  * normalization, which each surface applies afterwards and differently.
  */
 import { describe, expect, it } from "bun:test";
-import { stripTaskResultEnvelope } from "../src/task-result";
+import { isTerminalYieldToolResult, stripTaskResultEnvelope } from "../src/task-result";
 
 /** An envelope in the shape the prompt emits, with the attributes it always carries. */
 function envelope(inner: string): string {
@@ -69,5 +69,26 @@ describe("the task-result envelope has one reader", () => {
 		expect(stripTaskResultEnvelope(unterminated)).toBe(unterminated);
 		const noBody = envelope('<meta lines="0" size="0" />');
 		expect(stripTaskResultEnvelope(noBody)).toBe(noBody);
+	});
+});
+
+describe("isTerminalYieldToolResult", () => {
+	it("identifies a bare terminal yield", () => {
+		expect(isTerminalYieldToolResult({ toolName: "yield" })).toBe(true);
+		expect(isTerminalYieldToolResult({ toolName: "yield", result: { details: { status: "success" } } })).toBe(true);
+	});
+
+	it("distinguishes non-terminal multi-part yield sections", () => {
+		expect(
+			isTerminalYieldToolResult({
+				toolName: "yield",
+				result: { details: { status: "success", type: ["section"] } },
+			}),
+		).toBe(false);
+	});
+
+	it("returns false for non-yield tools and error yields", () => {
+		expect(isTerminalYieldToolResult({ toolName: "bash" })).toBe(false);
+		expect(isTerminalYieldToolResult({ toolName: "yield", isError: true })).toBe(false);
 	});
 });
