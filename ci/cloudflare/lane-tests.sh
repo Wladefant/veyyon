@@ -131,6 +131,10 @@ echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test
 # counts separately from child-command chunk totals and replays details on failure.
 export CI=true
 export VEYYON_TEST_CONCURRENCY=2
+report_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+test_report_root="$proof_tools/test-reports/run-$report_run_id"
+sandbox_test_report_root="$sandbox_repo_root/.cf-proof-tools/test-reports/run-$report_run_id"
+mkdir -p "$test_report_root"
 test_passes=0
 test_failures=0
 test_skips=0
@@ -143,16 +147,26 @@ chunk_failures=0
 run_bucket() {
   local mode="$1"
   echo "CLOUDFLARE_TEST_BUCKET_START $mode"
+  local bucket_report_dir="$test_report_root/$mode"
+  local sandbox_report_dir="$sandbox_test_report_root/$mode"
+  mkdir -p "$bucket_report_dir"
   local bucket_log
   bucket_log="$(mktemp)"
   local bucket_status=0
   if bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
     'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin_dir" \
-    "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" 2>&1 | tee "$bucket_log"; then
+    "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" "--junit-report-dir=$sandbox_report_dir" 2>&1 | tee "$bucket_log"; then
     :
   else
     bucket_status=$?
   fi
+  local report_status=0
+  python3 ci/cloudflare/check-test-skips.py report "$bucket_report_dir" || report_status=$?
+  if (( report_status != 0 && bucket_status == 0 )); then
+    bucket_status=$report_status
+  fi
+  local bucket_junit_reports
+  bucket_junit_reports="$(find "$bucket_report_dir" -type f -name '*.xml' | wc -l | tr -d '[:space:]')"
   read -r bucket_chunk_passes bucket_chunk_failures bucket_passes bucket_failures \
     bucket_skips bucket_todos bucket_reported bucket_files bucket_runs bucket_summaries < <(
     awk '
@@ -187,13 +201,14 @@ run_bucket() {
   test_reported=$((test_reported + bucket_reported))
   test_files=$((test_files + bucket_files))
   test_runs=$((test_runs + bucket_runs))
-  echo "CLOUDFLARE_TEST_BUCKET_END $mode chunks_pass=$bucket_chunk_passes chunks_fail=$bucket_chunk_failures pass=$bucket_passes fail=$bucket_failures skip=$bucket_skips todo=$bucket_todos reported=$bucket_reported files=$bucket_files runs=$bucket_runs"
+  echo "CLOUDFLARE_TEST_BUCKET_END $mode chunks_pass=$bucket_chunk_passes chunks_fail=$bucket_chunk_failures pass=$bucket_passes fail=$bucket_failures skip=$bucket_skips todo=$bucket_todos reported=$bucket_reported files=$bucket_files runs=$bucket_runs junit_reports=$bucket_junit_reports"
   rm -f "$bucket_log"
   local bucket_tests=$((bucket_passes + bucket_failures + bucket_skips + bucket_todos))
   if (( bucket_status == 0 )) && \
     (( bucket_summaries > 0 && bucket_runs > 0 && bucket_files > 0 && bucket_tests > 0 && \
        bucket_reported == bucket_tests && bucket_chunk_passes > 0 && bucket_chunk_failures == 0 && \
-       bucket_passes > 0 && bucket_failures == 0 && bucket_skips == 0 && bucket_todos == 0 )); then
+       bucket_passes > 0 && bucket_failures == 0 && bucket_todos == 0 && \
+       bucket_junit_reports == bucket_runs )); then
     return 0
   fi
   if (( bucket_status != 0 )); then
@@ -247,11 +262,18 @@ run_bucket scripts
 
 # Require real test cases and matching test-runner totals; chunk completion is reported separately.
 test_total=$((test_passes + test_failures + test_skips + test_todos))
-if (( test_total == 0 || test_passes == 0 || test_failures != 0 || test_skips != 0 || \
+skip_allowlist_status=0
+if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --expected-total "$test_skips"; then
+  echo 'CLOUDFLARE_SKIP_ALLOWLIST=passed'
+else
+  skip_allowlist_status=$?
+  echo "CLOUDFLARE_SKIP_ALLOWLIST=failed status=$skip_allowlist_status"
+fi
+if (( test_total == 0 || test_passes == 0 || test_failures != 0 || \
       test_todos != 0 || test_reported != test_total || test_files == 0 || test_runs == 0 || \
       chunk_passes == 0 || chunk_failures != 0 )); then
   echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures skip=$test_skips todo=$test_todos tests=$test_total reported=$test_reported files=$test_files runs=$test_runs chunks_pass=$chunk_passes chunks_fail=$chunk_failures"
-  echo 'Expected positive named test counts, zero failures, no skipped or todo tests, and matching reports.' >&2
+  echo 'Expected positive named test counts, zero failures, zero todos, and matching runner and JUnit reports.' >&2
   exit 1
 fi
 echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures skip=$test_skips todo=$test_todos tests=$test_total reported=$test_reported files=$test_files runs=$test_runs chunks_pass=$chunk_passes chunks_fail=$chunk_failures"
@@ -262,5 +284,9 @@ echo 'CLOUDFLARE_RUST_BUILD=passed'
 
 # Build the production Linux x64 CLI binary using the release's canonical compiler.
 RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
-
 npx --yes wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc
+
+echo 'CLOUDFLARE_WORKER_UPLOAD=passed'
+if (( skip_allowlist_status != 0 )); then
+  exit "$skip_allowlist_status"
+fi

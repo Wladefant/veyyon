@@ -131,6 +131,12 @@ process.on("exit", () => {
 const args = process.argv.slice(2);
 const isDryRun = args.includes("--dry-run");
 const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
+const junitReportDirArg = args.find(arg => arg.startsWith("--junit-report-dir="));
+const junitReportDirValue = junitReportDirArg?.slice("--junit-report-dir=".length);
+if (junitReportDirValue === "") {
+	throw new Error("--junit-report-dir requires a path");
+}
+const junitReportDir = junitReportDirValue ? path.resolve(junitReportDirValue) : null;
 // `--only-failures` is Bun's output filter — it hides passing tests within each
 // chunk, keeping the log terse, and is the default here (CI and the root
 // `test:ts` aggregate append it). It does NOT skip tests or share any
@@ -963,9 +969,21 @@ async function settleWithin(promise: Promise<unknown>, milliseconds: number): Pr
 	return settled;
 }
 
+function commandWithJUnitReport(testCommand: TestCommand): string[] {
+	if (!junitReportDir || testCommand.command[1] !== "test") {
+		return testCommand.command;
+	}
+	nodeFs.mkdirSync(junitReportDir, { recursive: true });
+	const scope = testCommand.cwd === "." ? "root" : testCommand.cwd.replaceAll("/", "__");
+	const label = testCommand.label.replaceAll(/[^A-Za-z0-9_.-]/g, "_");
+	const reportPath = path.join(junitReportDir, `${scope}--${label}.xml`);
+	return [...testCommand.command, "--reporter=junit", `--reporter-outfile=${reportPath}`];
+}
+
 async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
-	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
+	const command = commandWithJUnitReport(testCommand);
+	const renderedCommand = command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
 	console.log(`$ ${renderedCommand}`);
 
@@ -977,7 +995,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	const startedAt = performance.now();
 	const stdout = { text: "" };
 	const stderr = { text: "" };
-	const proc = Bun.spawn(testCommand.command, {
+	const proc = Bun.spawn(command, {
 		cwd,
 		env,
 		stdout: quiet ? "pipe" : "inherit",
@@ -1340,9 +1358,10 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			if (!testCommand) {
 				return;
 			}
-			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
+			const command = commandWithJUnitReport(testCommand);
+			const renderedCommand = command.map(shellQuote).join(" ");
 			const startedAt = performance.now();
-			const proc = Bun.spawn(testCommand.command, {
+			const proc = Bun.spawn(command, {
 				cwd: path.join(repoRoot, testCommand.cwd),
 				env,
 				stdout: "pipe",
