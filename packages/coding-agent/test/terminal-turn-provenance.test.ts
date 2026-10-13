@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { createTerminalTranscriptProjector } from "../src/modes/terminal/terminal-control";
+import { createTerminalTranscriptProjector } from "../src/session/session-history-format";
 
 const entry = (message: unknown) => ({ type: "message", message }) as SessionEntry;
 const answer = (names: string[] = [], stopReason = "stop") =>
