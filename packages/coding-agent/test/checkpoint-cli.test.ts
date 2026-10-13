@@ -16,7 +16,9 @@ test("separate CLI invocations on one host use independent lease owners", async 
 		url: process.env.VEYYON_CHECKPOINT_URL,
 		token: process.env.VEYYON_CHECKPOINT_TOKEN,
 		key: process.env.VEYYON_CHECKPOINT_KEY,
+		node: process.env.VEYYON_CHECKPOINT_NODE,
 	};
+	delete process.env.VEYYON_CHECKPOINT_NODE;
 	process.env.VEYYON_CHECKPOINT_URL = "https://checkpoint.invalid";
 	process.env.VEYYON_CHECKPOINT_TOKEN = "test";
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32).toString("base64");
@@ -52,6 +54,7 @@ test("separate CLI invocations on one host use independent lease owners", async 
 			VEYYON_CHECKPOINT_URL: previousEnv.url,
 			VEYYON_CHECKPOINT_TOKEN: previousEnv.token,
 			VEYYON_CHECKPOINT_KEY: previousEnv.key,
+			VEYYON_CHECKPOINT_NODE: previousEnv.node,
 		})) {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
