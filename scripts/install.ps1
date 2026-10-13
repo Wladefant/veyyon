@@ -27,6 +27,8 @@ param(
     [switch]$Binary,
     [switch]$Local,
     [string]$Ref,
+    [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
+    [string]$Repository = "santhreal/veyyon",
     [switch]$NoVerify,
     [switch]$Force,
     [switch]$Uninstall,
@@ -50,7 +52,7 @@ try {
     # protocol available. Nothing to do there, and nothing to report.
 }
 
-$Repo = "santhreal/veyyon"
+$Repo = $Repository
 $RepoUrl = "https://github.com/$Repo.git"
 $InstallDir = if ($env:VEYYON_INSTALL_DIR) { $env:VEYYON_INSTALL_DIR } else { "$env:LOCALAPPDATA\veyyon" }
 $SrcDir = if ($env:VEYYON_SRC_DIR) { $env:VEYYON_SRC_DIR } else { "$env:USERPROFILE\.veyyon\src" }
