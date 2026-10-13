@@ -40,11 +40,15 @@ def _repo_relative_file(case: ET.Element, suite: ET.Element, report: Path, repo_
     return PurePosixPath(raw).as_posix()
 
 
-def _read_skips(report_root: Path, repo_root: Path) -> tuple[Counter[tuple[str, str]], list[Path]]:
+def _read_skips(
+    report_root: Path, repo_root: Path
+) -> tuple[Counter[tuple[str, str]], list[Path], list[dict[str, str]], list[dict[str, str]]]:
     reports = _report_files(report_root)
     if not reports:
         raise ValueError(f"no JUnit XML reports found under {report_root}")
     skips: Counter[tuple[str, str]] = Counter()
+    unidentified: list[dict[str, str]] = []
+    suite_fallbacks: list[dict[str, str]] = []
     for report in reports:
         root = ET.parse(report).getroot()
         suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
@@ -52,18 +56,67 @@ def _read_skips(report_root: Path, repo_root: Path) -> tuple[Counter[tuple[str, 
             for case in suite.findall("testcase"):
                 if case.find("skipped") is None:
                     continue
-                file_name = _repo_relative_file(case, suite, report, repo_root)
-                test_name = case.get("name")
-                test_class = case.get("classname")
+                try:
+                    file_name = _repo_relative_file(case, suite, report, repo_root)
+                except ValueError as error:
+                    file_name = case.get("file") or suite.get("file") or ""
+                    unidentified.append(
+                        {
+                            "file": file_name,
+                            "testcase_name": case.get("name", ""),
+                            "testcase_classname": case.get("classname", ""),
+                            "suite_name": suite.get("name", ""),
+                            "suite_classname": suite.get("classname", ""),
+                            "report": report.name,
+                            "error": str(error),
+                        }
+                    )
+                    continue
+                test_name = case.get("name") or ""
+                test_class = case.get("classname") or ""
                 if not test_name or not test_class:
-                    raise ValueError(f"JUnit skipped testcase needs classname and name: {report}")
+                    suite_name = suite.get("name") or ""
+                    suite_class = suite.get("classname") or ""
+                    safe_case_attributes = {
+                        key: value for key, value in case.attrib.items() if key in {"name", "classname", "file", "time"}
+                    }
+                    raw_case = ET.Element(case.tag, safe_case_attributes)
+                    raw_case.append(ET.Element("skipped"))
+                    case_xml = ET.tostring(raw_case, encoding="unicode")
+                    if not test_name:
+                        test_name = suite_name
+                    if not test_class:
+                        test_class = suite_class
+                    if not test_name or not test_class:
+                        unidentified.append(
+                            {
+                                "file": file_name,
+                                "testcase_name": case.get("name", ""),
+                                "testcase_classname": case.get("classname", ""),
+                                "suite_name": suite_name,
+                                "suite_classname": suite_class,
+                                "report": report.name,
+                                "junit_case": case_xml,
+                            }
+                        )
+                        continue
+                    suite_fallbacks.append(
+                        {
+                            "file": file_name,
+                            "test": f"{test_class} > {test_name}",
+                            "report": report.name,
+                            "junit_case": case_xml,
+                        }
+                    )
                 test_name = f"{test_class} > {test_name}"
                 skips[(file_name, test_name)] += 1
-    return skips, reports
+    return skips, reports, unidentified, suite_fallbacks
 
 
-def _read_allowlist(path: Path) -> dict[tuple[str, str], dict[str, str]]:
+def _read_allowlist(path: Path, shard: str) -> dict[tuple[str, str], dict[str, str]]:
     entries: dict[tuple[str, str], dict[str, str]] = {}
+    seen: set[tuple[str, str]] = set()
+    expected_fields = {"file", "test", "class", "reason", "shard"}
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
@@ -71,17 +124,23 @@ def _read_allowlist(path: Path) -> dict[tuple[str, str], dict[str, str]]:
             entry = json.loads(line)
         except json.JSONDecodeError as error:
             raise ValueError(f"{path}:{line_number}: invalid JSON: {error}") from error
-        if not isinstance(entry, dict) or set(entry) != {"file", "test", "class", "reason"}:
-            raise ValueError(f"{path}:{line_number}: expected exactly file, test, class, reason")
+        if not isinstance(entry, dict) or set(entry) != expected_fields:
+            raise ValueError(
+                f"{path}:{line_number}: expected exactly file, test, class, reason, shard"
+            )
         if not all(isinstance(entry[key], str) and entry[key].strip() for key in entry):
             raise ValueError(f"{path}:{line_number}: all fields must be non-empty strings")
         if entry["class"] not in VALID_CLASSES:
             raise ValueError(f"{path}:{line_number}: unsupported gate class {entry['class']!r}")
+        if entry["shard"] not in {"1/3", "2/3", "3/3"}:
+            raise ValueError(f"{path}:{line_number}: unsupported shard {entry['shard']!r}")
         file_name = PurePosixPath(entry["file"].replace("\\", "/")).as_posix()
         key = (file_name, entry["test"])
-        if key in entries:
+        if key in seen:
             raise ValueError(f"{path}:{line_number}: duplicate skip entry {key!r}")
-        entries[key] = entry
+        seen.add(key)
+        if entry["shard"] == shard:
+            entries[key] = entry
     return entries
 
 
@@ -91,15 +150,32 @@ def main() -> int:
     parser.add_argument("report_root", type=Path)
     parser.add_argument("allowlist", type=Path, nargs="?")
     parser.add_argument("--expected-total", type=int)
+    parser.add_argument("--shard")
     args = parser.parse_args()
     repo_root = Path.cwd()
     try:
-        actual, reports = _read_skips(args.report_root, repo_root)
-        if args.expected_total is not None and sum(actual.values()) != args.expected_total:
-            raise ValueError(
-                f"JUnit skip count {sum(actual.values())} does not match runner summary {args.expected_total}"
+        if args.shard is not None and args.shard not in {"1/3", "2/3", "3/3"}:
+            raise ValueError(f"unsupported shard {args.shard!r}")
+        if args.mode == "check" and args.shard is None:
+            raise ValueError("check mode requires --shard <index>/3")
+        actual, reports, unidentified, suite_fallbacks = _read_skips(args.report_root, repo_root)
+        named_total = sum(actual.values())
+        total = named_total + len(unidentified)
+        count_mismatch = args.expected_total is not None and total != args.expected_total
+        print(
+            f"CLOUDFLARE_JUNIT_REPORTS count={len(reports)} skips={total} "
+            f"named={named_total} unidentified={len(unidentified)} suite_fallbacks={len(suite_fallbacks)}"
+        )
+        for entry in suite_fallbacks:
+            print(
+                "CLOUDFLARE_TEST_SKIP_SUITE_FALLBACK "
+                f"{json.dumps(entry, ensure_ascii=False, sort_keys=True)}"
             )
-        print(f"CLOUDFLARE_JUNIT_REPORTS count={len(reports)} skips={sum(actual.values())}")
+        for entry in unidentified:
+            print(
+                "CLOUDFLARE_TEST_SKIP_UNIDENTIFIED "
+                f"{json.dumps(entry, ensure_ascii=False, sort_keys=True)}"
+            )
         if args.mode == "report":
             for (file_name, test_name), count in sorted(actual.items()):
                 for _ in range(count):
@@ -108,10 +184,14 @@ def main() -> int:
                         f"file={json.dumps(file_name, ensure_ascii=False)} "
                         f"test={json.dumps(test_name, ensure_ascii=False)}"
                     )
+            if count_mismatch:
+                print(
+                    f"CLOUDFLARE_SKIP_COUNT_MISMATCH expected={args.expected_total} actual={total}"
+                )
             return 0
         if args.allowlist is None:
             raise ValueError("check mode requires an allowlist path")
-        allowed = _read_allowlist(args.allowlist)
+        allowed = _read_allowlist(args.allowlist, args.shard)
         unlisted = actual - Counter({key: 1 for key in allowed})
         stale = Counter({key: 1 for key in allowed}) - actual
         class_counts: Counter[str] = Counter()
@@ -138,11 +218,15 @@ def main() -> int:
                 f"file={json.dumps(file_name, ensure_ascii=False)} "
                 f"test={json.dumps(test_name, ensure_ascii=False)} count={count}"
             )
+        if count_mismatch:
+            print(f"CLOUDFLARE_SKIP_COUNT_MISMATCH expected={args.expected_total} actual={total}")
         classes = ",".join(f"{name}:{class_counts[name]}" for name in sorted(VALID_CLASSES))
         print(
-            f"CLOUDFLARE_SKIP_ALLOWLIST_SUMMARY total={sum(actual.values())} "
+            f"CLOUDFLARE_SKIP_ALLOWLIST_SUMMARY total={total} "
             f"allowlisted={sum(class_counts.values())} by_class={classes}"
         )
+        if unidentified or count_mismatch:
+            return 2
         return 1 if unlisted or stale else 0
     except (OSError, ET.ParseError, ValueError) as error:
         print(f"CLOUDFLARE_SKIP_REPORT_ERROR {error}", file=sys.stderr)
@@ -151,3 +235,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
