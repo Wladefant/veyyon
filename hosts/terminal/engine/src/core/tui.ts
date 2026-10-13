@@ -2972,26 +2972,17 @@ export class TUI extends Container {
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(windowTop, historyEnd);
 		} else if (
-			this.#frameCursorMarkers.length > 0 &&
 			frameLength - this.#committedRows < height &&
-			this.#frameCursorMarkers.some(
-				marker => marker.row >= this.#committedRows || (frameLength <= this.#committedRows && marker.row >= 0),
-			)
+			this.#frameCursorMarkers.some(marker => marker.row >= this.#committedRows)
 		) {
 			// Tail re-anchor (a direct terminal may instead take the
 			// divergenceRebuild full paint above when the prefix resynced):
-			// either the frame shrank into the committed prefix, or the live tail
-			// below the committed boundary no longer fills the viewport while the
-			// focused cursor sits in it. Both happen when a tall transient block
-			// collapses — a streaming reply aborting after part of its
-			// declared-final prefix reached scrollback (the audit resyncs), a
-			// tall transient prompt (the ask dialog's inline editor) shrinking
-			// back to the one-line editor, or an ephemeral card (an IRC message,
-			// a displaced todo snapshot) retracting from under a tall live block
-			// whose rows had already scrolled off. Flooring windowTop at
-			// #committedRows would pin the editor mid-screen with blank rows
-			// underneath. The prompt NEVER floats, so the frame tail is re-shown
-			// even when the transcript still overflows the viewport.
+			// The live tail below the committed boundary no longer fills the
+			// viewport while a live cursor sits in it. A marker inside committed
+			// history is not a focus anchor and must not revive those rows.
+			// A collapsing transient prompt or ephemeral card can shorten the
+			// live region below the committed prefix. Keep the live editor at
+			// the viewport bottom instead of pinning it above blank rows.
 			//
 			// Re-shown is not re-committed. The rows above the new window top
 			// are already in native history; the commit index stays where it is,

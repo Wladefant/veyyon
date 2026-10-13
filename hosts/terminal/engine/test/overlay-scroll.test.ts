@@ -667,6 +667,29 @@ describe("TUI overlays", () => {
 		}
 	});
 
+	it("does not revive a cursor marker owned by native history", async () => {
+		const term = new VirtualTerminal(30, 6);
+		const tui = new TUI(term, true);
+		const lines = buildRows(64);
+		lines[2] += CURSOR_MARKER;
+		const component = new MutableContentComponent(lines);
+		tui.addChild(component);
+		try {
+			tui.start();
+			await flushRender(term, tui);
+			const history = term.getScrollBuffer().slice(0, -term.rows);
+			component.setLines(lines.slice(0, 56));
+			for (let i = 0; i < 2; i++) {
+				tui.requestRender();
+				await flushRender(term, tui);
+				expect(term.getViewport().map(line => line.trim())).toEqual(Array.from({ length: 6 }, () => ""));
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+			}
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("does not collapse committed rows back into the viewport", async () => {
 		const term = new VirtualTerminal(30, 6);
 		const tui = new TUI(term);
@@ -705,7 +728,14 @@ describe("TUI overlays", () => {
 			component.setLines([...buildRows(55), "divergent"]);
 			tui.requestRender();
 			await flushRender(term, tui);
-			expect(term.getViewport().map(line => line.trim())).toEqual(["divergent", "", "", "", "", ""]);
+			// An in-place edit of an audited history row does not make that row live.
+			expect(term.getViewport().map(line => line.trim())).toEqual(blank);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+
+			component.setLines([...buildRows(56), "live-suffix"]);
+			tui.requestRender();
+			await flushRender(term, tui);
+			expect(term.getViewport().map(line => line.trim())).toEqual(["live-suffix", "", "", "", "", ""]);
 			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 		} finally {
 			tui.stop();
