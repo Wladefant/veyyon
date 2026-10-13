@@ -86,6 +86,8 @@ test("a second device cannot admit the same cloud session while its owner lease 
 			key: new Uint8Array(32),
 			fetch: fake,
 		}),
+		undefined,
+		"runtime-b",
 	);
 	await first.admit();
 	await expect(second.admit()).rejects.toThrow(/409/);
@@ -136,8 +138,10 @@ test("a transfer claim is single-use across runtimes sharing the destination dev
 			"transferred",
 			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 			{ targetNode: "destination-device", claimToken: "one-use", epoch: 4 },
+			"runtime-b",
 		);
 		await first.admit();
+		expect(second.ownerNode).not.toBe(first.ownerNode);
 		expect(first.ownerNode).not.toBe("destination-device");
 		await expect(second.admit()).rejects.toThrow(/409/);
 		await first.close();

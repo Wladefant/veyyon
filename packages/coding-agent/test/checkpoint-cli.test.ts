@@ -87,7 +87,9 @@ test("an interrupted handoff retries without changing source or overwriting the 
 		null;
 	let leaseOwner = "transfer-owner";
 	let leaseEpoch = 1;
-	let transferReplay: { transferId: string; targetNode: string } | undefined;
+	let transferReplay:
+		| { transferId: string; ownerNode: string; epoch: number; targetNode: string; claimToken: string }
+		| undefined;
 	let interruptedTransferResponses = 2;
 	let interruptCommit = true;
 	const fakeFetch: CheckpointFetch = async (input, init) => {
@@ -109,9 +111,17 @@ test("an interrupted handoff retries without changing source or overwriting the 
 				ownerNode: string;
 				epoch: number;
 				targetNode: string;
+				claimToken: string;
 				transferId: string;
 			};
 			if (transferReplay?.transferId === request.transferId) {
+				if (
+					transferReplay.ownerNode !== request.ownerNode ||
+					transferReplay.epoch !== request.epoch ||
+					transferReplay.targetNode !== request.targetNode ||
+					transferReplay.claimToken !== request.claimToken
+				)
+					return Response.json({ error: "transfer replay mismatch" }, { status: 409 });
 				if (interruptedTransferResponses > 0) {
 					interruptedTransferResponses--;
 					return Response.json({ error: "ack interrupted" }, { status: 503 });
@@ -128,7 +138,13 @@ test("an interrupted handoff retries without changing source or overwriting the 
 				return Response.json({ error: "stale writer" }, { status: 409 });
 			leaseOwner = request.targetNode;
 			leaseEpoch++;
-			transferReplay = { transferId: request.transferId, targetNode: request.targetNode };
+			transferReplay = {
+				transferId: request.transferId,
+				ownerNode: request.ownerNode,
+				epoch: request.epoch,
+				targetNode: request.targetNode,
+				claimToken: request.claimToken,
+			};
 			if (interruptedTransferResponses > 0) {
 				interruptedTransferResponses--;
 				return Response.json({ error: "ack interrupted" }, { status: 503 });

@@ -58,7 +58,8 @@ export async function consumeSessionOwnershipClaim(
 	path: string,
 	marker: SessionOwnershipMarker,
 ): Promise<void> {
-	const { claimToken: _claimToken, ...consumed } = marker;
+	const consumed = { ...marker };
+	delete consumed.claimToken;
 	const temporary = `${path}.${randomUUID()}.tmp`;
 	await writeFile(temporary, JSON.stringify(consumed), { flag: "wx", mode: 0o600 });
 	try {

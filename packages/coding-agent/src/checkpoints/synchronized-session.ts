@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { CheckpointClient, CheckpointLease } from "./cloud-checkpoints";
+const runtimeOwner = randomUUID();
 /** One local runtime owns this guard. Losing its lease requires an explicit fork or transfer. */
 export class SynchronizedSession {
-	readonly ownerNode = randomUUID();
+	readonly ownerNode = runtimeOwner;
 	#timer?: NodeJS.Timeout;
 	#lease?: CheckpointLease;
-	#lost = false;
 	constructor(
 		readonly sessionId: string,
 		readonly client: CheckpointClient,
 		readonly claim?: { targetNode: string; claimToken?: string; epoch: number },
+		readonly ownerNode = runtimeOwner,
 	) {}
 	async admit(): Promise<void> {
 		if (this.#lost) throw new Error("Synchronized ownership lost. Start an explicit local fork.");

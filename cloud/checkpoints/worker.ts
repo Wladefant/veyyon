@@ -59,14 +59,14 @@ export class SessionAuthority {
  if(prior){
  if(prior.sourceNode!==body.ownerNode || prior.sourceEpoch!==body.epoch || prior.targetNode!==targetNode || prior.claimHash!==claimHash)return json({error:"transfer replay mismatch"},409);
  const active=await store.get<Lease>("lease");
- if(active?.ownerNode===targetNode && active.epoch===prior.targetEpoch && active.claimHash===claimHash && Date.parse(active.expiresAt)>Date.now()){const {claimHash:_hash,...visible}=active;return json(visible);}
+ if(active?.ownerNode===targetNode && active.epoch===prior.targetEpoch && active.claimHash===claimHash && Date.parse(active.expiresAt)>Date.now()){const visible={...active};delete visible.claimHash;return json(visible);}
  return json({error:"transfer claim no longer active"},409);
  }
  if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
  const next:Lease={...current,ownerNode:targetNode,targetNode,epoch:current.epoch+1,expiresAt:new Date(Date.now()+60000).toISOString(),claimHash,claimEpoch:current.epoch+1};
  await store.put("lease",next);
  await store.put(`transfer:${transferId}`,{sourceNode:current.ownerNode,sourceEpoch:current.epoch,targetNode,targetEpoch:next.epoch,claimHash});
- const {claimHash:_hash,...visible}=next;return json(visible);
+ const visible={...next};delete visible.claimHash;return json(visible);
  }
  if(action==="claim"){
  const targetNode=body.targetNode;const claimToken=body.claimToken;
@@ -80,7 +80,7 @@ export class SessionAuthority {
  return json({error:"claimed lease is no longer active"},409);
  }
  if(!live || current.ownerNode!==targetNode || current.targetNode!==targetNode || current.epoch!==body.epoch || current.claimEpoch!==body.epoch || current.claimHash!==claimHash)return json({error:"invalid or spent transfer claim"},409);
- const {claimHash:_hash,claimEpoch:_claimEpoch,...base}=current;
+ const base={...current};delete base.claimHash;delete base.claimEpoch;
  const next:Lease={...base,ownerNode:body.ownerNode as string,epoch:current.epoch+1,expiresAt:new Date(Date.now()+60000).toISOString()};
  await store.put("lease",next);
  await store.put(`claim:${claimHash}`,{targetNode,ownerNode:body.ownerNode,epoch:next.epoch});
