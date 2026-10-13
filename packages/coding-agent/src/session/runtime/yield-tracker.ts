@@ -13,12 +13,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import { TOOL } from "../../tools/core/builtin-names";
 
-/** The fields of a tool result that decide whether it ended the run. */
-export interface YieldToolResult {
-	toolName: string;
-	isError?: boolean;
-	result?: { details?: unknown };
-}
+export { isTerminalYieldToolResult, type YieldToolResult } from "@veyyon/wire/task-result";
 
 export class YieldTracker {
 	/** The `yield` call that ended the run, until a settle clears it. */
@@ -85,22 +80,6 @@ export class YieldTracker {
 	}
 }
 
-/**
- * Whether a tool result ends the run: a `yield` that did not fail, unless its details hold
- * `status: "success"` with a non-empty `type` list of strings.
- */
-export function isTerminalYieldToolResult(event: YieldToolResult): boolean {
-	if (event.toolName !== TOOL.yield || event.isError) return false;
-	const details = event.result?.details;
-	if (!details || typeof details !== "object") return true;
-	const record = details as Record<string, unknown>;
-	return !(
-		record.status === "success" &&
-		Array.isArray(record.type) &&
-		record.type.length > 0 &&
-		record.type.every(item => typeof item === "string")
-	);
-}
 
 function lastCallIsYield(message: AssistantMessage, toolCallId: string): boolean {
 	const lastToolCall = message.content.findLast((content): content is ToolCall => content.type === "toolCall");
