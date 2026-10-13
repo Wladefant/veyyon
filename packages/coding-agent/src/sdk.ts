@@ -1551,6 +1551,7 @@ class SessionStartup {
 			preferWebsockets: this.#preferWebsockets,
 			convertToLlm: hooks.convertToLlm,
 			rebuildSystemPrompt: (toolNames, tools) => this.#rebuildSystemPrompt(toolNames, tools),
+			reloadProjectInputs: () => this.#promptInputs.reload(),
 			reloadSshTool: () => this.#reloadSshTool(),
 			requestedToolNames: this.#requestedToolNames,
 			setActiveToolNames: this.#tools.setActiveToolNames,

@@ -7,6 +7,7 @@
 import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
 import type { DiscoveredAdvisors } from "../advisor/config";
+import { clearCache as clearDiscoveryFsCache } from "../discovery/capability/fs";
 import type { Rule } from "../discovery/capability/rule";
 import { type BucketRulesOptions, bucketRules, type RuleBuckets } from "../discovery/capability/rule-buckets";
 import type { EffectiveToolDiscoveryMode } from "../discovery/mode";
@@ -124,10 +125,52 @@ export class ProjectPromptInputs {
 		};
 	}
 
+	/** Force the existing re-root discovery path to read the current directory again. */
+	async reload(): Promise<string[]> {
+		const before = this.#fileContents();
+		await this.refresh(true);
+		const after = this.#fileContents();
+		const added: string[] = [];
+		const changed: string[] = [];
+		const dropped: string[] = [];
+		for (const [file, content] of after) {
+			if (!before.has(file)) added.push(file);
+			else if (before.get(file) !== content) changed.push(file);
+		}
+		for (const file of before.keys()) {
+			if (!after.has(file)) dropped.push(file);
+		}
+		const lines: string[] = [];
+		if (added.length)
+			lines.push(
+				`Rule files and skills now in effect: ${added.join(", ")}. Follow them for the rest of the session.`,
+			);
+		if (changed.length)
+			lines.push(`Changed rule files and skills: ${changed.join(", ")}. Follow their reloaded contents.`);
+		if (dropped.length) lines.push(`No longer in effect: ${dropped.join(", ")}. Stop applying them.`);
+		if (!lines.length) lines.push("The rule files and skills in effect are unchanged.");
+		lines.push("Rule files and skills reloaded. The next model turn uses the rebuilt system prompt.");
+		return lines;
+	}
+
+	#fileContents(): Map<string, string> {
+		const current = this.#snapshot;
+		const files = new Map(current.contextFiles.map(file => [file.path, file.content]));
+		for (const skill of current.skills) files.set(skill.filePath, JSON.stringify(skill));
+		for (const rule of [
+			...current.rulebookRules,
+			...current.alwaysApplyRules,
+			...this.#options.ttsrManager.getRules(),
+		]) {
+			files.set(rule.path, JSON.stringify(rule));
+		}
+		return files;
+	}
+
 	/** Re-discover the project when the live cwd differs from the rendered one; resolves once they agree. */
-	async refresh(): Promise<void> {
-		if (this.#liveCwd() === this.#snapshot.cwd) return;
-		const refresh = this.#pending.catch(() => undefined).then(() => this.#discoverLiveCwd());
+	async refresh(force = false): Promise<void> {
+		if (!force && this.#liveCwd() === this.#snapshot.cwd) return;
+		const refresh = this.#pending.catch(() => undefined).then(() => this.#discoverLiveCwd(force));
 		this.#pending = refresh;
 		await refresh;
 		if (this.#liveCwd() !== this.#snapshot.cwd) await this.refresh();
@@ -137,9 +180,10 @@ export class ProjectPromptInputs {
 		return path.resolve(this.#options.getCwd());
 	}
 
-	async #discoverLiveCwd(): Promise<void> {
+	async #discoverLiveCwd(force: boolean): Promise<void> {
 		const cwd = this.#liveCwd();
-		if (cwd === this.#snapshot.cwd) return;
+		if (!force && cwd === this.#snapshot.cwd) return;
+		if (force) clearDiscoveryFsCache();
 
 		const discovery = this.#options.discover(cwd);
 		const [

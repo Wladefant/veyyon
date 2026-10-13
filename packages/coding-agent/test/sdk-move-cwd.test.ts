@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
+import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake, setAgentDir } from "@veyyon/utils";
 import { isolatedAuthStorage } from "./helpers/isolated-auth-storage";
@@ -141,6 +142,62 @@ describe("createAgentSession cwd after /move", () => {
 			expect(after).toContain("DESTINATION_AGENTS_MARKER");
 			expect(after).not.toContain("ORIGIN_AGENTS_MARKER");
 			expect(after).not.toBe(before);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("reloads rule edits through the live config command without restarting the session", async () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-reload-smoke-"));
+		tempDirs.push(tempDir);
+		const cwd = path.join(tempDir, "project");
+		fs.mkdirSync(cwd);
+		const file = path.join(cwd, "AGENTS.md");
+		fs.writeFileSync(file, "RELOAD_OLD_RULE\n");
+		globals = beginSettingsTest();
+		setAgentDir(tempDir);
+		fs.writeFileSync(
+			path.join(tempDir, "config.yml"),
+			"async:\n  enabled: false\nbashInterceptor:\n  enabled: false\n",
+		);
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir: tempDir,
+			sessionManager: SessionManager.create(cwd, path.join(tempDir, "sessions")),
+			authStorage: await isolatedAuthStorage(tempDir),
+			settings: await Settings.loadReadOnly({ agentDir: tempDir }),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			rules: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			toolNames: ["read"],
+		});
+		try {
+			const identity = session.sessionId;
+			expect(session.agent.state.systemPrompt.join("\n")).toContain("RELOAD_OLD_RULE");
+			fs.writeFileSync(file, "RELOAD_NEW_RULE\n");
+			const lines: string[] = [];
+			await executeAcpBuiltinSlashCommand("/reload-config", {
+				session,
+				sessionManager: session.sessionManager,
+				settings: session.settings,
+				cwd,
+				output: text => {
+					lines.push(text);
+				},
+				refreshCommands: () => {},
+				reloadPlugins: async () => {},
+			});
+			const text = session.agent.state.systemPrompt.join("\n");
+			expect(text).toContain("RELOAD_NEW_RULE");
+			expect(text).not.toContain("RELOAD_OLD_RULE");
+			expect(lines.join("\n")).toContain(`Changed rule files and skills: ${file}`);
+			expect(session.sessionId).toBe(identity);
+			console.log(`rules-reload smoke: pid=${process.pid} session=${identity} old absent, new present, no restart`);
 		} finally {
 			await session.dispose();
 		}
