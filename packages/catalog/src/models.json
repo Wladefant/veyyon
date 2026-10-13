@@ -23744,8 +23744,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 65536
+			"contextWindow": 128000,
+			"maxTokens": 64000
 		},
 		"gemini-2.5-flash": {
 			"id": "gemini-2.5-flash",
@@ -24184,7 +24184,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 65536,
-			"maxTokens": 65536,
+			"maxTokens": 4096,
 			"thinking": {
 				"mode": "google-level",
 				"efforts": [
@@ -24438,9 +24438,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 1.5,
-				"output": 7.5,
-				"cacheRead": 0.15,
+				"input": 0.75,
+				"output": 3.75,
+				"cacheRead": 0.075,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
@@ -24492,16 +24492,15 @@
 				"requiresEffort": true
 			}
 		},
-		"gemini-flash-latest": {
-			"id": "gemini-flash-latest",
-			"name": "Gemini Flash Latest",
+		"gemini-3.8-flash": {
+			"id": "gemini-3.8-flash",
+			"name": "Gemini 3.8 Flash",
 			"api": "google-generative-ai",
 			"provider": "google",
 			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
 			"reasoning": true,
 			"reasoningOptions": {
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
 					"high"
@@ -24512,9 +24511,81 @@
 				"image"
 			],
 			"cost": {
-				"input": 1.5,
-				"output": 9,
-				"cacheRead": 0.15,
+				"input": 0.75,
+				"output": 3.75,
+				"cacheRead": 0.075,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			}
+		},
+		"gemini-4-argon": {
+			"id": "gemini-4-argon",
+			"name": "Gemini 4 Argon",
+			"api": "google-generative-ai",
+			"provider": "google",
+			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+			"reasoning": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			},
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.1,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			}
+		},
+		"gemini-flash-latest": {
+			"id": "gemini-flash-latest",
+			"name": "Gemini Flash Latest",
+			"api": "google-generative-ai",
+			"provider": "google",
+			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+			"reasoning": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			},
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.75,
+				"output": 3.75,
+				"cacheRead": 0.075,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
@@ -24522,7 +24593,6 @@
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
 					"high"
@@ -24549,9 +24619,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.25,
-				"output": 1.5,
-				"cacheRead": 0.025,
+				"input": 0.3,
+				"output": 2.5,
+				"cacheRead": 0.03,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
@@ -24973,7 +25043,7 @@
 		},
 		"gemini-2.5-flash-lite": {
 			"id": "gemini-2.5-flash-lite",
-			"name": "Gemini 2.5 Flash Lite",
+			"name": "Gemini 2.5 Flash-Lite",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
 			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
@@ -25513,7 +25583,7 @@
 		},
 		"gemini-2.5-flash-lite": {
 			"id": "gemini-2.5-flash-lite",
-			"name": "Gemini 2.5 Flash Lite",
+			"name": "Gemini 2.5 Flash-Lite",
 			"api": "google-gemini-cli",
 			"provider": "google-gemini-cli",
 			"baseUrl": "https://cloudcode-pa.googleapis.com",

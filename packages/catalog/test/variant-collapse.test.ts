@@ -7,7 +7,7 @@ import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "@
 import { Effort } from "@veyyon/catalog/effort";
 import { stripThinkingVariantToken } from "@veyyon/catalog/identity/family";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
-import { resolveWireModelId } from "@veyyon/catalog/model-thinking";
+import { resolveReasoningSelection, resolveWireModelId } from "@veyyon/catalog/model-thinking";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { googleGeminiCliModelManagerOptions } from "@veyyon/catalog/provider-models/google";
 import type { ModelSpec } from "@veyyon/catalog/types";
@@ -216,6 +216,31 @@ describe("collapseEffortVariants", () => {
 			expect(cli[0]?.thinking?.mode).toBe("google-level");
 		});
 	}
+
+	// Gemini 4 Argon takes `thinkingLevel` LOW/MEDIUM/HIGH and answers HTTP 400 to `thinkingBudget`
+	// and to MINIMAL. A raw row used to bake the budget transport (the classifier did not know the
+	// `argon` tier), so every Antigravity request would have carried a budget the model rejects.
+	it("collapses gemini-4-argon onto the level transport with no minimal tier on both CCA tables", () => {
+		for (const table of [ANTIGRAVITY_VARIANT_COLLAPSE_TABLE, GEMINI_CLI_VARIANT_COLLAPSE_TABLE]) {
+			const out = collapseEffortVariants([memberSpec("gemini-4-argon")], table);
+			expect(out).toHaveLength(1);
+			const argon = out[0];
+			expect(argon?.id).toBe("gemini-4-argon");
+			expect(argon?.name).toBe("Gemini 4 Argon");
+			expect(argon?.requestModelId).toBeUndefined();
+			expect(argon?.thinking?.mode).toBe("google-level");
+			expect(argon?.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+			expect(argon?.thinking?.suppressWhenOff).toBeUndefined();
+
+			const model = buildModel(argon as ModelSpec<"google-gemini-cli">);
+			expect(model.thinking?.requiresEffort).toBe(true);
+			// Thinking off clamps to the LOW floor: no MINIMAL and no suppression reach the wire.
+			const off = resolveReasoningSelection(model, { disabled: true });
+			expect(off.enabled).toBe(true);
+			expect(off.effort).toBe(Effort.Low);
+			expect(resolveWireModelId(model, Effort.High)).toBe("gemini-4-argon");
+		}
+	});
 
 	// `gemini-3.6-flash` already belongs to the per-tier effort family, and one
 	// family carries one axis: that family's mode is "effort" (the wire id

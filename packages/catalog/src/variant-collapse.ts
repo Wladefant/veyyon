@@ -379,8 +379,13 @@ function gemini36FlashFamily(): EffortVariantFamily {
  * offers off, matching the bundled `google/gemini-3.7-flash` row. Shared
  * verbatim by both CCA tables: the two providers serve the same discovery list
  * and these deployments take `thinkingLevel` on both endpoints.
+ *
+ * Gemini 4 Argon is the same shape on a bare id: Google publishes `gemini-4-argon` with
+ * `thinkingLevel` LOW, MEDIUM (the server default) and HIGH, and rejects `thinkingBudget` and
+ * MINIMAL with HTTP 400, so the level transport and a three-tier ladder are the only surface that
+ * reaches the model. The logical id equals the wire id, so the row carries no `requestModelId`.
  */
-function geminiTieredFlashFamily(id: string, name: string, wireId: string): EffortVariantFamily {
+function geminiLevelFamily(id: string, name: string, wireId: string): EffortVariantFamily {
 	return {
 		id,
 		name,
@@ -397,9 +402,10 @@ function geminiTieredFlashFamily(id: string, name: string, wireId: string): Effo
 /** CCA families shared verbatim by both providers (transport-agnostic, or one transport both endpoints speak). */
 const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
 	gemini36FlashFamily(),
-	geminiTieredFlashFamily("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.8-flash-tiered"),
-	geminiTieredFlashFamily("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini-3.7-flash-tiered"),
-	geminiTieredFlashFamily("gemini-3.6-flash-tiered", "Gemini 3.6 Flash Tiered", "gemini-3.6-flash-tiered"),
+	geminiLevelFamily("gemini-4-argon", "Gemini 4 Argon", "gemini-4-argon"),
+	geminiLevelFamily("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.8-flash-tiered"),
+	geminiLevelFamily("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini-3.7-flash-tiered"),
+	geminiLevelFamily("gemini-3.6-flash-tiered", "Gemini 3.6 Flash Tiered", "gemini-3.6-flash-tiered"),
 	{
 		// Legacy static family — covers stale snapshots and caches. Stale ids are
 		// unverified against the budget-mode CCA contract; keep them on level.

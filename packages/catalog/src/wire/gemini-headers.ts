@@ -69,6 +69,9 @@ export const ANTIGRAVITY_MODEL_WIRE_PROFILES: Readonly<Record<string, Antigravit
 	"gemini-3.6-flash-tiered": { maxOutputTokens: 65536 },
 	"gemini-3.7-flash-tiered": { maxOutputTokens: 65536 },
 	"gemini-3.8-flash-tiered": { maxOutputTokens: 65536 },
+	// Gemini 4 Argon caps one streamed request at 65536 tokens. A larger `maxOutputTokens` starts a
+	// long decode that ends the stream with `finishReason: CONTINUATION` and a continuation token.
+	"gemini-4-argon": { maxOutputTokens: 65536 },
 	// Claude on `daily-cloudcode-pa` rejects `maxOutputTokens > 64000` with a
 	// 400 (`Request contains an invalid argument`). The model_enum label is
 	// untracked for these ids; the backend does not require it.

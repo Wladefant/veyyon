@@ -437,14 +437,11 @@ function inferThinkingControlMode<TApi extends Api>(
 	parsedModel: ParsedModel,
 ): ThinkingConfig["mode"] {
 	switch (spec.api) {
+		// Gemini 3 and later take `thinkingLevel`; Gemini 4 rejects `thinkingBudget` with HTTP 400.
 		case "google-generative-ai":
 		case "google-gemini-cli":
 		case "google-vertex":
-			return parsedModel.family === "gemini" &&
-				semverGte(parsedModel.version, "3.0") &&
-				parsedModel.version.major === 3
-				? "google-level"
-				: "budget";
+			return parsedModel.family === "gemini" && semverGte(parsedModel.version, "3.0") ? "google-level" : "budget";
 
 		case "anthropic-messages":
 			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
