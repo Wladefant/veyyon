@@ -7,7 +7,13 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as utils from "@veyyon/utils";
-import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
+import {
+	serveTerminalControl,
+	TerminalNotReadyError,
+	type TerminalControlTarget,
+	type TerminalOwner,
+} from "../src/launch/terminal-control";
+import type { TerminalTranscriptEntry } from "@veyyon/wire/presentation/transcript";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -213,26 +219,46 @@ test("history converts only new entries on a leaf change, and the frame stays bo
 	};
 	add(BASE);
 	let conversions = 0;
-	const mockMode = {
-		sessionManager: {
-			getSessionId: () => "big",
-			getLeafId: () => journal.at(-1)?.id ?? null,
-			getCwd: () => root,
-			getSessionFile: () => path.join(root, "big.jsonl"),
-			getEntries: () => journal.slice(),
-		},
-		session: {
-			isStreaming: false,
-			displayAssistantContent: (content: unknown[]) => {
-				conversions++;
-				return content;
-			},
-		},
-		isShuttingDown: false,
-		isInitialized: true,
+	let revision = "";
+	let entries: TerminalTranscriptEntry[] = [];
+	let converted = 0;
+	let lastConvertedId: string | undefined;
+	const history = (): TerminalTranscriptEntry[] => {
+		const next = `big:${journal.at(-1)?.id ?? null}`;
+		if (revision === next) return entries;
+		revision = next;
+		const intact = converted > 0 && journal.length >= converted && journal[converted - 1]?.id === lastConvertedId;
+		if (!intact) {
+			converted = 0;
+			entries = [];
+		}
+		const appended = journal.slice(converted).flatMap(entry => {
+			conversions++;
+			const text = (entry.message.content as Array<{ type: string; text: string }>)
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n")
+				.trim();
+			return text ? [{ entryId: entry.id, text }] : [];
+		});
+		converted = journal.length;
+		lastConvertedId = journal.at(-1)?.id;
+		if (appended.length || !intact) entries = entries.concat(appended);
+		return entries;
+	};
+	const target: TerminalControlTarget = {
+		identity: () => ({
+			sessionId: "big",
+			cwd: root,
+			sessionFile: path.join(root, "big.jsonl"),
+		}),
+		history,
+		deliver: async () => "started",
+		abort: async () => false,
+		subscribe: () => () => {},
 	};
 	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
-	cleanup.push(await startTerminalControl(mockMode as never));
+	cleanup.push(await startTerminalControl(target));
 	const owner = await readOwner(root);
 
 	const first = await rpc(owner, "subscribe");
