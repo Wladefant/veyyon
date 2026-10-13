@@ -104,5 +104,15 @@ class PC2InstallContract(unittest.TestCase):
             self.assertTrue((Path(root) / "config/profiles/default/agent/models.yml").exists())
 
 
+    def test_unsupported_python_refuses_before_install_or_configuration(self):
+        with patch.object(installer.sys, "version_info", (3, 10)), \
+                patch.object(installer.subprocess, "run") as run, \
+                patch.object(installer, "configure_pc2") as configure:
+            with self.assertRaisesRegex(ValueError, "Python 3.11 or newer"):
+                installer.main()
+            run.assert_not_called()
+            configure.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

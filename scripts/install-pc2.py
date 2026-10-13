@@ -108,6 +108,8 @@ def configure_pc2(config_dir, providers, gateway_url, memory_url, bank_id):
 
 
 def main():
+    if sys.version_info < (3, 11):
+        raise ValueError("PC2 setup requires Python 3.11 or newer. No files were changed.")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
     parser.add_argument("--install-dir", required=True)

@@ -8,7 +8,7 @@ Installation: https://github.com/Wladefant/veyyon/issues/604
 
 ## Prerequisites
 
-Use Windows on PC2. Install Python 3, Git, Tailscale and Bitwarden US through their supported installers.
+Use Windows on PC2. Install Python 3.11 or newer, Git, Tailscale and Bitwarden US through their supported installers.
 The operator must sign in to GitHub, the same tailnet and Bitwarden US on PC2.
 Authorize each external tool separately. Do not copy PC1 browser profiles or live databases.
 
@@ -56,7 +56,7 @@ A release with those changes does not exist yet. Stop before installation until 
 20. Set `VEYYON_CHECKPOINT_NODE=pc1` on PC1. Stop its session, then run `veyyon session handoff <session-id> --file <stopped-session.jsonl> --to pc2`.
 21. Set `VEYYON_CHECKPOINT_NODE=pc2` in the PC2 process environment.
 22. Run `veyyon session checkpoint-restore <session-id> --output <new-directory>` on PC2.
-23. Set `VEYYON_CHECKPOINT_SESSION=<session-id>` in the PC2 process environment. Resume only after ownership checks succeed.
+23. Pending the final interface in https://github.com/Wladefant/veyyon/pull/607: do not resume until automatic marker and claim fencing works.
 24. Confirm PC1 cannot admit a prompt or tool for the transferred session. Test reverse handoff before relying on it.
 25. Turn PC1 off. Confirm local tools, the installed catalog, remote memory and the independent model gateway remain available.
 
