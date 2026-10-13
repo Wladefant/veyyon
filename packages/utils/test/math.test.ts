@@ -95,7 +95,7 @@ const CLAMP01_DEF = /function\s+clamp01\s*\(/;
 const CLAMP_DEF = /function\s+clamp\s*\(/;
 const CLAMPLOW_DEF = /function\s+clampLow\s*\(/;
 
-async function walkTsSources(dir: string, out: string[], skipModes = false): Promise<void> {
+async function walkTsSources(dir: string, defFiles: string[], idiomFiles: string[], inModes = false): Promise<void> {
 	let entries: Dirent[];
 	try {
 		entries = await readdir(dir, { withFileTypes: true });
@@ -115,10 +115,11 @@ async function walkTsSources(dir: string, out: string[], skipModes = false): Pro
 			if (entry.name === "test" || entry.name === "tests") continue;
 			// The coding-agent modes/ subtree is a separately owned UI lane; the
 			// inline-idiom lock does not reach into it.
-			if (skipModes && entry.name === "modes") continue;
-			await walkTsSources(full, out, skipModes);
+			const childInModes = inModes || entry.name === "modes";
+			await walkTsSources(full, defFiles, idiomFiles, childInModes);
 		} else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-			out.push(full);
+			defFiles.push(full);
+			if (!inModes) idiomFiles.push(full);
 		}
 	}
 }
@@ -300,8 +301,7 @@ describe("clamp source lock", () => {
 		// at depth was outside this lock entirely, and the lock reported one owner while there were two.
 		for (const member of MEMBERS) {
 			for (const root of await sourceRootsFor(path.join(REPO_ROOT_DIR, member))) {
-				await walkTsSources(root, defFiles);
-				await walkTsSources(root, idiomFiles, true);
+				await walkTsSources(root, defFiles, idiomFiles);
 			}
 		}
 		// And the sweep opened every root the workspace declares. A root it never walked contributes
@@ -311,26 +311,37 @@ describe("clamp source lock", () => {
 		expect(swept).toContain(OWNER);
 
 		const defOffenders: string[] = [];
-		for (const file of defFiles) {
-			const rel = memberRelative(file);
-			if (rel === OWNER) continue;
-			const body = await readFile(file, "utf8");
-			if (CLAMP01_DEF.test(body) || CLAMP_DEF.test(body) || CLAMPLOW_DEF.test(body)) defOffenders.push(rel);
-		}
-		expect(defOffenders, "local clamp/clamp01/clampLow copies — import them from @veyyon/utils instead").toEqual([]);
-
 		const idiomOffenders: string[] = [];
 		const floorFirstOffenders: string[] = [];
 		const floorFirstSeen = new Set<string>();
-		for (const file of idiomFiles) {
-			const rel = memberRelative(file);
-			if (rel === OWNER) continue;
-			const body = await readFile(file, "utf8");
-			if (hasInlineClamp(body)) idiomOffenders.push(rel);
-			if (!hasFloorFirst(body)) continue;
-			floorFirstSeen.add(rel);
-			if (!FLOOR_FIRST_GRANDFATHERED.has(rel)) floorFirstOffenders.push(rel);
+		const idiomSet = new Set(idiomFiles);
+
+		const BATCH_SIZE = 64;
+		for (let i = 0; i < defFiles.length; i += BATCH_SIZE) {
+			const batch = defFiles.slice(i, i + BATCH_SIZE);
+			await Promise.all(
+				batch.map(async file => {
+					const rel = memberRelative(file);
+					if (rel === OWNER) return;
+					const body = await readFile(file, "utf8");
+					if (body.includes("clamp")) {
+						if (CLAMP01_DEF.test(body) || CLAMP_DEF.test(body) || CLAMPLOW_DEF.test(body)) {
+							defOffenders.push(rel);
+						}
+					}
+					if (idiomSet.has(file) && (body.includes("Math.min") || body.includes("Math.max"))) {
+						if (hasInlineClamp(body)) idiomOffenders.push(rel);
+						if (hasFloorFirst(body)) {
+							floorFirstSeen.add(rel);
+							if (!FLOOR_FIRST_GRANDFATHERED.has(rel)) floorFirstOffenders.push(rel);
+						}
+					}
+				}),
+			);
 		}
+		defOffenders.sort();
+		idiomOffenders.sort();
+		floorFirstOffenders.sort();
 		expect(idiomOffenders, "inline Math.min(Math.max(...)) clamp — call clamp()/clamp01() instead").toEqual([]);
 		expect(
 			floorFirstOffenders,

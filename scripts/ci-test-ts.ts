@@ -691,6 +691,10 @@ const catalogExpensiveTestFiles: readonly string[] = [
 	"test/a-resolved-model-keeps-the-compat-its-sources-declared.test.ts",
 ];
 
+const engineExpensiveTestFiles: readonly string[] = [
+	"test/editor-wordwrap-fuzz.test.ts",
+];
+
 function workspaceTestCommand(
 	pkg: string,
 	parallel: number,
@@ -883,7 +887,33 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
 		case "native":
-			return nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { smol: true }));
+			return nativeAndIntegrationPackages.flatMap(pkg => {
+				if (pkg === "hosts/terminal/engine") {
+					return [
+						workspaceTestCommand(pkg, 4, {
+							smol: true,
+							extraArgs: [
+								...onlyFailuresArgs,
+								...engineExpensiveTestFiles.flatMap(file => ["--path-ignore-patterns", file]),
+							],
+						}),
+						{
+							label: `${pkg} (isolated)`,
+							cwd: pkg,
+							command: [
+								"bun",
+								"test",
+								...preloadArgs,
+								"--smol",
+								"--parallel=1",
+								...onlyFailuresArgs,
+								...engineExpensiveTestFiles,
+							],
+						},
+					];
+				}
+				return [workspaceTestCommand(pkg, 4, { smol: true })];
+			});
 		case "coding-agent-singleton":
 			return await codingAgentTestCommands("singleton");
 		case "coding-agent-ui":
@@ -1252,6 +1282,15 @@ export function allocateCloudflareTestCommands<T>(
 				label.startsWith("natives/bridge/bindings/");
 			if (isBinding) {
 				return shard.index === 1 || shard.index === 2;
+			}
+			if (label.startsWith("hosts/terminal/engine")) {
+				return shard.index === 2;
+			}
+			if (label.startsWith("tests/evals")) {
+				return shard.index === 2;
+			}
+			if (label.startsWith("tests/simulations")) {
+				return false;
 			}
 			return shard.index === 1 ? index % shard.count === 0 : shard.index === 2 && index % shard.count !== 0;
 		});
@@ -1821,6 +1860,82 @@ export function diffRealConfigRoot(
 	return collectRealConfigChanges(before, after, options).map(formatRealConfigChange);
 }
 
+const TARGET_TRACKED_TEST_FILES: readonly string[] = [
+	"packages/utils/test/math.test.ts",
+	"hosts/terminal/engine/test/editor-wordwrap-fuzz.test.ts",
+	"packages/utils/test/an-idle-process-samples-its-stack-ten-times-less-often.test.ts",
+];
+
+interface FileTestReceipt {
+	file: string;
+	tests: number;
+	pass: number;
+	fail: number;
+	skip: number;
+	time: number;
+}
+
+function reportTrackedFileCounts(junitDir: string | null): void {
+	if (!junitDir) return;
+	let entries: string[];
+	try {
+		entries = nodeFs.readdirSync(junitDir);
+	} catch {
+		return;
+	}
+	const results = new Map<string, FileTestReceipt>();
+	const testsuiteRegex = /<testsuite\b([^>]*)>/gi;
+	for (const entry of entries) {
+		if (!entry.endsWith(".xml")) continue;
+		const full = path.join(junitDir, entry);
+		let content: string;
+		try {
+			content = nodeFs.readFileSync(full, "utf8");
+		} catch {
+			continue;
+		}
+		for (const match of content.matchAll(testsuiteRegex)) {
+			const attrs = match[1];
+			const nameMatch = /\b(?:name|file)="([^"]*)"/.exec(attrs);
+			if (!nameMatch) continue;
+			const suiteName = nameMatch[1];
+			const testsMatch = /\btests="(\d+)"/.exec(attrs);
+			const failuresMatch = /\bfailures="(\d+)"/.exec(attrs);
+			const errorsMatch = /\berrors="(\d+)"/.exec(attrs);
+			const skippedMatch = /\bskipped="(\d+)"/.exec(attrs);
+			const timeMatch = /\btime="([^"]*)"/.exec(attrs);
+
+			const tests = testsMatch ? Number.parseInt(testsMatch[1], 10) : 0;
+			const failures = failuresMatch ? Number.parseInt(failuresMatch[1], 10) : 0;
+			const errors = errorsMatch ? Number.parseInt(errorsMatch[1], 10) : 0;
+			const skipped = skippedMatch ? Number.parseInt(skippedMatch[1], 10) : 0;
+			const time = timeMatch ? Number.parseFloat(timeMatch[1]) : 0;
+			const fail = failures + errors;
+			const pass = Math.max(0, tests - fail - skipped);
+
+			for (const tracked of TARGET_TRACKED_TEST_FILES) {
+				const baseName = path.basename(tracked);
+				if (suiteName === tracked || suiteName.endsWith(`/${baseName}`) || suiteName === baseName) {
+					results.set(tracked, {
+						file: tracked,
+						tests,
+						pass,
+						fail,
+						skip: skipped,
+						time,
+					});
+				}
+			}
+		}
+	}
+	for (const [file, receipt] of results) {
+		console.log(
+			`CLOUDFLARE_TEST_FILE_COUNTS file="${file}" pass=${receipt.pass} fail=${receipt.fail} ` +
+				`skip=${receipt.skip} todo=0 tests=${receipt.tests} duration=${receipt.time.toFixed(3)}s`,
+		);
+	}
+}
+
 // Skipped when imported (e.g. by the runner's own unit tests), where
 // `process.argv` carries test-file paths rather than a mode/flags.
 if (import.meta.main) {
@@ -1854,9 +1969,11 @@ if (import.meta.main) {
 	// suite and compare it afterwards. Only SQLite sidecars exactly owned by an
 	// external Veyyon process at a boundary are attributable. Every other change
 	// remains a failure or an explicit unattributable result.
+
 	const ownershipBefore = scanLiveVeyyonOwnership();
 	const before = snapshotRealConfigRoot();
 
+	const bucketStartedAt = performance.now();
 	try {
 		if (!isDryRun && testCommands.length > 1 && (!isCI() || junitReportDir)) {
 			const concurrency = testConcurrency(testCommands.length);
@@ -1867,6 +1984,12 @@ if (import.meta.main) {
 			}
 		}
 	} finally {
+		const bucketSeconds = (performance.now() - bucketStartedAt) / 1000;
+		reportTrackedFileCounts(junitReportDir);
+		console.log(
+			`CLOUDFLARE_TEST_BUCKET_TIMING mode=${requestedMode} duration=${formatDuration(bucketSeconds)} ` +
+				`seconds=${bucketSeconds.toFixed(3)}`,
+		);
 		// In `finally` on purpose: a failing or interrupted run is exactly when a
 		// half-finished suite is most likely to have left damage behind.
 		const ownershipAfter = scanLiveVeyyonOwnership();

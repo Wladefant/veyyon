@@ -161,8 +161,6 @@ export function useMnemopiTestEnv(): void {
 	afterAll(() => {
 		resetModuleStateForTests();
 		try {
-			expect(homeRootsAMnemopiRunCouldCreate()).toEqual(rootsBefore);
-		} finally {
 			for (const [name, value] of previous) {
 				if (value === undefined) delete process.env[name];
 				else process.env[name] = value;
@@ -170,6 +168,8 @@ export function useMnemopiTestEnv(): void {
 			previous.clear();
 			isolated?.restore();
 			isolated = undefined;
+		} finally {
+			expect(homeRootsAMnemopiRunCouldCreate()).toEqual(rootsBefore);
 		}
 	});
 

@@ -22,7 +22,6 @@ import {
 	type Env,
 	embeddingModel,
 	embeddingsDisabled as embeddingsDisabledFromEnv,
-	fastembedCacheDir,
 	isApiEmbeddingModel,
 } from "../config";
 import type { DenseVector as Vector } from "../types";
@@ -401,7 +400,7 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 		);
 		return null;
 	}
-	const cacheDir = process.env.MNEMOPI_HOME ? fastembedCacheDir(process.env) : getFastembedCacheDir();
+	const cacheDir = getFastembedCacheDir();
 	const generation = localModelInitializerGeneration;
 	const cacheKey = JSON.stringify([generation, modelName, cacheDir]);
 	const cached = localModelPromises.get(cacheKey);

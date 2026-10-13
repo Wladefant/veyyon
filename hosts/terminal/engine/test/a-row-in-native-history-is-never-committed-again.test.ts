@@ -373,8 +373,9 @@ describe("a row in native history is never committed again", () => {
 		expect(history(term)).toHaveLength(76);
 
 		// Shrink to 50 rows with rows 40..49 diverged (edited): prefix reconciliation
-		// rebases committedRows to 40 and sets committedRowsResynced=true. The surviving
-		// tail (rows 26..49) must fill the 24-row viewport rather than painting out-of-bounds blanks.
+		// rebases committedRows to 40 and sets committedRowsResynced=true. Native scrollback
+		// semantics floor the window at the committed boundary (row 40) so already-committed
+		// rows (0..39) are never re-shown on the grid.
 		block.rows = Array.from({ length: 50 }, (_, i) =>
 			i >= 40 ? `diverged row ${i.toString().padStart(3, "0")}` : `plain row ${i.toString().padStart(3, "0")}`,
 		);
@@ -383,9 +384,9 @@ describe("a row in native history is never committed again", () => {
 
 		const collapsedViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
 		expect(collapsedViewport).toHaveLength(24);
-		expect(collapsedViewport[0]).toBe("plain row 026");
-		expect(collapsedViewport[23]).toBe("diverged row 049");
-		expect(collapsedViewport.every(row => row !== "")).toBe(true);
+		expect(collapsedViewport[0]).toBe("diverged row 040");
+		expect(collapsedViewport[9]).toBe("diverged row 049");
+		expect(collapsedViewport.slice(10)).toEqual(Array.from({ length: 14 }, () => ""));
 
 		const finalHistory = history(term);
 		expect(duplicates(finalHistory)).toEqual([]);
