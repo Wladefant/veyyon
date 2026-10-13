@@ -81,7 +81,7 @@ The Worker responds with `ok` to health probes. A version upload does not activa
 Veyyon implements shard-level `ci-receipt/v1` and `ci-manifest/v1` emission across all three Cloudflare Workers CI shards.
 
 ### Receipt emission (`ci/cloudflare/shard-receipt.mjs`)
-- **Schema**: canonical `ci-receipt/v1` and `ci-manifest/v1` vendored byte-for-byte in `ci_receipt.schema.json` with sibling `.source` from Superboard PR #826 head `1e91394ae5d47a9ccc592be02d4b9c11329bdcf1` (SHA256: `52627bd0cc08f7475423d9b054e7f970c82546630b1e42008f3e33c2d32b7192`).
+- **Schema**: canonical `ci-receipt/v1` and `ci-manifest/v1` vendored byte-for-byte in `ci_receipt.schema.json` with sibling `.source` from Superboard PR #826 head `8714fc6a0b6f37835e9b0b6db26fa087406d6b9c` (SHA256: `52627bd0cc08f7475423d9b054e7f970c82546630b1e42008f3e33c2d32b7192`).
 - **Validator**: zero-dependency validator in `ci_receipt.mjs` with sibling `.source` from the same PR head.
 - **Counter contract**: `status="passed"` requires `executed > 0`, `passed > 0`, and `failed == 0` across all suites.
 - **Errors subset invariant**: `errors` is a subset of `failed` (`errors <= failed`), and `executed = passed + failed` (errors are never counted twice).
