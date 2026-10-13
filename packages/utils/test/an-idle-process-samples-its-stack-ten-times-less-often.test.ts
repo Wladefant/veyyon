@@ -85,7 +85,7 @@ afterEach(async () => {
 describe("an idle process samples its stack ten times less often", () => {
 	test("a sampler that starts samples at the busy interval", async () => {
 		const sampler = await startedSampler(performance.now());
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		expect(await samplesInHold(sampler, 600)).toBeGreaterThanOrEqual(BUSY_MIN);
 	});
 
 	test("the first rotation 10s after the last busy tick restarts at the idle interval", async () => {

@@ -251,7 +251,8 @@ export class StallSampler implements StallStackSource {
 		}
 		if (this.#state !== "running") return;
 		const intervalUs = nowMs - this.#busyAtMs < IDLE_AFTER_MS ? BUSY_INTERVAL_US : IDLE_INTERVAL_US;
-		const full = nowMs - this.#startedAtMs >= (this.#intervalUs / 1000) * ROTATE_AFTER_SAMPLES;
+		const elapsedMs = Math.max(0, performance.now() - this.#startedAtMs);
+		const full = elapsedMs >= (this.#intervalUs / 1000) * ROTATE_AFTER_SAMPLES;
 		// A busy tick restarts an idle-interval profile at once. Going idle waits for the rotation,
 		// which restarts the profile regardless.
 		if (!full && intervalUs >= this.#intervalUs) return;
