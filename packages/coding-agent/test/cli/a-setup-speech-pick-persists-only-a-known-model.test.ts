@@ -18,6 +18,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "b
 import { runSetupCommand } from "../../src/cli/setup-cli";
 import * as picker from "../../src/cli/setup-model-picker";
 import { resetSettingsForTest, Settings, settings } from "../../src/config/settings";
+import * as recorder from "../../src/speech/stt/recorder";
 import * as sttDownloader from "../../src/speech/stt/downloader";
 import * as ttsDownloader from "../../src/speech/tts/downloader";
 import { initTheme } from "../../src/theme/theme";
@@ -46,6 +47,8 @@ describe("a setup speech pick persists only a known model", () => {
 		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		spyOn(process.stdout, "write").mockReturnValue(true);
 		spyOn(console, "log").mockImplementation(() => {});
+		spyOn(recorder, "detectRecorder").mockReturnValue({ tool: "sox", bin: "sox" });
+		spyOn(recorder, "ensureRecorder").mockResolvedValue({ tool: "sox", bin: "sox" });
 		spyOn(sttDownloader, "isSttModelCached").mockResolvedValue(true);
 		spyOn(ttsDownloader, "isTtsModelCached").mockResolvedValue(true);
 	});

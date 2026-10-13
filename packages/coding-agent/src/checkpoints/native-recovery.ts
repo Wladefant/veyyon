@@ -151,6 +151,7 @@ export async function captureNativeCheckpoint(
 			return execFileSync("git", args, {
 				cwd: header.cwd as string,
 				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
 				timeout: 3000,
 				windowsHide: true,
 			}).trim();
