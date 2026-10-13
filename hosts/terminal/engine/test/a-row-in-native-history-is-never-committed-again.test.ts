@@ -120,6 +120,14 @@ class Footer implements Component {
 	}
 }
 
+class PlainBlock implements Component {
+	rows: string[] = [];
+	invalidate(): void {}
+	render(): string[] {
+		return [...this.rows];
+	}
+}
+
 interface Variant {
 	height: number;
 	source: ShrinkSource;
@@ -312,4 +320,41 @@ describe("a row in native history is never committed again", () => {
 		expect(failures).toEqual([]);
 		expect([...swept]).toEqual([...SHRINK_SOURCES]);
 	}, 180_000);
+
+	test("cursorless component collapsing to an identical prefix preserves the surviving tail without recommitting", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(100, 24, 50_000);
+		const tui = new TUI(term, true);
+		tui.setScrollbackRebuild(true);
+
+		const block = new PlainBlock();
+		block.rows = Array.from({ length: 100 }, (_, i) => `plain row ${i.toString().padStart(3, "0")}`);
+		tui.addChild(block);
+		tui.start();
+		await settleFrames(term, tui);
+
+		// First render: 100 rows, height 24 commits 76 rows (0..75) and viewport displays 76..99.
+		expect(history(term)).toHaveLength(76);
+		const initialViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		expect(initialViewport[0]).toBe("plain row 076");
+		expect(initialViewport[23]).toBe("plain row 099");
+
+		// Shrink to identical 50-row prefix: prefix reconciliation rebases committedRows to 50
+		// and sets frameSqueezed=true, suppressing divergence rebuild. The surviving tail (rows 26..49)
+		// must fill the 24-row viewport rather than painting out-of-bounds blanks.
+		block.rows = Array.from({ length: 50 }, (_, i) => `plain row ${i.toString().padStart(3, "0")}`);
+		tui.requestRender();
+		await settleFrames(term, tui);
+
+		const collapsedViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		expect(collapsedViewport).toHaveLength(24);
+		expect(collapsedViewport[0]).toBe("plain row 026");
+		expect(collapsedViewport[23]).toBe("plain row 049");
+		expect(collapsedViewport.every(row => row !== "")).toBe(true);
+
+		// Native history must not recommit already-committed rows.
+		const finalHistory = history(term);
+		expect(duplicates(finalHistory)).toEqual([]);
+		tui.stop();
+	});
 });
