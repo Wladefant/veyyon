@@ -239,10 +239,13 @@ restore_policy() {
 }
 trap 'restore_policy; cleanup' EXIT INT TERM
 
-# Obtain pre-cut original module file from origin/main
-if ! git show origin/main:"$policy_file" > "$policy_file"; then
-  echo "ERROR: Failed to git show origin/main:$policy_file" >&2
-  exit 1
+# Obtain pre-cut original module file from origin/main (or ancestor 27bce50e16 in shallow clone)
+if ! git show origin/main:"$policy_file" > "$policy_file" 2>/dev/null; then
+  git fetch origin main:refs/remotes/origin/main --depth=1 2>/dev/null || true
+fi
+if ! git show origin/main:"$policy_file" > "$policy_file" 2>/dev/null; then
+  echo "Obtaining pre-cut manifest from ancestor commit 27bce50e16..."
+  git show "27bce50e16:$policy_file" > "$policy_file"
 fi
 
 # Run only new test that rejects macOS then require named assertion failure
