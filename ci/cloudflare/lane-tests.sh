@@ -4,20 +4,14 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-shard_branch="${WORKERS_CI_BRANCH:-}"
-case "$shard_branch" in
-  cf-ci/veyyon-workers) shard_index=1 ;;
-  cf-ci/veyyon-workers-shard-2) shard_index=2 ;;
-  cf-ci/veyyon-workers-shard-3) shard_index=3 ;;
-  *)
-    echo "CLOUDFLARE_CI_SHARD_INVALID branch=${shard_branch:-unset}; expected a registered shard branch." >&2
-    exit 1
-    ;;
-esac
-shard_spec="$shard_index/3"
-echo "CLOUDFLARE_CI_SHARD branch=$shard_branch shard=$shard_spec"
-SECONDS=0
-setup_seconds=0
+shard_index="${VEYYON_CI_SHARD:-}"
+shard_count="${VEYYON_CI_SHARDS:-}"
+if [[ ! "$shard_index" =~ ^[1-3]$ || "$shard_count" != 3 ]]; then
+  echo "CLOUDFLARE_CI_SHARD_INVALID shard=${shard_index:-unset} shards=${shard_count:-unset}; expected shard 1..3 of 3." >&2
+  exit 1
+fi
+shard_spec="$shard_index/$shard_count"
+echo "CLOUDFLARE_CI_SHARD branch=${WORKERS_CI_BRANCH:-unset} shard=$shard_spec"
 
 
 expected_bun="$(node -p "require('./package.json').packageManager.split('@')[1]")"
