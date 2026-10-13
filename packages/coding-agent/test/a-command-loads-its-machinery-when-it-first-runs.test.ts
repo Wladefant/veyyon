@@ -60,6 +60,8 @@ describe("an interactive session's static import graph", () => {
 			"btw-controller.ts",
 			"command-controller-shared.ts",
 			"command-controller.ts",
+			// Asked for a composer prediction at the end of every turn, before any command runs.
+			"composer-prediction-controller.ts",
 			"event-controller.ts",
 			"extension-ui-controller.ts",
 			"goal-mode-controller.ts",

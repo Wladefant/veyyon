@@ -68,6 +68,8 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"components/transcript/usage-row.ts",
 	"controllers/btw-controller.ts",
 	"controllers/command-controller.ts",
+	// Drives the session's composer prediction side request at each turn end, as btw-controller drives /btw.
+	"controllers/composer-prediction-controller.ts",
 	"controllers/event-controller.ts",
 	"controllers/extension-ui-controller.ts",
 	"controllers/goal-mode-controller.ts",
