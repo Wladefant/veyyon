@@ -529,4 +529,5 @@ export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig =
 					},
 				}
 			: undefined),
+	};
 }
