@@ -159,14 +159,18 @@ export function useMnemopiTestEnv(): void {
 	});
 
 	afterAll(() => {
-		for (const [name, value] of previous) {
-			if (value === undefined) delete process.env[name];
-			else process.env[name] = value;
+		resetModuleStateForTests();
+		try {
+			expect(homeRootsAMnemopiRunCouldCreate()).toEqual(rootsBefore);
+		} finally {
+			for (const [name, value] of previous) {
+				if (value === undefined) delete process.env[name];
+				else process.env[name] = value;
+			}
+			previous.clear();
+			isolated?.restore();
+			isolated = undefined;
 		}
-		previous.clear();
-		isolated?.restore();
-		isolated = undefined;
-		expect(homeRootsAMnemopiRunCouldCreate()).toEqual(rootsBefore);
 	});
 
 	beforeEach(() => {

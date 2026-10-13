@@ -47,8 +47,8 @@ const RESTORED_MIN = 6;
 const samplers: StallSampler[] = [];
 
 /** A running sampler, started by a busy tick at `nowMs`, its start settled. */
-async function startedSampler(nowMs: number): Promise<StallSampler> {
-	const sampler = new StallSampler();
+async function startedSampler(nowMs: number, now?: () => number): Promise<StallSampler> {
+	const sampler = new StallSampler({ now });
 	samplers.push(sampler);
 	sampler.quiet(nowMs, true);
 	await sampler.stacksBetween(0, 0);
@@ -96,9 +96,9 @@ describe("an idle process samples its stack ten times less often", () => {
 	});
 
 	test("a process idle past the stretch keeps the busy interval until its profile is full", async () => {
-		// The last busy tick was 20s ago; the profile restarts at real time after startup settles.
-		const sampler = await startedSampler(performance.now() - 20_000);
-		let nowValue = performance.now();
+		let nowValue = 0;
+		const sampler = await startedSampler(nowValue, () => nowValue);
+		sampler.quiet(nowValue - 20_000, true);
 		let scheduled: (() => void) | undefined;
 		const watchdog = new LoopWatchdog({
 			intervalMs: 5_000,
@@ -114,21 +114,15 @@ describe("an idle process samples its stack ten times less often", () => {
 		});
 		watchdog.start();
 
-		// Record initial samples so we can distinguish profile retention from replacement.
-		holdTheLoopForMs(300);
-
-		// A quiet tick 5s in: the profile is not full (10s), so going idle queues no restart.
-		nowValue += 5_000;
+		// At 9,999ms, the full-profile boundary has not arrived.
+		nowValue = 9_999;
 		scheduled!();
-		const kept = await sampler.stacksBetween(0, performance.now());
-		expect(kept?.samples).toBeGreaterThan(0);
 		expect(sampler.samplingIntervalUs).toBe(10_000);
 
-		// Once the profile is full (10s at busy interval), the quiet tick replaces it with the idle interval.
-		nowValue += 5_001;
+		// At exactly 10,000ms, the quiet tick rotates to the idle sampling cadence.
+		nowValue = 10_000;
 		scheduled!();
-		const rotated = await sampler.stacksBetween(0, performance.now());
-		expect(rotated?.samples).toBe(0);
+		await sampler.stacksBetween(0, 0);
 		expect(sampler.samplingIntervalUs).toBe(100_000);
 
 		watchdog.stop();

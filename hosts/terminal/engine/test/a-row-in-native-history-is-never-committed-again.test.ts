@@ -357,4 +357,38 @@ describe("a row in native history is never committed again", () => {
 		expect(duplicates(finalHistory)).toEqual([]);
 		tui.stop();
 	});
+
+	test("cursorless component collapsing with divergent rows preserves the surviving tail without recommitting", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(100, 24, 50_000);
+		const tui = new TUI(term, true);
+		tui.setScrollbackRebuild(true);
+
+		const block = new PlainBlock();
+		block.rows = Array.from({ length: 100 }, (_, i) => `plain row ${i.toString().padStart(3, "0")}`);
+		tui.addChild(block);
+		tui.start();
+		await settleFrames(term, tui);
+
+		expect(history(term)).toHaveLength(76);
+
+		// Shrink to 50 rows with rows 40..49 diverged (edited): prefix reconciliation
+		// rebases committedRows to 40 and sets committedRowsResynced=true. The surviving
+		// tail (rows 26..49) must fill the 24-row viewport rather than painting out-of-bounds blanks.
+		block.rows = Array.from({ length: 50 }, (_, i) =>
+			i >= 40 ? `diverged row ${i.toString().padStart(3, "0")}` : `plain row ${i.toString().padStart(3, "0")}`,
+		);
+		tui.requestRender();
+		await settleFrames(term, tui);
+
+		const collapsedViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		expect(collapsedViewport).toHaveLength(24);
+		expect(collapsedViewport[0]).toBe("plain row 026");
+		expect(collapsedViewport[23]).toBe("diverged row 049");
+		expect(collapsedViewport.every(row => row !== "")).toBe(true);
+
+		const finalHistory = history(term);
+		expect(duplicates(finalHistory)).toEqual([]);
+		tui.stop();
+	});
 });

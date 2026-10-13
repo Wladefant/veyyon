@@ -1168,7 +1168,7 @@ export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestSh
 }
 
 // Measured workspace suite execution costs:
-// - plugins/hashline: 379s -> shard 2
+// - plugins/hashline: 379s -> shard 1
 // - tests/simulations: 440.6s -> shard 3
 // - packages/ai: 76.8s -> shard 1
 // - packages/agent: 70.6s -> shard 1 (index 9, 9 % 3 == 0)
@@ -1177,12 +1177,12 @@ export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestSh
 //
 // Explicit shard mapping based on measured execution times (no branch mapping).
 // Shard variant mapping (total 3 shards):
-// - Shard 1: baseline (packages/ai, packages/agent, packages/utils, packages/catalog, plus natives/bridge/bindings full suite in native mode)
-// - Shard 2: modern (plugins/hashline, plus natives/bridge/bindings full suite in native mode)
-// - Shard 3: baseline (tests/simulations; native bindings excluded)
-// Remaining commands round-robin modulo unchanged; no exclusion assertion weakening.
+// - Shard 1: baseline (packages/ai, packages/agent, packages/utils, packages/catalog, plugins/hashline, plus natives/bridge/bindings full suite in native mode)
+// - Shard 2: modern (remaining assigned workspaces; native and coding-agent commands also absorb shard 3's modulo partition)
+// - Shard 3: baseline (tests/simulations only; native and coding-agent commands are reassigned to shard 2)
+// - Repo-level script tests run only on shard 1.
 const WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES: Readonly<Record<string, number>> = {
-	"plugins/hashline": 2,
+	"plugins/hashline": 1,
 	"tests/simulations": 3,
 	"packages/ai": 1,
 	"packages/agent": 1,
@@ -1253,10 +1253,18 @@ export function allocateCloudflareTestCommands<T>(
 			if (isBinding) {
 				return shard.index === 1 || shard.index === 2;
 			}
-			return index % shard.count === shard.index - 1;
+			return shard.index === 1 ? index % shard.count === 0 : shard.index === 2 && index % shard.count !== 0;
 		});
 	}
 
+	if (mode.startsWith("coding-agent-")) {
+		return commands.filter((_, index) =>
+			shard.index === 1 ? index % shard.count === 0 : shard.index === 2 && index % shard.count !== 0,
+		);
+	}
+	if (mode === "scripts") {
+		return shard.index === 1 ? [...commands] : [];
+	}
 	return partitionTestCommands(commands, shard);
 }
 

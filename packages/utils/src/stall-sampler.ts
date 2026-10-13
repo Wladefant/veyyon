@@ -187,7 +187,15 @@ export function summarizeWindow(profile: ParsedProfile, fromMs: number, toMs: nu
  */
 type SamplerState = "off" | "starting" | "running" | "lent" | "failed";
 
+export interface StallSamplerOptions {
+	/** Monotonic clock for profile age. Defaults to the process performance clock. */
+	now?: () => number;
+}
+
+/** The process-global profiler, with an injectable monotonic age clock for deterministic tests. */
+
 export class StallSampler implements StallStackSource {
+	#now: () => number;
 	#session: inspectorModule.Session | undefined;
 	#state: SamplerState = "off";
 	#startedAtMs = 0;
@@ -196,6 +204,9 @@ export class StallSampler implements StallStackSource {
 	#busyAtMs = 0;
 	/** Every profiler command runs after the previous one settles; the profiler is process-global. */
 	#chain: Promise<unknown> = Promise.resolve();
+	constructor(options: StallSamplerOptions = {}) {
+		this.#now = options.now ?? (() => performance.now());
+	}
 
 	/** The interval the next profile restart will use. */
 	get samplingIntervalUs(): number {
@@ -228,7 +239,7 @@ export class StallSampler implements StallStackSource {
 	async #begin(startedAtMs?: number): Promise<void> {
 		await this.#post("Profiler.setSamplingInterval", { interval: this.#intervalUs });
 		await this.#post("Profiler.start");
-		this.#startedAtMs = startedAtMs ?? performance.now();
+		this.#startedAtMs = startedAtMs ?? this.#now();
 	}
 
 	quiet(nowMs: number, busy: boolean): void {
