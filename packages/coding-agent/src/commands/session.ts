@@ -13,6 +13,7 @@ const SESSION_ACTIONS = [
 	"checkpoint-export",
 	"checkpoint-restore",
 	"checkpoint-fork",
+	"handoff",
 ] as const;
 
 export default class Session extends Command {
@@ -36,6 +37,7 @@ export default class Session extends Command {
 		output: Flags.string({ description: "Restore into this new directory" }),
 		file: Flags.string({ description: "Native session JSONL file to export or explicitly fork offline" }),
 		workspace: Flags.string({ description: "Approved workspace file or directory to include", multiple: true }),
+		to: Flags.string({ description: "Destination checkpoint node for session handoff" }),
 	};
 
 	static examples = [
@@ -43,6 +45,7 @@ export default class Session extends Command {
 		"veyyon session stats 3f8a",
 		"veyyon session checkpoint-export --file ./session.jsonl --workspace src",
 		"veyyon session checkpoint-fork --file ./session.jsonl",
+		"veyyon session handoff <id> --file ./session.jsonl --to laptop-b --workspace src",
 	];
 
 	async run(): Promise<void> {
@@ -57,13 +60,16 @@ export default class Session extends Command {
 							? "export"
 							: args.action === "checkpoint-restore"
 								? "restore"
-								: "fork";
+								: args.action === "handoff"
+									? "handoff"
+									: "fork";
 				await runCheckpointCommand({
 					action,
 					id: args.id,
 					output: flags.output,
 					sessionFile: flags.file,
 					workspace: flags.workspace,
+					targetNode: flags.to,
 				});
 				return;
 			}

@@ -61,7 +61,7 @@ test("separate CLI invocations on one host use independent lease owners", async 
 	}
 });
 
-test("an interrupted checkpoint export can retry without changing source or overwriting the import destination", async () => {
+test("an interrupted handoff retries without changing source or overwriting the destination", async () => {
 	const root = await mkdtemp(join(tmpdir(), "checkpoint-transfer-"));
 	const source = join(root, "session.jsonl");
 	const destination = join(root, "destination");
@@ -73,24 +73,67 @@ test("an interrupted checkpoint export can retry without changing source or over
 		url: process.env.VEYYON_CHECKPOINT_URL,
 		token: process.env.VEYYON_CHECKPOINT_TOKEN,
 		key: process.env.VEYYON_CHECKPOINT_KEY,
+		node: process.env.VEYYON_CHECKPOINT_NODE,
 	};
 	process.env.VEYYON_CHECKPOINT_URL = "https://checkpoint.invalid";
 	process.env.VEYYON_CHECKPOINT_TOKEN = "test";
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32).toString("base64");
+	process.env.VEYYON_CHECKPOINT_NODE = "transfer-owner";
 	const objects = new Map<string, Uint8Array>();
 	let head: { sequence: number; manifestHash: string; manifest: { objects: { hash: string; size: number }[] } } | null =
 		null;
+	let leaseOwner = "transfer-owner";
+	let leaseEpoch = 1;
+	let transferReplay: { transferId: string; targetNode: string } | undefined;
+	let interruptTransferResponse = true;
 	let interruptCommit = true;
 	const fakeFetch: CheckpointFetch = async (input, init) => {
 		const path = new URL(String(input)).pathname;
-		if (path.endsWith("/lease"))
+		if (path.endsWith("/lease")) {
+			const request = JSON.parse(String(init?.body)) as { ownerNode: string };
+			if (request.ownerNode !== leaseOwner)
+				return Response.json({ error: "owned" }, { status: 409 });
 			return Response.json({
-				ownerNode: "transfer-owner",
-				epoch: 1,
+				ownerNode: leaseOwner,
+				epoch: leaseEpoch,
 				expiresAt: "2099-01-01T00:00:00Z",
 				headSequence: head?.sequence ?? 0,
 				manifestHash: head?.manifestHash ?? "",
 			});
+		}
+		if (path.endsWith("/transfer")) {
+			const request = JSON.parse(String(init?.body)) as {
+				ownerNode: string;
+				epoch: number;
+				targetNode: string;
+				transferId: string;
+			};
+			if (transferReplay?.transferId === request.transferId) {
+				return Response.json({
+					ownerNode: leaseOwner,
+					epoch: leaseEpoch,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: head?.sequence ?? 0,
+					manifestHash: head?.manifestHash ?? "",
+				});
+			}
+			if (request.ownerNode !== leaseOwner || request.epoch !== leaseEpoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			leaseOwner = request.targetNode;
+			leaseEpoch++;
+			transferReplay = { transferId: request.transferId, targetNode: request.targetNode };
+			if (interruptTransferResponse) {
+				interruptTransferResponse = false;
+				return Response.json({ error: "ack interrupted" }, { status: 503 });
+			}
+			return Response.json({
+				ownerNode: leaseOwner,
+				epoch: leaseEpoch,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: head?.sequence ?? 0,
+				manifestHash: head?.manifestHash ?? "",
+			});
+		}
 		if (path.endsWith("/release")) return new Response(null, { status: 204 });
 		if (path.endsWith("/head")) return Response.json(head);
 		if (path.includes("/objects/")) {
@@ -109,10 +152,11 @@ test("an interrupted checkpoint export can retry without changing source or over
 				return Response.json({ error: "interrupted" }, { status: 503 });
 			}
 			const request = JSON.parse(String(init?.body)) as {
+				expectedHead: number;
 				manifest: { objects: { hash: string; size: number }[] };
 			};
 			head = {
-				sequence: 1,
+				sequence: request.expectedHead + 1,
 				manifest: request.manifest,
 				manifestHash: new Bun.SHA256().update(JSON.stringify(request.manifest)).digest("hex"),
 			};
@@ -126,6 +170,15 @@ test("an interrupted checkpoint export can retry without changing source or over
 		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
 		await runCheckpointCommand({ action: "export", sessionFile: source });
 		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
+		await runCheckpointCommand({
+			action: "handoff",
+			id: "transfer",
+			sessionFile: source,
+			targetNode: "destination",
+		});
+		expect(leaseOwner).toBe("destination");
+		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
+		process.env.VEYYON_CHECKPOINT_NODE = "destination";
 		await runCheckpointCommand({ action: "restore", id: "transfer", output: destination });
 		const restored = await Bun.file(join(destination, "sessions", "session.jsonl")).arrayBuffer();
 		expect(Buffer.from(restored)).toEqual(sourceBytes);
@@ -141,6 +194,7 @@ test("an interrupted checkpoint export can retry without changing source or over
 			VEYYON_CHECKPOINT_URL: previousEnv.url,
 			VEYYON_CHECKPOINT_TOKEN: previousEnv.token,
 			VEYYON_CHECKPOINT_KEY: previousEnv.key,
+			VEYYON_CHECKPOINT_NODE: previousEnv.node,
 		})) {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;

@@ -123,6 +123,37 @@ export class CheckpointClient {
 		this.#lost.delete(sessionId);
 		return lease;
 	}
+	async transferLease(sessionId: string, targetNode: string): Promise<CheckpointLease> {
+		const lease = this.#leases.get(sessionId);
+		if (!lease || this.#lost.has(sessionId)) throw new Error("Checkpoint lease required for transfer");
+		if (!targetNode || targetNode.length > 128) throw new Error("A valid target node is required");
+		const transferId = createHash("sha256")
+			.update(`${sessionId}:${lease.ownerNode}:${lease.epoch}:${targetNode}`)
+			.digest("hex");
+		const path = `/v1/sessions/${encodeURIComponent(sessionId)}/transfer`;
+		const init: RequestInit = {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				ownerNode: lease.ownerNode,
+				epoch: lease.epoch,
+				targetNode,
+				transferId,
+			}),
+		};
+		let next: CheckpointLease;
+		try {
+			next = await this.#request<CheckpointLease>(path, init);
+		} catch (firstError) {
+			try {
+				next = await this.#request<CheckpointLease>(path, init);
+			} catch {
+				throw firstError;
+			}
+		}
+		this.loseLease(sessionId);
+		return next;
+	}
 	async head(sessionId: string): Promise<{
 		sequence: number;
 		manifestHash: string;

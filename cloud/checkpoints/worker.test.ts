@@ -4,7 +4,14 @@ type State = ConstructorParameters<typeof SessionAuthority>[0];
 type Environment = ConstructorParameters<typeof SessionAuthority>[1];
 function fixture() {
  const data = new Map<string, unknown>();
- const storage:State["storage"] = { get: async <T>(key:string) => data.get(key) as T | undefined, put: async (key:string,value:unknown) => {data.set(key,value)}, transaction: async callback => callback(storage) };
+ const storage:State["storage"] = { get: async <T>(key:string) => data.get(key) as T | undefined, put: async (key:string,value:unknown) => {data.set(key,value)}, transaction: async <T>(callback:(store:State["storage"])=>Promise<T>) => {
+  const previous=transactionQueue;
+  let release!:()=>void;
+  transactionQueue=new Promise<void>(resolve=>{release=resolve});
+  await previous;
+  try{return await callback(storage)}finally{release()}
+ } };
+ let transactionQueue=Promise.resolve();
  const objects = new Map<string, Uint8Array>();
  const env:Environment = { OBJECTS: { get: async key => {const bytes=objects.get(key);return bytes?{size:bytes.length,arrayBuffer:async()=>bytes.slice().buffer}:null},put:async()=>{} }, INDEX: {prepare:()=>({bind:()=>({run:async()=>{},all:async()=>[]})})} };
  const authority = new SessionAuthority({storage}, env);
@@ -21,6 +28,41 @@ test("release advances epochs and replay is payload bound",async()=>{
  expect((await post("commit",{...body,manifest:{...body.manifest,sequence:2}})).status).toBe(400);
  await post("release",lease);await post("lease",{ownerNode:"b"});
  expect((await post("commit",{...body,idempotencyKey:"new",expectedHead:1,manifest:{...body.manifest,sequence:2}})).status).toBe(409);
+});
+test("a transfer rotates ownership, fences the source, and admits only its destination",async()=>{
+ const {post}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const request={...source,targetNode:"destination",transferId:"transfer-1"};
+ const transferred=await post("transfer",request);
+ expect(transferred.status).toBe(200);
+ const destination=await transferred.json() as {ownerNode:string;epoch:number};
+ expect(destination.ownerNode).toBe("destination");
+ expect(destination.epoch).toBe(source.epoch+1);
+ expect((await post("renew",source)).status).toBe(409);
+ expect((await post("transfer",{...source,targetNode:"attacker",transferId:"wrong-owner"})).status).toBe(409);
+ expect((await post("lease",{ownerNode:"other"})).status).toBe(409);
+ const resumed=await (await post("lease",{ownerNode:"destination"})).json() as {ownerNode:string;epoch:number};
+ expect(resumed.ownerNode).toBe("destination");
+ expect(resumed.epoch).toBe(destination.epoch);
+});
+test("an expired transferred lease can be taken by an offline destination",async()=>{
+ const {post,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ await post("transfer",{...source,targetNode:"destination",transferId:"transfer-expire"});
+ const current=data.get("lease") as {expiresAt:string};
+ current.expiresAt=new Date(0).toISOString();
+ const takeover=await post("lease",{ownerNode:"offline-destination"});
+ expect(takeover.status).toBe(200);
+ expect((await takeover.json() as {ownerNode:string}).ownerNode).toBe("offline-destination");
+});
+test("competing handoffs cannot both take ownership",async()=>{
+ const {post}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const results=await Promise.all([
+  post("transfer",{...source,targetNode:"laptop-a",transferId:"race-a"}),
+  post("transfer",{...source,targetNode:"laptop-b",transferId:"race-b"}),
+ ]);
+ expect(results.map(result=>result.status).sort()).toEqual([200,409]);
 });
 test("missing object cannot publish a head",async()=>{
  const {post}=fixture();const lease=await (await post("lease",{ownerNode:"a"})).json() as {epoch:number;ownerNode:string};

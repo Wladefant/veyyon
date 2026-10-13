@@ -51,6 +51,23 @@ export class SessionAuthority {
  if(live && current.ownerNode!==body.ownerNode)return json({error:"owned"},409);
  const lease:Lease={ownerNode:body.ownerNode as string,epoch:live?current.epoch:(current?.epoch??0)+1,expiresAt:new Date(Date.now()+60000).toISOString(),headSequence:head?.sequence??0,manifestHash:head?.manifestHash??""};await store.put("lease",lease);return json(lease);
  }
+ if(action==="transfer"){
+ const targetNode=body.targetNode;
+ const transferId=body.transferId;
+ if(typeof targetNode!=="string" || !targetNode.length || targetNode.length>128 || typeof transferId!=="string" || !transferId.length || transferId.length>256 || !Number.isSafeInteger(body.epoch))return json({error:"invalid transfer"},400);
+ const prior=await store.get<{sourceNode:string;sourceEpoch:number;targetNode:string;targetEpoch:number}>(`transfer:${transferId}`);
+ if(prior){
+ if(prior.sourceNode!==body.ownerNode || prior.sourceEpoch!==body.epoch || prior.targetNode!==targetNode)return json({error:"transfer replay mismatch"},409);
+ const active=await store.get<Lease>("lease");
+ if(active?.ownerNode===targetNode && active.epoch===prior.targetEpoch && Date.parse(active.expiresAt)>Date.now())return json(active);
+ return json({error:"transfer lease no longer active"},409);
+ }
+ if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
+ const next:Lease={...current,ownerNode:targetNode,epoch:current.epoch+1,expiresAt:new Date(Date.now()+60000).toISOString()};
+ await store.put("lease",next);
+ await store.put(`transfer:${transferId}`,{sourceNode:current.ownerNode,sourceEpoch:current.epoch,targetNode,targetEpoch:next.epoch});
+ return json(next);
+ }
  if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
  if(action==="renew"){const next={...current,expiresAt:new Date(Date.now()+60000).toISOString()};await store.put("lease",next);return json(next);}
  if(action==="release"){await store.put("lease",{...current,epoch:current.epoch+1,expiresAt:new Date(0).toISOString()});return new Response(null,{status:204});}
@@ -105,7 +122,7 @@ export default {
  if(bytes){if(await digest(bytes)!==hash)return json({error:"hash mismatch"},422);if(existing)return json({error:"immutable object exists"},409);await env.OBJECTS.put(hash,bytes,{onlyIf:{etagDoesNotMatch:"*"}});return new Response(null,{status:201});}
  }
  if(parts[1]==="catalog" && request.method==="GET")return json(await env.INDEX.prepare("SELECT id, sequence, manifest_hash FROM sessions LIMIT 100").bind().all());
- if(parts[1]==="sessions" && parts.length===4 && sessionId && ((parts[3]==="head" && request.method==="GET") || (["lease","renew","release","commit"].includes(parts[3]!) && request.method==="POST"))) return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId)).fetch(request);
+ if(parts[1]==="sessions" && parts.length===4 && sessionId && ((parts[3]==="head" && request.method==="GET") || (["lease","renew","release","transfer","commit"].includes(parts[3]!) && request.method==="POST"))) return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId)).fetch(request);
  return json({error:"not found"},404);
  }
 };
