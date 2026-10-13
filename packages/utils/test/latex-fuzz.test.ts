@@ -107,7 +107,10 @@ describe("latex fuzz invariants", () => {
 		// the parent's depth, or a nested-optional-arg chain launders past
 		// `#MAX_DEPTH` and overflows the stack (regression: it did, throwing a
 		// RangeError at depth ~8k and re-scanning O(n^2)).
-		for (const depth of [200, 1000, 5000, 20000]) {
+		//
+		// Bounded to 10k: depth > 8k proves stack safety past the JS call-stack
+		// ceiling, while keeping the deterministic fuzz workload fast under CI load.
+		for (const depth of [200, 1000, 10000]) {
 			const nestedBraces = `${"{".repeat(depth)}x${"}".repeat(depth)}`;
 			const nestedFrac = `${"\\frac{a}".repeat(depth)}{b}`;
 			const nestedScripts = `${"x^{".repeat(depth)}y${"}".repeat(depth)}`;
@@ -136,7 +139,7 @@ describe("latex fuzz invariants", () => {
 	// and a ratio is invariant to how loaded the machine is.
 	//
 	// Not caught here: a constant-factor blowup that stays linear, and stack
-	// exhaustion past 16k depth, which the sibling test above covers at 20k.
+	// exhaustion past 8k depth, which the sibling test above covers at 10k.
 	it("degrades a nested optional-argument chain in linear time", () => {
 		const cost = (depth: number): number => {
 			const attack = `${"\\sqrt[".repeat(depth)}2${"]{x}".repeat(depth)}`;

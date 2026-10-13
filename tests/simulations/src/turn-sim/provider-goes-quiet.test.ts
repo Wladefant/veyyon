@@ -75,7 +75,7 @@ describe("a provider that goes quiet", () => {
 		sim = await createSimulation({
 			script: scriptTurns(
 				async turn => {
-					turn.text("first attempt");
+					turn.thinking("first attempt");
 					await stalled.promise;
 				},
 				turn => {
@@ -99,7 +99,7 @@ describe("a provider that goes quiet", () => {
 		const stalled = Promise.withResolvers<never>();
 		sim = await createSimulation({
 			script: async turn => {
-				turn.text(`attempt ${turn.call}`);
+				turn.thinking(`attempt ${turn.call}`);
 				await stalled.promise;
 			},
 		});

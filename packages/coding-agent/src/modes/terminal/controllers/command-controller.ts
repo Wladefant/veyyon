@@ -1205,6 +1205,8 @@ export class CommandController {
 		} else {
 			await this.#executeBashCommand(command, excludeFromContext, isDeferred, false);
 		}
+		// A `!` or `%` command may have moved the tree, and an idle row has no other reason to look.
+		this.ctx.statusLine.refreshGitStatus();
 	}
 
 	/** Returns whether shell execution committed a cwd relocation, not whether the shell command succeeded. */

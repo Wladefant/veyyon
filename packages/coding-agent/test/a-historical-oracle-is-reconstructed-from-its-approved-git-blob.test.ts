@@ -13,6 +13,7 @@ import {
 	ADAPTER_FILENAME,
 	loadHistoricalOracle,
 	ORACLE_EXPORTS,
+	ORACLE_REPO_ROOT,
 	ORACLE_SNAPSHOT_COMMIT,
 	ORACLE_SOURCE_DIRECTORY,
 } from "./oracles/historical-loader";
@@ -31,7 +32,7 @@ describe("historical oracle reconstruction", () => {
 			.filter(file => file.endsWith(suffix))
 			.map(file => file.slice(0, -3))
 			.sort();
-		const historical = [...readGitTree(ORACLE_SNAPSHOT_COMMIT).keys()]
+		const historical = [...readGitTree(ORACLE_SNAPSHOT_COMMIT, ORACLE_REPO_ROOT).keys()]
 			.filter(file => file.startsWith(`${ORACLE_SOURCE_DIRECTORY}/`) && file.endsWith(suffix))
 			.map(file => path.basename(file, ".ts"))
 			.sort();
@@ -51,8 +52,10 @@ describe("historical oracle reconstruction", () => {
 				"git",
 				["show", `${ORACLE_SNAPSHOT_COMMIT}:${ORACLE_SOURCE_DIRECTORY}/${name}.ts`],
 				{
-					cwd: REPO_ROOT,
+					cwd: ORACLE_REPO_ROOT,
 					maxBuffer: 16 * 1024 * 1024,
+					timeout: 30_000,
+					windowsHide: true,
 				},
 			);
 			expect(fs.readFileSync(cacheFile).equals(approved)).toBe(true);
@@ -98,7 +101,8 @@ describe("historical oracle reconstruction", () => {
 		execFileSync(process.execPath, [helperPath], {
 			cwd: REPO_ROOT,
 			stdio: "pipe",
-			timeout: 30000,
+			timeout: 30_000,
+			windowsHide: true,
 		});
 	});
 });
