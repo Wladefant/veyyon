@@ -15,7 +15,8 @@
  *   column cap; the read is `:raw`, a delimited list, or in a display mode with no
  *   snapshot tag; the session exposes no live messages (the advisor); a same-named file elsewhere.
  *
- * The suite drives the real `Agent` loop and the real `read` tool against a real directory. Only the
+ * The decision is `refuseReadStillInContext` in `tools/fs/read-in-context.ts`, reached here only
+ * through the tool. The suite drives the real `Agent` loop and the real `read` tool against a real directory. Only the
  * model is scripted. `getLiveMessages` reads `agent.state.messages`, which is what the production
  * tool session passes, so a result appended mid-run is visible to the next call in the same run.
  *
