@@ -1,11 +1,14 @@
 /**
  * Refusal of a read whose output the model can still see.
  *
- * A read is refused when the file's snapshot tag is unchanged and every line the read would display
- * is already displayed by an earlier `read` result that is still in the agent's live context. The
- * check reads the live messages at call time and keeps no history of its own: a result that was
- * pruned, shaken out, deduplicated or summarized away by compaction no longer carries its numbered
- * rows, so it stops counting the moment the model stops seeing it.
+ * A read is refused when every row it would display is already displayed, byte for byte under the
+ * same section header, by an earlier `read` result that is still in the agent's live context. The
+ * header's snapshot tag is a 16-bit index of whitespace-normalized text, not the file's identity, so
+ * the rows themselves are the proof: a tag collision or a trailing-whitespace edit that changes a
+ * requested line changes its row and the read is delivered. The check reads the live messages at call
+ * time and keeps no history of its own: a result that was pruned, shaken out, deduplicated or
+ * summarized away by compaction no longer carries its numbered rows, so it stops counting the moment
+ * the model stops seeing it.
  *
  * The refusal is appended as a new short result. Nothing earlier in the conversation is rewritten,
  * so the cached prompt prefix is untouched, and compaction's supersede pruning does not treat the
@@ -13,9 +16,8 @@
  */
 import type { AgentMessage, AgentToolResult } from "@veyyon/agent-core";
 import type { ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
-import { parseSeenLinesFromHashlineBody } from "../../edit/file-snapshot-store";
+import { HASHLINE_LINE_PREFIX } from "../../edit/file-snapshot-store";
 import type { ToolSession } from "../../sdk";
-import { resolveOutputMaxColumns } from "../core/output-meta";
 import { resolveToCwd, splitPathAndSel } from "../core/path-utils";
 import { toolResult } from "../core/tool-result";
 import type { ReadToolDetails } from "./read-types";
@@ -24,39 +26,30 @@ import type { ReadToolDetails } from "./read-types";
 const SECTION_HEADER = /^\[[^\]\n]+#[0-9A-F]{4}\]$/;
 
 /**
- * The lines each hashline section of `text` displays, keyed by its header line.
+ * The numbered rows each hashline section of `text` displays, keyed by its header line.
  *
  * A section is its header and the non-empty lines that follow it. Every row a hashline body
  * displays is non-empty (an empty file line renders as `N:`), and a delimited read joins its parts
  * with a blank line, so a section ends at the first empty line and a later `:raw` part can never
- * lend its lines to the section before it.
+ * lend its rows to the section before it. Lines without a row prefix (truncation and continuation
+ * notices) are not rows.
  */
-function displayedLinesBySection(text: string): Map<string, Set<number>> {
-	const sections = new Map<string, Set<number>>();
-	let header: string | undefined;
-	let rows: string[] = [];
-	const flush = (): void => {
-		if (header === undefined) return;
-		let lines = sections.get(header);
-		if (!lines) {
-			lines = new Set();
-			sections.set(header, lines);
-		}
-		for (const line of parseSeenLinesFromHashlineBody(rows.join("\n"))) lines.add(line);
-		header = undefined;
-		rows = [];
-	};
+function displayedRowsBySection(text: string): Map<string, Set<string>> {
+	const sections = new Map<string, Set<string>>();
+	let rows: Set<string> | undefined;
 	for (const line of text.split("\n")) {
 		if (SECTION_HEADER.test(line)) {
-			flush();
-			header = line;
+			rows = sections.get(line);
+			if (!rows) {
+				rows = new Set();
+				sections.set(line, rows);
+			}
 		} else if (line.length === 0) {
-			flush();
-		} else if (header !== undefined) {
-			rows.push(line);
+			rows = undefined;
+		} else if (rows && HASHLINE_LINE_PREFIX.test(line)) {
+			rows.add(line);
 		}
 	}
-	flush();
 	return sections;
 }
 
@@ -93,31 +86,24 @@ function isLiveReadResult(message: AgentMessage): message is ToolResultMessage<R
 	);
 }
 
-/** The lines visible read results of `absolutePath` display under `header`. */
-function linesStillInContext(
+/** The rows visible read results of `absolutePath` display under `header`. */
+function rowsStillInContext(
 	messages: readonly AgentMessage[],
 	absolutePath: string,
 	header: string,
 	cwd: string,
-	maxColumns: number,
-): Set<number> {
-	const visible = new Set<number>();
+): Set<string> {
+	const visible = new Set<string>();
 	for (const message of messages) {
-		if (!isLiveReadResult(message)) continue;
-		const details = message.details;
-		// A row cut at the column cap showed only its prefix. A read at that same cap cuts it
-		// identically; a read at any other cap shows different bytes.
-		const clippedAt = details?.meta?.limits?.columnTruncated?.maxColumn;
-		if (clippedAt !== undefined && clippedAt !== maxColumns) continue;
-		if (!resultReadsPath(details, absolutePath, cwd)) continue;
-		const lines = displayedLinesBySection(resultText(message.content)).get(header);
-		if (lines) for (const line of lines) visible.add(line);
+		if (!isLiveReadResult(message) || !resultReadsPath(message.details, absolutePath, cwd)) continue;
+		const rows = displayedRowsBySection(resultText(message.content)).get(header);
+		if (rows) for (const row of rows) visible.add(row);
 	}
 	return visible;
 }
 
 /**
- * The refusal for `result` when every line it displays is unchanged and still in context, or
+ * The refusal for `result` when every row it displays is still in context, or
  * `undefined` to deliver `result` as read.
  *
  * `result` is a finished single-file read of `absolutePath`. A read with no hashline header (raw,
@@ -132,18 +118,12 @@ export function refuseReadStillInContext(
 ): AgentToolResult<ReadToolDetails> | undefined {
 	const messages = session.getLiveMessages?.();
 	if (!messages || messages.length === 0) return undefined;
-	const sections = displayedLinesBySection(resultText(result.content));
+	const sections = displayedRowsBySection(resultText(result.content));
 	if (sections.size !== 1) return undefined;
 	const [[header, requested]] = sections;
 	if (requested.size === 0) return undefined;
-	const visible = linesStillInContext(
-		messages,
-		absolutePath,
-		header,
-		session.cwd,
-		resolveOutputMaxColumns(session.settings),
-	);
-	for (const line of requested) if (!visible.has(line)) return undefined;
+	const visible = rowsStillInContext(messages, absolutePath, header, session.cwd);
+	for (const row of requested) if (!visible.has(row)) return undefined;
 
 	const details: ReadToolDetails = { resolvedPath: absolutePath, inContextRefusal: true };
 	if (result.details?.suffixResolution) details.suffixResolution = result.details.suffixResolution;

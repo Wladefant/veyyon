@@ -34,10 +34,11 @@ to a budget:
   with the line that continues it rather than the whole projection.
 - **Truncation is explicit.** A summary footer or a `[Showing lines …]`-style notice states the
   continuation selector.
-- **Reads still in context are refused.** A re-read of a file whose snapshot tag is unchanged, and
-  whose requested lines are all shown by earlier read results the model still sees, returns a
+- **Reads still in context are refused.** A re-read whose every displayed row is shown, byte for
+  byte under the same `[path#TAG]` header, by earlier read results the model still sees returns a
   one-line pointer to that output instead of the content. A result that was pruned, shaken or
-  compacted away no longer counts. No argument overrides the refusal. Nothing earlier in the
+  compacted away no longer counts. No argument overrides the refusal. No read is refused while an
+  extension handles the `context` event. Nothing earlier in the
   conversation is rewritten, so the cached prompt prefix is unchanged.
 - **Beyond plain text files:** the same tool also reads directories (depth-limited listing), archives
   (`.tar`, `.tar.gz`, `.zip`, via `archive.zip:path/inside`), SQLite databases (`file.db:table`, with

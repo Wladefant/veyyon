@@ -7,9 +7,10 @@
  * when it should not is worse than none: the model is told to work from output it cannot see, or
  * from bytes that no longer match the file. So the contract has two halves, and both are asserted:
  *
- * - Refused: the file's snapshot tag is unchanged AND every line the read would display is displayed
- *   by an earlier read result the model still sees (one result or the union of several).
- * - Delivered: the file changed; any requested line was never shown; the earlier result was pruned;
+ * - Refused: every row the read would display is displayed, byte for byte under the same header, by
+ *   an earlier read result the model still sees (one result or the union of several).
+ * - Delivered: the file changed, including a change the 16-bit tag misses (a hash collision, an edit
+ *   to trailing whitespace); any requested line was never shown; the earlier result was pruned;
  *   the only earlier "coverage" is itself a refusal; the earlier rows were clipped at a different
  *   column cap; the read is `:raw`, a delimited list, or in a display mode with no
  *   snapshot tag; the session exposes no live messages (the advisor); a same-named file elsewhere.
@@ -25,6 +26,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { ToolResultMessage } from "@veyyon/ai";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
+import { computeFileHash } from "@veyyon/hashline";
 import { createIntegrationWorkspace, type IntegrationWorkspace } from "../helpers/integration-workspace";
 
 /** One scripted read call, with an optional side effect run just before the model emits it. */
@@ -44,6 +46,17 @@ interface DriveOptions {
 const NOTES = Array.from({ length: 40 }, (_, i) => `note ${i + 1}`).join("\n");
 const OTHER = "other 1\nother 2\n";
 const HEADER = /^\[[^\]\n]+#[0-9A-F]{4}\]$/m;
+
+/** `NOTES` with line 3 rewritten until the whole file hashes to the same 16-bit tag as `NOTES`. */
+function collidingNotes(): string {
+	const tag = computeFileHash(NOTES);
+	const lines = NOTES.split("\n");
+	for (let k = 0; ; k++) {
+		lines[2] = `note 3 variant ${k}`;
+		const candidate = lines.join("\n");
+		if (computeFileHash(candidate) === tag) return candidate;
+	}
+}
 
 let workspace: IntegrationWorkspace | undefined;
 
@@ -208,6 +221,43 @@ describe("a read of lines still in context", () => {
 		]);
 		expect(header(second)).not.toBe(header(first));
 		expect(text(second)).toContain("note 41");
+	});
+
+	describe("a change the snapshot tag does not see", () => {
+		it("delivers a file whose new content collides with the old tag", async () => {
+			const colliding = collidingNotes();
+			const [first, second] = await drive([
+				{ args: { path: "notes.txt" } },
+				{ args: { path: "notes.txt" }, before: ws => ws.seed("notes.txt", colliding) },
+			]);
+			expect(header(second)).toBe(header(first));
+			expect(verdict(second)).toBe("delivered");
+			expect(text(second)).toContain(colliding.split("\n")[2]!);
+		});
+
+		it("delivers a file whose only change is trailing whitespace the tag normalizes away", async () => {
+			const [first, second] = await drive([
+				{ args: { path: "notes.txt" } },
+				{
+					args: { path: "notes.txt" },
+					before: ws => ws.seed("notes.txt", NOTES.replace("note 3\n", "note 3   \n")),
+				},
+			]);
+			expect(header(second)).toBe(header(first));
+			expect(verdict(second)).toBe("delivered");
+			expect(text(second)).toContain("3:note 3   \n");
+		});
+
+		it.each<[string, string, "refused" | "delivered"]>([
+			["refuses a range whose displayed rows the collision left byte-identical", "notes.txt:10-12", "refused"],
+			["delivers a range whose padded context shows the line the collision changed", "notes.txt:1-2", "delivered"],
+		])("%s", async (_name, range, expected) => {
+			const results = await drive([
+				{ args: { path: "notes.txt" } },
+				{ args: { path: range }, before: ws => ws.seed("notes.txt", collidingNotes()) },
+			]);
+			expect(results.map(verdict)).toEqual(["delivered", expected]);
+		});
 	});
 
 	it("delivers a delimited list in full when one of its files is already in context", async () => {

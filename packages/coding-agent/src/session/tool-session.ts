@@ -188,7 +188,10 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 			inputs.session()?.trackEvalExecution(execution, abortController) ?? execution,
 		getSessionId: () => sessionManager.getSessionId?.() ?? null,
 		getTurnIndex: () => inputs.session()?.getTurnIndex() ?? 0,
-		getLiveMessages: () => inputs.agent()?.state.messages ?? [],
+		// An extension `context` handler rewrites the messages each request sends, so the live
+		// state no longer states what the model sees; no message counts as in context then.
+		getLiveMessages: () =>
+			inputs.session()?.extensionRunner?.hasHandlers("context") ? undefined : (inputs.agent()?.state.messages ?? []),
 		getHindsightSessionState: () => inputs.session()?.getHindsightSessionState(),
 		getMnemopiSessionState: () => inputs.session()?.getMnemopiSessionState(),
 		getAgentId: () => inputs.agentId,
