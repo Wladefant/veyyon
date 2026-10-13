@@ -31,8 +31,7 @@ The lane disables the external SSH rung and pins `VEYYON_SANDBOX_RUNG=bwrap`. It
 The shard runner spawns child processes by the name `bun`. Each sandbox command starts through `/bin/sh` inside bwrap, adds only the checkout-mounted directory containing the copied Bun binary to the sandbox PATH, then replaces the shell with the shard runner. The host PATH does not leak into the sandbox.
 
 This lane verifies only Linux x64. It does not build `linux-arm64`, `win32-x64`, `darwin-x64`, or `darwin-arm64`. The existing GitHub Actions release matrix covers those targets.
-
-The Worker unit test runs with `CLOUDFLARE_API_TOKEN` unset. The lane parses each existing Bun test shard's pass and fail totals and fails on any failure or zero passes. It then runs `bun run check:rs` and builds the Linux x64 production CLI through `scripts/ci-release-build-binaries.ts`. The deploy command uploads only the `veyyon-ci-health` Worker version and disables Workers routes and preview URLs.
+The Worker unit test runs with `CLOUDFLARE_API_TOKEN` unset. The lane preserves the existing CI test buckets, shards, and assertions. Quiet output reports actual Bun test totals (`pass`, `fail`, `skip`, and `todo`) plus chunk totals as separate values. It fails on missing or empty test summaries, any failed test, and any skipped or todo test. It then runs `bun run check:rs` and builds the Linux x64 production CLI through `scripts/ci-release-build-binaries.ts`. The deploy command uploads only the `veyyon-ci-health` Worker version and disables Workers routes and preview URLs.
 
 The existing TypeScript test map excludes `clients/python/veybot/web`, which belongs to the Python client and sits outside every Bun test bucket. This lane follows that existing exclusion and does not run `bun run test:py`.
 

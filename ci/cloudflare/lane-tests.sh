@@ -108,7 +108,6 @@ fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-
 sandbox_root="$(mktemp -d /tmp/veyyon-workers-XXXXXX)"
 ln -s "$repo_root" "$sandbox_root/repo"
 export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
-bash scripts/test-sandbox/run.sh --rung=bwrap --probe
 runtime_bin_dir="$sandbox_root/repo/.cf-proof-tools/bin"
 # Child commands resolve `bun` by name. Add only this checkout-mounted real binary
 # directory after bwrap has applied its fixed PATH, then exec the test runner.
@@ -120,12 +119,19 @@ if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
   exit 1
 fi
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
-# process sizes as the repository's GitHub CI. Full output lets this runner
-# collect Bun's per-test summary lines rather than treating chunks as tests.
+# process sizes as the repository's GitHub CI. Quiet mode emits real Bun case
+# counts separately from child-command chunk totals and replays details on failure.
 export CI=true
 export VEYYON_TEST_CONCURRENCY=2
 test_passes=0
 test_failures=0
+test_skips=0
+test_todos=0
+test_reported=0
+test_files=0
+test_runs=0
+chunk_passes=0
+chunk_failures=0
 run_bucket() {
   local mode="$1"
   echo "CLOUDFLARE_TEST_BUCKET_START $mode"
@@ -134,26 +140,60 @@ run_bucket() {
   local bucket_status=0
   if bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
     'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin_dir" \
-    "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" --full 2>&1 | tee "$bucket_log"; then
+    "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" 2>&1 | tee "$bucket_log"; then
     :
   else
     bucket_status=$?
   fi
-  read -r bucket_passes bucket_failures < <(
+  read -r bucket_chunk_passes bucket_chunk_failures bucket_passes bucket_failures \
+    bucket_skips bucket_todos bucket_reported bucket_files bucket_runs bucket_summaries < <(
     awk '
-      /^[[:space:]]*[0-9]+ pass$/ { passes += $1 }
-      /^[[:space:]]*[0-9]+ fail$/ { failures += $1 }
-      END { printf "%d %d\n", passes, failures }
+      /^[[:space:]]*[0-9]+ chunks passed$/ { chunks_passed += $1 }
+      /^[[:space:]]*[0-9]+ failed chunks$/ { chunks_failed += $1 }
+      /^CLOUDFLARE_CI_TEST_COUNTS / {
+        summaries += 1
+        for (i = 2; i <= NF; i++) {
+          split($i, field, "=")
+          if (field[1] == "pass") passes += field[2]
+          if (field[1] == "fail") failures += field[2]
+          if (field[1] == "skip") skips += field[2]
+          if (field[1] == "todo") todos += field[2]
+          if (field[1] == "reported") reported += field[2]
+          if (field[1] == "files") files += field[2]
+          if (field[1] == "runs") runs += field[2]
+        }
+      }
+      END {
+        printf "%d %d %d %d %d %d %d %d %d %d\n",
+          chunks_passed, chunks_failed, passes, failures, skips, todos,
+          reported, files, runs, summaries
+      }
     ' "$bucket_log"
   )
+  chunk_passes=$((chunk_passes + bucket_chunk_passes))
+  chunk_failures=$((chunk_failures + bucket_chunk_failures))
   test_passes=$((test_passes + bucket_passes))
   test_failures=$((test_failures + bucket_failures))
-  echo "CLOUDFLARE_TEST_BUCKET_END $mode pass=$bucket_passes fail=$bucket_failures"
+  test_skips=$((test_skips + bucket_skips))
+  test_todos=$((test_todos + bucket_todos))
+  test_reported=$((test_reported + bucket_reported))
+  test_files=$((test_files + bucket_files))
+  test_runs=$((test_runs + bucket_runs))
+  echo "CLOUDFLARE_TEST_BUCKET_END $mode chunks_pass=$bucket_chunk_passes chunks_fail=$bucket_chunk_failures pass=$bucket_passes fail=$bucket_failures skip=$bucket_skips todo=$bucket_todos reported=$bucket_reported files=$bucket_files runs=$bucket_runs"
   rm -f "$bucket_log"
+  local bucket_tests=$((bucket_passes + bucket_failures + bucket_skips + bucket_todos))
+  if (( bucket_status == 0 )) && \
+    (( bucket_summaries > 0 && bucket_runs > 0 && bucket_files > 0 && bucket_tests > 0 && \
+       bucket_reported == bucket_tests && bucket_chunk_passes > 0 && bucket_chunk_failures == 0 && \
+       bucket_passes > 0 && bucket_failures == 0 && bucket_skips == 0 && bucket_todos == 0 )); then
+    return 0
+  fi
   if (( bucket_status != 0 )); then
-    echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=$bucket_status" >&2
+    echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=$bucket_status summaries=$bucket_summaries" >&2
     return "$bucket_status"
   fi
+  echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=1 summaries=$bucket_summaries" >&2
+  return 1
 }
 echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
 worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
@@ -162,16 +202,30 @@ worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/
   exit "$worker_status"
 }
 printf '%s\n' "$worker_output"
-read -r worker_passes worker_failures < <(
+read -r worker_tests worker_passes worker_failures worker_skips worker_todos worker_cancelled < <(
   awk '
+    /^# tests [0-9]+$/ { tests = $3 }
     /^# pass [0-9]+$/ { passes = $3 }
     /^# fail [0-9]+$/ { failures = $3 }
-    END { printf "%d %d\n", passes, failures }
+    /^# skipped [0-9]+$/ { skips = $3 }
+    /^# todo [0-9]+$/ { todos = $3 }
+    /^# cancelled [0-9]+$/ { cancelled = $3 }
+    END { printf "%d %d %d %d %d %d\n", tests, passes, failures, skips, todos, cancelled }
   ' <<< "$worker_output"
 )
 test_passes=$((test_passes + worker_passes))
-test_failures=$((test_failures + worker_failures))
-echo "CLOUDFLARE_TEST_BUCKET_END health-worker pass=$worker_passes fail=$worker_failures"
+test_failures=$((test_failures + worker_failures + worker_cancelled))
+test_skips=$((test_skips + worker_skips))
+test_todos=$((test_todos + worker_todos))
+test_reported=$((test_reported + worker_tests))
+test_files=$((test_files + 1))
+test_runs=$((test_runs + 1))
+echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=1 runs=1"
+if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
+      worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
+  echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2
+  exit 1
+fi
 
 run_bucket workspace
 run_bucket native
@@ -182,13 +236,16 @@ run_bucket coding-agent-native
 run_bucket scripts
 run_bucket coding-agent-heavy
 
-# The shard runner parses each bucket's TAP summary; fail closed on an empty or red suite.
-if (( test_passes == 0 || test_failures != 0 )); then
-  echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
-  echo 'Expected at least one passing test and zero failures.' >&2
+# Require real test cases and matching test-runner totals; chunk completion is reported separately.
+test_total=$((test_passes + test_failures + test_skips + test_todos))
+if (( test_total == 0 || test_passes == 0 || test_failures != 0 || test_skips != 0 || \
+      test_todos != 0 || test_reported != test_total || test_files == 0 || test_runs == 0 || \
+      chunk_passes == 0 || chunk_failures != 0 )); then
+  echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures skip=$test_skips todo=$test_todos tests=$test_total reported=$test_reported files=$test_files runs=$test_runs chunks_pass=$chunk_passes chunks_fail=$chunk_failures"
+  echo 'Expected positive named test counts, zero failures, no skipped or todo tests, and matching reports.' >&2
   exit 1
 fi
-echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures"
+echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures skip=$test_skips todo=$test_todos tests=$test_total reported=$test_reported files=$test_files runs=$test_runs chunks_pass=$chunk_passes chunks_fail=$chunk_failures"
 
 # Cargo comes from the pinned Rustup installation above; compiler failures are fatal.
 bun run check:rs

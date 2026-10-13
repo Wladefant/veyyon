@@ -912,6 +912,41 @@ export function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
+function drainOutput(
+	stream: ReadableStream<Uint8Array>,
+	sink: { text: string },
+): { done: Promise<void>; cancel: () => void } {
+	const decoder = new TextDecoder();
+	const reader = stream.getReader();
+	const done = (async () => {
+		try {
+			for (;;) {
+				const { done: ended, value } = await reader.read();
+				if (ended) break;
+				sink.text += decoder.decode(value, { stream: true });
+			}
+		} catch {
+			// cancelled or broken pipe — keep what was captured
+		}
+		sink.text += decoder.decode();
+	})();
+	return { done, cancel: () => void reader.cancel().catch(() => {}) };
+}
+
+async function settleWithin(promise: Promise<unknown>, milliseconds: number): Promise<boolean> {
+	const { promise: expired, resolve } = Promise.withResolvers<boolean>();
+	const timer = setTimeout(() => resolve(false), milliseconds);
+	const settled = await Promise.race([
+		promise.then(
+			() => true,
+			() => true,
+		),
+		expired,
+	]);
+	clearTimeout(timer);
+	return settled;
+}
+
 async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
@@ -923,19 +958,52 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	}
 
 	const env = buildChildEnv();
+	const startedAt = performance.now();
+	const stdout = { text: "" };
+	const stderr = { text: "" };
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
 		env,
-		stdout: "inherit",
-		stderr: "inherit",
+		stdout: quiet ? "pipe" : "inherit",
+		stderr: quiet ? "pipe" : "inherit",
 	});
-	const killTimer = setTimeout(() => proc.kill("SIGKILL"), chunkTimeoutMs());
+	const stdoutDrain = quiet ? drainOutput(proc.stdout as ReadableStream<Uint8Array>, stdout) : null;
+	const stderrDrain = quiet ? drainOutput(proc.stderr as ReadableStream<Uint8Array>, stderr) : null;
+	const drains = stdoutDrain && stderrDrain ? Promise.all([stdoutDrain.done, stderrDrain.done]) : null;
+	let timedOut = false;
+	const killTimer = setTimeout(() => {
+		timedOut = true;
+		proc.kill("SIGKILL");
+	}, chunkTimeoutMs());
 	const exitCode = await proc.exited;
 	clearTimeout(killTimer);
-	if (exitCode !== 0) {
+	if (drains && stdoutDrain && stderrDrain && !(await settleWithin(drains, 5000))) {
+		stdoutDrain.cancel();
+		stderrDrain.cancel();
+		await drains;
+	}
+	const output = quiet
+		? `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`
+		: "";
+	if (quiet) {
+		const outcome: ChunkOutcome = {
+			label: testCommand.label,
+			command: renderedCommand,
+			exitCode,
+			seconds: (performance.now() - startedAt) / 1000,
+			output,
+		};
+		const totals: BunTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, reportedTests: 0, files: 0, runs: 0 };
+		addBunTestTotals(totals, output);
+		const chunkResult = exitCode === 0 && !timedOut ? "1 chunks passed" : "1 failed chunks";
+		process.stdout.write(`${formatProgressLine(outcome)}\n ${chunkResult}\n${formatBunTestTotals(totals)}\n`);
+		if (exitCode !== 0 || timedOut) process.stdout.write(output);
+	}
+	if (exitCode !== 0 || timedOut) {
 		const files = chunkTestFiles(renderedCommand);
 		const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
-		throw new Error(`${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}${composition}`);
+		const timeout = timedOut ? " (watchdog timeout)" : "";
+		throw new Error(`${testCommand.label} failed with exit code ${exitCode}${timeout}: ${renderedCommand}${composition}`);
 	}
 }
 
@@ -1032,6 +1100,47 @@ interface ChunkOutcome {
 	output: string;
 }
 
+interface BunTestTotals {
+	pass: number;
+	fail: number;
+	skip: number;
+	todo: number;
+	reportedTests: number;
+	files: number;
+	runs: number;
+}
+
+function addBunTestTotals(totals: BunTestTotals, output: string): void {
+	const runPattern = /^Ran (\d+) tests? across (\d+) files?\./gm;
+	let summary: RegExpMatchArray | undefined;
+	for (const match of output.matchAll(runPattern)) summary = match;
+	if (!summary || summary.index === undefined) return;
+	const current: BunTestTotals = {
+		pass: 0,
+		fail: 0,
+		skip: 0,
+		todo: 0,
+		reportedTests: Number(summary[1]),
+		files: Number(summary[2]),
+		runs: 1,
+	};
+	for (const count of output.slice(0, summary.index).matchAll(/^\s*(\d+) (pass|fail|skip|todo)\s*$/gm)) {
+		current[count[2] as "pass" | "fail" | "skip" | "todo"] = Number(count[1]);
+	}
+	totals.pass += current.pass;
+	totals.fail += current.fail;
+	totals.skip += current.skip;
+	totals.todo += current.todo;
+	totals.reportedTests += current.reportedTests;
+	totals.files += current.files;
+	totals.runs += current.runs;
+}
+
+function formatBunTestTotals(totals: BunTestTotals): string {
+	const tests = totals.pass + totals.fail + totals.skip + totals.todo;
+	return `CLOUDFLARE_CI_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} reported=${totals.reportedTests} files=${totals.files} runs=${totals.runs}`;
+}
+
 // Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
 // above. Used by the progress line and footer so timings read like `bun test`.
 function formatDuration(seconds: number): string {
@@ -1056,17 +1165,20 @@ export function formatProgressLine(outcome: ChunkOutcome): string {
 	return `${style.bold(style.red(`✗ ${outcome.label}`))} ${time}${detail}`;
 }
 
-// Closing tally in `bun test` style, but counting test *chunks* (child commands),
-// not individual tests — the runner never parses child summaries. A green
-// `N chunks passed` line, a `N failed` line (red when non-zero, dim when clean),
-// then the total wall time. Printed after the failure report so a run always
-// ends on an at-a-glance verdict.
-export function formatSummaryFooter(passed: number, failed: number, totalSeconds: number): string {
-	const failLine = failed > 0 ? style.red(`${failed} failed`) : style.dim("0 failed");
+// The quiet footer keeps child-command totals separate from Bun's actual test
+// case totals so CI cannot mistake completed chunks for executed tests.
+export function formatSummaryFooter(
+	passed: number,
+	failed: number,
+	totalSeconds: number,
+	testTotals: BunTestTotals,
+): string {
+	const failLine = failed > 0 ? style.red(`${failed} failed chunks`) : style.dim("0 failed chunks");
 	return [
 		"",
 		` ${style.green(`${passed} chunks passed`)}`,
 		` ${failLine}`,
+		formatBunTestTotals(testTotals),
 		style.dim(`Ran ${passed + failed} test command(s) in ${formatDuration(totalSeconds)}.`),
 	].join("\n");
 }
@@ -1198,50 +1310,13 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
+	const testTotals: BunTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, reportedTests: 0, files: 0, runs: 0 };
 	let completed = 0;
 	console.log(
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
 			`(VEYYON_TEST_CONCURRENCY=<n>|all to change).`,
 	);
 
-	// Incremental, cancellable drain into a mutable sink, so a watchdog-killed
-	// chunk still reports whatever the child managed to print before it wedged.
-	function drainInto(
-		stream: ReadableStream<Uint8Array>,
-		sink: { text: string },
-	): { done: Promise<void>; cancel: () => void } {
-		const decoder = new TextDecoder();
-		const reader = stream.getReader();
-		const done = (async () => {
-			try {
-				for (;;) {
-					const { done: ended, value } = await reader.read();
-					if (ended) break;
-					sink.text += decoder.decode(value, { stream: true });
-				}
-			} catch {
-				// cancelled or broken pipe — keep what was captured
-			}
-			sink.text += decoder.decode();
-		})();
-		return { done, cancel: () => void reader.cancel().catch(() => {}) };
-	}
-
-	// Wait for `promise` at most `ms`; resolves `true` when it settled in time.
-	// Never rejects.
-	async function settleWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
-		const { promise: expired, resolve } = Promise.withResolvers<boolean>();
-		const timer = setTimeout(() => resolve(false), ms);
-		const settled = await Promise.race([
-			promise.then(
-				() => true,
-				() => true,
-			),
-			expired,
-		]);
-		clearTimeout(timer);
-		return settled;
-	}
 
 	async function worker(): Promise<void> {
 		for (;;) {
@@ -1259,8 +1334,8 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			});
 			const stdout = { text: "" };
 			const stderr = { text: "" };
-			const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
-			const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
+			const stdoutDrain = drainOutput(proc.stdout as ReadableStream<Uint8Array>, stdout);
+			const stderrDrain = drainOutput(proc.stderr as ReadableStream<Uint8Array>, stderr);
 			const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
 			// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
 			// after a GC crash) would otherwise hang this worker forever.
@@ -1287,6 +1362,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				seconds: (performance.now() - startedAt) / 1000,
 				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 			};
+			addBunTestTotals(testTotals, outcome.output);
 			if (quiet) {
 				let msg = `${formatProgressLine(outcome)}\n`;
 				if (exitCode !== 0 || timedOut) {
@@ -1311,10 +1387,13 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
 		process.stdout.write(
-			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
+			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds, testTotals)}\n`,
 		);
-	} else if (failures.length > 0) {
-		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
+	} else {
+		if (failures.length > 0) {
+			process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
+		}
+		process.stdout.write(`${formatBunTestTotals(testTotals)}\n`);
 	}
 	if (failures.length > 0) {
 		process.exitCode = 1;
