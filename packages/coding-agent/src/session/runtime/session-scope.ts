@@ -103,7 +103,7 @@ export class SessionScope {
 		await host.settings.reloadForCwd(normalizedCwd);
 		// Session cwd is independent of the OS cwd, including for the root session. Commands and
 		// tool paths resolve against the session store, never a process-wide directory change.
-		if (!host.isSpawned) this.#rescopeProcess();
+		if (!host.isSpawned) this.#rescopeProcess(normalizedCwd);
 		await preloadPluginRoots(os.homedir(), normalizedCwd);
 		await host.refreshSecrets();
 		await host.refreshSshTool();
@@ -186,11 +186,11 @@ export class SessionScope {
 	 * Refresh process-wide provider and discovery state for the root session. The directory itself
 	 * remains session-owned; changing it here would redirect unrelated sessions and hold worktrees.
 	 */
-	#rescopeProcess(): void {
+	#rescopeProcess(cwd: string): void {
 		// Provider preferences are process-wide, but their source is the destination scope of this
 		// session's Settings instance.
 		applyProviderGlobalsFromSettings(this.#host.settings);
-		clearClaudePluginRootsCache();
+		clearClaudePluginRootsCache(cwd);
 		resetCapabilities();
 	}
 

@@ -1488,16 +1488,23 @@ export async function listClaudePluginRoots(
 }
 
 /**
- * Clear the plugin roots cache (useful for testing or when plugins change).
+ * Clear discovery caches; a scoped caller must await preloadPluginRoots for that cwd.
  */
-export function clearClaudePluginRootsCache(): void {
+export function clearClaudePluginRootsCache(cwd?: string): void {
 	pluginRootsCache.clear();
 	for (const invalidate of pluginCacheInvalidators) invalidate();
 	// Keep warmed snapshots available until their replacements publish atomically.
-	preloadGeneration++;
-	// Re-warm each known scope without redirecting another session's sync reads.
-	for (const [cwd, home] of preloadHomes) {
-		void preloadPluginRoots(home, cwd);
+	if (cwd !== undefined) {
+		const scope = path.resolve(cwd);
+		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
+		return;
+	}
+	// Registry mutations affect every known scope; re-rooting affects only its destination.
+	for (const scope of preloadHomes.keys()) {
+		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
+	}
+	for (const [scope, home] of preloadHomes) {
+		void preloadPluginRoots(home, scope);
 	}
 }
 
@@ -1520,7 +1527,7 @@ export function clearPluginRootsAndCaches(extraPaths?: readonly string[]): void 
 const preloadedPluginRoots = new Map<string, ClaudePluginRoot[]>();
 let injectedPluginDirRoots: ClaudePluginRoot[] = [];
 const preloadHomes = new Map<string, string>();
-let preloadGeneration = 0;
+const preloadGenerations = new Map<string, number>();
 
 /**
  * Populate the module-level plugin roots cache for sync consumers.
@@ -1530,13 +1537,17 @@ let preloadGeneration = 0;
 export async function preloadPluginRoots(home: string, cwd: string): Promise<void> {
 	const scope = path.resolve(cwd);
 	preloadHomes.set(scope, home);
-	for (;;) {
-		const generation = preloadGeneration;
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const generation = preloadGenerations.get(scope) ?? 0;
 		const { roots } = await listClaudePluginRoots(home, scope);
-		if (generation !== preloadGeneration) {
+		if (generation !== (preloadGenerations.get(scope) ?? 0)) {
 			// Discovery may have filled the shared cache after its invalidation.
 			pluginRootsCache.clear();
-			continue;
+			if (attempt < 3) continue;
+			logger.debug("Plugin preload reached invalidation retry limit; publishing completed snapshot", {
+				cwd: scope,
+				attempts: attempt,
+			});
 		}
 		preloadedPluginRoots.set(scope, roots);
 		return;

@@ -178,4 +178,74 @@ describe("injectPluginDirRoots manifest name (Law 10)", () => {
 			await preloadA;
 		}
 	});
+
+	it("does not retry A when B repeatedly clears its own scope during A's preload", async () => {
+		const cwdA = makeTempDir("plugin-cross-clear-a-");
+		const cwdB = makeTempDir("plugin-cross-clear-b-");
+		const home = makeTempDir("plugin-cross-clear-home-");
+		const root = path.join(home, "plugin");
+		const registryPath = path.join(getPluginsDir(home), "installed_plugins.json");
+		fs.mkdirSync(root, { recursive: true });
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+		fs.writeFileSync(registryPath, JSON.stringify({
+			version: 2,
+			plugins: { "a@scope-test": [{ scope: "user", installPath: root, version: "1.0.0" }] },
+		}));
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const readFile = discoveryFs.readFile;
+		let reads = 0;
+		vi.spyOn(discoveryFs, "readFile").mockImplementation(async filePath => {
+			if (filePath === registryPath) {
+				reads++;
+				entered.resolve();
+				await release.promise;
+			}
+			return readFile(filePath);
+		});
+		const preloadA = preloadPluginRoots(home, cwdA);
+		try {
+			await entered.promise;
+			for (let i = 0; i < 10; i++) clearClaudePluginRootsCache(cwdB);
+			release.resolve();
+			await preloadA;
+			expect(reads).toBe(1);
+			expect(getPreloadedPluginRoots(cwdA).some(item => item.path === root)).toBe(true);
+		} finally {
+			release.resolve();
+			await preloadA;
+		}
+	});
+
+	it("publishes completed roots after three attempts under continuous same-scope invalidation", async () => {
+		const cwd = makeTempDir("plugin-retry-bound-");
+		const home = makeTempDir("plugin-retry-home-");
+		const root = path.join(home, "plugin");
+		const registryPath = path.join(getPluginsDir(home), "installed_plugins.json");
+		fs.mkdirSync(root, { recursive: true });
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+		fs.writeFileSync(registryPath, JSON.stringify({
+			version: 2,
+			plugins: { "bounded@scope-test": [{ scope: "user", installPath: root, version: "1.0.0" }] },
+		}));
+		const readFile = discoveryFs.readFile;
+		let reads = 0;
+		const debug = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		vi.spyOn(discoveryFs, "readFile").mockImplementation(async filePath => {
+			if (filePath === registryPath) {
+				reads++;
+				// Fail promptly against an unbounded implementation instead of hanging the suite.
+				if (reads > 3) throw new Error("Preload exceeded three discovery attempts");
+				clearClaudePluginRootsCache(cwd);
+			}
+			return readFile(filePath);
+		});
+		await preloadPluginRoots(home, cwd);
+		expect(reads).toBe(3);
+		expect(getPreloadedPluginRoots(cwd).some(item => item.path === root)).toBe(true);
+		expect(debug).toHaveBeenCalledWith(
+			"Plugin preload reached invalidation retry limit; publishing completed snapshot",
+			{ cwd, attempts: 3 },
+		);
+	});
 });
