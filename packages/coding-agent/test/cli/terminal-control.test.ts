@@ -243,8 +243,8 @@ describe("terminal-control CLI and owner discovery client", () => {
 			const token = "super-secret-auth-token-9999";
 			const raw = `Failed to process request with credential ${token}`;
 			const sanitized = stripSecrets(raw, [token]);
-			expect(sanitized).toBe("Failed to process request with credential [REDACTED]");
-			expect(sanitized).not.toContain(token);
+			expect(sanitized === "Failed to process request with credential [REDACTED]").toBe(true);
+			expect(sanitized.includes(token)).toBe(false);
 		});
 	});
 
@@ -264,7 +264,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 
 			const discovered = await discoverTerminalOwner("sess-target-1", tempDir);
 			expect(discovered.sessionId).toBe("sess-target-1");
-			expect(discovered.token).toBe("token-alpha");
+			expect(discovered.token === "token-alpha").toBe(true);
 		});
 
 		it("rejects absent owners", async () => {
@@ -335,7 +335,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 			);
 
 			const discovered = await discoverTerminalOwner("target-live", tempDir);
-			expect(discovered.token).toBe("live-token");
+			expect(discovered.token === "live-token").toBe(true);
 		});
 	});
 
@@ -392,7 +392,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 			expect(receivedReq).toBeDefined();
 			expect(receivedReq?.version).toBe(1);
 			expect(receivedReq?.sessionId).toBe("sess-rot-1");
-			expect(receivedReq?.token).toBe("bearer-token-12345");
+			expect(receivedReq?.token === "bearer-token-12345").toBe(true);
 			expect(receivedReq?.op).toBe("rotate");
 		});
 
@@ -493,15 +493,15 @@ describe("terminal-control CLI and owner discovery client", () => {
 			const result = await runCli(["terminal-control", "rotate", sessionId], spawnEnv);
 
 			expect(result.code).toBe(0);
-			expect(result.stdout.trim()).toBe("Rotation succeeded.");
-			expect(result.stdout).not.toContain(initialToken);
-			expect(result.stderr).toBe("");
+			expect(result.stdout.trim() === "Rotation succeeded.").toBe(true);
+			expect(result.stdout.includes(initialToken)).toBe(false);
+			expect(result.stderr === "").toBe(true);
 
 			const updatedOwner = await readOwnerRecord(profileRoot);
 			expect(updatedOwner.token).not.toBe(initialToken);
 			expect(typeof updatedOwner.token).toBe("string");
 			expect(updatedOwner.token.length).toBeGreaterThan(0);
-			expect(result.stdout).not.toContain(updatedOwner.token);
+			expect(result.stdout.includes(updatedOwner.token)).toBe(false);
 
 			const newPing = await pingEndpoint(updatedOwner);
 			expect(newPing.ok).toBe(true);
@@ -524,7 +524,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 
 			expect(result.code).toBe(1);
 			expect(result.stderr).toContain('No active terminal owner found for session "non-existent-session"');
-			expect(result.stdout.trim()).toBe("");
+			expect(result.stdout.trim() === "").toBe(true);
 
 			await fs.rm(hermeticHome, { recursive: true, force: true });
 		}, 60_000);
