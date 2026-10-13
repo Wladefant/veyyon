@@ -1172,6 +1172,7 @@ class SessionStartup {
 				rulebookRules,
 				alwaysApplyRules,
 			},
+			supplied: this.#options,
 			getCwd: () => this.#sessionManager.getCwd(),
 			discover: liveCwd => discoverProjectInputs(liveCwd, this.#agentDir, settings, this.#options),
 			ttsrManager: this.#ttsrManager,

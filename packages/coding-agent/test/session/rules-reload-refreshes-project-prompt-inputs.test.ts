@@ -19,7 +19,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";
 import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
-import type { ProjectInputDiscovery } from "@veyyon/coding-agent/session/factory-extensions";
+import { discoverRules, type ProjectInputDiscovery } from "@veyyon/coding-agent/session/factory-extensions";
 import { ProjectPromptInputs, type ProjectPromptSnapshot } from "@veyyon/coding-agent/session/prompt-inputs";
 import { buildSystemPrompt, loadProjectContextFiles } from "@veyyon/coding-agent/system-prompt";
 import type { ContextFileEntry } from "@veyyon/coding-agent/tools";
@@ -418,5 +418,51 @@ describe("rules reload refreshes project prompt inputs", () => {
 		});
 		expect(recoveredPrompt.systemPrompt.join("\n")).toContain("marker: recovered-success-marker-4402");
 		expect(recoveredPrompt.systemPrompt.join("\n")).not.toContain("marker: initial-recovery-marker-3301");
+	});
+
+	it("keeps the last good rule snapshot when RULES.md frontmatter becomes malformed", async () => {
+		using dir = TempDir.createSync("@reload-rules-malformed-");
+		using agentDir = TempDir.createSync("@reload-rules-malformed-profile-");
+		const cwd = dir.path();
+		const rulePath = path.join(agentDir.path(), "RULES.md");
+		fs.writeFileSync(rulePath, "---\nalwaysApply: true\n---\nLAST_GOOD_PARSED_RULE\n");
+		const initialRules = (await discoverRules(cwd, agentDir.path())).items;
+		expect(initialRules.find(rule => rule.path === rulePath)?.content).toContain("LAST_GOOD_PARSED_RULE");
+		const inputs = new ProjectPromptInputs({
+			initial: { ...emptySnapshot(cwd), alwaysApplyRules: initialRules },
+			getCwd: () => cwd,
+			discover: target => ({
+				cwd: target,
+				contextFiles: Promise.resolve([]),
+				workspaceTree: Promise.resolve({
+					rootPath: target,
+					rendered: "",
+					truncated: false,
+					totalLines: 0,
+					agentsMdFiles: [],
+				}),
+				activeRepoContext: Promise.resolve(null),
+				nonProjectCwd: Promise.resolve(null),
+				skills: Promise.resolve({ skills: [], warnings: [] }),
+				rules: discoverRules(target, agentDir.path()).then(result => result.items),
+				watchdogFiles: Promise.resolve([]),
+				advisors: Promise.resolve({ advisors: [], sharedInstructions: undefined }),
+			}),
+			ttsrManager: new TtsrManager(undefined, { getCwd: () => cwd }),
+			ttsrOptions: () => ({}),
+			onChange: () => {},
+		});
+		fs.writeFileSync(rulePath, "---\nalwaysApply: [broken\n---\nMALFORMED_NEW_RULE\n");
+		const lines = await inputs.reload();
+		const prompt = await buildSystemPrompt({ ...inputs.promptOptions(), agentDir: agentDir.path() });
+		expect(prompt.systemPrompt.join("\n")).toContain("LAST_GOOD_PARSED_RULE");
+		expect(prompt.systemPrompt.join("\n")).not.toContain("MALFORMED_NEW_RULE");
+		expect(lines.join("\n")).toContain("keeping the previous rules and skills");
+		expect(lines.join("\n")).toContain(rulePath);
+		fs.writeFileSync(rulePath, "---\nalwaysApply: true\n---\nRECOVERED_PARSED_RULE\n");
+		await inputs.reload();
+		expect(inputs.current.alwaysApplyRules.find(rule => rule.path === rulePath)?.content).toContain(
+			"RECOVERED_PARSED_RULE",
+		);
 	});
 });

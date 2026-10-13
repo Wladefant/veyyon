@@ -18,6 +18,13 @@ export async function captureDiscoveryReadErrors<T>(
 	const result = await readErrorScope.run(errors, discover);
 	return { result, errors: [...errors.values()] };
 }
+
+/** Feed structured loader failures into the current reload, without changing startup. */
+export function reportDiscoveryFailures(warnings: readonly string[]): void {
+	const errors = readErrorScope.getStore();
+	if (!errors) return;
+	for (const warning of warnings) errors.set(warning, warning);
+}
 /** Lookups of {@link findRepoRoot}, keyed by the resolved start directory; a concurrent call shares one. */
 const repoRootCache = new Map<string, Promise<string | null>>();
 
@@ -77,6 +84,8 @@ export async function readFile(filePath: string): Promise<string | null> {
 export async function readDirEntries(dirPath: string): Promise<fs.Dirent[]> {
 	const abs = resolvePath(dirPath);
 	if (dirCache.has(abs)) {
+		const error = contentReadErrors.get(abs);
+		if (error) readErrorScope.getStore()?.set(abs, error);
 		return dirCache.get(abs) ?? [];
 	}
 
@@ -92,6 +101,9 @@ export async function readDirEntries(dirPath: string): Promise<fs.Dirent[]> {
 		// otherwise silently hide every context file beneath it. Warn, cache
 		// the empty result so we do not re-warn, and fail soft with [].
 		if (!isMissingPath(err)) {
+			const message = `${abs}: ${errorMessage(err)}`;
+			contentReadErrors.set(abs, message);
+			readErrorScope.getStore()?.set(abs, message);
 			logger.warn("Directory exists but could not be listed; skipped during discovery", {
 				path: abs,
 				code: isFsError(err) ? err.code : undefined,
@@ -113,6 +125,7 @@ async function entryStats(dir: string, name: string): Promise<fs.Stats | null> {
 		return await fs.promises.lstat(entryPath);
 	} catch (err) {
 		if (!isMissingPath(err)) {
+			readErrorScope.getStore()?.set(entryPath, `${entryPath}: ${errorMessage(err)}`);
 			logger.warn("Directory entry exists but could not be inspected; skipped during discovery", {
 				path: entryPath,
 				code: isFsError(err) ? err.code : undefined,

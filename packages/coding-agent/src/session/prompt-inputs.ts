@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
+import { parseFrontmatter } from "@veyyon/utils";
 import { isMissingPath } from "@veyyon/utils/fs-error";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { DiscoveredAdvisors } from "../advisor/config";
@@ -78,6 +79,8 @@ export interface DiscoveredProjectInputs {
 
 export interface ProjectPromptInputsOptions {
 	readonly initial: ProjectPromptSnapshot;
+	/** Caller-owned inputs are never validated or refreshed from disk. */
+	readonly supplied?: Pick<CreateAgentSessionOptions, "contextFiles" | "skills" | "rules">;
 	/** The session's live cwd; `set_cwd` and `/move` change it mid-session. */
 	getCwd(): string;
 	discover(cwd: string): ProjectInputDiscovery;
@@ -167,7 +170,9 @@ export class ProjectPromptInputs {
 		const current = this.#snapshot;
 		const files = new Map(current.contextFiles.map(file => [file.path, file.content]));
 		for (const skill of current.skills) {
-			files.set(skill.filePath, `${JSON.stringify(skill)}\n${this.#skillDigests.get(skill.filePath) ?? ""}`);
+			if (this.#options.supplied?.skills === undefined)
+				files.set(skill.filePath, `${JSON.stringify(skill)}\n${this.#skillDigests.get(skill.filePath) ?? ""}`);
+			else files.set(skill.filePath, JSON.stringify(skill));
 		}
 		for (const rule of [
 			...current.rulebookRules,
@@ -181,6 +186,7 @@ export class ProjectPromptInputs {
 
 	#readSkillDigests(skills: Skill[]): Map<string, string> {
 		const digests = new Map<string, string>();
+		if (this.#options.supplied?.skills !== undefined) return digests;
 		for (const skill of skills) {
 			try {
 				if (fs.statSync(skill.filePath).isFile()) {
@@ -212,8 +218,22 @@ export class ProjectPromptInputs {
 		if (force) {
 			this.#reloadWarnings = [];
 			// A fail-soft loader must not turn an unreadable loaded file into an intentional removal.
-			for (const file of this.#fileContents().keys()) {
+			const { supplied } = this.#options;
+			const files = new Set([
+				...(supplied?.contextFiles === undefined ? this.#snapshot.contextFiles.map(file => file.path) : []),
+				...(supplied?.skills === undefined ? this.#snapshot.skills.map(skill => skill.filePath) : []),
+				...(supplied?.rules === undefined
+					? [
+							...this.#snapshot.rulebookRules,
+							...this.#snapshot.alwaysApplyRules,
+							...this.#options.ttsrManager.getRules(),
+						].map(rule => rule.path)
+					: []),
+			]);
+			for (const file of files) {
 				try {
+					const stat = await fs.promises.stat(file);
+					if (!stat.isFile()) throw new Error("not a regular file");
 					await fs.promises.readFile(file);
 				} catch (error) {
 					if (!isMissingPath(error)) this.#reloadWarnings.push(`${file}: ${errorMessage(error)}`);
@@ -249,6 +269,20 @@ export class ProjectPromptInputs {
 		if (force && captured.errors.length) {
 			this.#reloadWarnings = captured.errors;
 			return;
+		}
+		if (force && this.#options.supplied?.rules === undefined) {
+			for (const file of new Set(rules.map(rule => rule.path))) {
+				try {
+					if (!(await fs.promises.stat(file)).isFile()) throw new Error("not a regular file");
+					const content = await fs.promises.readFile(file, "utf8");
+					parseFrontmatter(content, { source: file, level: "fatal" });
+				} catch (error) {
+					this.#reloadWarnings.push(
+						`${file}: invalid or unreadable rule frontmatter (${error instanceof Error ? error.name : "error"})`,
+					);
+				}
+			}
+			if (this.#reloadWarnings.length) return;
 		}
 		if (this.#liveCwd() !== cwd) return;
 
