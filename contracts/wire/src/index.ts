@@ -1058,3 +1058,9 @@ export function isTodoListDone(
 	}
 	return seen;
 }
+
+export {
+	isTerminalYieldToolResult,
+	stripTaskResultEnvelope,
+	type YieldToolResult,
+} from "./task-result";
