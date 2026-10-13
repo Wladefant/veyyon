@@ -16,6 +16,38 @@ Covers:
 
 Does not cover `/tree` UI rendering behavior beyond semantics that affect session data.
 
+## Optional cloud checkpoints
+
+Cloud checkpoints are opt-in. Local sessions continue to work without cloud
+configuration. The local Veyyon process remains responsible for execution.
+
+Configure `VEYYON_CHECKPOINT_URL`, `VEYYON_CHECKPOINT_TOKEN`, and
+`VEYYON_CHECKPOINT_KEY` on the local machine. The key is a 32-byte base64
+encryption key. Never put its value in a session, log, or checkpoint. Enable
+`checkpoints.enabled` to use the checkpoint inspection and export commands.
+
+The checkpoint client encrypts native session bundles with AES-GCM before
+upload. It verifies ciphertext hashes before decryption. The manifest contains
+ciphertext hashes and sizes, not plaintext payload hashes.
+
+`veyyon session checkpoint-export --file <stopped-session.jsonl> --workspace <approved-file>`
+uploads a stopped journal and approved workspace files. The service lease fences
+checkpoint publication. Set `VEYYON_CHECKPOINT_SESSION` to the native session ID
+to admit a synchronized local runtime. Veyyon checks its server epoch before
+each prompt and tool call, and renews the lease every 15 seconds. Lease loss
+blocks further admission; continuing offline requires an explicit new fork.
+Each export or restore invocation uses a unique lease owner, even on one host.
+
+`veyyon session checkpoint-restore <id> --output <new-directory>` writes the
+verified journal under `sessions/session.jsonl`, artifacts beside it, referenced
+blobs under `blobs`, and approved files under `workspace`. It refuses an existing
+destination. Resume explicitly with `veyyon --resume <journal-path>`.
+
+`veyyon session checkpoint-fork <id>` materializes a new independent journal ID.
+Do not append an offline divergent journal to its original cloud ID.
+Recovery restores history and files, not running jobs or uncommitted output.
+Keep the URL, bearer token and recovery key outside journals.
+
 ## Expensive subagent handoff
 
 An expensive spawned agent can hand its assignment to a fresh transcript between provider requests after a completed turn/tool-result pair when its estimated context reaches `compaction.laneHandoffThresholdTokens` (default 150,000). Set the threshold to `0` to disable this automatic handoff. The threshold measures current context size, not cumulative usage. Luna and root sessions do not use this path.
