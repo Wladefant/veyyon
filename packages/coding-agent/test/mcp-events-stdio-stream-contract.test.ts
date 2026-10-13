@@ -17,13 +17,13 @@ describe("MCP stdio streamRequest contract", () => {
 			"const send = value => process.stdout.write(JSON.stringify(value) + '\\n');",
 			"rl.on('line', line => {",
 			"  const message = JSON.parse(line);",
-			"  if (message.method === 'events/subscribe') {",
+			"  if (message.method === 'events/stream') {",
 			"    const id = message.params._meta['io.modelcontextprotocol/subscriptionId'];",
 			"    streams.push(id);",
 			"    if (streams.length === 2) {",
-			"      for (const streamId of streams) send({ jsonrpc: '2.0', method: 'events/changed', params: { _meta: { 'io.modelcontextprotocol/subscriptionId': streamId }, marker: String(streamId) } });",
-			"      send({ jsonrpc: '2.0', method: 'events/changed', params: { _meta: { 'io.modelcontextprotocol/subscriptionId': 'unknown' }, marker: 'unknown' } });",
-			"      send({ jsonrpc: '2.0', method: 'events/changed', params: { marker: 'missing' } });",
+			"      for (const streamId of streams) send({ jsonrpc: '2.0', method: 'notifications/events/event', params: { _meta: { 'io.modelcontextprotocol/subscriptionId': streamId }, eventId: String(streamId), name: 'events/test', timestamp: '2026-10-14T00:00:00.000Z', data: { marker: String(streamId) }, marker: String(streamId) } });",
+			"      send({ jsonrpc: '2.0', method: 'notifications/events/heartbeat', params: { _meta: { 'io.modelcontextprotocol/subscriptionId': 'unknown' }, cursor: 'unknown' } });",
+			"      send({ jsonrpc: '2.0', method: 'notifications/events/heartbeat', params: { cursor: 'missing' } });",
 			"    }",
 			"  }",
 			"});",
@@ -36,13 +36,13 @@ describe("MCP stdio streamRequest contract", () => {
 		const bothReceived = new Promise<void>(resolve => { resolveBoth = resolve; });
 		let streamAId: string | number;
 		let streamBId: string | number;
-		const a = transport.streamRequest("events/subscribe", {}, message => {
+		const a = transport.streamRequest("events/stream", {}, message => {
 			if ("params" in message && message.params && typeof message.params === "object" && "marker" in message.params) {
 				receivedA.push(String(message.params.marker));
 				}
 			if (receivedA.length === 1 && receivedB.length === 1) resolveBoth?.();
 		}, { onRequestId: id => { streamAId = id; } });
-		const b = transport.streamRequest("events/subscribe", {}, message => {
+		const b = transport.streamRequest("events/stream", {}, message => {
 			if ("params" in message && message.params && typeof message.params === "object" && "marker" in message.params) {
 				receivedB.push(String(message.params.marker));
 			}
@@ -69,9 +69,12 @@ describe("MCP stdio streamRequest contract", () => {
 			"const send = value => process.stdout.write(JSON.stringify(value) + '\\n');",
 			"rl.on('line', line => {",
 			"  const message = JSON.parse(line);",
-			"  if (message.method === 'events/subscribe') {",
+			"  if (message.method === 'events/stream') {",
 			"    streams.push(message.params._meta['io.modelcontextprotocol/subscriptionId']);",
-			"    if (streams.length === 2) for (const id of streams) send({ jsonrpc: '2.0', method: 'events/changed', params: { _meta: { 'io.modelcontextprotocol/subscriptionId': id }, marker: String(id) } });",
+			"    if (streams.length === 2) for (const id of streams) send({ jsonrpc: '2.0', method: 'notifications/events/event', params: { _meta: { 'io.modelcontextprotocol/subscriptionId': id }, eventId: String(id), name: 'events/test', timestamp: '2026-10-14T00:00:00.000Z', data: { marker: String(id) }, marker: String(id) } });",
+			"  } else if (message.method === 'notifications/cancelled') {",
+			"    const other = streams.find(id => id !== message.params.requestId);",
+			"    if (other !== undefined) send({ jsonrpc: '2.0', method: 'notifications/events/event', params: { _meta: { 'io.modelcontextprotocol/subscriptionId': other }, eventId: 'after-cancel', name: 'events/test', timestamp: '2026-10-14T00:00:00.000Z', data: { marker: 'after-cancel' }, marker: 'after-cancel' } });",
 			"  }",
 			"});",
 		].join("\n");
@@ -81,17 +84,19 @@ describe("MCP stdio streamRequest contract", () => {
 		const receivedB: string[] = [];
 		let resolveBoth: (() => void) | undefined;
 		const bothReceived = new Promise<void>(resolve => { resolveBoth = resolve; });
-		const a = transport.streamRequest("events/subscribe", {}, () => receivedA.push("received"));
-		const b = transport.streamRequest("events/subscribe", {}, () => {
+		let resolveAfterCancel: (() => void) | undefined;
+		const afterCancel = new Promise<void>(resolve => { resolveAfterCancel = resolve; });
+		const a = transport.streamRequest("events/stream", {}, () => receivedA.push("received"));
+		const b = transport.streamRequest("events/stream", {}, () => {
 			receivedB.push("received");
 			if (receivedB.length === 1) resolveBoth?.();
+			if (receivedB.length === 2) resolveAfterCancel?.();
 		});
 		try {
 			await bothReceived;
-			a.cancel();
-			await a.done;
+			await afterCancel;
 			expect(receivedA).toHaveLength(1);
-			expect(receivedB).toHaveLength(1);
+			expect(receivedB).toHaveLength(2);
 			b.cancel();
 			await b.done;
 		} finally {
