@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
@@ -465,6 +467,7 @@
 - `collapseEffortVariants` plans each hand-table family, its live effort routing, its collapsed spec and its recycled alias rows in separate steps, and the collapse and the snapshot refresh build the thinking surface through one `familyThinkingConfig`; every collapsed catalog, discovered model list and cached snapshot is unchanged across 92,001 randomized and bundled inputs compared with the previous implementation.
 - Patch recovery evaluates the `diff` package when it first maps an edit from a stale snapshot onto the current file instead of when the module loads; behavior is unchanged.
 - Boundary repair, block lowering, batch preparation, anchor remapping, header parsing and line streaming run as separate per-step functions; patch output, warnings and errors are unchanged.
+- File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 - `getRecentSessions` and `findMostRecentSession` scan session files newest first by mtime and stop once they hold the requested rows, instead of listing the whole directory through `.session-list-index.json` and rewriting it, cutting the welcome shortlist over 1,495 sessions from 37.8 ms to 17.1 ms in a fresh process and from 19.9 ms and 6.3 MiB of heap to 4.0 ms and 0.6 MiB warm (medians of 11 and 8 alternating runs).
 - 13 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
@@ -1345,7 +1348,6 @@
 - An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
 - The package directory is `clients/web` instead of `packages/collab-web`; the package name, the relay and the guest client are unchanged.
 - Updated collaboration client to protocol v4, carrying tool execution displays on active tool state and tool result messages.
-- File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 - Unified patch operation definitions into a shared declarative operation table across tokenization and execution.
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
 - Seen-line and clipped-line records merge into a snapshot through one keyed step; recorded provenance is unchanged.

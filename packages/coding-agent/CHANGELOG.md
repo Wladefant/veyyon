@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-13
+
 ### Added
 
 - `session.backgroundLimit` (default 3, range 1-20) caps how many conversations run in the background at once, whether `/new`, RPC or ACP moved them there; a handoff past it stops the oldest background conversation and names it in the handoff message.
