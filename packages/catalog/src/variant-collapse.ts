@@ -397,6 +397,21 @@ function geminiTieredFlashFamily(id: string, name: string, wireId: string): Effo
 
 /** CCA families shared verbatim by both providers (transport-agnostic, or one transport both endpoints speak). */
 const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
+	{
+		id: "gemini-4-argon",
+		name: "Gemini 4 Argon",
+		members: ["gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"],
+		routing: {
+			[Effort.Low]: "gemini-4-argon-low",
+			[Effort.Medium]: "gemini-4-argon-medium",
+			[Effort.High]: "gemini-4-argon-high",
+		},
+		thinking: {
+			mode: "google-level",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			defaultLevel: Effort.Medium,
+		},
+	},
 	gemini36FlashFamily(),
 	geminiTieredFlashFamily("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.8-flash-tiered"),
 	geminiTieredFlashFamily("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini-3.7-flash-tiered"),
