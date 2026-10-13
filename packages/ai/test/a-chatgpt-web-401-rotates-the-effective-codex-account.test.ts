@@ -19,7 +19,7 @@
  * shared registry. Nothing here covers the ChatGPT Web bridge's request shape.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -34,6 +34,7 @@ const CODEX_ACCESS: readonly string[] = ["codex-a-access", "codex-b-access"];
 const WEB_ACCESS: readonly string[] = ["web-a-access", "web-b-access"];
 const SOLO_CODEX_ACCESS = "codex-solo-access";
 const HALF_HOUR_MS = 30 * 60_000;
+const NOW_MS = 1_760_000_000_000;
 
 function authError(): Error & { status: number } {
 	return Object.assign(new Error("401 authentication_error"), { status: 401 });
@@ -50,6 +51,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 	let savedEnv: Array<string | undefined> = [];
 
 	beforeEach(async () => {
+		setSystemTime(new Date(NOW_MS));
 		savedEnv = ENV_NAMES.map(name => process.env[name]);
 		for (const name of ENV_NAMES) delete process.env[name];
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "chatgpt-web-effective-"));
@@ -79,6 +81,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 	});
 
 	afterEach(async () => {
+		setSystemTime();
 		unregisterOAuthProviders(SOURCE);
 		store?.close();
 		store = undefined;
@@ -134,6 +137,14 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 			.map(block => ({ credentialId: block.credentialId, providerKey: block.providerKey }));
 	}
 
+	function accountEmail(auth: AuthStorage, provider: string, credentialId: number): string {
+		const row = auth.listStoredCredentials(provider).find(entry => entry.id === credentialId);
+		if (!row || row.credential.type !== "oauth" || !row.credential.email) {
+			throw new Error(`expected OAuth account email for ${provider} credential ${credentialId}`);
+		}
+		return row.credential.email;
+	}
+
 	test("a 401 on a borrowed Codex row rotates the session to the sibling Codex account", async () => {
 		if (!storage || !store) throw new Error("test setup failed");
 		await seedOAuthAccounts(storage, "openai-codex", CODEX_ACCESS);
@@ -179,6 +190,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		const markedAt = Date.now();
 		expect(await storage.markUsageLimitReached("chatgpt-web", SESSION, { retryAfterMs: HALF_HOUR_MS })).toEqual({
 			switched: true,
+			quotaMessage: `Quota reached on openai-codex account ${accountEmail(storage, "openai-codex", exhaustedId)}; resets ${new Date(NOW_MS + HALF_HOUR_MS).toISOString()}. 1 other account available; balancer will try it next.`,
 		});
 
 		const blocks = storage.listCredentialBlocks(storage.listStoredCredentials("openai-codex").map(row => row.id));
@@ -218,8 +230,11 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		await seedOAuthAccounts(storage, "chatgpt-web", WEB_ACCESS);
 
 		const served = await servedBearer(storage);
+		const markedAt = NOW_MS;
+		const servedId = servedRowId(storage, "chatgpt-web", served);
 		expect(await storage.markUsageLimitReached("chatgpt-web", SESSION, { retryAfterMs: HALF_HOUR_MS })).toEqual({
 			switched: true,
+			quotaMessage: `Quota reached on chatgpt-web account ${accountEmail(storage, "chatgpt-web", servedId)}; resets ${new Date(markedAt + HALF_HOUR_MS).toISOString()}. 1 other account available; balancer will try it next.`,
 		});
 
 		expect(blockedPairs(storage, "chatgpt-web")).toEqual([
