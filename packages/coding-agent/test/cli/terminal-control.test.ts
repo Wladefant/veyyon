@@ -1,5 +1,6 @@
 /**
- * Observable receipt and auth behavior tests for `terminal-control rotate <session-id>` CLI and client.
+ * Observable receipt, auth behavior, and registered CLI smoke contract tests
+ * for `terminal-control rotate <session-id>`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as crypto from "node:crypto";
@@ -8,7 +9,6 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord } from "@veyyon/utils";
-import { run } from "@veyyon/utils/cli";
 import { commands, resolveCliArgv } from "../../src/cli-commands";
 import {
 	discoverTerminalOwner,
@@ -16,11 +16,121 @@ import {
 	sendTerminalControlRotate,
 	stripSecrets,
 } from "../../src/launch/terminal-control-client";
+import {
+	serveTerminalControl,
+	type TerminalControlTarget,
+	type TerminalOwner,
+} from "../../src/launch/terminal-control";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+
+const repoRoot = path.resolve(import.meta.dir, "..", "..");
+const cliEntry = path.join(repoRoot, "src", "cli.ts");
+
+interface SpawnResult {
+	code: number;
+	stdout: string;
+	stderr: string;
+}
+
+async function runCli(args: string[], extraEnv?: Record<string, string>): Promise<SpawnResult> {
+	const { home, env, cleanup } = hermeticSpawnEnv(extraEnv);
+	try {
+		const spawnEnv: Record<string, string | undefined> = {
+			...env,
+			...(process.platform === "win32" ? { USERPROFILE: home } : {}),
+			...extraEnv,
+		};
+		const proc = Bun.spawn([process.execPath, cliEntry, ...args], {
+			env: spawnEnv,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		return { code, stdout, stderr };
+	} finally {
+		cleanup();
+	}
+}
+
+async function readOwnerRecord(root: string): Promise<TerminalOwner> {
+	const directory = path.join(root, "run", "terminals");
+	const files = (await fs.readdir(directory)).filter(name => name.endsWith(".json"));
+	if (files.length === 0) {
+		throw new Error("No terminal owner discovery record found");
+	}
+	const content = await fs.readFile(path.join(directory, files[0]!), "utf8");
+	const parsed = JSON.parse(content);
+	if (!isValidTerminalOwnerRecord(parsed)) {
+		throw new Error("Invalid terminal owner record read from directory");
+	}
+	return parsed;
+}
+
+async function pingEndpoint(
+	owner: { endpoint: string; token: string; sessionId: string },
+	bound = 5_000,
+): Promise<{ ok: boolean; result?: unknown; error?: unknown }> {
+	const { promise, resolve } = Promise.withResolvers<{ ok: boolean; result?: unknown; error?: unknown }>();
+	const socket = net.createConnection(owner.endpoint);
+
+	socket.setTimeout(bound, () => {
+		socket.destroy();
+		resolve({ ok: false, error: "timeout" });
+	});
+
+	let buffer = "";
+	socket.setEncoding("utf8");
+
+	socket.on("connect", () => {
+		const frame = JSON.stringify({
+			version: 1,
+			id: `ping-${crypto.randomUUID()}`,
+			token: owner.token,
+			sessionId: owner.sessionId,
+			op: "ping",
+		});
+		socket.write(`${frame}\n`);
+	});
+
+	socket.on("data", chunk => {
+		buffer += chunk;
+		const idx = buffer.indexOf("\n");
+		if (idx >= 0) {
+			socket.destroy();
+			try {
+				const res = JSON.parse(buffer.slice(0, idx));
+				if (isRecord(res)) {
+					resolve({ ok: res.ok === true, result: res.result, error: res.error });
+					return;
+				}
+			} catch {
+				// fallthrough
+			}
+			resolve({ ok: false, error: "invalid frame" });
+		}
+	});
+
+	socket.on("error", () => {
+		socket.destroy();
+		resolve({ ok: false, error: "socket error" });
+	});
+
+	socket.on("close", () => {
+		resolve({ ok: false, error: "closed" });
+	});
+
+	return promise;
+}
 
 describe("terminal-control CLI and owner discovery client", () => {
 	let tempDir: string;
 	let terminalsDir: string;
-	const cleanupServers: Array<net.Server> = [];
+	const cleanupServers: Array<net.Server | (() => void | Promise<void>)> = [];
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "term-ctrl-test-"));
@@ -30,8 +140,16 @@ describe("terminal-control CLI and owner discovery client", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
-		for (const server of cleanupServers.splice(0)) {
-			server.close();
+		for (const close of cleanupServers.splice(0)) {
+			try {
+				if (typeof close === "function") {
+					await close();
+				} else {
+					close.close();
+				}
+			} catch {
+				// ignore cleanup error
+			}
 		}
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -325,7 +443,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 		});
 	});
 
-	describe("real command registry integration", () => {
+	describe("registered CLI smoke contract against real server and parser", () => {
 		it("routes terminal-control through resolveCliArgv as a first-class subcommand", () => {
 			const resolved = resolveCliArgv(["terminal-control", "rotate", "sess-1"]);
 			expect(resolved).toEqual({
@@ -339,93 +457,88 @@ describe("terminal-control CLI and owner discovery client", () => {
 			expect(entry?.summary?.description).toContain("Rotate");
 		});
 
-		it("prints only 'Rotation succeeded.' on successful rotation through run()", async () => {
-			const nonce = crypto.randomUUID();
-			const endpoint =
-				process.platform === "win32"
-					? `\\\\.\\pipe\\mock-cmd-${nonce}`
-					: path.join(tempDir, `mock-cmd-${nonce}.sock`);
+		it("rotates credentials through runCli, emitting only redacted receipt, changing token, and enabling new ping", async () => {
+			const hermeticHome = await fs.mkdtemp(path.join(os.tmpdir(), "term-smoke-home-"));
+			const profileRoot = path.join(hermeticHome, ".veyyon", "profiles", "default");
+			await fs.mkdir(path.join(profileRoot, "run", "terminals"), { recursive: true });
 
-			const server = net.createServer(socket => {
-				socket.setEncoding("utf8");
-				let buf = "";
-				socket.on("data", chunk => {
-					buf += chunk;
-					const idx = buf.indexOf("\n");
-					if (idx >= 0) {
-						const req = JSON.parse(buf.slice(0, idx));
-						const id = isRecord(req) && typeof req.id === "string" ? req.id : "";
-						socket.write(`${JSON.stringify({ id, ok: true, result: { rotated: true } })}\n`);
-					}
-				});
-			});
-			cleanupServers.push(server);
-			const { promise, resolve } = Promise.withResolvers<void>();
-			server.listen(endpoint, () => resolve());
-			await promise;
-
-			const token = "super-secret-rotation-credential";
-			const owner = {
-				version: 1 as const,
-				sessionId: "sess-cli-ok",
-				pid: process.pid,
-				cwd: tempDir,
-				sessionFile: path.join(tempDir, "sess-cli.jsonl"),
-				endpoint,
-				token,
+			const sessionId = "smoke-live-session";
+			const target: TerminalControlTarget = {
+				identity: () => ({
+					sessionId,
+					cwd: profileRoot,
+					sessionFile: path.join(profileRoot, `${sessionId}.jsonl`),
+				}),
+				deliver: async () => "delivered",
+				abort: async () => false,
+				history: () => [{ entryId: "e1", text: "initial" }],
+				subscribe: () => () => {},
 			};
-			await fs.writeFile(path.join(terminalsDir, `${process.pid}-${nonce}.json`), JSON.stringify(owner));
 
-			const stdoutChunks: string[] = [];
-			const stderrChunks: string[] = [];
-			vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
-				stdoutChunks.push(String(chunk));
-				return true;
-			});
-			vi.spyOn(process.stderr, "write").mockImplementation(chunk => {
-				stderrChunks.push(String(chunk));
-				return true;
-			});
+			const closeServer = await serveTerminalControl(target, profileRoot);
+			cleanupServers.push(closeServer);
 
-			process.exitCode = 0;
+			const initialOwner = await readOwnerRecord(profileRoot);
+			const initialToken = initialOwner.token;
 
-			// Verify direct client rotation
-			await sendTerminalControlRotate(owner);
+			const initialPing = await pingEndpoint(initialOwner);
+			expect(initialPing.ok).toBe(true);
 
-			const stdoutOutput = stdoutChunks.join("");
-			const stderrOutput = stderrChunks.join("");
+			const spawnEnv: Record<string, string> = {
+				HOME: hermeticHome,
+				USERPROFILE: hermeticHome,
+				NO_COLOR: "1",
+			};
 
-			expect(stdoutOutput).not.toContain(token);
-			expect(stdoutOutput).not.toContain(endpoint);
-			expect(stderrOutput).not.toContain(token);
-		});
+			const result = await runCli(["terminal-control", "rotate", sessionId], spawnEnv);
 
-		it("rejects unknown action with CLI_EXIT_USAGE through run()", async () => {
-			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-			process.exitCode = 0;
+			expect(result.code).toBe(0);
+			expect(result.stdout.trim()).toBe("Rotation succeeded.");
+			expect(result.stdout).not.toContain(initialToken);
+			expect(result.stderr).toBe("");
 
-			await run({
-				bin: "veyyon",
-				version: "0.0.0",
-				argv: ["terminal-control", "unknown-action", "sess-1"],
-				commands,
-			});
+			const updatedOwner = await readOwnerRecord(profileRoot);
+			expect(updatedOwner.token).not.toBe(initialToken);
+			expect(typeof updatedOwner.token).toBe("string");
+			expect(updatedOwner.token.length).toBeGreaterThan(0);
+			expect(result.stdout).not.toContain(updatedOwner.token);
 
-			expect(process.exitCode).toBe(2);
-		});
+			const newPing = await pingEndpoint(updatedOwner);
+			expect(newPing.ok).toBe(true);
 
-		it("rejects unexpected token flag options through run()", async () => {
-			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-			process.exitCode = 0;
+			const oldTokenPing = await pingEndpoint({ ...updatedOwner, token: initialToken });
+			expect(oldTokenPing.ok).toBe(false);
 
-			await run({
-				bin: "veyyon",
-				version: "0.0.0",
-				argv: ["terminal-control", "rotate", "sess-1", "--token", "secret"],
-				commands,
-			});
+			await fs.rm(hermeticHome, { recursive: true, force: true });
+		}, 60_000);
 
-			expect(process.exitCode).toBe(2);
-		});
+		it("rejects absent session with failure exit code and clean error through runCli", async () => {
+			const hermeticHome = await fs.mkdtemp(path.join(os.tmpdir(), "term-smoke-absent-"));
+			const spawnEnv: Record<string, string> = {
+				HOME: hermeticHome,
+				USERPROFILE: hermeticHome,
+				NO_COLOR: "1",
+			};
+
+			const result = await runCli(["terminal-control", "rotate", "non-existent-session"], spawnEnv);
+
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain('No active terminal owner found for session "non-existent-session"');
+			expect(result.stdout.trim()).toBe("");
+
+			await fs.rm(hermeticHome, { recursive: true, force: true });
+		}, 60_000);
+
+		it("rejects unknown action with usage error through runCli", async () => {
+			const result = await runCli(["terminal-control", "unknown-action", "sess-1"]);
+			expect(result.code).toBe(2);
+			expect(result.stderr).toContain("Error:");
+		}, 60_000);
+
+		it("rejects unexpected token flag options through runCli", async () => {
+			const result = await runCli(["terminal-control", "rotate", "sess-1", "--token", "secret"]);
+			expect(result.code).toBe(2);
+			expect(result.stderr).toContain("Error:");
+		}, 60_000);
 	});
 });
