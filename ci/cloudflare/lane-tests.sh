@@ -4,20 +4,25 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-# Release mode branch check: run release proof pipeline on verified release branch
-current_branch="$(git branch --show-current 2>/dev/null || true)"
+# Release builds: a branch named cf-release/<mode> (or the proof branch) selects a release-linux.sh mode.
+# Workers Builds exposes the branch as WORKERS_CI_BRANCH; a detached clone falls back to the one
+# remote branch that points at HEAD.
+echo "Workers Builds context: $(env | grep -E '^WORKERS_CI_' | grep -v -E 'TOKEN|SECRET|KEY' | tr '\n' ' ')"
+current_branch="${WORKERS_CI_BRANCH:-$(git branch --show-current 2>/dev/null || true)}"
 if [[ -z "$current_branch" ]]; then
-  # Cloudflare Workers Builds clones detached HEAD; verify if HEAD matches remote release branch
   head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-  ref_sha="$(git ls-remote origin fix/windows-cross-release-569 2>/dev/null | awk '{print $1}')"
-  if [[ -n "$head_sha" && "$head_sha" == "$ref_sha" ]]; then
-    git checkout -B fix/windows-cross-release-569 2>/dev/null || true
-    current_branch="$(git branch --show-current 2>/dev/null || true)"
+  matches="$(git ls-remote origin 'refs/heads/cf-release/*' refs/heads/fix/windows-cross-release-569 2>/dev/null | awk -v sha="$head_sha" '$1 == sha {sub("refs/heads/", "", $2); print $2}')"
+  if [[ "$(printf '%s\n' "$matches" | grep -c .)" == "1" ]]; then
+    current_branch="$matches"
   fi
 fi
 
-if [[ "$current_branch" == "fix/windows-cross-release-569" ]]; then
-  release_mode="${VEYYON_RELEASE_MODE:-windows-proof}"
+release_mode=""
+case "$current_branch" in
+  fix/windows-cross-release-569) release_mode="windows-proof" ;;
+  cf-release/*) release_mode="${current_branch#cf-release/}" ;;
+esac
+if [[ -n "$release_mode" ]]; then
   echo "Release mode branch detected: $current_branch (invoking release-linux.sh $release_mode)"
   exec bash ci/cloudflare/release-linux.sh "$release_mode"
 fi

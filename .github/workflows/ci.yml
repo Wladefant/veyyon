@@ -535,7 +535,7 @@ jobs:
               VEYYON_OFFICIAL_RELEASE: '1'
            run: bun run ci:release:build-binaries
          # Windows binary is cross-built on Linux. It is not natively runtime-verified.
-         # Canonical release building routes to ci/cloudflare/release-linux.sh full entry.
+         # Canonical release building routes to ci/cloudflare/release-linux.sh part builds (see docs/internal/releasing.md).
          - name: Smoke release binary
            if: matrix.platform != 'win32'
            run: |
@@ -590,7 +590,7 @@ jobs:
             # Published as release assets so SOURCE installs stay toolchain-free:
             # ensure-native.ts fetches `veyyon_natives.<platform>-<arch>[-variant].node`
             # from the checkout's own release tag instead of requiring cargo.
-            # Canonical release building routes to ci/cloudflare/release-linux.sh full entry,
+            # Canonical release building routes to ci/cloudflare/release-linux.sh part builds (see docs/internal/releasing.md),
             # which produces Linux x64/arm64 and Windows x64 MSVC native addons.
             # If GH release secret (GH_TOKEN with contents:write permission) is unavailable externally,
             # publishing cannot create or update the GitHub Release draft and assets.

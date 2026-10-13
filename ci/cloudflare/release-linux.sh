@@ -5,10 +5,21 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
 mode="${1:-windows-proof}"
-if [[ "$mode" != "windows-proof" && "$mode" != "full" ]]; then
-  echo "Usage: $0 [windows-proof|full]" >&2
-  exit 1
-fi
+# windows-proof     Windows binary + addon, focused release tests, nothing published.
+# part-windows      The same, then uploads its assets to the shared draft release.
+# part-linux-x64    linux-x64 binary + baseline/modern addons, uploaded to the draft.
+# part-linux-arm64  linux-arm64 binary + addon, uploaded to the draft.
+# finalize          No compiling: verifies the draft holds the full manifest, publishes, runs verify-assets.
+# One Workers Build cannot hold all seven artifacts (20 minute limit, small disk), hence the parts.
+want_win=0; want_lx64=0; want_larm=0; do_upload=0; do_finalize=0
+case "$mode" in
+  windows-proof) want_win=1 ;;
+  part-windows) want_win=1; do_upload=1 ;;
+  part-linux-x64) want_lx64=1; do_upload=1 ;;
+  part-linux-arm64) want_larm=1; do_upload=1 ;;
+  finalize) do_finalize=1 ;;
+  *) echo "Usage: $0 [windows-proof|part-windows|part-linux-x64|part-linux-arm64|finalize]" >&2; exit 1 ;;
+esac
 
 echo "=== Veyyon Cloudflare Linux Release ($mode) ==="
 cleanup() {
@@ -39,6 +50,38 @@ fi
 
 bun --version
 bun install --frozen-lockfile
+
+# Shared release inputs and the publisher (REST only, see publish-release.ts).
+run_publisher() {
+  if [[ -z "${VEYYON_RELEASE_TOKEN:-}" ]]; then
+    echo "VEYYON_RELEASE_TOKEN is not set; built and proven but nothing was published."
+    return 0
+  fi
+  export VEYYON_RELEASE_SHA="$(git rev-parse HEAD)"
+  export VEYYON_RELEASE_TAG="${VEYYON_RELEASE_TAG:-cf-release-test-${VEYYON_RELEASE_SHA:0:12}}"
+  if [[ "$1" == "finalize" ]]; then
+    local gh_version=2.83.0
+    if ! command -v gh >/dev/null 2>&1; then
+      local gh_archive="$HOME/.cache/gh_${gh_version}_linux_amd64.tar.gz"
+      mkdir -p "$HOME/.cache" "$HOME/.local/bin"
+      curl --proto '=https' --tlsv1.2 -fsSL \
+        "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz" \
+        -o "$gh_archive"
+      printf '%s  %s\n' 'a5cf6cdb40fc67751adf561126b3314044779cea81ba4f254fbe8e9a69f1676f' "$gh_archive" \
+        | sha256sum --check
+      tar -xzf "$gh_archive" -C "$HOME/.cache"
+      ln -sf "$HOME/.cache/gh_${gh_version}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+    fi
+    gh --version | head -n 1
+  fi
+  bun ci/cloudflare/publish-release.ts "$1"
+}
+
+if (( do_finalize )); then
+  run_publisher finalize
+  echo "=== Veyyon Cloudflare Linux Release completed successfully ($mode) ==="
+  exit 0
+fi
 
 # 2. Bounded tool bootstrap: Rust toolchain from rust-toolchain.toml
 rust_channel=""
@@ -76,16 +119,19 @@ if ! rustup toolchain list | grep -Eq "^${rust_channel}(-|$)"; then
 fi
 rustup default "$rust_channel"
 
-echo "Adding Windows MSVC target: x86_64-pc-windows-msvc..."
-rustup target add --toolchain "$rust_channel" x86_64-pc-windows-msvc
-
-if [[ "$mode" == "full" ]]; then
-  echo "Adding Linux targets: x86_64-unknown-linux-gnu and aarch64-unknown-linux-gnu..."
+if (( want_win )); then
+  echo "Adding Windows MSVC target: x86_64-pc-windows-msvc..."
+  rustup target add --toolchain "$rust_channel" x86_64-pc-windows-msvc
+fi
+if (( want_lx64 )); then
   rustup target add --toolchain "$rust_channel" x86_64-unknown-linux-gnu
+fi
+if (( want_larm )); then
   rustup target add --toolchain "$rust_channel" aarch64-unknown-linux-gnu
 fi
 
-# 3. LLVM / Clang / LLD tooling for cargo-xwin (without assuming sudo)
+# 3. LLVM / Clang / LLD tooling for cargo-xwin (without assuming sudo); Windows part only
+if (( want_win )); then
 if ! command -v clang >/dev/null 2>&1 || (! command -v lld >/dev/null 2>&1 && ! command -v lld-link >/dev/null 2>&1); then
   echo "LLVM tooling missing; checking installation paths without assuming sudo..."
   if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
@@ -197,8 +243,10 @@ cargo-xwin --version
 # Accept official Microsoft Windows SDK license solely for official cargo-xwin acquisition
 export XWIN_ACCEPT_LICENSE=1
 
-# 5. Zig & cargo-zigbuild (full mode only)
-if [[ "$mode" == "full" ]]; then
+fi
+
+# 5. Zig & cargo-zigbuild (Linux parts only)
+if (( want_lx64 || want_larm )); then
   zig_version=0.16.0
   zig_archive="$HOME/.cache/zig-x86_64-linux-${zig_version}.tar.xz"
   if ! command -v zig >/dev/null 2>&1 || [[ "$(zig version 2>/dev/null)" != "$zig_version" ]]; then
@@ -222,7 +270,8 @@ if [[ "$mode" == "full" ]]; then
   cargo-zigbuild --version
 fi
 
-# 5b. Focused Release Tests & Pre-cut Manifest Negative Control Proof
+# 5b. Focused Release Tests & Pre-cut Manifest Negative Control Proof (Windows part: it owns the manifest change)
+if (( want_win )); then
 echo "=== 5b. Focused Release Tests & Pre-cut Manifest Negative Control Proof ==="
 
 # Remote red proof against pre-cut original release-policy manifest:
@@ -282,22 +331,38 @@ bun test scripts/release-policy.test.ts \
   scripts/release-native-artifacts-match-ci.test.ts
 
 echo "RELEASE_FOCUSED_TESTS: passed"
+fi
 
 # 6. Build Native Addons
 export CI=true
 
-echo "Building Windows native addon: x86_64-pc-windows-msvc (baseline)..."
-CROSS_TARGET=x86_64-pc-windows-msvc TARGET_PLATFORM=win32 TARGET_ARCH=x64 TARGET_VARIANTS=baseline CI=true \
-  bun run ci:build:native
+# The Cloudflare build disk is small: drop each target's intermediates once its addon is copied out.
+free_target_dir() {
+  rm -rf "$repo_root/target/$1" "$repo_root/natives/target/$1" 2>/dev/null || true
+  df -h / | tail -n 1
+}
 
-if [[ "$mode" == "full" ]]; then
+if (( want_win )); then
+  echo "Building Windows native addon: x86_64-pc-windows-msvc (baseline)..."
+  CROSS_TARGET=x86_64-pc-windows-msvc TARGET_PLATFORM=win32 TARGET_ARCH=x64 TARGET_VARIANTS=baseline CI=true \
+    bun run ci:build:native
+  free_target_dir x86_64-pc-windows-msvc
+fi
+
+if (( want_lx64 )); then
   echo "Building Linux x64 native addons (baseline modern)..."
-  CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
-    TARGET_VARIANTS='baseline modern' CI=true bun run ci:build:native
+  for variant in baseline modern; do
+    CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
+      TARGET_VARIANTS="$variant" CI=true bun run ci:build:native
+    free_target_dir x86_64-unknown-linux-gnu
+  done
+fi
 
+if (( want_larm )); then
   echo "Building Linux arm64 native addon..."
   CROSS_TARGET=aarch64-unknown-linux-gnu TARGET_PLATFORM=linux TARGET_ARCH=arm64 \
     CI=true bun run ci:build:native
+  free_target_dir aarch64-unknown-linux-gnu
 fi
 
 # 7. Build Distribution Binaries
@@ -305,27 +370,25 @@ binaries_dir="$repo_root/packages/coding-agent/binaries"
 native_dir="$repo_root/natives/bridge/bindings/native"
 mkdir -p "$binaries_dir"
 
-if [[ "$mode" == "windows-proof" ]]; then
-  echo "Compiling Windows production binary (RELEASE_TARGETS=win32-x64)..."
-  RELEASE_TARGETS=win32-x64 bun run ci:release:build-binaries
-else
-  echo "Compiling Linux and Windows production binaries (RELEASE_TARGETS=linux-x64,linux-arm64,win32-x64)..."
-  RELEASE_TARGETS=linux-x64,linux-arm64,win32-x64 bun run ci:release:build-binaries
-fi
+release_targets=()
+if (( want_win )); then release_targets+=(win32-x64); fi
+if (( want_lx64 )); then release_targets+=(linux-x64); fi
+if (( want_larm )); then release_targets+=(linux-arm64); fi
+release_targets_csv="$(IFS=,; echo "${release_targets[*]}")"
+echo "Compiling production binaries (RELEASE_TARGETS=$release_targets_csv)..."
+RELEASE_TARGETS="$release_targets_csv" bun run ci:release:build-binaries
 
 # 8. Assemble Release Distribution Artifacts & Generate Checksum Sidecars
 echo "Assembling distribution artifacts and generating SHA-256 sidecars..."
-if [[ -f "$native_dir/veyyon_natives.win32-x64-baseline.node" ]]; then
+if (( want_win )) && [[ -f "$native_dir/veyyon_natives.win32-x64-baseline.node" ]]; then
   cp -f "$native_dir/veyyon_natives.win32-x64-baseline.node" "$binaries_dir/"
 fi
 
-if [[ "$mode" == "full" ]]; then
-  for addon in "$native_dir"/veyyon_natives.linux-*.node; do
-    if [[ -f "$addon" ]]; then
-      cp -f "$addon" "$binaries_dir/"
-    fi
-  done
-fi
+for addon in "$native_dir"/veyyon_natives.linux-*.node; do
+  if [[ -f "$addon" ]]; then
+    cp -f "$addon" "$binaries_dir/"
+  fi
+done
 
 (
   cd "$binaries_dir"
@@ -348,29 +411,9 @@ fi
 echo "Running artifact proof validation..."
 bash "$repo_root/ci/cloudflare/artifact-proof.sh" "$mode"
 
-# 10. Publish as a GitHub Release (full mode, only when the scoped token is present)
-if [[ "$mode" == "full" ]]; then
-  if [[ -z "${VEYYON_RELEASE_TOKEN:-}" ]]; then
-    echo "VEYYON_RELEASE_TOKEN is not set; full distribution built and proven but not published."
-  else
-    gh_version=2.83.0
-    if ! command -v gh >/dev/null 2>&1; then
-      gh_archive="$HOME/.cache/gh_${gh_version}_linux_amd64.tar.gz"
-      mkdir -p "$HOME/.cache" "$HOME/.local/bin"
-      curl --proto '=https' --tlsv1.2 -fsSL \
-        "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz" \
-        -o "$gh_archive"
-      printf '%s  %s\n' 'a5cf6cdb40fc67751adf561126b3314044779cea81ba4f254fbe8e9a69f1676f' "$gh_archive" \
-        | sha256sum --check
-      tar -xzf "$gh_archive" -C "$HOME/.cache"
-      ln -sf "$HOME/.cache/gh_${gh_version}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
-    fi
-    gh --version | head -n 1
-    git_sha="$(git rev-parse HEAD)"
-    export VEYYON_RELEASE_SHA="$git_sha"
-    export VEYYON_RELEASE_TAG="${VEYYON_RELEASE_TAG:-cf-release-test-${git_sha:0:12}}"
-    bun ci/cloudflare/publish-release.ts
-  fi
+# 10. Upload this part to the shared draft release (needs the scoped token)
+if (( do_upload )); then
+  run_publisher upload
 fi
 
 echo "=== Veyyon Cloudflare Linux Release completed successfully ($mode) ==="

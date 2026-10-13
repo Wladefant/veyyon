@@ -5,10 +5,13 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
 mode="${1:-windows-proof}"
-if [[ "$mode" != "windows-proof" && "$mode" != "full" ]]; then
-  echo "Usage: $0 [windows-proof|full]" >&2
-  exit 1
-fi
+want_win=0; want_lx64=0; want_larm=0
+case "$mode" in
+  windows-proof|part-windows) want_win=1 ;;
+  part-linux-x64) want_lx64=1 ;;
+  part-linux-arm64) want_larm=1 ;;
+  *) echo "Usage: $0 [windows-proof|part-windows|part-linux-x64|part-linux-arm64]" >&2; exit 1 ;;
+esac
 
 echo "=== Veyyon Artifact Proof ($mode) ==="
 
@@ -35,27 +38,30 @@ check_file_exists() {
   echo "OK: Found asset ($size bytes): $file"
 }
 
-# Windows subset assets
-check_file_exists "$binaries_dir/veyyon-windows-x64.exe" "Windows CLI executable" || true
-check_file_exists "$binaries_dir/veyyon-windows-x64.exe.sha256" "Windows CLI checksum sidecar" || true
-check_file_exists "$binaries_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in release binaries" || true
-check_file_exists "$binaries_dir/veyyon_natives.win32-x64-baseline.node.sha256" "Windows native addon checksum sidecar" || true
-check_file_exists "$native_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in package native dir" || true
+if (( want_win )); then
+  check_file_exists "$binaries_dir/veyyon-windows-x64.exe" "Windows CLI executable" || true
+  check_file_exists "$binaries_dir/veyyon-windows-x64.exe.sha256" "Windows CLI checksum sidecar" || true
+  check_file_exists "$binaries_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in release binaries" || true
+  check_file_exists "$binaries_dir/veyyon_natives.win32-x64-baseline.node.sha256" "Windows native addon checksum sidecar" || true
+  check_file_exists "$native_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in package native dir" || true
+fi
 check_file_exists "$binaries_dir/local-assets.sha256" "Release bundle checksum manifest" || true
 
-if [[ "$mode" == "full" ]]; then
+if (( want_lx64 )); then
   check_file_exists "$binaries_dir/veyyon-linux-x64" "Linux x64 CLI executable" || true
   check_file_exists "$binaries_dir/veyyon-linux-x64.sha256" "Linux x64 CLI checksum sidecar" || true
-  check_file_exists "$binaries_dir/veyyon-linux-arm64" "Linux arm64 CLI executable" || true
-  check_file_exists "$binaries_dir/veyyon-linux-arm64.sha256" "Linux arm64 CLI checksum sidecar" || true
   check_file_exists "$binaries_dir/veyyon_natives.linux-x64-baseline.node" "Linux x64 baseline native addon in binaries" || true
   check_file_exists "$binaries_dir/veyyon_natives.linux-x64-baseline.node.sha256" "Linux x64 baseline native addon checksum" || true
   check_file_exists "$binaries_dir/veyyon_natives.linux-x64-modern.node" "Linux x64 modern native addon in binaries" || true
   check_file_exists "$binaries_dir/veyyon_natives.linux-x64-modern.node.sha256" "Linux x64 modern native addon checksum" || true
-  check_file_exists "$binaries_dir/veyyon_natives.linux-arm64.node" "Linux arm64 native addon in binaries" || true
-  check_file_exists "$binaries_dir/veyyon_natives.linux-arm64.node.sha256" "Linux arm64 native addon checksum" || true
   check_file_exists "$native_dir/veyyon_natives.linux-x64-baseline.node" "Linux x64 baseline addon in native dir" || true
   check_file_exists "$native_dir/veyyon_natives.linux-x64-modern.node" "Linux x64 modern addon in native dir" || true
+fi
+if (( want_larm )); then
+  check_file_exists "$binaries_dir/veyyon-linux-arm64" "Linux arm64 CLI executable" || true
+  check_file_exists "$binaries_dir/veyyon-linux-arm64.sha256" "Linux arm64 CLI checksum sidecar" || true
+  check_file_exists "$binaries_dir/veyyon_natives.linux-arm64.node" "Linux arm64 native addon in binaries" || true
+  check_file_exists "$binaries_dir/veyyon_natives.linux-arm64.node.sha256" "Linux arm64 native addon checksum" || true
   check_file_exists "$native_dir/veyyon_natives.linux-arm64.node" "Linux arm64 addon in native dir" || true
 fi
 
@@ -166,15 +172,18 @@ print(f'OK: Valid ELF 64-bit {arch} signature verified for {path}')
   fi
 }
 
-validate_pe_amd64 "$binaries_dir/veyyon-windows-x64.exe" "Windows CLI binary"
-validate_pe_amd64 "$binaries_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in binaries"
-validate_pe_amd64 "$native_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in native dir"
-
-if [[ "$mode" == "full" ]]; then
+if (( want_win )); then
+  validate_pe_amd64 "$binaries_dir/veyyon-windows-x64.exe" "Windows CLI binary"
+  validate_pe_amd64 "$binaries_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in binaries"
+  validate_pe_amd64 "$native_dir/veyyon_natives.win32-x64-baseline.node" "Windows native addon in native dir"
+fi
+if (( want_lx64 )); then
   validate_elf "$binaries_dir/veyyon-linux-x64" "x64" "Linux x64 binary"
-  validate_elf "$binaries_dir/veyyon-linux-arm64" "arm64" "Linux arm64 binary"
   validate_elf "$binaries_dir/veyyon_natives.linux-x64-baseline.node" "x64" "Linux x64 baseline addon"
   validate_elf "$binaries_dir/veyyon_natives.linux-x64-modern.node" "x64" "Linux x64 modern addon"
+fi
+if (( want_larm )); then
+  validate_elf "$binaries_dir/veyyon-linux-arm64" "arm64" "Linux arm64 binary"
   validate_elf "$binaries_dir/veyyon_natives.linux-arm64.node" "arm64" "Linux arm64 addon"
 fi
 
@@ -212,14 +221,17 @@ verify_sidecar() {
   echo "OK: Verified sidecar $sidecar ($actual_hash)"
 }
 
-verify_sidecar "$binaries_dir/veyyon-windows-x64.exe"
-verify_sidecar "$binaries_dir/veyyon_natives.win32-x64-baseline.node"
-
-if [[ "$mode" == "full" ]]; then
+if (( want_win )); then
+  verify_sidecar "$binaries_dir/veyyon-windows-x64.exe"
+  verify_sidecar "$binaries_dir/veyyon_natives.win32-x64-baseline.node"
+fi
+if (( want_lx64 )); then
   verify_sidecar "$binaries_dir/veyyon-linux-x64"
-  verify_sidecar "$binaries_dir/veyyon-linux-arm64"
   verify_sidecar "$binaries_dir/veyyon_natives.linux-x64-baseline.node"
   verify_sidecar "$binaries_dir/veyyon_natives.linux-x64-modern.node"
+fi
+if (( want_larm )); then
+  verify_sidecar "$binaries_dir/veyyon-linux-arm64"
   verify_sidecar "$binaries_dir/veyyon_natives.linux-arm64.node"
 fi
 
@@ -244,7 +256,7 @@ fi
 # 4. Runtime load verification (if Wine is available)
 wine_load_status="unavailable"
 wine_bin="$(command -v wine64 2>/dev/null || command -v wine 2>/dev/null || true)"
-if [[ -n "$wine_bin" ]]; then
+if (( want_win )) && [[ -n "$wine_bin" ]]; then
   echo "Checking Windows binary runtime execution with $wine_bin..."
   load_output=""
   if load_output="$(WINEDEBUG=-all "$wine_bin" "$binaries_dir/veyyon-windows-x64.exe" --version 2>&1)"; then
