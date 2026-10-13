@@ -2,8 +2,7 @@ import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { FetchImpl, ModelSpec } from "../types";
 import { discoveryFetch, isRecord } from "../utils";
 
-/** Public TypeSafe API root shared by discovery and judgment requests. */
-export const TYPESAFE_DEFAULT_BASE_URL = "https://api.typesafe.ai";
+export { TYPESAFE_DEFAULT_BASE_URL } from "../provider-endpoints";
 
 /** Wire card returned by TypeSafe's authenticated `GET /v1/models`. */
 export interface TypeSafeModelCard {

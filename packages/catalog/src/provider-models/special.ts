@@ -1,11 +1,32 @@
 import { lazy } from "@veyyon/utils/abortable";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import { type CodexModelDiscoveryResult, fetchCodexModels } from "../discovery/codex";
+import type { CodexModelDiscoveryResult } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
-import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
-import { fetchTypeSafeModels, TYPESAFE_DEFAULT_BASE_URL } from "../discovery/typesafe";
 import type { ModelManagerOptions } from "../model-manager";
+import { GITLAB_SAAS_URL, TYPESAFE_DEFAULT_BASE_URL } from "../provider-endpoints";
 import type { FetchImpl, ModelSpec } from "../types";
+
+export function buildGitLabDuoWorkflowFallbackModel(
+	id = "claude_sonnet_4_6_vertex",
+	name = "Claude Sonnet 4.6 - Vertex",
+	baseUrl = GITLAB_SAAS_URL,
+): ModelSpec<"gitlab-duo-agent"> {
+	const normalizedBaseUrl = trimTrailingSlashes(baseUrl?.trim() || GITLAB_SAAS_URL);
+	return {
+		id,
+		name,
+		api: "gitlab-duo-agent",
+		provider: "gitlab-duo-agent",
+		baseUrl: normalizedBaseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		pricing: "unknown",
+		contextWindow: 1_000_000,
+		maxTokens: null,
+		supportsTools: true,
+	};
+}
 
 // ---------------------------------------------------------------------------
 // OpenAI Codex
@@ -53,6 +74,8 @@ export function openaiCodexModelManagerOptions(
 							? await resolveAccounts()
 							: [{ accessToken: accessToken!, accountId }];
 						if (!accounts || accounts.length === 0) return null;
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchCodexModels } = await import("../discovery/codex");
 						const results = await Promise.all(
 							accounts.map(account =>
 								fetchCodexModels({
@@ -160,8 +183,10 @@ export function gitLabDuoWorkflowModelManagerOptions(
 		],
 		...(apiKey
 			? {
-					fetchDynamicModels: async hooks =>
-						fetchGitLabDuoWorkflowModels({
+					fetchDynamicModels: async hooks => {
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchGitLabDuoWorkflowModels } = await import("../discovery/gitlab-duo-workflow");
+						return fetchGitLabDuoWorkflowModels({
 							apiKey,
 							baseUrl: config.baseUrl,
 							fetch: config.fetch,
@@ -169,8 +194,8 @@ export function gitLabDuoWorkflowModelManagerOptions(
 							projectId: config.projectId,
 							cwd: config.cwd,
 							onFailure: hooks?.onFailure,
-						}),
-				}
+						});
+					},
 			: undefined),
 	};
 }
@@ -492,13 +517,15 @@ export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig =
 		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
 		...(apiKey
 			? {
-					fetchDynamicModels: () =>
-						fetchTypeSafeModels({
+					fetchDynamicModels: async () => {
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchTypeSafeModels } = await import("../discovery/typesafe");
+						return fetchTypeSafeModels({
 							apiKey,
 							baseUrl,
 							fetch: config.fetch,
-						}),
+						});
+					},
 				}
 			: undefined),
-	};
 }
