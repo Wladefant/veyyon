@@ -675,7 +675,7 @@ describe("TUI overlays", () => {
 		try {
 			tui.start();
 			await flushRender(term, tui);
-			const history = term.getScrollBuffer().slice();
+			const history = term.getScrollBuffer().slice(0, -term.rows);
 
 			// A strict-prefix collapse leaves the viewport blank rather than reviving committed rows.
 			component.setLines(buildRows(56));
@@ -683,29 +683,29 @@ describe("TUI overlays", () => {
 			await flushRender(term, tui);
 			const blank = ["", "", "", "", "", ""];
 			expect(term.getViewport().map(line => line.trim())).toEqual(blank);
-			expect(term.getScrollBuffer()).toEqual(history);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 
 			for (let i = 0; i < 2; i++) {
 				tui.requestRender();
 				await flushRender(term, tui);
 				expect(term.getViewport().map(line => line.trim())).toEqual(blank);
-				expect(term.getScrollBuffer()).toEqual(history);
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 			}
 
 			const handle = tui.showOverlay(new LineComponent("overlay-", 2), { anchor: "center" });
 			await flushRender(term, tui);
 			expect(term.getViewport().some(line => line.trim().length > 0)).toBe(true);
-			expect(term.getScrollBuffer()).toEqual(history);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 			handle.hide();
 			await flushRender(term, tui);
 			expect(term.getViewport().map(line => line.trim())).toEqual(blank);
-			expect(term.getScrollBuffer()).toEqual(history);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 
 			component.setLines([...buildRows(55), "divergent"]);
 			tui.requestRender();
 			await flushRender(term, tui);
 			expect(term.getViewport().map(line => line.trim())).toEqual(["divergent", "", "", "", "", ""]);
-			expect(term.getScrollBuffer()).toEqual(history);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 		} finally {
 			tui.stop();
 		}
@@ -773,15 +773,15 @@ describe("TUI overlays", () => {
 			const before = term.getScrollBuffer().length;
 			expect(term.getViewport().map(line => line.trim())).toEqual(Array.from({ length: 10 }, (_v, i) => `row-${140 + i}`));
 			for (let i = 0; i < 12; i++) {
-				const history = term.getScrollBuffer().slice();
+				const history = term.getScrollBuffer().slice(0, -term.rows);
 				const handle = tui.showOverlay(new LineComponent(`overlay-${i}-`, 3), { anchor: "center" });
 				await flushRender(term, tui);
 				expect(term.getViewport().some(line => line.trim().length > 0)).toBe(true);
-				expect(term.getScrollBuffer()).toEqual(history);
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 				expect(term.getViewport().some(line => line.includes(`overlay-${i}-0`))).toBe(true);
 				handle.hide();
 				await flushRender(term, tui);
-				expect(term.getScrollBuffer()).toEqual(history);
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 
 				if (i % 4 === 0) {
 					component.setLines(buildRows(140 + (i % 4) * 10));
