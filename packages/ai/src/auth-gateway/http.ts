@@ -78,16 +78,15 @@ export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
 const TOKEN_ENCODER = new TextEncoder();
 
 export function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
-	if (tokens.size === 0) return true;
 	const header = req.headers.get("authorization");
 	if (!header) return false;
-	const match = header.match(/^Bearer\s+(.+)$/i);
+	const match = header.match(/^Bearer ([^\s,]+)$/);
 	if (!match) return false;
-	const presented = TOKEN_ENCODER.encode(match[1].trim());
-	// Iterate every allowed token regardless of early hits so the result
-	// timing reflects the full set, not the position of the match.
+	const presented = TOKEN_ENCODER.encode(match[1]);
+	// Process every allowed token. Empty configured values never authorize.
 	let ok = false;
 	for (const tok of tokens) {
+		if (tok.length === 0) continue;
 		const expected = TOKEN_ENCODER.encode(tok);
 		if (timingSafeEqual(presented, expected)) ok = true;
 	}
@@ -224,4 +223,45 @@ export function withCors(response: Response, req: Request): Response {
 		statusText: response.statusText,
 		headers,
 	});
+}
+
+/** Redact credential material per complete SSE frame, preserving prompt delivery and cancellation. */
+export function redactResponse(response: Response, secrets: readonly string[]): Response {
+	const scrub = (text: string): string => {
+		for (const secret of [...new Set(secrets)].sort((a, b) => b.length - a.length)) {
+			if (secret) text = text.replaceAll(secret, "[REDACTED]");
+		}
+		return text;
+	};
+	const headers = new Headers(response.headers);
+	for (const [name, value] of headers) headers.set(name, scrub(value));
+	headers.delete("content-length");
+	if (!response.body) return new Response(null, { status: response.status, headers });
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+	const streaming = headers.get("content-type")?.includes("text/event-stream");
+	let carry = "";
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const { value, done } = await reader.read();
+				carry += decoder.decode(value, { stream: !done });
+				if (done) {
+					controller.enqueue(encoder.encode(scrub(carry)));
+					controller.close();
+				} else if (streaming) {
+					const boundary = carry.lastIndexOf("\n\n");
+					if (boundary >= 0) {
+						controller.enqueue(encoder.encode(scrub(carry.slice(0, boundary + 2))));
+						carry = carry.slice(boundary + 2);
+					}
+				}
+			} catch {
+				controller.error(new Error("Gateway response stream failed"));
+			}
+		},
+		cancel(reason) { return reader.cancel(reason); },
+	});
+	return new Response(body, { status: response.status, headers });
 }

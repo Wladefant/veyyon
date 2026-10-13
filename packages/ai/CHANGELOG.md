@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
+
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 
 ## [1.5.6] - 2026-10-10
