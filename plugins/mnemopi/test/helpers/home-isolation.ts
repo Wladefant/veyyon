@@ -43,13 +43,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const isolatedHome = mkdtempSync(join(tmpdir(), "mnemopi-test-home-"));
-if (!process.env.MNEMOPI_HOME) process.env.MNEMOPI_HOME = isolatedHome;
-// @veyyon/utils resolves logger/cache roots from VEYYON_CONFIG_DIR and XDG_*,
-// independently of MNEMOPI_HOME. Set these in the preload, before test imports
-// can initialize its cached directory resolvers or emit the first log line.
-if (!process.env.VEYYON_CONFIG_DIR) process.env.VEYYON_CONFIG_DIR = join(isolatedHome, "config");
+// Test processes own their isolation boundary. Replacing inherited values here
+// keeps late writers isolated even after per-suite helpers restore their snapshots.
+process.env.MNEMOPI_HOME = isolatedHome;
+process.env.VEYYON_CONFIG_DIR = join(isolatedHome, "config");
 for (const name of ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) {
-	if (!process.env[name]) process.env[name] = join(isolatedHome, name.slice(4).toLowerCase());
+	process.env[name] = join(isolatedHome, name.slice(4).toLowerCase());
 }
 process.on("exit", () => {
 	rmSync(isolatedHome, { recursive: true, force: true });
