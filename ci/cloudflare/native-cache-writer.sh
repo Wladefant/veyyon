@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
+# Bound writer work to 1200s overall, retaining time for R2 upload.
+writer_started_ms="$(date +%s%3N)"
 
 # Writer cannot run on PR branch; strictly main only
 current_branch="${WORKERS_CI_BRANCH:-$(git branch --show-current 2>/dev/null || echo "")}"
@@ -10,7 +12,7 @@ if [[ "$current_branch" != "main" ]]; then
   echo "CLOUDFLARE_NATIVE_CACHE_WRITER_FORBIDDEN branch=${current_branch:-unset}; writer runs on main branch only" >&2
   exit 1
 fi
-echo "CLOUDFLARE_NATIVE_CACHE_WRITER branch=main"
+echo "CLOUDFLARE_NATIVE_CACHE_WRITER branch=main label=cache-writer tests=0 test_result=NO-RESULT"
 
 # Writer uses WRITE secret only; strip release tokens and reader credentials
 unset VEYYON_RELEASE_TOKEN VEYYON_RELEASE_TAG VEYYON_RELEASE_SHA VEYYON_RELEASE_PRERELEASE \
@@ -60,7 +62,7 @@ if ! command -v rustup >/dev/null 2>&1; then
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
 if ! rustup toolchain list | grep -Eq '^nightly-2026-04-29(-|$)'; then
-  rustup toolchain install nightly-2026-04-29 --profile minimal --component rustfmt --component clippy \
+  rustup toolchain install nightly-2026-04-29 --profile minimal \
     --target x86_64-unknown-linux-gnu
 fi
 
@@ -83,6 +85,17 @@ if ! command -v cargo-zigbuild >/dev/null 2>&1; then
 fi
 zig version
 cargo-zigbuild --version
+
+bootstrap_finished_ms="$(date +%s%3N)"
+bootstrap_ms="$((bootstrap_finished_ms - writer_started_ms))"
+build_timeout_ms="$((1200000 - bootstrap_ms - 100000))"
+if (( build_timeout_ms > 1100000 )); then build_timeout_ms=1100000; fi
+if (( build_timeout_ms <= 0 )); then
+  echo "NO-RESULT native-writer-budget-exhausted bootstrap_ms=${bootstrap_ms}" >&2
+  exit 1
+fi
+export CARGO_BUILD_JOBS=4
+export VEYYON_NATIVE_BUILD_TIMEOUT_MS="$build_timeout_ms"
 
 # Invoke native cache helper in --write mode
 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \

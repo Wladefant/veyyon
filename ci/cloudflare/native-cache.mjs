@@ -29,6 +29,20 @@ export const DEFAULT_ZIG_VERSION = "0.16.0";
 export const DEFAULT_RUST_TOOLCHAIN = "nightly-2026-04-29";
 export const DEFAULT_FETCH_TIMEOUT_MS = 60000;
 export const DEFAULT_BUILD_TIMEOUT_MS = 660000;
+export const WRITER_BUILD_BUDGET_MS = 1100000;
+export const WRITER_TOTAL_BUDGET_MS = 1200000;
+export const WRITER_UPLOAD_RESERVE_MS = 100000;
+
+export function getWriterBuildTimeoutMs(bootstrapMs, options = {}) {
+	const totalBudgetMs = options.totalBudgetMs ?? WRITER_TOTAL_BUDGET_MS;
+	const uploadReserveMs = options.uploadReserveMs ?? WRITER_UPLOAD_RESERVE_MS;
+	const buildCapMs = options.buildCapMs ?? WRITER_BUILD_BUDGET_MS;
+	const timeoutMs = Math.min(buildCapMs, totalBudgetMs - bootstrapMs - uploadReserveMs);
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+		throw new Error(`Native cache writer budget exhausted: remaining build timeout is ${timeoutMs}ms.`);
+	}
+	return timeoutMs;
+}
 
 export const CANONICAL_ADDON_FILES = Object.assign(
 	[
@@ -479,8 +493,11 @@ export async function uploadToCache(bucket, cacheKey, repoRoot, options = {}) {
 	const hash = cacheKey.replace(/^trusted\//, "");
 	const prefix = `trusted/${hash}`;
 
-	// 1. Build both variants
-	await buildArtifacts(repoRoot, { ...options, targetVariants: "baseline modern" });
+	await buildArtifacts(repoRoot, {
+		...options,
+		buildTimeout: options.buildTimeout ?? process.env.VEYYON_NATIVE_BUILD_TIMEOUT_MS,
+		targetVariants: "baseline modern",
+	});
 
 	// 2. Validate both addon files exist and non-zero size
 	const files = {};
@@ -558,13 +575,14 @@ export async function runNativeCache(options = {}) {
 
 	if (writeMode) {
 		validateWriterBranchGuard(env, options);
+		console.log("[native-cache] label=cache-writer tests=0 test_result=NO-RESULT");
 		const config = validateEnvironmentConfig(env, { writeMode: true });
 		const { key, hash } = computeCacheKey({ env, repoRoot });
 		console.log(`[native-cache] cache key: ${key}`);
 		console.log("[native-cache] running native cold build and uploading to trusted cache...");
 		await uploadToCache(config.bucket, key, repoRoot, { ...options, config, writeMode });
 		console.log(`[native-cache] cold build completed and uploaded to R2: ${key}`);
-		return { hit: false, key, hash, uploaded: true };
+		return { hit: false, key, hash, uploaded: true, label: "cache-writer", tests: 0, test_result: "NO-RESULT" };
 	}
 
 	const variant = options.variant || env.VEYYON_NATIVE_VARIANT;
@@ -576,7 +594,6 @@ export async function runNativeCache(options = {}) {
 
 	const { key, hash } = computeCacheKey({ env, repoRoot });
 	console.log(`[native-cache] cache key: ${key}`);
-
 	const config = validateEnvironmentConfig(env, { writeMode: false });
 	const restoreResult = await restoreFromCache(config.bucket, key, repoRoot, {
 		...options,
@@ -591,10 +608,7 @@ export async function runNativeCache(options = {}) {
 	}
 
 	console.log(`[native-cache] cache miss: ${key} (${restoreResult.reason})`);
-	console.log(`[native-cache] running native cold build for selected variant "${variant}" (reader mode: no upload)...`);
-	await buildArtifacts(repoRoot, { ...options, targetVariants: variant });
-	console.log(`[native-cache] ready with valid addon file for variant ${variant}: ${CANONICAL_ADDON_FILES[variant]}`);
-	return { hit: false, key, hash, variant, uploaded: false, built: true };
+	throw new Error("NO-RESULT native-cold-miss");
 }
 
 const isMain =

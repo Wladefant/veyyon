@@ -18,6 +18,7 @@ import {
 	DEFAULT_ZIG_VERSION,
 	EXPECTED_BUCKET,
 	EXPECTED_ENDPOINT,
+	getWriterBuildTimeoutMs,
 	getTrustedR2Key,
 	redactSecrets,
 	restoreFromCache,
@@ -27,6 +28,13 @@ import {
 	validateManifest,
 	validateWriterBranchGuard,
 } from "./native-cache.mjs";
+test("writer build budget accounts for bootstrap, cap, reserve, and exhausted budget", () => {
+	assert.equal(getWriterBuildTimeoutMs(0), 1100000);
+	assert.equal(getWriterBuildTimeoutMs(100000), 1000000);
+	assert.throws(() => getWriterBuildTimeoutMs(1100000), /writer budget exhausted/);
+	assert.throws(() => getWriterBuildTimeoutMs(1200000), /writer budget exhausted/);
+});
+
 
 test("cache key computation is deterministic for identical inputs", () => {
 	const fixedFiles = {
@@ -565,57 +573,45 @@ test("restoreFromCache restores selected variant with verified checksum and size
 	}
 });
 
-test("reader mode never uploads on cache miss and builds selected variant locally", async () => {
+test("reader mode fails closed on cache miss without building or uploading", async () => {
 	const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-reader-miss-"));
 	try {
 		let uploaded = false;
-		let builtVariants = null;
-
-		const mockS3Client = {
-			presign: (key, opts) => {
-				if (opts?.method === "PUT") uploaded = true;
-				return `https://${EXPECTED_ENDPOINT}/${key}`;
-			},
-		};
-
-		const fakeFetcher = async () => new Response("Not Found", { status: 404 });
-
-		const fakeBuildRunner = async () => {
-			// Emulate cold build creating only the requested variant
-			const baselineDir = path.join(tmpRepo, "natives/bridge/bindings/native");
-			fs.mkdirSync(baselineDir, { recursive: true });
-			fs.writeFileSync(path.join(tmpRepo, CANONICAL_ADDON_FILES.baseline), "baseline-built-bytes");
-		};
-
-		const res = await runNativeCache({
-			buildRunner: fakeBuildRunner,
-			config: {
-				accessKeyId: "k",
-				endpoint: `https://${EXPECTED_ENDPOINT}`,
-				secretAccessKey: "s",
-			},
+		let built = false;
+		await assert.rejects(() => runNativeCache({
+			buildRunner: async () => { built = true; },
+			config: { accessKeyId: "k", endpoint: `https://${EXPECTED_ENDPOINT}`, secretAccessKey: "s" },
 			env: {
 				VEYYON_NATIVE_CACHE_BUCKET: EXPECTED_BUCKET,
-				VEYYON_NATIVE_CACHE_CREDENTIALS: JSON.stringify({
-					accessKeyId: "k",
-					endpoint: EXPECTED_ENDPOINT,
-					secretAccessKey: "s",
-				}),
+				VEYYON_NATIVE_CACHE_CREDENTIALS: JSON.stringify({ accessKeyId: "k", endpoint: EXPECTED_ENDPOINT, secretAccessKey: "s" }),
 				VEYYON_NATIVE_VARIANT: "baseline",
 			},
-			fetchRunner: fakeFetcher,
+			fetchRunner: async () => new Response("Not Found", { status: 404 }),
 			repoRoot: tmpRepo,
-			s3Client: mockS3Client,
-			writeMode: false,
-		});
-
-		assert.equal(res.hit, false);
-		assert.equal(res.built, true);
-		assert.equal(res.uploaded, false);
+			s3Client: { presign: (key, opts) => {
+				if (opts?.method === "PUT") uploaded = true;
+				return `https://${EXPECTED_ENDPOINT}/${key}`;
+			} },
+		}), /NO-RESULT native-cold-miss/);
+		assert.equal(built, false);
 		assert.equal(uploaded, false);
-		assert.equal(res.variant, "baseline");
 	} finally {
 		fs.rmSync(tmpRepo, { force: true, recursive: true });
+	}
+});
+
+test("writer branch guard permits exact main and rejects PR and cf-ci branch names", () => {
+	assert.doesNotThrow(() => validateWriterBranchGuard({ WORKERS_CI_BRANCH: "main" }));
+	for (const branch of ["pull/570", "feature/native-cache", "cf-ci"]) {
+		assert.throws(
+			() =>
+				validateWriterBranchGuard({
+					VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS: "injected",
+					WORKERS_CI_BRANCH: branch,
+				}),
+			/Native cache writer rejected: WORKERS_CI_BRANCH must be "main"/,
+			branch,
+		);
 	}
 });
 
@@ -722,6 +718,11 @@ test("writer mode uploads nodes first manifest last with checksum logging naming
 		}
 
 		assert.equal(res.uploaded, true);
+		assert.equal(res.label, "cache-writer");
+		assert.equal(res.tests, 0);
+		assert.equal(res.test_result, "NO-RESULT");
+		assert.ok(logged.some(l => l.includes("label=cache-writer tests=0 test_result=NO-RESULT")));
+		assert.equal(logged.some(l => /\btest_result=PASS\b/.test(l)), false);
 
 		// Verify checksum logs name variant and sha
 		const baselineLog = logged.find(l => l.includes("checksum variant=baseline sha="));
