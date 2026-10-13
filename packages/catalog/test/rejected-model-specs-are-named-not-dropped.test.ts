@@ -76,6 +76,7 @@ async function refresh(specs: readonly ModelSpec<"openai-completions">[]): Promi
 		providerId: "openai",
 		staticModels: [],
 		cacheDbPath: dbPath,
+		modelsDev: { fetch: async () => null, map: () => [] },
 		fetchDynamicModels: async () => specs as unknown as readonly ModelSpec<Api>[],
 		onDiscoveryFailure: failure => failures.push(failure),
 	});
