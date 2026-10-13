@@ -4,14 +4,36 @@ set -Eeuo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-shard_index="${VEYYON_CI_SHARD:-}"
-shard_count="${VEYYON_CI_SHARDS:-}"
-if [[ ! "$shard_index" =~ ^[1-3]$ || "$shard_count" != 3 ]]; then
-  echo "CLOUDFLARE_CI_SHARD_INVALID shard=${shard_index:-unset} shards=${shard_count:-unset}; expected shard 1..3 of 3." >&2
-  exit 1
-fi
-shard_spec="$shard_index/$shard_count"
-echo "CLOUDFLARE_CI_SHARD branch=${WORKERS_CI_BRANCH:-unset} shard=$shard_spec"
+route_output="$(node ci/cloudflare/lane-routing.mjs)"
+IFS='|' read -r route_kind route_arg route_shard route_count <<< "$route_output"
+case "$route_kind" in
+  release-skip)
+    echo "release branch: shard $route_shard skipped"
+    exit 0
+    ;;
+  release)
+    route_mode="$route_arg"
+    shard_index="$route_shard"
+    echo "release branch: shard 1 runs unsplit release mode $route_mode"
+    if [[ -f ci/cloudflare/release-linux.sh ]]; then
+      exec bash ci/cloudflare/release-linux.sh "$route_mode"
+    fi
+    echo "release branch: shard 1 skipped; release path is unavailable in this checkout"
+    exit 0
+    ;;
+  tests)
+    shard_index="$route_arg"
+    shard_count="$route_shard"
+    shard_spec="$shard_index/$shard_count"
+    echo "CLOUDFLARE_CI_SHARD branch=${WORKERS_CI_BRANCH:-unset} shard=$shard_spec"
+    ;;
+  *)
+    echo "CLOUDFLARE_CI_ROUTE_INVALID route=$route_kind" >&2
+    exit 1
+    ;;
+esac
+unset VEYYON_RELEASE_TOKEN VEYYON_RELEASE_TAG VEYYON_RELEASE_SHA VEYYON_RELEASE_PRERELEASE \
+  VEYYON_RELEASE_PUBLISH VEYYON_RELEASE_REPO
 
 
 expected_bun="$(node -p "require('./package.json').packageManager.split('@')[1]")"
@@ -264,7 +286,7 @@ run_bucket() {
 }
 if (( shard_index == 1 )); then
   echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
-  worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs 2>&1)" || {
+  worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs 2>&1)" || {
     worker_status=$?
     printf '%s\n' "$worker_output"
     exit "$worker_status"
@@ -335,8 +357,7 @@ if (( shard_index == 1 )); then
   echo 'CLOUDFLARE_RUST_BUILD=passed'
 
   RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
-  npx --yes wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc
-  echo 'CLOUDFLARE_WORKER_UPLOAD=passed'
+  echo 'CLOUDFLARE_CI_WORKER_VERSION_UPLOAD=deferred-to-Workers-Builds-deploy-command'
 else
   echo "CLOUDFLARE_SHARD_DEFERRED gate=check:rs shard=$shard_spec"
   echo "CLOUDFLARE_SHARD_DEFERRED gate=release-build-and-upload shard=$shard_spec"

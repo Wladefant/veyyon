@@ -30,6 +30,28 @@ test("health Worker configuration cannot route or publish a preview", async () =
 	assert.deepEqual(config.routes, []);
 });
 
+test("shard 2 Worker configuration cannot route or publish a preview", async () => {
+	const config = await readJson("./wrangler.shard-2.jsonc");
+	assert.equal(config.account_id, "a0d288d1c95470cd009cc6e0df7accb7");
+	assert.equal(config.name, "veyyon-ci-shard-2");
+	assert.equal(config.main, "worker.mjs");
+	assert.equal(config.compatibility_date, "2026-10-12");
+	assert.equal(config.workers_dev, false);
+	assert.equal(config.preview_urls, false);
+	assert.deepEqual(config.routes, []);
+});
+
+test("shard 3 Worker configuration cannot route or publish a preview", async () => {
+	const config = await readJson("./wrangler.shard-3.jsonc");
+	assert.equal(config.account_id, "a0d288d1c95470cd009cc6e0df7accb7");
+	assert.equal(config.name, "veyyon-ci-shard-3");
+	assert.equal(config.main, "worker.mjs");
+	assert.equal(config.compatibility_date, "2026-10-12");
+	assert.equal(config.workers_dev, false);
+	assert.equal(config.preview_urls, false);
+	assert.deepEqual(config.routes, []);
+});
+
 test("health Worker upload targets the shared Cloudflare CI account", async () => {
 	const config = await readJson("./wrangler.jsonc");
 	assert.equal(config.account_id, "a0d288d1c95470cd009cc6e0df7accb7");
