@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { getAgentDir, logger } from "@veyyon/utils";
+import { errorMessage, getAgentDir, logger } from "@veyyon/utils";
 import { loadSkills, type Skill } from "../extensibility/skills";
 import { loadProjectContextFiles } from "../system-prompt";
 import type { ContextFileEntry } from "../tools";
@@ -78,7 +78,7 @@ export async function applyContextVariant(
 					logger.warn("Context variant unreadable; the full file stays", {
 						path: entry.path,
 						variant,
-						error: err instanceof Error ? err.message : String(err),
+						error: errorMessage(err),
 					});
 				}
 				return entry;

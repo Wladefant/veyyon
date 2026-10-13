@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { NativeCheckpointBundle } from "./native-recovery";
 
@@ -101,11 +102,13 @@ export class CheckpointClient {
 	}
 	async #request<T>(path: string, init: RequestInit = {}): Promise<T> {
 		if (!this.enabled) throw new Error("Cloud checkpoints are disabled or not configured");
-		const response = await this.#fetch(new URL(path, this.options.baseUrl), {
-			...init,
-			signal: AbortSignal.timeout(this.#timeout),
-			headers: { authorization: `Bearer ${this.options.token}`, ...init.headers },
-		});
+		const response = await withScopedTimeoutSignal(this.#timeout, async signal =>
+			this.#fetch(new URL(path, this.options.baseUrl), {
+				...init,
+				signal,
+				headers: { authorization: `Bearer ${this.options.token}`, ...init.headers },
+			}),
+		);
 		if (!response.ok) throw new Error(`Checkpoint service returned HTTP ${response.status}`);
 		if (response.status === 204) return undefined as T;
 		return (await response.json()) as T;
@@ -181,12 +184,14 @@ export class CheckpointClient {
 		for (let offset = 0; offset < pending.ciphertext.byteLength; offset += 8388608) {
 			const chunk = pending.ciphertext.subarray(offset, Math.min(offset + 8388608, pending.ciphertext.byteLength));
 			const hash = createHash("sha256").update(chunk).digest("hex");
-			const put = await this.#fetch(new URL(`/v1/objects/${hash}`, this.options.baseUrl), {
-				method: "PUT",
-				signal: AbortSignal.timeout(this.#timeout),
-				headers: { authorization: `Bearer ${this.options.token}`, "content-type": "application/octet-stream" },
-				body: chunk,
-			});
+			const put = await withScopedTimeoutSignal(this.#timeout, async signal =>
+				this.#fetch(new URL(`/v1/objects/${hash}`, this.options.baseUrl), {
+					method: "PUT",
+					signal,
+					headers: { authorization: `Bearer ${this.options.token}`, "content-type": "application/octet-stream" },
+					body: chunk,
+				}),
+			);
 			if (!put.ok && put.status !== 409) throw new Error(`Checkpoint object upload returned HTTP ${put.status}`);
 			objects.push({ hash, size: chunk.byteLength });
 		}
@@ -228,10 +233,12 @@ export class CheckpointClient {
 		const ciphertext = new Uint8Array(size);
 		let offset = 0;
 		for (const object of head.manifest.objects) {
-			const response = await this.#fetch(new URL(`/v1/objects/${object.hash}`, this.options.baseUrl), {
-				signal: AbortSignal.timeout(this.#timeout),
-				headers: { authorization: `Bearer ${this.options.token}` },
-			});
+			const response = await withScopedTimeoutSignal(this.#timeout, async signal =>
+				this.#fetch(new URL(`/v1/objects/${object.hash}`, this.options.baseUrl), {
+					signal,
+					headers: { authorization: `Bearer ${this.options.token}` },
+				}),
+			);
 			if (!response.ok) throw new Error(`Checkpoint object unavailable: HTTP ${response.status}`);
 			const bytes = new Uint8Array(await response.arrayBuffer());
 			const hash = createHash("sha256").update(bytes).digest("hex");
