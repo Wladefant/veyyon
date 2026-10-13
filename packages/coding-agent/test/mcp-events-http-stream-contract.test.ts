@@ -56,12 +56,14 @@ describe("MCP Streamable HTTP streamRequest contract", () => {
 		const receivedA: string[] = [];
 		const receivedB: string[] = [];
 		let allocatedA: string | number | undefined;
+		let streamAId: string | number;
 		const a = transport.streamRequest("events/stream", {}, message => {
-			expect(allocatedA).toBe(a.id);
+			expect(allocatedA).toBe(streamAId);
 			if ("params" in message && message.params && typeof message.params === "object" && "marker" in message.params) {
 				receivedA.push(String(message.params.marker));
 			}
 		}, { onRequestId: id => { allocatedA = id; } });
+		streamAId = a.id;
 		const b = transport.streamRequest("events/stream", {}, message => {
 			if ("params" in message && message.params && typeof message.params === "object" && "marker" in message.params) {
 				receivedB.push(String(message.params.marker));

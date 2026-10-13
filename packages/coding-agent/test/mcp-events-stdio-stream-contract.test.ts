@@ -94,6 +94,8 @@ describe("MCP stdio streamRequest contract", () => {
 		});
 		try {
 			await bothReceived;
+			a.cancel();
+			await a.done;
 			await afterCancel;
 			expect(receivedA).toHaveLength(1);
 			expect(receivedB).toHaveLength(2);
