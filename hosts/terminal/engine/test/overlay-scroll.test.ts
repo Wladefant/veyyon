@@ -695,6 +695,7 @@ describe("TUI overlays", () => {
 			const handle = tui.showOverlay(new LineComponent("overlay-", 2), { anchor: "center" });
 			await flushRender(term, tui);
 			expect(term.getViewport().some(line => line.trim().length > 0)).toBe(true);
+			expect(term.getViewport()[0]?.trim()).toBe("row-50");
 			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 			handle.hide();
 			await flushRender(term, tui);
@@ -777,6 +778,7 @@ describe("TUI overlays", () => {
 				const handle = tui.showOverlay(new LineComponent(`overlay-${i}-`, 3), { anchor: "center" });
 				await flushRender(term, tui);
 				expect(term.getViewport().some(line => line.trim().length > 0)).toBe(true);
+				expect(term.getViewport()[0]?.trim()).toBe(i === 0 ? "row-140" : "row-130");
 				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 				expect(term.getViewport().some(line => line.includes(`overlay-${i}-0`))).toBe(true);
 				handle.hide();
