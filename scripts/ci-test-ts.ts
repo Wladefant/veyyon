@@ -1677,8 +1677,9 @@ if (import.meta.main) {
 
 	await ensureToolViewsGenerated();
 	const testCommands = await commandsForMode(requestedMode as Mode);
-	// Outside CI, fan the independent chunk processes out across cores; CI keeps the
-	// sequential, fail-fast path so each memory-capped runner job stays bounded.
+	// Ordinary CI is sequential and fail-fast. JUnit collection keeps CI sequential,
+	// but runs every child command so a failed chunk cannot hide later reports.
+	// Local runs may fan independent chunks out across cores.
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
 	// child, and the tripwire preload) are meant to make real-data writes
 	// impossible, but a safety mechanism believed to work and never checked is how
@@ -1690,8 +1691,9 @@ if (import.meta.main) {
 	const before = snapshotRealConfigRoot();
 
 	try {
-		if (!isDryRun && !isCI() && testCommands.length > 1) {
-			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
+		if (!isDryRun && testCommands.length > 1 && (!isCI() || junitReportDir)) {
+			const concurrency = isCI() ? 1 : testConcurrency(testCommands.length);
+			await runTestCommandsInParallel(testCommands, concurrency);
 		} else {
 			for (const testCommand of testCommands) {
 				await runTestCommand(testCommand);

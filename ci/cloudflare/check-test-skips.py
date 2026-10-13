@@ -115,20 +115,21 @@ def main() -> int:
         class_counts: Counter[str] = Counter()
         for (file_name, test_name), count in sorted(actual.items()):
             entry = allowed.get((file_name, test_name))
-            if entry is None:
+            allowed_count = min(count, 1) if entry is not None else 0
+            if entry is not None:
+                class_counts[entry["class"]] += allowed_count
+                print(
+                    "CLOUDFLARE_TEST_SKIP_ALLOWLISTED "
+                    f"file={json.dumps(file_name, ensure_ascii=False)} "
+                    f"test={json.dumps(test_name, ensure_ascii=False)} class={entry['class']} "
+                    f"reason={json.dumps(entry['reason'], ensure_ascii=False)} count={allowed_count}"
+                )
+            if count > allowed_count:
                 print(
                     "CLOUDFLARE_TEST_SKIP_UNLISTED "
                     f"file={json.dumps(file_name, ensure_ascii=False)} "
-                    f"test={json.dumps(test_name, ensure_ascii=False)} count={count}"
+                    f"test={json.dumps(test_name, ensure_ascii=False)} count={count - allowed_count}"
                 )
-                continue
-            class_counts[entry["class"]] += count
-            print(
-                "CLOUDFLARE_TEST_SKIP_ALLOWLISTED "
-                f"file={json.dumps(file_name, ensure_ascii=False)} "
-                f"test={json.dumps(test_name, ensure_ascii=False)} class={entry['class']} "
-                f"reason={json.dumps(entry['reason'], ensure_ascii=False)} count={count}"
-            )
         for (file_name, test_name), count in sorted(stale.items()):
             print(
                 "CLOUDFLARE_TEST_SKIP_STALE "

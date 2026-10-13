@@ -138,6 +138,7 @@ mkdir -p "$test_report_root"
 test_passes=0
 test_failures=0
 test_skips=0
+junit_test_skips=0
 test_todos=0
 test_reported=0
 test_files=0
@@ -197,6 +198,7 @@ run_bucket() {
   test_passes=$((test_passes + bucket_passes))
   test_failures=$((test_failures + bucket_failures))
   test_skips=$((test_skips + bucket_skips))
+  junit_test_skips=$((junit_test_skips + bucket_skips))
   test_todos=$((test_todos + bucket_todos))
   test_reported=$((test_reported + bucket_reported))
   test_files=$((test_files + bucket_files))
@@ -263,7 +265,7 @@ run_bucket scripts
 # Require real test cases and matching test-runner totals; chunk completion is reported separately.
 test_total=$((test_passes + test_failures + test_skips + test_todos))
 skip_allowlist_status=0
-if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --expected-total "$test_skips"; then
+if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --expected-total "$junit_test_skips"; then
   echo 'CLOUDFLARE_SKIP_ALLOWLIST=passed'
 else
   skip_allowlist_status=$?
