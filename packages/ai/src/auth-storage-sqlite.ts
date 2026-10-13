@@ -34,6 +34,7 @@ import {
 	isSqliteBusyError,
 	matchesReplacementCredential,
 	normalizeDisabledCause,
+	personalAccountId,
 	resolveCredentialIdentityKey,
 	resolveRowCredentialIdentityKey,
 	serializeCredential,
@@ -752,13 +753,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 	/**
 	 * Hard-deletes disabled rows for a provider when an active replacement exists.
-	 * OAuth credentials match by identity key; API keys match by provider and type.
+	 * OAuth credentials match by identity key, or by a shared personal account id (a Google
+	 * account whose email changed keeps its id); API keys match by provider and type.
 	 * Disabled rows without an active same-type replacement remain recoverable.
 	 */
 	#purgeSupersededDisabledRows(provider: string, activeRows: StoredAuthCredential[]): void {
 		try {
 			let hasActiveApiKey = false;
 			const activeIdentityKeys = new Set<string>();
+			const activeAccountIds = new Set<string>();
 			for (const row of activeRows) {
 				if (row.credential.type === "api_key") {
 					hasActiveApiKey = true;
@@ -766,6 +769,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				}
 				const identityKey = resolveCredentialIdentityKey(provider, row.credential);
 				if (identityKey) activeIdentityKeys.add(identityKey);
+				const accountId = personalAccountId(provider, row.credential);
+				if (accountId) activeAccountIds.add(accountId);
 			}
 			if (!hasActiveApiKey && activeIdentityKeys.size === 0) return;
 
@@ -777,6 +782,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				}
 				const identityKey = resolveRowCredentialIdentityKey(provider, row);
 				if (identityKey && activeIdentityKeys.has(identityKey)) {
+					this.#hardDeleteStmt.run(row.id);
+					continue;
+				}
+				if (activeAccountIds.size === 0) continue;
+				const accountId = personalAccountId(provider, deserializeCredential(row));
+				if (accountId && activeAccountIds.has(accountId)) {
 					this.#hardDeleteStmt.run(row.id);
 				}
 			}

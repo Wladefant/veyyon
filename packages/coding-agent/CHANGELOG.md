@@ -13,6 +13,7 @@
 - Composer predictions show the message you are likely to send next as dim text in the empty composer after each turn, inserted by Tab and sent only by Enter; `composer.predictions.mode` selects `off` (the default, which sends no request), `chatgpt-pro`, which requests a ChatGPT Codex prediction on GPT-6 Astra or GPT-6.1 Sol only with the token of a ChatGPT Pro plan Codex login, never a routed or API-key credential, may count against that account's usage limits, and otherwise sends nothing and shows as greyed out in `/settings`, or `custom`, which uses the first model with credentials in `composer.predictions.model`, chosen from any provider in the settings model picker; a stored `composer.predictions.enabled: false` loads as `off`.
 - A composer prediction ends with a dim `· tab to accept` hint showing the configured Tab key; the hint leaves with the suggestion when you type or press Tab, and a row too narrow for both drops the hint before it hides the suggestion.
 - `read` refuses a re-read whose every displayed row is still shown byte for byte under the same header by an earlier read result in context, returning a one-line pointer to that output instead of the content; no argument overrides the refusal, a pruned, shaken or compacted earlier result no longer counts, and no read is refused while an extension handles the `context` event.
+- The account card's signed-out login note offers `f` to forget it, which stops the card and `/account` from reporting a login you do not intend to sign back in.
 
 ### Changed
 

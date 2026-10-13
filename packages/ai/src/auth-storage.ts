@@ -1890,6 +1890,28 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Dismiss every signed-out login {@link AuthStorage.listProvidersWithFailedRefresh} reports for
+	 * `provider`, returning how many it dismissed.
+	 *
+	 * The rows stay disabled and on disk; only their cause changes, from a refresh failure to a
+	 * dismissal, so no reader reports them again and a later successful refresh cannot re-enable them.
+	 * Without it the note had one remedy, a fresh login to the dead account, and a login that will
+	 * never come back (an address that moved to another account, a grant revoked on purpose) kept
+	 * the provider reported as signed out for good.
+	 */
+	forgetSignedOutLogins(provider: string): number {
+		const listDisabled = this.#store.listDisabledAuthCredentials?.bind(this.#store);
+		if (!listDisabled) return 0;
+		let forgotten = 0;
+		for (const row of listDisabled(provider)) {
+			if (!row.disabledCause || !isRefreshFailureDisableCause(row.disabledCause)) continue;
+			this.#store.deleteAuthCredential(row.id, "signed-out login dismissed by user");
+			forgotten++;
+		}
+		return forgotten;
+	}
+
+	/**
 	 * Check if any form of auth is configured for a provider.
 	 * Unlike getApiKey(), this doesn't refresh OAuth tokens.
 	 */

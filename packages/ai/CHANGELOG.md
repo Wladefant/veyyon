@@ -20,6 +20,8 @@
 - `@veyyon/ai/usage/openai-codex-predictions` exports `fetchCodexPredictionsConfig` and `parseCodexPredictionsConfig`, which read the Codex composer-prediction configuration from `/wham/predictions/config`, and the `codexFork` stream option sends an OpenAI Codex request as an ephemeral fork of another session's thread, setting `thread_source` and `forked_from_thread_id` in its turn metadata.
 - `AuthStorage.hasApiKeyOverride(provider)` reports whether an `--api-key` or a `models.yml` key replaces the provider's stored logins and environment token.
 - `@veyyon/ai/utils/schema` exports `ZOD_INSTANCE_KINDS`, every Zod 4 kind by which `decontaminateZodInstance` recognizes a serialized instance.
+- `AuthStorage.forgetSignedOutLogins(provider)` dismisses the provider's logins that a failed refresh signed out, keeping them disabled under a cause no reader reports and no successful refresh re-enables, and returns how many it dismissed.
+- A Google Antigravity or Gemini CLI login stores the Google account id as the credential's `accountId`, and a login with the same id under a new email replaces the login under the old email and purges its signed-out row.
 
 ### Changed
 

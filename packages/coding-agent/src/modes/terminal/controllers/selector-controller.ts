@@ -1525,6 +1525,19 @@ export class SelectorController {
 						`${row.providerLabel}: cleared the rate-limit hold on ${accountDisplayLabel(row)} and re-checked it`,
 					);
 				},
+				onForgetSignedOut: provider => {
+					const forgotten = authStorage.forgetSignedOutLogins(provider);
+					reload();
+					if (forgotten > 0) {
+						this.ctx.showStatus(
+							`${formatProviderName(provider)}: forgot the signed-out login; its credential stays disabled`,
+						);
+					} else {
+						this.ctx.showWarning(
+							`${formatProviderName(provider)}: no signed-out login to forget in this credential store`,
+						);
+					}
+				},
 				onCancel: done,
 			},
 			{

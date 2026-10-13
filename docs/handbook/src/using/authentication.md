@@ -95,7 +95,7 @@ temporary outage:
 Kimi Code · 1 account
   a previous login was signed out: oauth refresh failed:
   invalid_grant: The provided authorization grant is invalid
-  press a to sign in again
+  press a to sign in again, or f to forget it
 ```
 
 If that provider had only one login, it now has none, and the card states that rather than showing the
@@ -103,10 +103,19 @@ provider as one you never signed into. `/account` shows it too, so you do not ha
 to find out:
 
 ```text
-1 provider has a signed-out login (Kimi Code) · /providers to sign in again
+1 provider has a signed-out login (Kimi Code) · /providers to sign in again or forget it
 ```
 
-A logout you performed yourself is not reported this way. You already know about it.
+A logout you performed yourself is not reported this way.
+
+Press `f` on the card to forget a signed-out login you do not intend to sign back in. The note and the
+`/account` line stop reporting it; the credential stays disabled in the auth database and a later
+refresh does not bring it back.
+
+A Google login (Google Antigravity, Gemini CLI) records the Google account id. A login under a new
+address of the same Google account replaces the login under the old address and clears its
+signed-out note. A login stored before the account id was recorded carries none and is not linked;
+forget its note with `f`.
 
 ## Headless and remote hosts
 

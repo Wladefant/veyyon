@@ -289,6 +289,7 @@ describe("AccountManager UX audit", () => {
 			onShowUsage: row => calls.usageShown.push(row),
 			onAddAccount: provider => calls.added.push(provider),
 			onClearRateLimitBlock: row => calls.clearedBlock.push(row),
+			onForgetSignedOut: () => {},
 			onCancel: () => calls.cancelled++,
 		};
 		return { callbacks, calls };
@@ -756,6 +757,7 @@ function makeCallbacks(): {
 		onShowUsage: row => calls.usageShown.push(row),
 		onAddAccount: provider => calls.added.push(provider),
 		onClearRateLimitBlock: row => calls.clearedBlock.push(row),
+		onForgetSignedOut: () => {},
 		onCancel: () => calls.cancelled++,
 	};
 	return { callbacks, calls };
