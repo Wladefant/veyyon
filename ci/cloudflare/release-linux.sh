@@ -248,6 +248,10 @@ if ! git show origin/main:"$policy_file" > "$policy_file" 2>/dev/null; then
   git show "27bce50e16:$policy_file" > "$policy_file"
 fi
 
+# Set sandbox gate environment variables for proof test execution in build container
+export VEYYON_TEST_SANDBOX=bwrap-userns
+export VEYYON_TEST_HOST_HOME=/nonexistent-host-home
+
 # Run only new test that rejects macOS then require named assertion failure
 set +e
 negative_test_output="$(bun test scripts/release-policy.test.ts -t "rejects distribution assets outside the exact manifest, including omitted macOS artifacts" 2>&1)"
