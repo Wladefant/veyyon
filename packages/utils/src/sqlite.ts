@@ -514,6 +514,7 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 		backupPath,
 		warning: "Stored credentials from this database may require re-login.",
 	});
+	options.onCorruptionPreserved?.(backupPath, failure.original);
 }
 
 export async function openSqliteDatabase<T>(
