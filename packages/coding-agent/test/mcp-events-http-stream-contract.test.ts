@@ -54,6 +54,8 @@ describe("MCP Streamable HTTP streamRequest contract", () => {
 		const transport = new HttpTransport({ type: "http", url: `http://127.0.0.1:${server.port}/mcp`, timeout: 1_000 });
 		await transport.connect();
 		const receivedA: string[] = [];
+		const generalNotifications: Array<{ method: string; params: unknown }> = [];
+		transport.onNotification = (method, params) => { generalNotifications.push({ method, params }); };
 		const receivedB: string[] = [];
 		let allocatedA: string | number | undefined;
 		let streamAId: string | number;
@@ -71,14 +73,16 @@ describe("MCP Streamable HTTP streamRequest contract", () => {
 		});
 		try {
 			await until(() => controllers.has(a.id) && controllers.has(b.id));
+			controllers.get(a.id)?.enqueue(encoder.encode(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/events/list_changed" })}\n\n`));
 			push(a.id, a.id, "a-only");
 			push(a.id, b.id, "wrong-stream");
 			push(a.id, "unknown-subscription", "unknown");
 			push(a.id, undefined, "missing");
 			push(b.id, b.id, "b-only");
-			await until(() => receivedA.length === 1 && receivedB.length === 1);
+			await until(() => receivedA.length === 1 && receivedB.length === 1 && generalNotifications.length === 1);
 			expect(receivedA).toEqual(["a-only"]);
 			expect(receivedB).toEqual(["b-only"]);
+			expect(generalNotifications).toEqual([{ method: "notifications/events/list_changed", params: undefined }]);
 		} finally {
 			a.cancel();
 			b.cancel();
