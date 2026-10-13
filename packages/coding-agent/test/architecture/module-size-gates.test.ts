@@ -9,7 +9,11 @@
  * a recorded reason, not a target. Two of them are far above the 800-line figure
  * the plan asked for, and that is stated rather than hidden:
  *
- * `core/tui.ts` is 3800 lines. MEASURED 2026-10-04, after the frame throttle
+ * `core/tui.ts` is 3964 lines. RE-MEASURED 2026-10-13, after the frame
+ * composition, input dispatch, window planning and update emission were split
+ * into single-purpose steps (853443e2b5): the lines added are the steps'
+ * signatures and doc comments, not new behavior. It was 3800 at 2026-10-04,
+ * after the frame throttle
  * and the terminal hosts' settle windows moved to `core/frame-pacing.ts`; it
  * was 3821 at 2026-09-30, after the queue of
  * virtualized roots a component-scoped frame compacts and the switch that
@@ -29,9 +33,11 @@
  * its own render-oracle evidence. Its headroom is roughly two percent rather
  * than the table's ten, because this is the module the ratchet exists for.
  *
- * `core/renderer.ts` is 611 lines and holds the frame preparation the engine
+ * `core/renderer.ts` is 750 lines and holds the frame preparation the engine
  * calls per row: SGR coalescing, line fitting, prefix resync, cursor-marker
- * extraction. It is under the plan's figure and listed for the same reason.
+ * extraction. It was 697 until the render hotspots were split into
+ * single-purpose helpers (266b3ec500). It is under the plan's figure and listed
+ * for the same reason.
  *
  * What it does NOT catch: a module that stays small by pushing its complexity
  * into a sibling, and it says nothing about whether the lines are any good.
@@ -50,10 +56,13 @@ import { isDirectory, lineCount, repoPath, repoRelative, typeScriptFiles } from 
  * with a test that names it" gate counts these as named. `core/component-types.ts`
  * RE-MEASURED 2026-09-30 at 328, after `Component.releaseRenderCache()` and the
  * empty child set of a compacting frame joined the contract it declares.
+ * `core/tui.ts` (3964), `core/renderer.ts` (750) and `core/frame-plan.ts` (98)
+ * RE-MEASURED 2026-10-13 after the single-purpose splits named above, each
+ * keeping the headroom ratio it had.
  */
 const CORE_CEILINGS: Record<string, number> = {
-	"core/tui.ts": 3860,
-	"core/renderer.ts": 700,
+	"core/tui.ts": 4030,
+	"core/renderer.ts": 860,
 	"core/overlay.ts": 560,
 	"core/image-budget.ts": 330,
 	"core/component-types.ts": 360,
@@ -63,7 +72,7 @@ const CORE_CEILINGS: Record<string, number> = {
 	"core/container.ts": 180,
 	"core/mouse-routing.ts": 150,
 	"core/paint-sequences.ts": 430,
-	"core/frame-plan.ts": 90,
+	"core/frame-plan.ts": 114,
 	"core/frame-pacing.ts": 150,
 };
 
