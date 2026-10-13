@@ -57,8 +57,10 @@ const SECRET_CONTENT_PATTERNS = [
 	/\bghp_[a-zA-Z0-9]{20,}\b/,
 	/\bgho_[a-zA-Z0-9]{20,}\b/,
 	/\bgithub_pat_[a-zA-Z0-9_-]{20,}\b/,
-	/\beyJh[a-zA-Z0-9_-]{10,}\.eyJh[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b/,
-	/['"]?(?:api[_-]?token|api[_-]?key|client[_-]?secret|auth[_-]?token)['"]?\s*[:=]\s*['"][^'"]{8,}['"]/i,
+	/\beyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b/,
+	/\bbearer\s+[a-zA-Z0-9._~+/-]+=*/i,
+	/['"]?(?:api[_-]?(?:token|key)|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|passwd|pwd)['"]?\s*[:=]\s*\S+/i,
+	/\bAKIA[A-Z0-9]{16}\b/,
 ];
 
 export interface ValidationResult {
@@ -245,6 +247,19 @@ export async function validateSecurityAllowlist(
 
 	if (isForbiddenRuntimeFile(relPath)) {
 		return { valid: false, reason: `Runtime/cache file rejected: ${relPath}` };
+	}
+
+	const normalized = normalizeRelativePath(relPath);
+	const segments = normalized.split("/");
+	const extension = path.extname(normalized).toLowerCase();
+	const category = segments[0];
+	const allowed = normalized === "config/hindsight-reference.json" ||
+		(normalized === "lessons/learned.md") ||
+		(["skills", "managed-skills", "rules"].includes(category) && [".md", ".mdc"].includes(extension)) ||
+		(category === "workflows" && [".md", ".py", ".mjs", ".sh"].includes(extension));
+	if (!allowed || normalized !== relPath || !/^[a-zA-Z0-9_./-]+$/.test(normalized) ||
+		segments.some(segment => segment.endsWith(".") || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment))) {
+		return { valid: false, reason: "Path or file type is not syncable" };
 	}
 
 	if (options.fullPath) {

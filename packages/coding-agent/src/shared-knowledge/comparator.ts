@@ -1,4 +1,6 @@
+import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { KNOWLEDGE_CATEGORIES } from "./types";
 import { computeSha256 } from "./catalog";
 import type {
 	CatalogItem,
@@ -203,8 +205,20 @@ export async function compareCatalogToTarget(
 				};
 				items.push(comparison);
 				updates.push(comparison);
+			} else if (item.sha256 === baselineSha256) {
+				// Only the local copy changed. Preserve it until upstream changes.
+				const comparison: ItemComparison = {
+					item,
+					status: "UNCHANGED",
+					targetExists: true,
+					targetSha256,
+					baselineSha256,
+					incomingSha256: item.sha256,
+				};
+				items.push(comparison);
+				unchanged.push(comparison);
 			} else {
-				// DIVERGENT EDIT (CONFLICT): both target and incoming diverged from baseline!
+				// Both local target and incoming catalog diverged from baseline.
 				const comparison: ItemComparison = {
 					item,
 					status: "CONFLICT",
@@ -235,20 +249,19 @@ export async function compareCatalogToTarget(
 
 	// 4. Check for baseline items deleted in incoming catalog
 	for (const [relPath, baseSha256] of Object.entries(baselineItems)) {
-		if (incomingPathSet.has(relPath)) {
+		// Legacy baselines do not identify category ownership. Never guess a target.
+		const deletedItem = baseline?.itemDetails?.[relPath];
+		if (
+			!deletedItem ||
+			deletedItem.relativePath !== relPath ||
+			!KNOWLEDGE_CATEGORIES.includes(deletedItem.category) ||
+			deletedItem.sha256 !== baseSha256
+		) {
 			continue;
 		}
 
-		// Synthetic item representing deleted baseline entry
-		const deletedItem: CatalogItem = {
-			category: "skills", // Default placeholder
-			relativePath: relPath,
-			name: path.basename(relPath),
-			sha256: "",
-			size: 0,
-		};
-
 		const targetPath = targetResolver(deletedItem);
+
 		const targetSha256 = await getFileSha256(targetPath);
 
 		if (targetSha256 === undefined) {

@@ -2,12 +2,16 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
-	assertNotSymlink,
+	scanContentForSecrets,
+	isForbiddenDatabaseFile,
+	isForbiddenSecretFile,
+	isForbiddenRuntimeFile,
 	normalizeRelativePath,
-	validateRelativePath,
 	validateSecurityAllowlist,
 } from "./allowlist";
-import { extractHindsightReference } from "./hindsight-reference";
+import { extractHindsightReference, validateHindsightReference } from "./hindsight-reference";
+import { assertSafePath } from "./safe-fs";
+import { YAML } from "bun";
 import {
 	type CatalogItem,
 	type ExportOptions,
@@ -18,7 +22,6 @@ import {
 	KNOWLEDGE_SCHEMA_VERSION,
 	type KnowledgeCategory,
 	type KnowledgeManifest,
-	type SkillTier,
 } from "./types";
 
 /**
@@ -60,10 +63,14 @@ interface DiscoveredFile {
  */
 async function scanDirectory(
 	rootDir: string,
+	category: KnowledgeCategory,
 	subPath = "",
+	reviewedPaths?: Set<string>,
+	skippedPaths = new Set<string>(),
 ): Promise<DiscoveredFile[]> {
 	const results: DiscoveredFile[] = [];
 	const currentDir = path.join(rootDir, subPath);
+	await assertSafePath(rootDir, currentDir);
 
 	let entries: string[];
 	try {
@@ -79,32 +86,27 @@ async function scanDirectory(
 	for (const entry of entries) {
 		const entryRel = subPath ? `${subPath}/${entry}` : entry;
 		const fullPath = path.join(rootDir, entryRel);
-
-		// Symlink rejection
-		const symlinkCheck = await assertNotSymlink(fullPath);
-		if (!symlinkCheck.valid) {
+		const catalogPath = `${category}/${entryRel}`;
+		const stat = await fs.lstat(fullPath);
+		if (!stat.isDirectory() && reviewedPaths && !reviewedPaths.has(catalogPath)) {
+			skippedPaths.add(catalogPath);
 			continue;
 		}
-
-		let stat;
-		try {
-			stat = await fs.stat(fullPath);
-		} catch {
+		if (isForbiddenDatabaseFile(entryRel) || isForbiddenSecretFile(entryRel) || isForbiddenRuntimeFile(entryRel)) {
+			if (reviewedPaths) skippedPaths.add(catalogPath);
 			continue;
 		}
+		await assertSafePath(rootDir, fullPath);
 
 		if (stat.isDirectory()) {
-			const subResults = await scanDirectory(rootDir, entryRel);
+			const subResults = await scanDirectory(rootDir, category, entryRel, reviewedPaths, skippedPaths);
 			results.push(...subResults);
 		} else if (stat.isFile()) {
-			let content = "";
-			try {
-				content = await fs.readFile(fullPath, "utf-8");
-			} catch {
-				continue;
-			}
+			if (!(await validateSecurityAllowlist(`${category}/${entryRel}`)).valid) continue;
+			const content = await fs.readFile(fullPath, "utf-8");
+			if (!scanContentForSecrets(content).valid) throw new Error("Credential-bearing knowledge source refused");
 
-			const allowCheck = await validateSecurityAllowlist(entryRel, { fullPath, content });
+			const allowCheck = await validateSecurityAllowlist(`${category}/${entryRel}`, { fullPath, content });
 			if (allowCheck.valid) {
 				results.push({
 					relativePath: normalizeRelativePath(entryRel),
@@ -119,17 +121,35 @@ async function scanDirectory(
 	return results;
 }
 
+/** Never read bytes from a source that the plan did not select. */
+async function readSelectedSource(root: string, fullPath: string, catalogPath: string, reviewedPaths: Set<string> | undefined, skippedPaths: Set<string>): Promise<string | undefined> {
+	if (reviewedPaths && !reviewedPaths.has(catalogPath)) {
+		try {
+			await fs.lstat(fullPath);
+			skippedPaths.add(catalogPath);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		return undefined;
+	}
+	await assertSafePath(root, fullPath);
+	return fs.readFile(fullPath, "utf-8");
+}
+
 /**
  * Collects all text knowledge catalog items from local directories according to options.
  */
-export async function collectLocalKnowledge(options: ExportOptions): Promise<{
+export async function collectLocalKnowledge(options: ExportOptions, reviewedItems?: CatalogItem[]): Promise<{
 	items: CatalogItem[];
 	files: Map<string, string>; // relativePath -> content
 	hindsightReference?: HindsightReferenceConfig;
+	skippedPaths: string[];
 }> {
 	const items: CatalogItem[] = [];
 	const files = new Map<string, string>();
 	const enabledCategories = new Set(options.categories ?? KNOWLEDGE_CATEGORIES);
+	const reviewedPaths = reviewedItems ? new Set(reviewedItems.map(item => item.relativePath)) : undefined;
+	const skippedPaths = new Set<string>();
 
 	const agentDir = options.agentDir;
 	const globalDir = options.globalDir;
@@ -138,7 +158,7 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 	// 1. Authored skills
 	if (enabledCategories.has("skills") && agentDir) {
 		const skillsDir = path.join(agentDir, "skills");
-		const discovered = await scanDirectory(skillsDir);
+		const discovered = await scanDirectory(skillsDir, "skills", "", reviewedPaths, skippedPaths);
 		for (const file of discovered) {
 			const catalogPath = `skills/${file.relativePath}`;
 			const sha256 = computeSha256(file.content);
@@ -158,7 +178,7 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 	// 2. Managed skills
 	if (enabledCategories.has("managed-skills") && agentDir) {
 		const managedDir = path.join(agentDir, "managed-skills");
-		const discovered = await scanDirectory(managedDir);
+		const discovered = await scanDirectory(managedDir, "managed-skills", "", reviewedPaths, skippedPaths);
 		for (const file of discovered) {
 			const catalogPath = `managed-skills/${file.relativePath}`;
 			const sha256 = computeSha256(file.content);
@@ -184,8 +204,10 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 
 		for (const candidate of candidatePaths) {
 			try {
-				const content = await fs.readFile(candidate, "utf-8");
+				const content = await readSelectedSource(agentDir, candidate, "lessons/learned.md", reviewedPaths, skippedPaths);
+				if (content === undefined) continue;
 				const allowCheck = await validateSecurityAllowlist("lessons/learned.md", { fullPath: candidate, content });
+				if (!allowCheck.valid) throw new Error("Unsafe learned knowledge source");
 				if (allowCheck.valid) {
 					const catalogPath = "lessons/learned.md";
 					const sha256 = computeSha256(content);
@@ -210,7 +232,7 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 	if (enabledCategories.has("rules")) {
 		if (agentDir) {
 			const rulesDir = path.join(agentDir, "rules");
-			const discovered = await scanDirectory(rulesDir);
+			const discovered = await scanDirectory(rulesDir, "rules", "", reviewedPaths, skippedPaths);
 			for (const file of discovered) {
 				const catalogPath = `rules/${file.relativePath}`;
 				const sha256 = computeSha256(file.content);
@@ -230,9 +252,11 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 			for (const filename of profileFiles) {
 				const full = path.join(agentDir, filename);
 				try {
-					const content = await fs.readFile(full, "utf-8");
 					const catalogPath = `rules/profile-${filename}`;
+					const content = await readSelectedSource(agentDir, full, catalogPath, reviewedPaths, skippedPaths);
+					if (content === undefined) continue;
 					const allowCheck = await validateSecurityAllowlist(catalogPath, { fullPath: full, content });
+					if (!allowCheck.valid) throw new Error("Unsafe profile knowledge source");
 					if (allowCheck.valid) {
 						items.push({
 							category: "rules",
@@ -254,9 +278,11 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 			// Global AGENTS.md
 			const globalAgents = path.join(globalDir, "AGENTS.md");
 			try {
-				const content = await fs.readFile(globalAgents, "utf-8");
 				const catalogPath = "rules/global-AGENTS.md";
+				const content = await readSelectedSource(globalDir, globalAgents, catalogPath, reviewedPaths, skippedPaths);
+				if (content !== undefined) {
 				const allowCheck = await validateSecurityAllowlist(catalogPath, { fullPath: globalAgents, content });
+				if (!allowCheck.valid) throw new Error("Unsafe global knowledge source");
 				if (allowCheck.valid) {
 					items.push({
 						category: "rules",
@@ -267,6 +293,7 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 					});
 					files.set(catalogPath, content);
 				}
+				}
 			} catch (error) {
 				const err = error as NodeJS.ErrnoException;
 				if (err.code !== "ENOENT") throw error;
@@ -276,7 +303,7 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 
 	// 5. Workflows
 	if (enabledCategories.has("workflows") && workflowsDir) {
-		const discovered = await scanDirectory(workflowsDir);
+		const discovered = await scanDirectory(workflowsDir, "workflows", "", reviewedPaths, skippedPaths);
 		for (const file of discovered) {
 			const catalogPath = `workflows/${file.relativePath}`;
 			const sha256 = computeSha256(file.content);
@@ -294,7 +321,7 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 
 	// 6. Reviewed Configuration & Hindsight reference
 	let hindsightReference: HindsightReferenceConfig | undefined;
-	if (enabledCategories.has("config")) {
+	if (enabledCategories.has("config") && (!reviewedPaths || reviewedPaths.has("config/hindsight-reference.json"))) {
 		if (options.hindsightConfig) {
 			const extracted = extractHindsightReference(options.hindsightConfig as Record<string, unknown>);
 			if (extracted) {
@@ -304,21 +331,11 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 			// Try reading agent config.yml if available
 			const configPath = path.join(agentDir, "config.yml");
 			try {
+				await assertSafePath(agentDir, configPath);
 				const raw = await fs.readFile(configPath, "utf-8");
-				// Parse key-value lines for hindsight settings
-				const parsedConfig: Record<string, unknown> = {};
-				const lines = raw.split("\n");
-				for (const line of lines) {
-					const match = line.match(/^\s*([a-zA-Z0-9_.-]+)\s*:\s*(.+)$/);
-					if (match) {
-						const key = match[1].trim();
-						let val: unknown = match[2].trim().replace(/^['"]|['"]$/g, "");
-						if (val === "true") val = true;
-						if (val === "false") val = false;
-						parsedConfig[key] = val;
-					}
-				}
-				const extracted = extractHindsightReference(parsedConfig);
+				const parsedConfig: unknown = YAML.parse(raw);
+				if (!parsedConfig || typeof parsedConfig !== "object" || Array.isArray(parsedConfig)) throw new Error("Invalid settings object");
+				const extracted = extractHindsightReference(parsedConfig as Record<string, unknown>);
 				if (extracted) {
 					hindsightReference = extracted;
 				}
@@ -341,8 +358,83 @@ export async function collectLocalKnowledge(options: ExportOptions): Promise<{
 			files.set(catalogPath, jsonText);
 		}
 	}
+	else if (enabledCategories.has("config") && reviewedPaths) {
+		if (options.hindsightConfig) skippedPaths.add("config/hindsight-reference.json");
+		else if (agentDir) await readSelectedSource(agentDir, path.join(agentDir, "config.yml"), "config/hindsight-reference.json", reviewedPaths, skippedPaths);
+	}
 
-	return { items, files, hindsightReference };
+	return { items, files, hindsightReference, skippedPaths: [...skippedPaths] };
+}
+
+/** Validate catalog and baseline item metadata without echoing its values. */
+export async function validateCatalogItem(value: unknown): Promise<CatalogItem> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid catalog item");
+	const item = value as CatalogItem;
+	if (Object.keys(item).some(key => !["category", "relativePath", "name", "tier", "sha256", "size"].includes(key)) ||
+		!KNOWLEDGE_CATEGORIES.includes(item.category) ||
+		typeof item.relativePath !== "string" || !item.relativePath.startsWith(`${item.category}/`) ||
+		typeof item.name !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(item.name) ||
+		typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(item.sha256) ||
+		!Number.isSafeInteger(item.size) || item.size < 0 ||
+		(item.category === "skills" ? item.tier !== "authored" : item.category === "managed-skills" ? item.tier !== "managed" : item.tier !== undefined) ||
+		!(await validateSecurityAllowlist(item.relativePath)).valid) throw new Error("Invalid catalog item fields");
+	return item;
+}
+
+
+async function validateCatalogManifest(value: unknown): Promise<KnowledgeManifest> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid catalog manifest");
+	const data = value as Record<string, unknown>;
+	if (Object.keys(data).some(key => !["schemaVersion", "createdAt", "generator", "generatorVersion", "baselineId", "categories", "items", "hindsightReference"].includes(key)) ||
+		data.schemaVersion !== KNOWLEDGE_SCHEMA_VERSION || typeof data.createdAt !== "string" || !Number.isFinite(Date.parse(data.createdAt)) ||
+		data.generator !== GENERATOR_ID || typeof data.generatorVersion !== "string" ||
+		(data.baselineId !== undefined && (typeof data.baselineId !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(data.baselineId))) ||
+		!Array.isArray(data.categories) || data.categories.some(category => !KNOWLEDGE_CATEGORIES.includes(category)) ||
+		new Set(data.categories).size !== data.categories.length || !Array.isArray(data.items)) throw new Error("Invalid catalog manifest fields");
+	if (data.hindsightReference !== undefined) validateHindsightReference(data.hindsightReference);
+	const manifest = data as unknown as KnowledgeManifest;
+	const destinations = new Set<string>();
+	for (const item of manifest.items) {
+		await validateCatalogItem(item);
+		if (!manifest.categories.includes(item.category)) throw new Error("Catalog item category is not declared");
+		const destination = item.relativePath.toLowerCase();
+		if (destinations.has(destination)) throw new Error("Duplicate catalog destination");
+		destinations.add(destination);
+	}
+	if ((manifest.hindsightReference !== undefined) !== destinations.has("config/hindsight-reference.json")) throw new Error("Unbound Hindsight reference");
+	return manifest;
+}
+
+/** Load a validated selection before reading any source bytes. */
+export async function readReviewedPlanItems(planPath: string): Promise<CatalogItem[]> {
+	if (typeof planPath !== "string" || !planPath) throw new Error("A reviewed export plan is required");
+	await assertSafePath(path.dirname(path.resolve(planPath)), planPath);
+	const plan = await validateCatalogManifest(JSON.parse(await fs.readFile(planPath, "utf-8")));
+	return plan.items;
+}
+
+/** Approve exact reviewed bytes only; a plan never approves future discoveries. */
+export async function validateReviewedPlan(planPath: string, candidates: CatalogItem[]): Promise<{ items: CatalogItem[]; skippedPaths: string[] }> {
+	if (typeof planPath !== "string" || !planPath) throw new Error("A reviewed export plan is required");
+	await assertSafePath(path.dirname(path.resolve(planPath)), planPath);
+	const plan = await validateCatalogManifest(JSON.parse(await fs.readFile(planPath, "utf-8")));
+	const current = new Map(candidates.map(item => [item.relativePath, item]));
+	if (current.size !== candidates.length) throw new Error("Duplicate export candidates");
+	const items: CatalogItem[] = [];
+	for (const reviewed of plan.items) {
+		const candidate = current.get(reviewed.relativePath);
+		if (!candidate || candidate.sha256 !== reviewed.sha256 || candidate.category !== reviewed.category ||
+			candidate.size !== reviewed.size || candidate.tier !== reviewed.tier || candidate.name !== reviewed.name) throw new Error("Reviewed source is missing or changed");
+		await validateCatalogItem(candidate);
+		items.push(candidate);
+		current.delete(reviewed.relativePath);
+	}
+	if (plan.hindsightReference) {
+		const referenceBytes = `${JSON.stringify(plan.hindsightReference, null, 2)}\n`;
+		const referenceItem = items.find(item => item.relativePath === "config/hindsight-reference.json");
+		if (!referenceItem || referenceItem.sha256 !== computeSha256(referenceBytes)) throw new Error("Reviewed reference differs from selected content");
+	}
+	return { items, skippedPaths: [...current.keys()] };
 }
 
 /**
@@ -353,6 +445,7 @@ export async function readCatalog(catalogDir: string): Promise<{
 	files: Map<string, string>;
 }> {
 	const manifestPath = path.join(catalogDir, "manifest.json");
+	await assertSafePath(catalogDir, manifestPath);
 	let manifestRaw: string;
 	try {
 		manifestRaw = await fs.readFile(manifestPath, "utf-8");
@@ -368,30 +461,14 @@ export async function readCatalog(catalogDir: string): Promise<{
 		throw new Error(`Catalog manifest at ${manifestPath} is not valid JSON`);
 	}
 
-	if (!parsed || typeof parsed !== "object" || !("schemaVersion" in parsed) || !("items" in parsed)) {
-		throw new Error(`Catalog manifest at ${manifestPath} has invalid structure`);
-	}
-
-	const manifest = parsed as KnowledgeManifest;
-	if (manifest.schemaVersion > KNOWLEDGE_SCHEMA_VERSION) {
-		throw new Error(
-			`Catalog schema version ${manifest.schemaVersion} is newer than supported ${KNOWLEDGE_SCHEMA_VERSION}`,
-		);
-	}
+	const manifest = await validateCatalogManifest(parsed);
 
 	const files = new Map<string, string>();
 
 	for (const item of manifest.items) {
-		const pathCheck = validateRelativePath(item.relativePath);
-		if (!pathCheck.valid) {
-			throw new Error(`Catalog item has invalid relative path '${item.relativePath}': ${pathCheck.reason}`);
-		}
 
 		const fullPath = path.join(catalogDir, item.relativePath);
-		const symlinkCheck = await assertNotSymlink(fullPath);
-		if (!symlinkCheck.valid) {
-			throw new Error(`Catalog file is a forbidden symlink: ${item.relativePath}`);
-		}
+		await assertSafePath(catalogDir, fullPath);
 
 		let content: string;
 		try {
@@ -407,6 +484,7 @@ export async function readCatalog(catalogDir: string): Promise<{
 				`SHA-256 digest mismatch for ${item.relativePath}: expected ${item.sha256}, got ${actualSha256}`,
 			);
 		}
+		if (Buffer.byteLength(content, "utf-8") !== item.size) throw new Error("Catalog file size mismatch");
 
 		const allowCheck = await validateSecurityAllowlist(item.relativePath, { fullPath, content });
 		if (!allowCheck.valid) {
@@ -414,6 +492,16 @@ export async function readCatalog(catalogDir: string): Promise<{
 		}
 
 		files.set(item.relativePath, content);
+	}
+
+	const referenceText = files.get("config/hindsight-reference.json");
+	if ((manifest.hindsightReference !== undefined) !== (referenceText !== undefined)) throw new Error("Unbound Hindsight reference");
+	if (referenceText !== undefined) {
+		const reference: unknown = JSON.parse(referenceText);
+		validateHindsightReference(reference);
+		const keys = Object.keys(reference).sort() as (keyof HindsightReferenceConfig)[];
+		if (keys.length !== Object.keys(manifest.hindsightReference!).length ||
+			keys.some(key => JSON.stringify(reference[key]) !== JSON.stringify(manifest.hindsightReference![key]))) throw new Error("Hindsight reference differs from verified content");
 	}
 
 	return { manifest, files };

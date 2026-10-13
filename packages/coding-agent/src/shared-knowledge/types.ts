@@ -80,6 +80,8 @@ export interface KnowledgeBaseline {
 	appliedAt: string;
 	baselineId: string;
 	items: Record<string, string>; // relativePath -> sha256
+	/** Original catalog items keyed by relativePath; absent in legacy baselines. */
+	itemDetails?: Record<string, CatalogItem>;
 	hindsightReference?: HindsightReferenceConfig;
 }
 
@@ -119,6 +121,10 @@ export interface ExportOptions {
 	globalDir?: string;
 	workflowsDir?: string;
 	outDir: string;
+	/** Write candidates to this review plan without creating a catalog. */
+	planPath?: string;
+	/** Require this reviewed plan for a real export. */
+	reviewedPlanPath?: string;
 	includeHindsightReference?: boolean;
 	hindsightConfig?: Partial<HindsightReferenceConfig>;
 }

@@ -29,9 +29,9 @@ Authored skills strictly take precedence over managed skills:
 To protect machine security and prevent secret leakage:
 
 1. **Path Traversal:** Any relative path containing `..`, leading slashes, Windows drive letters, UNC paths, or null bytes is rejected.
-2. **Symlinks:** Symbolic links are rejected. All synced items must be regular files.
+2. **Symlinks:** Source and target paths reject symlinks, junctions, canonical aliases, and symlink ancestors. Targets must remain within their managed root.
 3. **Database Files:** SQLite files (`.db`, `.db-wal`, `.db-shm`, `.sqlite`, `.sqlite3`) are strictly forbidden. Per SQLite Write-Ahead Logging specifications, WAL shared memory requires all processes to be on the same host; database files must never be replicated as raw text assets.
-4. **Secrets and Credentials:** Files named `.env`, `credentials.json`, `id_rsa`, `*.pem`, `*.key`, or paths under `shared-auth/` are strictly rejected. Content containing API keys or private keys is rejected.
+4. **Secrets and Credentials:** Credential files and common credential patterns are rejected. The scanner cannot detect every secret. Keep credentials in Bitwarden US and review every planned file before export.
 5. **Runtime Files:** Transient files (`*.sock`, `*.pid`, `*.lock`, `*.log`, `node_modules/`, `__pycache__/`, `cache/`, `logs/`, `run/`, `ipc/`) are excluded.
 
 ## Manifest Hashes and 3-Way Baseline Comparison
@@ -41,17 +41,18 @@ Catalogs include a `manifest.json` recording SHA-256 digests for all items.
 When applying an incoming catalog, Veyyon performs a three-way comparison against the local target and the last-applied baseline (`.knowledge-baseline.json`):
 
 - **Clean Create:** File does not exist locally and was not in the baseline. Safe to create.
-- **Unchanged:** Local target hash matches incoming catalog hash. No-op.
+- **Unchanged:** Incoming matches the local target, or incoming remains at the baseline while only the local target changed. Preserve local edits.
 - **Clean Update:** Local target matches the baseline (unmodified locally) and upstream has changed. Safe to update.
 - **Divergent Edit (Conflict):** Local target was modified locally and incoming catalog differs, or target exists without a baseline.
-- **Clean Delete:** Item was deleted upstream and local target is unmodified from baseline. Safe to remove.
+- **Clean Delete:** An owned baseline item disappeared upstream and its local bytes remain unchanged. Preserve its original category and destination. Legacy baselines without ownership details cannot authorize deletion.
 
 ### Conflict Preservation and Atomicity
 
 When a divergent edit is detected:
 1. **Refuse Overwrites:** The synchronization operation refuses to overwrite any target file.
 2. **Preserve Both Inputs:** The local target file remains completely untouched. When conflict preservation is enabled, the incoming conflicting version is written alongside the target as `<targetPath>.conflict.<sha>` so no edits are lost.
-3. **No Partial Application:** Pre-flight validation checks all files before making any writes. If a single item has a conflict or validation error, zero files are written to the target directory.
+3. **Locked Transaction:** Apply holds exclusive root, baseline, and configuration locks during comparison and commit. It stages files in the same directory and restores backups after a write failure. An interrupted process leaves a journal; the next locked apply restores the prior state before comparison. Unlocked readers can observe replacements during commit.
+4. **Dry Run:** Dry runs create no conflict copies and write no baseline.
 
 ## Hindsight Remote Memory Reference
 
@@ -64,16 +65,27 @@ When sharing memory configuration:
 
 ### Export
 
-Export local text knowledge assets into a versioned catalog directory:
+Create a candidate plan without exporting a catalog:
 
 ```bash
-veyyon knowledge export --out ./knowledge-catalog
+veyyon knowledge export --plan ./review-plan.json
 ```
 
-Filter by specific categories:
+Read every listed file and its path, category, and SHA-256 digest. Remove entries you do not approve from the plan.
+Then export exactly the reviewed set:
 
 ```bash
-veyyon knowledge export --out ./knowledge-catalog --categories skills,rules
+veyyon knowledge export --out ./knowledge-catalog --reviewed-plan ./review-plan.json
+```
+
+Export refuses changed or missing reviewed files before it writes the catalog. It reports and skips files absent from the plan.
+A real export without `--reviewed-plan` fails.
+
+To plan only specific categories:
+
+```bash
+veyyon knowledge export --plan ./review-plan.json --categories skills,rules
+veyyon knowledge export --out ./knowledge-catalog --reviewed-plan ./review-plan.json --categories skills,rules
 ```
 
 ### Apply / Import / Pull

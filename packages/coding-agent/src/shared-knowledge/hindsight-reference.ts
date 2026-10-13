@@ -1,149 +1,71 @@
+import { CONTEXT_SETTINGS } from "../config/settings-domains/context";
+import { scanContentForSecrets } from "./allowlist";
 import type { HindsightReferenceConfig } from "./types";
 
 const REFERENCE_NOTICE =
 	"Shared Hindsight configuration reference only. Contains no credentials. No database migration is performed.";
+const STRING_FIELDS = ["apiUrl", "bankId", "bankIdPrefix", "scoping", "bankMission", "retainMission", "retainMode"] as const;
+const BOOLEAN_FIELDS = ["autoRecall", "autoRetain"] as const;
+const ALLOWED_KEYS: Record<string, true> = {
+	backend: true, _referenceNotice: true, apiUrl: true, bankId: true, bankIdPrefix: true,
+	scoping: true, bankMission: true, retainMission: true, retainMode: true,
+	autoRecall: true, autoRetain: true, recallTypes: true,
+};
 
-/**
- * Type guard for HindsightReferenceConfig.
- */
-export function isHindsightReferenceConfig(value: unknown): value is HindsightReferenceConfig {
-	if (!value || typeof value !== "object") {
-		return false;
+/** Validate without putting untrusted values into errors or logs. */
+export function validateHindsightReference(value: unknown): asserts value is HindsightReferenceConfig {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Hindsight reference object");
+	const ref = value as Record<string, unknown>;
+	if (Object.keys(ref).some(key => !Object.hasOwn(ALLOWED_KEYS, key))) throw new Error("Unknown Hindsight reference keys");
+	if (ref.backend !== "hindsight" || ref._referenceNotice !== REFERENCE_NOTICE) throw new Error("Invalid Hindsight reference identity");
+	for (const key of STRING_FIELDS) {
+		if (ref[key] === undefined) continue;
+		if (typeof ref[key] !== "string" || !ref[key] || /[\x00-\x1f\x7f]/.test(ref[key]) || !scanContentForSecrets(ref[key]).valid) throw new Error(`Invalid Hindsight reference field: ${key}`);
 	}
-	if (!("backend" in value) || value.backend !== "hindsight") {
-		return false;
+	for (const key of ["bankId", "bankIdPrefix", "scoping", "retainMode"] as const) {
+		if (ref[key] !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(ref[key] as string)) throw new Error(`Invalid Hindsight reference field: ${key}`);
 	}
-	return "_referenceNotice" in value;
+	if (ref.scoping !== undefined && !CONTEXT_SETTINGS["hindsight.scoping"].values.some(value => value === ref.scoping)) throw new Error("Invalid Hindsight reference field: scoping");
+	if (ref.retainMode !== undefined && !CONTEXT_SETTINGS["hindsight.retainMode"].values.some(value => value === ref.retainMode)) throw new Error("Invalid Hindsight reference field: retainMode");
+	for (const key of BOOLEAN_FIELDS) if (ref[key] !== undefined && typeof ref[key] !== "boolean") throw new Error(`Invalid Hindsight reference field: ${key}`);
+	if (ref.recallTypes !== undefined && (!Array.isArray(ref.recallTypes) || ref.recallTypes.some(v => typeof v !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(v)))) throw new Error("Invalid Hindsight reference field: recallTypes");
+	if (ref.apiUrl !== undefined) {
+		let url: URL;
+		try { url = new URL(ref.apiUrl as string); } catch { throw new Error("Invalid Hindsight reference field: apiUrl"); }
+		if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Credential-bearing or unsupported Hindsight URL");
+	}
 }
 
-/**
- * Extracts reviewed Hindsight configuration for cross-PC sharing as a reference.
- * Strictly excludes any credentials (e.g. `apiToken`), secrets, or database state.
- */
-export function extractHindsightReference(
-	source: Record<string, unknown>,
-): HindsightReferenceConfig | undefined {
-	let backend = source["memory.backend"];
-	if (backend === undefined && typeof source.memory === "object" && source.memory !== null && "backend" in source.memory) {
-		const mem = source.memory as Record<string, unknown>;
-		backend = mem.backend;
+export function isHindsightReferenceConfig(value: unknown): value is HindsightReferenceConfig {
+	try { validateHindsightReference(value); return true; } catch { return false; }
+}
+
+/** Extract only declared reference fields from typed options or real parsed settings. */
+export function extractHindsightReference(source: Record<string, unknown>): HindsightReferenceConfig | undefined {
+	const memory = source.memory && typeof source.memory === "object" && !Array.isArray(source.memory) ? source.memory as Record<string, unknown> : {};
+	const nestedValue = source.hindsight ?? memory.hindsight;
+	const nested = nestedValue && typeof nestedValue === "object" && !Array.isArray(nestedValue) ? nestedValue as Record<string, unknown> : {};
+	const direct = "backend" in source || STRING_FIELDS.some(key => key in source) || BOOLEAN_FIELDS.some(key => key in source) || "recallTypes" in source;
+	if (!direct && source["memory.backend"] !== "hindsight" && memory.backend !== "hindsight" && !Object.keys(source).some(key => key.startsWith("hindsight.")) && !Object.keys(nested).length) return undefined;
+	if (direct && Object.keys(source).some(key => !Object.hasOwn(ALLOWED_KEYS, key))) throw new Error("Unknown Hindsight reference keys");
+	if (direct && ((source.backend !== undefined && source.backend !== "hindsight") ||
+		(source._referenceNotice !== undefined && source._referenceNotice !== REFERENCE_NOTICE))) throw new Error("Invalid Hindsight reference identity");
+	const ref: Record<string, unknown> = { backend: "hindsight", _referenceNotice: REFERENCE_NOTICE };
+	for (const key of [...STRING_FIELDS, ...BOOLEAN_FIELDS, "recallTypes"]) {
+		const value = direct ? source[key] : source[`hindsight.${key}`] ?? nested[key];
+		if (value !== undefined) ref[key] = value;
 	}
-
-	// If memory backend is not hindsight, check if hindsight keys are explicitly set
-	const hasHindsight = backend === "hindsight" || "hindsight.apiUrl" in source || "hindsight.bankId" in source;
-	if (!hasHindsight) {
-		return undefined;
-	}
-
-	const ref: HindsightReferenceConfig = {
-		backend: "hindsight",
-		_referenceNotice: REFERENCE_NOTICE,
-	};
-
-	// Helper to extract a string field
-	const apiUrl = source["hindsight.apiUrl"];
-	if (typeof apiUrl === "string") {
-		ref.apiUrl = apiUrl;
-	}
-
-	const bankId = source["hindsight.bankId"];
-	if (typeof bankId === "string") {
-		ref.bankId = bankId;
-	}
-
-	const bankIdPrefix = source["hindsight.bankIdPrefix"];
-	if (typeof bankIdPrefix === "string") {
-		ref.bankIdPrefix = bankIdPrefix;
-	}
-
-	const scoping = source["hindsight.scoping"];
-	if (typeof scoping === "string") {
-		ref.scoping = scoping;
-	}
-
-	const bankMission = source["hindsight.bankMission"];
-	if (typeof bankMission === "string") {
-		ref.bankMission = bankMission;
-	}
-
-	const retainMission = source["hindsight.retainMission"];
-	if (typeof retainMission === "string") {
-		ref.retainMission = retainMission;
-	}
-
-	const autoRecall = source["hindsight.autoRecall"];
-	if (typeof autoRecall === "boolean") {
-		ref.autoRecall = autoRecall;
-	}
-
-	const autoRetain = source["hindsight.autoRetain"];
-	if (typeof autoRetain === "boolean") {
-		ref.autoRetain = autoRetain;
-	}
-
-	const retainMode = source["hindsight.retainMode"];
-	if (typeof retainMode === "string") {
-		ref.retainMode = retainMode;
-	}
-
-	const recallTypes = source["hindsight.recallTypes"];
-	if (Array.isArray(recallTypes)) {
-		ref.recallTypes = recallTypes.filter((item): item is string => typeof item === "string");
-	}
-
-	// Double check: strictly ensure NO apiToken exists in the output
-	const mutableRef = ref as Record<string, unknown>;
-	if ("apiToken" in mutableRef || "hindsight.apiToken" in mutableRef) {
-		delete mutableRef.apiToken;
-		delete mutableRef["hindsight.apiToken"];
-	}
-
+	validateHindsightReference(ref);
 	return ref;
 }
 
-/**
- * Merges reference Hindsight configuration into a target settings dictionary.
- * Does not overwrite existing credentials, does not inject tokens, and never
- * triggers an automated database migration.
- */
-export function applyHindsightReference(
-	reference: HindsightReferenceConfig,
-	target: Record<string, unknown>,
-): Record<string, unknown> {
-	const updated = { ...target };
-
-	updated["memory.backend"] = "hindsight";
-
-	if (reference.apiUrl) {
-		updated["hindsight.apiUrl"] = reference.apiUrl;
+/** Keep credentials and unrelated settings on the destination machine. */
+export function applyHindsightReference(reference: HindsightReferenceConfig, target: Record<string, unknown>): Record<string, unknown> {
+	validateHindsightReference(reference);
+	const updated = { ...target, "memory.backend": "hindsight" };
+	for (const key of [...STRING_FIELDS, ...BOOLEAN_FIELDS, "recallTypes"]) {
+		const value = reference[key as keyof HindsightReferenceConfig];
+		if (value !== undefined) (updated as Record<string, unknown>)[`hindsight.${key}`] = Array.isArray(value) ? [...value] : value;
 	}
-	if (reference.bankId) {
-		updated["hindsight.bankId"] = reference.bankId;
-	}
-	if (reference.bankIdPrefix) {
-		updated["hindsight.bankIdPrefix"] = reference.bankIdPrefix;
-	}
-	if (reference.scoping) {
-		updated["hindsight.scoping"] = reference.scoping;
-	}
-	if (reference.bankMission) {
-		updated["hindsight.bankMission"] = reference.bankMission;
-	}
-	if (reference.retainMission) {
-		updated["hindsight.retainMission"] = reference.retainMission;
-	}
-	if (reference.autoRecall !== undefined) {
-		updated["hindsight.autoRecall"] = reference.autoRecall;
-	}
-	if (reference.autoRetain !== undefined) {
-		updated["hindsight.autoRetain"] = reference.autoRetain;
-	}
-	if (reference.retainMode) {
-		updated["hindsight.retainMode"] = reference.retainMode;
-	}
-	if (reference.recallTypes) {
-		updated["hindsight.recallTypes"] = [...reference.recallTypes];
-	}
-
 	return updated;
 }

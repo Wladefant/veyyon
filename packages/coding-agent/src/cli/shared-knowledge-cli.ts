@@ -37,6 +37,8 @@ export interface KnowledgeCliArgs {
 	action: KnowledgeAction;
 	path?: string;
 	out?: string;
+	plan?: string;
+	reviewedPlan?: string;
 	from?: string;
 	baseline?: string;
 	categories?: string[];
@@ -66,10 +68,8 @@ export async function runKnowledgeCliCommand(args: KnowledgeCliArgs): Promise<vo
 
 	switch (action) {
 		case "export": {
-			const outDir = args.out ?? args.path;
-			if (!outDir) {
-				throw new Error("Must specify output catalog directory with --out <dir> or positional argument");
-			}
+			const outDir = args.out ?? args.path ?? (args.plan ? path.dirname(args.plan) : undefined);
+			if (!outDir) throw new Error("Specify --out for export or --plan for review");
 
 			const categories = args.categories as KnowledgeCategory[] | undefined;
 			const result = await exportKnowledgeCatalog({
@@ -78,13 +78,18 @@ export async function runKnowledgeCliCommand(args: KnowledgeCliArgs): Promise<vo
 				globalDir: roots.globalDir,
 				workflowsDir: roots.workflowsDir,
 				categories,
+				planPath: args.plan,
+				reviewedPlanPath: args.reviewedPlan,
 			});
 
 			if (args.json) {
 				console.log(JSON.stringify(result, null, 2));
+			} else if (args.plan) {
+				console.log(`Review plan created: ${args.plan}`);
 			} else {
-				console.log(`Exported ${result.exportedCount} knowledge items to ${outDir}`);
+				console.log(`Exported ${result.exportedCount} reviewed knowledge items to ${outDir}`);
 				console.log(`Manifest created: ${path.join(outDir, "manifest.json")}`);
+				if (result.skippedPaths.length) console.log(`Skipped unreviewed paths:\n  - ${result.skippedPaths.join("\n  - ")}`);
 			}
 			break;
 		}
@@ -142,6 +147,7 @@ export async function runKnowledgeCliCommand(args: KnowledgeCliArgs): Promise<vo
 				targetGlobalDir: roots.globalDir,
 				targetWorkflowsDir: roots.workflowsDir,
 				baselinePath: args.baseline,
+				categories: args.categories as KnowledgeCategory[] | undefined,
 			});
 
 			if (args.json) {

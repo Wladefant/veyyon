@@ -23,6 +23,11 @@ describe("Shared Text Knowledge Synchronization", () => {
 	let targetGlobalDir: string;
 	let targetWorkflowsDir: string;
 	let catalogDir: string;
+	async function exportReviewed(options: ExportOptions) {
+		const planPath = path.join(tempDir, "review-plan.json");
+		await exportKnowledgeCatalog({ ...options, planPath });
+		return exportKnowledgeCatalog({ ...options, reviewedPlanPath: planPath });
+	}
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-shared-knowledge-test-"));
@@ -94,12 +99,12 @@ describe("Shared Text Knowledge Synchronization", () => {
 			hindsightConfig: {
 				apiUrl: "https://hindsight.vectorize.io",
 				bankId: "pilot-shared-bank",
-				scoping: "account",
+				scoping: "global",
 			},
 		};
 
 		// 2. Export catalog
-		const exportResult = await exportKnowledgeCatalog(exportOptions);
+		const exportResult = await exportReviewed(exportOptions);
 		expect(exportResult.exportedCount).toBeGreaterThan(0);
 		expect(exportResult.manifest.items.length).toBe(exportResult.exportedCount);
 
@@ -178,7 +183,7 @@ describe("Shared Text Knowledge Synchronization", () => {
 			"utf-8",
 		);
 
-		await exportKnowledgeCatalog({
+		await exportReviewed({
 			agentDir: sourceAgentDir,
 			outDir: catalogDir,
 			categories: ["managed-skills"],
@@ -211,7 +216,7 @@ describe("Shared Text Knowledge Synchronization", () => {
 		await fs.mkdir(skillDir, { recursive: true });
 		await fs.writeFile(path.join(skillDir, "SKILL.md"), "Version 1: Baseline", "utf-8");
 
-		await exportKnowledgeCatalog({
+		await exportReviewed({
 			agentDir: sourceAgentDir,
 			outDir: catalogDir,
 			categories: ["skills"],
@@ -228,7 +233,7 @@ describe("Shared Text Knowledge Synchronization", () => {
 
 		// 2. Upstream edits the skill
 		await fs.writeFile(path.join(skillDir, "SKILL.md"), "Version 2: Upstream edit", "utf-8");
-		await exportKnowledgeCatalog({
+		await exportReviewed({
 			agentDir: sourceAgentDir,
 			outDir: catalogDir,
 			categories: ["skills"],
@@ -304,7 +309,7 @@ describe("Shared Text Knowledge Synchronization", () => {
 		await fs.mkdir(skill2Dir, { recursive: true });
 		await fs.writeFile(path.join(skill2Dir, "SKILL.md"), "Skill Two Content", "utf-8");
 
-		await exportKnowledgeCatalog({
+		await exportReviewed({
 			agentDir: sourceAgentDir,
 			outDir: catalogDir,
 			categories: ["skills"],
@@ -353,7 +358,7 @@ describe("Shared Text Knowledge Synchronization", () => {
 			"hindsight.apiUrl": "https://hindsight.vectorize.io",
 			"hindsight.apiToken": "super-secret-token-12345", // Must be strictly excluded!
 			"hindsight.bankId": "team-bank",
-			"hindsight.scoping": "account",
+			"hindsight.scoping": "global",
 			"hindsight.autoRecall": true,
 			"hindsight.autoRetain": true,
 		};
@@ -363,7 +368,7 @@ describe("Shared Text Knowledge Synchronization", () => {
 		expect(ref?.backend).toBe("hindsight");
 		expect(ref?.apiUrl).toBe("https://hindsight.vectorize.io");
 		expect(ref?.bankId).toBe("team-bank");
-		expect(ref?.scoping).toBe("account");
+		expect(ref?.scoping).toBe("global");
 		expect(ref?.autoRecall).toBe(true);
 
 		// STRICT VERIFICATION: credentials must never be in the reference object
