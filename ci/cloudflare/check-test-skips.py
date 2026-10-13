@@ -18,9 +18,9 @@ def _report_files(report_root: Path) -> list[Path]:
 
 
 def _repo_relative_file(case: ET.Element, suite: ET.Element, report: Path, repo_root: Path) -> str:
-    raw = case.get("file") or case.get("classname") or suite.get("name")
+    raw = case.get("file") or suite.get("file")
     if not raw:
-        raise ValueError(f"JUnit testcase has no file or classname: {report}")
+        raise ValueError(f"JUnit testcase has no file attribute: {report}")
     raw = raw.replace("\\", "/")
     candidate = Path(raw)
     if candidate.is_absolute():
@@ -54,8 +54,10 @@ def _read_skips(report_root: Path, repo_root: Path) -> tuple[Counter[tuple[str, 
                     continue
                 file_name = _repo_relative_file(case, suite, report, repo_root)
                 test_name = case.get("name")
-                if not test_name:
-                    raise ValueError(f"JUnit skipped testcase has no name: {report}")
+                test_class = case.get("classname")
+                if not test_name or not test_class:
+                    raise ValueError(f"JUnit skipped testcase needs classname and name: {report}")
+                test_name = f"{test_class} > {test_name}"
                 skips[(file_name, test_name)] += 1
     return skips, reports
 

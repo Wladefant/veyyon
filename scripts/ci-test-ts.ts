@@ -49,6 +49,7 @@ interface TestCommand {
 	label: string;
 	cwd: string;
 	command: string[];
+	env?: Record<string, string>;
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
@@ -686,9 +687,9 @@ export function workspaceTestParallelism(pkg: string, requested: number): number
 function workspaceTestCommand(
 	pkg: string,
 	parallel: number,
-	options: { extraArgs?: string[]; smol?: boolean } = {},
+	options: { env?: Record<string, string>; extraArgs?: string[]; smol?: boolean } = {},
 ): TestCommand {
-	const { extraArgs = [], smol = false } = options;
+	const { env, extraArgs = [], smol = false } = options;
 	// `--smol` runs the test process with a smaller heap. The native/TUI/integration
 	// bucket asks for it because those suites load the native addon and browser-ish
 	// modules; without it a fat single invocation can OOM-kill (reported as exit 137).
@@ -696,6 +697,7 @@ function workspaceTestCommand(
 	return {
 		label: pkg,
 		cwd: pkg,
+		env,
 		command: [
 			"bun",
 			"test",
@@ -838,6 +840,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		case "workspace-cloudflare":
 			return fastWorkspacePackages.map(pkg =>
 				workspaceTestCommand(pkg, 8, {
+					env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
 					extraArgs: [
 						...onlyFailuresArgs,
 						...(pkg === "packages/utils"
@@ -991,7 +994,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		return;
 	}
 
-	const env = buildChildEnv();
+	const env = buildChildEnv(testCommand.env);
 	const startedAt = performance.now();
 	const stdout = { text: "" };
 	const stderr = { text: "" };
@@ -1056,9 +1059,10 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 //   bucket chunk crashed ~25% of runs with `BUN_JSC_forceRAMSize=256MB`,
 //   0/10 with markers=1, at zero measured wall-time cost. useConcurrentGC=0
 //   alone did not prevent it — the crash predates this knob.
-function buildChildEnv(): Record<string, string | undefined> {
+function buildChildEnv(overrides: Record<string, string> = {}): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...Bun.env,
+		...overrides,
 		GITHUB_ACTIONS: "",
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
@@ -1341,7 +1345,6 @@ export function formatFailureReport(failures: ChunkOutcome[], total: number, rep
 // failures are collected and reported together instead of failing fast, so one
 // run surfaces every broken chunk and exits non-zero without a runner stack trace.
 export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
-	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
 	const testTotals: BunTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, reportedTests: 0, files: 0, runs: 0 };
@@ -1358,6 +1361,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			if (!testCommand) {
 				return;
 			}
+			const env = buildChildEnv(testCommand.env);
 			const command = commandWithJUnitReport(testCommand);
 			const renderedCommand = command.map(shellQuote).join(" ");
 			const startedAt = performance.now();
