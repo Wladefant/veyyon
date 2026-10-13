@@ -104,11 +104,16 @@ fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-
     python3 "$1" "${proof_dir}.cpio"
   ' _ "$repo_root/ci/cloudflare/device-node-check.py"
 
-# The real Bun binary and checkout symlink stay outside the build user's home.
-sandbox_root="$(mktemp -d /tmp/veyyon-workers-XXXXXX)"
-ln -s "$repo_root" "$sandbox_root/repo"
-export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
-runtime_bin_dir="$sandbox_root/repo/.cf-proof-tools/bin"
+# Keep the checkout at its real host path. The sandbox runner relocates a checkout
+# under the hidden build user's home to /srv/veyyon; an alias under /tmp makes the
+# repository itself visible to the temp-directory janitor as stale test data.
+export VEYYON_SANDBOX_REPO_ROOT="$repo_root"
+sandbox_repo_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
+if [[ -z "$sandbox_repo_root" || "$sandbox_repo_root" == /tmp || "$sandbox_repo_root" == /tmp/* ]]; then
+  echo "CLOUDFLARE_BWRAP_REPO_ROOT_INVALID path=${sandbox_repo_root:-empty}" >&2
+  exit 1
+fi
+runtime_bin_dir="$sandbox_repo_root/.cf-proof-tools/bin"
 # Child commands resolve `bun` by name. Add only this checkout-mounted real binary
 # directory after bwrap has applied its fixed PATH, then exec the test runner.
 if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
@@ -118,6 +123,7 @@ if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
   echo "CLOUDFLARE_BWRAP_BUN_CHILD_FAILED" >&2
   exit 1
 fi
+echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Quiet mode emits real Bun case
 # counts separately from child-command chunk totals and replays details on failure.
@@ -229,7 +235,7 @@ fi
 
 # `coding-agent-heavy` aggregates the four following coding-agent buckets. Run
 # their named CI buckets once each instead of repeating the same assertions.
-run_bucket workspace
+run_bucket workspace-cloudflare
 run_bucket native
 run_bucket coding-agent-singleton
 run_bucket coding-agent-ui

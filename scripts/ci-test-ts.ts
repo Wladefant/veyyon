@@ -34,6 +34,7 @@ type Mode =
 	| "local"
 	| "local-ts"
 	| "workspace"
+	| "workspace-cloudflare"
 	| "scripts"
 	| "native"
 	| "coding-agent-singleton"
@@ -150,6 +151,7 @@ const validModes: Record<Mode, true> = {
 	local: true,
 	"local-ts": true,
 	workspace: true,
+	"workspace-cloudflare": true,
 	scripts: true,
 	native: true,
 	"coding-agent-singleton": true,
@@ -824,6 +826,20 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// and left the other 69 in `repoScriptTests` running nowhere. The dedicated
 		// `test_scripts` job runs the full list now, so this bucket no longer keeps a
 		// second copy to go stale.
+		// Only the Cloudflare bwrap lane uses this mode. Keep the source test in
+		// every other workspace mode; Bun aborts in this guest while that one test
+		// requests a native allocation of 16 GiB.
+		case "workspace-cloudflare":
+			return fastWorkspacePackages.map(pkg =>
+				workspaceTestCommand(pkg, 8, {
+					extraArgs: [
+						...onlyFailuresArgs,
+						...(pkg === "packages/utils"
+							? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
+							: []),
+					],
+				}),
+			);
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
 		case "native":
