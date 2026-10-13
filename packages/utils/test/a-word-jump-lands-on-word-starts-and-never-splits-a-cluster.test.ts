@@ -137,17 +137,28 @@ describe("moveWordLeft / moveWordRight — invariants (fuzz)", () => {
 					throw new Error(`threw on ${JSON.stringify(text)}@${cursor}: ${e}`);
 				}
 				const clamped = Math.min(Math.max(cursor, 0), len);
+				const ctx = `text=${JSON.stringify(text)} len=${len} cursor=${cursor} clamped=${clamped} left=${left} right=${right} iter=${iter}`;
 				// 1. Range.
-				expect(left).toBeGreaterThanOrEqual(0);
-				expect(left).toBeLessThanOrEqual(len);
-				expect(right).toBeGreaterThanOrEqual(0);
-				expect(right).toBeLessThanOrEqual(len);
+				if (left < 0 || left > len) {
+					throw new Error(`moveWordLeft out of range [0, ${len}]: ${ctx}`);
+				}
+				if (right < 0 || right > len) {
+					throw new Error(`moveWordRight out of range [0, ${len}]: ${ctx}`);
+				}
 				// 2. Progress toward the edge (no fixpoint that would hang a caller).
-				if (clamped > 0) expect(left).toBeLessThan(clamped);
-				if (clamped < len) expect(right).toBeGreaterThan(clamped);
+				if (clamped > 0 && left >= clamped) {
+					throw new Error(`moveWordLeft did not make progress: ${ctx}`);
+				}
+				if (clamped < len && right <= clamped) {
+					throw new Error(`moveWordRight did not make progress: ${ctx}`);
+				}
 				// 3. Grapheme safety — never lands mid-cluster.
-				expect(boundaries.has(left)).toBe(true);
-				expect(boundaries.has(right)).toBe(true);
+				if (!boundaries.has(left)) {
+					throw new Error(`moveWordLeft landed mid-cluster: ${ctx} boundaries=[${[...boundaries].join(",")}]`);
+				}
+				if (!boundaries.has(right)) {
+					throw new Error(`moveWordRight landed mid-cluster: ${ctx} boundaries=[${[...boundaries].join(",")}]`);
+				}
 			}
 		}
 	});
@@ -162,21 +173,29 @@ describe("moveWordLeft / moveWordRight — invariants (fuzz)", () => {
 			let steps = 0;
 			while (pos > 0) {
 				const next = moveWordLeft(text, pos);
-				expect(next).toBeLessThan(pos);
+				if (next >= pos) {
+					throw new Error(`left walk did not make progress: text=${JSON.stringify(text)} pos=${pos} next=${next} iter=${iter}`);
+				}
 				pos = next;
 				if (++steps > len + 2) throw new Error(`left walk did not terminate on ${JSON.stringify(text)}`);
 			}
-			expect(pos).toBe(0);
+			if (pos !== 0) {
+				throw new Error(`left walk ended at pos=${pos} !== 0: text=${JSON.stringify(text)} iter=${iter}`);
+			}
 			// Walk right from the start: strictly increasing, terminates at len.
 			pos = 0;
 			steps = 0;
 			while (pos < len) {
 				const next = moveWordRight(text, pos);
-				expect(next).toBeGreaterThan(pos);
+				if (next <= pos) {
+					throw new Error(`right walk did not make progress: text=${JSON.stringify(text)} pos=${pos} next=${next} iter=${iter}`);
+				}
 				pos = next;
 				if (++steps > len + 2) throw new Error(`right walk did not terminate on ${JSON.stringify(text)}`);
 			}
-			expect(pos).toBe(len);
+			if (pos !== len) {
+				throw new Error(`right walk ended at pos=${pos} !== len=${len}: text=${JSON.stringify(text)} iter=${iter}`);
+			}
 		}
 	});
 });

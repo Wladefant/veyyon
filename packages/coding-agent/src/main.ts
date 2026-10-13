@@ -48,6 +48,7 @@ import {
 	normalizeContinueSessionArgs,
 	reportUnrecognizedFlags,
 } from "./cli/args";
+import { startTerminalControl } from "./modes/terminal/terminal-control";
 import { EXIT_FAILURE, EXIT_OK, EXIT_USAGE } from "./cli/exit-codes";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
@@ -672,6 +673,7 @@ async function runInteractiveMode(
 		created.mcpManager,
 		started.eventBus,
 		created.setToolNotifier,
+		startTerminalControl,
 	);
 	mode.createNextSession = started.createNextSession;
 	const setupFlow = await selectSetupFlow(mode, launch);

@@ -221,10 +221,10 @@ export class StallSampler implements StallStackSource {
 	}
 
 	/** Start the next profile at `#intervalUs`. The caller holds the chain. */
-	async #begin(): Promise<void> {
+	async #begin(startedAtMs?: number): Promise<void> {
 		await this.#post("Profiler.setSamplingInterval", { interval: this.#intervalUs });
 		await this.#post("Profiler.start");
-		this.#startedAtMs = performance.now();
+		this.#startedAtMs = startedAtMs ?? performance.now();
 	}
 
 	quiet(nowMs: number, busy: boolean): void {
@@ -232,6 +232,7 @@ export class StallSampler implements StallStackSource {
 		if (this.#state === "off") {
 			this.#state = "starting";
 			this.#busyAtMs = nowMs;
+			this.#startedAtMs = nowMs;
 			void this.#enqueue(async () => {
 				if (this.#state !== "starting") return;
 				try {
@@ -241,7 +242,7 @@ export class StallSampler implements StallStackSource {
 						this.#session.connect();
 					}
 					await this.#post("Profiler.enable");
-					await this.#begin();
+					await this.#begin(nowMs);
 					this.#state = "running";
 				} catch (error) {
 					this.#fail(error);
@@ -251,12 +252,11 @@ export class StallSampler implements StallStackSource {
 		}
 		if (this.#state !== "running") return;
 		const intervalUs = nowMs - this.#busyAtMs < IDLE_AFTER_MS ? BUSY_INTERVAL_US : IDLE_INTERVAL_US;
-		const elapsedMs = Math.max(0, performance.now() - this.#startedAtMs);
-		const full = elapsedMs >= (this.#intervalUs / 1000) * ROTATE_AFTER_SAMPLES;
+		const full = nowMs - this.#startedAtMs >= (this.#intervalUs / 1000) * ROTATE_AFTER_SAMPLES;
 		// A busy tick restarts an idle-interval profile at once. Going idle waits for the rotation,
 		// which restarts the profile regardless.
 		if (!full && intervalUs >= this.#intervalUs) return;
-		this.#restartAt(intervalUs);
+		this.#restartAt(intervalUs, nowMs);
 	}
 
 	/**
@@ -274,7 +274,7 @@ export class StallSampler implements StallStackSource {
 	}
 
 	/** Replaces the running profile with one sampling at `intervalUs`. */
-	#restartAt(intervalUs: number): void {
+	#restartAt(intervalUs: number, startedAtMs?: number): void {
 		this.#intervalUs = intervalUs;
 		// Hold off the next rotation until this one has restarted the profile.
 		this.#startedAtMs = Number.POSITIVE_INFINITY;
@@ -282,7 +282,7 @@ export class StallSampler implements StallStackSource {
 			if (this.#state !== "running") return;
 			try {
 				await this.#post("Profiler.stop");
-				await this.#begin();
+				await this.#begin(startedAtMs);
 			} catch (error) {
 				this.#fail(error);
 			}
@@ -294,7 +294,7 @@ export class StallSampler implements StallStackSource {
 			if (this.#state !== "running") return undefined;
 			try {
 				const result = await this.#post("Profiler.stop");
-				await this.#begin();
+				await this.#begin(toMs > 0 ? toMs : undefined);
 				const profile = parseProfile(result);
 				return profile ? summarizeWindow(profile, fromMs, toMs) : undefined;
 			} catch (error) {

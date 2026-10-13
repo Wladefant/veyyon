@@ -12,7 +12,7 @@ another one. "Agent" in a request means that CLI, not the assistant answering.
 Maps and indexes: [`packages/coding-agent/DEVELOPMENT.md`](packages/coding-agent/DEVELOPMENT.md) maps
 the source tree to its owning documents; [`docs/internal/README.md`](docs/internal/README.md) indexes
 contributor docs ([onboarding](docs/internal/onboarding.md), [testing](docs/internal/testing.md));
-[`review.md`](review.md) is the pull-request review guide; [`docs/handbook/`](docs/handbook/) is the
+[`docs/review-guide.md`](docs/review-guide.md) is the pull-request review guide; [`docs/handbook/`](docs/handbook/) is the
 operator manual.
 
 |Member|Description|
@@ -194,7 +194,7 @@ Scope is settled on the issue, before the work exists. For a large pull request 
 behind it, request the issue instead of reviewing the diff.
 
 One concern per pull request. The description covers every change in the diff; an undescribed
-change is itself a finding, per [`review.md`](review.md). Split a fix that includes unrelated work.
+change is itself a finding, per [`docs/review-guide.md`](docs/review-guide.md). Split a fix that includes unrelated work.
 
 Never write a closing keyword into a commit message, a pull request title, or a pull request body.
 `Closes`, `Fixes`, `Resolves` and their variants (`close`, `closed`, `fix`, `fixed`, `resolve`,
@@ -213,7 +213,7 @@ pull request writes `Refs #N`.
 A closing keyword that already landed cannot be undone by editing the commit message: reopen the
 issue and say it autoclosed.
 
-Reviewing a pull request follows [`review.md`](review.md): its section order, its reject-on-sight
+Reviewing a pull request follows [`docs/review-guide.md`](docs/review-guide.md): its section order, its reject-on-sight
 list, and its rule that a finding names the file, the line and the input that breaks it. Do not
 report a review as clean from the GitHub summary alone.
 

@@ -225,8 +225,10 @@ import { OAuthManualInputManager } from "./oauth-manual-input";
 import { countRunningAgentBadgeAgents, getRunningAgentBadgeRegistry } from "./running-agent-badge";
 import { type SessionObserverChangeKind, SessionObserverRegistry } from "./session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
+import { createTerminalTranscriptProjector, terminalTranscriptEntry } from "../../session/session-history-format";
+import type { TerminalTranscriptEntry } from "@veyyon/wire/presentation";
+import { TerminalNotReadyError, type TerminalControlTarget } from "../../launch/terminal-control";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
-import { startTerminalControl } from "./terminal-control";
 import { consumeRelaunchMarker, flushPendingTtyInput, RELAUNCH_MARKER } from "./tty-input-flush";
 import type {
 	CompactionQueuedMessage,
@@ -490,6 +492,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#cleanupUnsubscribe?: () => void;
 	readonly #herdrReporter = new HerdrReporter();
 	#closeTerminalControl?: () => void;
+	readonly #startTerminalControl: ((target: TerminalControlTarget) => Promise<() => void>) | undefined;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	#planModePreviousTools: string[] | undefined;
@@ -656,8 +659,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		mcpManager?: MCPManager,
 		eventBus?: EventBus,
 		setToolNotifier: (notify: HostNotifier) => void = () => {},
+		startTerminalControl?: (target: TerminalControlTarget) => Promise<() => void>,
 	) {
 		this.session = session;
+		this.#startTerminalControl = startTerminalControl;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
 		this.keybindings = this.#firstFrame?.keybindings ?? KeybindingsManager.inMemory();
@@ -1043,6 +1048,97 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		return null;
 	}
+	#createTerminalControlTarget(): TerminalControlTarget {
+		let revision = "";
+		let entries: TerminalTranscriptEntry[] = [];
+		let converted = 0;
+		let lastConvertedId: string | undefined;
+		const projector = createTerminalTranscriptProjector();
+		const history = (): TerminalTranscriptEntry[] => {
+			const next = `${this.sessionManager.getSessionId()}:${this.sessionManager.getLeafId()}`;
+			if (revision === next) return entries;
+			revision = next;
+			const journal = this.sessionManager.getEntries();
+			const intact = converted > 0 && journal.length >= converted && journal[converted - 1]?.id === lastConvertedId;
+			if (!intact) {
+				converted = 0;
+				entries = [];
+				projector.reset();
+			}
+			const appended = journal.slice(converted).flatMap(entry => {
+				const turn = projector.observe(entry);
+				if (entry.type !== "message" || entry.message.role !== "assistant") return [];
+				const content = this.session.displayAssistantContent(entry.message.content);
+				const text = content.filter(block => block.type === "text").map(block => block.text).join("\n").trim();
+				return text ? [terminalTranscriptEntry(entry.id, text, turn)] : [];
+			});
+			converted = journal.length;
+			lastConvertedId = journal.at(-1)?.id;
+			if (appended.length || !intact) entries = entries.concat(appended);
+			return entries;
+		};
+		const thisMode = this;
+		return {
+			identity: () => ({
+				sessionId: this.sessionManager.getSessionId(),
+				cwd: this.sessionManager.getCwd(),
+				sessionFile: this.sessionManager.getSessionFile() ?? "",
+			}),
+			history,
+			async deliver(text, behavior) {
+				if (thisMode.isShuttingDown || !thisMode.isInitialized) throw new Error("Terminal is shutting down");
+				if (thisMode.session.isStreaming) {
+					if (behavior === "followUp") {
+						await thisMode.session.followUp(text);
+						return "queued";
+					}
+					await thisMode.session.steer(text);
+					return "steered";
+				}
+				const submit = thisMode.onInputCallback;
+				if (!submit) throw new TerminalNotReadyError("Terminal is not ready for input; delivery not accepted");
+				thisMode.onInputCallback = undefined;
+				submit(thisMode.startPendingSubmission({ text }));
+				return "started";
+			},
+			async abort() {
+				if (!thisMode.session.isStreaming) return false;
+				await thisMode.session.abort();
+				return true;
+			},
+			subscribe(listener) {
+				let sessionId = thisMode.sessionManager.getSessionId();
+				let previous = history();
+				let seen = new Set(previous.map(entry => entry.entryId));
+				let active = thisMode.session.isStreaming;
+				const timer = setInterval(() => {
+					const current = thisMode.sessionManager.getSessionId();
+					const next = history();
+					if (current !== sessionId) {
+						sessionId = current;
+						previous = next;
+						seen = new Set(next.map(entry => entry.entryId));
+						active = thisMode.session.isStreaming;
+						return;
+					}
+					if (next !== previous) {
+						previous = next;
+						const appended = next.filter(entry => !seen.has(entry.entryId));
+						for (const entry of appended) seen.add(entry.entryId);
+						if (appended.length) listener({ kind: "appended", sessionId, entries: appended });
+					}
+					if (active !== thisMode.session.isStreaming) {
+						active = thisMode.session.isStreaming;
+						listener({ kind: "streaming", sessionId, active });
+					}
+				}, 250);
+				timer.unref();
+				return () => clearInterval(timer);
+			},
+		};
+	}
+
+	
 
 	async init(): Promise<void> {
 		if (this.isInitialized) return;
@@ -1451,7 +1547,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// controller is loaded before the queue drains. A failed load is reported by the open itself.
 		if (this.editor.hasEarlyActions()) await this.#selectors().catch(() => undefined);
 		this.#inputController.drainEarlySubmissions();
-		this.#closeTerminalControl = await startTerminalControl(this);
+		if (this.#startTerminalControl) {
+			this.#closeTerminalControl = await this.#startTerminalControl(this.#createTerminalControlTarget());
+		}
 	}
 
 	/** Themes already warned about an unhonored `always`, so the log is not repeated. */
