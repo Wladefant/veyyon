@@ -110,7 +110,13 @@ def configure_pc2(config_dir, providers, gateway_url, memory_url, bank_id):
 def main():
     if sys.version_info < (3, 11):
         raise ValueError("PC2 setup requires Python 3.11 or newer. No files were changed.")
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Knowledge export: first run `veyyon knowledge export --plan ./review-plan.json`; "
+               "review the paths, hashes and categories; then run "
+               "`veyyon knowledge export --out ./catalog --reviewed-plan ./review-plan.json`. "
+               "A bare export refuses.",
+    )
     parser.add_argument("--version", required=True)
     parser.add_argument("--install-dir", required=True)
     parser.add_argument("--config-dir", required=True)

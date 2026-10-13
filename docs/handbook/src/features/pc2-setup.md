@@ -56,9 +56,12 @@ A release with those changes does not exist yet. Stop before installation until 
 20. Set `VEYYON_CHECKPOINT_NODE=pc1` on PC1. Stop its session, then run `veyyon session handoff <session-id> --file <stopped-session.jsonl> --to pc2`.
 21. Set `VEYYON_CHECKPOINT_NODE=pc2` in the PC2 process environment.
 22. Run `veyyon session checkpoint-restore <session-id> --output <new-directory>` on PC2.
-23. Pending the final interface in https://github.com/Wladefant/veyyon/pull/607: do not resume until automatic marker and claim fencing works.
+23. Resume the restored transcript normally. Restore persists the ownership marker, and resume claims one runtime automatically.
 24. Confirm PC1 cannot admit a prompt or tool for the transferred session. Test reverse handoff before relying on it.
 25. Turn PC1 off. Confirm local tools, the installed catalog, remote memory and the independent model gateway remain available.
+
+Keep each machine's node label stable. Do not set `VEYYON_CHECKPOINT_SESSION` manually.
+Main holds this setup PR until the session-handoff PR has an exact-head approval.
 
 No provider subscription sign-in on PC2 is needed for broker-backed models.
 Provider sign-ins belong to the independent credential authority and use supported owner flows.
@@ -99,12 +102,15 @@ It skips reinstallation and preserves existing sessions. A changed release or bi
 
 ## Update and conflict procedure
 
-1. Export reviewed changes to a separate catalog with `veyyon knowledge export --out <new-catalog>`.
-2. Review the catalog for secrets and machine-specific paths before committing it.
-3. Push the private catalog with normal Git ownership and access controls.
-4. Pull on the other PC with `git pull --ff-only`.
-5. If Git refuses divergence, preserve both branches and resolve the text conflict explicitly.
-6. Apply the catalog with a saved baseline and a dry run before changing local files.
+1. Run `veyyon knowledge export --plan ./review-plan.json`.
+2. Review every listed path, hash and category. Exclude secrets and machine-specific paths.
+3. Run `veyyon knowledge export --out ./catalog --reviewed-plan ./review-plan.json`.
+4. If a reviewed file changed or disappeared, stop and review a new plan. A bare export refuses.
+5. Review the resulting catalog before committing it.
+6. Push the private catalog with normal Git ownership and access controls.
+7. Pull on the other PC with `git pull --ff-only`.
+8. If Git refuses divergence, preserve both branches and resolve the text conflict explicitly.
+9. Apply the catalog with a saved baseline and a dry run before changing local files.
 
 Do not mirror `.veyyon`, SQLite databases, PIDs, sockets, browser profiles, caches or active worktrees.
 Sync is not backup. A failed apply is not permission to force overwrite.
