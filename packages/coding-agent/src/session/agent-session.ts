@@ -14,6 +14,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
+import { SynchronizedSession } from "../checkpoints/synchronized-session";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1092,6 +1094,7 @@ export class AgentSession {
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
 	readonly yieldQueue: YieldQueue;
+	#cloudOwnership?: SynchronizedSession;
 	fileSnapshotStore?: InMemorySnapshotStore;
 	readonly #approvals: SessionApprovals;
 	/**
@@ -5444,6 +5447,25 @@ export class AgentSession {
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		await this.#promptRefresh;
 		await this.#startupHydration;
+		const cloudSessionId = process.env.VEYYON_CHECKPOINT_SESSION;
+		if (this.settings.get("checkpoints.enabled") && cloudSessionId === this.sessionManager.getSessionId()) {
+			if (!this.#cloudOwnership) {
+				this.#cloudOwnership = new SynchronizedSession(cloudSessionId, CheckpointClient.fromEnv());
+				const previous = this.agent.beforeToolCall;
+				this.agent.beforeToolCall = async (context, signal) => {
+					if (this.sessionManager.getSessionId() !== cloudSessionId) {
+						await this.#cloudOwnership!.close();
+						return previous?.(context, signal);
+					}
+					await this.#cloudOwnership!.admit();
+					return previous?.(context, signal);
+				};
+				this.#listenerReleases.push(() => {
+					void this.#cloudOwnership!.close().catch(error => logger.warn("Cloud ownership release failed", { error: errorMessage(error) }));
+				});
+			}
+			await this.#cloudOwnership.admit();
+		}
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 
 		// Handle extension commands first (execute immediately, even during streaming)

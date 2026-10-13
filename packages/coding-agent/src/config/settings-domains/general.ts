@@ -42,6 +42,11 @@ export const GENERAL_SETTINGS = {
 	"auth.broker.url": { type: "string", default: undefined },
 	"auth.broker.token": { type: "string", default: undefined },
 
+	"checkpoints.enabled": {
+		type: "boolean",
+		default: false,
+	},
+
 	autoResume: {
 		type: "boolean",
 		default: false,
