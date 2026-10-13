@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { applyOwnerOnlyWindowsAcl, getConfigRootDir, postmortem } from "@veyyon/utils";
+import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmortem } from "@veyyon/utils";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
@@ -306,24 +306,15 @@ export async function serveTerminalControl(
 		});
 	});
 	const writeOwner = options.writeOwner ?? (async (destination: string, record: TerminalOwner): Promise<void> => {
-		const temporary = `${destination}.${crypto.randomUUID()}.tmp`;
-		let reserved = false;
-		try {
-			const handle = await fs.open(temporary, "wx", 0o600);
-			reserved = true;
-			try {
-				await applyOwnerOnlyWindowsAcl(temporary);
-				await handle.writeFile(JSON.stringify(record));
-				await handle.sync();
-			} finally {
-				await handle.close();
-			}
-			// Never unlink the old credential on a failed replacement.
-			await fs.rename(temporary, destination);
-			reserved = false;
-		} finally {
-			if (reserved) await fs.rm(temporary, { force: true });
-		}
+		await atomicWriteFileWith(destination, async temporary => {
+			await applyOwnerOnlyWindowsAcl(temporary);
+			await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
+		}, {
+			mode: 0o600,
+			// This credential dies with the process. No fallible flush may follow its atomic replacement.
+			fsync: false,
+			requireAtomicReplace: true,
+		});
 	});
 	const publish = (nextToken?: string, expectedToken?: string): Promise<void> => {
 		const run = publication.then(async () => {
