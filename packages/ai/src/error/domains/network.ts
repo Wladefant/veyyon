@@ -152,7 +152,6 @@ export const DEAD_SOCKET_ERRNOS = [
 	"EPIPE",
 	"ENETUNREACH",
 	"EHOSTUNREACH",
-	"ENOTFOUND",
 	"EAI_AGAIN",
 ] as const;
 
