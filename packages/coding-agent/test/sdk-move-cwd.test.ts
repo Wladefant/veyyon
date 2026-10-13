@@ -158,7 +158,7 @@ describe("createAgentSession cwd after /move", () => {
 		setAgentDir(tempDir);
 		fs.writeFileSync(
 			path.join(tempDir, "config.yml"),
-			"async:\n  enabled: false\nbashInterceptor:\n  enabled: false\n",
+			"async:\n  enabled: false\nbashInterceptor:\n  enabled: false\nadvisor:\n  enabled: true\n",
 		);
 		const { session } = await createAgentSession({
 			cwd,
@@ -197,6 +197,10 @@ describe("createAgentSession cwd after /move", () => {
 			expect(text).not.toContain("RELOAD_OLD_RULE");
 			expect(lines.join("\n")).toContain(`Changed rule files and skills: ${file}`);
 			expect(session.sessionId).toBe(identity);
+			const advisor = await session.getAdvisorAgent();
+			expect(advisor).toBeDefined();
+			expect((await session.reloadRules()).join("\n")).toContain("unchanged");
+			expect(await session.getAdvisorAgent()).toBe(advisor);
 			console.log(`rules-reload smoke: pid=${process.pid} session=${identity} old absent, new present, no restart`);
 		} finally {
 			await session.dispose();

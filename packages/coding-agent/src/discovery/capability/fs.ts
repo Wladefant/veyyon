@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isFsError, isMissingPath } from "@veyyon/utils/fs-error";
@@ -6,6 +7,17 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 
 const contentCache = new Map<string, string | null>();
 const dirCache = new Map<string, fs.Dirent[]>();
+const contentReadErrors = new Map<string, string>();
+const readErrorScope = new AsyncLocalStorage<Map<string, string>>();
+
+/** Capture fail-soft discovery reads without changing startup's warning behavior. */
+export async function captureDiscoveryReadErrors<T>(
+	discover: () => Promise<T>,
+): Promise<{ result: T; errors: string[] }> {
+	const errors = new Map<string, string>();
+	const result = await readErrorScope.run(errors, discover);
+	return { result, errors: [...errors.values()] };
+}
 /** Lookups of {@link findRepoRoot}, keyed by the resolved start directory; a concurrent call shares one. */
 const repoRootCache = new Map<string, Promise<string | null>>();
 
@@ -16,6 +28,8 @@ function resolvePath(filePath: string): string {
 export async function readFile(filePath: string): Promise<string | null> {
 	const abs = resolvePath(filePath);
 	if (contentCache.has(abs)) {
+		const error = contentReadErrors.get(abs);
+		if (error) readErrorScope.getStore()?.set(abs, error);
 		return contentCache.get(abs) ?? null;
 	}
 
@@ -28,6 +42,9 @@ export async function readFile(filePath: string): Promise<string | null> {
 		const stats = await fs.promises.stat(abs);
 		if (!stats.isFile()) {
 			contentCache.set(abs, null);
+			const error = `${abs}: not a regular file`;
+			contentReadErrors.set(abs, error);
+			readErrorScope.getStore()?.set(abs, error);
 			return null;
 		}
 		const content = await Bun.file(abs).text();
@@ -44,6 +61,9 @@ export async function readFile(filePath: string): Promise<string | null> {
 		// return null so startup proceeds; the cached null above suppresses
 		// re-warning on repeat reads of the same path.
 		if (!isMissingPath(err)) {
+			const message = `${abs}: ${errorMessage(err)}`;
+			contentReadErrors.set(abs, message);
+			readErrorScope.getStore()?.set(abs, message);
 			logger.warn("Context file exists but could not be read; dropped from discovery", {
 				path: abs,
 				code: isFsError(err) ? err.code : undefined,
@@ -158,6 +178,7 @@ export function cacheStats(): { content: number; dir: number } {
 
 export function clearCache(): void {
 	contentCache.clear();
+	contentReadErrors.clear();
 	dirCache.clear();
 	repoRootCache.clear();
 }
@@ -165,6 +186,7 @@ export function clearCache(): void {
 export function invalidate(filePath: string): void {
 	const abs = resolvePath(filePath);
 	contentCache.delete(abs);
+	contentReadErrors.delete(abs);
 	dirCache.delete(abs);
 	repoRootCache.clear();
 	const parent = path.dirname(abs);

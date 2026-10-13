@@ -182,6 +182,19 @@ describe("rules reload refreshes project prompt inputs", () => {
 		expect(rebuiltText).toContain("marker: reloaded-new-rule-marker-9934");
 		expect(rebuiltText).not.toContain("marker: initial-old-rule-marker-7812");
 		expect(discoveryCount).toBeGreaterThan(0);
+
+		fs.unlinkSync(agentsPath);
+		fs.mkdirSync(agentsPath);
+		const failedReload = await inputs.reload();
+		expect(inputs.current.contextFiles.find(file => file.path === agentsPath)?.content).toContain(
+			"marker: reloaded-new-rule-marker-9934",
+		);
+		expect(failedReload.join("\n")).toContain("keeping the previous rules and skills");
+		expect(failedReload.join("\n")).not.toContain("No longer in effect");
+		fs.rmdirSync(agentsPath);
+		fs.writeFileSync(agentsPath, "RECOVERED_RULE\n");
+		await inputs.reload();
+		expect(inputs.current.contextFiles.find(file => file.path === agentsPath)?.content).toContain("RECOVERED_RULE");
 	});
 
 	it("re-discovers newly added and deleted context files in the same cwd on forced refresh", async () => {
@@ -250,6 +263,18 @@ describe("rules reload refreshes project prompt inputs", () => {
 		const afterRemovedText = afterRemovedPrompt.systemPrompt.join("\n");
 		expect(afterRemovedText).not.toContain("marker: added-claude-marker-5022");
 		expect(afterRemovedText).toContain("marker: base-agents-marker-4011");
+
+		const invalidNewLayer = path.join(cwd, ".veyyon", "AGENTS.md");
+		fs.mkdirSync(invalidNewLayer, { recursive: true });
+		const failedReload = await inputs.reload();
+		expect(failedReload.join("\n")).toContain(invalidNewLayer);
+		expect(failedReload.join("\n")).toContain("keeping the previous rules and skills");
+		expect(inputs.current.contextFiles.find(file => file.path === agentsPath)?.content).toContain(
+			"marker: base-agents-marker-4011",
+		);
+		fs.rmdirSync(invalidNewLayer);
+		fs.writeFileSync(invalidNewLayer, "FIXED_NEW_LAYER\n");
+		expect((await inputs.reload()).join("\n")).toContain(`Rule files and skills now in effect: ${invalidNewLayer}`);
 	});
 
 	it("updates skills on forced refresh in the same cwd", async () => {
@@ -260,6 +285,9 @@ describe("rules reload refreshes project prompt inputs", () => {
 		fs.writeFileSync(agentsPath, "# Rules\nmarker: skills-test-marker-1001\n");
 
 		let currentSkills: Skill[] = [makeSkill("alpha-skill", "Alpha description", cwd)];
+		const skillPath = currentSkills[0].filePath;
+		fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+		fs.writeFileSync(skillPath, "Initial skill body\n");
 
 		const discover = (target: string): ProjectInputDiscovery => ({
 			cwd: target,
@@ -294,6 +322,9 @@ describe("rules reload refreshes project prompt inputs", () => {
 		});
 		expect(initialPrompt.systemPrompt.join("\n")).toContain("alpha-skill");
 		expect(inputs.current.skills.map(s => s.name)).toEqual(["alpha-skill"]);
+
+		fs.writeFileSync(skillPath, "Updated skill body with unchanged metadata\n");
+		expect((await inputs.reload()).join("\n")).toContain(`Changed rule files and skills: ${skillPath}`);
 
 		// Update skills in place
 		currentSkills = [makeSkill("beta-skill", "Beta description", cwd)];

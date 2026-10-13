@@ -4,10 +4,13 @@
  * caller's replacement prompt.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
+import { isMissingPath } from "@veyyon/utils/fs-error";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import type { DiscoveredAdvisors } from "../advisor/config";
-import { clearCache as clearDiscoveryFsCache } from "../discovery/capability/fs";
+import { captureDiscoveryReadErrors, clearCache as clearDiscoveryFsCache } from "../discovery/capability/fs";
 import type { Rule } from "../discovery/capability/rule";
 import { type BucketRulesOptions, bucketRules, type RuleBuckets } from "../discovery/capability/rule-buckets";
 import type { EffectiveToolDiscoveryMode } from "../discovery/mode";
@@ -95,10 +98,13 @@ export class ProjectPromptInputs {
 	#snapshot: ProjectPromptSnapshot;
 	#pending: Promise<void> = Promise.resolve();
 	readonly #options: ProjectPromptInputsOptions;
+	#skillBodies: Map<string, string>;
+	#reloadWarnings: string[] = [];
 
 	constructor(options: ProjectPromptInputsOptions) {
 		this.#options = options;
 		this.#snapshot = options.initial;
+		this.#skillBodies = this.#readSkillBodies(options.initial.skills);
 	}
 
 	get current(): ProjectPromptSnapshot {
@@ -129,6 +135,9 @@ export class ProjectPromptInputs {
 	async reload(): Promise<string[]> {
 		const before = this.#fileContents();
 		await this.refresh(true);
+		if (this.#reloadWarnings.length) {
+			return this.#reloadWarnings.map(error => `Could not reload ${error}; keeping the previous rules and skills.`);
+		}
 		const after = this.#fileContents();
 		const added: string[] = [];
 		const changed: string[] = [];
@@ -156,7 +165,9 @@ export class ProjectPromptInputs {
 	#fileContents(): Map<string, string> {
 		const current = this.#snapshot;
 		const files = new Map(current.contextFiles.map(file => [file.path, file.content]));
-		for (const skill of current.skills) files.set(skill.filePath, JSON.stringify(skill));
+		for (const skill of current.skills) {
+			files.set(skill.filePath, `${JSON.stringify(skill)}\n${this.#skillBodies.get(skill.filePath) ?? ""}`);
+		}
 		for (const rule of [
 			...current.rulebookRules,
 			...current.alwaysApplyRules,
@@ -165,6 +176,19 @@ export class ProjectPromptInputs {
 			files.set(rule.path, JSON.stringify(rule));
 		}
 		return files;
+	}
+
+	#readSkillBodies(skills: Skill[]): Map<string, string> {
+		const bodies = new Map<string, string>();
+		for (const skill of skills) {
+			try {
+				if (fs.statSync(skill.filePath).isFile())
+					bodies.set(skill.filePath, fs.readFileSync(skill.filePath, "utf8"));
+			} catch {
+				// Caller-owned skills may not have a disk file. Discovery reports disk read failures.
+			}
+		}
+		return bodies;
 	}
 
 	/** Re-discover the project when the live cwd differs from the rendered one; resolves once they agree. */
@@ -183,9 +207,33 @@ export class ProjectPromptInputs {
 	async #discoverLiveCwd(force: boolean): Promise<void> {
 		const cwd = this.#liveCwd();
 		if (!force && cwd === this.#snapshot.cwd) return;
-		if (force) clearDiscoveryFsCache();
+		if (force) {
+			this.#reloadWarnings = [];
+			// A fail-soft loader must not turn an unreadable loaded file into an intentional removal.
+			for (const file of this.#fileContents().keys()) {
+				try {
+					await fs.promises.readFile(file);
+				} catch (error) {
+					if (!isMissingPath(error)) this.#reloadWarnings.push(`${file}: ${errorMessage(error)}`);
+				}
+			}
+			if (this.#reloadWarnings.length) return;
+			clearDiscoveryFsCache();
+		}
 
-		const discovery = this.#options.discover(cwd);
+		const captured = await captureDiscoveryReadErrors(async () => {
+			const discovery = this.#options.discover(cwd);
+			return Promise.all([
+				discovery.contextFiles,
+				discovery.workspaceTree,
+				discovery.activeRepoContext,
+				discovery.nonProjectCwd,
+				discovery.skills,
+				discovery.rules,
+				discovery.watchdogFiles,
+				discovery.advisors,
+			]);
+		});
 		const [
 			contextFiles,
 			workspaceTree,
@@ -195,16 +243,11 @@ export class ProjectPromptInputs {
 			rules,
 			watchdogFiles,
 			advisors,
-		] = await Promise.all([
-			discovery.contextFiles,
-			discovery.workspaceTree,
-			discovery.activeRepoContext,
-			discovery.nonProjectCwd,
-			discovery.skills,
-			discovery.rules,
-			discovery.watchdogFiles,
-			discovery.advisors,
-		]);
+		] = captured.result;
+		if (force && captured.errors.length) {
+			this.#reloadWarnings = captured.errors;
+			return;
+		}
 		if (this.#liveCwd() !== cwd) return;
 
 		const buckets = this.#registerRules(rules);
@@ -230,6 +273,7 @@ export class ProjectPromptInputs {
 			rulebookRules: buckets.rulebookRules,
 			alwaysApplyRules: buckets.alwaysApplyRules,
 		};
+		this.#skillBodies = this.#readSkillBodies(next.skills);
 		this.#options.onChange(next);
 	}
 

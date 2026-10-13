@@ -1189,7 +1189,11 @@ class SessionStartup {
 		toolSession.rules = next.rules;
 		if (this.#session) {
 			this.#session.replaceSkills(next.skills);
-			this.#session.replaceProjectAdvisorScope(projectAdvisorScope(next));
+			const nextAdvisorScope = projectAdvisorScope(next);
+			if (JSON.stringify(this.#advisorScope) !== JSON.stringify(nextAdvisorScope)) {
+				this.#advisorScope = nextAdvisorScope;
+				this.#session.replaceProjectAdvisorScope(nextAdvisorScope);
+			}
 		}
 		reportSkillWarnings(this.#operatorNotices, next.skillWarnings);
 		this.#ttsrManager.reportUnknownToolScopes(this.#toolRegistry.keys());

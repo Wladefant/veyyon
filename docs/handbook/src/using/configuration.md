@@ -57,7 +57,10 @@ and discovered skills from disk without a session restart. It rebuilds the runni
 so modified instructions take effect on the very next turn.
 The reload summary names added, changed, and dropped paths without repeating file contents.
 It preserves the normal layer precedence and discovery warnings.
-A rejected discovery leaves the previous snapshot active. Unreadable files follow the same warning behavior as startup.
+If a loaded file cannot be read, reload keeps the last good rule and skill snapshot and reports the path and error.
+Deleted files still leave the snapshot. Fix an unreadable file and retry to apply pending edits.
+Skill body edits count as changed files, even when their names and descriptions stay the same.
+An unchanged reload keeps the existing advisor agent.
 SDK-supplied context files, skills, and rules remain caller-owned and do not become disk-discovered inputs.
 There is no automatic file watching or mtime polling. Running workers need their own reload command or SDK call.
 
