@@ -269,7 +269,7 @@ function revealHiddenCorruption(db: Database | undefined, error: unknown): unkno
 		detail = `database disk image is malformed (${rows[0]?.quick_check})`;
 	} catch (probeError) {
 		if (!isSqliteCorruptionError(probeError)) return error;
-		detail = probeError instanceof Error ? probeError.message : String(probeError);
+		detail = errorMessage(probeError);
 		({ code, errno } = probeError as { code: unknown; errno?: unknown });
 	}
 	return Object.assign(new Error(`${detail}; initialization failed: ${errorMessage(error)}`, { cause: error }), {

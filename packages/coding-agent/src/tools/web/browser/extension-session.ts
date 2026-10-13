@@ -4,6 +4,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import { ToolError } from "../../core/tool-errors";
 import {
 	EXTENSION_PROTOCOL_VERSION,
@@ -85,7 +86,7 @@ export async function openExtensionSession(
 	} catch (error) {
 		await relay.close();
 		if (opts.signal?.aborted) throw error;
-		const reason = error instanceof Error ? error.message : String(error);
+		const reason = errorMessage(error);
 		throw new ToolError(
 			`Could not connect to the Chrome extension: ${reason} Check that Chrome is running with the extension installed and that the token is current. State directory: ${extensionStateDir()}.`,
 		);

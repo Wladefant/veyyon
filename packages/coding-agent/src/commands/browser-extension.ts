@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Args, Command, Flags } from "@veyyon/utils/cli";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import {
 	extensionStateDir,
 	hasExtensionToken,
@@ -103,9 +104,7 @@ export default class BrowserExtension extends Command {
 				try {
 					process.stdout.write(`Relay: ${JSON.stringify(await control(state, "status"))}\n`);
 				} catch (error) {
-					process.stdout.write(
-						`Relay: not reachable (${error instanceof Error ? error.message : String(error)})\n`,
-					);
+					process.stdout.write(`Relay: not reachable (${errorMessage(error)})\n`);
 				}
 				return;
 			}

@@ -14,6 +14,8 @@
  */
 
 import { types } from "node:util";
+import { escapeRegExp } from "@veyyon/utils/regex";
+import { isRecord } from "@veyyon/utils/type-guards";
 import { redactProviderSecrets } from "../error/error-body";
 import type { UsageCredential, UsageLimit, UsageLogger, UsageReport } from "../usage";
 
@@ -102,10 +104,6 @@ function wholeBase64Spellings(secret: string): Array<{ text: string; bounded: bo
 		if (unpadded.length > 0) spellings.push({ text: unpadded, bounded: unpadded.length < MIN_UNPADDED_BASE64_FORM });
 	}
 	return spellings;
-}
-
-function escapeRegExp(text: string): string {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -478,10 +476,6 @@ export function redactUsageReport(report: UsageReport, secrets: readonly string[
 
 function isPrimitiveData(value: unknown): value is string | number | boolean | null {
 	return value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
