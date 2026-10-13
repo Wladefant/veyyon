@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
-import { expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { openSqliteDatabase, openSqliteDatabaseSync } from "../src/sqlite";
 import { TempDir } from "../src/temp";
 
+describe("openSqliteDatabase", () => {
 test.skipIf(process.platform !== "win32")(
 	"Windows ordinary file aliases retain the pending guard after main removal",
 	async () => {
@@ -209,3 +210,4 @@ test.skipIf(process.platform !== "win32")(
 	},
 	45000,
 );
+});

@@ -25,6 +25,15 @@ case "$route_kind" in
     shard_index="$route_arg"
     shard_count="$route_shard"
     shard_spec="$shard_index/$shard_count"
+    case "$shard_index" in
+      2)
+        native_variant=modern
+        ;;
+      *)
+        native_variant=baseline
+        ;;
+    esac
+    export VEYYON_NATIVE_VARIANT="$native_variant"
     echo "CLOUDFLARE_CI_SHARD branch=${WORKERS_CI_BRANCH:-unset} shard=$shard_spec"
     ;;
   *)
@@ -116,7 +125,8 @@ setup_seconds=$((setup_seconds + phase_seconds))
 echo "CLOUDFLARE_SETUP_PHASE name=rust-zig-toolchain seconds=$phase_seconds"
 SECONDS=0
 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
-  TARGET_VARIANTS='baseline modern' bun run ci:build:native
+  TARGET_VARIANTS="$native_variant" bun ci/cloudflare/native-cache.mjs
+unset VEYYON_NATIVE_CACHE_CREDENTIALS VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS
 phase_seconds=$SECONDS
 setup_seconds=$((setup_seconds + phase_seconds))
 echo "CLOUDFLARE_SETUP_PHASE name=native-addon-build seconds=$phase_seconds"
@@ -179,6 +189,12 @@ setup_seconds=$((setup_seconds + phase_seconds))
 echo "CLOUDFLARE_SETUP_PHASE name=bwrap-bootstrap seconds=$phase_seconds"
 echo "CLOUDFLARE_SETUP_TOTAL seconds=$setup_seconds"
 echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
+if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
+  'export PATH="$1:$PATH"; export VEYYON_NATIVE_VARIANT="$2"; shift 2; exec "$@"' _ "$runtime_bin_dir" "$native_variant" \
+  "$runtime_bin_dir/bun" ci/cloudflare/native-variant-proof.mjs "$native_variant"; then
+  echo "CLOUDFLARE_NATIVE_VARIANT_PROOF_FAILED" >&2
+  exit 1
+fi
 # Existing runner buckets preserve the same shard lists, timeouts and bounded
 # process sizes as the repository's GitHub CI. Quiet mode emits real Bun case
 # counts separately from child-command chunk totals and replays details on failure.
@@ -208,7 +224,7 @@ run_bucket() {
   bucket_log="$(mktemp)"
   local bucket_status=0
   if bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
-    'export PATH="$1:$PATH"; export VEYYON_TEST_CONCURRENCY=2; export VEYYON_CI_TEST_SHARD="$2"; shift 2; exec "$@"' _ "$runtime_bin_dir" "$shard_spec" \
+    'export PATH="$1:$PATH"; export VEYYON_TEST_CONCURRENCY=2; export VEYYON_CI_TEST_SHARD="$2"; export VEYYON_NATIVE_VARIANT="$3"; shift 3; exec "$@"' _ "$runtime_bin_dir" "$shard_spec" "$native_variant" \
     "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" "--junit-report-dir=$sandbox_report_dir" 2>&1 | tee "$bucket_log"; then
     :
   else
@@ -288,7 +304,7 @@ run_bucket() {
 }
 if (( shard_index == 1 )); then
   echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
-  worker_output="$(env -u CLOUDFLARE_API_TOKEN node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs 2>&1)" || {
+  worker_output="$(env -u CLOUDFLARE_API_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/native-cache.test.mjs 2>&1)" || {
     worker_status=$?
     printf '%s\n' "$worker_output"
     exit "$worker_status"
@@ -310,9 +326,9 @@ if (( shard_index == 1 )); then
   test_skips=$((test_skips + worker_skips))
   test_todos=$((test_todos + worker_todos))
   test_reported=$((test_reported + worker_tests))
-  test_files=$((test_files + 1))
+  test_files=$((test_files + 3))
   test_runs=$((test_runs + 1))
-  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=1 runs=1"
+  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=3 runs=1"
   if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
         worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
     echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2

@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { parseCiTestShard, partitionTestCommands, testConcurrency } from "./ci-test-ts";
+import {
+	allocateCloudflareTestCommands,
+	fastWorkspacePackages,
+	nativeAndIntegrationPackages,
+	parseCiTestShard,
+	partitionTestCommands,
+	testConcurrency,
+} from "./ci-test-ts";
 
 /**
  * How many test chunks run at once.
@@ -79,5 +86,90 @@ describe("Cloudflare test command sharding", () => {
 		expect(() => parseCiTestShard("0/3")).toThrow();
 		expect(() => parseCiTestShard("4/3")).toThrow();
 		expect(() => parseCiTestShard("2/0")).toThrow();
+	});
+
+	it("separates heavy commands across shards for workspace-cloudflare mode", () => {
+		const workspaceCommands = fastWorkspacePackages.map(pkg => ({ label: pkg }));
+		const shard1 = allocateCloudflareTestCommands("workspace-cloudflare", workspaceCommands, { index: 1, count: 3 });
+		const shard2 = allocateCloudflareTestCommands("workspace-cloudflare", workspaceCommands, { index: 2, count: 3 });
+		const shard3 = allocateCloudflareTestCommands("workspace-cloudflare", workspaceCommands, { index: 3, count: 3 });
+
+		// Explicit overrides based on measured suite durations
+		expect(shard1.map(c => c.label)).toContain("packages/ai");
+		expect(shard2.map(c => c.label)).toContain("plugins/hashline");
+		expect(shard3.map(c => c.label)).toContain("tests/simulations");
+
+		// Natural round-robin modulo placement on shard 1
+		expect(shard1.map(c => c.label)).toContain("packages/agent");
+		expect(shard1.map(c => c.label)).toContain("packages/utils");
+
+		// Heavy commands must be strictly separated across distinct shards
+		expect(shard1.map(c => c.label)).not.toContain("plugins/hashline");
+		expect(shard1.map(c => c.label)).not.toContain("tests/simulations");
+		expect(shard2.map(c => c.label)).not.toContain("packages/ai");
+		expect(shard2.map(c => c.label)).not.toContain("tests/simulations");
+		expect(shard3.map(c => c.label)).not.toContain("packages/ai");
+		expect(shard3.map(c => c.label)).not.toContain("plugins/hashline");
+	});
+
+	it("preserves every ordinary command exactly once across all shards", () => {
+		const workspaceCommands = fastWorkspacePackages.map(pkg => ({ label: pkg }));
+		const workspaceShards = [1, 2, 3].map(index =>
+			allocateCloudflareTestCommands("workspace-cloudflare", workspaceCommands, { index, count: 3 }),
+		);
+		const allWorkspaceAllocated = workspaceShards.flat().map(c => c.label).sort();
+		expect(allWorkspaceAllocated).toEqual(workspaceCommands.map(c => c.label).sort());
+
+		// In native mode, every non-binding command must run exactly once across the shards
+		const nativeCommands = nativeAndIntegrationPackages.map(pkg => ({ label: pkg }));
+		const nativeShards = [1, 2, 3].map(index =>
+			allocateCloudflareTestCommands("native", nativeCommands, { index, count: 3 }),
+		);
+		const ordinaryNativeAllocated = nativeShards
+			.flat()
+			.filter(c => c.label !== "natives/bridge/bindings")
+			.map(c => c.label)
+			.sort();
+		const expectedOrdinary = nativeCommands
+			.filter(c => c.label !== "natives/bridge/bindings")
+			.map(c => c.label)
+			.sort();
+		expect(ordinaryNativeAllocated).toEqual(expectedOrdinary);
+	});
+
+	it("runs full native binding tests on both baseline (shard 1) and modern (shard 2), not shard 3", () => {
+		const nativeCommands = nativeAndIntegrationPackages.map(pkg => ({ label: pkg }));
+		const shard1 = allocateCloudflareTestCommands("native", nativeCommands, { index: 1, count: 3 });
+		const shard2 = allocateCloudflareTestCommands("native", nativeCommands, { index: 2, count: 3 });
+		const shard3 = allocateCloudflareTestCommands("native", nativeCommands, { index: 3, count: 3 });
+
+		expect(shard1.map(c => c.label)).toContain("natives/bridge/bindings");
+		expect(shard2.map(c => c.label)).toContain("natives/bridge/bindings");
+		expect(shard3.map(c => c.label)).not.toContain("natives/bridge/bindings");
+	});
+
+	it("preserves default generic partition unchanged for other modes and counts", () => {
+		const genericCommands = Array.from({ length: 17 }, (_, index) => ({ label: `generic-${index}` }));
+
+		// Generic mode with 3 shards reuses partitionTestCommands
+		for (let index = 1; index <= 3; index++) {
+			const allocated = allocateCloudflareTestCommands("generic", genericCommands, { index, count: 3 });
+			const partitioned = partitionTestCommands(genericCommands, { index, count: 3 });
+			expect(allocated).toEqual(partitioned);
+		}
+
+		// Shard count other than 3 falls back to partitionTestCommands
+		for (const count of [2, 4]) {
+			for (let index = 1; index <= count; index++) {
+				const allocatedWorkspace = allocateCloudflareTestCommands("workspace-cloudflare", genericCommands, {
+					index,
+					count,
+				});
+				expect(allocatedWorkspace).toEqual(partitionTestCommands(genericCommands, { index, count }));
+
+				const allocatedNative = allocateCloudflareTestCommands("native", genericCommands, { index, count });
+				expect(allocatedNative).toEqual(partitionTestCommands(genericCommands, { index, count }));
+			}
+		}
 	});
 });

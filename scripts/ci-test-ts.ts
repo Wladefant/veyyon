@@ -1137,6 +1137,89 @@ export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestSh
 	return commands.filter((_, index) => index % shard.count === shard.index - 1);
 }
 
+// Measured workspace suite execution costs:
+// - plugins/hashline: 379s -> shard 2
+// - tests/simulations: 440.6s -> shard 3
+// - packages/ai: 76.8s -> shard 1
+// - packages/agent: 70.6s -> shard 1 (index 9, 9 % 3 == 0)
+// - packages/utils: 40.7s -> shard 1 (index 6, 6 % 3 == 0)
+//
+// Explicit shard mapping based on measured execution times (no branch mapping).
+// Shard variant mapping (total 3 shards):
+// - Shard 1: baseline (packages/ai, packages/agent, packages/utils, plus natives/bridge/bindings full suite in native mode)
+// - Shard 2: modern (plugins/hashline, plus natives/bridge/bindings full suite in native mode)
+// - Shard 3: baseline (tests/simulations; native bindings excluded)
+// Remaining commands round-robin modulo unchanged; no exclusion assertion weakening.
+const WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES: Readonly<Record<string, number>> = {
+	"plugins/hashline": 2,
+	"tests/simulations": 3,
+	"packages/ai": 1,
+};
+
+function extractCommandLabel(command: unknown): string {
+	if (typeof command === "string") {
+		return command;
+	}
+	if (command && typeof command === "object") {
+		if ("label" in command && typeof command.label === "string") {
+			return command.label;
+		}
+		if ("cwd" in command && typeof command.cwd === "string") {
+			return command.cwd;
+		}
+	}
+	return "";
+}
+
+function resolveWorkspaceCloudflareOverride(label: string): number | undefined {
+	if (label in WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES) {
+		return WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES[label];
+	}
+	for (const [key, shardNumber] of Object.entries(WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES)) {
+		if (label.startsWith(`${key} `) || label.startsWith(`${key}/`)) {
+			return shardNumber;
+		}
+	}
+	return undefined;
+}
+
+export function allocateCloudflareTestCommands<T>(
+	mode: string,
+	commands: readonly T[],
+	shard: CiTestShard,
+): T[] {
+	if (shard.count !== 3) {
+		return partitionTestCommands(commands, shard);
+	}
+
+	if (mode === "workspace-cloudflare") {
+		return commands.filter((command, index) => {
+			const label = extractCommandLabel(command);
+			const override = resolveWorkspaceCloudflareOverride(label);
+			if (override !== undefined) {
+				return override === shard.index;
+			}
+			return index % shard.count === shard.index - 1;
+		});
+	}
+
+	if (mode === "native") {
+		return commands.filter((command, index) => {
+			const label = extractCommandLabel(command);
+			const isBinding =
+				label === "natives/bridge/bindings" ||
+				label.startsWith("natives/bridge/bindings ") ||
+				label.startsWith("natives/bridge/bindings/");
+			if (isBinding) {
+				return shard.index === 1 || shard.index === 2;
+			}
+			return index % shard.count === shard.index - 1;
+		});
+	}
+
+	return partitionTestCommands(commands, shard);
+}
+
 // ANSI styling for interactive runs only; disabled when stdout is not a TTY or
 // NO_COLOR is set, so CI logs and piped/aggregated output stay plain text.
 const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
@@ -1702,7 +1785,11 @@ if (import.meta.main) {
 	await ensureToolViewsGenerated();
 	const availableTestCommands = await commandsForMode(requestedMode as Mode);
 	const testShard = parseCiTestShard(Bun.env.VEYYON_CI_TEST_SHARD);
-	const testCommands = testShard ? partitionTestCommands(availableTestCommands, testShard) : availableTestCommands;
+	const testCommands = testShard
+		? (testShard.count === 3
+			? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
+			: partitionTestCommands(availableTestCommands, testShard))
+		: availableTestCommands;
 	if (testShard && testCommands.length === 0) {
 		console.log(
 			`CLOUDFLARE_CI_TEST_SHARD_DEFERRED mode=${requestedMode} shard=${testShard.index}/${testShard.count} ` +

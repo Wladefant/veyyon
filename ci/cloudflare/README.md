@@ -26,7 +26,25 @@ The lane reads the pinned Bun version from the root `package.json`. It installs 
 
 The lane installs missing Linux test dependencies through `sudo -n` only when passwordless sudo works. If sudo is not available, the lane reports the limit and continues. Native compiler and test failures remain fatal.
 
-The lane installs the Rust nightly pinned by `rust-toolchain.toml`, Zig `0.16.0`, and `cargo-zigbuild`. It builds Linux x64 native addons in both `baseline` and `modern` variants against `x86_64-unknown-linux-gnu.2.17`. This matches the release workflow's glibc floor.
+The lane installs the Rust nightly pinned by `rust-toolchain.toml`, Zig `0.16.0`, and `cargo-zigbuild`. Each ordinary shard builds only its selected Linux x64 native addon variant against `x86_64-unknown-linux-gnu.2.17`: shard 2 builds `modern`, while shards 1 and 3 build `baseline`. This matches the release workflow's glibc floor.
+
+### Shard variant mapping and source costs
+
+Ordinary CI routes across three shards with deterministic variant and workload assignments:
+
+- **Shard 1 (`baseline`)**: runs the health-worker suite, `packages/ai` (~76.8s), `packages/agent` (~70.6s), and `packages/utils` (~40.7s), plus the full `natives/bridge/bindings` suite in native mode.
+- **Shard 2 (`modern`)**: runs `plugins/hashline` (~379s measured execution cost), plus the full `natives/bridge/bindings` suite in native mode.
+- **Shard 3 (`baseline`)**: runs `tests/simulations` (~440.6s measured execution cost). Native binding suites are excluded on shard 3.
+
+Allocating native binding tests to both shard 1 and shard 2 verifies that both `baseline` and `modern` native binaries pass all assertions. Each shard exports `VEYYON_NATIVE_VARIANT` and runs `ci/cloudflare/native-variant-proof.mjs` inside `bwrap` after bootstrap and before bucket execution. The proof dynamically imports `native/index.js`, calls `visibleWidth('abc', 4)`, asserts stdout `3`, requires the startup marker to match the canonical variant binary without modern fallback, and logs `CLOUDFLARE_NATIVE_LOADED variant=<...> sha256=<...>`.
+
+### Native cache reader and writer
+
+The R2 native cache separates cache reading from cache writing:
+
+- **Cache reader (`ci/cloudflare/native-cache.mjs`)**: ordinary branch builds run in reader mode. The reader validates trusted R2 keys (`trusted/<hash>`), checks SHA256 checksums and file sizes against the remote manifest, and restores only the selected variant. On a cache miss, the reader logs the miss reason and performs a local cold build for the selected variant without uploading (`miss no write`).
+- **Cache writer (`ci/cloudflare/native-cache-writer.sh`)**: runs strictly on the `main` branch after merge (`WORKERS_CI_BRANCH=main`). The writer performs a cold build of both `baseline` and `modern` variants, validates non-zero outputs, uploads validated `.node` binaries first with SHA256 checksums, and uploads `manifest.json` last.
+- **Credential isolation**: secret cache credentials (`VEYYON_NATIVE_CACHE_CREDENTIALS` and `VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS`) are unset after cache restoration and before Bubblewrap bootstrap. Sandbox guests and test child processes never receive cache secrets.
 
 The lane disables the external SSH rung and pins `VEYYON_SANDBOX_RUNG=bwrap`. It downloads and unpacks Bubblewrap and its test tools into a temporary directory when the Workers Builds image lacks them. It sets `VEYYON_SANDBOX_REPO_ROOT` to a short-lived checkout alias under `/var/tmp`, not `/tmp`. The bwrap rung binds the requested repository path verbatim; the alias stays outside both the hidden build user's home and the guest `/tmp` scanned by the test temp-directory janitor. The lane queries `pwd` inside the pinned bwrap rung and uses that mounted guest path.
 

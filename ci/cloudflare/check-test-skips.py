@@ -115,7 +115,7 @@ def _read_skips(
 
 def _read_allowlist(path: Path, shard: str) -> dict[tuple[str, str], dict[str, str]]:
     entries: dict[tuple[str, str], dict[str, str]] = {}
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     expected_fields = {"file", "test", "class", "reason", "shard"}
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -136,9 +136,10 @@ def _read_allowlist(path: Path, shard: str) -> dict[tuple[str, str], dict[str, s
             raise ValueError(f"{path}:{line_number}: unsupported shard {entry['shard']!r}")
         file_name = PurePosixPath(entry["file"].replace("\\", "/")).as_posix()
         key = (file_name, entry["test"])
-        if key in seen:
-            raise ValueError(f"{path}:{line_number}: duplicate skip entry {key!r}")
-        seen.add(key)
+        seen_key = (entry["shard"], file_name, entry["test"])
+        if seen_key in seen:
+            raise ValueError(f"{path}:{line_number}: duplicate skip entry {seen_key!r}")
+        seen.add(seen_key)
         if entry["shard"] == shard:
             entries[key] = entry
     return entries
@@ -192,12 +193,12 @@ def main() -> int:
         if args.allowlist is None:
             raise ValueError("check mode requires an allowlist path")
         allowed = _read_allowlist(args.allowlist, args.shard)
-        unlisted = actual - Counter({key: 1 for key in allowed})
-        stale = Counter({key: 1 for key in allowed}) - actual
+        unlisted = Counter({key: count for key, count in actual.items() if key not in allowed})
+        stale = Counter({key: 1 for key in allowed if key not in actual})
         class_counts: Counter[str] = Counter()
         for (file_name, test_name), count in sorted(actual.items()):
             entry = allowed.get((file_name, test_name))
-            allowed_count = min(count, 1) if entry is not None else 0
+            allowed_count = count if entry is not None else 0
             if entry is not None:
                 class_counts[entry["class"]] += allowed_count
                 print(
