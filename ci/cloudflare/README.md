@@ -29,6 +29,7 @@ The lane installs the Rust nightly pinned by `rust-toolchain.toml`, Zig `0.16.0`
 The lane disables the external SSH rung and pins `VEYYON_SANDBOX_RUNG=bwrap`. It downloads and unpacks Bubblewrap and its test tools into a temporary directory when the Workers Builds image lacks them. It sets `VEYYON_SANDBOX_REPO_ROOT` to a short-lived checkout alias under `/var/tmp`, not `/tmp`. The bwrap rung binds the requested repository path verbatim; the alias stays outside both the hidden build user's home and the guest `/tmp` scanned by the test temp-directory janitor. The lane queries `pwd` inside the pinned bwrap rung and uses that mounted guest path.
 
 The lane copies the actual Bun executable into `.cf-proof-tools/bin` inside the checkout. Each sandbox command adds the guest-visible path to the fixed sandbox PATH, then runs the existing bucket command. The wrapper also supplies that PATH to nested commands that resolve `bun` by name. The host PATH does not enter the sandbox.
+The bwrap command wrapper sets `VEYYON_TEST_CONCURRENCY=2` inside the guest. It runs two existing package commands at once without changing the test file lists, test assertions, or per-command Bun parallelism.
 
 This lane verifies only Linux x64. It does not build `linux-arm64`, `win32-x64`, `darwin-x64`, or `darwin-arm64`. The Windows and macOS native runner jobs were retired, and this lane makes no GitHub Actions coverage claim for those targets. Additional platform coverage, including the separately authorized Linux cross-build follow-up, remains outside this lane.
 

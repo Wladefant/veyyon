@@ -90,7 +90,6 @@ real_bun="$(bun -p 'process.execPath')"
 cp -L "$real_bun" "$proof_tools/bin/bun"
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_SANDBOX_RUNG=bwrap
-export VEYYON_SANDBOX_FORWARD=VEYYON_TEST_CONCURRENCY
 
 # Assert the exact initramfs device metadata required by the guest kernel.
 fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-sysv.so" \
@@ -130,7 +129,6 @@ echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test
 # process sizes as the repository's GitHub CI. Quiet mode emits real Bun case
 # counts separately from child-command chunk totals and replays details on failure.
 export CI=true
-export VEYYON_TEST_CONCURRENCY=2
 report_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 test_report_root="$proof_tools/test-reports/run-$report_run_id"
 sandbox_test_report_root="$sandbox_repo_root/.cf-proof-tools/test-reports/run-$report_run_id"
@@ -155,7 +153,7 @@ run_bucket() {
   bucket_log="$(mktemp)"
   local bucket_status=0
   if bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
-    'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin_dir" \
+    'export PATH="$1:$PATH"; export VEYYON_TEST_CONCURRENCY=2; shift; exec "$@"' _ "$runtime_bin_dir" \
     "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" "--junit-report-dir=$sandbox_report_dir" 2>&1 | tee "$bucket_log"; then
     :
   else
