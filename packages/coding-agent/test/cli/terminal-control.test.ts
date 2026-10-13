@@ -498,7 +498,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 			expect(result.stderr === "").toBe(true);
 
 			const updatedOwner = await readOwnerRecord(profileRoot);
-			expect(updatedOwner.token).not.toBe(initialToken);
+			expect(updatedOwner.token !== initialToken).toBe(true);
 			expect(typeof updatedOwner.token).toBe("string");
 			expect(updatedOwner.token.length).toBeGreaterThan(0);
 			expect(result.stdout.includes(updatedOwner.token)).toBe(false);
