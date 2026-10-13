@@ -24,7 +24,6 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path` | `string` | Yes | Filesystem path, internal URL, or web URL. May end with a trailing selector such as `:50-100` or `:raw`. |
-| `force` | `boolean` | No | Deliver a local file read that would otherwise be refused as still in context. |
 
 ### Selector grammar
 
@@ -94,7 +93,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/web/fetc
 9. Local text reads are streamed by `streamLinesFromFile()` rather than loading the whole file. The tool adds `1` leading and `3` trailing context lines around explicit bounded ranges (constrained sides only).
 10. Hashline-eligible local reads record a whole-file snapshot into the session snapshot store (`getFileSnapshotStore()` on `session.fileSnapshotStore`, `packages/coding-agent/src/edit/file-snapshot-store.ts`) for later hashline edit verification/recovery.
 11. If suffix resolution happened, the first text block is prefixed with `[Path '...' not found; resolved to '...' via suffix match]`.
-12. A finished local file read in hashline mode passes through `refuseReadStillInContext()` in `packages/coding-agent/src/tools/fs/read-in-context.ts` unless `force` is `true`. The read is refused when its one `[PATH#TAG]` section's displayed lines are all displayed under the same header by earlier `read` results in `session.getLiveMessages()` that are not errors and carry no `prunedAt`, for the same resolved path (its `details.meta.source`, or an entry of a delimited read's `displayReadTargets`). An earlier result clipped at `tools.outputMaxColumns` counts only while that cap is unchanged. The refusal result repeats the header, states that the earlier output is current, and sets `details.inContextRefusal`; supersede pruning does not count it as a newer read. Raw, binary, image, line-number and plain reads, each part of a delimited read, and sessions without `getLiveMessages` (the advisor) are never refused.
+12. A finished local file read in hashline mode passes through `refuseReadStillInContext()` in `packages/coding-agent/src/tools/fs/read-in-context.ts`. No argument bypasses it. The read is refused when its one `[PATH#TAG]` section's displayed lines are all displayed under the same header by earlier `read` results in `session.getLiveMessages()` that are not errors and carry no `prunedAt`, for the same resolved path (its `details.meta.source`, or an entry of a delimited read's `displayReadTargets`). An earlier result clipped at `tools.outputMaxColumns` counts only while that cap is unchanged. The refusal result repeats the header, states that the earlier output is current, and sets `details.inContextRefusal`; supersede pruning does not count it as a newer read. Raw, binary, image, line-number and plain reads, each part of a delimited read, and sessions without `getLiveMessages` (the advisor) are never refused.
 
 ## Modes / Variants
 

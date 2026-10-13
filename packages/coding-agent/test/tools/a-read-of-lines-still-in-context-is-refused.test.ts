@@ -3,7 +3,7 @@
  *
  * WHY THIS SUITE EXISTS. A model that re-reads a file it can already see pays for the same bytes
  * twice and grows the context it reasons over. The `read` tool refuses such a call with a short
- * result that points back at the earlier output, and `force: true` overrides it. A refusal that fires
+ * result that points back at the earlier output, and the model has no argument that overrides it. A refusal that fires
  * when it should not is worse than none: the model is told to work from output it cannot see, or
  * from bytes that no longer match the file. So the contract has two halves, and both are asserted:
  *
@@ -11,7 +11,7 @@
  *   by an earlier read result the model still sees (one result or the union of several).
  * - Delivered: the file changed; any requested line was never shown; the earlier result was pruned;
  *   the only earlier "coverage" is itself a refusal; the earlier rows were clipped at a different
- *   column cap; the read is `:raw`, `force: true`, a delimited list, or in a display mode with no
+ *   column cap; the read is `:raw`, a delimited list, or in a display mode with no
  *   snapshot tag; the session exposes no live messages (the advisor); a same-named file elsewhere.
  *
  * The suite drives the real `Agent` loop and the real `read` tool against a real directory. Only the
@@ -124,7 +124,7 @@ describe("a read of lines still in context", () => {
 		expect(verdict(first)).toBe("delivered");
 		expect(verdict(second)).toBe("refused");
 		expect(text(second)).toBe(
-			`${header(first)}\nRead refused: \`notes.txt\` is unchanged since an earlier read whose output is still in your context. Work from that output; its line numbers and tag are current. Re-issue with \`force: true\` only if that output is unusable.`,
+			`${header(first)}\nRead refused: \`notes.txt\` is unchanged since an earlier read whose output is still in your context. Work from that output; its line numbers and tag are current.`,
 		);
 	});
 
@@ -158,9 +158,9 @@ describe("a read of lines still in context", () => {
 			["delivered", "delivered"],
 		],
 		[
-			"an explicit force: true",
+			"a stray force: true, which no longer overrides the refusal",
 			[{ args: { path: "notes.txt" } }, { args: { path: "notes.txt", force: true } }],
-			["delivered", "delivered"],
+			["delivered", "refused"],
 		],
 		[
 			"a :raw re-read",

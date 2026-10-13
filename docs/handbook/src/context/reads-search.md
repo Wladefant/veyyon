@@ -37,8 +37,8 @@ to a budget:
 - **Reads still in context are refused.** A re-read of a file whose snapshot tag is unchanged, and
   whose requested lines are all shown by earlier read results the model still sees, returns a
   one-line pointer to that output instead of the content. A result that was pruned, shaken or
-  compacted away no longer counts. `force: true` reads anyway. Nothing earlier in the conversation
-  is rewritten, so the cached prompt prefix is unchanged.
+  compacted away no longer counts. No argument overrides the refusal. Nothing earlier in the
+  conversation is rewritten, so the cached prompt prefix is unchanged.
 - **Beyond plain text files:** the same tool also reads directories (depth-limited listing), archives
   (`.tar`, `.tar.gz`, `.zip`, via `archive.zip:path/inside`), SQLite databases (`file.db:table`, with
   pagination and `where`/`order` filters), PDF/Word/PowerPoint/Excel/EPUB (extracted text), Jupyter

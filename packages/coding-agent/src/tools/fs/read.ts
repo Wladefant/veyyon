@@ -78,7 +78,6 @@ const readSchema = lazy(() =>
 		"limit?": type("number.integer > 0").describe(
 			"Directory listings only: max entries returned; omitted entries are reported with the limit and how to see more.",
 		),
-		"force?": type("boolean").describe("Bypass a `Read refused` result."),
 	}),
 );
 
@@ -176,15 +175,15 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 
 		for (const part of parts) {
 			try {
-				// Directory params apply per entry: every delimited part re-enters
-				// execute with the same `depth`/`limit` the caller asked for. A part is
+				// Directory params apply per entry: every delimited part re-enters the
+				// read with the same `depth`/`limit` the caller asked for. A part is
 				// never refused as still in context: the combined result is one read of
 				// every part to supersede pruning, which would then blank the earlier
 				// result a refused part pointed back to.
-				const result = await this.execute(
-					"read-delimited-part",
-					{ path: part, depth: directory.depth, limit: directory.limit, force: true },
+				const result = await this.#read(
+					{ path: part, depth: directory.depth, limit: directory.limit },
 					signal,
+					false,
 				);
 				displayReadTargets.push(result.details?.suffixResolution?.to ?? part);
 				for (const block of result.content) {
@@ -325,12 +324,21 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		return executeReadUrl(this.session, cacheKey, signal);
 	}
 
-	async execute(
+	execute(
 		_toolCallId: string,
 		params: ReadParams,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<ReadToolDetails>,
 		_toolContext?: AgentToolContext,
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		return this.#read(params, signal, true);
+	}
+
+	/** `refuseInContext` is false only for a part of a delimited list; see `#tryReadDelimitedPaths`. */
+	async #read(
+		params: ReadParams,
+		signal: AbortSignal | undefined,
+		refuseInContext: boolean,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const readPath = params.path.startsWith("file://") ? expandPath(params.path) : params.path;
 		const conflictUri = parseConflictUri(readPath);
@@ -350,8 +358,10 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 
 		const routed = await this.#routeInternalUrl(readPath, params, signal);
 		if (routed.kind === "handled") return routed.result;
-		if (routed.kind === "promoted") return this.#readFilesystemPath(routed.readPath, routed.selector, params, signal);
-		return this.#readFilesystemPath(readPath, undefined, params, signal);
+		if (routed.kind === "promoted") {
+			return this.#readFilesystemPath(routed.readPath, routed.selector, params, signal, refuseInContext);
+		}
+		return this.#readFilesystemPath(readPath, undefined, params, signal, refuseInContext);
 	}
 
 	/**
@@ -365,6 +375,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		promotedSelector: string | undefined,
 		params: ReadParams,
 		signal: AbortSignal | undefined,
+		refuseInContext: boolean,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		// One suffix-glob memo per read call — archive, sqlite, and plain-path
 		// resolution share misses instead of re-globbing the workspace.
@@ -412,7 +423,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		const outcome = await this.#readFileContent(readPath, target.path, resolved, parsed, signal);
 		const result =
 			outcome.kind === "result" ? outcome.result : finishLocalRead(outcome.read, resolved.suffixResolution);
-		if (params.force === true) return result;
+		if (!refuseInContext) return result;
 		return refuseReadStillInContext(this.session, result, resolved.absolutePath, readPath) ?? result;
 	}
 

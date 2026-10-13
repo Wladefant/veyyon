@@ -149,7 +149,7 @@ export function refuseReadStillInContext(
 	if (result.details?.suffixResolution) details.suffixResolution = result.details.suffixResolution;
 	return toolResult<ReadToolDetails>(details)
 		.text(
-			`${header}\nRead refused: \`${requestedPath}\` is unchanged since an earlier read whose output is still in your context. Work from that output; its line numbers and tag are current. Re-issue with \`force: true\` only if that output is unusable.`,
+			`${header}\nRead refused: \`${requestedPath}\` is unchanged since an earlier read whose output is still in your context. Work from that output; its line numbers and tag are current.`,
 		)
 		.sourcePath(absolutePath)
 		.done();
