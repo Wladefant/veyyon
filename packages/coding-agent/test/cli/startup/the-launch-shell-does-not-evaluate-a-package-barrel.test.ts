@@ -96,7 +96,7 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * RE-MEASURED 2026-10-04 at 359, from 355: usage tracking additions for Antigravity account windows
  * and launch-facts reorganization. The ceiling keeps the one leaf of margin.
  */
-// 363 -> 365 (ceiling 365, measured 365 on CI): re-measured 2026-10-04 after PR #470 added github-copilot-client-id.ts to settings.ts (Refs #472).
+// 363 -> 365 (exclusive ceiling, measured 363): re-measured 2026-10-04 after PR #470 added github-copilot-client-id.ts to settings.ts (Refs #472).
 const SHELL_GRAPH_MODULE_CEILING = 365;
 
 async function probe(code: string): Promise<number> {
@@ -131,7 +131,7 @@ describe("the launch shell does not evaluate a package barrel", () => {
 		const imports = ENTRIES.map(entry => `await import(${JSON.stringify(`./${entry}`)});`).join("\n");
 		const modules = await probe(`${imports}
 console.log(Object.keys(require.cache).filter(p => !p.includes("node_modules")).length);`);
-		expect(modules).toBeLessThanOrEqual(SHELL_GRAPH_MODULE_CEILING);
+		expect(modules).toBeLessThan(SHELL_GRAPH_MODULE_CEILING);
 	}, 60_000);
 
 	/**
