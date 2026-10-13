@@ -2,7 +2,8 @@ import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { FetchImpl, ModelSpec } from "../types";
 import { discoveryFetch, isRecord } from "../utils";
 
-export { TYPESAFE_DEFAULT_BASE_URL } from "../provider-endpoints";
+import { TYPESAFE_DEFAULT_BASE_URL } from "../provider-endpoints";
+export { TYPESAFE_DEFAULT_BASE_URL };
 
 /** Wire card returned by TypeSafe's authenticated `GET /v1/models`. */
 export interface TypeSafeModelCard {
