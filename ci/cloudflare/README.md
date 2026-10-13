@@ -75,3 +75,41 @@ The existing TypeScript test map excludes `clients/python/veybot/web`, which bel
 Before each test bucket starts, the shared test runner removes `CLOUDFLARE_API_TOKEN` from each child process. The normal branch path also unsets the release variables before any dependency, build, or test command starts.
 
 The Worker responds with `ok` to health probes. A version upload does not activate or promote the version. It does not expose a public Worker URL or alter the application deployment path.
+
+## Shard receipt emission and partition adapter (Issue #589)
+
+Veyyon implements shard-level `ci-receipt/v1` and `ci-manifest/v1` emission across all three Cloudflare Workers CI shards.
+
+### Receipt emission (`ci/cloudflare/shard-receipt.mjs`)
+- **Schema**: canonical `ci-receipt/v1` and `ci-manifest/v1`.
+- **Counter contract**: `status="passed"` requires `executed > 0`, `passed > 0`, and `failed == 0` across all suites.
+- **NO-RESULT**: suites with `executed == 0`, all skipped, xfail-only, unparseable summaries, or missing producer secrets yield explicit status `"incomplete"` (NO-RESULT), never `"passed"`.
+- **Failure text fallback**: failed tests without reporter messages record `"message unavailable"`.
+- **Producer transport**: uploads evidence via multipart/form-data with fields `receipt`, `manifest`, and binary artifacts.
+- **HMAC signing**: signs payload using HMAC-SHA256 with key `EVIDENCE_PRODUCER_SECRET` over UTF-8 `${request_id}\n${expiry_epoch_ms}\n` concatenated with raw multipart body bytes.
+- **Missing secret**: if `EVIDENCE_PRODUCER_SECRET` is unset, emits an explicit NO-RESULT receipt with `reason="missing_producer_secret"` and skips upload; never fakes PASS.
+- **Aggregation**: aggregates receipts across all expected shards (1..3). Fails closed on missing shards (`REJECT_MISSING_SHARDS`), duplicate shards (`REJECT_DUPLICATE_SHARDS`), mismatched expected shard counts or candidate SHAs (`REJECT_MISMATCHED_SHARDS`), or untrusted pass claims (`REJECT_UNTRUSTED_CLAIMS`).
+
+### Partition adapter (`ci/cloudflare/partition-adapter.mjs`)
+- Partitions suites based strictly on observed execution costs from remote audit logs:
+  - `plugins/hashline`: ~379.0s (Shard 2 modern)
+  - `tests/simulations`: ~440.6s (Shard 3 baseline)
+  - `packages/ai`: ~76.8s (Shard 1 baseline)
+  - `packages/agent`: ~70.6s (Shard 1 baseline)
+  - `packages/utils`: ~40.7s (Shard 1 baseline)
+  - `natives/bridge/bindings`: ~25.0s (Shards 1 and 2)
+  - `packages/catalog`: ~15.0s (Shard 1 baseline)
+  - `health-worker`: ~4.5s (Shard 1 baseline)
+- Runtime estimates are not invented. Timeout prevention is an expectation requiring remote proof on Cloudflare Workers Builds.
+
+### Deterministic fixtures (`ci/cloudflare/fixtures/`)
+- `shard-1-pass.json`, `shard-2-pass.json`, `shard-3-pass.json`: valid passing shard receipts.
+- `missing-shard-receipts.json`: incomplete shard set (missing shard 3).
+- `duplicate-shard-receipts.json`: duplicate shard ID (shard 1 submitted twice).
+- `mismatched-shard-receipts.json`: inconsistent expected_shards (shard 1 expects 3, shard 2 expects 4).
+- `no-result-missing-secret.json`: explicit NO-RESULT when `EVIDENCE_PRODUCER_SECRET` is unset.
+- `no-result-all-skipped.json`: suite with zero executed and all skipped tests.
+- `no-result-xfail-only.json`: suite with xfail tests only.
+- `no-result-zero-executed.json`: suite with zero executed tests.
+- `no-result-unparseable.json`: unparseable test runner output.
+- `failed-no-reporter-text.json`: failed test with `"message unavailable"` fallback.

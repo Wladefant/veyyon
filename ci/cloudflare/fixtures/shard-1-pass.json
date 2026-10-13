@@ -1,0 +1,75 @@
+{
+  "schema_version": "ci-receipt/v1",
+  "repo": "Wladefant/veyyon",
+  "request_id": "req-veyyon-ci-shard1-pass",
+  "build_id": "152d7357-ad4d-4848-9a82-af02bb2f312f",
+  "trigger_id": "a2dd8733-d34a-4789-8bea-a752ae2925e2",
+  "candidate_sha": "7ca99eff372d798f5790f1a5b293da41b53fa14e",
+  "checkout_sha": "7ca99eff372d798f5790f1a5b293da41b53fa14e",
+  "base_sha": "d19980e65de352e00b952ae20dd4944159907459",
+  "runner_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "policy_digest": "sha256:7a35368a5c3789437d808e09f584e031dc240a63aa68b8e8f855e2e8316dfa99",
+  "selection_digest": "sha256:d86e92c46271a396e4ea472e3913de8f0b741005b632948c2b7b5c00e1215b4f",
+  "shard_id": 1,
+  "expected_shards": 3,
+  "status": "passed",
+  "started_at": "2026-10-13T20:30:00.000Z",
+  "ended_at": "2026-10-13T20:38:30.000Z",
+  "suites": [
+    {
+      "name": "health-worker",
+      "target_ids": ["health-worker"],
+      "command": "node --test ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs",
+      "exit_code": 0,
+      "counts": {
+        "discovered": 36,
+        "executed": 36,
+        "passed": 36,
+        "failed": 0,
+        "skipped": 0,
+        "assertions": 72
+      },
+      "tests": [
+        {
+          "name": "isolated CI health Worker returns HTTP 200 and ok",
+          "target_id": "health-worker",
+          "status": "passed",
+          "duration_ms": 15,
+          "assertions": 2
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "name": "workspace-cloudflare",
+      "target_ids": ["packages/ai", "packages/agent", "packages/utils", "packages/catalog"],
+      "command": "bun scripts/ci-test-ts.ts workspace-cloudflare",
+      "exit_code": 0,
+      "counts": {
+        "discovered": 14484,
+        "executed": 14143,
+        "passed": 14143,
+        "failed": 0,
+        "skipped": 341,
+        "assertions": 38290
+      },
+      "tests": [
+        {
+          "name": "packages/ai > stream > handles text stream chunks cleanly",
+          "target_id": "packages/ai",
+          "status": "passed",
+          "duration_ms": 220,
+          "assertions": 4
+        }
+      ],
+      "artifacts": [
+        {
+          "key": "evidence/Wladefant/veyyon/7ca99eff372d798f5790f1a5b293da41b53fa14e/152d7357-ad4d-4848-9a82-af02bb2f312f/junit-shard-1.xml",
+          "sha256": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+          "size_bytes": 102400,
+          "kind": "junit"
+        }
+      ]
+    }
+  ]
+}

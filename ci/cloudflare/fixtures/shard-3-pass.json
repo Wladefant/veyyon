@@ -1,0 +1,75 @@
+{
+  "schema_version": "ci-receipt/v1",
+  "repo": "Wladefant/veyyon",
+  "request_id": "req-veyyon-ci-shard3-pass",
+  "build_id": "66a85c11-df13-4797-9e14-f9c7cff0d4c6",
+  "trigger_id": "a2dd8733-d34a-4789-8bea-a752ae2925e2",
+  "candidate_sha": "7ca99eff372d798f5790f1a5b293da41b53fa14e",
+  "checkout_sha": "7ca99eff372d798f5790f1a5b293da41b53fa14e",
+  "base_sha": "d19980e65de352e00b952ae20dd4944159907459",
+  "runner_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "policy_digest": "sha256:7a35368a5c3789437d808e09f584e031dc240a63aa68b8e8f855e2e8316dfa99",
+  "selection_digest": "sha256:d86e92c46271a396e4ea472e3913de8f0b741005b632948c2b7b5c00e1215b4f",
+  "shard_id": 3,
+  "expected_shards": 3,
+  "status": "passed",
+  "started_at": "2026-10-13T20:30:00.000Z",
+  "ended_at": "2026-10-13T20:44:00.000Z",
+  "suites": [
+    {
+      "name": "tests/simulations",
+      "target_ids": ["tests/simulations"],
+      "command": "bun scripts/ci-test-ts.ts workspace-cloudflare",
+      "exit_code": 0,
+      "counts": {
+        "discovered": 1826,
+        "executed": 1826,
+        "passed": 1826,
+        "failed": 0,
+        "skipped": 0,
+        "assertions": 3652
+      },
+      "tests": [
+        {
+          "name": "tests/simulations > session > replay deterministic log",
+          "target_id": "tests/simulations",
+          "status": "passed",
+          "duration_ms": 350,
+          "assertions": 2
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "name": "plugins/mnemopi",
+      "target_ids": ["plugins/mnemopi", "apps/stats"],
+      "command": "bun scripts/ci-test-ts.ts workspace-cloudflare",
+      "exit_code": 0,
+      "counts": {
+        "discovered": 2946,
+        "executed": 2942,
+        "passed": 2942,
+        "failed": 0,
+        "skipped": 4,
+        "assertions": 5884
+      },
+      "tests": [
+        {
+          "name": "plugins/mnemopi > memory > triple store query",
+          "target_id": "plugins/mnemopi",
+          "status": "passed",
+          "duration_ms": 80,
+          "assertions": 2
+        }
+      ],
+      "artifacts": [
+        {
+          "key": "evidence/Wladefant/veyyon/7ca99eff372d798f5790f1a5b293da41b53fa14e/66a85c11-df13-4797-9e14-f9c7cff0d4c6/junit-shard-3.xml",
+          "sha256": "6d449999f6ff3ae83e8a006a60863f24d6f343f5af540ed20d7753bececb1a0c",
+          "size_bytes": 72000,
+          "kind": "junit"
+        }
+      ]
+    }
+  ]
+}
