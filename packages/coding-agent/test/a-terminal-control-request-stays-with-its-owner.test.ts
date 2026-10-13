@@ -9,7 +9,7 @@ import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { assertNotTerminalOwned } from "@veyyon/kernel/session/terminal-ownership";
 import * as utils from "@veyyon/utils";
-import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
+import { serveTerminalControl, type TerminalControlTarget, type TerminalOwner } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -129,32 +129,23 @@ test("implicit resume and GUI open refuse the live owner's transcript before rea
 test("startTerminalControl wires InteractiveMode delivery and submission", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-mode-"));
 	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
-	const mockManager = {
-		getSessionId: () => "interactive-session",
-		getLeafId: () => "leaf-1",
-		getCwd: () => root,
-		getSessionFile: () => path.join(root, "session.jsonl"),
-		getEntries: () => [],
-	};
 	let submitted: unknown;
-	const mockMode = {
-		sessionManager: mockManager,
-		session: {
-			isStreaming: false,
-			displayAssistantContent: () => [],
-			steer: async () => {},
-			followUp: async () => {},
-			abort: async () => {},
+	const target: TerminalControlTarget = {
+		identity: () => ({
+			sessionId: "interactive-session",
+			cwd: root,
+			sessionFile: path.join(root, "session.jsonl"),
+		}),
+		deliver: async text => {
+			submitted = { text };
+			return "started";
 		},
-		isShuttingDown: false,
-		isInitialized: true,
-		onInputCallback: (val: unknown) => {
-			submitted = val;
-		},
-		startPendingSubmission: (input: unknown) => input,
+		abort: async () => false,
+		history: () => [],
+		subscribe: () => () => {},
 	};
 	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
-	const close = await startTerminalControl(mockMode as never);
+	const close = await startTerminalControl(target);
 	cleanup.push(close);
 
 	const directory = path.join(root, "run", "terminals");

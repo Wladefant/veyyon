@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as crypto from "node:crypto";
 import * as nodeFs from "node:fs";
@@ -481,6 +481,7 @@ test("compatibility: deterministic injected parent openSync wx EACCES allows hea
 	}
 });
 
+describe("openSqliteDatabase", () => {
 test.skipIf(process.platform !== "win32")(
 	"regression: real NTFS ACL denied-create-directory allows healthy reads while marker blocks both",
 	async () => {
@@ -607,6 +608,7 @@ test.skipIf(process.platform !== "win32")(
 		}
 	},
 );
+});
 
 test("regression: physical URI-looking filenames exact starts-file subprocess runner asserts backing, persistence, and quarantine block", async () => {
 	await using dir = await TempDir.create("@omp-corrupt-uri-runner-");
@@ -745,6 +747,7 @@ test("regression: physical URI-looking filenames exact starts-file subprocess ru
 	}
 }, 45000);
 
+describe("openSqliteDatabase", () => {
 test.skipIf(process.platform !== "win32")(
 	"regression: windows NTFS ADS corrupt-header recovery and interrupted unlink guard",
 	async () => {
@@ -1134,6 +1137,7 @@ test.skipIf(process.platform !== "win32")(
 	},
 	45000,
 );
+});
 
 test("regression: physical URI corrupt-header recovery preserves backup bytes and recreates fresh usable store", async () => {
 	await using dir = await TempDir.create("@omp-corrupt-uri-recovery-");
@@ -1214,6 +1218,7 @@ test("regression: physical URI corrupt-header recovery preserves backup bytes an
 	expect(asyncReopened).toEqual([{ v: "uri-async-recovered" }]);
 });
 
+describe("openSqliteDatabase", () => {
 test.skipIf(process.platform !== "win32")(
 	"regression: windows :memory: store opens async and sync without EINVAL pathname lock",
 	async () => {
@@ -1266,6 +1271,7 @@ test.skipIf(process.platform !== "win32")(
 		expect(syncRecRows).toEqual([{ k: "win-sync-rec", v: 40 }]);
 	},
 );
+});
 
 test("regression: transient corruption surfaces error without quarantine and closes handle", async () => {
 	const createCorruptionError = () => {

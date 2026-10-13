@@ -26,21 +26,34 @@ function graphemeCount(text: string): number {
 }
 
 function assertChunkInvariants(line: string, chunks: ReturnType<typeof wordWrapLine>): void {
-	expect(Array.isArray(chunks)).toBe(true);
-	expect(chunks.length).toBeGreaterThan(0); // always at least one (possibly empty) chunk
+	if (!Array.isArray(chunks) || chunks.length === 0) {
+		expect(Array.isArray(chunks)).toBe(true);
+		expect(chunks.length).toBeGreaterThan(0);
+		return;
+	}
 	let prevStart = -1;
 	for (const chunk of chunks) {
-		expect(typeof chunk.text).toBe("string");
-		// Indices are valid code-unit offsets into the original line, ordered
-		// start <= end, and never past the line's end.
-		expect(Number.isInteger(chunk.startIndex)).toBe(true);
-		expect(Number.isInteger(chunk.endIndex)).toBe(true);
-		expect(chunk.startIndex).toBeGreaterThanOrEqual(0);
-		expect(chunk.endIndex).toBeGreaterThanOrEqual(chunk.startIndex);
-		expect(chunk.endIndex).toBeLessThanOrEqual(line.length);
-		// Start offsets advance (or hold) across chunks — never rewind, or a later
-		// cursor position would resolve to an earlier layout line.
-		expect(chunk.startIndex).toBeGreaterThanOrEqual(prevStart);
+		if (
+			typeof chunk.text !== "string" ||
+			!Number.isInteger(chunk.startIndex) ||
+			!Number.isInteger(chunk.endIndex) ||
+			chunk.startIndex < 0 ||
+			chunk.endIndex < chunk.startIndex ||
+			chunk.endIndex > line.length ||
+			chunk.startIndex < prevStart
+		) {
+			expect(typeof chunk.text).toBe("string");
+			// Indices are valid code-unit offsets into the original line, ordered
+			// start <= end, and never past the line's end.
+			expect(Number.isInteger(chunk.startIndex)).toBe(true);
+			expect(Number.isInteger(chunk.endIndex)).toBe(true);
+			expect(chunk.startIndex).toBeGreaterThanOrEqual(0);
+			expect(chunk.endIndex).toBeGreaterThanOrEqual(chunk.startIndex);
+			expect(chunk.endIndex).toBeLessThanOrEqual(line.length);
+			// Start offsets advance (or hold) across chunks — never rewind, or a later
+			// cursor position would resolve to an earlier layout line.
+			expect(chunk.startIndex).toBeGreaterThanOrEqual(prevStart);
+		}
 		prevStart = chunk.startIndex;
 	}
 }
@@ -118,6 +131,27 @@ describe("wordWrapLine fuzz invariants", () => {
 			"x1",
 			"。",
 		];
+		const widthCache = new Map<string, number>();
+		const countCache = new Map<string, number>();
+
+		const getVisibleWidth = (str: string): number => {
+			let cached = widthCache.get(str);
+			if (cached === undefined) {
+				cached = visibleWidth(str);
+				widthCache.set(str, cached);
+			}
+			return cached;
+		};
+
+		const getGraphemeCount = (str: string): number => {
+			let cached = countCache.get(str);
+			if (cached === undefined) {
+				cached = graphemeCount(str);
+				countCache.set(str, cached);
+			}
+			return cached;
+		};
+
 		fuzzStrings(
 			{
 				seed: 0x9a_5c_11_fe,
@@ -133,10 +167,13 @@ describe("wordWrapLine fuzz invariants", () => {
 			line => {
 				for (const width of [1, 2, 3, 5, 8, 13]) {
 					for (const chunk of wordWrapLine(line, width)) {
-						const w = visibleWidth(chunk.text);
+						const w = getVisibleWidth(chunk.text);
 						if (w > width) {
 							// Only tolerated when the chunk is a lone, unsplittable grapheme.
-							expect(graphemeCount(chunk.text)).toBe(1);
+							const count = getGraphemeCount(chunk.text);
+							if (count !== 1) {
+								expect(count).toBe(1);
+							}
 						}
 					}
 				}

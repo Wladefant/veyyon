@@ -11,13 +11,13 @@
  *
  * `seedBand` keeps the FULL corpus available but runs a bounded, deterministic,
  * evenly-spaced sample on the per-commit gate, and the entire range only when
- * `HASHLINE_SEED_SOAK` is set (the scheduled soak job in ci.yml). The sample is
- * not silent: `SEEDS_ARE_SAMPLED` records the mode, and both ends of every band
+ * `HASHLINE_SEED_SOAK` enables the full range for the Cloudflare shard and scheduled soak.
+ * The sample is not silent: `SEEDS_ARE_SAMPLED` records the mode, and both ends of every band
  * plus the low seeds (where off-by-one walks live) are always included, so the
  * per-commit gate still exercises every band, just not all 3M seeds of it.
  */
 
-/** True when the full seed corpus should run (scheduled soak job); false on the per-commit gate. */
+/** True when the full seed corpus should run. */
 export const SEED_SOAK = Boolean(process.env.HASHLINE_SEED_SOAK);
 
 /**
@@ -33,14 +33,14 @@ export const SEEDS_ARE_SAMPLED = !SEED_SOAK;
 
 /**
  * The seeds to exercise for a `[start, end]` band: the whole inclusive range
- * under soak or when the band is already small, otherwise a deterministic,
- * strictly-ascending, de-duplicated sample — both ends, the first few seeds, and
- * `SEEDS_PER_BAND` evenly-spaced interior seeds.
+ * when full-range mode is on (defaulted from `HASHLINE_SEED_SOAK`) or the band
+ * is small; otherwise a deterministic, ascending sample includes both ends,
+ * low seeds, and `SEEDS_PER_BAND` evenly-spaced interior seeds.
  */
-export function* seedBand(start: number, end: number): Generator<number> {
+export function* seedBand(start: number, end: number, fullRange = SEED_SOAK): Generator<number> {
 	if (start > end) return;
 	const total = end - start + 1;
-	if (SEED_SOAK || total <= SEEDS_PER_BAND) {
+	if (fullRange || total <= SEEDS_PER_BAND) {
 		for (let seed = start; seed <= end; seed++) yield seed;
 		return;
 	}

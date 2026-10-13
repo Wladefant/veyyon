@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `StallSampler` rotation time accounting to use the caller's clock instead of mixing it with `performance.now()`.
+
 ## [1.5.6] - 2026-10-10
 
 ### Breaking Changes

@@ -47,8 +47,8 @@ const RESTORED_MIN = 6;
 const samplers: StallSampler[] = [];
 
 /** A running sampler, started by a busy tick at `nowMs`, its start settled. */
-async function startedSampler(nowMs: number): Promise<StallSampler> {
-	const sampler = new StallSampler();
+async function startedSampler(nowMs: number, now?: () => number): Promise<StallSampler> {
+	const sampler = new StallSampler({ now });
 	samplers.push(sampler);
 	sampler.quiet(nowMs, true);
 	await sampler.stacksBetween(0, 0);
@@ -96,20 +96,43 @@ describe("an idle process samples its stack ten times less often", () => {
 	});
 
 	test("a process idle past the stretch keeps the busy interval until its profile is full", async () => {
-		// The last busy tick was 20s ago; the profile restarted when the start settled.
-		const sampler = await startedSampler(performance.now() - 20_000);
-		sampler.quiet(performance.now() + 5_000, false);
-		// The profile was not full, so going idle queued no restart: the hold runs on the busy profile.
-		const from = performance.now();
-		holdTheLoopForMs(500);
-		const stacks = await sampler.stacksBetween(from, performance.now());
-		expect(stacks?.samples).toBeGreaterThanOrEqual(BUSY_MIN);
+		let nowValue = 0;
+		const sampler = await startedSampler(nowValue, () => nowValue);
+		sampler.quiet(nowValue - 20_000, true);
+		let scheduled: (() => void) | undefined;
+		const watchdog = new LoopWatchdog({
+			intervalMs: 5_000,
+			thresholdMs: 10_000,
+			now: () => nowValue,
+			schedule: cb => {
+				scheduled = cb;
+				return {};
+			},
+			cpuUsage: () => ({ user: 0, system: 0 }),
+			stacks: sampler,
+			parkAfterMs: 1_000_000,
+		});
+		watchdog.start();
+
+		// At 9,999ms, the full-profile boundary has not arrived.
+		nowValue = 9_999;
+		scheduled!();
+		expect(sampler.samplingIntervalUs).toBe(10_000);
+
+		// At exactly 10,000ms, the quiet tick rotates to the idle sampling cadence.
+		nowValue = 10_000;
+		scheduled!();
+		await sampler.stacksBetween(0, 0);
+		expect(sampler.samplingIntervalUs).toBe(100_000);
+
+		watchdog.stop();
 	});
 
 	test("one busy tick restores the busy interval without waiting for a rotation", async () => {
 		const sampler = await idleSampler();
 		sampler.quiet(performance.now(), true);
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		await sampler.stacksBetween(0, 0);
+		expect(sampler.samplingIntervalUs).toBe(10_000);
 	});
 
 	test("a process that worked inside the idle stretch keeps the busy interval through a rotation", async () => {
@@ -119,7 +142,8 @@ describe("an idle process samples its stack ten times less often", () => {
 		sampler.quiet(workedAt, true);
 		// The profile is full 10s after it started; the work was 7s before this tick.
 		sampler.quiet(workedAt + 7_000, false);
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		await sampler.stacksBetween(0, 0);
+		expect(sampler.samplingIntervalUs).toBe(10_000);
 	});
 
 	test("the idle stretch ends at 10s exactly", async () => {
@@ -128,10 +152,11 @@ describe("an idle process samples its stack ten times less often", () => {
 		const sampler = await startedSampler(busyAt);
 
 		sampler.quiet(busyAt + 9_999, false);
-		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
+		await sampler.stacksBetween(0, 0);
+		expect(sampler.samplingIntervalUs).toBe(10_000);
 
 		sampler.quiet(busyAt + 10_000, false);
-		expect(await samplesInHold(sampler)).toBeLessThanOrEqual(IDLE_MAX);
+		expect(sampler.samplingIntervalUs).toBe(100_000);
 	});
 
 	test("an idle-interval profile is kept until it could hold 1,000 samples, 100s, and replaced after", async () => {

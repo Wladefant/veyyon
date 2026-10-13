@@ -202,7 +202,7 @@ describe("cross-provider terminal and transient error conditions", () => {
 			settings: { "retry.maxRetries": 2, "retry.baseDelayMs": 1, "retry.maxDelayMs": 2 },
 			script: scriptTurns(
 				turn => {
-					turn.text("partial text before drop");
+					turn.thinking("partial text before drop");
 					turn.fail(incompleteError.message, errorId);
 				},
 				turn => {

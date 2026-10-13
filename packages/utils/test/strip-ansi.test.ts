@@ -14,7 +14,10 @@
  */
 import { describe, expect, it } from "bun:test";
 import { stripAnsi, stripAnsiExceptSgr } from "@veyyon/utils/strip-ansi";
-import { collectPackageSources } from "./support/package-sources";
+import { execFileSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { collectPackageSourceFiles, memberRelative, REPO_ROOT } from "./support/package-sources";
 
 describe("stripAnsi", () => {
 	it("strips SGR color/style sequences", () => {
@@ -223,15 +226,56 @@ describe("stripAnsi against the shared cross-language corpus", () => {
 const OWNER = "utils/src/strip-ansi.ts";
 const STRIPANSI_DEF = /function\s+stripAnsi\s*\(/;
 
+// Exclude generated dependency stores, build caches, and test fixture caches.
+const SKIP_STORES = [
+	`${path.sep}.cache${path.sep}`,
+	`${path.sep}node_modules${path.sep}`,
+	`${path.sep}dist${path.sep}`,
+	`${path.sep}vendor${path.sep}`,
+	`${path.sep}repo-cache${path.sep}`,
+	`${path.sep}fixtures${path.sep}`,
+	`${path.sep}.npm${path.sep}`,
+	`${path.sep}.bun${path.sep}`,
+	`${path.sep}target${path.sep}`,
+	`${path.sep}build${path.sep}`,
+	`${path.sep}.build${path.sep}`,
+];
+
 // The monorepo walk + skip-set is shared with every other source-ownership lock
 // (see ./support/package-sources).
 describe("stripAnsi source lock", () => {
 	it("no source or test file defines a local stripAnsi outside the owner", async () => {
-		const offenders: string[] = [];
-		for (const { rel, text } of await collectPackageSources({ dirs: ["src", "test"], includeTests: true })) {
-			if (rel === OWNER) continue;
-			if (STRIPANSI_DEF.test(text)) offenders.push(rel);
+		let checkedIn: Set<string> | undefined;
+		try {
+			const stdout = execFileSync("git", ["ls-files", "-z"], {
+				cwd: REPO_ROOT,
+				encoding: "utf8",
+				maxBuffer: 64 * 1024 * 1024,
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+			checkedIn = new Set(stdout.split("\0").filter(Boolean));
+		} catch {
+			// Fallback if git is not available
 		}
+
+		const files = await collectPackageSourceFiles({ dirs: ["src", "test"], includeTests: true });
+		const offenders: string[] = [];
+
+		await Promise.all(
+			files.map(async file => {
+				const rel = memberRelative(file);
+				if (rel === OWNER) return;
+				if (SKIP_STORES.some(store => file.includes(store))) return;
+				if (checkedIn) {
+					const repoRel = path.relative(REPO_ROOT, file).replace(/\\/g, "/");
+					if (!checkedIn.has(repoRel)) return;
+				}
+				const text = await readFile(file, "utf8");
+				if (!text.includes("stripAnsi")) return;
+				if (STRIPANSI_DEF.test(text)) offenders.push(rel);
+			}),
+		);
+
 		expect(
 			offenders,
 			"local stripAnsi copies: import it from @veyyon/utils; a narrower stripper needs its own name",

@@ -14,8 +14,8 @@
 import { describe, expect, it } from "bun:test";
 import { SEED_SOAK, SEEDS_PER_BAND, seedBand } from "./seed-band";
 
-function collect(start: number, end: number): number[] {
-	return [...seedBand(start, end)];
+function collect(start: number, end: number, fullRange?: boolean): number[] {
+	return [...seedBand(start, end, fullRange)];
 }
 
 describe("seedBand", () => {
@@ -31,15 +31,13 @@ describe("seedBand", () => {
 		expect(collect(500, 499)).toEqual([]);
 	});
 
-	// The remaining assertions describe the per-commit sampling path, which only
-	// exists when the soak env is off. Under HASHLINE_SEED_SOAK every band is
-	// exhaustive, so guard them so the soak job's own run of this suite still passes.
-	describe.if(!SEED_SOAK)("per-commit sampling (large band)", () => {
+	// Keep sampling-mode contract checks active even during full-range shard runs.
+	describe("per-commit sampling (large band)", () => {
 		const START = 1_750_001;
 		const END = 2_000_000; // 250_000-seed band, the largest in the corpus.
 
 		it("samples rather than running the whole band", () => {
-			const seeds = collect(START, END);
+			const seeds = collect(START, END, false);
 			expect(seeds.length).toBeLessThan(END - START + 1);
 			// Both ends plus low seeds add at most a handful over the interior sample.
 			expect(seeds.length).toBeLessThanOrEqual(SEEDS_PER_BAND + 5);
@@ -48,14 +46,14 @@ describe("seedBand", () => {
 		});
 
 		it("always covers both ends and the low seeds where off-by-one walks bite", () => {
-			const seeds = collect(START, END);
+			const seeds = collect(START, END, false);
 			for (const boundary of [START, START + 1, START + 2, END - 1, END]) {
 				expect(seeds).toContain(boundary);
 			}
 		});
 
 		it("returns strictly ascending, de-duplicated, in-range seeds", () => {
-			const seeds = collect(START, END);
+			const seeds = collect(START, END, false);
 			for (const s of seeds) {
 				expect(s).toBeGreaterThanOrEqual(START);
 				expect(s).toBeLessThanOrEqual(END);
@@ -67,7 +65,7 @@ describe("seedBand", () => {
 		});
 
 		it("is deterministic", () => {
-			expect(collect(START, END)).toEqual(collect(START, END));
+			expect(collect(START, END, false)).toEqual(collect(START, END, false));
 		});
 	});
 

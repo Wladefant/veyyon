@@ -11,6 +11,7 @@
 ### Changed
 
 - `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
+- Terminal-control history projection now uses the wire transcript view and is injected from the CLI composition root; no user-visible behavior change.
 - Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
 
 ### Added

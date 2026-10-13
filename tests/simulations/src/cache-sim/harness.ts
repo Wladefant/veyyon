@@ -416,6 +416,12 @@ export interface Arm {
 export const PRODUCTION: Arm = { name: "production" };
 
 /**
+ * The shallow anchor arm: exactly the baseline the counterfactual scenarios price
+ * against (anchor at system[0], trailing system block, and last two messages).
+ */
+export const SHALLOW_ANCHOR: Arm = deepAnchor(0);
+
+/**
  * The two retention arms. Both are production placement; only the lifetime the
  * request asks for moves, which is the switch this family exists to price.
  */

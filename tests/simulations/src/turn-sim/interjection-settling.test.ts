@@ -471,7 +471,7 @@ describe("plain multi-turn sessions without interjection", () => {
 					turn.finish();
 				},
 				async turn => {
-					turn.text("half an answer");
+					turn.thinking("half an answer");
 					await stalled.promise;
 				},
 				turn => {

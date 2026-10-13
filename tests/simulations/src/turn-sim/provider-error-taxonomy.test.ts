@@ -78,7 +78,7 @@ const ERROR_ROWS: readonly ErrorRow[] = [
 ];
 
 /** Whether the turn had already streamed something when the failure landed. */
-const ARRIVALS = ["before any content", "after partial text"] as const;
+const ARRIVALS = ["before any content", "after partial thinking"] as const;
 
 function lastAssistant(simulation: Simulation): AssistantMessage {
 	const assistants = simulation.session.messages.filter(
@@ -115,7 +115,7 @@ describe("a provider failure is resampled only when resampling could help", () =
 					// only for the ones expected to get there.
 					script: turn => {
 						if (turn.call === 1) {
-							if (arrival === "after partial text") turn.text("partial answer. ");
+							if (arrival === "after partial thinking") turn.thinking("partial answer. ");
 							turn.fail(row.message);
 							return;
 						}
@@ -175,7 +175,7 @@ describe("a provider failure is resampled only when resampling could help", () =
 		sim = await createSimulation({
 			settings: { "retry.enabled": true },
 			script: turn => {
-				turn.text(`half an answer before attempt ${turn.call} died. `);
+				turn.thinking(`half an answer before attempt ${turn.call} died. `);
 				turn.fail("stream error: NGHTTP2_INTERNAL_ERROR");
 			},
 		});
@@ -186,8 +186,8 @@ describe("a provider failure is resampled only when resampling could help", () =
 		const streamed = sim.session.messages
 			.filter((message): message is AssistantMessage => message.role === "assistant")
 			.flatMap(message => message.content)
-			.filter(block => block.type === "text")
-			.map(block => block.text)
+			.filter(block => block.type === "thinking")
+			.map(block => block.thinking)
 			.join(" ");
 		expect(streamed).toContain("half an answer before attempt");
 		expect(lastAssistant(sim).stopReason).toBe("error");
@@ -201,7 +201,7 @@ describe("a provider failure is resampled only when resampling could help", () =
 			settings: { "retry.enabled": true },
 			script: turn => {
 				if (turn.call === 1) {
-					turn.text("abandoned half-reply. ");
+					turn.thinking("abandoned half-reply. ");
 					turn.fail("stream error: NGHTTP2_INTERNAL_ERROR");
 					return;
 				}
@@ -217,8 +217,8 @@ describe("a provider failure is resampled only when resampling could help", () =
 		const streamed = sim.session.messages
 			.filter((message): message is AssistantMessage => message.role === "assistant")
 			.flatMap(message => message.content)
-			.filter(block => block.type === "text")
-			.map(block => block.text)
+			.filter(block => block.type === "thinking")
+			.map(block => block.thinking)
 			.join(" ");
 		expect(streamed).not.toContain("abandoned half-reply");
 	});

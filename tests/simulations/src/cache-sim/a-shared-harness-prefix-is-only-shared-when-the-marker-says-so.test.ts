@@ -81,6 +81,7 @@ import {
 	PRODUCTION,
 	prefixesOf,
 	runFleet,
+	SHALLOW_ANCHOR,
 	type Step,
 	sharedGlobally,
 	systemPrompt,
@@ -173,7 +174,7 @@ describe("a harness prefix shared between a parent and its agents", () => {
 	});
 
 	it("leaves the shallow anchor buying nothing, at every fan-out, as the product ships today", async () => {
-		const deltas = await deltasAcrossFanOut(PRODUCTION, deepAnchor(1));
+		const deltas = await deltasAcrossFanOut(SHALLOW_ANCHOR, deepAnchor(1));
 
 		// Every fan-out, not most of them: with no sharing the extra depth is free
 		// money and more agents only widen the gap, which is the whole finding.
@@ -183,7 +184,7 @@ describe("a harness prefix shared between a parent and its agents", () => {
 	});
 
 	it("pays for its depth only once the scope is set, and only above a fan-out this run reports", async () => {
-		const deltas = await deltasAcrossFanOut(sharedGlobally(PRODUCTION), sharedGlobally(deepAnchor(1)));
+		const deltas = await deltasAcrossFanOut(sharedGlobally(SHALLOW_ANCHOR), sharedGlobally(deepAnchor(1)));
 
 		// The trade is one parent penalty against one saving per sharing agent, so
 		// the delta shrinks by a constant per agent and crosses zero exactly once.
@@ -210,9 +211,9 @@ describe("a harness prefix shared between a parent and its agents", () => {
 	 */
 	it("still pays for itself if a shared write turns out to cost the dearest write in the table", async () => {
 		const pessimistic = PRICE.write1h / PRICE.write5m;
-		const withoutSharing = await fleetCost(PRODUCTION, 1);
-		const free = (await runFleet(sharedGlobally(PRODUCTION), fleetOf(1))).cost;
-		const dear = (await runFleet(sharedGlobally(PRODUCTION), fleetOf(1), { globalWritePremium: pessimistic })).cost;
+		const withoutSharing = await fleetCost(SHALLOW_ANCHOR, 1);
+		const free = (await runFleet(sharedGlobally(SHALLOW_ANCHOR), fleetOf(1))).cost;
+		const dear = (await runFleet(sharedGlobally(SHALLOW_ANCHOR), fleetOf(1), { globalWritePremium: pessimistic })).cost;
 
 		expect(pessimistic).toBeGreaterThan(1);
 		// The premium is real money, so the pessimistic arm must cost more than the
@@ -231,11 +232,11 @@ describe("a harness prefix shared between a parent and its agents", () => {
 	 */
 	it("is turned into a loss by scoping the marker on the block that changes", async () => {
 		const pessimistic = PRICE.write1h / PRICE.write5m;
-		const withoutSharing = await fleetCost(PRODUCTION, 1);
-		const anchorOnly = (await runFleet(sharedGlobally(PRODUCTION), fleetOf(1), { globalWritePremium: pessimistic }))
+		const withoutSharing = await fleetCost(SHALLOW_ANCHOR, 1);
+		const anchorOnly = (await runFleet(sharedGlobally(SHALLOW_ANCHOR), fleetOf(1), { globalWritePremium: pessimistic }))
 			.cost;
 		const everywhere = (
-			await runFleet(sharedGlobally(PRODUCTION, { everySystemMarker: true }), fleetOf(1), {
+			await runFleet(sharedGlobally(SHALLOW_ANCHOR, { everySystemMarker: true }), fleetOf(1), {
 				globalWritePremium: pessimistic,
 			})
 		).cost;
