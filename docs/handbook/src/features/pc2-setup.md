@@ -56,7 +56,7 @@ A release with those changes does not exist yet. Stop before installation until 
 20. Set `VEYYON_CHECKPOINT_NODE=pc1` on PC1. Stop its session, then run `veyyon session handoff <session-id> --file <stopped-session.jsonl> --to pc2`.
 21. Set `VEYYON_CHECKPOINT_NODE=pc2` in the PC2 process environment.
 22. Run `veyyon session checkpoint-restore <session-id> --output <new-directory>` on PC2.
-23. Resume the restored transcript only after ownership checks succeed.
+23. Set `VEYYON_CHECKPOINT_SESSION=<session-id>` in the PC2 process environment. Resume only after ownership checks succeed.
 24. Confirm PC1 cannot admit a prompt or tool for the transferred session. Test reverse handoff before relying on it.
 25. Turn PC1 off. Confirm local tools, the installed catalog, remote memory and the independent model gateway remain available.
 
