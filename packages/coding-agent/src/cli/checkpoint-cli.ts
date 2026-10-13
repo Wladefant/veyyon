@@ -12,6 +12,11 @@ export interface CheckpointCommandArgs {
 	workspace?: string[];
 }
 export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise<void> {
+	if (args.action === "fork" && args.sessionFile) {
+		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
+		console.log(JSON.stringify(await forkNativeCheckpoint(bundle)));
+		return;
+	}
 	if (!settings.get("checkpoints.enabled"))
 		throw new Error("Cloud checkpoints are disabled. Enable checkpoints.enabled to use this command.");
 	const client = CheckpointClient.fromEnv();

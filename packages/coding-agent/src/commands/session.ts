@@ -34,7 +34,7 @@ export default class Session extends Command {
 	static flags = {
 		json: Flags.boolean({ char: "j", description: "Output the full report as JSON", default: false }),
 		output: Flags.string({ description: "Restore into this new directory" }),
-		file: Flags.string({ description: "Native session JSONL file to export" }),
+		file: Flags.string({ description: "Native session JSONL file to export or explicitly fork offline" }),
 		workspace: Flags.string({ description: "Approved workspace file or directory to include", multiple: true }),
 	};
 
@@ -42,6 +42,7 @@ export default class Session extends Command {
 		"veyyon session stats",
 		"veyyon session stats 3f8a",
 		"veyyon session checkpoint-export --file ./session.jsonl --workspace src",
+		"veyyon session checkpoint-fork --file ./session.jsonl",
 	];
 
 	async run(): Promise<void> {
