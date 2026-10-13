@@ -248,6 +248,7 @@
 
 ### Fixed
 
+- A read of a missing `artifact://` id, a missing `agent://` output or a missing PDF image member lists at most 20 of what exists followed by a count of the rest, instead of every id in every session, which printed thousands of artifact ids into one tool result in a long session.
 - A transcript rebuild, such as after a compaction, releases the tool cards and assistant segments it removed from the screen and the arguments of calls that settled, instead of holding every card a long agent run ever drew, so a 900-second soak of tool turns and compactions ends at 987 MB RSS instead of 1,512 MB with 481,732 heap objects instead of 945,900.
 - A collapsed edit card whose change lines alone pass 40 draws 40 diff rows and counts the rest as hidden, instead of drawing every line of the run that crossed the budget (a 600-line replacement drew 603 rows) or overflowing the call stack on a run of a million lines, and cutting the diff and counting its lines no longer copy each run or re-split the kept text, so cutting a 5,600-line, 400-hunk diff takes 355 µs instead of 544 µs and counting it 56 µs instead of 190 µs (median of nine rounds of 300).
 - A session switch, `/resume`, reload, `/new` or `/drop` that fails part-way, such as on a disk error while the outgoing transcript is flushed, keeps the session listening, so later turns reach the screen and the session file instead of running unseen and unsaved.
