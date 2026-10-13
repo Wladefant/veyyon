@@ -10,7 +10,7 @@ import type { Agent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import type { HostNotifier } from "@veyyon/host";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { errorMessage, logger, setProjectDir } from "@veyyon/utils";
+import { errorMessage, logger } from "@veyyon/utils";
 import { formatModelString } from "../config/model-resolver";
 import { defaultEvalSessionId } from "../eval/session-id";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
@@ -138,9 +138,8 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 	const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 
 	/**
-	 * Move the session working directory before an `AgentSession` exists. Once it does, the
-	 * move is `AgentSession.setCwd`, which re-scopes far more than this. The process-global
-	 * half is skipped for a spawned agent for the reason `AgentSession.rescopeToCwd` skips it.
+	 * Move only this session's working directory before an `AgentSession` exists. Once it does,
+	 * the move is `AgentSession.setCwd`, which refreshes the session's cwd-derived runtime.
 	 */
 	const setCwd: NonNullable<ToolSession["setCwd"]> = async (resolvedPath, cwdOptions) => {
 		const session = inputs.session();
@@ -148,7 +147,6 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 		const previous = sessionManager.getCwd();
 		const cwd = await sessionManager.setCwd(resolvedPath, cwdOptions);
 		if (cwd !== previous) {
-			if (!inputs.isSpawned) setProjectDir(cwd);
 			const note = `Session working directory changed: ${previous} → ${cwd}`;
 			sessionManager.appendCustomMessageEntry("cwd_changed", note, true, { previous, cwd }, "agent");
 		}

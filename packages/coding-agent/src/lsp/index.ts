@@ -21,6 +21,7 @@ import {
 } from "@veyyon/utils";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import type { BunFile } from "bun";
+import { ensurePreloadedPluginRoots, registerPluginCacheInvalidator } from "../discovery/helpers";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 import { theme } from "../theme/theme-binding";
@@ -281,15 +282,39 @@ async function notifyFileSaved(
 
 // Cache config per cwd to avoid repeated file I/O
 const configCache = new Map<string, LspConfig>();
+const configGenerations = new Map<string, number>();
 
-function getConfig(cwd: string): LspConfig {
-	let config = configCache.get(cwd);
-	if (!config) {
-		config = loadConfig(cwd);
+registerPluginCacheInvalidator(cwd => {
+	if (cwd === undefined) {
+		configCache.clear();
+		for (const scope of configGenerations.keys()) {
+			configGenerations.set(scope, (configGenerations.get(scope) ?? 0) + 1);
+		}
+	} else {
+		const scope = path.resolve(cwd);
+		configCache.delete(scope);
+		configGenerations.set(scope, (configGenerations.get(scope) ?? 0) + 1);
+	}
+});
+
+async function getConfig(cwd: string): Promise<LspConfig> {
+	cwd = path.resolve(cwd);
+	const cached = configCache.get(cwd);
+	if (cached) return cached;
+	if (!configGenerations.has(cwd)) configGenerations.set(cwd, 0);
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const generation = configGenerations.get(cwd);
+		const pluginRoots = await ensurePreloadedPluginRoots(cwd);
+		const config = loadConfig(cwd, pluginRoots);
+		if (generation !== configGenerations.get(cwd)) {
+			if (attempt < 3) continue;
+			return config;
+		}
 		setIdleTimeout(config.idleTimeoutMs);
 		configCache.set(cwd, config);
+		return config;
 	}
-	return config;
+	throw new Error("LSP configuration discovery exhausted without a completed attempt");
 }
 
 function isCustomLinter(serverConfig: ServerConfig): boolean {
@@ -1675,7 +1700,7 @@ async function runLspWritethrough(
 		return undefined;
 	}
 
-	const config = getConfig(cwd);
+	const config = await getConfig(cwd);
 	const servers = getServersForFile(config, dst);
 
 	if (servers.length === 0) {
@@ -1952,7 +1977,7 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 		const { action, file } = params;
 		throwIfAborted(signal);
 
-		const config = getConfig(this.session.cwd);
+		const config = await getConfig(this.session.cwd);
 
 		// These actions take no file, or resolve their own targets.
 		switch (action) {
@@ -2794,8 +2819,8 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 		// and plugin configs added after the first LSP call become visible —
 		// otherwise `getConfig` returns the first observation for the rest of
 		// the process lifetime (#3546).
-		configCache.delete(this.session.cwd);
-		const refreshedConfig = getConfig(this.session.cwd);
+		configCache.delete(path.resolve(this.session.cwd));
+		const refreshedConfig = await getConfig(this.session.cwd);
 		const servers = getLspServers(refreshedConfig);
 		if (servers.length === 0) {
 			return {
