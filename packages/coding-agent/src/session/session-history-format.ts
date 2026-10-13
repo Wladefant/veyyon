@@ -22,6 +22,65 @@ import type {
 	FileMentionMessage,
 	HookMessage,
 } from "./messages";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { isTerminalYieldToolResult } from "@veyyon/wire/task-result";
+import type { TerminalTranscriptEntry, TerminalTurnProvenance } from "@veyyon/wire/presentation/transcript";
+
+/**
+ * Persisted assistant text carries its turn's operator and tool activity to forwarding clients.
+ * A terminal answer or successful terminal yield clears activity. Other tool calls keep it.
+ */
+export function createTerminalTranscriptProjector() {
+	let hasOperatorMessage = false;
+	const toolNames = new Set<string>();
+	return {
+		reset() {
+			hasOperatorMessage = false;
+			toolNames.clear();
+		},
+		observe(entry: SessionEntry): TerminalTurnProvenance | undefined {
+			if (entry.type === "custom_message") {
+				if (entry.attribution === "user") hasOperatorMessage = true;
+				return undefined;
+			}
+			if (entry.type !== "message") return undefined;
+			const message = entry.message;
+			if (message.role === "user") {
+				if (message.attribution !== "agent") hasOperatorMessage = true;
+				return undefined;
+			}
+			if (message.role === "toolResult") {
+				if (isTerminalYieldToolResult({
+					toolName: message.toolName,
+					isError: message.isError,
+					result: { details: message.details },
+				})) this.reset();
+				return undefined;
+			}
+			if (message.role !== "assistant") return undefined;
+			for (const block of message.content) {
+				if (block.type === "toolCall") toolNames.add(block.name);
+			}
+			const turn: TerminalTurnProvenance = {
+				hasOperatorMessage,
+				hasSubstantiveToolCall: [...toolNames].some(name => name !== "job" && name !== "poll"),
+				toolNames: [...toolNames],
+				isMain: true,
+			};
+			if (message.stopReason !== "toolUse") this.reset();
+			return turn;
+		},
+	};
+}
+
+export function terminalTranscriptEntry(
+	entryId: string,
+	text: string,
+	turn?: TerminalTurnProvenance,
+): TerminalTranscriptEntry {
+	return { entryId, text, turn };
+}
+
 
 export interface HistoryFormatOptions {
 	/** Optional H1 prepended to the transcript. */
