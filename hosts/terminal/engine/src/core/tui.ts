@@ -2509,7 +2509,7 @@ export class TUI extends Container {
 		);
 		const fullPaint = firstPaint || replaceRequested || geometryRebuild || divergenceRebuild;
 		if (divergenceRebuild && this.#rehydrateDivergence()) return;
-		const plan = this.#planWindow(rawFrame, height, transition, prefix, hasVisibleOverlay, fullPaint);
+		const plan = this.#planWindow(rawFrame, height, transition, hasVisibleOverlay, fullPaint);
 
 		// 5. Pick the visible cursor marker (bottom-most at or below the window
 		// top), prepare lines, and build the visible window slice.
@@ -2953,11 +2953,10 @@ export class TUI extends Container {
 		rawFrame: readonly string[],
 		height: number,
 		transition: FrameTransition,
-		prefix: PrefixReconciliation,
 		hasVisibleOverlay: boolean,
 		fullPaint: boolean,
 	): WindowPlan {
-		const { prevWindowTop, geometryChanged } = transition;
+		const { geometryChanged } = transition;
 		const frameLength = rawFrame.length;
 		let committedPrefixResliced = false;
 		// Ceiling on what may enter native scrollback: chrome mounted after the
@@ -2973,12 +2972,11 @@ export class TUI extends Container {
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(windowTop, historyEnd);
 		} else if (
+			this.#frameCursorMarkers.length > 0 &&
 			frameLength - this.#committedRows < height &&
-			(prevWindowTop < this.#committedRows ||
-				(prefix.frameSqueezed && frameLength <= this.#committedRows && frameLength >= height) ||
-				this.#frameCursorMarkers.some(
-					marker => marker.row >= this.#committedRows || (frameLength <= this.#committedRows && marker.row >= 0),
-				))
+			this.#frameCursorMarkers.some(
+				marker => marker.row >= this.#committedRows || (frameLength <= this.#committedRows && marker.row >= 0),
+			)
 		) {
 			// Tail re-anchor (a direct terminal may instead take the
 			// divergenceRebuild full paint above when the prefix resynced):
@@ -3000,14 +2998,9 @@ export class TUI extends Container {
 			// so the next growth slides the window in place (`#emitUpdate`'s
 			// uncommitted-slide rewrite) until it passes the committed boundary,
 			// and only rows beyond that boundary ever scroll off into history.
-			// That slide is the third way in: a window that already shows
-			// committed rows (`prevWindowTop < #committedRows`) keeps the frame
-			// tail while the tail is still shorter than the viewport, cursor or
-			// no cursor — flooring it at the boundary now would paint a short
-			// window over rows the grid already shows, with blank rows under it.
-			// Lowering the index here is what made every insert/retract cycle
-			// under a tall running card append the same rows to native scrollback
-			// again — thousands of copies of one status row over a long turn.
+			// Cursorless frames keep windowTop at or above the committed boundary:
+			// hiding the caret does not make history live again. An overlay may
+			// project that history onto the grid, but never changes this ledger.
 			windowTop = Math.max(0, frameLength - height);
 			if (this.#committedRows > frameLength) {
 				// Only a geometry frame arrives here with the index past the frame
@@ -3136,9 +3129,10 @@ export class TUI extends Container {
 				altCaret = { row: regionRows + (cursorPos.row - footerTop), col: cursorPos.col };
 			}
 		} else {
-			for (let r = 0; r < height; r++) window[r] = frame[windowTop + r] ?? "";
+			const projectedTop = hasVisibleOverlay ? Math.max(0, frameLength - height) : windowTop;
+			for (let r = 0; r < height; r++) window[r] = frame[projectedTop + r] ?? "";
 			if (this.#pinnedFooterRows > 0) {
-				overlayFooterTop = Math.min(height, Math.max(0, frameLength - this.#pinnedFooterRows - windowTop));
+				overlayFooterTop = Math.min(height, Math.max(0, frameLength - this.#pinnedFooterRows - projectedTop));
 			}
 			if (cursorPos !== null && cursorPos.row >= windowTop && cursorPos.row < windowTop + height) {
 				altCaret = { row: cursorPos.row - windowTop, col: cursorPos.col };
