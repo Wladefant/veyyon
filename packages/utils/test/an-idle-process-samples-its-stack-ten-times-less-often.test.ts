@@ -96,7 +96,7 @@ describe("an idle process samples its stack ten times less often", () => {
 	});
 
 	test("a process idle past the stretch keeps the busy interval until its profile is full", async () => {
-		// The last busy tick was 20s ago; the profile restarted when the start settled.
+		// The last busy tick was 20s ago; the profile restarts at real time after startup settles.
 		const sampler = await startedSampler(performance.now() - 20_000);
 		let nowValue = performance.now();
 		let scheduled: (() => void) | undefined;
@@ -125,7 +125,7 @@ describe("an idle process samples its stack ten times less often", () => {
 		expect(sampler.samplingIntervalUs).toBe(10_000);
 
 		// Once the profile is full (10s at busy interval), the quiet tick replaces it with the idle interval.
-		nowValue += 5_000;
+		nowValue += 5_001;
 		scheduled!();
 		const rotated = await sampler.stacksBetween(0, performance.now());
 		expect(rotated?.samples).toBe(0);

@@ -2509,7 +2509,7 @@ export class TUI extends Container {
 		);
 		const fullPaint = firstPaint || replaceRequested || geometryRebuild || divergenceRebuild;
 		if (divergenceRebuild && this.#rehydrateDivergence()) return;
-		const plan = this.#planWindow(rawFrame, height, transition, hasVisibleOverlay, fullPaint);
+		const plan = this.#planWindow(rawFrame, height, transition, prefix, hasVisibleOverlay, fullPaint);
 
 		// 5. Pick the visible cursor marker (bottom-most at or below the window
 		// top), prepare lines, and build the visible window slice.
@@ -2953,6 +2953,7 @@ export class TUI extends Container {
 		rawFrame: readonly string[],
 		height: number,
 		transition: FrameTransition,
+		prefix: PrefixReconciliation,
 		hasVisibleOverlay: boolean,
 		fullPaint: boolean,
 	): WindowPlan {
@@ -2974,7 +2975,7 @@ export class TUI extends Container {
 		} else if (
 			frameLength - this.#committedRows < height &&
 			(prevWindowTop < this.#committedRows ||
-				(frameLength <= this.#committedRows && frameLength >= height) ||
+				(prefix.frameSqueezed && frameLength <= this.#committedRows && frameLength >= height) ||
 				this.#frameCursorMarkers.some(
 					marker => marker.row >= this.#committedRows || (frameLength <= this.#committedRows && marker.row >= 0),
 				))

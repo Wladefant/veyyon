@@ -28,6 +28,7 @@ export const DEFAULT_VARIANTS = "baseline modern";
 export const DEFAULT_ZIG_VERSION = "0.16.0";
 export const DEFAULT_RUST_TOOLCHAIN = "nightly-2026-04-29";
 export const DEFAULT_FETCH_TIMEOUT_MS = 60000;
+export const DEFAULT_BUILD_TIMEOUT_MS = 660000;
 
 export const CANONICAL_ADDON_FILES = Object.assign(
 	[
@@ -328,10 +329,16 @@ function getUploadPayload(filePath) {
 
 export async function buildArtifacts(repoRoot, options = {}) {
 	const targetVariants = options.targetVariants || "baseline modern";
+	const buildTimeout =
+		options.buildTimeout ??
+		(process.env.VEYYON_NATIVE_BUILD_TIMEOUT_MS
+			? Number(process.env.VEYYON_NATIVE_BUILD_TIMEOUT_MS)
+			: DEFAULT_BUILD_TIMEOUT_MS);
 	const buildRunner = options.buildRunner || (() => {
 		const bunCmd = process.env.BUN_BIN || "bun";
 		const buildEnv = {
 			...process.env,
+			CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || "4",
 			CROSS_TARGET: options.crossTarget || process.env.CROSS_TARGET || DEFAULT_CROSS_TARGET,
 			TARGET_ARCH: options.targetArch || process.env.TARGET_ARCH || DEFAULT_ARCH,
 			TARGET_PLATFORM: options.targetPlatform || process.env.TARGET_PLATFORM || DEFAULT_PLATFORM,
@@ -346,7 +353,7 @@ export async function buildArtifacts(repoRoot, options = {}) {
 				cwd: repoRoot,
 				env: buildEnv,
 				stdio: "inherit",
-				timeout: options.buildTimeout || 600000,
+				timeout: buildTimeout,
 				windowsHide: true,
 			});
 			child.on("error", reject);
