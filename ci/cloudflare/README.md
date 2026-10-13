@@ -1,6 +1,6 @@
 # Veyyon Cloudflare CI
 
-Workers Builds runs the TypeScript check and the existing sharded test buckets. It builds portable Linux x64 native addons and the Linux x64 production CLI. It runs the Rust checks and uploads an isolated health Worker version. It does not deploy the Veyyon application.
+Workers Builds runs the TypeScript check and existing sharded test buckets. It builds portable Linux x64 native addons and the Linux x64 production CLI. It runs Rust checks and uploads isolated CI Worker versions. It does not deploy the Veyyon application.
 
 ## Trigger configuration
 
@@ -16,7 +16,7 @@ All Workers Builds CI for all repositories runs in Cloudflare account `a0d288d1c
 
 Use the existing user-scoped token `Cloudflare API token - polysim-builds` with Workers Builds Configuration Edit and Workers Scripts Read permissions. It is stored in the US Shared collection. Do not mint another user token. Keep its working copy outside git and do not print its value.
 
-The rollout tracker manages GitHub app connections and Workers Builds triggers. Do not create a second connection or trigger.
+The rollout tracker owns the GitHub app connection and the Workers Builds triggers. Use one repository connection. The three CI Workers each use one preview trigger; keep the release trigger and its `VEYYON_RELEASE_*` variables separate.
 
 ## Build behavior
 
