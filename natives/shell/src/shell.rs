@@ -1270,17 +1270,20 @@ async fn run_shell_command_once(
 	let reader_cancel = CancellationToken::new();
 	let (activity_tx, activity_rx) = flume::bounded::<()>(1);
 	let reader_callback = on_chunk;
+	let partial_capture = Arc::new(std::sync::Mutex::new(None));
 	let mut reader_handle = tokio::spawn({
 		let reader_cancel = reader_cancel.clone();
+		let partial_capture = partial_capture.clone();
 		async move {
 			match capture_mode {
 				CommandCaptureMode::Buffered { max_capture_bytes } => {
-					let output = read_output_buffered(
+					let output = read_output_buffered_with_capture(
 						reader_file,
 						reader_callback,
 						reader_cancel,
 						activity_tx,
 						max_capture_bytes,
+						Some(partial_capture),
 					)
 					.await;
 					Result::<OutputRead>::Ok(OutputRead::Buffered(output))
@@ -1355,6 +1358,15 @@ async fn run_shell_command_once(
 				reader_handle.abort();
 				let _ = reader_handle.await;
 			},
+		}
+	}
+	if reader_output.is_none() {
+		let partial = partial_capture
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			.take();
+		if let Some(partial) = partial {
+			reader_output = Some(OutputRead::Buffered(partial.into_output()));
 		}
 	}
 	cancel_bridge.abort();
@@ -1643,7 +1655,13 @@ async fn read_output_pipe_chunk_windows(
 					Err(error) => return Err(error),
 				}
 			},
-			PipeReadiness::Empty | PipeReadiness::Eof | PipeReadiness::NotAPipe => return Ok(None),
+			PipeReadiness::Empty | PipeReadiness::Eof => return Ok(None),
+			PipeReadiness::NotAPipe => match reader.read(buf) {
+				Ok(0) => return Ok(None),
+				Ok(n) => return Ok(Some(n)),
+				Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
+				Err(error) => return Err(error),
+			},
 		}
 	}
 }
@@ -2067,6 +2085,40 @@ async fn read_output(
 	}
 }
 
+// A task abort drops this guard before its JoinHandle finishes. Keep the raw
+// capture outside the task, without copying it on each callback.
+#[derive(Default)]
+struct BufferedCapture {
+	bytes: Vec<u8>,
+	input_bytes: usize,
+	exceeded: bool,
+}
+
+impl BufferedCapture {
+	fn into_output(self) -> BufferedOutput {
+		BufferedOutput {
+			text: decode_bytes(&self.bytes),
+			input_bytes: self.input_bytes,
+			exceeded: self.exceeded,
+		}
+	}
+}
+
+struct BufferedCaptureGuard {
+	capture: BufferedCapture,
+	partial: Option<Arc<std::sync::Mutex<Option<BufferedCapture>>>>,
+}
+
+impl Drop for BufferedCaptureGuard {
+	fn drop(&mut self) {
+		if let Some(partial) = &self.partial {
+			*partial.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+				Some(std::mem::take(&mut self.capture));
+		}
+	}
+}
+
+#[cfg(test)]
 async fn read_output_buffered(
 	reader: fs::File,
 	on_chunk: Option<Sender<String>>,
@@ -2074,11 +2126,26 @@ async fn read_output_buffered(
 	activity: Sender<()>,
 	max_capture_bytes: usize,
 ) -> BufferedOutput {
+	read_output_buffered_with_capture(
+		reader, on_chunk, cancel_token, activity, max_capture_bytes, None,
+	)
+	.await
+}
+
+async fn read_output_buffered_with_capture(
+	reader: fs::File,
+	on_chunk: Option<Sender<String>>,
+	cancel_token: CancellationToken,
+	activity: Sender<()>,
+	max_capture_bytes: usize,
+	partial_capture: Option<Arc<std::sync::Mutex<Option<BufferedCapture>>>>,
+) -> BufferedOutput {
 	const BUF: usize = 65536;
 	let mut buf = vec![0u8; BUF];
-	let mut input_bytes = 0usize;
-	let mut captured = Vec::new();
-	let mut exceeded = false;
+	let mut capture = BufferedCaptureGuard {
+		capture: BufferedCapture::default(),
+		partial: partial_capture,
+	};
 	let mut decoder = OutputDecoder::new();
 
 	#[cfg(unix)]
@@ -2141,17 +2208,13 @@ async fn read_output_buffered(
 		};
 		if n > 0 {
 			let _ = activity.try_send(());
-			input_bytes = input_bytes.saturating_add(n);
+			capture.capture.input_bytes = capture.capture.input_bytes.saturating_add(n);
 		}
-		// Once `exceeded`, the post-process minimizer is bypassed (see the
-		// `!output.exceeded` gate at the call site), so further appends just
-		// grow `captured` without serving any purpose. Stop accumulating to
-		// bound peak memory on commands that produce very large output.
-		if !exceeded {
-			if captured.len().saturating_add(n) > max_capture_bytes {
-				exceeded = true;
+		if !capture.capture.exceeded {
+			if capture.capture.bytes.len().saturating_add(n) > max_capture_bytes {
+				capture.capture.exceeded = true;
 			} else {
-				captured.extend_from_slice(&buf[..n]);
+				capture.capture.bytes.extend_from_slice(&buf[..n]);
 			}
 		}
 
@@ -2166,7 +2229,7 @@ async fn read_output_buffered(
 		emit_chunk(&rest, on_chunk.as_ref()).await;
 	}
 
-	BufferedOutput { text: decode_bytes(&captured), input_bytes, exceeded }
+	std::mem::take(&mut capture.capture).into_output()
 }
 
 #[cfg(unix)]
@@ -2475,6 +2538,89 @@ fn uutils_env_disabled(config: &ShellConfig, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn reader_shutdown_preserves_capture_with_a_slow_chunk_consumer() {
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create session");
+		let params = session.shell.default_exec_params();
+		// Keep the receiver alive but never receive. The reader must stop while
+		// its callback waits, not because the callback channel was disconnected.
+		let (sender, _receiver) = flume::bounded::<String>(0);
+		let output = time::timeout(
+			Duration::from_secs(5),
+			run_shell_command_once(
+				&mut session,
+				"printf 'retained-output'".to_owned(),
+				params,
+				Some(sender),
+				CancellationToken::new(),
+				Arc::new(process::SpawnRegistry::new()),
+				None,
+				CommandCaptureMode::Buffered { max_capture_bytes: 1024 },
+			),
+		)
+		.await
+		.expect("reader shutdown must remain bounded")
+		.expect("command should succeed");
+		assert_eq!(exit_code(&output.result), 0);
+		let captured = output.buffered.expect("aborted reader must return its partial capture");
+		assert_eq!(captured.text, "retained-output");
+		assert_eq!(captured.input_bytes, 15);
+		assert!(!captured.exceeded);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn reader_shutdown_preserves_capture_limit_with_a_slow_chunk_consumer() {
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create session");
+		let params = session.shell.default_exec_params();
+		let (sender, _receiver) = flume::bounded::<String>(0);
+		let output = time::timeout(
+			Duration::from_secs(5),
+			run_shell_command_once(
+				&mut session,
+				"printf 'retained-output'".to_owned(),
+				params,
+				Some(sender),
+				CancellationToken::new(),
+				Arc::new(process::SpawnRegistry::new()),
+				None,
+				CommandCaptureMode::Buffered { max_capture_bytes: 1 },
+			),
+		)
+		.await
+		.expect("reader shutdown must remain bounded")
+		.expect("command should succeed");
+		let captured = output.buffered.expect("aborted reader must retain capture metadata");
+		assert_eq!(captured.input_bytes, 15);
+		assert!(captured.exceeded);
+		assert!(captured.text.is_empty(), "capture must not exceed its byte limit");
+	}
+
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn cancelled_not_a_pipe_reader_reads_available_bytes_and_eof() {
+		let scratch = veyyon_test_scratch::scratch_dir("cancelled-not-a-pipe");
+		let path = scratch.join("output.txt");
+		fs::write(&path, b"file-output").expect("write fixture");
+		let mut reader = fs::File::open(&path).expect("open fixture");
+		let cancel = CancellationToken::new();
+		cancel.cancel();
+		let mut polls = 0;
+		let mut remaining = None;
+		let mut buf = [0u8; 4];
+		let mut output = Vec::new();
+		while let Some(n) = read_output_pipe_chunk_windows(
+			&mut reader, &mut buf, &cancel, &mut polls, &mut remaining,
+		)
+		.await
+		.expect("read cancelled regular file")
+		{
+			output.extend_from_slice(&buf[..n]);
+		}
+		assert_eq!(output, b"file-output");
+	}
 
 	/// The uutils-backed `mkdir` builtin must (1) create directories under the
 	/// shell's working directory rather than the host process cwd, (2) route
