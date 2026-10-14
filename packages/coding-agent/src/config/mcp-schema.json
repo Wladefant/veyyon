@@ -127,6 +127,9 @@
         },
         "oauth": {
           "$ref": "#/$defs/oauthConfig"
+        },
+        "events": {
+          "$ref": "#/$defs/eventsConfig"
         }
       }
     },
@@ -258,6 +261,117 @@
           "$ref": "#/$defs/sseServer"
         }
       ]
+    },
+    "eventsConfig": {
+      "type": "object",
+      "description": "Event subscription configuration for MCP Events draft support.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether MCP event subscriptions are enabled for this server (default: false)."
+        },
+        "subscriptions": {
+          "type": "array",
+          "description": "Explicit list of event subscriptions.",
+          "items": {
+            "$ref": "#/$defs/eventSubscription"
+          }
+        }
+      }
+    },
+    "eventSubscription": {
+      "type": "object",
+      "description": "An explicit event subscription configuration.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "mode"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The advertised event name to subscribe to."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "poll",
+            "push",
+            "webhook"
+          ],
+          "description": "The delivery mode for this subscription: poll, push, or webhook."
+        },
+        "arguments": {
+          "type": "object",
+          "description": "Optional subscription arguments conforming to the event inputSchema.",
+          "additionalProperties": true
+        },
+        "webhook": {
+          "$ref": "#/$defs/eventWebhookConfig"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "webhook"
+              }
+            },
+            "required": ["mode"]
+          },
+          "then": {
+            "required": ["webhook"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": ["poll", "push"]
+              }
+            },
+            "required": ["mode"]
+          },
+          "then": {
+            "not": {
+              "required": ["webhook"]
+            }
+          }
+        }
+      ],
+    },
+    "eventWebhookConfig": {
+      "type": "object",
+      "description": "Webhook delivery configuration for an event subscription.",
+      "additionalProperties": false,
+      "required": [
+        "callbackUrl",
+        "listenPort",
+        "secretRef"
+      ],
+      "properties": {
+        "callbackUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "description": "Reachable HTTPS callback URL the MCP server will POST events to."
+        },
+        "listenPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback receiver port exposed through the configured callback relay."
+        },
+        "secretRef": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\$(?:[A-Za-z_][A-Za-z0-9_]*|\\{[A-Za-z_][A-Za-z0-9_]*\\})$",
+          "description": "Explicit $ENV or ${ENV} reference for a webhook signing secret provisioned in Bitwarden US; raw secret values are forbidden."
+        }
+      }
     }
   }
 }

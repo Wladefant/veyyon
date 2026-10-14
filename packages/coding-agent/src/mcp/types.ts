@@ -76,6 +76,39 @@ export interface MCPAuthConfig {
 	resource?: string;
 }
 
+/** Supported delivery modes for MCP Events */
+export type MCPEventDeliveryMode = "poll" | "push" | "webhook";
+
+/** Webhook delivery configuration for an event subscription */
+export interface MCPEventWebhookConfig {
+	/** Reachable HTTPS callback URL the MCP server will POST events to */
+	callbackUrl: string;
+	/** Loopback receiver port exposed through the configured callback relay */
+	listenPort: number;
+	/** Explicit environment variable reference to a Bitwarden-provisioned webhook signing secret */
+	secretRef: string;
+}
+
+/** Explicit event subscription configuration */
+export interface MCPServerEventSubscriptionConfig {
+	/** Event name to subscribe to, matching an advertised event from events/list */
+	name: string;
+	/** Delivery mode for this event subscription: poll, push, or webhook */
+	mode: MCPEventDeliveryMode;
+	/** Optional subscription arguments conforming to the event inputSchema */
+	arguments?: Record<string, unknown>;
+	/** Webhook delivery configuration (required when mode is "webhook") */
+	webhook?: MCPEventWebhookConfig;
+}
+
+/** Per-server event subscriptions configuration (opt-in draft MCP Events support) */
+export interface MCPServerEventsConfig {
+	/** Whether event subscriptions are enabled for this server (default: false, opt-in) */
+	enabled?: boolean;
+	/** Explicit list of event subscriptions for this server */
+	subscriptions?: MCPServerEventSubscriptionConfig[];
+}
+
 /** Base server config with shared options */
 interface MCPServerConfigBase {
 	/** Whether this server is enabled (default: true) */
@@ -96,6 +129,8 @@ interface MCPServerConfigBase {
 		/** `prompt` param for the authorization request (default "consent"; "" to omit) */
 		prompt?: string;
 	};
+	/** Event subscriptions configuration (opt-in draft MCP Events support) */
+	events?: MCPServerEventsConfig;
 }
 
 /** Stdio server configuration */
@@ -207,7 +242,7 @@ export interface MCPEventOccurrence {
 	eventId: string;
 	name: string;
 	timestamp: string;
-	data: Record<string, unknown>;
+	data: unknown;
 	cursor?: string | null;
 	_meta?: Record<string, unknown>;
 }
@@ -223,6 +258,152 @@ export interface MCPEventsPollResult {
 	truncated?: boolean;
 	hasMore?: boolean;
 	nextPollMs?: number;
+}
+
+/** Callback when an MCP event occurrence arrives from a server */
+export type MCPEventCallback = (
+	serverName: string,
+	event: MCPEventOccurrence,
+	subscriptionKey: string,
+) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
+
+/** Payload for durable per-session MCP event state persistence */
+export interface MCPEventStatePayload {
+	subscriptionKey?: string;
+	cursor?: string;
+	seenEventIds?: string[];
+	eventId?: string;
+	event?: MCPEventOccurrence;
+	pendingEvent?: MCPEventOccurrence;
+	enqueued?: boolean;
+}
+
+/**
+ * Returns true if event subscriptions are explicitly enabled and configured on the server config.
+ * Disabled or empty config causes no event requests.
+ */
+export function isMCPEventsEnabled(config?: MCPServerEventsConfig): boolean {
+	return config?.enabled === true && Array.isArray(config.subscriptions) && config.subscriptions.length > 0;
+}
+
+/**
+ * Validate an MCP server events configuration object.
+ * Returns an array of human-readable error messages, or an empty array if valid.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function validateMCPEventsConfig(serverName: string, config: unknown): string[] {
+	if (config === undefined || config === null) return [];
+	if (!isRecord(config)) {
+		return [`Server "${serverName}" has invalid "events" configuration: must be an object.`];
+	}
+
+	const errors: string[] = [];
+
+	if ("enabled" in config && typeof config.enabled !== "boolean") {
+		errors.push(`Server "${serverName}" "events.enabled" must be a boolean.`);
+	}
+
+	// Forbid raw secret fields at top-level events config
+	if ("secret" in config || "rawSecret" in config) {
+		errors.push(
+			`Server "${serverName}" "events" sets a plaintext secret field. Plaintext secrets are forbidden in MCP config; use an explicit environment reference in "webhook.secretRef" instead.`,
+		);
+	}
+
+	if ("subscriptions" in config && config.subscriptions !== undefined) {
+		if (!Array.isArray(config.subscriptions)) {
+			errors.push(`Server "${serverName}" "events.subscriptions" must be an array.`);
+		} else {
+			const validModes: readonly string[] = ["poll", "push", "webhook"];
+			for (let i = 0; i < config.subscriptions.length; i++) {
+				const sub = config.subscriptions[i];
+				const prefix = `Server "${serverName}" events.subscriptions[${i}]`;
+				if (!isRecord(sub)) {
+					errors.push(`${prefix} must be an object.`);
+					continue;
+				}
+
+				if (typeof sub.name !== "string" || sub.name.trim().length === 0) {
+					errors.push(`${prefix} requires a non-empty string "name".`);
+				}
+
+				if (typeof sub.mode !== "string" || !validModes.includes(sub.mode)) {
+					errors.push(
+						`${prefix} "mode" must be one of "poll", "push", or "webhook" (got ${JSON.stringify(sub.mode)}).`,
+					);
+				}
+
+				if ("arguments" in sub && sub.arguments !== undefined) {
+					if (!isRecord(sub.arguments)) {
+						errors.push(`${prefix} "arguments" must be an object if specified.`);
+					}
+				}
+
+				if ("secret" in sub || "rawSecret" in sub) {
+					errors.push(
+						`${prefix} sets a plaintext secret field. Plaintext secrets are forbidden in MCP config; use "webhook.secretRef" instead.`,
+					);
+				}
+
+				if (sub.mode === "webhook") {
+					if (!("webhook" in sub) || !isRecord(sub.webhook)) {
+						errors.push(
+							`${prefix} mode "webhook" requires a "webhook" configuration object with "callbackUrl", "listenPort", and "secretRef".`,
+						);
+					} else {
+						const wh = sub.webhook;
+
+						if ("secret" in wh || "rawSecret" in wh) {
+							errors.push(
+								`${prefix}.webhook sets a plaintext "secret" field. Plaintext secrets are forbidden; use "secretRef" instead.`,
+							);
+						}
+
+						if (typeof wh.callbackUrl !== "string" || wh.callbackUrl.trim().length === 0) {
+							errors.push(`${prefix}.webhook requires a non-empty string "callbackUrl".`);
+						} else {
+							try {
+								const parsedUrl = new URL(wh.callbackUrl);
+								if (
+									parsedUrl.protocol !== "https:" ||
+									parsedUrl.username.length > 0 ||
+									parsedUrl.password.length > 0 ||
+									parsedUrl.hash.length > 0
+								) {
+									errors.push(
+										`${prefix}.webhook "callbackUrl" must use HTTPS without embedded credentials or a fragment.`,
+									);
+								}
+							} catch {
+								errors.push(`${prefix}.webhook "callbackUrl" is not a valid URL: "${wh.callbackUrl}".`);
+							}
+						}
+
+						if (typeof wh.secretRef !== "string" || wh.secretRef.trim().length === 0) {
+							errors.push(
+								`${prefix}.webhook requires an explicit $ENV or \${ENV} reference for a Bitwarden-provisioned signing secret.`,
+							);
+						} else if (!/^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(wh.secretRef)) {
+							errors.push(
+								`${prefix}.webhook "secretRef" must be an explicit $ENV or \${ENV} reference; raw values and other secret stores are not supported.`,
+							);
+						}
+
+						if (!Number.isInteger(wh.listenPort) || (wh.listenPort as number) < 1 || (wh.listenPort as number) > 65535) {
+							errors.push(`${prefix}.webhook "listenPort" must be an integer from 1 through 65535.`);
+						}
+					}
+				} else if ("webhook" in sub) {
+					errors.push(`${prefix} "webhook" configuration is valid only when mode is "webhook".`);
+				}
+			}
+		}
+	}
+
+	return errors;
 }
 
 /** MCP tool definition */
@@ -286,12 +467,37 @@ export interface MCPToolCallResult {
 export interface MCPRequestOptions {
 	/** Abort signal (e.g. Escape-to-interrupt) */
 	signal?: AbortSignal;
+	/** Timeout in milliseconds (0 disables request deadline) */
+	timeoutMs?: number;
+	/** Synchronous callback receiving the allocated request ID before transmission */
+	onRequestId?: (id: string | number) => void;
 }
+
+/** A long-lived request whose matching server notifications are delivered to its callback. */
+export interface MCPStreamRequest {
+	/** JSON-RPC id used to correlate this stream's notifications. */
+	readonly id: string | number;
+	/** Settles when the stream ends, is cancelled, or the transport closes. */
+	readonly done: Promise<void>;
+	/** Abort this stream without affecting other transport requests. */
+	cancel(): void;
+}
+
+export type MCPStreamNotificationHandler = (notification: JsonRpcMessage) => void;
+
+export type MCPStreamRequestOptions = MCPRequestOptions;
 
 /** Transport interface - abstracts stdio/http */
 export interface MCPTransport {
 	/** Send a request and wait for response */
 	request<T = unknown>(method: string, params?: Record<string, unknown>, options?: MCPRequestOptions): Promise<T>;
+	/** Start a long-lived request and deliver notifications correlated to its request id. */
+	streamRequest?(
+		method: string,
+		params: Record<string, unknown> | undefined,
+		onNotification: MCPStreamNotificationHandler,
+		options?: MCPStreamRequestOptions,
+	): MCPStreamRequest;
 
 	/** Send a notification (no response expected) */
 	notify(method: string, params?: Record<string, unknown>): Promise<void>;

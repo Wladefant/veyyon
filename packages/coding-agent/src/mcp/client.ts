@@ -51,6 +51,7 @@ const CLIENT_INFO = {
 	name: "veyyon-coding-agent",
 	version: "1.0.0",
 };
+const RFC3339_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * Default handler for standard MCP server-to-client requests.
@@ -297,10 +298,15 @@ export async function listEvents(
 			throw new Error(`MCP server "${connection.name}" returned an invalid events/list page`);
 		}
 		const page = raw as MCPEventsListResult;
+		if (page.nextCursor !== undefined && typeof page.nextCursor !== "string") {
+			throw new Error(`MCP server "${connection.name}" returned an invalid events/list cursor`);
+		}
 		for (const event of page.events) {
 			if (
 				typeof event?.name !== "string" ||
+				event.name.length === 0 ||
 				!Array.isArray(event.delivery) ||
+				event.delivery.length === 0 ||
 				event.delivery.some(mode => mode !== "poll" && mode !== "push" && mode !== "webhook")
 			) {
 				throw new Error(`MCP server "${connection.name}" returned an invalid event descriptor`);
@@ -327,19 +333,83 @@ export async function pollEvents(
 	if (!result || !Array.isArray(result.events)) {
 		throw new Error(`MCP server "${connection.name}" returned an invalid events/poll result`);
 	}
-	for (const event of result.events as MCPEventOccurrence[]) {
+	if (
+		result.cursor !== undefined && result.cursor !== null && typeof result.cursor !== "string" ||
+		result.truncated !== undefined && typeof result.truncated !== "boolean" ||
+		result.hasMore !== undefined && typeof result.hasMore !== "boolean" ||
+		result.nextPollMs !== undefined && (typeof result.nextPollMs !== "number" || !Number.isFinite(result.nextPollMs))
+	) {
+		throw new Error(`MCP server "${connection.name}" returned invalid events/poll controls`);
+	}
+	for (const event of result.events) {
 		if (
 			typeof event?.eventId !== "string" ||
+			event.eventId.length === 0 ||
 			typeof event.name !== "string" ||
+			event.name.length === 0 ||
 			typeof event.timestamp !== "string" ||
-			!event.data ||
-			typeof event.data !== "object" ||
-			Array.isArray(event.data)
+			!RFC3339_DATE_TIME.test(event.timestamp) ||
+			!Number.isFinite(Date.parse(event.timestamp)) ||
+			event.cursor !== undefined && event.cursor !== null && typeof event.cursor !== "string" ||
+			event.data === undefined
 		) {
 			throw new Error(`MCP server "${connection.name}" returned an invalid event occurrence`);
 		}
 	}
 	return result;
+}
+
+/** Register or refresh a webhook-only event subscription. */
+export async function subscribeToEvents(
+	connection: MCPServerConnection,
+	name: string,
+	args: Record<string, unknown>,
+	delivery: { url: string; secret: string },
+	cursor: string | null,
+	ttlMs: number | null,
+	options?: MCPRequestOptions,
+): Promise<{ id: string; refreshBefore: string | null; cursor?: string | null; truncated?: boolean }> {
+	if (!connection.capabilities.events) throw new Error(`MCP server "${connection.name}" does not advertise events`);
+	const result = await connection.transport.request<{
+		id: string;
+		refreshBefore: string | null;
+		cursor?: string | null;
+		truncated?: boolean;
+	}>("events/subscribe", {
+		name,
+		arguments: args,
+		delivery: { mode: "webhook", ...delivery },
+		cursor,
+		ttlMs,
+	}, options);
+	if (
+		!result ||
+		typeof result.id !== "string" ||
+		result.id.length === 0 ||
+		!(result.refreshBefore === null || typeof result.refreshBefore === "string") ||
+		(typeof result.refreshBefore === "string" && !Number.isFinite(Date.parse(result.refreshBefore))) ||
+		(result.cursor !== undefined && result.cursor !== null && typeof result.cursor !== "string") ||
+		(result.truncated !== undefined && typeof result.truncated !== "boolean")
+	) {
+		throw new Error(`MCP server "${connection.name}" returned an invalid events/subscribe result`);
+	}
+	return result;
+}
+
+/** Remove a webhook-only event subscription by its canonical key. */
+export async function unsubscribeFromEvents(
+	connection: MCPServerConnection,
+	name: string,
+	args: Record<string, unknown>,
+	url: string,
+	options?: MCPRequestOptions,
+): Promise<void> {
+	if (!connection.capabilities.events) throw new Error(`MCP server "${connection.name}" does not advertise events`);
+	await connection.transport.request("events/unsubscribe", {
+		name,
+		arguments: args,
+		delivery: { url },
+	}, options);
 }
 
 

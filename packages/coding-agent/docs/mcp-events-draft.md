@@ -1,25 +1,86 @@
-# MCP Events draft support
+# MCP Events (draft)
 
-MCP Events is an experimental, opt-in protocol proposal. Veyyon currently recognizes the advertised `events` capability and exposes `events/list` and single-page `events/poll` client calls. It does not yet configure subscriptions, run poll loops, handle push or webhook delivery, persist cursors, deduplicate occurrences, or route events into sessions.
+Veyyon implements opt-in support for the experimental [MCP Events design sketch](https://github.com/modelcontextprotocol/experimental-ext-triggers-events/blob/main/docs/design-sketch-proposal.md). The proposal may change. No subscription starts unless `events.enabled` is `true` and the server has at least one configured subscription. Each subscription uses a mode advertised for that event type.
 
-Proposal: [MCP Events design sketch](https://github.com/modelcontextprotocol/experimental-ext-triggers-events/blob/main/docs/design-sketch-proposal.md). It may change before adoption. This guide describes the proposed contract so server authors can plan; it is not a usable Veyyon configuration reference.
+## Configure an event subscription
 
-## Proposed delivery modes
+Add an `events` object to a server entry in the active profile's `mcp.json`. For example, poll a server event:
 
-The proposal defines `events/list` to advertise event types, their subscription `inputSchema`, their `payloadSchema`, and a non-empty subset of delivery modes. No delivery mode is required by the proposal.
+```json
+{
+  "mcpServers": {
+    "alerts": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "events": {
+        "enabled": true,
+        "subscriptions": [
+          {
+            "name": "incident.created",
+            "mode": "poll",
+            "arguments": { "severity": "P1" }
+          }
+        ]
+      }
+    }
+  }
+}
+```
 
-- **Poll** uses repeated `events/poll` requests with a server-issued cursor. Respect the server's `nextPollMs`; the proposal's client-side polling floor is 1,000 ms. A cursor is opaque. `truncated: true` means events may have been skipped, and `eventId` supports deduplication.
-- **Push** uses a long-lived `events/stream` request. The server sends event notifications and heartbeats; ending the request ends that stream subscription.
-- **Webhook** uses `events/subscribe` and `events/unsubscribe`. The client registers a callback URL, supplies a `whsec_` signing secret, and refreshes before the server-granted `refreshBefore` time unless the server grants no expiry. The server signs deliveries using Standard Webhooks headers and includes `X-MCP-Subscription-Id`.
+Each subscription needs `name` and `mode` (`poll`, `push`, or `webhook`). `arguments` is optional and must match that event's advertised `inputSchema`. Event discovery and subscription only happen when the server advertises Events, the event exists, and it advertises the configured mode. Unsupported or unadvertised subscriptions do not start. An absent or false `events.enabled`, or an empty subscriptions list, disables event requests.
 
-Webhook delivery requires a callback endpoint the MCP server can reach. A loopback address such as `localhost` or `127.0.0.1` names the server's own network namespace, not the coding-agent user's machine; it is not a general remote callback route. Use a reachable HTTPS endpoint with a valid certificate and an authenticated MCP principal. The draft requires HTTPS and a valid `whsec_` value. The proposal's verification errors include unreachable endpoints and failed challenges.
+Poll mode follows server `nextPollMs` with a minimum interval of 1,000 ms; if omitted, the client waits 30 seconds. The client persists opaque cursors and deduplicates repeated event IDs. Push opens a long-lived stream and ends it with the subscription. Neither requires a webhook receiver.
 
-The secret is signing material, not an event argument. A future client configuration should accept a secret reference and resolve it through its credential facility; it must not serialize or display a generated raw secret. Veyyon does not yet implement this behavior or a secret-reference field for event subscriptions. Do not put webhook signing secrets into checked-in MCP config.
+## Webhook receiver and relay
 
-## Trust and session boundaries
+Webhook mode needs an HTTPS callback URL reachable by the MCP server and a local receiver port. The receiver binds only to `127.0.0.1`; the public callback address does not bind the local listener to a public interface. Configure a trusted HTTPS relay (such as a reverse proxy or tunnel) to forward the callback URL's exact path to `http://127.0.0.1:<listenPort>/<same-path>`. Preserve the request method, path, headers, and raw body; signature verification covers the raw bytes. Keep the relay access-controlled and expose only the intended callback route.
 
-Event data is untrusted input, just like MCP tool results. It may contain prompt injection or misleading instructions. The proposal does not make payload text trusted policy. Veyyon does not yet provide event-to-session routing or event deduplication.
+```json
+{
+  "mcpServers": {
+    "alerts": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "events": {
+        "enabled": true,
+        "subscriptions": [
+          {
+            "name": "incident.created",
+            "mode": "webhook",
+            "arguments": { "severity": "P1" },
+            "webhook": {
+              "callbackUrl": "https://events.example.net/mcp/alerts/incidents",
+              "listenPort": 8787,
+              "secretRef": "$MCP_ALERTS_WEBHOOK_SECRET"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+```
 
-## Implementation status
+`callbackUrl` must use HTTPS and must not include URL credentials or a fragment. Its path must be unique among active webhook subscriptions in the session. `listenPort` selects the local loopback receiver port; use the same port in the relay's upstream mapping. A generic callback URL has no fixed port requirement; the HTTPS front end and relay determine the public endpoint.
 
-The MCP client exposes capability negotiation, paginated `events/list`, and one-page `events/poll` primitives. It does not implement runtime mode negotiation, configured subscriptions, poll scheduling, push streams, webhook registration or verification, cursor persistence, deduplication, session-scoped delivery, or subscription cleanup. The APIs are building blocks, not an end-to-end event feature. This guide is not a usable Veyyon event configuration reference.
+**Cloudflare-specific constraint:** for the Cloudflare webhook event, use a public dotted HTTPS hostname on port 443. That event is webhook-only. Do not generalize this requirement to other MCP webhook servers. See the [Cloudflare event bridge source](https://github.com/cloudflare/mcp-server-cloudflare/blob/e85737947299bbb9b5858fc9ae6bc6d1e6f9a3ba/src/events/ans-bridge.ts). Cloudflare Containers are reached through HTTP requests routed by Workers and Durable Objects, not direct inbound TCP/UDP to a container; see [Containers request lifecycle](https://developers.cloudflare.com/containers/concepts/architecture/#lifecycle-of-a-request).
+
+The server registers/refreshes a webhook subscription with a suggested 30-minute TTL and refreshes it before the granted deadline. The receiver verifies Standard Webhooks signatures and timestamp, accepts JSON events and control messages, and rejects malformed, expired, oversized, or invalidly signed deliveries. Disconnect or session cleanup unregisters the subscription and closes unused local listeners.
+
+## Signing secret setup
+
+Veyyon accepts only an explicit environment-variable reference in `webhook.secretRef`: `$NAME` or `${NAME}`. Set that variable in the environment available to the Veyyon process. Secret resolution is manual; Veyyon does not generate a key or provision Bitwarden entries.
+
+Generate a cryptographically random Standard Webhooks `whsec_` signing key using your trusted secret-management process, store it in Bitwarden US, and inject its value into the named environment variable when starting Veyyon. Configure only the variable reference. Never place the raw key in `mcp.json`, source control, command-line arguments, or logs. Do not use a `vault:` string as `secretRef`; current event config resolution supports environment references only. Keep the same key provisioned on the server side so both sides verify/sign the same webhook deliveries.
+
+## Event handling and session safety
+
+Poll, push, and webhook occurrences are delivered to the session that owns the MCP manager and subscription. Event IDs are deduplicated per subscription; cursors and delivery journal state are persisted with that session for resume/replay handling. Session teardown stops event streams, unregisters webhook subscriptions, closes unused local receiver hosts, and detaches event callbacks.
+Event delivery requires a persistent session journal. Sessions without a session file fail closed: delivery is not acknowledged until Veyyon can ensure the journal is on disk and flush it, so the server can retry rather than lose an event. Run event subscriptions in a session with a persistent journal to receive and resume delivery.
+
+
+Event payloads remain untrusted data. They can contain prompt injection or misleading instructions and must be treated like untrusted MCP tool output, never as policy or system instructions. The event's `data` fields are content, not authorization to run tools or change settings.
+
+## Protocol notes
+
+`events/list` advertises event names, input and payload schemas, and supported delivery modes. Poll uses `events/poll` with the saved cursor; `truncated: true` indicates skipped history. Push uses a long-lived `events/stream` request and event notifications. Webhook uses only `events/subscribe` and `events/unsubscribe`; delivery is signed with Standard Webhooks headers and carries `X-MCP-Subscription-Id`. See the linked draft for cursor, gap, termination, and schema-evolution details.

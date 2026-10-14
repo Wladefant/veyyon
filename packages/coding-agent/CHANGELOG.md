@@ -14,7 +14,8 @@
 - Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
 
 ### Added
-- Added basic MCP Events capability discovery and one-page polling client calls; full subscription lifecycle support is not included.
+- Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
+- Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 
