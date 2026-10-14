@@ -3,7 +3,7 @@
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { type BinaryTarget, RELEASE_TARGETS as targets } from "../packages/coding-agent/scripts/binary-targets";
+import { type BinaryTarget, ALL_TARGETS, RELEASE_TARGETS as targets } from "../packages/coding-agent/scripts/binary-targets";
 import { COMPILED_EXTERNAL_DEPENDENCIES, compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
 
 const repoRoot = path.join(import.meta.dir, "..");
@@ -138,11 +138,14 @@ async function resetArtifacts(): Promise<void> {
 
 async function main(): Promise<void> {
 	const requestedTargets = parseRequestedTargets();
-	const selectedTargets = requestedTargets ? targets.filter(target => requestedTargets.has(target.id)) : targets;
+	const availableTargets = requestedTargets ? ALL_TARGETS : targets;
+	const selectedTargets = requestedTargets
+		? availableTargets.filter(target => requestedTargets.has(target.id))
+		: targets;
 
 	if (requestedTargets) {
 		const unknownTargets = [...requestedTargets].filter(
-			requestedTarget => !targets.some(target => target.id === requestedTarget),
+			requestedTarget => !ALL_TARGETS.some(target => target.id === requestedTarget),
 		);
 		if (unknownTargets.length > 0) {
 			throw new Error(`Unknown release target(s): ${unknownTargets.join(", ")}`);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { $ } from "bun";
-import { RELEASE_TARGETS } from "../packages/coding-agent/scripts/binary-targets";
+import { OPTIONAL_MACOS_TARGETS, RELEASE_TARGETS } from "../packages/coding-agent/scripts/binary-targets";
 import { resolveCrossBuild } from "../packages/coding-agent/scripts/build-binary";
 
 const repoRoot = path.join(import.meta.dir, "..");
@@ -21,6 +21,17 @@ describe("local cross-builds derive from the release target table", () => {
 	it("resolves every release target id to that row's exact triple", () => {
 		expect(RELEASE_TARGETS.length).toBeGreaterThan(0);
 		for (const target of RELEASE_TARGETS) {
+			expect(resolveCrossBuild(target.id)).toEqual({
+				id: target.id,
+				platform: target.platform,
+				arch: target.arch,
+				target: target.target,
+			});
+		}
+	});
+
+	it("resolves optional macOS targets for local compilation", () => {
+		for (const target of OPTIONAL_MACOS_TARGETS) {
 			expect(resolveCrossBuild(target.id)).toEqual({
 				id: target.id,
 				platform: target.platform,

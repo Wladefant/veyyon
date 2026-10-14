@@ -41,22 +41,6 @@ export interface BinaryTarget {
 /** Every binary a release publishes, in the order the release build walks them. */
 export const RELEASE_TARGETS: readonly BinaryTarget[] = [
 	{
-		id: "darwin-arm64",
-		platform: "darwin",
-		arch: "arm64",
-		target: "bun-darwin-arm64",
-		outfile: "packages/coding-agent/binaries/veyyon-darwin-arm64",
-		bytecode: true, // built natively on macos-14
-	},
-	{
-		id: "darwin-x64",
-		platform: "darwin",
-		arch: "x64",
-		target: "bun-darwin-x64",
-		outfile: "packages/coding-agent/binaries/veyyon-darwin-x64",
-		bytecode: true, // built natively on macos-15-intel
-	},
-	{
 		id: "linux-x64",
 		platform: "linux",
 		arch: "x64",
@@ -88,6 +72,32 @@ export const RELEASE_TARGETS: readonly BinaryTarget[] = [
 	},
 ];
 
+/** Optional macOS targets preserved for local compilation when appropriate. */
+export const OPTIONAL_MACOS_TARGETS: readonly BinaryTarget[] = [
+	{
+		id: "darwin-arm64",
+		platform: "darwin",
+		arch: "arm64",
+		target: "bun-darwin-arm64",
+		outfile: "packages/coding-agent/binaries/veyyon-darwin-arm64",
+		bytecode: true, // built natively on macos-14
+	},
+	{
+		id: "darwin-x64",
+		platform: "darwin",
+		arch: "x64",
+		target: "bun-darwin-x64",
+		outfile: "packages/coding-agent/binaries/veyyon-darwin-x64",
+		bytecode: true, // built natively on macos-15-intel
+	},
+];
+
+/** All recognized binary targets across release and local builds. */
+export const ALL_TARGETS: readonly BinaryTarget[] = Object.freeze([
+	...RELEASE_TARGETS,
+	...OPTIONAL_MACOS_TARGETS,
+]);
+
 /**
  * Extra `CROSS_TARGET` spellings a local build accepts, mapped to the target id.
  *
@@ -102,5 +112,5 @@ const CROSS_TARGET_ALIASES: Readonly<Record<string, string>> = {
 /** The target with this id or accepted alias, or `undefined` when nothing matches. */
 export function findBinaryTarget(idOrAlias: string): BinaryTarget | undefined {
 	const id = CROSS_TARGET_ALIASES[idOrAlias] ?? idOrAlias;
-	return RELEASE_TARGETS.find(target => target.id === id);
+	return ALL_TARGETS.find(target => target.id === id);
 }

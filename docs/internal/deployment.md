@@ -206,11 +206,9 @@ change a name, change it in the table and in both installers together:
 | --- | --- |
 | linux x64 | `veyyon-linux-x64` |
 | linux arm64 | `veyyon-linux-arm64` |
-| macOS x64 | `veyyon-darwin-x64` |
-| macOS arm64 | `veyyon-darwin-arm64` |
 | Windows x64 | `veyyon-windows-x64.exe` |
 
-Each ships alongside a `<asset>.sha256`. `install.sh` covers linux and darwin;
+Each ships alongside a `<asset>.sha256`. `install.sh` covers linux;
 `install.ps1` handles `veyyon-windows-x64.exe`.
 
 ### Integrity
