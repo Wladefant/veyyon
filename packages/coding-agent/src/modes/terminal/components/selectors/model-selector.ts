@@ -1,7 +1,7 @@
 /**
  * Reusable searchable model selector with auth status on each row.
  *
- * Used by settings roles, agent profiles, compaction, and any other surface
+ * Used by the Roster, agent profiles, compaction, and any other surface
  * that needs "pick a model from the catalog" without reimplementing search,
  * auth badges, or clear/unset.
  */
@@ -12,7 +12,6 @@ import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import type { SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { ModelRegistry } from "../../../../config/model-registry";
-import type { Settings } from "../../../../config/settings";
 import { theme } from "../../../../theme/theme";
 import {
 	buildBrowserItems,
@@ -132,7 +131,6 @@ export class ModelSelectorPanel extends Container {
 	#onCancel: () => void;
 
 	constructor(
-		settings: Settings,
 		registry: ModelRegistry,
 		models: ReadonlyArray<Model>,
 		options: ModelSelectorOptions,
@@ -150,7 +148,7 @@ export class ModelSelectorPanel extends Container {
 		}
 		this.addChild(new Spacer(1));
 
-		this.#browser = new ModelBrowser(settings, {
+		this.#browser = new ModelBrowser({
 			showProvider: true,
 			currentContextTokens: options.currentContextTokens,
 			disableOverContext: false,

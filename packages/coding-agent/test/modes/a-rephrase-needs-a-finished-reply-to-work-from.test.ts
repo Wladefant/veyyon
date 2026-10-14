@@ -78,7 +78,7 @@ describe("/rephrase needs a finished reply to work from", () => {
 			"todo.enabled": false,
 			"todo.reminders": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const noteTool: AgentTool = {
 			name: "note",

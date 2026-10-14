@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { INHERIT_ROW_SELECTOR } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-browser";
 import { ModelSelectorPanel } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-selector";
 import { barePickerSelector } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
@@ -59,7 +58,6 @@ function makePanel(options: { allowClear?: boolean; currentSelector?: string; cl
 		cancels: 0,
 	};
 	harness.panel = new ModelSelectorPanel(
-		Settings.isolated({}),
 		REGISTRY,
 		MODELS,
 		{

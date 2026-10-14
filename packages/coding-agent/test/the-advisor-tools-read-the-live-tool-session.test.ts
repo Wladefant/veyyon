@@ -63,7 +63,7 @@ async function launch(): Promise<Launched> {
 	authStorages.push(authStorage);
 	authStorage.setRuntimeApiKey("openai", "test-key");
 	const settings = Settings.isolated({ "async.enabled": false, "advisor.enabled": true });
-	settings.setModelRole("advisor", "openai/gpt-4o-mini");
+	settings.set("agent.helpers", { ...settings.get("agent.helpers"), advisor: { model: "openai/gpt-4o-mini" } });
 
 	const sessions: ToolSession[] = [];
 	const buildRead = BUILTIN_TOOLS.read;

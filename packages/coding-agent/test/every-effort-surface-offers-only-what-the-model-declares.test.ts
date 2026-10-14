@@ -439,8 +439,8 @@ function openThinkingModal(model: Model<Api>): string {
 function openModelHubEffortStrip(model: Model<Api>): string {
 	const ui = { requestRender: () => {}, terminal: { rows: 40 } } as unknown as TUI;
 	const hub = new ModelHubComponent(ui, settings, modelRegistry, [{ model }], {
-		onAssign: () => {},
-		onUnassign: () => {},
+		onSetDefault: () => {},
+		onClearDefault: () => {},
 		onLoginRequest: () => {},
 		onFallbackChainChange: () => {},
 		onCancel: () => {},

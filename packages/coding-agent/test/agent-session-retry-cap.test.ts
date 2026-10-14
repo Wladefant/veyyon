@@ -126,7 +126,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 100,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -199,7 +199,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -293,7 +293,7 @@ describe("AgentSession retry delay cap", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -386,7 +386,7 @@ describe("AgentSession retry delay cap", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -460,7 +460,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -526,7 +526,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 5_000,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -639,7 +639,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -762,7 +762,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -898,7 +898,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 5_000,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -962,7 +962,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 5_000,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1017,7 +1017,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1075,7 +1075,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": true,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1132,7 +1132,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1189,7 +1189,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1245,7 +1245,7 @@ describe("AgentSession retry delay cap", () => {
 		});
 
 		const settings = Settings.isolated({ "compaction.enabled": false });
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,

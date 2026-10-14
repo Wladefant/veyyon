@@ -57,7 +57,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		resetSettingsForTest();
 	});
 
-	it("does not switch to the plan-role model after exit when the entry switch was deferred by streaming", async () => {
+	it("does not switch to the plan helper's model after exit when the entry switch was deferred by streaming", async () => {
 		const planModel = modelRegistry.find("anthropic", "claude-haiku-4-5");
 		if (!planModel) throw new Error("Expected claude-haiku-4-5 in registry");
 
@@ -65,12 +65,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// previous (default) model and queues a pending switch to the plan model
 		// instead of applying it immediately.
 		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => true });
-		vi.spyOn(session, "resolveRoleModelWithThinking").mockReturnValue({
-			model: planModel,
-			thinkingLevel: undefined,
-			explicitThinkingLevel: false,
-			warning: undefined,
-		});
+		vi.spyOn(session, "resolveHelperModel").mockReturnValue({ model: planModel, inherited: false });
 		// Avoid kicking off real session work during plan mode entry.
 		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);
 
@@ -88,8 +83,8 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// Stream ends → event-controller flushes any queued model switch.
 		await mode.flushPendingModelSwitch();
 
-		// Contract: the deferred plan-role switch must be discarded on exit.
-		// Otherwise the next user turn lands on the plan-role model even though
+		// Contract: the deferred plan-model switch must be discarded on exit.
+		// Otherwise the next user turn lands on the plan model even though
 		// the user is no longer in plan mode.
 		expect(setModelSpy).not.toHaveBeenCalled();
 	});

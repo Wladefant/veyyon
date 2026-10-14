@@ -39,9 +39,8 @@ function clampMemoryEffort(model: Model, requested: Effort): Effort | undefined 
 }
 
 import type { ModelRegistry } from "../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
 import type { Settings } from "../config/settings";
+import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
 
 // The path layout lives in its own leaf: this module reaches 558 modules (it asks a model to
 // summarise a session), and `internal-urls/memory-protocol` needs only the root. Re-exported so
@@ -381,11 +380,7 @@ async function runPhase1(options: {
 		const threads = await collectThreads(session, currentThreadId);
 		upsertThreads(db, threads);
 
-		const phase1Model = await resolveMemoryModel({
-			modelRegistry,
-			session,
-			fallbackRole: "default",
-		});
+		const phase1Model = resolveMemoryModel(modelRegistry, session);
 		if (!phase1Model) {
 			logger.debug("Phase1 skipped: no model available");
 			return;
@@ -539,11 +534,7 @@ async function runPhase2(options: {
 			return;
 		}
 
-		const phase2Model = await resolveMemoryModel({
-			modelRegistry,
-			session,
-			fallbackRole: "smol",
-		});
+		const phase2Model = resolveMemoryModel(modelRegistry, session);
 		if (!phase2Model) {
 			markPhase2FailureWithFallback(db, {
 				claim,
@@ -1371,22 +1362,15 @@ function computeModelTokenBudget(model: Model, config: MemoryRuntimeConfig): num
 	return Math.max(2048, Math.floor(maxTokens));
 }
 
-async function resolveMemoryModel(options: {
-	modelRegistry: ModelRegistry;
-	session: AgentSession;
-	fallbackRole: string;
-}): Promise<Model | undefined> {
-	const { modelRegistry, session, fallbackRole } = options;
-	const requestedModel =
-		session.settings.getModelRole(fallbackRole) || session.settings.getModelRole(DEFAULT_MODEL_SLOT);
-	if (requestedModel) {
-		const resolved = resolveModelRoleValue(requestedModel, modelRegistry.getAll(), {
-			settings: session.settings,
-			matchPreferences: getModelMatchPreferences(session.settings),
+/** The `memory` helper's model: its configured chain, else the session's model. */
+function resolveMemoryModel(modelRegistry: ModelRegistry, session: AgentSession): Model | undefined {
+	const selection = resolveHelperModel(session.settings, "memory", modelRegistry.getAll(), session.model);
+	if (!selection) {
+		logger.warn("Memory pass skipped: the configured model matches no model", {
+			setting: helperSettingPath("memory", "model"),
 		});
-		if (resolved.model) return resolved.model;
 	}
-	return session.model ?? modelRegistry.getAll()[0];
+	return selection?.model;
 }
 
 function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {

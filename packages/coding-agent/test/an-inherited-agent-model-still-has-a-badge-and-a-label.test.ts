@@ -197,7 +197,7 @@ describe("an inherited subagent model still has a badge and a label", () => {
 			} as never;
 		});
 		const settings = Settings.isolated({ "providers.tinyModel": "online" });
-		settings.setModelRole("default", "stale/default-model");
+		settings.setDefaultModel("stale/default-model");
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(
 			createSessionResult(createChild(live, undefined, () => sleep(20))),
 		);

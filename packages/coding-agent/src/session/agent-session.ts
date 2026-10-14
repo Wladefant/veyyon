@@ -167,6 +167,7 @@ import {
 import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import { credentialRemedySentence, missingCredentialsMessage } from "../config/missing-credentials";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	extractExplicitThinkingSelector,
@@ -175,14 +176,12 @@ import {
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
-	type ResolvedModelRoleValue,
-	resolveModelRoleValue,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT, getKnownRoleIds, resolveModelSlot } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
 import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
-import { onAppendOnlyModeChanged, onModelRolesChanged } from "../config/settings-signals";
+import { onAppendOnlyModeChanged, onHelperModelsChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability, reset as resetCapabilities } from "../discovery/capability";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
@@ -249,6 +248,13 @@ import { invalidateHostMetadata } from "../ssh/connection-manager";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
 import { enabledAgentNames, resolveDelegation } from "../task/agent-settings";
 import {
+	HELPER_IDS,
+	type HelperId,
+	type HelperModelSelection,
+	helperModelPatterns,
+	resolveHelperModel,
+} from "../task/helper-settings";
+import {
 	IrcBus,
 	type IrcMessage,
 	type IrcPersistedDeliveryFacts,
@@ -293,7 +299,7 @@ import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { isSameAssistantMessage, sanitizeAssistantForReparentedHistory } from "./agent-session-message-shapes";
-import { contextPromotionTarget, roleModelValue } from "./agent-session-model-targets";
+import { contextPromotionTarget } from "./agent-session-model-targets";
 import { isToolOrderPermutation } from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
@@ -327,9 +333,6 @@ import {
 	type ProjectAdvisorScope,
 	type PromptOptions,
 	QUIESCENCE_RECHECK_MS,
-	type ResolvedRoleModel,
-	type RoleModelCycle,
-	type RoleModelCycleResult,
 	type ScheduledAgentContinueOptions,
 	type SecretRuntimeLease,
 	type SessionHandoffOptions,
@@ -2021,7 +2024,7 @@ export class AgentSession {
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		this.#listenerReleases.push(
 			onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model)),
-			onModelRolesChanged(() => this.#advisorRoster.onModelRolesChanged()),
+			onHelperModelsChanged(() => this.#advisorRoster.onHelperModelsChanged()),
 		);
 		const unsubscribePromptSettings = this.settings.onEffectiveSettingChanged((path, value) => {
 			if (this.#isDisposed) return;
@@ -5007,38 +5010,61 @@ export class AgentSession {
 		await sendModeContext(this, this.#buildVibeModeMessage(), options);
 	}
 
-	resolveRoleModel(role: string): Model | undefined {
-		return roleModelValue(this.settings, role, this.#config.modelRegistry.getAvailable(), this.model).model;
+	/**
+	 * Resolve a helper to its model and thinking level.
+	 */
+	resolveHelperModel(id: HelperId): HelperModelSelection | undefined {
+		return resolveHelperModel(this.settings, id, this.#config.modelRegistry.getAvailable(), this.model);
 	}
 
 	/**
-	 * Resolve a role to its model AND thinking level.
-	 * Unlike resolveRoleModel(), this preserves the thinking level suffix
-	 * from role configuration (e.g., "anthropic/claude-sonnet-4-5:xhigh").
+	 * Resolve the configured `defaultModel` chain to its first available model,
+	 * with the effort its `:level` suffix names. Undefined when the setting is
+	 * unset or matches nothing available.
 	 */
-	resolveRoleModelWithThinking(role: string): ResolvedModelRoleValue {
-		return roleModelValue(this.settings, role, this.#config.modelRegistry.getAvailable(), this.model);
+	resolveDefaultModel(): { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+		const resolved = resolveModelSelectorValue(
+			this.settings.get("defaultModel"),
+			this.#config.modelRegistry.getAvailable(),
+			{ settings: this.settings, matchPreferences: getModelMatchPreferences(this.settings) },
+		);
+		if (!resolved.model) return undefined;
+		return {
+			model: resolved.model,
+			thinkingLevel: resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
+		};
 	}
 
 	/**
 	 * Resolve the explicit thinking suffix that should apply when a temporary
-	 * picker selects a model already assigned to a configured role.
+	 * picker selects a model already assigned to defaultModel or a helper chain.
 	 */
 	resolveTemporaryModelThinkingLevel(model: Model): ConfiguredThinkingLevel | undefined {
 		const availableModels = this.#config.modelRegistry.getAvailable();
 		if (availableModels.length === 0) return undefined;
 
 		const matchPreferences = getModelMatchPreferences(this.settings);
-		for (const role of getKnownRoleIds(this.settings)) {
-			const roleValue = this.settings.getModelRole(role);
-			if (!roleValue) continue;
-
-			const resolved = resolveModelRoleValue(roleValue, availableModels, {
+		const defaultPattern = this.settings.get("defaultModel");
+		if (defaultPattern) {
+			const resolved = resolveModelSelectorValue(defaultPattern, availableModels, {
 				settings: this.settings,
 				matchPreferences,
 			});
-			if (!resolved.explicitThinkingLevel || resolved.thinkingLevel === undefined || !resolved.model) continue;
-			if (modelsAreEqual(resolved.model, model)) return resolved.thinkingLevel;
+			if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined && resolved.model) {
+				if (modelsAreEqual(resolved.model, model)) return resolved.thinkingLevel;
+			}
+		}
+
+		for (const id of HELPER_IDS) {
+			const patterns = helperModelPatterns(this.settings, id);
+			if (patterns.length === 0) continue;
+			const resolved = resolveModelSelectorValue(patterns, availableModels, {
+				settings: this.settings,
+				matchPreferences,
+			});
+			if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined && resolved.model) {
+				if (modelsAreEqual(resolved.model, model)) return resolved.thinkingLevel;
+			}
 		}
 
 		return undefined;
@@ -6657,7 +6683,7 @@ export class AgentSession {
 	 */
 	async setModel(
 		model: Model,
-		role: string = DEFAULT_MODEL_SLOT,
+		slot = "default",
 		options?: {
 			selector?: string;
 			thinkingLevel?: ConfiguredThinkingLevel;
@@ -6675,15 +6701,10 @@ export class AgentSession {
 		this.#config.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#retry.clearActiveFallback();
 		this.#setModelWithProviderSessionReset(targetModel);
-		// One name for the slot, resolved once: the log and the store used to disagree
-		// on the same write (stored `default`, logged `interactive`), so a reader of
-		// the session log could not match an entry to the setting it changed.
-		const slot = resolveModelSlot(role);
 		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, slot);
 		if (options?.persist) {
-			this.settings.setModelRole(
-				slot,
-				this.#formatRoleModelValue(slot, targetModel, options.selector, options.thinkingLevel),
+			this.settings.setDefaultModel(
+				this.#formatDefaultModelValue(targetModel, options.selector, options.thinkingLevel),
 			);
 		}
 		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(
@@ -6742,97 +6763,6 @@ export class AgentSession {
 			return this.#cycleScopedModel(direction);
 		}
 		return this.#cycleAvailableModel(direction);
-	}
-
-	/**
-	 * Resolve the configured role models in the given order plus the index of
-	 * the currently active one. Roles that have no configured model, or whose
-	 * configured model is not currently available, are skipped. The `default`
-	 * role falls back to the active model when no explicit assignment exists.
-	 *
-	 * Returns `undefined` only when there is no current model or no available
-	 * models at all; an empty `models` array is never returned (callers should
-	 * still guard on `models.length`).
-	 */
-	getRoleModelCycle(roleOrder: readonly string[]): RoleModelCycle | undefined {
-		const availableModels = this.#config.modelRegistry.getAvailable();
-		if (availableModels.length === 0) return undefined;
-
-		const currentModel = this.model;
-		if (!currentModel) return undefined;
-		const matchPreferences = getModelMatchPreferences(this.settings);
-		const models: ResolvedRoleModel[] = [];
-
-		for (const role of roleOrder) {
-			const roleModelStr =
-				role === "default"
-					? (this.settings.getModelRole(DEFAULT_MODEL_SLOT) ?? `${currentModel.provider}/${currentModel.id}`)
-					: this.settings.getModelRole(role);
-			if (!roleModelStr) continue;
-
-			const resolved = resolveModelRoleValue(roleModelStr, availableModels, {
-				settings: this.settings,
-				matchPreferences,
-			});
-			if (!resolved.model) continue;
-
-			models.push({
-				role,
-				model: resolved.model,
-				thinkingLevel: resolved.thinkingLevel,
-				explicitThinkingLevel: resolved.explicitThinkingLevel,
-			});
-		}
-
-		if (models.length === 0) return undefined;
-
-		// Trust the recorded role only while its resolved model still IS the
-		// active model. A model switch through another surface (alt+m, retry
-		// fallback, /model) or a role re-configuration leaves the recorded role
-		// pointing at a model the session no longer runs; cycling from that
-		// stale slot lands on the wrong neighbor and reads as a skipped entry.
-		const lastRole = this.sessionManager.getLastModelChangeRole();
-		let currentIndex = lastRole ? models.findIndex(entry => entry.role === lastRole) : -1;
-		if (currentIndex !== -1 && !modelsAreEqual(models[currentIndex].model, currentModel)) {
-			currentIndex = -1;
-		}
-		if (currentIndex === -1) {
-			currentIndex = models.findIndex(entry => modelsAreEqual(entry.model, currentModel));
-		}
-		if (currentIndex === -1) currentIndex = 0;
-
-		return { models, currentIndex };
-	}
-
-	/**
-	 * Apply a resolved role model as the active model without changing global
-	 * settings. Shared with role cycling and the plan-approval model slider.
-	 */
-	async applyRoleModel(entry: ResolvedRoleModel): Promise<void> {
-		await this.setModel(entry.model, entry.role, {
-			thinkingLevel: entry.explicitThinkingLevel ? entry.thinkingLevel : undefined,
-		});
-	}
-
-	/**
-	 * Cycle through configured role models in a fixed order.
-	 * Skips missing roles and changes only the active session model.
-	 * @param roleOrder - Order of roles to cycle through (e.g., ["slow", "default", "smol"])
-	 * @param direction - "forward" (default) or "backward"
-	 */
-	async cycleRoleModels(
-		roleOrder: readonly string[],
-		direction: "forward" | "backward" = "forward",
-	): Promise<RoleModelCycleResult | undefined> {
-		const cycle = this.getRoleModelCycle(roleOrder);
-		if (!cycle || cycle.models.length <= 1) return undefined;
-
-		const step = direction === "backward" ? -1 : 1;
-		const next = cycle.models[(cycle.currentIndex + step + cycle.models.length) % cycle.models.length];
-
-		await this.applyRoleModel(next);
-
-		return { model: next.model, thinkingLevel: this.thinkingLevel, role: next.role };
 	}
 
 	async #getScopedModelsWithApiKey(): Promise<
@@ -6935,7 +6865,7 @@ export class AgentSession {
 		const all = this.#config.modelRegistry.getAvailable();
 		const patterns = this.settings.get("enabledModels");
 		if (!patterns || patterns.length === 0) return all;
-		return filterAvailableModelsByEnabledPatterns(all, patterns, this.settings);
+		return filterAvailableModelsByEnabledPatterns(all, patterns);
 	}
 
 	/**
@@ -7693,8 +7623,11 @@ export class AgentSession {
 		}
 	}
 
-	#formatRoleModelValue(
-		role: string,
+	/**
+	 * The `defaultModel` value a persisted switch writes: the chosen selector, carrying an explicit
+	 * effort suffix when one was passed or when the configured primary already named one.
+	 */
+	#formatDefaultModelValue(
 		model: Model,
 		selectorOverride?: string,
 		thinkingLevelOverride?: ConfiguredThinkingLevel,
@@ -7703,10 +7636,8 @@ export class AgentSession {
 		if (thinkingLevelOverride !== undefined) {
 			return formatModelSelectorValue(modelKey, thinkingLevelOverride);
 		}
-		const existingRoleValue = this.settings.getModelRole(role);
-		if (!existingRoleValue) return modelKey;
-
-		const thinkingLevel = extractExplicitThinkingSelector(existingRoleValue, this.settings, {
+		const [primary] = normalizeModelPatternList(this.settings.get("defaultModel"));
+		const thinkingLevel = extractExplicitThinkingSelector(primary, {
 			isLiteralModelId: (provider, id) => this.#config.modelRegistry.find(provider, id) !== undefined,
 		});
 		return formatModelSelectorValue(modelKey, thinkingLevel);

@@ -669,7 +669,7 @@ async function generateModels() {
 	// below). Always push the curated seed so a regen without credentials, or
 	// with a failed fetch, still bundles XAI_OAUTH_CURATED_MODELS verbatim:
 	// ModelRegistry.#loadModels() picks them up synchronously at boot, so a
-	// persisted `modelRoles.default = "xai-oauth/<id>"` is honored before the
+	// persisted `defaultModel = "xai-oauth/<id>"` is honored before the
 	// async refresh fires (interactive boot does not await refresh).
 	allModels.push(...buildXaiOAuthStaticSeed());
 	// Seed Anthropic models that are live on the first-party API or in limited

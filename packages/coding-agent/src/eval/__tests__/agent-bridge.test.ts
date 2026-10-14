@@ -42,11 +42,9 @@ const taskAgent = {
 	spawns: "*",
 } satisfies AgentDefinition;
 
-// No `model:` here. It used to pin `["@smol"]`, a role alias, which stopped resolving when
-// role expansion lost its built-in chain: an unset role now reports that it names no model
-// instead of silently reaching for a small one. Nothing in this suite is about model
-// resolution — the fixture exists to be a SECOND agent to spawn by name — so pinning a
-// model only coupled it to a subsystem it does not test.
+// No `model:` here. Nothing in this suite is about model resolution — the fixture exists
+// to be a SECOND agent to spawn by name — so pinning a model would only couple it to a
+// subsystem it does not test.
 const reviewerAgent = {
 	name: "reviewer",
 	description: "Reviewer agent",

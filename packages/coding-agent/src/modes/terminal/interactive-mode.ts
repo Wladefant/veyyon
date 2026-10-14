@@ -107,7 +107,7 @@ import { requestsPrompts } from "../../prompts/requests/rows";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import { formatProviderName } from "../../session/account-format";
 import type { AgentSession } from "../../session/agent-session";
-import { type ResolvedRoleModel, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../../session/agent-session-types";
+import { SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../../session/agent-session-types";
 import {
 	BackgroundSessions,
 	type KeptSession,
@@ -121,6 +121,7 @@ import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../../slash-commands/built
 import { buildTuiBuiltinSlashCommands } from "../../slash-commands/builtin-registry";
 import type { SubcommandDef } from "../../slash-commands/types";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../../system-prompt";
+import { helperSettingPath } from "../../task/helper-settings";
 import { applyGroundPaint, getDetectedTerminalGround, setDetectedTerminalGround } from "../../theme/ground-tints";
 import { setMarkdownMermaidRendering } from "../../theme/markdown-theme";
 import { clearMermaidCache } from "../../theme/mermaid-cache";
@@ -271,7 +272,7 @@ class AnchoredLiveContainer extends Container implements NativeScrollbackLiveReg
 	}
 }
 
-/** How long the ctrl+p model-role cycle chip track lingers above the editor
+/** How long the ctrl+p model cycle chip track lingers above the editor
  *  before it auto-clears, mirroring the todo HUD's auto-clear timer. */
 const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
@@ -305,6 +306,15 @@ interface TodoBoardBuildInputs {
 	columns: number;
 	maxRows: number;
 	theme: Theme;
+}
+
+/** A model the plan-approval slider offers to execute the plan: the default model or the plan helper's. */
+interface PlanExecutionModel {
+	/** `default` or `plan`; also the session-log slot the switch is recorded under. */
+	label: "default" | "plan";
+	model: Model;
+	/** The effort that choice names, or undefined to keep the model's own. */
+	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
 export class InteractiveMode implements InteractiveModeContext {
@@ -1986,7 +1996,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * Render the ctrl+p model-role cycle chip track into its own anchored
+	 * Render the ctrl+p model cycle chip track into its own anchored
 	 * container (just above the editor), mirroring the todo HUD: the container is
 	 * cleared and rebuilt in place on every cycle, so rapid presses or concurrent
 	 * chat activity can never stack duplicate tracks into the scrollback.
@@ -2440,12 +2450,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #applyPlanModeModel(): Promise<void> {
-		const resolved = this.session.resolveRoleModelWithThinking("plan");
-		if (!resolved.model) return;
+		const resolved = this.session.resolveHelperModel("plan");
+		if (!resolved) {
+			this.showWarning(
+				`${helperSettingPath("plan", "model")} matches no available model; plan mode stays on the current model.`,
+			);
+			return;
+		}
 
 		const currentModel = this.session.model;
 		const sameModel = modelsAreEqual(currentModel, resolved.model);
-		const planThinkingLevel = resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined;
+		const planThinkingLevel = resolved.thinkingLevel;
 
 		this.#planModePreviousModelState = currentModel
 			? { model: currentModel, thinkingLevel: this.session.configuredThinkingLevel() }
@@ -2653,7 +2668,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	async #applyDeferredPlanModelTransition(
 		outcome: CompactionOutcome | undefined,
-		executionModel: ResolvedRoleModel | undefined,
+		executionModel: PlanExecutionModel | undefined,
 	): Promise<void> {
 		const deferredPrev = this.#planModePreviousModelState;
 		if (deferredPrev === undefined || outcome === "failed") return;
@@ -2678,19 +2693,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!options?.deferModelRestore) {
 				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
 			}
-			// If #applyPlanModeModel queued a deferred switch to the plan-role model
+			// If #applyPlanModeModel queued a deferred switch to the plan helper's model
 			// (because the session was streaming on entry), drop it now: we are
 			// leaving plan mode, so flushing it on the next agent_end would land the
-			// session on the plan-role model after the user has exited plan mode
+			// session on the plan model after the user has exited plan mode
 			// (issue #816). This runs even when deferModelRestore is set
 			// (compact-approval path): otherwise the stale plan switch survives and
 			// flushPendingModelSwitch() later clobbers the restored/execution model.
-			// Only clear when the pending target matches the plan-role model — leave
+			// Only clear when the pending target matches the plan model — leave
 			// any unrelated user-queued switch intact.
 			const pending = this.#pendingModelSwitch;
 			if (pending) {
-				const planResolution = this.session.resolveRoleModelWithThinking("plan");
-				if (planResolution.model && modelsAreEqual(pending.model, planResolution.model)) {
+				const planResolution = this.session.resolveHelperModel("plan");
+				if (planResolution && modelsAreEqual(pending.model, planResolution.model)) {
 					this.#pendingModelSwitch = undefined;
 				}
 			}
@@ -2929,16 +2944,40 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async #applyPlanExecutionModel(entry: ResolvedRoleModel | undefined): Promise<void> {
+	async #applyPlanExecutionModel(entry: PlanExecutionModel | undefined): Promise<void> {
 		if (!entry) return;
 		try {
-			await this.session.applyRoleModel(entry);
+			await this.session.setModel(entry.model, entry.label, { thinkingLevel: entry.thinkingLevel });
 			this.statusLine.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Continuing with ${entry.role}: ${entry.model.name || entry.model.id}`);
+			this.showStatus(`Continuing with ${entry.label}: ${entry.model.name || entry.model.id}`);
 		} catch (error) {
-			this.showWarning(`Could not switch to the ${entry.role} model: ${errorMessage(error)}`);
+			this.showWarning(`Could not switch to the ${entry.label} model: ${errorMessage(error)}`);
 		}
+	}
+
+	/**
+	 * The models the plan-approval slider offers, default first: the configured
+	 * default model (the pre-plan model when none is configured) and the plan
+	 * helper's model. A plan entry on the default entry's model is dropped when
+	 * it names the same effort or none, since it would run the same turn.
+	 */
+	#planExecutionChoices(): PlanExecutionModel[] {
+		const choices: PlanExecutionModel[] = [];
+		const defaultModel = this.session.resolveDefaultModel() ?? this.#planModePreviousModelState;
+		if (defaultModel) choices.push({ label: "default", ...defaultModel });
+		const plan = this.session.resolveHelperModel("plan");
+		if (
+			plan &&
+			!choices.some(
+				entry =>
+					modelsAreEqual(entry.model, plan.model) &&
+					(plan.thinkingLevel === undefined || entry.thinkingLevel === plan.thinkingLevel),
+			)
+		) {
+			choices.push({ label: "plan", model: plan.model, thinkingLevel: plan.thinkingLevel });
+		}
+		return choices;
 	}
 
 	#resolveLocalRoot(): string {
@@ -2991,7 +3030,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			title: string;
 			preserveContext?: boolean;
 			compactBeforeExecute?: boolean;
-			executionModel?: ResolvedRoleModel;
+			executionModel?: PlanExecutionModel;
 		},
 	): Promise<void> {
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
@@ -3332,27 +3371,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		const keepContextLabel = formatKeepContextLabel(contextUsage);
 		const keepContextDisabled = isKeepContextDisabled(contextUsage);
 
-		// Model-tier slider: let the operator pick which configured role model
-		// (smol/default/slow/…) executes the approved plan. The slider always starts
-		// on the `default` tier so execution defaults to the default model no matter
-		// which model drove the planning conversation. Left/right move it from there;
-		// hidden when fewer than two role models resolve — a lone tier is no choice.
-		// `selectedTierIndex` tracks the live slider position.
-		// `cycleOrder` is the ctrl+p cycle and no longer carries the legacy `default`
-		// pseudo-role (see settings.ts's cycleOrder migration), but the slider still
-		// needs `default` as its anchor tier, so it is prepended explicitly here.
-		const roleOrder = ["default", ...this.session.settings.get("cycleOrder").filter(role => role !== "default")];
-		const cycle = this.session.getRoleModelCycle(roleOrder);
-		const defaultTierIndex = cycle ? cycle.models.findIndex(entry => entry.role === "default") : -1;
-		const startTierIndex = defaultTierIndex >= 0 ? defaultTierIndex : (cycle?.currentIndex ?? 0);
-		let selectedTierIndex = startTierIndex;
+		// Model slider: the operator picks which model executes the approved plan,
+		// the default model or the plan helper's. It starts on the default model so
+		// execution runs it no matter which model drove the planning conversation,
+		// and is hidden when both resolve to the same model and effort.
+		const choices = this.#planExecutionChoices();
+		let selectedTierIndex = 0;
 		const slider: HookSelectorSlider | undefined =
-			cycle && cycle.models.length > 1
+			choices.length > 1
 				? {
 						caption: "continue with",
-						index: startTierIndex,
-						segments: cycle.models.map(entry => ({
-							label: entry.role,
+						index: 0,
+						segments: choices.map(entry => ({
+							label: entry.label,
 							detail: entry.model.name || entry.model.id,
 						})),
 						onChange: index => {
@@ -3401,34 +3432,27 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;
 				}
-				// Capture the operator's tier choice and hand it to #approvePlan, which
+				// Capture the operator's choice and hand it to #approvePlan, which
 				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
 				// #planModePreviousModelState (the model from before plan mode), so
 				// applying the slider choice any earlier would be silently reverted.
-				// Pass executionModel only when the slider was actually shown — a
-				// singleton cycle (e.g. only modelRoles.plan is configured, so
-				// getRoleModelCycle synthesizes a lone `default` entry from the
-				// currently active plan model) hides the slider, the operator made
-				// no selection, and the pre-plan model is not in the cycle. Pinning
-				// that singleton would silently switch the session back to the plan
-				// model after #exitPlanMode restored the pre-plan model.
-				// Treat the choice as implicit only when applying the selected role
-				// would land on the same end state as the restore — same model AND
-				// the same effective thinking level. A role with an explicit thinking
-				// suffix that differs from the restored thinking level must still go
-				// through applyRoleModel, otherwise approving on the same model with a
-				// different configured thinking level silently keeps the pre-plan level.
+				// Pass executionModel only when the slider was shown: with no slider
+				// the operator made no selection and the restore stands.
+				// Treat the choice as implicit only when applying it would land on the
+				// same end state as the restore — same model AND the same effective
+				// thinking level. A choice with an explicit thinking level that differs
+				// from the restored one must still switch, otherwise approving on the
+				// same model silently keeps the pre-plan level.
 				const restoredState = this.#planModePreviousModelState;
-				const restoredIndex =
-					cycle && restoredState
-						? cycle.models.findIndex(entry => {
-								if (!modelsAreEqual(entry.model, restoredState.model)) return false;
-								if (!entry.explicitThinkingLevel) return true;
-								return entry.thinkingLevel === restoredState.thinkingLevel;
-							})
-						: -1;
+				const restoredIndex = restoredState
+					? choices.findIndex(entry => {
+							if (!modelsAreEqual(entry.model, restoredState.model)) return false;
+							if (entry.thinkingLevel === undefined) return true;
+							return entry.thinkingLevel === restoredState.thinkingLevel;
+						})
+					: -1;
 				const executionModel =
-					slider && cycle && selectedTierIndex !== restoredIndex ? cycle.models[selectedTierIndex] : undefined;
+					slider && selectedTierIndex !== restoredIndex ? choices[selectedTierIndex] : undefined;
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					title: details.title,
@@ -4485,8 +4509,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.cycleThinkingLevel();
 	}
 
-	cycleRoleModel(direction?: "forward" | "backward"): Promise<void> {
-		return this.#inputController.cycleRoleModel(direction);
+	cycleModel(direction?: "forward" | "backward"): Promise<void> {
+		return this.#inputController.cycleModel(direction);
 	}
 
 	toggleToolOutputExpansion(): void {

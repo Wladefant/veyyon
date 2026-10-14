@@ -14,7 +14,7 @@
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { isRecord, logger } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
-import { resolveConfiguredModelPatterns } from "../config/model-resolver";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import type { SettingPath, Settings } from "../config/settings";
 import type { AgentLaneSettings, AgentSettings } from "../config/settings-domains/agents";
 import {
@@ -561,9 +561,8 @@ export interface ResolvedAgentModel {
 	 */
 	inherited?: true;
 	/**
-	 * Set when a CONFIGURED pattern expanded to nothing (a role alias pointing at
-	 * an unset role, or an empty value). The caller must surface this rather than
-	 * fall through to the next layer.
+	 * Set when a CONFIGURED pattern expanded to nothing (an empty value). The
+	 * caller must surface this rather than fall through to the next layer.
 	 */
 	unresolved?: { source: AgentModelSource; value: string; depth?: number };
 }
@@ -916,7 +915,7 @@ export function resolveAgentModel(options: {
 		if (Array.isArray(raw) && raw.length === 0) continue;
 		if (namesInheritedModel(raw)) return inherit(layer.source, layer.depth);
 		const depthFields = layer.depth !== undefined ? { depth: layer.depth } : {};
-		const patterns = resolveConfiguredModelPatterns(raw, settings);
+		const patterns = normalizeModelPatternList(raw);
 		if (patterns.length > 0) return { patterns, source: layer.source, ...depthFields };
 		return {
 			patterns: [],

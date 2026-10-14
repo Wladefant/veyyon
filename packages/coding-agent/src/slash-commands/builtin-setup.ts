@@ -4,11 +4,8 @@ import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
 import { getAgentDir, getGlobalConfigRootDir, logger, nearestNames, truncate } from "@veyyon/utils";
 import { runTrustSlashCommand } from "../cli/trust-cli";
 import { credentialRemedySentence } from "../config/missing-credentials";
-import {
-	getModelMatchPreferences,
-	resolveConfiguredModelPatterns,
-	resolveModelFromString,
-} from "../config/model-resolver";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
+import { getModelMatchPreferences, resolveModelFromString } from "../config/model-resolver";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import { formatProviderName } from "../session/account-format";
 import {
@@ -67,7 +64,7 @@ export function accountRoleSources(session: AgentSession): AccountRoleSources {
 	const preferences = getModelMatchPreferences(session.settings);
 	const agentProviders: string[] = model ? [model.provider] : [];
 	for (const chain of configuredAgentModelChains(session.settings)) {
-		for (const pattern of resolveConfiguredModelPatterns(chain, session.settings)) {
+		for (const pattern of normalizeModelPatternList(chain)) {
 			const resolved = resolveModelFromString(pattern, available, preferences);
 			if (resolved && !agentProviders.includes(resolved.provider)) agentProviders.push(resolved.provider);
 		}

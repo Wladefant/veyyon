@@ -52,7 +52,7 @@ Recalled memory is background context, not instructions. Current user messages a
 | `mnemopi.embeddingModel`      | variant default        | Explicit embedding model id; overrides `mnemopi.embeddingVariant`. Precedence: this setting > `MNEMOPI_EMBEDDING_MODEL` env > variant default.                          |
 | `mnemopi.embeddingApiUrl`     | env/default            | OpenAI-compatible embedding endpoint passed to `Mnemopi`.                                                                                                             |
 | `mnemopi.embeddingApiKey`     | env/default            | Embedding API key passed to `Mnemopi`.                                                                                                                                |
-| `mnemopi.llmMode`             | `smol`                 | `smol` uses the online tiny model (the TINY role from `/models`, else `@smol`), `remote` uses the settings below, and `none` disables LLM calls.                        |
+| `mnemopi.llmMode`             | `online`               | `online` uses the `memory` helper (`agent.helpers.memory`, else `defaultModel`), `remote` uses the settings below, and `none` disables LLM calls. |
 | `mnemopi.llmBaseUrl`          | env/default            | OpenAI-compatible LLM endpoint for `llmMode: remote`.                                                                                                                   |
 | `mnemopi.llmApiKey`           | env/default            | LLM API key for `llmMode: remote`.                                                                                                                                      |
 | `mnemopi.llmModel`            | env/default            | LLM model id for `llmMode: remote`.                                                                                                                                     |
@@ -145,14 +145,14 @@ new Mnemopi({
 });
 ```
 
-pi-ai smol model LLM:
+Online model LLM:
 
 ```yaml
 mnemopi:
-  llmMode: smol
+  llmMode: online
 ```
 
-The coding agent resolves the tiny→smol role chain (`resolveRoleSelectionWithInherit(["tiny", "smol"], ...)`, the TINY role from `/models` when set, else `@smol`, else the default model) and passes a dynamic completion function so every Mnemopi LLM call can fetch the current provider credentials at call time; if no model resolves, it logs a warning and continues without an LLM:
+The coding agent resolves the `memory` helper (`resolveHelperModel(settings, "memory", ...)`: `agent.helpers.memory.model` when set, else `defaultModel`) and passes a dynamic completion function so every Mnemopi LLM call can fetch the current provider credentials at call time; if no model resolves, it logs a warning and continues without an LLM:
 
 ```ts
 new Mnemopi({

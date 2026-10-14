@@ -528,8 +528,8 @@ export class InputController {
 		// waiting; otherwise ctrl+b stays readline cursor-left.
 		this.ctx.editor.onBashBackground = () => requestManualBackground();
 		this.ctx.editor.onCycleThinkingLevel = () => this.cycleThinkingLevel();
-		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel("forward");
-		this.ctx.editor.onCycleModelBackward = () => this.cycleRoleModel("backward");
+		this.ctx.editor.onCycleModelForward = () => this.cycleModel("forward");
+		this.ctx.editor.onCycleModelBackward = () => this.cycleModel("backward");
 		this.ctx.editor.onSelectModelTemporary = () => this.ctx.showModelSelector({ temporaryOnly: true });
 
 		// Global debug handler on TUI (works regardless of focus)
@@ -1878,29 +1878,32 @@ export class InputController {
 		}
 	}
 
-	async cycleRoleModel(direction: "forward" | "backward" = "forward"): Promise<void> {
+	async cycleModel(direction: "forward" | "backward" = "forward"): Promise<void> {
 		if (this.ctx.focusedAgentId) {
 			this.ctx.showStatus("Model/thinking apply to the main session — press ←← to return first");
 			return;
 		}
 		try {
-			const cycleOrder = settings.get("cycleOrder");
-			const result = await this.ctx.session.cycleRoleModels(cycleOrder, direction);
+			const result = await this.ctx.session.cycleModel(direction);
 			if (!result) {
-				this.ctx.showStatus("Only one role model available");
+				this.ctx.showStatus("Only one model available");
 				return;
 			}
-
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
-			// The status line already reports the resolved model + thinking level, so
-			// the cycle status is just a status-line-style chip track (active role
-			// filled), matching the plan-approval model slider. It renders into its
-			// own anchored container above the editor (cleared+rebuilt each cycle),
-			// so it updates in place instead of stacking duplicates in the scrollback.
+			if (!result.isScoped) {
+				this.ctx.showStatus(`Model: ${result.model.provider}/${result.model.id}`);
+				return;
+			}
+			// A scoped cycle (`--models`) is a short list, so it renders as a chip
+			// track with the active model filled, in its own anchored container
+			// above the editor that is rebuilt each cycle instead of stacking.
+			const scoped = this.ctx.session.scopedModels;
 			const track = renderSegmentTrack(
-				cycleOrder.map(role => ({ label: role })),
-				cycleOrder.indexOf(result.role),
+				scoped.map(entry => ({ label: entry.model.id })),
+				scoped.findIndex(
+					entry => entry.model.provider === result.model.provider && entry.model.id === result.model.id,
+				),
 			);
 			this.ctx.showModelCycleTrack(track);
 		} catch (error) {

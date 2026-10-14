@@ -1,5 +1,5 @@
 /**
- * Generate session titles using a smol, fast model.
+ * Generate session titles with the `title` helper model.
  */
 import * as path from "node:path";
 import type { Api, ApiKeyResolver, AssistantMessage, Context, Model } from "@veyyon/ai";
@@ -8,10 +8,10 @@ import { StreamMarkupHealing } from "@veyyon/ai/utils/stream-markup-healing";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { $env, isTerminalHeadless, logger, prompt } from "@veyyon/utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveRoleSelectionWithInherit } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { titlesPrompts } from "../prompts/titles/rows";
 import { withAtomicSecretPlaceholders } from "../secrets/placeholder";
+import { resolveHelperModel } from "../task/helper-settings";
 import { formatTitleUserMessage } from "../tiny/message-preproc";
 import { isTinyTitleLocalModelKey, ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
 import { isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
@@ -47,7 +47,7 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
 	const availableModels = registry.getAvailable();
 	if (availableModels.length === 0) return undefined;
 
-	return resolveRoleSelectionWithInherit(["tiny", "commit", "smol"], settings, availableModels, currentModel)?.model;
+	return resolveHelperModel(settings, "title", availableModels, currentModel)?.model;
 }
 
 /**
@@ -55,7 +55,7 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
  *
  * @param firstMessage The first user message
  * @param registry Model registry
- * @param settings Settings used to resolve the smol role
+ * @param settings Settings used to resolve the `title` helper
  * @param sessionId Optional session id for sticky API key selection
  * @param currentModel Current model (used to derive title model)
  * @param metadataResolver Optional resolver evaluated after credential selection
@@ -123,9 +123,8 @@ export async function generateSessionTitle(
 	}
 
 	// User explicitly picked a local tiny model. NEVER fall back to the online
-	// smol path (issue #3187): the smol role resolves through priority.json and
-	// silently bills whatever provider holds the resolved API key — OpenRouter
-	// in the reporter's case, leaking real credits without consent. If the
+	// path (issue #3187): an online model silently bills whatever provider
+	// holds the resolved API key, leaking real credits without consent. If the
 	// local worker fails (unknown key, download missing, transformers.js
 	// crash, abort), leave the session untitled; the next user turn retries.
 	if (!isTinyTitleLocalModelKey(tinyModel)) {

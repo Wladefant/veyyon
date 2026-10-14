@@ -5,7 +5,7 @@
  * which agent types exist, what model and effort each one runs, and the limits
  * every run is held to. It is one settings area because it used to be five —
  * `task.*` operational knobs on the Tasks tab, `agent.model` under Models,
- * `modelRoles.task` in the role table, `task.agentModelOverrides` and
+ * a `task` model role, `task.agentModelOverrides` and
  * `task.disabledAgents` with no UI at all — and no screen showed what a spawned
  * agent would actually do.
  *
@@ -55,7 +55,7 @@
  *     lane that spawned you. Change what `deep` runs and everything under `deep`
  *     follows, which is the only reading under which a nested page needs no
  *     absolute value to be understood. The top level has no lane above it, so
- *     unset there is the `default` model role.
+ *     unset there is the spawning session's model.
  *  2. `agents.enabled` IS THE DEPTH LIMIT. Turning a level on grants it; the
  *     first level nobody turned on is where `agent.maxNestedSpawnDepth`
  *     resumes answering. A separate per-agent number is gone: two controls over
@@ -91,6 +91,22 @@ export interface AgentLaneSettings {
 
 /** The top level of a lane chain is a lane like any other. */
 export type AgentSettings = AgentLaneSettings;
+
+/**
+ * One row in {@link AGENTS_SETTINGS}`["agent.helpers"]`, keyed by helper id.
+ *
+ * A helper is a model call a feature makes on its own (a session title, a
+ * commit message, an image description), not an agent the model spawns. It has
+ * the two answers a lane has and nothing else: no `enabled`, because the
+ * feature's own switch governs it, and no `agents`, because a helper spawns
+ * nothing. Unset runs the session's model and effort.
+ */
+export interface HelperLaneSettings {
+	/** What this helper runs. Unset runs the session's model. */
+	model?: string | string[];
+	/** The effort this helper runs at. Unset runs the session's effort. */
+	thinkingLevel?: string;
+}
 
 /**
  * The one bundled agent enabled out of the box: the end-to-end delegate.
@@ -248,7 +264,7 @@ export const AGENTS_SETTINGS = {
 			group: "Agents",
 			label: "Roster",
 			description:
-				"Which agent types the model may spawn and what each one runs. Enabled: the model may pick that agent. Disabled: it may not. With no rows, only the deep agent is enabled. Each agent's page sets its Model, its Effort and which agents it may spawn in turn; an unset value follows the level above, then the session's model and effort.",
+				"What each helper and each agent type runs. Helpers are the model calls features make on their own: advisor, plan mode, vision, commit messages, titles, memory and the rest. Subagents are the agent types the model may spawn: Enabled lets the model pick one, Disabled does not, and with no rows only the deep agent is enabled. Each page sets a Model and an Effort; an agent's page also sets which agents it may spawn. An unset value follows the level above, then the session's model and effort.",
 			keywords: [
 				"agents",
 				"roster",
@@ -263,8 +279,26 @@ export const AGENTS_SETTINGS = {
 				"per-agent",
 				"model",
 				"effort",
+				"helpers",
+				"subagents",
+				"advisor",
+				"plan",
+				"vision",
+				"commit",
+				"title",
+				"memory",
 			],
 		},
+	},
+
+	/**
+	 * Per-helper model and effort keyed by helper id; see {@link HelperLaneSettings}
+	 * and `HELPER_IDS` in `task/helper-settings.ts`. Drawn as the Helpers section
+	 * of the Roster page, which is its only editor.
+	 */
+	"agent.helpers": {
+		type: "record",
+		default: {} as Record<string, HelperLaneSettings>,
 	},
 
 	"agent.maxNestedSpawnDepth": {

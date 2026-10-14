@@ -72,7 +72,7 @@ type SettingsSeed = Parameters<typeof Settings.isolated>[0];
 
 function seeded(seed: SettingsSeed): Settings {
 	const settings = Settings.isolated(seed);
-	settings.setModelRole("default", DEFAULT_ROLE_MODEL);
+	settings.setDefaultModel(DEFAULT_ROLE_MODEL);
 	return settings;
 }
 

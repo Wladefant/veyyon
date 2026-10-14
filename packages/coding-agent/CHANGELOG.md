@@ -2,16 +2,32 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Model roles are removed: `modelRoles`, `modelTags`, `cycleOrder`, custom roles, the `@role`, `pi/role` and `*` selectors, the `--smol` and `--slow` flags, the `VEYYON_SMOL_MODEL`, `VEYYON_SLOW_MODEL` and `VEYYON_PLAN_MODEL` variables and the `/settings` Roles tab no longer exist; `defaultModel` holds the model chain a session starts on, and `agent.helpers.<id>` (`advisor`, `plan`, `vision`, `commit`, `title`, `memory`, `autoThinking`, `unexpectedStop`, `speech`, `completion`) sets the model and effort of each feature's own model call.
+- The `/settings` Roster page lists a Helpers section above the Subagents section, and a helper with no model or effort set runs the session's model and effort.
+- Ctrl+P cycles the scoped models, or every available model when none are scoped, instead of cycling roles.
+- The eval `completion()` helper runs the `completion` helper when `model` is omitted, the session's active model for `"default"`, and otherwise reads `model` as a model selector.
+- `retryFallbackChains` keys are `default`, a model selector or a `provider/*` wildcard, matched in that order of specificity: exact selector, then wildcard, then `default`.
+- The `@veyyon/coding-agent` exports `formatRoleChip`, `resolveRoleAssignments` and `retryFallbackChainsForRoles` are removed, and `resolveRetryFallbackRole` is renamed `resolveRetryFallbackKey`.
+
+### Added
+
+- A config written before this release migrates on load: `modelRoles.default` (or `interactive`) becomes `defaultModel`, the `advisor`, `plan`, `vision`, `commit`, `tiny` and `smol` roles become the matching helpers' models with `@role` references expanded, `mnemopi.llmMode: smol` becomes `online`, and each dropped key is reported once in the log.
+
 ### Changed
 
 - An agent with no model or effort set on its roster page or in its definition runs the spawning session's live model and effort instead of the `default` model role at medium effort; bundled `scout`, `sonic` and `librarian` no longer pin an effort, `model: inherit` on a lane overrides a definition's model, and `/account status` counts the session's provider as an agent provider.
 - Resuming or switching to a transcript reads its starting service tier through the same function a new session uses; no user-visible change.
+- The `/settings` model hub's "Default & fallbacks" view and Default Model row edit `defaultModel`, and clearing the Default Model row keeps a `--model` launch as the session's model.
+- Advisor messages name `agent.helpers.advisor.model` and the Agents → Roster → Helpers → Advisor page.
 
 ### Fixed
 
 - An agent whose effort is inherited or configured runs at the level its own model accepts, and its badge shows that level, rather than the parent's level for a model that lacks it; a parent with no effort leaves the agent at its own default instead of none.
 - An agent that resolves no effort of its own shows the effort its session settles on in its badge, and the `/settings` agent roster shows an agent that runs the session's model as `session model`, which leaves room for a read-only source marker.
 - The `Runs` line on a `/settings` agent page reads `the session's model and effort` for an agent with neither set, and `session effort` instead of `inherit effort` when only the model is set.
+- The plan-approval slider no longer offers the plan model as a second choice when it is the default model at the same effort.
 
 ## [1.5.6] - 2026-10-13
 

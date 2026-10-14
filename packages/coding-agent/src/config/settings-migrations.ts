@@ -15,9 +15,11 @@
  * runs once against the config an instance owns.
  */
 
+import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { deleteByPath, getByPath, type RawSettings, setByPath } from "@veyyon/kernel/settings/store";
 import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
+import type { HelperId } from "../task/helper-settings";
 import { isLightTheme } from "../theme/theme-luminance";
 import { normalizeToolName } from "../tools/core/builtin-names";
 import { type CompactionStrategySetting, migrateCompactionStrategyValue } from "./compaction-strategy";
@@ -624,12 +626,221 @@ function migrateCompactionModel(raw: RawSettings): void {
 	}
 }
 
-/** cycleOrder: drop legacy default pseudo-role from ctrl+p order. */
-function migrateCycleOrder(raw: RawSettings): void {
-	const cycleOrder = raw.cycleOrder;
-	if (Array.isArray(cycleOrder)) {
-		raw.cycleOrder = cycleOrder.filter(role => role !== "default");
+/** Every name `modelRoles` shipped with. Any other key under it was a custom role. */
+const BUILT_IN_ROLES: ReadonlySet<string> = new Set([
+	"default",
+	"interactive",
+	"smol",
+	"slow",
+	"vision",
+	"plan",
+	"commit",
+	"tiny",
+	"advisor",
+]);
+
+/**
+ * The roles each helper read before helpers had their own row, in the order it
+ * tried them. The first one set becomes the helper's model. An empty list is a
+ * helper no role ever configured.
+ */
+const HELPER_ROLE_SOURCES: Readonly<Record<HelperId, readonly string[]>> = {
+	advisor: ["advisor"],
+	plan: ["plan"],
+	vision: ["vision"],
+	commit: ["commit", "smol"],
+	title: ["tiny", "commit", "smol"],
+	memory: ["tiny", "smol"],
+	autoThinking: ["tiny", "smol"],
+	unexpectedStop: ["tiny", "smol"],
+	speech: ["tiny", "smol"],
+	completion: [],
+};
+
+/** Every role a helper inherits from. A role outside this set and not `default` has no successor. */
+const ROLES_WITH_A_HELPER: ReadonlySet<string> = new Set(Object.values(HELPER_ROLE_SOURCES).flat());
+
+/** A `:level` thinking suffix a role reference or a stored pattern may end in. */
+const THINKING_SUFFIXES: ReadonlySet<string> = new Set([
+	...Object.values(ThinkingLevel).filter(level => level !== ThinkingLevel.Inherit),
+	"auto",
+]);
+
+/** Settings whose value is a model chain that could name a role. */
+const MODEL_CHAIN_PATHS: readonly (readonly string[])[] = [
+	["agent", "model"],
+	["agent", "sharedModel"],
+	["compaction", "model"],
+	["prewalk", "cheapModel"],
+	["prewalk", "strongModel"],
+	["composer", "predictions", "model"],
+	["enabledModels"],
+];
+
+/** A chain value as its ordered patterns: a comma string and a list are the same chain. */
+function modelPatternList(value: unknown): string[] {
+	const parts =
+		typeof value === "string"
+			? value.split(",")
+			: Array.isArray(value)
+				? value.flatMap(entry => (typeof entry === "string" ? entry.split(",") : []))
+				: [];
+	return parts.map(part => part.trim()).filter(Boolean);
+}
+
+function withoutThinkingSuffix(pattern: string): string {
+	const colon = pattern.lastIndexOf(":");
+	return colon >= 0 && THINKING_SUFFIXES.has(pattern.slice(colon + 1)) ? pattern.slice(0, colon) : pattern;
+}
+
+/**
+ * The role a pattern referred to: `@role`, the legacy `pi/role` when `role` was
+ * a role, or a bare `*` for the default role, each optionally `:level`.
+ */
+function roleReference(
+	pattern: string,
+	roles: ReadonlyMap<string, string[]>,
+): { role: string; level: string | undefined } | undefined {
+	const base = withoutThinkingSuffix(pattern);
+	const level = base === pattern ? undefined : pattern.slice(base.length + 1);
+	if (base === "*") return { role: "default", level };
+	if (base.startsWith("@")) return { role: base.slice(1), level };
+	if (!base.startsWith("pi/")) return undefined;
+	const role = base.slice("pi/".length);
+	return roles.has(role) || BUILT_IN_ROLES.has(role) ? { role, level } : undefined;
+}
+
+/**
+ * Replace every role reference in a chain with the role's own patterns. A
+ * reference to a role that is unset, or that leads back to itself, has no model
+ * to stand for and is dropped into `dropped`. A `:level` on the reference
+ * replaces the level stored on the role, as role expansion did.
+ */
+function expandRoleReferences(
+	patterns: readonly string[],
+	roles: ReadonlyMap<string, string[]>,
+	visiting: readonly string[],
+	dropped: Set<string>,
+): string[] {
+	const expanded: string[] = [];
+	for (const pattern of patterns) {
+		const reference = roleReference(pattern, roles);
+		if (!reference) {
+			expanded.push(pattern);
+			continue;
+		}
+		const role = reference.role === "interactive" ? "default" : reference.role;
+		const target = roles.get(role);
+		if (!target || visiting.includes(role)) {
+			dropped.add(pattern);
+			continue;
+		}
+		const inner = expandRoleReferences(target, roles, [...visiting, role], dropped);
+		const { level } = reference;
+		expanded.push(...(level ? inner.map(entry => `${withoutThinkingSuffix(entry)}:${level}`) : inner));
 	}
+	return expanded;
+}
+
+function chainValue(patterns: readonly string[]): string | string[] {
+	return patterns.length === 1 ? patterns[0] : [...patterns];
+}
+
+/** Rewrite one chain setting in place when it names a role, keeping its string or list shape. */
+function expandChainAt(raw: RawSettings, path: readonly string[], expand: (patterns: string[]) => string[]): void {
+	const value = getByPath(raw, path);
+	const patterns = modelPatternList(value);
+	const expanded = expand(patterns);
+	if (expanded.length === patterns.length && expanded.every((pattern, i) => pattern === patterns[i])) return;
+	if (expanded.length === 0) deleteByPath(raw, path);
+	else setByPath(raw, path, Array.isArray(value) ? expanded : expanded.join(","));
+}
+
+/**
+ * `modelRoles`, `cycleOrder` and `modelTags` -> `defaultModel` and `agent.helpers`.
+ *
+ * Roles were a second vocabulary for "which model": a table of named slots that
+ * other settings referred to as `@role`. The session's model is `defaultModel`
+ * now, and each feature that ran on a role has its own row under
+ * `agent.helpers`, so the role table goes and every `@role` reference is
+ * replaced by the patterns it stood for. A helper takes the first role set in
+ * the order it used to read them; an `agent.helpers` model already on disk wins.
+ * `slow`, custom roles, `cycleOrder`, `modelTags`, unresolvable references and
+ * role-keyed retry fallback chains have no successor: they are dropped and
+ * reported. `mnemopi.llmMode: smol`, which named the role it ran on, becomes
+ * `online`, the `memory` helper.
+ *
+ * A fixed point: the role table is deleted, and every reference is either
+ * expanded or dropped, so a second pass finds nothing to do.
+ */
+function migrateModelRoles(raw: RawSettings): void {
+	const roles = new Map<string, string[]>();
+	const table = raw.modelRoles;
+	if (isRecord(table)) {
+		for (const [role, value] of Object.entries(table)) {
+			const patterns = modelPatternList(value);
+			if (patterns.length === 0) continue;
+			const slot = role === "interactive" ? "default" : role;
+			if (role === "interactive" && roles.has(slot)) continue;
+			roles.set(slot, patterns);
+		}
+	}
+	const dropped = new Set<string>();
+	const expand = (patterns: string[]): string[] => expandRoleReferences(patterns, roles, [], dropped);
+
+	if (table !== undefined) {
+		const defaultPatterns = roles.get("default");
+		if (defaultPatterns && raw.defaultModel === undefined) {
+			const expanded = expandRoleReferences(defaultPatterns, roles, ["default"], dropped);
+			if (expanded.length > 0) raw.defaultModel = chainValue(expanded);
+		}
+		for (const [helper, sources] of Object.entries(HELPER_ROLE_SOURCES)) {
+			const source = sources.find(role => roles.has(role));
+			if (source === undefined || getByPath(raw, ["agent", "helpers", helper, "model"]) !== undefined) continue;
+			const expanded = expandRoleReferences(roles.get(source) ?? [], roles, [source], dropped);
+			if (expanded.length > 0) setByPath(raw, ["agent", "helpers", helper, "model"], chainValue(expanded));
+		}
+		for (const [role, patterns] of roles) {
+			if (role !== "default" && !ROLES_WITH_A_HELPER.has(role))
+				dropped.add(`modelRoles.${role}=${patterns.join(",")}`);
+		}
+		delete raw.modelRoles;
+	}
+	for (const key of ["cycleOrder", "modelTags"] as const) {
+		if (raw[key] === undefined) continue;
+		dropped.add(key);
+		delete raw[key];
+	}
+	if (getByPath(raw, ["mnemopi", "llmMode"]) === "smol") setByPath(raw, ["mnemopi", "llmMode"], "online");
+
+	for (const path of MODEL_CHAIN_PATHS) expandChainAt(raw, path, expand);
+	const agents = getByPath(raw, ["agent", "agents"]);
+	if (isRecord(agents)) {
+		for (const name of Object.keys(agents)) expandChainAt(raw, ["agent", "agents", name, "model"], expand);
+	}
+	const chains = getByPath(raw, ["retry", "fallbackChains"]);
+	if (isRecord(chains)) {
+		for (const key of Object.keys(chains)) {
+			const isRoleKey = !key.includes("/") && key !== "default" && (BUILT_IN_ROLES.has(key) || roles.has(key));
+			if (key === "interactive" && chains.default === undefined) {
+				chains.default = chains.interactive;
+				delete chains.interactive;
+			} else if (isRoleKey) {
+				dropped.add(`retry.fallbackChains.${key}`);
+				delete chains[key];
+				continue;
+			}
+			const chainKey = key === "interactive" ? "default" : key;
+			if (chains[chainKey] !== undefined) expandChainAt(raw, ["retry", "fallbackChains", chainKey], expand);
+		}
+	}
+
+	if (dropped.size === 0) return;
+	logger.warn(
+		`Settings: model roles were removed, and these values have no successor: ${[...dropped].join(", ")}. ` +
+			`The session model is defaultModel (/model), and each helper's model is set in Agents → Roster → Helpers.`,
+		{ setting: "modelRoles", dropped: [...dropped] },
+	);
 }
 
 /**
@@ -1097,7 +1308,10 @@ const RAW_SETTINGS_MIGRATIONS: readonly RawSettingsMigration[] = [
 	migrateEditSettings,
 	migrateCompactionStrategy,
 	migrateCompactionModel,
-	migrateCycleOrder,
+	// After the agent and compaction folds, so `agent.model` (once
+	// `modelRoles.task`) and `compaction.model` are in place when their role
+	// references are expanded.
+	migrateModelRoles,
 	dropSnapcompact,
 	migrateInlineToolDescriptors,
 	migrateStatusLine,

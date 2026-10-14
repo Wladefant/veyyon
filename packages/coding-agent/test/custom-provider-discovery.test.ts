@@ -40,8 +40,8 @@ async function createHub(state: ProviderDiscoveryState): Promise<ModelHubCompone
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
 	const hub = new ModelHubComponent(ui, Settings.isolated({}), modelRegistry, [], {
-		onAssign: () => {},
-		onUnassign: () => {},
+		onSetDefault: () => {},
+		onClearDefault: () => {},
 		onCancel: () => {},
 	});
 	await Bun.sleep(0);

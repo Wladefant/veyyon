@@ -42,6 +42,7 @@ import { detectTerminalId } from "@veyyon/utils/terminal-emulator";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking/constants";
 import type { GitStatusSummary } from "../utils/git";
+import { normalizeModelPatternList } from "./model-pattern-list";
 import { isSettingsInitialized, settings } from "./settings-instance";
 
 /**
@@ -90,11 +91,11 @@ const GROUND_HEX_RE = /^#[0-9a-f]{6}$/i;
  *
  * Every fact is optional: they are recorded from different places at different moments, and a
  * launch that never resolved one leaves the previous value alone rather than writing a null over
- * it. `modelRole` is what the gauge was measured under: a percentage is a fraction of one model's
- * window, so a role change invalidates it while leaving the dirty marker alone.
+ * it. `defaultModel` is what the gauge was measured under: a percentage is a fraction of one model's
+ * window, so a default model change invalidates it while leaving the dirty marker alone.
  */
 interface ProjectFacts {
-	modelRole: string;
+	defaultModel: string;
 	gitStatus?: GitStatusSummary;
 	contextPercent?: number;
 	/** Milliseconds since the epoch, used only to decide which entry leaves when the map is full. */
@@ -232,7 +233,7 @@ function projectKey(): string {
  * The release and the configured default model, which is what the model-scoped facts describe.
  *
  * A display name, a provider and an effort belong to the model rather than to the directory it was
- * used in, so they are keyed on the role alone and a first launch in a new project states them.
+ * used in, so they are keyed on the default model alone and a first launch in a new project states them.
  * The id is read from the settings store the launch path has already loaded, and it is the same id
  * the next session will start from.
  *
@@ -241,7 +242,7 @@ function projectKey(): string {
  * have moved.
  */
 function modelKey(): string {
-	return `${VERSION}|${settings.getModelRole("default") ?? ""}`;
+	return `${VERSION}|${defaultModelSelector()}`;
 }
 
 /**
@@ -254,9 +255,12 @@ function terminalKey(): string {
 	return detectTerminalId();
 }
 
-/** The configured default model, which is what a project's gauge was measured against. */
-function modelRole(): string {
-	return settings.getModelRole("default") ?? "";
+/**
+ * The first selector of `defaultModel`, which is what a project's gauge was measured against and
+ * what the launch card states before a catalog exists. Empty when no default model is configured.
+ */
+export function defaultModelSelector(): string {
+	return normalizeModelPatternList(settings.get("defaultModel"))[0] ?? "";
 }
 
 /**
@@ -356,14 +360,15 @@ export function readLaunchFacts(): LaunchFacts {
 	const model = file?.models[modelKey()];
 
 	// The gauge answers to both keys, project first. A reading is a fraction of THIS model's
-	// window, so a role change invalidates the project's copy while the dirty marker beside it,
+	// window, so a default model change invalidates the project's copy while the dirty marker beside it,
 	// which describes the working tree, survives. What stands in for an invalidated or missing
 	// reading is the same model's resting cost from wherever it last idled: system prompt, tool
 	// schemas and skills index dominate it, and only the project-scoped context that directory
 	// contributed differs, which on a project carrying a large `AGENTS.md` is several points. That
 	// is a bar drawn a cell or two off against `? left` and no bar at all, and `?` is the one
 	// reading whose arrival redraws the row rather than moving a number already on it.
-	const projectGauge = project && project.modelRole === modelRole() ? asPercent(project.contextPercent) : null;
+	const projectGauge =
+		project && project.defaultModel === defaultModelSelector() ? asPercent(project.contextPercent) : null;
 	return {
 		gitStatus: project ? asGitStatus(project.gitStatus) : null,
 		modelName: model && typeof model.name === "string" && model.name.length > 0 ? model.name : null,
@@ -425,28 +430,28 @@ export interface RestLaunchFactsSource {
 }
 
 /**
- * Whether `model` is the configured default role's model, the key every model fact and gauge is
- * filed under. The role is `provider/id` — comparing it to the bare `model.id` never matched — and
+ * Whether `model` is the configured default model, the key every model fact and gauge is filed
+ * under. The selector is `provider/id` — comparing it to the bare `model.id` never matched — and
  * it carries an optional `:thinking` or `@route` suffix, which is why this tests the qualified id as
  * a PREFIX at a delimiter rather than splitting on a colon the id may contain.
  */
-function isDefaultRoleModel(model: RestLaunchFactsSource["model"]): boolean {
-	const role = settings.getModelRole("default");
+function isDefaultModel(model: RestLaunchFactsSource["model"]): boolean {
+	const selector = defaultModelSelector();
 	const qualified = model?.provider ? `${model.provider}/${model.id}` : model?.id;
 	return (
-		!!role &&
+		!!selector &&
 		!!qualified &&
-		(role === qualified || role.startsWith(`${qualified}:`) || role.startsWith(`${qualified}@`))
+		(selector === qualified || selector.startsWith(`${qualified}:`) || selector.startsWith(`${qualified}@`))
 	);
 }
 
 /**
  * The resting gauge the last launch recorded for `model` in this project, as {@link readLaunchFacts}
- * states it to the card, or null when `model` is not the default role the record is keyed on, when
+ * states it to the card, or null when `model` is not the default model the record is keyed on, when
  * nothing is recorded, or when settings are not initialized.
  */
 export function recordedRestingGauge(model: RestLaunchFactsSource["model"]): number | null {
-	if (!isSettingsInitialized() || !isDefaultRoleModel(model)) return null;
+	if (!isSettingsInitialized() || !isDefaultModel(model)) return null;
 	return readLaunchFacts().contextPercent;
 }
 
@@ -455,30 +460,30 @@ export function recordRestLaunchFacts(
 	contextPercent: number | null,
 	contextLimit: number,
 ): Promise<void> {
-	// The record is keyed by the configured default role, so a process that
+	// The record is keyed by the configured default model, so a process that
 	// never initialised settings has no key to file under — and nothing to say
 	// to the next launch's card. An ACP or eval session constructs through the
 	// same entrypoint without settings; recording must not be the thing that
 	// breaks it.
 	if (!isSettingsInitialized()) return Promise.resolve();
 	const update: LaunchFactsUpdate = {};
-	// Both model facts are filed under the DEFAULT ROLE, because that string is
+	// Both model facts are filed under the DEFAULT MODEL, because that string is
 	// what the next launch keys on.
-	const isDefaultRole = isDefaultRoleModel(source.model);
+	const isDefault = isDefaultModel(source.model);
 
 	// A percentage is a fraction of the window of the model that measured it; a
 	// session runs another model whenever `--model` or `/model` says so, and
-	// recording that reading under the role's key hands the next launch a gauge
+	// recording that reading under the default model's key hands the next launch a gauge
 	// drawn against a window its model does not have. The model's copy is the
 	// same reading with the project's context files taken out, so a project
 	// never measured states a floor every project shares.
-	if (isDefaultRole && contextPercent !== null && source.messageCount === 0) {
+	if (isDefault && contextPercent !== null && source.messageCount === 0) {
 		update.contextPercent = contextPercent;
 		update.modelContextPercent =
 			contextLimit > 0 ? contextPercent - (source.systemContextTokens / contextLimit) * 100 : contextPercent;
 	}
 
-	if (source.model?.name && isDefaultRole) {
+	if (source.model?.name && isDefault) {
 		update.modelName = source.model.name;
 		if (source.model.provider) update.providerName = source.model.provider;
 	}
@@ -487,7 +492,7 @@ export function recordRestLaunchFacts(
 	// the rungs this model supports. Sent as an explicit `null` when the row
 	// printed no tail, so a model whose thinking was turned off stops the next
 	// launch printing the rung it used to run at.
-	if (isDefaultRole && source.model) {
+	if (isDefault && source.model) {
 		if (!source.model.thinking) {
 			update.thinking = null;
 		} else if (source.isAutoThinking) {
@@ -507,16 +512,16 @@ export function recordLaunchFacts(update: LaunchFactsUpdate): Promise<void> {
 	// the same one even though the settings store is free to move between statements.
 	const key = projectKey();
 	const model = modelKey();
-	const role = modelRole();
+	const defaultModel = defaultModelSelector();
 	const previous = load();
 	const recordedProject = previous?.projects[key];
 	const recordedModel = previous?.models[model];
-	const sameModel = recordedProject?.modelRole === role;
+	const sameModel = recordedProject?.defaultModel === defaultModel;
 	const terminal = terminalKey();
 	const recordedTerminal = previous?.terminals[terminal];
 
 	const nextProject: ProjectFacts = {
-		modelRole: role,
+		defaultModel,
 		recordedAt: Date.now(),
 		...(recordedProject && asGitStatus(recordedProject.gitStatus) ? { gitStatus: recordedProject.gitStatus } : {}),
 		...(sameModel && typeof recordedProject?.contextPercent === "number"

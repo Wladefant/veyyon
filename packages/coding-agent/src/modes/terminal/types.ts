@@ -494,7 +494,7 @@ export interface InteractiveModeContext {
 	hasActiveOmfg(): boolean;
 	handleOmfgEscape(): boolean;
 	cycleThinkingLevel(): void;
-	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
+	cycleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;
 	setToolsExpanded(expanded: boolean): void;
 	toggleThinkingBlockVisibility(): void;

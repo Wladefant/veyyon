@@ -1,9 +1,9 @@
 /**
  * WHY THIS EXISTS. `retry.fallbackChains` is keyed by two different things that look alike as text:
- * a model role (`smol`, `default`) and a model selector (`anthropic/claude-sonnet-4`, optionally
- * with an effort suffix). Everything downstream of the chain depends on telling them apart and on
- * separating a selector's model from its effort: the chain key decides whether a fallback follows a
- * role or follows the model across role reassignments, and the BASE selector is what cooldown and
+ * the name `default` (the default model's chain) and a model selector (`anthropic/claude-sonnet-4`,
+ * optionally with an effort suffix). Everything downstream of the chain depends on telling them
+ * apart and on separating a selector's model from its effort: the chain key decides whether a
+ * fallback follows the default model or one specific model, and the BASE selector is what cooldown and
  * pinning state is keyed by. Two selectors that name one model at two efforts must collapse to one
  * base, or the same model accumulates a second, independent cooldown entry and a model that was
  * stood down keeps being retried at another effort.
@@ -37,14 +37,14 @@ function model(provider: string, id: string): Model {
 	} as Model;
 }
 
-describe("a fallback chain key says whether it follows a role or a model", () => {
-	it("reads a name with no slash as a role, which is not a selector", () => {
-		for (const role of ["default", "smol", "slow"]) {
-			expect(isRetryFallbackModelKey(role)).toBe(false);
-			expect(isRetryFallbackWildcardKey(role)).toBe(false);
-			// The pairing is the point: a role key must not also parse as a model selector, or one
+describe("a fallback chain key says whether it follows the default or a model", () => {
+	it("reads a name with no slash as a name, which is not a selector", () => {
+		for (const name of ["default", "fast", "backup"]) {
+			expect(isRetryFallbackModelKey(name)).toBe(false);
+			expect(isRetryFallbackWildcardKey(name)).toBe(false);
+			// The pairing is the point: a named key must not also parse as a model selector, or one
 			// key would be read as both and the chain would follow the wrong thing.
-			expect(parseRetryFallbackSelector(role)).toBeUndefined();
+			expect(parseRetryFallbackSelector(name)).toBeUndefined();
 		}
 	});
 

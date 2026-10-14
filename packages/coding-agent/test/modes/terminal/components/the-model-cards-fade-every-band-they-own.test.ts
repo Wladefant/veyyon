@@ -192,8 +192,8 @@ function makeTui(onRender: () => void = () => {}): TUI {
 
 function makeHub(onRender: () => void = () => {}): ModelHubComponent {
 	return new ModelHubComponent(makeTui(onRender), Settings.isolated({}), makeRegistry(), [], {
-		onAssign: () => {},
-		onUnassign: () => {},
+		onSetDefault: () => {},
+		onClearDefault: () => {},
 		onCancel: () => {},
 	});
 }

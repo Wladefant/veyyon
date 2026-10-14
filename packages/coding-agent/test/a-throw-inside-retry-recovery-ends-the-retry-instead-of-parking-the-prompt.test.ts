@@ -157,7 +157,7 @@ describe("a throw inside retry recovery ends the retry instead of parking the pr
 				"retry.baseDelayMs": 5,
 				...(boundary.fallbackChains ? { "retry.fallbackChains": boundary.fallbackChains } : {}),
 			});
-			settings.setModelRole("default", primarySelector);
+			settings.setDefaultModel(primarySelector);
 			const session = new AgentSession({
 				agent,
 				sessionManager: SessionManager.inMemory(),

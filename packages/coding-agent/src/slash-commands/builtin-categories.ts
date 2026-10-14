@@ -43,7 +43,7 @@ export const BUILTIN_SLASH_COMMAND_CATEGORIES: Readonly<Record<string, string>> 
 	retry: "model",
 	// Beside /btw and /tan: all three act on what the conversation just said, not on the model.
 	rephrase: "context",
-	// Beside the model roles: the advisor IS a model role, and its knobs sit under the Model tab.
+	// Beside the model commands: the advisor's knobs sit under the Model tab.
 	advisor: "model",
 	share: "share",
 	collab: "share",

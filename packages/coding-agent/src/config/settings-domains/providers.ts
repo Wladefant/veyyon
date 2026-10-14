@@ -384,7 +384,7 @@ export const PROVIDERS_SETTINGS = {
 			group: "Services",
 			label: "Enhanced Speech Rewriting",
 			description:
-				"Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure",
+				"Rewrite assistant output into natural spoken prose with the speech helper's model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure",
 			condition: "speechEnabled",
 		},
 	},
@@ -410,7 +410,7 @@ export const PROVIDERS_SETTINGS = {
 			group: "Tiny Model",
 			label: "Session Title Model",
 			description:
-				"Model that writes session titles. Online: the Tiny role from /models, else @smol. Local: an on-device model.",
+				"Model that writes session titles. Online: the title helper (Roster > Helpers), else the session's model. Local: an on-device model.",
 			options: TINY_TITLE_MODEL_OPTIONS,
 		},
 	},
@@ -449,7 +449,7 @@ export const PROVIDERS_SETTINGS = {
 			group: "General",
 			label: "Memory Model",
 			description:
-				"Model Mnemopi uses to extract and consolidate facts. Online: the Tiny role from /models, else @smol. Local: an on-device model.",
+				"Model Mnemopi uses to extract and consolidate facts. Online: the memory helper (Roster > Helpers), else the session's model. Local: an on-device model.",
 			condition: "mnemopiActive",
 			options: TINY_MEMORY_MODEL_OPTIONS,
 		},
@@ -464,7 +464,7 @@ export const PROVIDERS_SETTINGS = {
 			group: "Thinking",
 			label: "Auto Thinking Model",
 			description:
-				"Model that rates task difficulty for the `auto` thinking level. Online: the Tiny role from /models, else @smol. Local: an on-device model.",
+				"Model that rates task difficulty for the `auto` thinking level. Online: the auto-thinking helper (Roster > Helpers), else the session's model. Local: an on-device model.",
 			condition: "autoThinkingActive",
 			options: AUTO_THINKING_MODEL_OPTIONS,
 		},
@@ -489,7 +489,7 @@ export const PROVIDERS_SETTINGS = {
 			group: "Tiny Model",
 			label: "Unexpected Stop Model",
 			description:
-				"Model that classifies whether a turn stopped unexpectedly. Online: the Tiny role from /models, else @smol. Local: an on-device model.",
+				"Model that classifies whether a turn stopped unexpectedly. Online: the unexpected-stop helper (Roster > Helpers), else the session's model. Local: an on-device model.",
 			condition: "unexpectedStopDetection",
 			options: TINY_MEMORY_MODEL_OPTIONS,
 		},

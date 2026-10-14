@@ -7,8 +7,8 @@ How the coding agent loads models, applies overrides, resolves credentials, and 
 Primary implementation files:
 
 - `src/config/model-registry.ts`: loads built-in + custom models, provider overrides, runtime discovery, auth integration
-- `src/config/model-resolver.ts`: parses model patterns and selects initial/smol/slow models
-- `src/config/settings-schema.ts`: model-related settings (`modelRoles`, provider transport preferences)
+- `src/config/model-resolver.ts`: parses model patterns and resolves model chains to available models
+- `src/config/settings-schema.ts`: model-related settings (`defaultModel`, provider transport preferences)
 - `src/session/auth-storage.ts`: re-exports `AuthStorage` from `@veyyon/ai` (`packages/ai/src/auth-storage.ts`); API key + OAuth resolution order
 - `packages/catalog/src/models.ts` and `packages/catalog/src/types.ts`: built-in providers/models (`getBundledModels` / `getBundledProviders`) and `Model`/`compat` types
 
@@ -459,53 +459,29 @@ split across `--provider` and `--model`. A selector with an empty id (`openai/`,
 `--provider openai --model *`) is a selector error that states the provider's default model;
 it never substring-matches the empty string against the provider's first model.
 
-A `@role` selector expands through `modelRoles` and may chain (`@smol` set to `@slow` set to
-`openai/gpt-4o`). The nearest `:level` suffix in the chain wins. Three failures are reported by
-role rather than as an authentication or unknown-id failure: the role is unset, the role is
-unknown, or the chain refers back to itself. A chain whose first entries fail continues to the
-next entry; only a chain with no usable entry fails.
-
 ### Initial model selection priority
 
 `buildSessionOptions(...)` in `main.ts` sets the model a session starts on, in this order:
 
-1. an explicit `--model` (or the legacy `--provider` pair). A selector that resolves to nothing is fatal before the session starts, except a bare id with no provider and no `:` suffix, which is stored as `options.modelPattern` and resolved again after extensions load, since an extension may register the provider it specifies. A `@role` selector never defers: an unset, unknown or self-referencing role is a settings fact no extension changes, so it exits at once.
-2. the scoped set from `--models`, when this is not a `--continue` or `--resume`. Inside that set the remembered `modelRoles.default` wins if it is there; if it is configured but unavailable, `fallbackForUnavailableDefault` substitutes and prints the reason; otherwise the first scoped model is used.
-3. otherwise nothing is pinned here, and the session resolves `modelRoles.default` through `resolveModelRoleValue` against the models that have a usable credential.
+1. an explicit `--model` (or the legacy `--provider` pair). A selector that resolves to nothing is fatal before the session starts, except a bare id with no provider and no `:` suffix, which is stored as `options.modelPattern` and resolved again after extensions load, since an extension may register the provider it specifies.
+2. the scoped set from `--models`, when this is not a `--continue` or `--resume`. Inside that set the first `defaultModel` entry wins if it is there; if it is configured but unavailable, `fallbackForUnavailableDefault` substitutes and prints the reason; otherwise the first scoped model is used.
+3. otherwise nothing is pinned here, and the session resolves `defaultModel` through `resolveModelSelectorValue` against the models that have a usable credential.
 
 A resumed session restores its own model rather than taking a CLI default, which is why step 2 is skipped under `--continue`/`--resume`.
 
-### Role aliases and settings
+### Model chain settings
 
-Built-in role ids (see `model-roles.ts`):
-
-| Role | Selectable in UI | Purpose |
-| --- | --- | --- |
-| `default` | No (hidden) | Storage key for the **interactive** model (`/model` persist / “set as default”) |
-| `smol` | Yes | Fast / cheap (`--smol`) |
-| `slow` | Yes | Thinking (`--slow`) |
-| `vision` | Yes | Multimodal |
-| `plan` | Yes | Plan mode (`--plan`) |
-| `designer` | Yes | Design-oriented work |
-| `commit` | Yes | Commit / changelog |
-| `tiny` | Yes | Lightweight background (titles, classifiers); else `@smol` |
-| `advisor` | Yes | Advisor runtime |
-
-There is no `task` model role. Profile-wide and per-agent model policy lives under `agent` instead of the role table.
-
-`cycleOrder` defaults to `["smol","slow"]`; the entry `default` is stripped on load. Role aliases like `@smol` expand through `settings.modelRoles`; `*` selects `@default` (interactive). Quote `@` aliases in YAML values (`fable: "@slow"`). Each role value can append a thinking selector (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`).
-
-If a role points at another role, the target model still inherits normally and any explicit suffix on the referring role wins for that role-specific use.
+`defaultModel`, `agent.model`, `agent.helpers.<id>.model` and `compaction.model` hold an ordered chain: a comma-separated string or a YAML list. The first entry that matches an available model is used. Each entry can append a thinking selector (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`), which outranks the effort configured beside it.
 
 Related settings:
 
-- `modelRoles` (record)
+- `defaultModel` (model chain)
 - `enabledModels` (scoped pattern list)
 - `modelProviderOrder` (global canonical-provider precedence)
 - `providers.kimiApiFormat` (`openai` or `anthropic` request format)
 - `providers.openaiWebsockets` (`auto|off|on` websocket preference for OpenAI Codex transport)
 
-`modelRoles` may store either:
+A chain entry may be either:
 
 - `provider/modelId` to pin a concrete provider variant
 - a canonical id such as `gpt-5.3-codex` to allow provider coalescing
@@ -579,7 +555,7 @@ If switching from/to `openai-codex-responses`, session provider state key `opena
 Promotion uses temporary switching (`setModelTemporary`):
 
 - recorded as a temporary `model_change` in session history
-- does not rewrite saved role mapping
+- does not rewrite `defaultModel`
 
 ### Configuring explicit fallback chains
 

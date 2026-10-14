@@ -1,58 +1,73 @@
-# Models, roles, and profiles
+# Models, helpers, and profiles
 
 ## Concepts
 
 | Concept | Meaning |
 | --- | --- |
-| **Default model** | The model used for the main conversation, and the one a new session starts on. Chosen with `/model` or `--model`, or in `/settings` under Model. Persisted under `modelRoles.default`, which is a slot rather than a selectable role, so it does not appear in role pickers. |
-| **Role** | A named model assignment for a kind of work (`smol`, `plan`, `advisor`, and others). Configure it in `modelRoles` or Settings → Model → Roles. |
+| **Default model** | The model a new session starts on. Set with `/model`, for one run with `--model`, or in `/settings` under Model → Default Model. Stored as `defaultModel`. |
+| **Helper** | A model call a feature makes on its own behalf: the advisor, plan mode, image description, commit messages, session titles, and others. Configured under `agent.helpers` or in `/settings` under Agents → Roster → Helpers. |
 | **Agent policy** | The blanket model and effort plus per-agent `enabled`, `model`, `thinkingLevel`, and `maxNestedSpawnDepth` choices under `agent`. |
 | **Profile** | User config tree at `~/.veyyon/profiles/<name>/` (including `default`). |
 
-## Interactive model
+## Default model
 
-- Set live with `/model` or the model picker; set for a run with `--model <provider/id>`.
-- On “set as default” / persist paths, the value is stored as **`modelRoles.default`** in the active profile’s `config.yml`.
-- There is no separate top-level `model:` settings key in the schema. Prefer the picker or `modelRoles.default` in config.
+- `/model` switches the live model. Persisting the choice writes `defaultModel` in the active profile's `config.yml`.
+- `--model <provider/id>` sets the model for one run and is never written back.
+- `defaultModel` is an ordered chain: a comma-separated string or a list. The first entry that matches an available model is used, and later entries are retry fallbacks for it.
+- Unset, a new session starts on an available model that has credentials.
 
 ```yaml
 # ~/.veyyon/profiles/default/agent/config.yml
-modelRoles:
-  default: anthropic/claude-sonnet-5   # interactive model (persisted default)
-  smol: openai/gpt-4.1-mini
-  slow: anthropic/claude-opus-4-5:high
-  plan: anthropic/claude-sonnet-5
-  advisor: anthropic/claude-sonnet-5:medium
+defaultModel: anthropic/claude-sonnet-5:medium,openai/gpt-5
 ```
 
-Role values may include a thinking suffix (`:off`, `:auto`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). The model picker shows only variants the selected model supports. If a provider publishes effort tiers as separate upstream IDs, Veyyon presents one logical model and routes the chosen effort to the matching ID.
+A model value may include a thinking suffix (`:off`, `:auto`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). The model picker shows only variants the selected model supports. If a provider publishes effort tiers as separate upstream IDs, Veyyon presents one logical model and routes the chosen effort to the matching ID.
 
-## Built-in roles
+`Ctrl+P` and `Shift+Ctrl+P` (`app.model.cycleForward`, `app.model.cycleBackward`) cycle the scoped models when `--models` is set, and the available models otherwise.
 
-From `packages/coding-agent/src/config/model-roles.ts`:
+## Helpers
 
-| Role id | UI name | Notes |
+Each helper reads `agent.helpers.<id>.model` and `agent.helpers.<id>.thinkingLevel`.
+
+| Helper id | Roster label | Runs |
 | --- | --- | --- |
-| `default` | (hidden) | Storage key for the interactive model only; not shown in role pickers or default `cycleOrder` |
-| `smol` | Fast | Cheap / fast work; `--smol` or env `VEYYON_SMOL_MODEL` |
-| `slow` | Thinking | Heavier reasoning; `--slow` or env `VEYYON_SLOW_MODEL` |
-| `vision` | Vision | Multimodal work |
-| `plan` | Architect | Plan mode; `--plan` or env `VEYYON_PLAN_MODEL` |
-| `commit` | Commit | Commit / changelog generation |
-| `tiny` | Tiny | Lightweight background work: titles, classifiers |
-| `advisor` | Advisor | Advisor runtime; set in Settings → Model → Advisor → Advisor Model, not in the Roles table |
+| `advisor` | Advisor | Reviews the session's turns while the advisor is on. |
+| `plan` | Plan | Runs the session while plan mode is on. `--plan <model>` sets it for one run. |
+| `vision` | Vision | Describes images for `inspect_image` and for a session model without image input. |
+| `commit` | Commit | Writes commit messages and changelog entries for `veyyon commit`. |
+| `title` | Session Title | Names each session from its first messages. |
+| `memory` | Memory | Extracts and consolidates memories when memory is on. |
+| `autoThinking` | Auto Thinking | Rates each prompt's difficulty for the `auto` effort. |
+| `unexpectedStop` | Unexpected Stop | Checks whether a turn stopped before it finished, when detection is on. |
+| `speech` | Speech | Rewrites a reply for speech before it is spoken aloud. |
+| `completion` | Eval Completion | Answers `completion()` calls from the eval tool. |
 
-Custom role names can appear via `modelRoles`, `modelTags`, or `cycleOrder` entries.
+A helper with no model runs the session's live model, and one with no effort runs the session's effort. A caller with no session, such as `veyyon commit` or a headless title, runs `defaultModel` instead. A helper model is an ordered chain like `defaultModel`; a `:level` suffix on the matching entry outranks the helper's `thinkingLevel`. A configured chain that matches no available model leaves the feature without a model, and the feature reports the setting to fix.
 
-Unset selectable roles, `advisor` included, **inherit the live interactive model** at use time. No role has a built-in model chain: a role you have not set specifies no model of its own, so nothing you did not choose ends up running.
+The `vision` helper searches further, because its job is to find a model that accepts images when the session model does not. `inspect_image` tries the `vision` chain, then `defaultModel`, then the session model, then the first available model. Image description for a text-only session model takes the first image-capable match in the same order.
 
-The Roles table lists `smol`, `slow`, `vision`, `plan`, `commit` and `tiny`. `advisor` is a real slot with the same resolution, and `@advisor` names it, but it is edited from the Advisor group instead, beside the toggle that turns the feature on.
+```yaml
+agent:
+  helpers:
+    title:
+      model: openai/gpt-5-mini
+      thinkingLevel: low
+    plan:
+      model: anthropic/claude-opus-4-5:high
+```
 
-A caller may still request several roles in order. Title generation, for example, requests `tiny`, then `commit`, then `smol`, and takes the first one you have set. That order belongs to the caller, not to the role: `tiny` does not fall back to `smol`, the title generator prefers `tiny` and accepts `smol`. If you have set none of them, the whole list is unset and the caller inherits the interactive model like any other unset role.
+In `/settings`, Agents → Roster lists the helpers above the subagents. Enter opens a helper's page, which edits its model and effort. Choosing the first row of a picker, or Del or Backspace with an empty search, returns the value to unset.
 
-There is no `task` role. The model your agents run is set in the Agents settings area, which sets it on its own; see [Settings: Agents](../reference/settings.md#agents).
+A config from an earlier version that holds `modelRoles` is migrated on load. `modelRoles.default` becomes `defaultModel`. Each helper takes the first role that was set, in this order:
 
-To return an assigned role or model policy to its unset state, open its picker in `/settings` and choose the first row, `(inherit main model)` (the default model's picker reads `(auto-select on launch)`). Del or Backspace with an empty search does the same.
+| Helper | Roles read |
+| --- | --- |
+| `advisor`, `plan`, `vision` | the role of the same name |
+| `commit` | `commit`, then `smol` |
+| `title` | `tiny`, then `commit`, then `smol` |
+| `memory`, `autoThinking`, `unexpectedStop`, `speech` | `tiny`, then `smol` |
+
+An `@role` reference in another model setting is replaced by that role's models. `slow`, custom roles, `cycleOrder`, `modelTags` and role-keyed retry fallback chains are dropped, and the log lists each dropped value.
 
 ## Agent policy and compaction overrides
 
@@ -82,21 +97,6 @@ compaction:
 
 In Settings, Enter edits the highlighted chain position. **Add fallback**
 appends a position. Delete removes only the highlighted position.
-
-## Cycling roles (Ctrl+P)
-
-`cycleOrder` lists which **roles** the model switcher cycles (`app.model.cycleForward` / `cycleBackward`, default chords often Ctrl+P / Shift+Ctrl+P).
-
-- Schema default: `["smol", "slow"]` (see `DEFAULT_CYCLE_ORDER`).
-- The string `default` is **stripped** from `cycleOrder` on load; the interactive model is not cycled as a role entry.
-- Scoped models (`--models` / enabled model list) can also drive cycling when configured.
-
-```yaml
-cycleOrder:
-  - smol
-  - slow
-  - plan
-```
 
 ## Profiles
 

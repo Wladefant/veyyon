@@ -158,8 +158,6 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.filter(Boolean);
 }
 
-const AGENT_RETRY_FALLBACK_ROLE_PREFIX = "agent:";
-
 interface AgentRetryFallbackCandidate {
 	model: Model<Api>;
 	selector: string;
@@ -187,12 +185,11 @@ function resolveAgentRetryFallbackCandidates(
 
 function installAgentRetryFallbackChain(args: {
 	settings: Settings;
-	id: string;
 	candidates: AgentRetryFallbackCandidate[];
 	model: Model<Api> | undefined;
 	authFallbackUsed: boolean;
 }): string | undefined {
-	const { settings, id, candidates, model, authFallbackUsed } = args;
+	const { settings, candidates, model, authFallbackUsed } = args;
 	if (!model || authFallbackUsed || candidates.length <= 1) return undefined;
 
 	const selectedIndex = candidates.findIndex(
@@ -202,28 +199,16 @@ function installAgentRetryFallbackChain(args: {
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
 	if (fallbackSelectors.length === 0) return undefined;
 
-	const role = `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`;
-	const modelRoles: Record<string, string> = {};
-	const existingRoles = settings.getModelRoles();
-	for (const existingRole in existingRoles) {
-		const selector = existingRoles[existingRole];
-		if (selector) {
-			modelRoles[existingRole] = selector;
-		}
-	}
-	modelRoles[role] = candidates[selectedIndex].selector;
-	settings.override("modelRoles", modelRoles);
-	const fallbackChains: Record<string, string[]> = {
-		[role]: fallbackSelectors,
-	};
+	// Keyed by the primary's own selector, so the chain applies to that model in this agent's settings
+	// fork and never reaches the parent's chains.
+	const key = candidates[selectedIndex].selector;
+	const fallbackChains: Record<string, string[]> = { [key]: fallbackSelectors };
 	const existingFallbackChains = settings.get("retry.fallbackChains");
-	for (const existingRole in existingFallbackChains) {
-		if (existingRole !== role) {
-			fallbackChains[existingRole] = existingFallbackChains[existingRole];
-		}
+	for (const existingKey in existingFallbackChains) {
+		if (existingKey !== key) fallbackChains[existingKey] = existingFallbackChains[existingKey];
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
-	return role;
+	return key;
 }
 
 function withAbortTimeout<T>(
@@ -1919,16 +1904,15 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 			resolvedModel: model.id,
 		});
 	}
-	const retryFallbackRole = installAgentRetryFallbackChain({
+	const retryFallbackKey = installAgentRetryFallbackChain({
 		settings,
-		id: options.id,
 		candidates: resolveAgentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
 		model,
 		authFallbackUsed,
 	});
-	if (retryFallbackRole) {
+	if (retryFallbackKey) {
 		logger.debug("Configured agent runtime model fallback chain", {
-			role: retryFallbackRole,
+			key: retryFallbackKey,
 			requested: modelPatterns,
 		});
 	}
@@ -2025,7 +2009,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 	const { modelRegistry, model, thinkingLevel } = runModel;
 	const id = options.id;
 	// A requested pattern that resolved to no model is handed to the session to resolve itself, with
-	// the parent's model as its auth fallback and the run's retry chain as its fallback role.
+	// the parent's model as its auth fallback and the run's retry chain as its fallback chain.
 	const deferredPattern = !model && options.modelOverride !== undefined;
 	const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 	const promptInputs: AgentPromptInputs = {
@@ -2048,7 +2032,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		model,
 		modelPattern: deferredPattern ? modelPatterns : undefined,
 		modelPatternAuthFallback: deferredPattern ? options.parentActiveModelPattern : undefined,
-		modelPatternFallbackRole: deferredPattern ? `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}` : undefined,
+		modelPatternFallbackChain: deferredPattern,
 		thinkingLevel,
 		toolNames,
 		requireYieldTool: true,

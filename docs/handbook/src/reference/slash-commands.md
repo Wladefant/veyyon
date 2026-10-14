@@ -116,7 +116,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 
 | Command | Purpose |
 | --- | --- |
-| `/model [id]`, `/models` | Select the **interactive** model only (no role cycle; roles live in settings) |
+| `/model [id]`, `/models` | Select the **interactive** model only (helper models live in settings) |
 | `/switch` | Try a model for this session only, without saving it as default (same as alt+p) |
 | `/fast on\|off\|status` | Fast mode |
 | `/effort [level]` (`/thinking`) | Set reasoning effort; no argument opens the picker |

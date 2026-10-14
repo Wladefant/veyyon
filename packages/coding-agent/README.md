@@ -2,7 +2,7 @@
 
 Core implementation package for the `veyyon` coding agent in the veyyon monorepo.
 
-For installation, setup, provider configuration, model roles, slash commands, and full CLI reference, see:
+For installation, setup, provider configuration, model settings, slash commands, and full CLI reference, see:
 - [Monorepo README (local)](../../README.md)
 - [Monorepo README (GitHub)](https://github.com/santhreal/veyyon#readme)
 

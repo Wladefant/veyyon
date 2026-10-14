@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
-import { resolveConfiguredModelPatterns, resolveModelOverride } from "@veyyon/coding-agent/config/model-resolver";
+import { resolveModelOverride } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { getBundledAgent, loadBundledAgents } from "@veyyon/coding-agent/task/agents";
 
@@ -57,12 +57,11 @@ describe("bundled agent parsing", () => {
 		}
 	});
 
-	// Issue #4761: with `modelRoles.slow: ...:xhigh`, the role's explicit effort
-	// suffix must survive agent-pattern expansion and model resolution for the
-	// bundled agents routed at that role. The executor prefers an explicit
-	// resolved suffix over the agent-definition default (task/executor.ts), so
-	// the resolved level below is what the agent runs at.
-	it("resolves the configured slow-role effort suffix for reviewer", () => {
+	// Issue #4761: an explicit effort suffix on the model configured for a
+	// bundled agent must survive model resolution. The executor prefers an
+	// explicit resolved suffix over the agent-definition default
+	// (task/executor.ts), so the resolved level below is what the agent runs at.
+	it("resolves the effort suffix of the model configured for reviewer", () => {
 		const gpt55 = buildModel({
 			id: "gpt-5.5",
 			name: "GPT-5.5 Codex",
@@ -76,17 +75,15 @@ describe("bundled agent parsing", () => {
 			contextWindow: 272000,
 			maxTokens: 128000,
 		});
-		const settings = Settings.isolated({
-			modelRoles: { slow: "openai-codex/gpt-5.5:xhigh" },
-		});
+		const settings = Settings.isolated({});
 		const registry = { getAvailable: () => [gpt55] } as Parameters<typeof resolveModelOverride>[1];
 
 		const agent = getBundledAgent("reviewer");
 		expect(agent?.thinkingLevel).toBeUndefined();
-		// The operator's agent model is what a bundled specialist runs now, so the
-		// role's `:xhigh` suffix has to survive expansion of THAT value. The bundled
-		// definitions carry no `model:` of their own; see the test below.
-		const patterns = resolveConfiguredModelPatterns("@slow", settings);
+		// The configured agent model is what a bundled specialist runs, so its
+		// `:xhigh` suffix has to survive resolution. The bundled definitions carry
+		// no `model:` of their own; see the test above.
+		const patterns = ["openai-codex/gpt-5.5:xhigh"];
 		const resolved = resolveModelOverride(patterns, registry, settings);
 		expect(resolved.model?.provider).toBe("openai-codex");
 		expect(resolved.model?.id).toBe("gpt-5.5");

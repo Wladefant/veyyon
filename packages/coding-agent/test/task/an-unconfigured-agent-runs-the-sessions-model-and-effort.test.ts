@@ -94,7 +94,7 @@ describe("an agent nobody configured runs the session's model and effort", () =>
 			"agent.agents": enabled,
 			"agent.isolation.mode": "none",
 		});
-		settings.setModelRole("default", DEFAULT_ROLE_MODEL);
+		settings.setDefaultModel(DEFAULT_ROLE_MODEL);
 		const tool = await TaskTool.create(
 			makeToolSession({
 				cwd: tempDir.path(),

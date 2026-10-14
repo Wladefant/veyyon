@@ -356,7 +356,7 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 				[AGENT]: { model: BLANKET_MODEL, thinkingLevel: ThinkingLevel.High, agents: { model: DEPTH_MODEL } },
 			},
 		});
-		store.setModelRole("default", DEFAULT_ROLE_MODEL);
+		store.setDefaultModel(DEFAULT_ROLE_MODEL);
 
 		for (const taskDepth of [undefined, 1, 2]) {
 			const resolved = resolveAgentModel({
@@ -408,7 +408,7 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 				"agent.model": [FALLBACK_MODEL, FRONTMATTER_MODEL],
 				"agent.agents": { [AGENT]: { model: BLANKET_MODEL, agents: { model: DEPTH_MODEL } } },
 			});
-			store.setModelRole("default", SESSION_MODEL);
+			store.setDefaultModel(SESSION_MODEL);
 
 			expect(configuredAgentModelChains(store), `shared ${sharedModel}`).toEqual([
 				[FALLBACK_MODEL, FRONTMATTER_MODEL],
@@ -447,7 +447,7 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 	it("orders the lane over frontmatter, and frontmatter over the session's model", () => {
 		const lane = Settings.isolated({ "agent.agents": { [AGENT]: { model: BLANKET_MODEL } } });
 		const nothing = Settings.isolated();
-		nothing.setModelRole("default", DEFAULT_ROLE_MODEL);
+		nothing.setDefaultModel(DEFAULT_ROLE_MODEL);
 		const session = { sessionModelPattern: SESSION_MODEL };
 
 		expect(
@@ -465,7 +465,7 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 	 */
 	it("leaves every other agent where it was", () => {
 		const store = Settings.isolated({ "agent.agents": { [AGENT]: { model: BLANKET_MODEL } } });
-		store.setModelRole("default", DEFAULT_ROLE_MODEL);
+		store.setDefaultModel(DEFAULT_ROLE_MODEL);
 
 		expect(
 			resolveAgentModel({ settings: store, agentName: AGENT, sessionModelPattern: SESSION_MODEL }).patterns,
@@ -616,7 +616,7 @@ describe("the layer that chose an agent's model is one of exactly four", () => {
 											}
 										: {}),
 								});
-								if (defaultRole) store.setModelRole("default", defaultRole);
+								if (defaultRole) store.setDefaultModel(defaultRole);
 								produced.add(
 									resolveAgentModel({
 										settings: store,
@@ -645,9 +645,9 @@ describe("the layer that chose an agent's model is one of exactly four", () => {
 	 */
 	it("resolves the same with and without the depth-keyed chain set", () => {
 		const clean = Settings.isolated();
-		clean.setModelRole("default", SESSION_MODEL);
+		clean.setDefaultModel(SESSION_MODEL);
 		const stale = Settings.isolated({ "agent.modelByDepth": { "1": DEPTH_MODEL } });
-		stale.setModelRole("default", SESSION_MODEL);
+		stale.setDefaultModel(SESSION_MODEL);
 
 		for (const taskDepth of [undefined, 1, 2]) {
 			const a = resolveAgentModel({ settings: clean, agentName: AGENT, taskDepth });

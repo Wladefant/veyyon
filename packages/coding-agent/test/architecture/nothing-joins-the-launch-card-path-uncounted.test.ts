@@ -99,8 +99,11 @@ const ADMITTED_THIRD_PARTY = ["chalk", "lru-cache"];
  *
  * 333 rather than 332 is `core/frame-pacing.ts`, the frame throttle and the terminal hosts' settle
  * windows split out of `core/tui.ts`, which the card already evaluates. It imports nothing.
+ *
+ * 334 rather than 333 is `config/model-pattern-list.ts`, the splitter `config/launch-facts.ts` reads
+ * the first `defaultModel` selector through. It imports nothing.
  */
-const CARD_PATH_CEILING = 333;
+const CARD_PATH_CEILING = 334;
 const CARD_PATH_FLOOR = 250;
 
 describe("nothing joins the launch card path uncounted", () => {

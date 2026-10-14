@@ -18,10 +18,9 @@ function onlineModel(): Model {
 function settingsFor(backend: string, model = onlineModel()) {
 	return {
 		get(path: string) {
-			return path === "providers.unexpectedStopModel" ? backend : undefined;
-		},
-		getModelRole(role: string) {
-			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
+			if (path === "providers.unexpectedStopModel") return backend;
+			if (path === "agent.helpers") return { unexpectedStop: { model: `${model.provider}/${model.id}` } };
+			return undefined;
 		},
 	} as never;
 }

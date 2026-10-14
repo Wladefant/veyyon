@@ -3,7 +3,7 @@
 Product decision. Do not "clean up" the coordination + prompt keepers below. Do not confuse them with
 settings UX that was cut (model-selection matrix, role-based routing popups, replaced by the shipped
 model-slots-plus-3-knob-compaction design, see [Compaction & project memory](../handbook/src/context/compaction-memory.md)
-and [Models, roles, and profiles](../handbook/src/using/roles-and-profiles.md)).
+and [Models, helpers, and profiles](../handbook/src/using/roles-and-profiles.md)).
 
 This page is a keep/cut ledger carried forward from the pre-fork planning notes. The keep/cut
 *decisions* are sound; the module pointers below have been re-grounded on the real TypeScript tree,
@@ -52,11 +52,11 @@ These are **not** keepers. Do not preserve them when condensing settings; they w
 the shipped model-slots-plus-3-knob-compaction design (see [Compaction & project memory](../handbook/src/context/compaction-memory.md)).
 
 1. **Role-based model-selection matrix and per-role popups.** Superseded by the shipped design: the
-   interactive model via `/model`, plain `agent.model` and `compaction.model` fields in settings.
-   `default` is not a model or a role, see `packages/coding-agent/src/config/model-roles.ts` and
-   `packages/coding-agent/src/config/model-resolver.ts`.
+   interactive model via `/model` (`defaultModel`), plain `agent.model` and `compaction.model` fields,
+   and one row per feature under `agent.helpers`, see `packages/coding-agent/src/task/helper-settings.ts`
+   and `packages/coding-agent/src/config/model-resolver.ts`.
 2. **Silent per-role heuristic routing.** The primary model drives everything unless the plain
-   agent/compaction fields say otherwise; there is no hidden per-role auto-pick behind the scenes.
+   agent/compaction/helper fields say otherwise; there is no hidden per-role auto-pick behind the scenes.
 3. **Overlapping compaction settings UX.** Condensed to threshold, the fixed
    `summary` strategy, and an ordered model chain. See
    `packages/coding-agent/src/config/compaction-strategy.ts` and the `compaction.*`

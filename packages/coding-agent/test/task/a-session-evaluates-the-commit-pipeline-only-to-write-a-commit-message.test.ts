@@ -17,7 +17,7 @@
  * isolation runner, or any module they reach turns the suite red whichever file holds it.
  *
  * The `ai` arm is the positive control and the contract the change keeps: the callback evaluates the
- * pipeline on its first call, sends the diff to the smol model, and returns the model's message. The
+ * pipeline on its first call, sends the diff to the commit helper's model, and returns the model's message. The
  * `generic` arm keeps returning no callback, so the caller writes its static message.
  *
  * WHAT IT DOES NOT CATCH. A route that reaches the pipeline after session creation from a tool's
@@ -85,7 +85,7 @@ it("builds the isolation commit-message callback of each style and evaluates no 
 	expect(report.atCallback).toEqual([]);
 });
 
-it("writes the commit message with the smol model on the callback's first call", () => {
+it("writes the commit message with the commit helper's model on the callback's first call", () => {
 	expect(report.message).toBe("fix the probe");
 	expect(report.afterCommit).toContain("rows.ts");
 	expect(report.afterCommit).toContain("message-system.md");

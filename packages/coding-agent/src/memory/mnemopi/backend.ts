@@ -10,10 +10,10 @@ import type { DiagnosticSummary } from "@veyyon/mnemopi/diagnose";
 import { clampLow, logger, removeWithRetries } from "@veyyon/utils";
 import { escapeMarkdownTableCell } from "@veyyon/utils/markdown-table";
 import type { ModelRegistry } from "../../config/model-registry";
-import { resolveRoleSelectionWithInherit } from "../../config/model-resolver";
 import { resolveConfigValue } from "../../config/resolve-config-value";
 import { memoriesPrompts } from "../../prompts/memories/rows";
 import type { AgentSession } from "../../session/agent-session";
+import { helperSettingPath, resolveHelperModel } from "../../task/helper-settings";
 import { isTinyMemoryLocalModelKey, ONLINE_MEMORY_MODEL_KEY } from "../../tiny/models";
 import { tinyModelClient } from "../../tiny/title-client";
 import { shortenPath } from "../../tools/core/render-utils";
@@ -511,7 +511,7 @@ async function resolveMnemopiProviderOptions(
 
 	if (config.llm.mode === "none") return base;
 
-	// A local on-device memory model (providers.memoryModel) overrides the smol/remote
+	// A local on-device memory model (providers.memoryModel) overrides the online/remote
 	// LLM for both consolidation and the configured extraction path. `none` still wins
 	// (the user explicitly disabled the LLM). The refined prompts feed the small local
 	// model the line-format extraction + hardened consolidation recipes from the spike.
@@ -543,20 +543,21 @@ async function resolveMnemopiProviderOptions(
 	}
 
 	try {
-		const resolved = resolveRoleSelectionWithInherit(["tiny", "smol"], settings, modelRegistry.getAvailable());
-		const model = resolved?.model;
+		const model = resolveHelperModel(settings, "memory", modelRegistry.getAvailable())?.model;
 		if (!model) {
-			logger.warn("Mnemopi: llmMode=smol but no tiny/smol/default model resolved; continuing without LLM.");
+			logger.warn(
+				`Mnemopi: llmMode=online but ${helperSettingPath("memory", "model")} and defaultModel resolve to no model; continuing without LLM.`,
+			);
 			return base;
 		}
 		const onlineCompletion = Object.assign(
 			async (prompt: string, opts?: MnemopiLlmCompleteOptions) => {
 				if (opts?.onPayload === undefined) {
-					throw new Error("Mnemopi online smol completion requires an attempt-time payload hook.");
+					throw new Error("Mnemopi online completion requires an attempt-time payload hook.");
 				}
 				const hasApiKey = await modelRegistry.getApiKey(model, sessionId);
 				if (!hasApiKey) {
-					logger.warn("Mnemopi: smol completion requested but no current API key is available.", {
+					logger.warn("Mnemopi: online completion requested but no current API key is available.", {
 						provider: model.provider,
 						model: model.id,
 					});
@@ -597,7 +598,7 @@ async function resolveMnemopiProviderOptions(
 			},
 		};
 	} catch (error) {
-		logger.warn("Mnemopi: smol LLM resolution failed; continuing without LLM.", { error: String(error) });
+		logger.warn("Mnemopi: online LLM resolution failed; continuing without LLM.", { error: String(error) });
 		return base;
 	}
 }
@@ -608,17 +609,17 @@ function createMnemopiAttemptFetch(baseFetch: FetchImpl, onPayload: MnemopiLlmPa
 		let requestInit = init;
 		if (init?.body !== undefined && init.body !== null) {
 			if (typeof init.body !== "string") {
-				throw new Error("Mnemopi online smol completion produced a non-JSON provider body.");
+				throw new Error("Mnemopi online completion produced a non-JSON provider body.");
 			}
 			let payload: unknown;
 			try {
 				payload = JSON.parse(init.body) as unknown;
 			} catch {
-				throw new Error("Mnemopi online smol completion produced an invalid provider body.");
+				throw new Error("Mnemopi online completion produced an invalid provider body.");
 			}
 			const serialized = JSON.stringify(await onPayload(payload));
 			if (serialized === undefined) {
-				throw new Error("Mnemopi online smol completion payload hook returned no body.");
+				throw new Error("Mnemopi online completion payload hook returned no body.");
 			}
 			requestInit = { ...init, body: serialized };
 		} else if (input instanceof Request) {
@@ -626,15 +627,15 @@ function createMnemopiAttemptFetch(baseFetch: FetchImpl, onPayload: MnemopiLlmPa
 			try {
 				payload = JSON.parse(await input.clone().text()) as unknown;
 			} catch {
-				throw new Error("Mnemopi online smol completion produced an invalid provider request.");
+				throw new Error("Mnemopi online completion produced an invalid provider request.");
 			}
 			const serialized = JSON.stringify(await onPayload(payload));
 			if (serialized === undefined) {
-				throw new Error("Mnemopi online smol completion payload hook returned no body.");
+				throw new Error("Mnemopi online completion payload hook returned no body.");
 			}
 			requestInput = new Request(input, { body: serialized });
 		} else {
-			throw new Error("Mnemopi online smol completion produced no interceptable request body.");
+			throw new Error("Mnemopi online completion produced no interceptable request body.");
 		}
 		return baseFetch(requestInput, requestInit);
 	};

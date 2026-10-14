@@ -96,7 +96,7 @@ describe("AgentSession tool-call loop guard", () => {
 			"model.toolCallLoopGuard.threshold": 5,
 			"model.toolCallLoopGuard.exemptTools": ["job", "irc"],
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(tempDir.path()),

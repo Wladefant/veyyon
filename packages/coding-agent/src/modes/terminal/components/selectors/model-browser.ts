@@ -1,11 +1,12 @@
 /**
  * Frameless, reusable model browser: a fuzzy search row, a windowed model
- * list with role chips and metadata columns, and a selection detail block.
+ * list with a default-model chip and metadata columns, and a selection detail
+ * block.
  *
  * Hosts own the surrounding chrome and the data scope — the fullscreen
- * /models hub ({@link ./model-hub}) feeds it scope-filtered items plus role
- * state, while the advisor config overlay embeds it as a plain "pick one
- * model" list.
+ * /models hub ({@link ./model-hub}) feeds it scope-filtered items plus the
+ * default model, while the advisor config overlay embeds it as a plain "pick
+ * one model" list.
  */
 import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@veyyon/agent-core";
@@ -23,8 +24,7 @@ import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import type { SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { resolveEffort, withLegacyDefaultEffort } from "../../../../config/effort-resolver";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../../../../config/model-resolver";
-import { DEFAULT_MODEL_SLOT, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../../../config/model-roles";
+import { getModelMatchPreferences, resolveModelSelectorValue } from "../../../../config/model-resolver";
 import type { Settings } from "../../../../config/settings";
 import { type ThemeColor, theme } from "../../../../theme/theme";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../../../thinking";
@@ -59,69 +59,44 @@ export interface ModelBrowserItem {
 	virtualDetail?: string;
 }
 
-/** Resolved role assignment as displayed by the browser and the hub. */
-export interface RoleAssignment {
+/** The resolved default model as the browser and the hub display it. */
+export interface DefaultModelAssignment {
 	model: Model;
 	thinkingLevel: ConfiguredThinkingLevel;
 }
 
-/** Map of role id to its resolved assignment (absent roles are unassigned). */
-export type RoleAssignments = Record<string, RoleAssignment | undefined>;
-
 /**
- * Resolve every known role that the operator has CONFIGURED to its display
- * assignment, against `allModels`. Shared by the /models hub and the alt+p
+ * Resolve the configured `defaultModel` chain against `allModels`: the first
+ * entry that matches, with its effort. Shared by the /models hub and the alt+p
  * session picker.
  *
- * An unset role gets no assignment. It used to get an "auto-selected" one, shown
- * as a hollow chip, by expanding `@role` through a built-in `priority.json`
- * chain — so the hub advertised a model for a role the operator never assigned,
- * and different roles pointed at different models on a stock install. Unset now
- * means inherit the main model, and the roles view says exactly that, so there
- * is no second model to display.
+ * An unset default, or one that matches nothing, gets no assignment: the hub
+ * shows no default rather than advertise a model nobody picked. The effort is
+ * the selector's explicit `:level`, else what Default Effort sets for that
+ * model, so the chip shows the effort a session starting on it runs.
  */
-export function resolveRoleAssignments(settings: Settings, allModels: ReadonlyArray<Model>): RoleAssignments {
-	const resolvedThinkingLevel = (
-		role: string,
-		model: Model,
-		resolved: { explicitThinkingLevel: boolean; thinkingLevel?: ConfiguredThinkingLevel },
-	): ConfiguredThinkingLevel => {
-		if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined) {
-			return resolved.thinkingLevel;
-		}
-		if (role === "default") {
-			// Shown as the default role's effort: resolve against the concrete
-			// assignment so a model-specific row displays exactly what runtime uses.
-			return (
-				resolveEffort({
-					modelSelector: `${model.provider}/${model.id}`,
-					defaultEffort: withLegacyDefaultEffort(
-						settings.isConfigured("defaultEffort") ? settings.get("defaultEffort") : undefined,
-						settings.get("defaultThinkingLevel"),
-					),
-				}).level ?? ThinkingLevel.Inherit
-			);
-		}
-		return ThinkingLevel.Inherit;
-	};
-
-	const roles: RoleAssignments = {};
-	const matchPreferences = getModelMatchPreferences(settings);
-	const catalog = allModels.slice();
-
-	for (const role of [DEFAULT_MODEL_SLOT, ...getKnownRoleIds(settings)]) {
-		const roleValue = settings.getModelRole(role);
-		if (!roleValue) continue;
-		const resolved = resolveModelRoleValue(roleValue, catalog, { settings, matchPreferences });
-		if (resolved.model) {
-			roles[role] = {
-				model: resolved.model,
-				thinkingLevel: resolvedThinkingLevel(role, resolved.model, resolved),
-			};
-		}
+export function resolveDefaultModelAssignment(
+	settings: Settings,
+	allModels: ReadonlyArray<Model>,
+): DefaultModelAssignment | undefined {
+	const resolved = resolveModelSelectorValue(settings.get("defaultModel"), allModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	const model = resolved.model;
+	if (!model) return undefined;
+	if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined) {
+		return { model, thinkingLevel: resolved.thinkingLevel };
 	}
-
-	return roles;
+	const thinkingLevel =
+		resolveEffort({
+			modelSelector: `${model.provider}/${model.id}`,
+			defaultEffort: withLegacyDefaultEffort(
+				settings.isConfigured("defaultEffort") ? settings.get("defaultEffort") : undefined,
+				settings.get("defaultThinkingLevel"),
+			),
+		}).level ?? ThinkingLevel.Inherit;
+	return { model, thinkingLevel };
 }
 
 /** Wrap raw models into browser items. */
@@ -185,46 +160,38 @@ function extractVersionNumber(id: string): number {
 	return 0;
 }
 
-/** Rank a model by the first built-in role it is assigned to (lower = earlier role). */
-function computeModelRank(model: Model, roles: RoleAssignments): number {
-	let i = 0;
-	while (i < MODEL_ROLE_IDS.length) {
-		const assigned = roles[MODEL_ROLE_IDS[i]];
-		if (assigned && modelsAreEqual(assigned.model, model)) {
-			break;
-		}
-		i++;
-	}
-	return i;
+/** 0 for the default model, which sorts first, and 1 for every other model. */
+function computeModelRank(model: Model, defaultModel: DefaultModelAssignment | undefined): number {
+	return defaultModel && modelsAreEqual(defaultModel.model, model) ? 0 : 1;
 }
 
 /** Options for {@link sortModelItems}. */
 export interface SortModelItemsOptions {
-	roles?: RoleAssignments;
+	defaultModel?: DefaultModelAssignment;
 	mruOrder?: ReadonlyArray<string>;
 	/**
-	 * When a search query is narrowing the list, role assignments should NOT
-	 * promote a weakly-matching default model above a perfect text match —
-	 * defer to MRU/version instead so user affinity drives the order.
+	 * When a search query is narrowing the list, the default model should NOT
+	 * promote a weak match above a perfect text match: defer to MRU/version
+	 * instead so user affinity drives the order.
 	 */
-	skipRoleRank?: boolean;
+	skipDefaultRank?: boolean;
 }
 
 /**
- * Order models for display: role-assigned first, then most-recently-used,
+ * Order models for display: the default model first, then most-recently-used,
  * then per provider by priority, version, and recency.
  */
 export function sortModelItems(items: ModelBrowserItem[], options: SortModelItemsOptions = {}): void {
-	const { roles = {}, mruOrder = [], skipRoleRank = false } = options;
+	const { defaultModel, mruOrder = [], skipDefaultRank = false } = options;
 	const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
 	const dateRe = /-(\d{8})$/;
 	const latestRe = /-latest$/;
 
 	items.sort((a, b) => {
-		if (!skipRoleRank) {
-			const aRank = computeModelRank(a.model, roles);
-			const bRank = computeModelRank(b.model, roles);
+		if (!skipDefaultRank) {
+			const aRank = computeModelRank(a.model, defaultModel);
+			const bRank = computeModelRank(b.model, defaultModel);
 			if (aRank !== bRank) return aRank - bRank;
 		}
 
@@ -297,16 +264,13 @@ export function thinkingLevelGlyph(level: ConfiguredThinkingLevel): string {
 }
 
 /**
- * A slim role chip: `●default ◉` — solid dot for the operator's assignment,
- * thinking glyph attached when set. Only configured roles produce a chip; an
- * unset role inherits the main model and has nothing of its own to show.
+ * The default-model chip: `●default ◉`, with the effort's glyph attached when
+ * one is set.
  */
-export function formatRoleChip(role: string, assignment: RoleAssignment, settings: Settings): string {
-	const info = getRoleInfo(role, settings);
-	const label = (info.tag ?? info.name ?? role).toLowerCase();
+export function formatDefaultChip(assignment: DefaultModelAssignment): string {
 	const glyph = thinkingLevelGlyph(assignment.thinkingLevel);
 	const suffix = glyph ? ` ${theme.fg("dim", glyph)}` : "";
-	return theme.fg(info.color ?? "muted", `${theme.status.enabled}${label}`) + suffix;
+	return theme.fg("success", `${theme.status.enabled}default`) + suffix;
 }
 
 /**
@@ -395,11 +359,10 @@ type PerfMode = "off" | "tps" | "full";
  * stays stable across renders.
  */
 export class ModelBrowser implements Component {
-	#settings: Settings;
 	#searchInput = new Input();
 	#baseItems: ModelBrowserItem[] = [];
 	#visibleItems: ModelBrowserItem[] = [];
-	#roles: RoleAssignments = {};
+	#defaultModel: DefaultModelAssignment | undefined;
 	#mruOrder: ReadonlyArray<string> = [];
 	#perf: ReadonlyMap<string, ModelPerfStats> = new Map();
 	/**
@@ -426,7 +389,7 @@ export class ModelBrowser implements Component {
 	#currentContextTokens: number;
 	#disableOverContext: boolean;
 	#emptyText?: () => string | undefined;
-	/** Keep role-like virtual rows in their host-defined order during search. */
+	/** Keep virtual action rows in their host-defined order during search. */
 	#preserveQueryOrder = false;
 	/** First visible list row; panned by the wheel, snapped to the selection on keyboard navigation. */
 	#windowStart = 0;
@@ -443,8 +406,7 @@ export class ModelBrowser implements Component {
 	/** Cancel key with an empty query (a non-empty query is cleared first). */
 	onCancel?: () => void;
 
-	constructor(settings: Settings, options: ModelBrowserOptions = {}) {
-		this.#settings = settings;
+	constructor(options: ModelBrowserOptions = {}) {
 		this.#showProvider = options.showProvider ?? true;
 		const tokens = options.currentContextTokens ?? 0;
 		this.#currentContextTokens = Number.isFinite(tokens) && tokens > 0 ? Math.floor(tokens) : 0;
@@ -467,8 +429,8 @@ export class ModelBrowser implements Component {
 		}
 	}
 
-	setRoles(roles: RoleAssignments): void {
-		this.#roles = roles;
+	setDefaultModel(assignment: DefaultModelAssignment | undefined): void {
+		this.#defaultModel = assignment;
 	}
 
 	setMruOrder(order: ReadonlyArray<string>): void {
@@ -605,20 +567,16 @@ export class ModelBrowser implements Component {
 		this.onSelectionChange?.(this.getSelected());
 	}
 
-	#isRecentOrRole(item: ModelBrowserItem): boolean {
+	#isRecentOrDefault(item: ModelBrowserItem): boolean {
 		if (this.#mruOrder.includes(item.selector)) return true;
-		for (const role in this.#roles) {
-			const r = this.#roles[role];
-			if (r && modelsAreEqual(r.model, item.model)) return true;
-		}
-		return false;
+		return this.#defaultModel !== undefined && modelsAreEqual(this.#defaultModel.model, item.model);
 	}
 	#insertSeparator(items: ModelBrowserItem[]): ModelBrowserItem[] {
 		const filtered = items.filter(item => item.id !== "separator");
 		// Virtual action rows (inherit/clear) pin ahead of the separator and
 		// recents: they are not "recent", but they must not trigger it either.
 		const firstNonRecentIndex = filtered.findIndex(
-			item => item.virtualLabel === undefined && !this.#isRecentOrRole(item),
+			item => item.virtualLabel === undefined && !this.#isRecentOrDefault(item),
 		);
 		if (firstNonRecentIndex > 0 && firstNonRecentIndex < filtered.length) {
 			const separatorItem: ModelBrowserItem = {
@@ -648,12 +606,16 @@ export class ModelBrowser implements Component {
 				items = matches;
 			} else {
 				// Match quality is the primary key while searching: an exact
-				// "gpt-5.5" must beat the MRU (or role-assigned) "gpt-5.6", so
-				// role rank is skipped and MRU only breaks ties. Scores are
+				// "gpt-5.5" must beat the MRU (or default) "gpt-5.6", so the
+				// default rank is skipped and MRU only breaks ties. Scores are
 				// bucketed so sub-point position noise (provider-name length)
 				// can't split equally good matches; within a bucket the stable
 				// sort keeps sortModelItems' MRU/version order.
-				sortModelItems(matches, { roles: this.#roles, mruOrder: this.#mruOrder, skipRoleRank: true });
+				sortModelItems(matches, {
+					defaultModel: this.#defaultModel,
+					mruOrder: this.#mruOrder,
+					skipDefaultRank: true,
+				});
 				const buckets = new Map<ModelBrowserItem, number>();
 				for (const result of ranked) buckets.set(result.item, Math.round(result.score / 10));
 				matches.sort((a, b) => (buckets.get(a) ?? 0) - (buckets.get(b) ?? 0));
@@ -929,17 +891,9 @@ export class ModelBrowser implements Component {
 		if (selected.selector === this.#currentSelector) {
 			chips.push(theme.fg("success", `${theme.status.enabled} current`));
 		}
-		const seen = new Set<string>();
-		const pushRole = (role: string) => {
-			if (seen.has(role)) return;
-			seen.add(role);
-			const assignment = this.#roles[role];
-			if (!assignment || !modelsAreEqual(assignment.model, model)) return;
-			if (getRoleInfo(role, this.#settings).hidden) return;
-			chips.push(formatRoleChip(role, assignment, this.#settings));
-		};
-		for (const role of MODEL_ROLE_IDS) pushRole(role);
-		for (const role in this.#roles) pushRole(role);
+		if (this.#defaultModel && modelsAreEqual(this.#defaultModel.model, model)) {
+			chips.push(formatDefaultChip(this.#defaultModel));
+		}
 		const line2 = chips.length > 0 ? truncateToWidth(`  ${chips.join(theme.fg("dim", " · "))}`, width) : "";
 		return [line1, line2];
 	}

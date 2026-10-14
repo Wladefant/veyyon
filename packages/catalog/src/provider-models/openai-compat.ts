@@ -1515,7 +1515,7 @@ function applyXAIOAuthCuration(dynamic: readonly ModelSpec<"openai-responses">[]
  * - \`packages/catalog/scripts/generate-models.ts\` (bundles the same entries into
  *   `models.json`, so the synchronous `ModelRegistry.#loadModels()` boot path
  *   sees `xai-oauth` without waiting for a refresh — fixes the boot-time
- *   default-model reset when `modelRoles.default = "xai-oauth/<id>"`).
+ *   default-model reset when `defaultModel = "xai-oauth/<id>"`).
  *
  * `reasoning` defaults to `true` for the Grok-4.x family; the explicit
  * `grok-4.20-0309-non-reasoning` entry opts out via `XAICuratedModel.reasoning`.
@@ -1563,7 +1563,7 @@ export function xaiOAuthModelManagerOptions(
 	// `config.apiKey` at construction time, and OAuth tokens resolve later via
 	// AuthStorage). \`generate-models.ts\` calls the same builder so \`models.json\`
 	// carries these entries too — making the synchronous `#loadModels()` boot
-	// path honor `modelRoles.default = "xai-oauth/<id>"` without `await refresh()`.
+	// path honor `defaultModel = "xai-oauth/<id>"` without `await refresh()`.
 	const staticModels = buildXaiOAuthStaticSeed(resolvedBaseUrl);
 	if (!base.fetchDynamicModels) {
 		return { ...base, staticModels };

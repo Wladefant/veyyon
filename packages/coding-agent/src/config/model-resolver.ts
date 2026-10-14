@@ -10,9 +10,9 @@
  *   grammar on top: trailing `:level` thinking suffixes (`splitThinkingSuffix`)
  *   and `@upstream` provider routing (`splitUpstreamRouting`).
  * - Everything else (`resolveModelFromString`, `resolveModelOverride*`,
- *   `resolveRoleSelection`, `resolveModelScope`, `resolveCliModel`,
- *   `findSmolModel`/`findSlowModel`) adapts inputs — roles, settings patterns,
- *   CLI flags, scope globs — onto that pipeline.
+ *   `resolveModelSelectorValue`, `resolveModelScope`, `resolveCliModel`)
+ *   adapts inputs — settings patterns, CLI flags, scope globs — onto that
+ *   pipeline.
  */
 
 // The owner, not the barrel: see the note in `../thinking.ts`.
@@ -28,7 +28,6 @@ import { resolveBareVariantAlias, resolveVariantAlias } from "@veyyon/catalog/va
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { logger } from "@veyyon/utils";
 import { fuzzyMatch } from "@veyyon/utils/fuzzy";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -37,18 +36,16 @@ import {
 	resolveThinkingLevelForModel,
 } from "../thinking";
 import { isAuthenticated, kNoAuth } from "./auth-state";
+import { normalizeModelPatternList } from "./model-pattern-list";
 import type { ModelRegistry } from "./model-registry";
 import { type ModelRegistryView, modelResolutionFailureMessage } from "./model-resolution-failure";
-import {
-	DEFAULT_MODEL_ROLE_ALIAS,
-	DEFAULT_MODEL_SLOT,
-	formatModelRoleAlias,
-	LEGACY_MODEL_ROLE_ALIAS_PREFIX,
-	MODEL_ROLE_ALIAS_PREFIX,
-	MODEL_ROLE_IDS,
-	type ModelRole,
-} from "./model-roles";
 import type { Settings } from "./settings";
+
+/**
+ * `*` as a whole pattern or as the id after `provider/`. It names no model: a
+ * glob scope is matched by `matchingGlobModels`, never by the model matcher.
+ */
+const PROVIDER_WILDCARD_ID = "*";
 
 function isKnownProvider(provider: string): provider is KnownProvider {
 	return provider in DEFAULT_MODEL_PER_PROVIDER;
@@ -118,8 +115,7 @@ function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): Co
  * the caller opts in via `allowMaxSuffix`/`allowAutoAlias`, the guarded `:max`
  * level / `:auto` sentinel); `base` then has the suffix stripped. Otherwise
  * `base` is the input.
- * `minColonIndex` requires the colon to appear strictly after that index —
- * role-alias callers pass the matched alias prefix length.
+ * `minColonIndex` requires the colon to appear strictly after that index.
  */
 function splitThinkingSuffix(
 	pattern: string,
@@ -144,7 +140,7 @@ function resolveGlobScopePattern(
 	pattern: string,
 	availableModels: readonly Model<Api>[],
 ): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } {
-	// Glob scopes describe which models are enabled, not per-role thinking.
+	// Glob scopes describe which models are enabled, not per-model thinking.
 	// Coerce the `auto` sentinel to a concrete-only view so scope callers stay
 	// typed on `ThinkingLevel` and `enabledModels: [\"openai/*:auto\"]` doesn't
 	// pin a stray per-model level.
@@ -676,7 +672,7 @@ function matchModel(
 	// An empty pattern is a substring of every id and a `*` here is not a glob
 	// (glob scope is `matchingGlobModels`): either would pick the first model of
 	// the whole registry, or of a provider, in silence.
-	if (!modelPattern || modelPattern === DEFAULT_MODEL_ROLE_ALIAS) return undefined;
+	if (!modelPattern || modelPattern === PROVIDER_WILDCARD_ID) return undefined;
 	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
 	if (exactRefMatch) {
 		return exactRefMatch;
@@ -721,7 +717,7 @@ function matchModel(
 		if (providerModels.length === 0) {
 			// The prefix is not a known provider in this candidate set, so treat the
 			// slash as part of the raw model ID and continue with generic matching.
-		} else if (!modelId || modelId === DEFAULT_MODEL_ROLE_ALIAS) {
+		} else if (!modelId || modelId === PROVIDER_WILDCARD_ID) {
 			// `openai/` and `openai/*` name a provider and no model; fuzzy-matching
 			// the empty id ranked every model of the provider and returned the oldest.
 			return undefined;
@@ -870,7 +866,7 @@ function parseModelPatternWithContext(
 }
 
 /** Match a single pattern with a pre-built preference context (direct match plus
- *  the `@upstream` routing fallback), so role resolution can reuse one context
+ *  the `@upstream` routing fallback), so chain resolution can reuse one context
  *  across every fallback pattern instead of rebuilding it per pattern. */
 function matchPatternWithContext(
 	pattern: string,
@@ -908,223 +904,6 @@ export function parseModelPattern(
 	);
 }
 
-const DEFAULT_MODEL_ROLE = "default";
-const MODEL_ROLE_ALIAS_PREFIXES = [MODEL_ROLE_ALIAS_PREFIX, LEGACY_MODEL_ROLE_ALIAS_PREFIX];
-
-function isModelRole(role: string): role is ModelRole {
-	return (MODEL_ROLE_IDS as string[]).includes(role);
-}
-
-/**
- * Minimum colon index for splitting a `:<level>` suffix off a role alias, or
- * `undefined` when `value` is not role-alias shaped. Doubles as the slice
- * offset of the role name for prefixed aliases (`@role`, `pi/role`); the bare
- * `*` default alias returns 0 because its colon sits immediately after the
- * one-character token (`*:xhigh`).
- */
-function modelRoleAliasPrefixLength(value: string): number | undefined {
-	if (value === DEFAULT_MODEL_ROLE_ALIAS || value.startsWith(`${DEFAULT_MODEL_ROLE_ALIAS}:`)) return 0;
-	return MODEL_ROLE_ALIAS_PREFIXES.find(prefix => value.startsWith(prefix))?.length;
-}
-
-function getModelRoleAlias(value: string, settings?: Settings): string | undefined {
-	const normalized = value.trim();
-	const prefixLength = modelRoleAliasPrefixLength(normalized);
-	if (prefixLength === undefined) return undefined;
-
-	const candidate = normalized === DEFAULT_MODEL_ROLE_ALIAS ? DEFAULT_MODEL_ROLE : normalized.slice(prefixLength);
-	if (isModelRole(candidate) || candidate === DEFAULT_MODEL_ROLE || settings?.getModelRole(candidate) !== undefined) {
-		return candidate;
-	}
-	return undefined;
-}
-
-/**
- * Why a `@role` selector expanded to no pattern. Each member names the role so
- * the caller can print a sentence about the ROLE, not about a model id; every
- * caller used to receive `undefined` for all three and report "model not
- * found" for a setting that was never written.
- */
-export type RolePatternFailure =
-	/** The role exists and has no value; it inherits and names no model of its own. */
-	| { kind: "unset-role"; role: string }
-	/** No built-in or configured role has this name. */
-	| { kind: "unknown-role"; role: string }
-	/** The role's chain of `@role` values returns to a role already on the chain. */
-	| { kind: "role-cycle"; role: string; chain: string[] };
-
-export type RolePatternResolution = { kind: "patterns"; patterns: string[] } | RolePatternFailure;
-
-/** Roles a `@role` selector may name: the built-in set plus every configured custom role. */
-function knownRoleNames(settings?: Settings): string[] {
-	const names = new Set<string>([DEFAULT_MODEL_ROLE, ...MODEL_ROLE_IDS]);
-	for (const role in settings?.getModelRoles() ?? {}) names.add(role);
-	return [...names];
-}
-
-/** The operator-facing sentence for a {@link RolePatternFailure}. */
-export function describeRolePatternFailure(failure: RolePatternFailure, settings?: Settings): string {
-	const alias = formatModelRoleAlias(failure.role);
-	switch (failure.kind) {
-		case "unset-role":
-			return (
-				`Role "${failure.role}" is not set, so ${alias} names no model. ` +
-				`Set it under Settings → Model → Roles or as modelRoles.${failure.role} in config.yml.`
-			);
-		case "unknown-role":
-			return `Unknown role "${failure.role}" (${alias}). Roles: ${knownRoleNames(settings).join(", ")}.`;
-		case "role-cycle":
-			return `Role "${failure.role}" refers back to itself: ${failure.chain.map(formatModelRoleAlias).join(" → ")} → ${alias}.`;
-	}
-}
-
-/**
- * Split a configured model value into its ordered chain of patterns.
- *
- * `"opus,sonnet"` and `["opus", "sonnet"]` are the same chain. This is the ONE
- * splitter: the settings chain picker reads and writes through it, so what the
- * picker shows as entry two is exactly what compaction and the agent spawner
- * try second. Role aliases are left alone here; expansion happens in
- * {@link resolveConfiguredModelPatterns}.
- */
-export function normalizeModelPatternList(value: string | string[] | undefined): string[] {
-	if (!value) return [];
-	const patterns = Array.isArray(value) ? value.flatMap(pattern => pattern.split(",")) : value.split(",");
-	return patterns.map(pattern => pattern.trim()).filter(Boolean);
-}
-
-/**
- * Expand one configured pattern, resolving a `@role` alias to the model the role
- * is configured with.
- *
- * An UNSET role resolves to `unset-role`, never to a built-in chain. That is the
- * product contract stated on {@link MODEL_ROLES} and owned by
- * {@link resolveRoleSelectionWithInherit}: an unset role inherits the live main
- * model, so pattern expansion must report "this role names no model of its own"
- * and let the caller apply inherit, or print which role is unset.
- *
- * Returning `priority.json` defaults here instead is the bug this shape exists
- * to prevent: `@smol` / `@slow` / `@designer` resolved to concrete — and
- * different — models even though every role picker showed "inherit (follows main
- * model)". Spawned agents took this path (agent frontmatter carried role aliases), so
- * a stock install silently fanned out across several models and no spawned agent
- * model setting could hold. `priority.json` is for FIRST-RUN model selection
- * ({@link findSmolModel} / {@link findSlowModel}), not for role expansion.
- *
- * A role whose value is itself a `@role` re-enters here (`smol: "@default"`,
- * `slow: "@smol:high"` resolves through both hops), with `visited` as the cycle
- * guard. The `:level` nearest the caller wins over one stored further down the
- * chain, so `@smol:high` over `smol: "@default:low"` yields `<default>:high`.
- */
-function resolveConfiguredRolePattern(
-	value: string,
-	settings?: Settings,
-	visited: string[] = [],
-): RolePatternResolution {
-	const normalized = value.trim();
-	if (!normalized) return { kind: "patterns", patterns: [] };
-
-	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
-		normalized,
-		modelRoleAliasPrefixLength(normalized) ?? LEGACY_MODEL_ROLE_ALIAS_PREFIX.length,
-		MAX_THINKING_SUFFIX_OPTIONS,
-	);
-	const role = getModelRoleAlias(aliasCandidate, settings);
-	if (!role) {
-		// A `@name` that matches no role is not a model pattern either — no provider
-		// or model id starts with `@` — so resolving it to the literal string only
-		// pushes the failure downstream, where it surfaces as "no model matched"
-		// with no mention of the role that does not exist. (The legacy `pi/`
-		// spelling is left alone: `pi/` is also a plausible provider prefix.)
-		if (normalized.startsWith(MODEL_ROLE_ALIAS_PREFIX)) {
-			return { kind: "unknown-role", role: aliasCandidate.slice(MODEL_ROLE_ALIAS_PREFIX.length) };
-		}
-		return { kind: "patterns", patterns: [normalized] };
-	}
-	if (visited.includes(role)) return { kind: "role-cycle", role, chain: visited };
-
-	const configured = settings?.getModelRole(role)?.trim();
-	const configuredPatterns = configured ? normalizeModelPatternList(configured) : [];
-	if (configuredPatterns.length === 0) {
-		return { kind: "unset-role", role };
-	}
-
-	const expanded = expandPatternChain(configuredPatterns, settings, [...visited, role]);
-	if (expanded.kind !== "patterns" || !thinkingLevel) return expanded;
-	return {
-		kind: "patterns",
-		patterns: expanded.patterns.map(pattern => {
-			// The alias suffix is the selector nearest the caller and therefore
-			// replaces a valid suffix stored on the aliased role. Appending produced
-			// `model:high:low`, leaving two contradictory selectors in one value.
-			const existing = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
-			return `${existing.base}:${thinkingLevel}`;
-		}),
-	};
-}
-
-/**
- * Expand every pattern of one chain. A chain entry that is a role failure is
- * skipped while another entry still yields a pattern (`@smol, gpt-4o` with
- * `smol` unset is a chain of one); the first failure is the result only when
- * the whole chain expands to nothing, so a caller never reports a failure the
- * chain's own fallback covered.
- */
-function expandPatternChain(
-	patterns: string[],
-	settings: Settings | undefined,
-	visited: string[],
-): RolePatternResolution {
-	let firstFailure: RolePatternFailure | undefined;
-	const expanded: string[] = [];
-	for (const pattern of patterns) {
-		const resolved = resolveConfiguredRolePattern(pattern, settings, visited);
-		if (resolved.kind === "patterns") expanded.push(...resolved.patterns);
-		else firstFailure ??= resolved;
-	}
-	if (expanded.length === 0 && firstFailure) return firstFailure;
-	return { kind: "patterns", patterns: expanded };
-}
-
-/**
- * Expand a role alias like "@smol" to the configured model string.
- */
-export function expandRoleAlias(value: string, settings?: Settings): string {
-	const normalized = value.trim();
-	if (normalized === DEFAULT_MODEL_ROLE || normalized === DEFAULT_MODEL_ROLE_ALIAS) {
-		// Bare "default" / "*" are inherit/wildcard sentinels, never expanded.
-		return normalized;
-	}
-	if (
-		normalized === formatModelRoleAlias(DEFAULT_MODEL_ROLE) &&
-		settings?.getModelRole(DEFAULT_MODEL_ROLE) === undefined
-	) {
-		// "@default" with no stored legacy default role stays literal; when the
-		// role IS configured it expands like any other alias (#980 fail-closed).
-		return normalized;
-	}
-
-	const resolved = resolveConfiguredRolePattern(value, settings);
-	return (resolved.kind === "patterns" ? resolved.patterns[0] : undefined) ?? value;
-}
-
-/**
- * Expand a configured chain to concrete patterns, or report WHY it expanded to
- * nothing. A caller that prints a failure uses this and
- * {@link describeRolePatternFailure}; a caller that only needs the list uses
- * {@link resolveConfiguredModelPatterns}.
- */
-export function expandConfiguredModelPatterns(
-	value: string | string[] | undefined,
-	settings?: Settings,
-): RolePatternResolution {
-	return expandPatternChain(normalizeModelPatternList(value), settings, []);
-}
-
-export function resolveConfiguredModelPatterns(value: string | string[] | undefined, settings?: Settings): string[] {
-	const expanded = expandConfiguredModelPatterns(value, settings);
-	return expanded.kind === "patterns" ? expanded.patterns : [];
-}
 /*
  * There is deliberately no agent-model resolver here.
  *
@@ -1151,41 +930,31 @@ export function resolveConfiguredModelPatterns(value: string | string[] | undefi
  * anything useful.
  */
 export function resolveCompactionModelPatterns(settings?: Settings): string[] {
-	const configured = settings?.get("compaction.model");
-	const value = typeof configured === "string" ? configured.trim() : configured;
-	if (!value || value.length === 0) return [];
-	return resolveConfiguredModelPatterns(value, settings);
+	return normalizeModelPatternList(settings?.get("compaction.model"));
 }
 
-/**
- * Resolve a model role value into a concrete model and thinking metadata.
- */
-export interface ResolvedModelRoleValue {
+/** A configured model value resolved to a concrete model and thinking metadata. */
+export interface ResolvedModelSelectorValue {
 	model: Model<Api> | undefined;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	explicitThinkingLevel: boolean;
 	warning: string | undefined;
 }
 
-export function resolveModelRoleValue(
-	roleValue: string | undefined,
+/**
+ * Resolve a configured model value (one selector, a comma chain or a list) to
+ * the first entry that matches an available model.
+ */
+export function resolveModelSelectorValue(
+	value: string | string[] | undefined,
 	// Readonly: this only reads the list, and callers legitimately hold a readonly
 	// model list (the settings selector's picker does), which a mutable parameter
 	// type rejected.
 	availableModels: readonly Model<Api>[],
 	options?: { settings?: Settings; matchPreferences?: ModelMatchPreferences },
-): ResolvedModelRoleValue {
-	if (!roleValue) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
-	}
-
-	const normalized = roleValue.trim();
-	if (!normalized || normalized === DEFAULT_MODEL_ROLE) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
-	}
-
-	const effectivePatterns = resolveConfiguredModelPatterns(normalized, options?.settings);
-	if (!effectivePatterns || effectivePatterns.length === 0) {
+): ResolvedModelSelectorValue {
+	const effectivePatterns = normalizeModelPatternList(value);
+	if (effectivePatterns.length === 0) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
 	}
 
@@ -1228,36 +997,14 @@ function isLiteralModelSelector(value: string, options?: ExplicitThinkingSelecto
 
 export function extractExplicitThinkingSelector(
 	value: string | undefined,
-	settings?: Settings,
 	options?: ExplicitThinkingSelectorOptions,
 ): ConfiguredThinkingLevel | undefined {
-	if (!value) return undefined;
-	const normalized = value.trim();
-	if (!normalized || normalized === DEFAULT_MODEL_ROLE) return undefined;
-
-	const visited = new Set<string>();
-	let current = normalized;
-	while (!visited.has(current)) {
-		visited.add(current);
-		const rolePrefixLength = modelRoleAliasPrefixLength(current) ?? LEGACY_MODEL_ROLE_ALIAS_PREFIX.length;
-		const strictSelector = splitThinkingSuffix(current, rolePrefixLength).level;
-		if (strictSelector) {
-			return strictSelector;
-		}
-		const maxSelector = splitThinkingSuffix(current, rolePrefixLength, MAX_THINKING_SUFFIX_OPTIONS).level;
-		if (
-			maxSelector &&
-			(modelRoleAliasPrefixLength(current) !== undefined || !isLiteralModelSelector(current, options))
-		) {
-			return maxSelector;
-		}
-		const expanded = expandRoleAlias(current, settings).trim();
-		if (!expanded || expanded === current) break;
-		if (expanded === DEFAULT_MODEL_ROLE) return undefined;
-		current = expanded;
-	}
-
-	return undefined;
+	const normalized = value?.trim();
+	if (!normalized) return undefined;
+	const strictSelector = splitThinkingSuffix(normalized).level;
+	if (strictSelector) return strictSelector;
+	const maxSelector = splitThinkingSuffix(normalized, -1, MAX_THINKING_SUFFIX_OPTIONS).level;
+	return maxSelector && !isLiteralModelSelector(normalized, options) ? maxSelector : undefined;
 }
 
 /**
@@ -1299,7 +1046,7 @@ export function resolveModelOverride(
 			thinkingLevel,
 			explicitThinkingLevel,
 			warning: patternWarning,
-		} = resolveModelRoleValue(pattern, availableModels, {
+		} = resolveModelSelectorValue(pattern, availableModels, {
 			settings,
 			matchPreferences,
 		});
@@ -1319,7 +1066,7 @@ export function resolveModelOverride(
  * usable auth), and the parent's active model resolves with working auth,
  * use the parent's model instead. This prevents spawned agent dispatch from
  * silently routing to a provider the user can't actually call (e.g.
- * `modelRoles.task` pointing at an unqualified id whose only available
+ * an agent model pointing at an unqualified id whose only available
  * provider variant has no configured credentials — see #985).
  *
  * `sessionId` is forwarded to `getApiKey` so that session-sticky OAuth
@@ -1375,85 +1122,9 @@ export async function resolveModelOverrideWithAuthFallback(
 	return { ...fallback, authFallbackUsed: true, warning: primary.warning ?? fallback.warning };
 }
 
-/** A role chain walk: the winning selection, plus the roles that were set but could not resolve. */
-interface RoleChainWalk {
-	selection?: { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel };
-	/** Roles carrying a configured value that matched no available model. */
-	misconfiguredRoles: string[];
-}
-
-/**
- * Walk a role chain in order, returning the first role that resolves plus every
- * role that was CONFIGURED yet matched no available model.
- *
- * The second half is what keeps "unset" and "set to something broken" apart. A
- * chain is a preference list, so a broken role does not stop the walk, but the
- * caller must be able to tell a deliberate blank (inherit the main model) from a
- * typo'd or unauthenticated override (report it) instead of silently running a
- * model the operator never chose.
- */
-function walkRoleChain(
-	roles: readonly string[],
-	settings: Settings,
-	availableModels: readonly Model<Api>[],
-): RoleChainWalk {
-	const matchPreferences = getModelMatchPreferences(settings);
-	const misconfiguredRoles: string[] = [];
-	for (const role of roles) {
-		const configured = settings.getModelRole(role)?.trim();
-		const resolved = resolveModelRoleValue(configured, availableModels, { settings, matchPreferences });
-		if (resolved.model) {
-			return { selection: { model: resolved.model, thinkingLevel: resolved.thinkingLevel }, misconfiguredRoles };
-		}
-		if (configured) misconfiguredRoles.push(role);
-	}
-	return { misconfiguredRoles };
-}
-
-/**
- * Resolve a list of role patterns to the first matching model.
- */
-export function resolveRoleSelection(
-	roles: readonly string[],
-	settings: Settings,
-	availableModels: readonly Model<Api>[],
-): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
-	return walkRoleChain(roles, settings, availableModels).selection;
-}
-
-/**
- * Role resolution with the inherit default: configured roles win; when every
- * role in the chain is UNSET the live main model is inherited. Headless contexts
- * (no session) pass no `liveModel` and inherit the persisted `default` role
- * instead. This is the single owner of the "unset role follows the main model"
- * product contract — role consumers must not hand-roll their own unset fallback.
- *
- * A role that IS configured but resolves to no available model (typo, retired
- * id, unauthenticated provider) returns `undefined` rather than inheriting. The
- * operator asked for a specific model, so quietly running a different one is the
- * silent fallback this contract exists to prevent; callers surface the miss
- * instead (an advisor reports itself inactive, titling skips and logs).
- */
-export function resolveRoleSelectionWithInherit(
-	roles: readonly string[],
-	settings: Settings,
-	availableModels: readonly Model<Api>[],
-	liveModel?: Model<Api>,
-): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
-	const { selection, misconfiguredRoles } = walkRoleChain(roles, settings, availableModels);
-	if (selection) return selection;
-	if (misconfiguredRoles.length > 0) return undefined;
-	if (liveModel) return { model: liveModel, thinkingLevel: undefined };
-	const persisted = resolveModelRoleValue(settings.getModelRole(DEFAULT_MODEL_SLOT), availableModels, {
-		settings,
-		matchPreferences: getModelMatchPreferences(settings),
-	});
-	return persisted.model ? { model: persisted.model, thinkingLevel: persisted.thinkingLevel } : undefined;
-}
-
 /**
  * Single owner of the "configured default model is unavailable" substitution:
- * when the persisted `default` role points at a model whose provider has no
+ * when the persisted `defaultModel` points at a model whose provider has no
  * stored credentials (or that no longer exists), every surface (interactive
  * session, print mode, commit, …) substitutes the SAME model and surfaces the
  * SAME operator warning. Callers MUST print the returned warning — silently
@@ -1489,26 +1160,6 @@ export function fallbackForUnavailableDefault(
 }
 
 /**
- * Resolve the model for the `advisor` role. A configured `modelRoles.advisor`
- * wins outright (a bad override surfaces as no model rather than silently
- * running something else); when unset the advisor inherits the live main model
- * like every other role, via the one owner {@link resolveRoleSelectionWithInherit}.
- *
- * The advisor used to be the single role that resolved a built-in `slow`
- * priority chain when unset. It is off by default and every model — including
- * inherit — is a valid choice once it is turned on, so a hidden chain only
- * decided a model the operator never picked. Returns undefined only when no
- * model is available at all.
- */
-export function resolveAdvisorRoleSelection(
-	settings: Settings,
-	availableModels: readonly Model<Api>[],
-	liveModel?: Model<Api>,
-): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
-	return resolveRoleSelectionWithInherit(["advisor"], settings, availableModels, liveModel);
-}
-
-/**
  * Resolve model patterns to actual Model objects with optional thinking levels
  * Format: "pattern:level" where :level is optional
  * For each pattern, finds all matching models and picks the best version:
@@ -1523,7 +1174,6 @@ export async function resolveModelScope(
 	patterns: string[],
 	modelRegistry: Pick<ModelRegistry, "getAvailable">,
 	preferences?: ModelMatchPreferences,
-	settings?: Settings,
 ): Promise<ScopedModel[]> {
 	const availableModels = modelRegistry.getAvailable();
 	const context = buildPreferenceContext(availableModels, preferences);
@@ -1557,25 +1207,6 @@ export async function resolveModelScope(
 
 			for (const model of matchingModels) {
 				addScopedModel(model, thinkingLevel, explicitThinkingLevel);
-			}
-			continue;
-		}
-
-		// Role aliases (`@smol`, `pi/slow`) resolve to the role's single concrete
-		// model — not its whole fallback chain — so a role contributes one scope
-		// entry exactly like `--model` would pick. (Bare `*` stays a match-all
-		// glob above; scope semantics, not the default-role alias.)
-		if (settings && modelRoleAliasPrefixLength(pattern) !== undefined) {
-			const resolved = resolveModelRoleValue(pattern, availableModels, { settings, matchPreferences: preferences });
-			if (resolved.warning) logger.warn(resolved.warning);
-			if (!resolved.model) {
-				logger.warn(`No models match pattern "${pattern}"`);
-				continue;
-			}
-			if (resolved.thinkingLevel === AUTO_THINKING) {
-				addScopedModel(resolved.model, undefined, false);
-			} else {
-				addScopedModel(resolved.model, resolved.thinkingLevel, resolved.explicitThinkingLevel);
 			}
 			continue;
 		}
@@ -1629,7 +1260,7 @@ export async function resolveAllowedModels(
 	if (!patterns || patterns.length === 0) {
 		return available;
 	}
-	const scoped = await resolveModelScope(patterns, modelRegistry, preferences, settings);
+	const scoped = await resolveModelScope(patterns, modelRegistry, preferences);
 	if (scoped.length === 0) {
 		return [];
 	}
@@ -1658,7 +1289,6 @@ export async function resolveAllowedModels(
 export function filterAvailableModelsByEnabledPatterns(
 	available: Model<Api>[],
 	patterns: readonly string[],
-	settings?: Settings,
 ): Model<Api>[] {
 	if (patterns.length === 0) return available;
 
@@ -1673,13 +1303,6 @@ export function filterAvailableModelsByEnabledPatterns(
 			for (const model of resolveGlobScopePattern(pattern, available).models) {
 				addAllowed(model);
 			}
-			continue;
-		}
-
-		// Mirror resolveModelScope: role aliases resolve to the role's model.
-		if (settings && modelRoleAliasPrefixLength(pattern) !== undefined) {
-			const { model } = resolveModelRoleValue(pattern, available, { settings });
-			if (model) addAllowed(model);
 			continue;
 		}
 
@@ -1698,13 +1321,6 @@ export interface ResolveCliModelResult {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	warning: string | undefined;
 	error: string | undefined;
-	/**
-	 * Set beside `error` when the selector named a `@role` that expands to no
-	 * model. The failure is in settings, not in the registry, so loading more
-	 * providers cannot cure it: a caller that defers an unknown id until
-	 * extensions register their models reports this one at once.
-	 */
-	roleFailure?: RolePatternFailure;
 }
 
 /**
@@ -1715,8 +1331,8 @@ export interface ResolveCliModelResult {
  * another provider's models, and {@link resolveProviderModelReference} reads
  * only models whose provider equals the named one ignoring case, so a hit here
  * is the model the whole-catalog path returns. A miss returns undefined and the
- * caller runs that path unchanged, which owns every error, fuzzy match and
- * role alias. Undefined as well when the registry cannot list one provider.
+ * caller runs that path unchanged, which owns every error and fuzzy match.
+ * Undefined as well when the registry cannot list one provider.
  */
 function resolveNamedProviderReference(
 	cliProvider: string | undefined,
@@ -1735,10 +1351,9 @@ function resolveNamedProviderReference(
 			? cliModel.substring(prefix.length)
 			: trimmedModel;
 		const idPart = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
-		if (idPart === "" || idPart === DEFAULT_MODEL_ROLE_ALIAS) return undefined;
+		if (idPart === "" || idPart === PROVIDER_WILDCARD_ID) return undefined;
 		return resolveProviderModelReference(provider, pattern, models);
 	}
-	if (modelRoleAliasPrefixLength(cliModel) !== undefined) return undefined;
 	const slashIndex = trimmedModel.indexOf("/");
 	if (slashIndex === -1) return undefined;
 	const provider = trimmedModel.substring(0, slashIndex).trim();
@@ -1754,10 +1369,9 @@ export function resolveCliModel(options: {
 	cliProvider?: string;
 	cliModel?: string;
 	modelRegistry: CliModelRegistry;
-	settings?: Settings;
 	preferences?: ModelMatchPreferences;
 }): ResolveCliModelResult {
-	const { cliProvider, cliModel, modelRegistry, settings, preferences: callerPreferences } = options;
+	const { cliProvider, cliModel, modelRegistry, preferences: callerPreferences } = options;
 	// Default the ambiguity tie-break to the registry's own credential check so
 	// every CLI resolution path prefers providers the user can actually call.
 	const preferences: ModelMatchPreferences = {
@@ -1803,33 +1417,6 @@ export function resolveCliModel(options: {
 			warning: undefined,
 			error: modelResolutionFailureMessage([cliProvider ? `${cliProvider}/${cliModel}` : cliModel], failureView),
 		};
-	}
-
-	// Patterns a `@role` selector expanded to, so a miss is reported against what
-	// the registry was searched for rather than against the alias.
-	let roleExpandedPatterns: string[] | undefined;
-	if (!cliProvider && modelRoleAliasPrefixLength(cliModel) !== undefined) {
-		const expansion = expandConfiguredModelPatterns(cliModel, settings);
-		if (expansion.kind !== "patterns") {
-			return {
-				model: undefined,
-				selector: undefined,
-				warning: undefined,
-				error: describeRolePatternFailure(expansion, settings),
-				roleFailure: expansion,
-			};
-		}
-		roleExpandedPatterns = expansion.patterns;
-		const resolved = resolveModelRoleValue(cliModel, availableModels, { settings, matchPreferences: preferences });
-		if (resolved.model) {
-			return {
-				model: resolved.model,
-				selector: formatModelString(resolved.model),
-				thinkingLevel: resolved.thinkingLevel,
-				warning: resolved.warning,
-				error: undefined,
-			};
-		}
 	}
 
 	const providerMap = new Map<string, string>();
@@ -1903,7 +1490,7 @@ export function resolveCliModel(options: {
 
 	if (provider) {
 		const idPart = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
-		if (idPart === "" || idPart === DEFAULT_MODEL_ROLE_ALIAS) {
+		if (idPart === "" || idPart === PROVIDER_WILDCARD_ID) {
 			// A provider and no model is a selector error, not a lookup miss: the
 			// matcher rejects it (see `matchModel`), and the remedy is the provider's
 			// own default rather than a near-match list an empty id cannot produce.
@@ -1945,7 +1532,7 @@ export function resolveCliModel(options: {
 			selector: undefined,
 			thinkingLevel: undefined,
 			warning,
-			error: modelResolutionFailureMessage(roleExpandedPatterns ?? [display], failureView),
+			error: modelResolutionFailureMessage([display], failureView),
 		};
 	}
 
@@ -1961,80 +1548,4 @@ export function resolveCliModel(options: {
 		warning,
 		error: undefined,
 	};
-}
-
-/**
- * Find a smol/fast model using the priority chain.
- * Tries exact matches first, then fuzzy matches.
- *
- * @param modelRegistry The model registry to search
- * @param savedModel Optional saved model string from settings (provider/modelId)
- * @returns The best available smol model, or undefined if none found
- */
-export async function findSmolModel(
-	modelRegistry: ModelLookupRegistry,
-	savedModel?: string,
-): Promise<Model<Api> | undefined> {
-	const availableModels = modelRegistry.getAvailable();
-	if (availableModels.length === 0) return undefined;
-
-	// 1. Try saved model from settings
-	if (savedModel) {
-		const match = resolveModelFromString(savedModel, availableModels, undefined);
-		if (match) return match;
-	}
-
-	// 2. Try priority chain
-	for (const pattern of MODEL_PRIO.smol) {
-		// Try exact match with provider prefix
-		const providerMatch = availableModels.find(m => `${m.provider}/${m.id}`.toLowerCase() === pattern);
-		if (providerMatch) return providerMatch;
-
-		// Try exact match first
-		const exactMatch = parseModelPattern(pattern, availableModels, undefined).model;
-		if (exactMatch) return exactMatch;
-
-		// Try fuzzy match (substring)
-		const fuzzyMatch = availableModels.find(m => m.id.toLowerCase().includes(pattern));
-		if (fuzzyMatch) return fuzzyMatch;
-	}
-
-	// 3. Fallback to first available (same as default)
-	return availableModels[0];
-}
-
-/**
- * Find a slow/comprehensive model using the priority chain.
- * Prioritizes reasoning and codex models for thorough analysis.
- *
- * @param modelRegistry The model registry to search
- * @param savedModel Optional saved model string from settings (provider/modelId)
- * @returns The best available slow model, or undefined if none found
- */
-export async function findSlowModel(
-	modelRegistry: ModelLookupRegistry,
-	savedModel?: string,
-): Promise<Model<Api> | undefined> {
-	const availableModels = modelRegistry.getAvailable();
-	if (availableModels.length === 0) return undefined;
-
-	// 1. Try saved model from settings
-	if (savedModel) {
-		const match = resolveModelFromString(savedModel, availableModels, undefined);
-		if (match) return match;
-	}
-
-	// 2. Try priority chain
-	for (const pattern of MODEL_PRIO.slow) {
-		// Try exact match first
-		const exactMatch = parseModelPattern(pattern, availableModels, undefined).model;
-		if (exactMatch) return exactMatch;
-
-		// Try fuzzy match (substring)
-		const fuzzyMatch = availableModels.find(m => m.id.toLowerCase().includes(pattern.toLowerCase()));
-		if (fuzzyMatch) return fuzzyMatch;
-	}
-
-	// 3. Fallback to first available (same as default)
-	return availableModels[0];
 }

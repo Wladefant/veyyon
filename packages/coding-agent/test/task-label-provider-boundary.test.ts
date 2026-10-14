@@ -23,10 +23,9 @@ describe("task label provider boundary", () => {
 		} as never);
 		const settings = {
 			get(path: string) {
-				return path === "providers.tinyModel" ? "online" : undefined;
-			},
-			getModelRole(role: string) {
-				return role === "smol" ? `${model.provider}/${model.id}` : undefined;
+				if (path === "providers.tinyModel") return "online";
+				if (path === "agent.helpers") return { title: { model: `${model.provider}/${model.id}` } };
+				return undefined;
 			},
 		} as never;
 		const registry = {
@@ -96,8 +95,11 @@ describe("task label provider boundary", () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5") as Model<Api> | undefined;
 		if (!model) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const settings = {
-			get: (path: string) => (path === "providers.tinyModel" ? "online" : undefined),
-			getModelRole: (role: string) => (role === "smol" ? `${model.provider}/${model.id}` : undefined),
+			get: (path: string) => {
+				if (path === "providers.tinyModel") return "online";
+				if (path === "agent.helpers") return { title: { model: `${model.provider}/${model.id}` } };
+				return undefined;
+			},
 			getStorage: () => undefined,
 		} as never;
 		const registry = {
@@ -132,8 +134,11 @@ describe("task label provider boundary", () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5") as Model<Api> | undefined;
 		if (!model) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const settings = {
-			get: (path: string) => (path === "providers.tinyModel" ? "online" : undefined),
-			getModelRole: (role: string) => (role === "smol" ? `${model.provider}/${model.id}` : undefined),
+			get: (path: string) => {
+				if (path === "providers.tinyModel") return "online";
+				if (path === "agent.helpers") return { title: { model: `${model.provider}/${model.id}` } };
+				return undefined;
+			},
 			getStorage: () => undefined,
 		} as never;
 		const secret = "TASK_LABEL_NEW_RUNTIME_SECRET_812";
@@ -165,8 +170,11 @@ describe("task label provider boundary", () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5") as Model<Api> | undefined;
 		if (!model) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const settings = {
-			get: (path: string) => (path === "providers.tinyModel" ? "online" : undefined),
-			getModelRole: (role: string) => (role === "smol" ? `${model.provider}/${model.id}` : undefined),
+			get: (path: string) => {
+				if (path === "providers.tinyModel") return "online";
+				if (path === "agent.helpers") return { title: { model: `${model.provider}/${model.id}` } };
+				return undefined;
+			},
 			getStorage: () => undefined,
 		} as never;
 		const secret = "TASK_LABEL_RETRY_SECRET_883";

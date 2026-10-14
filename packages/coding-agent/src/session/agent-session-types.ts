@@ -458,29 +458,6 @@ export interface ModelCycleResult {
 	isScoped: boolean;
 }
 
-/** Result from cycleRoleModels() */
-export interface RoleModelCycleResult {
-	model: Model;
-	thinkingLevel: ThinkingLevel | undefined;
-	role: string;
-}
-
-/** A configured role resolved to a concrete model, used by role cycling and
- *  the plan-approval model slider. */
-export interface ResolvedRoleModel {
-	role: string;
-	model: Model;
-	thinkingLevel?: ConfiguredThinkingLevel;
-	explicitThinkingLevel: boolean;
-}
-
-/** The set of resolvable role models plus the index of the currently active
- *  one within {@link ResolvedRoleModel.role} order. */
-export interface RoleModelCycle {
-	models: ResolvedRoleModel[];
-	currentIndex: number;
-}
-
 export interface ContextUsageBreakdown {
 	contextWindow: number;
 	anchored: boolean;

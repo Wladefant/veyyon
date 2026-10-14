@@ -14,26 +14,26 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe("coding-agent Mnemopi online smol boundary", () => {
-	/** Why: the real smol adapter must keep raw context behind the post-credential physical-attempt hook. */
+describe("coding-agent Mnemopi online memory-helper boundary", () => {
+	/** Why: the real online adapter must keep raw context behind the post-credential physical-attempt hook. */
 	it("reads the current session obfuscator after key lookup and at final payload dispatch", async () => {
-		const afterKeySecret = "MNEMOPI_SMOL_AFTER_KEY_SECRET_771";
-		const retrySecret = "MNEMOPI_SMOL_RETRY_SECRET_771";
+		const afterKeySecret = "MNEMOPI_ONLINE_AFTER_KEY_SECRET_771";
+		const retrySecret = "MNEMOPI_ONLINE_RETRY_SECRET_771";
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5") as Model<Api> | undefined;
-		if (!model) throw new Error("Expected bundled smol test model");
-		const root = TempDir.createSync("mnemopi-smol-boundary-");
+		if (!model) throw new Error("Expected bundled memory helper test model");
+		const root = TempDir.createSync("mnemopi-online-boundary-");
 		const settings = Settings.isolated({
 			"mnemopi.dbPath": root.join("mnemopi.db"),
-			"mnemopi.llmMode": "smol",
+			"mnemopi.llmMode": "online",
 			"mnemopi.noEmbeddings": true,
 			"mnemopi.autoRecall": false,
 			"mnemopi.autoRetain": false,
 			"providers.memoryModel": "online",
+			"agent.helpers": { memory: { model: `${model.provider}/${model.id}` } },
 		});
-		settings.setModelRole("smol", `${model.provider}/${model.id}`);
 		let obfuscator = new SecretObfuscator([]);
 		const session = {
-			sessionId: "mnemopi-smol-boundary-session",
+			sessionId: "mnemopi-online-boundary-session",
 			settings,
 			get obfuscator() {
 				return obfuscator;
@@ -76,7 +76,7 @@ describe("coding-agent Mnemopi online smol boundary", () => {
 			});
 			return {
 				stopReason: "stop",
-				content: [{ type: "text", text: "smol result" }],
+				content: [{ type: "text", text: "online result" }],
 			} as never;
 		});
 
@@ -96,7 +96,7 @@ describe("coding-agent Mnemopi online smol boundary", () => {
 
 			// Why: the backend awaits a registry preflight before completeSimple,
 			// and provider auth retries happen after that context was first built.
-			expect(result).toBe("smol result");
+			expect(result).toBe("online result");
 			expect(providerContext).not.toContain(afterKeySecret);
 			expect(providerContext).not.toContain(retrySecret);
 			expect(finalPayload).not.toContain(afterKeySecret);

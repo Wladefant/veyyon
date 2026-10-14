@@ -787,15 +787,19 @@ if "__veyyon_prelude_loaded__" not in globals():
 
     tool = _ToolProxy()
 
-    def completion(prompt, *, model="default", system=None, schema=None):
-        """Oneshot, stateless completion against a model tier.
+    def completion(prompt, *, model=None, system=None, schema=None):
+        """Oneshot, stateless completion.
 
-        `model` selects a tier: "smol", "default" (the session's active model),
-        or "slow". Pass `system` for a system prompt. Pass a JSON-Schema dict
-        as `schema` to force a structured response; the parsed object is then
-        returned instead of the completion text.
+        Omit `model` to run the completion helper (the session's model unless
+        configured), pass "default" for the session's active model, or pass a
+        model selector such as "anthropic/claude-sonnet-4-5:high". Pass
+        `system` for a system prompt. Pass a JSON-Schema dict as `schema` to
+        force a structured response; the parsed object is then returned
+        instead of the completion text.
         """
-        args = {"prompt": prompt, "model": model}
+        args = {"prompt": prompt}
+        if model is not None:
+            args["model"] = model
         if system is not None:
             args["system"] = system
         if schema is not None:

@@ -120,10 +120,13 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * statically. It replaced `winston`, `winston-daily-rotate-file` and 27 packages under them, which
  * the logger loaded through `require` on the first log line, an edge this walk does not follow.
  *
+ * 312 rather than 311 is `config/model-pattern-list.ts`, the splitter `launch-facts.ts` reads the
+ * first `defaultModel` selector through. It imports nothing.
+ *
  * The floor is what stops a resolution table that stopped resolving from satisfying the ceiling with
  * a handful of modules while measuring nothing.
  */
-const LAUNCH_CARD_CEILING = 311;
+const LAUNCH_CARD_CEILING = 312;
 const LAUNCH_CARD_FLOOR = 150;
 
 describe("the launch card opens no database", () => {

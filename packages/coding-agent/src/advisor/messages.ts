@@ -19,18 +19,18 @@ export function describeAdvisorToggle(enabled: boolean, running: boolean): strin
 	if (!enabled) return "Advisor stopped for this session.";
 	return running
 		? "Advisor started for this session."
-		: "Advisor enabled, but no model resolved for the advisor role — assign one with /model.";
+		: "Advisor enabled, but no model resolved for the advisor helper: configure one in /settings under Agents -> Roster.";
 }
 
 /**
  * The next move after `/advisor status`, given what the status just reported.
  *
  * "Off" and "on but no model resolved" need different fixes — the `advisor.enabled`
- * setting versus a `modelRoles.advisor` assignment — so each carries its own
+ * setting versus an `agent.helpers.advisor.model` chain — so each carries its own
  * instruction instead of one generic line.
  */
 export function advisorStatusNextStep(configured: boolean, active: boolean): string {
 	if (!configured) return "Turn it on for this session with /advisor on, or set advisor.enabled in /settings.";
-	if (!active) return "Assign an advisor model with /model, under the advisor role.";
+	if (!active) return "Assign an advisor model under Agents -> Roster in /settings.";
 	return "Edit the roster with /advisor configure.";
 }

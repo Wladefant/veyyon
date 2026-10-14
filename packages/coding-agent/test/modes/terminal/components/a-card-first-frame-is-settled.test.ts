@@ -293,8 +293,8 @@ const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "ModelHubComponent",
 		create: async () =>
 			new ModelHubComponent(DUMMY_UI, await Settings.init(), DUMMY_REGISTRY, [], {
-				onAssign: () => {},
-				onUnassign: () => {},
+				onSetDefault: () => {},
+				onClearDefault: () => {},
 				onCancel: () => {},
 			}),
 	},

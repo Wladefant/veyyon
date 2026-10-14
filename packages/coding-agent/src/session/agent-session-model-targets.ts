@@ -16,11 +16,9 @@ import type { Model } from "@veyyon/ai";
 import {
 	getModelMatchPreferences,
 	parseModelString,
-	type ResolvedModelRoleValue,
 	resolveCompactionModelPatterns,
-	resolveModelRoleValue,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT, SELECTABLE_MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { AUTO_THINKING } from "../thinking";
 
@@ -66,29 +64,6 @@ export function compactionTarget(currentModel: Model, availableModels: Model[]):
 	return configuredModelTarget(currentModel.compactionModel, currentModel, availableModels);
 }
 
-/** What a model role resolves to, with the thinking level its selector carries. */
-export function roleModelValue(
-	settings: Settings,
-	role: string,
-	availableModels: Model[],
-	currentModel: Model | undefined,
-): ResolvedModelRoleValue {
-	const roleModelStr =
-		role === "default"
-			? (settings.getModelRole(DEFAULT_MODEL_SLOT) ??
-				(currentModel ? `${currentModel.provider}/${currentModel.id}` : undefined))
-			: settings.getModelRole(role);
-
-	if (!roleModelStr) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
-	}
-
-	return resolveModelRoleValue(roleModelStr, availableModels, {
-		settings,
-		matchPreferences: getModelMatchPreferences(settings),
-	});
-}
-
 /**
  * The models compaction may try, in the order it tries them.
  *
@@ -115,7 +90,7 @@ export function compactionModelCandidates(
 
 	const configuredPatterns = resolveCompactionModelPatterns(settings);
 	for (const pattern of configuredPatterns) {
-		const resolved = resolveModelRoleValue(pattern, availableModels, {
+		const resolved = resolveModelSelectorValue(pattern, availableModels, {
 			settings,
 			matchPreferences: getModelMatchPreferences(settings),
 		});
@@ -142,9 +117,11 @@ export function compactionModelCandidates(
 		}
 	}
 	addCandidate(preferredModel ?? undefined);
-	for (const role of SELECTABLE_MODEL_ROLE_IDS) {
-		addCandidate(roleModelValue(settings, role, availableModels, preferredModel ?? undefined).model);
-	}
+	const defaultResolved = resolveModelSelectorValue(settings.get("defaultModel"), availableModels, {
+		settings,
+		matchPreferences: getModelMatchPreferences(settings),
+	});
+	addCandidate(defaultResolved.model);
 
 	// The widest window among everything authenticated is the only tier that
 	// can reach a provider the operator never chose for this session, and
@@ -178,7 +155,7 @@ export function compactionModelCandidates(
 export function configuredCompactionEfforts(settings: Settings, availableModels: Model[]): Map<string, ThinkingLevel> {
 	const efforts = new Map<string, ThinkingLevel>();
 	for (const pattern of resolveCompactionModelPatterns(settings)) {
-		const resolved = resolveModelRoleValue(pattern, availableModels, {
+		const resolved = resolveModelSelectorValue(pattern, availableModels, {
 			settings,
 			matchPreferences: getModelMatchPreferences(settings),
 		});

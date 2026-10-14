@@ -9,6 +9,7 @@
 ### Changed
 
 - Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
+- Comments in the xAI OAuth resolver and the model generator name the `defaultModel` setting instead of the removed model roles; no user-visible change.
 
 ## [1.5.6] - 2026-10-13
 

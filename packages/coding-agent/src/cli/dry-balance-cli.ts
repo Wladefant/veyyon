@@ -22,9 +22,8 @@ import {
 	getModelMatchPreferences,
 	resolveAllowedModels,
 	resolveCliModel,
-	resolveModelRoleValue,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { benchPrompts } from "../prompts/bench/rows";
 import { createCliModelRuntime } from "./model-runtime";
@@ -540,7 +539,6 @@ async function resolveDryBalanceModel(
 			cliModel: modelSelector,
 			modelRegistry,
 			preferences,
-			settings,
 		});
 		if (resolved.error) throw new Error(resolved.error);
 		if (!resolved.model) throw new Error(modelResolutionFailureMessage([modelSelector], modelRegistry));
@@ -554,12 +552,12 @@ async function resolveDryBalanceModel(
 		);
 	}
 
-	const defaultRoleSpec = resolveModelRoleValue(settings?.getModelRole(DEFAULT_MODEL_SLOT), allowedModels, {
+	const defaultModelSpec = resolveModelSelectorValue(settings?.get("defaultModel"), allowedModels, {
 		settings,
 		matchPreferences: preferences,
 	});
-	if (defaultRoleSpec.model) {
-		return { model: defaultRoleSpec.model, warning: defaultRoleSpec.warning };
+	if (defaultModelSpec.model) {
+		return { model: defaultModelSpec.model, warning: defaultModelSpec.warning };
 	}
 
 	for (const candidate of allowedModels) {

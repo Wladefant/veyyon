@@ -6,7 +6,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, prompt, Snowflake } from "@veyyon/utils";
-import { resolveConfiguredModelPatterns } from "../config/model-resolver";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { mcpManagerInstance } from "../mcp/manager-instance";
@@ -49,6 +48,7 @@ import type { JsStatusEvent } from "./js/shared/types";
 import type { EvalBridgeOptions } from "./types";
 // Import review tools for side effects (registers agent tool handlers).
 import "../tools/agent/review";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 
 /**
  * Re-exported from its leaf, so a caller that only needs to RECOGNIZE the name does not load this
@@ -403,7 +403,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// and lane rows key on that child depth — the same value the executor derives
 	// as `childDepth`.
 	const resolvedModel = parsed.model
-		? { patterns: resolveConfiguredModelPatterns(parsed.model, options.session.settings), source: "agent" as const }
+		? { patterns: normalizeModelPatternList(parsed.model), source: "agent" as const }
 		: resolveAgentModel({
 				settings: options.session.settings,
 				agentName,

@@ -6,6 +6,7 @@ import { missingCredentialsMessage } from "../config/missing-credentials";
 import { goalsPrompts } from "../prompts/goals/rows";
 import { mapJsonStrings } from "../secrets/obfuscator";
 import type { AgentSession } from "../session/agent-session";
+import { helperSettingPath } from "../task/helper-settings";
 import { concreteThinkingLevel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
 const RESPOND_TOOL_NAME = "respond";
@@ -98,19 +99,13 @@ export async function runGuidedGoalTurn(
 	session: AgentSession,
 	options: GuidedGoalTurnOptions,
 ): Promise<GuidedGoalTurnResult> {
-	const plan = session.resolveRoleModelWithThinking("plan");
-	const slow = plan.model ? plan : session.resolveRoleModelWithThinking("slow");
-	const resolved = slow.model
-		? slow
-		: {
-				model: session.model,
-				thinkingLevel: session.thinkingLevel,
-				explicitThinkingLevel: false,
-				warning: undefined,
-			};
-	if (!resolved.model) {
-		throw new Error("No plan, slow, or current session model is available for /guided-goal.");
+	const plan = session.resolveHelperModel("plan");
+	if (!plan) {
+		throw new Error(
+			`No model is available for /guided-goal: ${helperSettingPath("plan", "model")} matches no available model, or no session model is set.`,
+		);
 	}
+	const resolved = { model: plan.model, thinkingLevel: plan.thinkingLevel ?? session.thinkingLevel };
 
 	let apiKey: string | undefined;
 	try {

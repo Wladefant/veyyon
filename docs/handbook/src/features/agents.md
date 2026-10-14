@@ -171,7 +171,7 @@ agent:
 A lane retains its configuration while the switch is on, and re-evaluates when the
 switch goes off.
 
-A temporary pick, role cycling and plan mode move the live session model, and so the
+A temporary pick, model cycling and plan mode move the live session model, and so the
 model of every agent spawned afterwards that has none of its own. Set a model on an
 agent's page to keep that agent on it.
 
@@ -247,7 +247,7 @@ The id is painted in that agent's own accent, the same hue the status line gives
 name and the same one a delegated todo row uses to point back at it.
 
 The label is the spawn description, or a label generated from the assignment when
-the spawn gave none. It is generated with the tiny, commit or smol role when one is
+the spawn gave none. It is generated with the `title` helper when one is
 configured and with the session's live model otherwise, the way a session title is.
 The badge is the model the agent runs on: the resolved `agent.model` or
 per-agent override when one matched, else the session's own model that the agent

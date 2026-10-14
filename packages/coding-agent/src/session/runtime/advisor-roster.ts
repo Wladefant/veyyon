@@ -59,16 +59,11 @@ import {
 	resolveAdvisorDeliveryChannel,
 	slugifyAdvisorName,
 } from "../../advisor";
-import {
-	formatModelString,
-	formatModelStringWithRouting,
-	resolveAdvisorRoleSelection,
-	resolveModelOverride,
-} from "../../config/model-resolver";
-import { MODEL_ROLES } from "../../config/model-roles";
+import { formatModelString, formatModelStringWithRouting, resolveModelOverride } from "../../config/model-resolver";
 import { serviceTierForAllFamilies, serviceTierSettingToTier } from "../../config/service-tier";
 import { advisorPrompts } from "../../prompts/advisor/rows";
 import type { SecretObfuscator } from "../../secrets/obfuscator";
+import { HELPERS, helperSettingPath, resolveHelperModel } from "../../task/helper-settings";
 import {
 	concreteThinkingLevel,
 	resolveThinkingLevelForModel,
@@ -266,8 +261,8 @@ export class AdvisorRoster {
 		return false;
 	}
 
-	/** A model role changed: rebuild any advisor whose resolved model no longer matches. */
-	onModelRolesChanged(): void {
+	/** A helper model changed: rebuild any advisor whose resolved model no longer matches. */
+	onHelperModelsChanged(): void {
 		if (!isAdvisorProductEnabled() || !this.#enabled || this.#host.isDisposed()) return;
 		if (this.#advisors.length > 0 && !this.#matchesCurrentConfig()) this.stop();
 		this.#build(true);
@@ -545,8 +540,9 @@ export class AdvisorRoster {
 					continue;
 				}
 			} else {
-				const sel = resolveAdvisorRoleSelection(
+				const sel = resolveHelperModel(
 					host.settings,
+					"advisor",
 					host.modelRegistry.getAvailable(),
 					host.agent.state.model,
 				);
@@ -556,7 +552,7 @@ export class AdvisorRoster {
 					if (emitWarnings) {
 						host.emitNotice(
 							"warning",
-							`Advisor "${config.name}": no advisor model available (set Advisor Model in /settings → Model → Advisor, or sign in so the session model can be inherited); advisor inactive`,
+							`Advisor "${config.name}": no advisor model available (set ${helperSettingPath("advisor", "model")} in /settings, or sign in so the session model can be inherited); advisor inactive`,
 							"advisor",
 						);
 					}
@@ -707,7 +703,7 @@ export class AdvisorRoster {
 		// back to the UUIDv7 provider session id, not the local `-advisor` label.
 		const advisorTelemetry = deriveAdvisorTelemetry(host.agent.telemetry, {
 			id: advisorSessionLabel,
-			name: slug ? `${MODEL_ROLES.advisor.name}: ${advisorName}` : MODEL_ROLES.advisor.name,
+			name: slug ? `${HELPERS.advisor.label}: ${advisorName}` : HELPERS.advisor.label,
 			description: formatModelString(advisorModel),
 		});
 		// Mirror the SDK's provider-shaping options (streamFn/onPayload/...,

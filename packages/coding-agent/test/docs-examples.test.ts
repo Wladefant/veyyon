@@ -689,7 +689,7 @@ describe("docs examples — inline dotted settings mentions are registered paths
 
 	/**
 	 * A dotted token is valid when it is a registered leaf, a group prefix, a
-	 * child of a map-valued leaf (`modelRoles.task` under the `modelRoles`
+	 * child of a map-valued leaf (`agent.helpers.plan` under the `agent.helpers`
 	 * setting), or a keybinding action ID (`tui.select.pageUp` — the `tui.*`
 	 * action namespace overlaps the `tui.*` settings root).
 	 */

@@ -80,7 +80,7 @@ they opt in.
 | flan-t5-small | Rejected, just echoes the input    |
 
 **Shipped local options**: `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`.
-**Default**: `online` (@smol).
+**Default**: `online` (the `title` helper, else the session's model).
 
 ## Task 2: Mnemopi memory (`providers.memoryModel`)
 
@@ -133,7 +133,7 @@ pick** (its consolidation is good enough). If running a second model for consoli
 wins that task.
 
 **Shipped local options**: `llama3.2:3b`, `qwen3-1.7b` (recommended), `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`.
-**Default**: `online` (the configured smol model).
+**Default**: `online` (the `memory` helper, else the session's model).
 
 ### Known Mnemopi parser bugs (surfaced by these experiments)
 

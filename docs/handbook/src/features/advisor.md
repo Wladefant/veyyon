@@ -23,22 +23,23 @@ The advisor is not a second executor: it cannot approve actions or change primar
 
 Set `advisor.enabled: true`, in `/settings` → Model → Advisor or in the config file.
 
-Which model the advisor runs is the **Advisor Model** row, directly below the toggle in that same
-group. It is the only settings surface for the choice; the Roles table does not list the advisor.
-Leave it unset and the advisor runs the live main model.
+Which model the advisor runs is the **Advisor** helper, in `/settings` → Agents → Roster → Helpers.
+Leave it unset and the advisor runs the live main model and effort.
 
-The row writes `modelRoles.advisor`:
+The helper page writes `agent.helpers.advisor`:
 
 ```yaml
-modelRoles:
-  advisor: anthropic/claude-sonnet-4-5:medium
+agent:
+  helpers:
+    advisor:
+      model: anthropic/claude-sonnet-4-5:medium
 
 advisor:
   enabled: true
 ```
 
-Resolution is normal model-role resolution: provider-prefixed ids, canonical ids, and optional
-thinking suffixes. A `WATCHDOG.yml` roster entry's own `model:` overrides it for that advisor.
+The model is an ordered chain: provider-prefixed ids, canonical ids, and optional thinking
+suffixes, first available match wins. A `WATCHDOG.yml` roster entry's own `model:` overrides it for that advisor.
 
 `/advisor` controls the advisor from inside a session:
 
@@ -59,7 +60,7 @@ A bare `/advisor` opens a picker listing those subcommands.
 | `--advisor` CLI flag | Enable the advisor for the launched session. |
 | `WATCHDOG.yml` | Define the advisor roster (models, tools, prompts); see below. |
 
-If `modelRoles.advisor` is set but does not resolve to an available model, the advisor stays inactive; it does not fall back to the main model. Correct or clear the assignment to start it.
+If `agent.helpers.advisor.model` is set but does not resolve to an available model, the advisor stays inactive; it does not fall back to the main model. Correct or clear the assignment to start it.
 
 ## What the advisor receives
 
@@ -241,7 +242,7 @@ Fields:
 
 - `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
 - `advisors[].name`: human label; slugified for the session id and the `<session>/__advisor.jsonl` filename. Duplicate slugs across files are resolved by the same specificity rule as `WATCHDOG.md` discovery (project leaf > project ancestor > user).
-- `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
+- `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses the `advisor` helper.
 - `advisors[].tools`: optional list of built-in tool names to grant. Omitted or empty → the default `read`/`search` subset. Any name in [`BUILTIN_TOOL_NAMES`](../../../../packages/coding-agent/src/tools/core/builtin-names.ts) is accepted, including mutating tools (`edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools). Unknown names are dropped with a warning. See [Tools and isolation](#tools-and-isolation) for the safety implications of granting mutating tools.
 - `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
 
@@ -254,7 +255,7 @@ Fields:
 `advisor.agents` controls whether spawned task/eval agents also get an advisor runtime.
 
 - `false` (default): only the main session can run an advisor.
-- `true`: eligible agent sessions build their own advisor with the same settings/model-role resolution, then rerun `WATCHDOG.md` discovery for that agent session's `cwd` and agent directory.
+- `true`: eligible agent sessions build their own advisor with the same settings and helper model resolution, then rerun `WATCHDOG.md` discovery for that agent session's `cwd` and agent directory.
 
 Agent advisors remain isolated from the agent's primary tool session in the same way the main advisor is isolated from the main agent.
 
