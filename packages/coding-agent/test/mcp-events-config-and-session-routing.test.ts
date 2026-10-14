@@ -10,6 +10,7 @@ import { MCPManager } from "../src/mcp/manager";
 import { wireReactiveMCPManager } from "../src/session/factory-mcp";
 import { buildMcpEventBatchMessage, type McpEventEntry } from "../src/session/factory-notices";
 import { createHmac } from "node:crypto";
+import * as fs from "node:fs";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
@@ -391,6 +392,37 @@ describe("MCP event prompt receipts and session isolation", () => {
 			ensure.mockRestore();
 			flush.mockRestore();
 		}
+	});
+
+	it("does not acknowledge an event until the journal fsync succeeds", async () => {
+		const owner = await realSession(temporarySetup(), undefined, true);
+		const fsync = spyOn(fs, "fsyncSync").mockImplementation(() => {
+			throw new Error("fsync failed");
+		});
+		try {
+			await expect(owner.accept(occurrence("evt-fsync"))).rejects.toThrow("fsync failed");
+			expect(fsync).toHaveBeenCalled();
+			expect(owner.session.yieldQueue.has("mcp-event")).toBe(false);
+			expect(receipts(owner.journal)).toHaveLength(0);
+		} finally {
+			fsync.mockRestore();
+		}
+	});
+
+	it("keeps an event pending after a rejected prompt and retries it without restarting", async () => {
+		const owner = await realSession(temporarySetup(), undefined, true);
+		const prompt = spyOn(owner.session.agent, "prompt").mockImplementationOnce(async () => {
+			throw new Error("prompt rejected");
+		});
+		await owner.accept(occurrence("evt-prompt-retry"));
+		await owner.session.yieldQueue.flush("idle");
+		expect(owner.session.yieldQueue.has("mcp-event")).toBe(true);
+		expect(receipts(owner.journal)).toHaveLength(0);
+
+		await owner.session.yieldQueue.flush("idle");
+		await owner.session.waitForIdle();
+		expect(prompt).toHaveBeenCalledTimes(2);
+		expect(receipts(owner.journal)).toHaveLength(1);
 	});
 
 	it("(c) replays after a crash after enqueue but before the prompt drain persists a receipt", async () => {

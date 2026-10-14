@@ -2111,6 +2111,17 @@ export class SessionManager {
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
+	/** Flush session writes and fsync the append writer before acknowledging durable receipts. */
+	async sync(): Promise<void> {
+		if (!this.#persist || !this.#sessionFile) throw new Error("Cannot make a non-persistent session durable");
+		await this.flush();
+		await this.#scheduleDiskWork(async () => {
+			if (this.#writer?.isOpen()) await this.#writer.sync();
+		});
+		await this.#storage.drain();
+		if (this.#diskFailure) throw this.#diskFailure;
+	}
+
 	/**
 	 * Synchronously makes the current append-only session durable. Avoid rewriting
 	 * an already-current file: large restored sessions can contain GiB of compacted

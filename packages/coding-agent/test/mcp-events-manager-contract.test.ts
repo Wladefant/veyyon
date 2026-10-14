@@ -2,7 +2,6 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "bun:test";
 import { MCPManager } from "../src/mcp/manager";
 import type { MCPEventOccurrence, MCPServerConfig, MCPServerEventSubscriptionConfig } from "../src/mcp/types";
-import { wireReactiveMCPManager } from "../src/session/factory-mcp";
 
 const EVENT_NAME = "orders/changed";
 const CALLBACK_SECRET = `whsec_${Buffer.from("manager-contract-test-secret").toString("base64")}`;
@@ -395,6 +394,51 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	});
 
+	it("rejects malformed push cursors and reconnects from the last committed cursor", async () => {
+		const retryStreamOpened = Promise.withResolvers<void>();
+		const server = fakeMcpServer({
+			delivery: "push",
+			onStream(_controller, _streamId, ordinal) {
+				if (ordinal === 2) retryStreamOpened.resolve();
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const received: string[] = [];
+		const cursors: Array<string | null> = [];
+		manager.setEventCursorProvider(() => "committed-cursor");
+		manager.setOnEvent((_name, occurrence) => {
+			received.push(occurrence.eventId);
+			return "queued";
+		});
+		manager.setOnEventCursor((_name, _key, cursor) => { cursors.push(cursor); });
+		vi.useFakeTimers();
+		try {
+			await connect(manager, "malformed-push-server", managerConfig(server, {
+				enabled: true,
+				subscriptions: [{ name: EVENT_NAME, mode: "push" }],
+			}));
+			const firstStream = server.requests.find(request => request.method === "events/stream");
+			emitStreamNotification(server.streamControllers[0]!, firstStream!.id!, "notifications/events/event", {
+				eventId: "malformed-event",
+				name: EVENT_NAME,
+				timestamp: "2026-10-14T12:00:00Z",
+				data: {},
+				cursor: 42,
+			});
+			await server.streamCancellations[0];
+			expect(received).toEqual([]);
+			expect(cursors).toEqual([]);
+			await vi.advanceTimersByTimeAsync(5_000);
+			await retryStreamOpened.promise;
+			const streams = server.requests.filter(request => request.method === "events/stream");
+			expect(streams[1]?.params.cursor).toBe("committed-cursor");
+		} finally {
+			await manager.stopEvents();
+			server.stop();
+			vi.useRealTimers();
+		}
+	});
+
 
 	it("answers webhook challenges before subscribing, refreshes, and unsubscribes on stop", async () => {
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
@@ -427,6 +471,7 @@ describe("MCPManager event subscription contracts", () => {
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
+						"X-MCP-Subscription-Id": `pending-${subscriptionCalls.length}`,
 						"webhook-id": messageId,
 						"webhook-timestamp": timestamp,
 						"webhook-signature": `v1,${signature}`,
@@ -511,37 +556,4 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	});
 
-	it("deduplicates within a subscription while isolating the same event id across subscriptions and sessions", async () => {
-		const handlers: Array<((serverName: string, occurrence: MCPEventOccurrence, key: string) => unknown) | undefined> = [];
-		const makeSession = (sessionId: string) => {
-			const queued: unknown[] = [];
-			let handler: typeof handlers[number] = undefined;
-			const managerStub = {
-				setSpawnAdoption() {}, setSpawnGate() {}, setOnToolsChanged() {}, setOnPromptsChanged() {}, setOnResourcesChanged() {},
-				setOnEvent(callback: typeof handler) { handler = callback; },
-				setOnEventCursor() {}, setEventCursorProvider() {}, setOnEventControl() {}, stopEvents() {},
-			};
-			const sessionStub = {
-				isDisposed: false,
-				sessionManager: {
-					getSessionId: () => sessionId,
-					getEntries: () => [],
-					appendCustomEntry: () => {},
-				},
-				yieldQueue: { enqueue: (_type: string, item: unknown) => { queued.push(item); } },
-			};
-			wireReactiveMCPManager({ manager: managerStub as never, session: sessionStub as never, settings: { get: () => undefined } as never, refreshTools: async () => {} });
-			handlers.push(handler!);
-			return { queued };
-		};
-		const owner = makeSession("owner");
-		const other = makeSession("other");
-		const occurrence = event("shared-event");
-		await handlers[0]!("orders", occurrence, "sub-a");
-		await handlers[0]!("orders", occurrence, "sub-a");
-		await handlers[0]!("orders", occurrence, "sub-b");
-		await handlers[1]!("orders", occurrence, "sub-a");
-		expect(owner.queued).toHaveLength(2);
-		expect(other.queued).toHaveLength(1);
-	});
 });

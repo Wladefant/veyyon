@@ -1865,6 +1865,10 @@ export class AgentSession {
 				const first = messages[0];
 				if (!first) return;
 				await this.agent.prompt(messages.length === 1 ? first : messages);
+				if (messages.some(message => message.role === "custom" && message.customType === "mcp-event")) {
+					await this.sessionManager.ensureOnDisk();
+					await this.sessionManager.sync();
+				}
 			},
 			scheduleIdleFlush: run => {
 				this.#postPrompt.schedule(

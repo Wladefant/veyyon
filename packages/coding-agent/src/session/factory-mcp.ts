@@ -432,7 +432,7 @@ export function wireReactiveMCPManager({ manager, session, settings, refreshTool
 				throw new Error("MCP event delivery requires a persistent session journal");
 			}
 			await session.sessionManager.ensureOnDisk();
-			await session.sessionManager.flush();
+			await session.sessionManager.sync();
 		};
 		const scopedId = (subscriptionKey: string, id: string) => `${subscriptionKey}\0${id}`;
 		const journal = session.sessionManager.getEntries();
