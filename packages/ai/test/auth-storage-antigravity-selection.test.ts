@@ -572,4 +572,40 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		// A is still exhausted for Gemini, so its block stands too.
 		expect(store.getCredentialBlock?.(credentialIdA!, "google-antigravity:oauth", "counter:google")).toBeDefined();
 	});
+
+	test("healing the Gemini block keeps a pinned session moving off the Claude/GPT counter that is still refused", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const sessionId = "pinned-heal";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const credentialIdB = authStorage.listStoredCredentials(provider)[1]!.id;
+		usageByAccount.set(
+			"acct-b",
+			createAntigravityReport({
+				accountId: "acct-b",
+				projectId: "proj-b",
+				windows: [
+					{ counter: "google", usedFraction: 0.01, resetInMs: 5 * HOUR_MS },
+					{ counter: "claude-gpt", usedFraction: 1, resetInMs: 48 * HOUR_MS },
+				],
+			}),
+		);
+		expect(authStorage.pinSessionCredential(provider, sessionId, credentialIdB)).toBe(true);
+		for (const modelId of ["gemini-3.8-flash", "claude-opus-4-6"]) {
+			await authStorage.markUsageLimitReached(provider, sessionId, {
+				credentialId: credentialIdB,
+				modelId,
+				retryAfterMs: 48 * HOUR_MS,
+			});
+		}
+		now += 6 * 60 * 1000;
+		// This call reads fresh usage and lifts the Gemini block; the Claude/GPT refusal must survive it.
+		await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" });
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "claude-opus-4-6" })).toBe("api-acct-a");
+	});
 });

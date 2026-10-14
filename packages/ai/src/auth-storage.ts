@@ -4761,7 +4761,14 @@ export class AuthStorage {
 			else kept.push({ scope, blockedUntilMs });
 		}
 		if (healed.length === 0) return;
+		const confirmedBefore = new Map(this.#confirmedAntigravityQuota);
 		this.clearCredentialBlocks(provider, credentialId);
+		// A kept scope is still a confirmed refusal; only a healed scope may lose its confirmation.
+		for (const { scope } of kept) {
+			const key = `${credentialId}:${scope}`;
+			const confirmedUntil = confirmedBefore.get(key);
+			if (confirmedUntil !== undefined) this.#confirmedAntigravityQuota.set(key, confirmedUntil);
+		}
 		for (const { scope, blockedUntilMs } of kept) {
 			this.#blocks.markCredentialBlocked(provider, providerKey, credentialIndex, blockedUntilMs, scope);
 		}
