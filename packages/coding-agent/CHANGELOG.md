@@ -7,6 +7,7 @@
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
+- MCP event notices remain queued after prompt rejection and are fsynced with their durable prompt receipt before delivery is acknowledged ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 
 ### Changed
 
@@ -14,6 +15,8 @@
 - Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
 
 ### Added
+- Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
+- Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 

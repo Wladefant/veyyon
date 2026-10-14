@@ -29,16 +29,27 @@ import {
 	connectToServer,
 	disconnectServer,
 	getPrompt,
+	listEvents,
 	listPrompts,
 	listResources,
 	listResourceTemplates,
 	listTools,
+	pollEvents,
 	readResource,
 	serverSupportsPrompts,
 	serverSupportsResources,
+	subscribeToEvents,
 	subscribeToResources,
+	unsubscribeFromEvents,
 	unsubscribeFromResources,
 } from "./client";
+import {
+	createWebhookReceiver,
+	type MCPWebhookControl,
+	type MCPWebhookMessage,
+	type MCPWebhookRegistration,
+} from "./events-webhook";
+import { startMCPWebhookHost } from "./events-webhook-host";
 import { type LoadMCPConfigsResult, loadAllMCPConfigs, validateServerConfig } from "./config";
 import { hasMcpConfigCommands, mcpConfigCommandValues } from "./config-commands";
 import { mcpManagerInstance, setMcpManagerInstance } from "./manager-instance";
@@ -53,6 +64,7 @@ import { DeferredMCPTool, MCPTool, type MCPToolDetails, mcpToolNamePrefix } from
 import type { MCPToolCache } from "./tool-cache";
 import { describeMCPServerTarget } from "./transports/transport-failure";
 import {
+	type MCPEventOccurrence,
 	type MCPGetPromptResult,
 	MCPNotificationMethods,
 	type MCPPrompt,
@@ -62,9 +74,34 @@ import {
 	type MCPResourceTemplate,
 	type MCPServerConfig,
 	type MCPServerConnection,
+	type MCPServerEventSubscriptionConfig,
+	type MCPStreamRequest,
 	type MCPToolDefinition,
 	type MCPTransport,
+	isMCPEventsEnabled,
 } from "./types";
+
+type ActiveMCPEventSubscription = {
+	controller: AbortController;
+	serverName: string;
+	key: string;
+	timer?: Timer;
+	stream?: MCPStreamRequest;
+	streamProcessing?: Promise<void>;
+	streamFailed?: boolean;
+	cursor: string | null;
+	lifecycle?: Promise<void>;
+	seen: Set<string>;
+	mode?: MCPServerEventSubscriptionConfig["mode"];
+	connection?: MCPServerConnection;
+	config?: MCPServerEventSubscriptionConfig;
+	webhookId?: string;
+	webhookPath?: string;
+	webhookPort?: number;
+	unsubscribe?: Promise<void>;
+};
+
+const MCP_EVENT_STREAM_HEARTBEAT_TIMEOUT_MS = 60_000;
 
 type ToolLoadResult = {
 	connection: MCPServerConnection;
@@ -84,6 +121,50 @@ type TrackedPromise<T> = {
 	value?: T;
 	reason?: unknown;
 };
+
+function waitForMCPEventDelay(ms: number, signal: AbortSignal, onTimer: (timer: Timer) => void): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	if (signal.aborted) {
+		resolve();
+		return promise;
+	}
+	const abort = () => {
+		clearTimeout(timer);
+		signal.removeEventListener("abort", abort);
+		resolve();
+	};
+	const timer = setTimeout(() => {
+		signal.removeEventListener("abort", abort);
+		onTimer(timer);
+		resolve();
+	}, ms);
+	signal.addEventListener("abort", abort, { once: true });
+	onTimer(timer);
+	return promise;
+}
+
+function isMCPEventOccurrence(value: unknown): value is MCPEventOccurrence {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const event = value as Partial<MCPEventOccurrence>;
+	return (
+		typeof event.eventId === "string" &&
+		event.eventId.length > 0 &&
+		typeof event.name === "string" &&
+		event.name.length > 0 &&
+		typeof event.timestamp === "string" &&
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(event.timestamp) &&
+		Number.isFinite(Date.parse(event.timestamp)) &&
+		(event.cursor === undefined || event.cursor === null || typeof event.cursor === "string") &&
+		event.data !== undefined
+	);
+}
+
+function mcpErrorCode(error: unknown): number | undefined {
+	if (!error || typeof error !== "object") return undefined;
+	if ("code" in error && typeof error.code === "number") return error.code;
+	const match = error instanceof Error ? /^MCP error (-?\d+):/.exec(error.message) : null;
+	return match ? Number(match[1]) : undefined;
+}
 
 /**
  * How long startup waits for MCP connections before serving cached tools.
@@ -286,6 +367,42 @@ export class MCPManager {
 			...(gate ? { beforeSpawn: () => gate("an MCP stdio server") } : {}),
 		};
 	}
+	#onEventControl?: (serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
+	#webhookRegistrations = new Map<string, MCPWebhookRegistration>();
+	#webhookVerificationRoutes = new Map<string, { secret: string }>();
+	#webhookSubscriptions = new Map<string, { serverName: string; key: string }>();
+	#webhookHosts = new Map<number, { close(): void | Promise<void> }>();
+	#webhookPortById = new Map<string, number>();
+	#webhookReceiver = createWebhookReceiver({
+		registrations: this.#webhookRegistrations,
+		verificationRoutes: this.#webhookVerificationRoutes,
+		accept: async (subscriptionId, message) => {
+			const target = this.#webhookSubscriptions.get(subscriptionId);
+			const subscription = target ? this.#activeEvents.get(target.key) : undefined;
+			if (!target || !subscription) throw new Error("MCP webhook subscription is not active");
+			if ("type" in message) {
+				const outcome = await this.#recordEventControl(target.serverName, target.key, message);
+				if (message.type === "gap") {
+					await this.#recordEventCursor(subscription, message.cursor ?? null);
+				} else if (message.error.code === -32024) {
+					this.#stopEvent(target.key, subscription, false);
+				} else if ([-32023, -32026, -32011, -32012, -32015].includes(message.error.code)) {
+					this.#stopEvent(target.key, subscription, false);
+					void this.#refreshEventDescriptors(target.serverName);
+				}
+				return outcome === "duplicate" ? "duplicate" : "queued";
+			}
+			return (await this.#deliverEvent(target.serverName, target.key, subscription, message)) ? "queued" : "duplicate";
+		},
+	});
+	#onEventCursor?: (serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>;
+	#eventCursorProvider?: (serverName: string, subscriptionKey: string) => string | null | undefined;
+	#onEvent?: (serverName: string, event: MCPEventOccurrence, subscriptionKey: string) =>
+		| void
+		| "queued"
+		| "duplicate"
+		| Promise<void | "queued" | "duplicate">;
+	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
 
 	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
 	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();
@@ -296,6 +413,8 @@ export class MCPManager {
 	// the server later connects. This is what lets the noisy startup banner shrink
 	// to a count without hiding the error (the detail lives in `/mcp list`).
 	#lastErrors = new Map<string, string>();
+	#eventSubscriptionFailures = new Map<string, string>();
+
 	#authStorage: AuthStorage | null = null;
 	#onNotification?: (serverName: string, method: string, params: unknown) => void;
 	#onToolsChanged?: (tools: CustomTool<TSchema, MCPToolDetails>[]) => void;
@@ -306,11 +425,10 @@ export class MCPManager {
 	#subscribedResources = new Map<string, Set<string>>();
 	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
 	#pendingReconnections = new Map<string, Promise<MCPServerConnection | null>>();
-	/** Preserved configs for reconnection after connection loss. */
 	#serverConfigs = new Map<string, MCPServerConfig>();
 	/**
 	 * Timestamps of recent `reconnectServer` invocations per server, used by the
-	 * crash-storm circuit breaker (see {@link RECONNECT_BURST_LIMIT}).
+	 * crash-storm circuit breaker.
 	 */
 	#reconnectHistory = new Map<string, number[]>();
 	/** Monotonic epoch incremented on disconnectAll to invalidate stale reconnections. */
@@ -326,6 +444,583 @@ export class MCPManager {
 	 */
 	setOnNotification(handler: (serverName: string, method: string, params: unknown) => void): void {
 		this.#onNotification = handler;
+	}
+
+
+	setOnEvent(
+		handler:
+			| ((
+					serverName: string,
+					event: MCPEventOccurrence,
+					subscriptionKey: string,
+				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
+			| undefined,
+	): void {
+		this.#onEvent = handler;
+		if (handler) {
+			for (const [serverName, connection] of this.#connections) {
+				const config = this.#serverConfigs.get(serverName);
+				if (config?.events) void this.#startConfiguredEvents(serverName, connection, config.events);
+			}
+		}
+	}
+
+	setOnEventCursor(
+		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
+	): void {
+		this.#onEventCursor = handler;
+	}
+	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
+		this.#eventCursorProvider = provider;
+	}
+
+
+	setOnEventControl(
+		handler: ((serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">) | undefined,
+	): void {
+		this.#onEventControl = handler;
+	}
+
+	async #stopServerEvents(serverName: string): Promise<void> {
+		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
+		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
+		await Promise.allSettled(
+			matching.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+		);
+	}
+
+	async stopEvents(): Promise<void> {
+		const active = [...this.#activeEvents.entries()];
+		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
+		await Promise.allSettled(
+			active.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+		);
+		for (const [port, host] of this.#webhookHosts) {
+			this.#webhookHosts.delete(port);
+			await host.close();
+		}
+	}
+
+	async #startConfiguredEvents(
+		serverName: string,
+		connection: MCPServerConnection,
+		config: MCPServerConfig["events"],
+	): Promise<void> {
+		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
+		let descriptors;
+		try {
+			descriptors = await listEvents(connection);
+		} catch (error) {
+			logger.warn("Failed to list MCP event types", { path: `mcp:${serverName}`, error: errorMessage(error) });
+			return;
+		}
+		const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
+		for (const requested of config.subscriptions ?? []) {
+			const descriptor = byName.get(requested.name);
+			if (!descriptor || !descriptor.delivery.includes(requested.mode)) continue;
+			if (requested.mode === "push" && !connection.transport.streamRequest) {
+				logger.warn("Configured MCP event push mode is unsupported by this transport", {
+					path: `mcp:${serverName}`,
+					event: requested.name,
+				});
+				continue;
+			}
+			const key = this.#eventKey(serverName, requested);
+			if (this.#activeEvents.has(key)) continue;
+			const subscription: ActiveMCPEventSubscription = {
+				controller: new AbortController(),
+				serverName,
+				key,
+				seen: new Set(),
+				mode: requested.mode,
+				connection,
+				config: requested,
+				cursor: this.#eventCursorProvider?.(serverName, key) ?? null,
+			};
+			this.#activeEvents.set(key, subscription);
+			if (requested.mode === "poll") {
+				subscription.lifecycle = this.#pollEventLoop(serverName, connection, requested, key, subscription);
+			} else if (requested.mode === "push") {
+				this.#startEventStream(serverName, connection, requested, key, subscription);
+			} else {
+				subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+			}
+		}
+	}
+
+	async #subscribeWebhook(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): Promise<void> {
+		const webhook = requested.webhook;
+		if (!webhook || subscription.controller.signal.aborted) return;
+		const reference = webhook.secretRef;
+		if (!/^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(reference)) {
+			logger.error("MCP webhook secretRef must be an explicit environment reference", { path: `mcp:${serverName}` });
+			this.#stopEvent(key, subscription, false);
+			return;
+		}
+		let secret: string | undefined;
+		try {
+			secret = await resolveConfigValue(reference, `MCP webhook signing secret for ${serverName}`);
+		} catch (error) {
+			logger.warn("Failed to resolve MCP webhook secret reference", {
+				path: `mcp:${serverName}`,
+				error: errorMessage(error),
+			});
+			this.#stopEvent(key, subscription, false);
+			return;
+		}
+		if (!secret) {
+			const variable = describeConfigEnvReference(reference)?.variable ?? reference;
+			const reason = `Environment variable "${variable}" for MCP event "${requested.name}" on server "${serverName}" is unset or empty.`;
+			this.#eventSubscriptionFailures.set(key, reason);
+			logger.warn("MCP event subscription failed", {
+				path: `mcp:${serverName}`,
+				event: requested.name,
+				environmentVariable: variable,
+				reason,
+			});
+			this.#stopEvent(key, subscription, false);
+			return;
+		}
+		this.#eventSubscriptionFailures.delete(key);
+		let callback: URL;
+		try {
+			callback = new URL(webhook.callbackUrl);
+		} catch {
+			logger.error("MCP webhook callback URL is invalid", { path: `mcp:${serverName}` });
+			return;
+		}
+		if (callback.protocol !== "https:" || callback.username !== "" || callback.password !== "" || callback.hash !== "") {
+			logger.error("MCP webhook callback must use HTTPS without embedded credentials or a fragment", { path: `mcp:${serverName}` });
+			return;
+		}
+		const path = callback.pathname;
+		if (
+			[...this.#webhookRegistrations].some(
+				([id, registration]) => id !== subscription.webhookId && registration.callbackPath === path,
+			) ||
+			this.#webhookVerificationRoutes.has(path)
+		) {
+			logger.error("MCP webhook callback path must be unique within this session", { path: `mcp:${serverName}` });
+			return;
+		}
+		const port = webhook.listenPort;
+		subscription.webhookPath = path;
+		subscription.webhookPort = port;
+		this.#webhookVerificationRoutes.set(path, { secret });
+		try {
+			if (!this.#webhookHosts.has(port)) {
+				this.#webhookHosts.set(port, startMCPWebhookHost(this.#webhookReceiver, port));
+			}
+			const result = await subscribeToEvents(
+				connection,
+				requested.name,
+				requested.arguments ?? {},
+				{ url: webhook.callbackUrl, secret },
+				subscription.cursor,
+				1_800_000,
+				{ signal: subscription.controller.signal },
+			);
+			if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) {
+				subscription.unsubscribe = unsubscribeFromEvents(
+					connection,
+					requested.name,
+					requested.arguments ?? {},
+					webhook.callbackUrl,
+				).catch(error => {
+					logger.warn("Failed to clean up canceled MCP webhook subscription", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+						error: errorMessage(error),
+					});
+				}).then(() => this.#closeUnusedWebhookHost(port));
+				await subscription.unsubscribe;
+				return;
+			}
+			if (subscription.webhookId) {
+				this.#webhookRegistrations.delete(subscription.webhookId);
+				this.#webhookSubscriptions.delete(subscription.webhookId);
+				this.#webhookPortById.delete(subscription.webhookId);
+			}
+			subscription.webhookId = result.id;
+			this.#webhookRegistrations.set(result.id, { secret, name: requested.name, callbackPath: path });
+			this.#webhookSubscriptions.set(result.id, { serverName, key });
+			this.#webhookPortById.set(result.id, port);
+			this.#webhookVerificationRoutes.delete(path);
+			if (result.truncated) {
+				await this.#recordEventControl(serverName, key, {
+					type: "gap",
+					messageId: `subscribe:${key}:${result.cursor ?? "null"}`,
+					cursor: result.cursor ?? null,
+				});
+			}
+			await this.#recordEventCursor(subscription, result.cursor ?? null);
+			if (result.refreshBefore !== null) {
+				const refreshAt = Date.parse(result.refreshBefore) - Date.now() - 60_000;
+				subscription.timer = setTimeout(() => {
+					if (this.#activeEvents.get(key) === subscription) {
+						subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+					}
+				}, Math.max(1_000, refreshAt));
+			}
+		} catch (error) {
+			this.#webhookVerificationRoutes.delete(path);
+			logger.warn("MCP webhook subscription failed", {
+				path: `mcp:${serverName}`,
+				event: requested.name,
+				error: errorMessage(error),
+			});
+			if (subscription.webhookId) {
+				this.#scheduleWebhookRetry(serverName, connection, requested, key, subscription);
+			} else {
+				this.#stopEvent(key, subscription);
+			}
+		}
+	}
+	#scheduleWebhookRetry(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): void {
+		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return;
+		subscription.timer = setTimeout(() => {
+			if (this.#activeEvents.get(key) === subscription) {
+				subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+			}
+		}, 5_000);
+	}
+
+	async #refreshEventDescriptors(serverName: string): Promise<void> {
+		const connection = this.#connections.get(serverName);
+		const config = this.#serverConfigs.get(serverName);
+		if (!connection || !config?.events || !this.#onEvent) return;
+		try {
+			const descriptors = new Map((await listEvents(connection)).map(descriptor => [descriptor.name, descriptor]));
+			for (const subscription of config.events.subscriptions ?? []) {
+				if (!descriptors.get(subscription.name)?.delivery.includes(subscription.mode)) {
+					const key = this.#eventKey(serverName, subscription);
+					const active = this.#activeEvents.get(key);
+					if (active) this.#stopEvent(key, active);
+				}
+			}
+			await this.#startConfiguredEvents(serverName, connection, config.events);
+		} catch (error) {
+			logger.warn("Failed to refresh MCP event types", { path: `mcp:${serverName}`, error: errorMessage(error) });
+		}
+	}
+
+	async #recordEventCursor(subscription: ActiveMCPEventSubscription, cursor: string | null): Promise<void> {
+		const handler = this.#onEventCursor;
+		if (!handler) throw new Error("MCP event cursor callback is not configured");
+		await handler(subscription.serverName, subscription.key, cursor);
+		subscription.cursor = cursor;
+	}
+
+	async #recordEventControl(
+		serverName: string,
+		key: string,
+		control: MCPWebhookControl,
+	): Promise<void | "queued" | "duplicate"> {
+		const handler = this.#onEventControl;
+		if (!handler) throw new Error("MCP event control callback is not configured");
+		return await handler(serverName, key, control);
+	}
+
+	#eventKey(serverName: string, subscription: MCPServerEventSubscriptionConfig): string {
+		return `${serverName}\0${subscription.name}\0${JSON.stringify(subscription.arguments ?? {})}`;
+	}
+	async #deliverEvent(
+		serverName: string,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+		event: MCPEventOccurrence,
+		cursor?: string | null,
+		commitOccurrenceCursor = true,
+	): Promise<boolean> {
+		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return false;
+		if (!isMCPEventOccurrence(event) || event.name !== subscription.config?.name) {
+			throw new Error("MCP event occurrence is invalid or does not match its subscription");
+		}
+		if (!this.#onEvent) throw new Error("MCP event callback is not configured");
+		const hasEventCursor = event.cursor !== undefined || cursor !== undefined;
+		const eventCursor = event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
+		if (subscription.seen.has(event.eventId)) return false;
+		const deliveryEvent = { ...event, cursor: eventCursor };
+		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
+		if (commitOccurrenceCursor && hasEventCursor) await this.#recordEventCursor(subscription, eventCursor);
+		subscription.seen.add(event.eventId);
+		if (subscription.seen.size > 10_000) subscription.seen.delete(subscription.seen.values().next().value!);
+		return outcome !== "duplicate";
+	}
+	async #pollEventLoop(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): Promise<void> {
+		while (!subscription.controller.signal.aborted && this.#activeEvents.has(key)) {
+			const previousCursor = subscription.cursor;
+			try {
+				const result = await pollEvents(
+					connection,
+					requested.name,
+					requested.arguments ?? {},
+					previousCursor,
+					{ signal: subscription.controller.signal },
+				);
+				for (const event of result.events) {
+					await this.#deliverEvent(serverName, key, subscription, event, undefined, false);
+				}
+				if (result.truncated) {
+					await this.#recordEventControl(serverName, key, {
+						type: "gap",
+						messageId: `poll:${key}:${result.cursor ?? "null"}`,
+						cursor: result.cursor ?? null,
+					});
+				}
+				await this.#recordEventCursor(subscription, result.cursor ?? null);
+				if (result.hasMore) continue;
+				const delay = Math.max(1_000, Number.isFinite(result.nextPollMs) ? result.nextPollMs! : 30_000);
+				await waitForMCPEventDelay(delay, subscription.controller.signal, timer => {
+					subscription.timer = timer;
+				});
+				subscription.timer = undefined;
+			} catch (error) {
+				if (subscription.controller.signal.aborted) continue;
+				const code = mcpErrorCode(error);
+				if (code === -32024) {
+					this.#stopEvent(key, subscription);
+				} else if ([-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
+					this.#stopEvent(key, subscription);
+					void this.#refreshEventDescriptors(serverName);
+				} else {
+					logger.warn("MCP event poll failed", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+						error: errorMessage(error),
+					});
+					await waitForMCPEventDelay(5_000, subscription.controller.signal, timer => {
+						subscription.timer = timer;
+					});
+					subscription.timer = undefined;
+				}
+			}
+		}
+	}
+
+	#startEventStream(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): void {
+		const streamRequest = connection.transport.streamRequest;
+		if (!streamRequest) {
+			this.#stopEvent(key, subscription, false);
+			logger.warn("Configured MCP event push mode is unsupported by this transport", {
+				path: `mcp:${serverName}`,
+				event: requested.name,
+			});
+			return;
+		}
+		let streamId: string | number | undefined;
+		subscription.streamProcessing = Promise.resolve();
+		subscription.streamFailed = false;
+		const stream = streamRequest.call(
+			connection.transport,
+			"events/stream",
+			{ name: requested.name, arguments: requested.arguments ?? {}, cursor: subscription.cursor },
+			notification => {
+				if (!("method" in notification)) return;
+				const params = notification.params;
+				const value = params && typeof params === "object" ? params as Record<string, unknown> : undefined;
+				const metadata = value?._meta as Record<string, unknown> | undefined;
+				const notificationId = metadata?.["io.modelcontextprotocol/subscriptionId"];
+				if (streamId === undefined || notificationId !== streamId) {
+					if (notification.method === "notifications/events/list_changed" && notificationId === undefined) {
+						this.#handleServerNotification(serverName, notification.method, params);
+					}
+					return;
+				}
+				if (!notification.method.startsWith("notifications/events/")) return;
+				this.#armStreamHeartbeat(subscription);
+				subscription.streamProcessing = subscription.streamProcessing!.then(async () => {
+					if (subscription.streamFailed || subscription.controller.signal.aborted) return;
+					if (!value) throw new Error("MCP event stream frame has no params");
+					const rawCursor = value.cursor;
+					if (rawCursor !== undefined && rawCursor !== null && typeof rawCursor !== "string") {
+						throw new Error("MCP event stream frame has an invalid cursor");
+					}
+					const cursor = rawCursor === undefined ? undefined : rawCursor;
+					const controlMessageId =
+						`push:${key}:${notification.method}:${cursor ?? "null"}:${String((value.error as { code?: unknown } | undefined)?.code ?? "")}`;
+					if (notification.method === "notifications/events/event") {
+						if (!isMCPEventOccurrence(value) || value.name !== requested.name) {
+							throw new Error("MCP event stream occurrence is invalid or does not match its subscription");
+						}
+						await this.#deliverEvent(serverName, key, subscription, value, cursor);
+					} else if (
+						notification.method === "notifications/events/active" ||
+						notification.method === "notifications/events/heartbeat"
+					) {
+						if (notification.method === "notifications/events/active" && value.truncated === true) {
+							await this.#recordEventControl(serverName, key, {
+								type: "gap",
+								messageId: controlMessageId,
+								...(cursor !== undefined ? { cursor } : {}),
+							});
+						}
+						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+					} else if (notification.method === "notifications/events/gap") {
+						await this.#recordEventControl(serverName, key, {
+							type: "gap",
+							messageId: controlMessageId,
+							...(cursor !== undefined ? { cursor } : {}),
+						});
+						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+					} else if (notification.method === "notifications/events/error") {
+						const error = value.error as { code?: unknown } | undefined;
+						logger.warn("MCP event stream reported a transient error", {
+							path: `mcp:${serverName}`,
+							event: requested.name,
+							code: typeof error?.code === "number" ? error.code : undefined,
+						});
+					} else if (notification.method === "notifications/events/list_changed") {
+						await this.#refreshEventDescriptors(serverName);
+					} else if (notification.method === "notifications/events/terminated") {
+						const error = value.error as { code?: number; message?: string; data?: Record<string, unknown> } | undefined;
+						const code = error?.code;
+						await this.#recordEventControl(serverName, key, {
+							type: "terminated",
+							messageId: controlMessageId,
+							error: {
+								code: typeof code === "number" ? code : 0,
+								message: typeof error?.message === "string" ? error.message : "MCP event stream terminated",
+								...(error?.data ? { data: error.data } : {}),
+							},
+						});
+						this.#stopEvent(key, subscription, false);
+						if (code !== -32024 && [-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
+							void this.#refreshEventDescriptors(serverName);
+						}
+					}
+				}).catch(error => {
+					subscription.streamFailed = true;
+					logger.warn("Failed to persist MCP event stream frame", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+						error: errorMessage(error),
+					});
+					subscription.stream?.cancel();
+				});
+			},
+			{
+				signal: subscription.controller.signal,
+				timeoutMs: 0,
+				onRequestId: id => {
+					streamId = id;
+				},
+			},
+		);
+		subscription.stream = stream;
+		this.#armStreamHeartbeat(subscription);
+		const finish = async (error?: unknown): Promise<void> => {
+			await subscription.streamProcessing;
+			if (subscription.controller.signal.aborted) return;
+			const code = error === undefined ? undefined : mcpErrorCode(error);
+			if (code === -32024) {
+				this.#stopEvent(key, subscription);
+				return;
+			}
+			if (code !== undefined && [-32023, -32026, -32011, -32012, -32015].includes(code)) {
+				this.#stopEvent(key, subscription, false);
+				void this.#refreshEventDescriptors(serverName);
+				return;
+			}
+			if (error !== undefined) {
+				logger.warn("MCP event stream ended", {
+					path: `mcp:${serverName}`,
+					event: requested.name,
+					error: errorMessage(error),
+				});
+			}
+			this.#scheduleStreamRestart(serverName, connection, requested, key, subscription);
+		};
+		void stream.done.then(() => finish(), error => finish(error));
+	}
+	#armStreamHeartbeat(subscription: ActiveMCPEventSubscription): void {
+		clearTimeout(subscription.timer);
+		subscription.timer = setTimeout(() => {
+			if (!subscription.controller.signal.aborted) subscription.stream?.cancel();
+		}, MCP_EVENT_STREAM_HEARTBEAT_TIMEOUT_MS);
+	}
+
+	#scheduleStreamRestart(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): void {
+		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return;
+		clearTimeout(subscription.timer);
+		subscription.timer = setTimeout(() => {
+			if (!subscription.controller.signal.aborted && this.#activeEvents.has(key)) {
+				this.#startEventStream(serverName, connection, requested, key, subscription);
+			}
+		}, 5_000);
+	}
+	#stopEvent(key: string, subscription: ActiveMCPEventSubscription, unsubscribeWebhook = true): void {
+		if (this.#activeEvents.get(key) !== subscription) return;
+		this.#activeEvents.delete(key);
+		clearTimeout(subscription.timer);
+		subscription.controller.abort();
+		subscription.stream?.cancel();
+		const id = subscription.webhookId;
+		const port = subscription.webhookPort;
+		if (subscription.webhookPath) this.#webhookVerificationRoutes.delete(subscription.webhookPath);
+		if (id) {
+			this.#webhookRegistrations.delete(id);
+			this.#webhookSubscriptions.delete(id);
+			this.#webhookPortById.delete(id);
+		}
+		const closeHost = port === undefined ? undefined : () => this.#closeUnusedWebhookHost(port);
+		if (id && unsubscribeWebhook && subscription.connection && subscription.config?.webhook) {
+			subscription.unsubscribe = unsubscribeFromEvents(
+				subscription.connection,
+				subscription.config.name,
+				subscription.config.arguments ?? {},
+				subscription.config.webhook.callbackUrl,
+			).catch(error => {
+				logger.warn("Failed to unsubscribe MCP webhook", {
+					path: `mcp:${subscription.connection?.name ?? "unknown"}`,
+					event: subscription.config?.name,
+					error: errorMessage(error),
+				});
+			}).then(closeHost);
+		} else if (closeHost) {
+			subscription.unsubscribe = closeHost();
+		}
+	}
+
+	async #closeUnusedWebhookHost(port: number): Promise<void> {
+		if (
+			[...this.#webhookPortById.values()].includes(port) ||
+			[...this.#activeEvents.values()].some(subscription => subscription.webhookPort === port)
+		) return;
+		const host = this.#webhookHosts.get(port);
+		if (!host) return;
+		this.#webhookHosts.delete(port);
+		await host.close();
 	}
 
 	/**
@@ -540,6 +1235,7 @@ export class MCPManager {
 					// cache keys stable and avoid leaking rotating credentials.
 					connection.config = config;
 					this.#serverConfigs.set(name, config);
+					if (config.events) void this.#startConfiguredEvents(name, connection, config.events);
 					if (sources[name]) {
 						connection._source = sources[name];
 					}
@@ -576,7 +1272,7 @@ export class MCPManager {
 					connection.transport.onClose = () => {
 						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
 						this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
-						void this.reconnectServer(name);
+						void this.#stopServerEvents(name).then(() => this.reconnectServer(name));
 					};
 
 					return connection;
@@ -738,7 +1434,6 @@ export class MCPManager {
 	}
 	#handleServerNotification(serverName: string, method: string, params: unknown): void {
 		logger.debug("MCP notification received", { path: `mcp:${serverName}`, method });
-
 		switch (method) {
 			case MCPNotificationMethods.TOOLS_LIST_CHANGED:
 				this.#triggerNotificationRefresh(serverName, "tools");
@@ -756,6 +1451,9 @@ export class MCPManager {
 			}
 			case MCPNotificationMethods.PROMPTS_LIST_CHANGED:
 				this.#triggerNotificationRefresh(serverName, "prompts");
+				break;
+			case "notifications/events/list_changed":
+				void this.#refreshEventDescriptors(serverName);
 				break;
 			default:
 				break;
@@ -828,6 +1526,15 @@ export class MCPManager {
 	getLastError(name: string): string | undefined {
 		if (this.#connections.has(name)) return undefined;
 		return this.#lastErrors.get(name);
+	}
+
+	/** The failure state for one configured event subscription, independent of transport health. */
+	getEventSubscriptionStatus(
+		serverName: string,
+		subscription: MCPServerEventSubscriptionConfig,
+	): Readonly<{ status: "failed"; reason: string }> | undefined {
+		const reason = this.#eventSubscriptionFailures.get(this.#eventKey(serverName, subscription));
+		return reason === undefined ? undefined : { status: "failed", reason };
 	}
 
 	/**
@@ -903,6 +1610,7 @@ export class MCPManager {
 	 * Disconnect from a specific server.
 	 */
 	async disconnectServer(name: string): Promise<void> {
+		await this.#stopServerEvents(name);
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
 		this.#pendingReconnections.delete(name);
@@ -948,6 +1656,7 @@ export class MCPManager {
 		// Invalidate any in-flight reconnection attempts that outlive this call.
 		// They captured the old epoch; after increment they'll detect staleness.
 		this.#epoch++;
+		await this.stopEvents();
 		// Detach onClose before closing to prevent spurious reconnect attempts
 		for (const conn of this.#connections.values()) {
 			conn.transport.onClose = undefined;
@@ -1224,7 +1933,7 @@ export class MCPManager {
 		connection.transport.onClose = () => {
 			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
 			this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
-			void this.reconnectServer(name);
+			void this.#stopServerEvents(name).then(() => this.reconnectServer(name));
 		};
 		try {
 			const serverTools = await listTools(connection);
@@ -1234,6 +1943,7 @@ export class MCPManager {
 			this.#replaceServerTools(name, customTools);
 			this.#onToolsChanged?.(this.#tools);
 			void this.#loadServerResourcesAndPrompts(name, connection);
+			if (config.events) void this.#startConfiguredEvents(name, connection, config.events);
 			return connection;
 		} catch (error) {
 			// Clean up the connection to avoid zombie transports
