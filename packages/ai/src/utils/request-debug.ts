@@ -1,3 +1,5 @@
+import { isLogRedactionActive } from "@veyyon/utils/logger";
+
 import { Buffer } from "node:buffer";
 import * as fs from "node:fs/promises";
 import * as logger from "@veyyon/utils/logger";
@@ -74,7 +76,7 @@ function isRequestDebugEnvEnabled(): boolean {
 }
 
 export function isRequestDebugEnabled(): boolean {
-	return isRequestDebugEnvEnabled();
+	return !isLogRedactionActive() && isRequestDebugEnvEnabled();
 }
 
 function reportRequestDebugFailure(message: string, error: unknown, path?: string): void {
@@ -194,6 +196,7 @@ export function withRequestDebugFetch<T extends { fetch?: FetchImpl } | undefine
 }
 
 export async function createRequestDebugSession(payload: RequestDebugPayload): Promise<RequestDebugSession> {
+	if (isLogRedactionActive()) throw new Error("Request debug capture is disabled for private gateway requests");
 	const { id, requestPath, responsePath, handle } = await reserveRequestDebugFile();
 	const requestDump: Record<string, unknown> = {
 		id,
