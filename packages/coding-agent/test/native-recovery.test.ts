@@ -6,8 +6,10 @@ import { serializeTitleSlot } from "../../../kernel/src/session/session-title-sl
 import {
 	captureNativeCheckpoint,
 	forkNativeCheckpoint,
+	persistNativeHandoffIdentity,
 	restoreNativeCheckpoint,
 } from "../src/checkpoints/native-recovery";
+import { readSessionOwnershipMarker } from "../src/checkpoints/session-ownership-marker";
 
 const roots: string[] = [];
 async function scratch(): Promise<string> {
@@ -111,5 +113,47 @@ describe("native recovery", () => {
 		);
 		expect(forkHeader.id).toBe(fork.sessionId);
 		expect(forkHeader.parentSessionId).toBe("parent");
+	});
+	test("transferred native journals fence the source, restore identity, and clear it only on an explicit fork", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		const original = `${JSON.stringify({ type: "session", id: "native-transfer", cwd: root })}\n`;
+		await writeFile(file, original);
+		const identity = { version: 1 as const, targetNode: "laptop-b", transferId: "transfer-1", transferEpoch: 9 };
+		await persistNativeHandoffIdentity(file, identity);
+		const source = await readFile(file, "utf8");
+		const sourceHeader = JSON.parse(source.split("\n")[0]!) as Record<string, unknown>;
+		expect(sourceHeader.checkpointHandoff).toEqual(identity);
+		expect(source.split("\n").slice(1).join("\n")).toBe(original.split("\n").slice(1).join("\n"));
+
+		await expect(readSessionOwnershipMarker(file, "native-transfer")).rejects.toThrow(/marker is missing/i);
+		const bundle = await captureNativeCheckpoint(file, []);
+		bundle.handoff = {
+			targetNode: "laptop-b",
+			transferId: "transfer-1",
+			claimToken: "one-use-claim-capability-long",
+			epoch: 9,
+		};
+		const restoredDirectory = join(root, "restored");
+		await restoreNativeCheckpoint(bundle, restoredDirectory);
+		roots.push(restoredDirectory);
+		const restoredHeader = JSON.parse(
+			(await readFile(join(restoredDirectory, "sessions", "session.jsonl"), "utf8")).split("\n")[0]!,
+		) as Record<string, unknown>;
+		expect(restoredHeader.checkpointHandoff).toEqual(identity);
+		const restoredMarker = JSON.parse(
+			await readFile(join(restoredDirectory, "sessions", "checkpoint-ownership.json"), "utf8"),
+		) as { transferId: string; claimToken: string };
+		expect(restoredMarker.transferId).toBe(identity.transferId);
+		expect(restoredMarker.claimToken).toBe(bundle.handoff.claimToken);
+
+		const fork = await forkNativeCheckpoint(bundle);
+		roots.push(fork.directory);
+		const forkHeader = JSON.parse(
+			(await readFile(join(fork.directory, "sessions", "session.jsonl"), "utf8")).split("\n")[0]!,
+		) as Record<string, unknown>;
+		expect(forkHeader.id).toBe(fork.sessionId);
+		expect(forkHeader).not.toHaveProperty("checkpointHandoff");
+		expect(await readFile(file, "utf8")).toBe(source);
 	});
 });

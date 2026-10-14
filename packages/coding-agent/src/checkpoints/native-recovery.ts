@@ -1,3 +1,4 @@
+import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -14,7 +15,7 @@ export interface NativeCheckpointBundle {
 	blobs: Record<string, string>;
 	workspace: { dirty: string[]; files: { path: string; bytes: string }[] };
 	pins: { bun: string; commit: string; runtime: string };
-	handoff?: { targetNode: string; claimToken: string; epoch: number };
+	handoff?: { targetNode: string; claimToken: string; transferId: string; epoch: number };
 }
 
 const forbidden =
@@ -88,6 +89,66 @@ function parseHeader(bytes: Uint8Array): Record<string, unknown> {
 			return value as Record<string, unknown>;
 	}
 	throw new Error("Native session header must contain type, id, and cwd");
+}
+export async function persistNativeHandoffIdentity(
+	sessionFile: string,
+	identity: SessionHandoffIdentity,
+): Promise<void> {
+	if (
+		identity.version !== 1 ||
+		!isCheckpointNodeLabel(identity.targetNode) ||
+		!/^[A-Za-z0-9_-]{1,128}$/.test(identity.transferId) ||
+		!Number.isSafeInteger(identity.transferEpoch) ||
+		identity.transferEpoch < 1
+	)
+		throw new Error("Invalid native session handoff identity");
+	const journalPath = resolve(sessionFile);
+	await assertNoSymlink(journalPath);
+	await assertNotTerminalOwned(journalPath);
+	const original = await readStable(journalPath);
+	const header = parseHeader(original);
+	const prior = header.checkpointHandoff;
+	if (prior && typeof prior === "object" && "targetNode" in prior && prior.targetNode !== identity.targetNode)
+		throw new Error("A handed-off native session cannot be transferred to a different node");
+	const text = Buffer.from(original).toString("utf8");
+	let offset = 0;
+	let headerStart = -1;
+	let headerEnd = -1;
+	for (let index = 0; index < 2; index++) {
+		const newline = text.indexOf("\n", offset);
+		const lineEnd = newline < 0 ? text.length : newline;
+		const contentEnd = lineEnd > offset && text[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
+		let entry: unknown;
+		try {
+			entry = JSON.parse(text.slice(offset, contentEnd));
+		} catch {
+			entry = undefined;
+		}
+		if (entry && typeof entry === "object" && "type" in entry && entry.type === "session") {
+			headerStart = offset;
+			headerEnd = contentEnd;
+			break;
+		}
+		if (newline < 0) break;
+		offset = newline + 1;
+	}
+	if (headerStart < 0 || headerEnd < 0) throw new Error("Native session header could not be located");
+	const next = Buffer.from(
+		text.slice(0, headerStart) +
+			JSON.stringify({ ...header, checkpointHandoff: identity }) +
+			text.slice(headerEnd),
+	);
+	if (next.equals(Buffer.from(original))) return;
+	if (!(await readFile(journalPath)).equals(Buffer.from(original)))
+		throw new Error("Native session changed while persisting its handoff identity");
+	const temporary = `${journalPath}.${randomUUID()}.tmp`;
+	await writeFile(temporary, next, { flag: "wx", mode: 0o600 });
+	try {
+		await rename(temporary, journalPath);
+	} catch (error) {
+		await rm(temporary, { force: true });
+		throw new Error("Could not persist the native session handoff identity", { cause: error });
+	}
 }
 export async function captureNativeCheckpoint(
 	sessionFile: string,
@@ -193,6 +254,31 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 	}
 	const header = parseHeader(decodeBase64(bundle.journal.bytes));
 	if (header.id !== bundle.native.sessionId) throw new Error("Checkpoint journal and native header disagree");
+	const handoff = bundle.handoff;
+	if (handoff) {
+		if (
+			!isCheckpointNodeLabel(handoff.targetNode) ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(handoff.transferId) ||
+			typeof handoff.claimToken !== "string" ||
+			handoff.claimToken.length < 16 ||
+			handoff.claimToken.length > 128 ||
+			!Number.isSafeInteger(handoff.epoch) ||
+			handoff.epoch < 1
+		)
+			throw new Error("Invalid transferred-session claim");
+		if (
+			header.checkpointHandoff &&
+			typeof header.checkpointHandoff === "object" &&
+			"targetNode" in header.checkpointHandoff &&
+			header.checkpointHandoff.targetNode !== handoff.targetNode
+		)
+			throw new Error("Checkpoint handoff target does not match its native journal");
+	} else if (!fork && header.checkpointHandoff !== undefined) {
+		throw new Error("Transferred checkpoint is missing its authority claim");
+	}
+	const identity: SessionHandoffIdentity | undefined = handoff
+		? { version: 1, targetNode: handoff.targetNode, transferId: handoff.transferId, transferEpoch: handoff.epoch }
+		: undefined;
 	const newId = fork ? randomUUID() : bundle.native.sessionId;
 	const journalBytes = decodeBase64(bundle.journal.bytes);
 	const journalText = Buffer.from(journalBytes).toString("utf8");
@@ -202,8 +288,12 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 		headerStart = headerEnd + 1;
 		headerEnd = journalText.indexOf("\n", headerStart);
 	}
-	const headerLine = JSON.stringify({ ...header, id: newId, parentSessionId: bundle.native.sessionId });
-	const materializedJournal = fork
+	const outputHeader = { ...header, id: newId, parentSessionId: bundle.native.sessionId };
+	if (fork) delete outputHeader.checkpointHandoff;
+	else if (identity) outputHeader.checkpointHandoff = identity;
+	const headerLine = JSON.stringify(outputHeader);
+	const rewriteJournal = fork || identity !== undefined;
+	const materializedJournal = rewriteJournal
 		? Buffer.from(
 				journalText.slice(0, headerStart) + headerLine + (headerEnd < 0 ? "" : journalText.slice(headerEnd)),
 			)
@@ -232,19 +322,18 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 			await mkdir(dirname(target), { recursive: true });
 			await writeFile(target, decodeBase64(file.bytes), { flag: "wx", mode: 0o600 });
 		}
-		if (
-			!fork &&
-			bundle.handoff &&
-			(!bundle.handoff.targetNode ||
-				!bundle.handoff.claimToken ||
-				!Number.isSafeInteger(bundle.handoff.epoch) ||
-				bundle.handoff.epoch < 1)
-		)
-			throw new Error("Invalid transferred-session claim");
-		if (!fork && bundle.handoff)
+		if (!fork && handoff)
 			await writeFile(
 				join(staging, "sessions", "checkpoint-ownership.json"),
-				JSON.stringify({ version: 1, sessionId: newId, ...bundle.handoff }),
+				JSON.stringify({
+					version: 1,
+					sessionId: newId,
+					targetNode: handoff.targetNode,
+					transferId: handoff.transferId,
+					transferEpoch: handoff.epoch,
+					epoch: handoff.epoch,
+					claimToken: handoff.claimToken,
+				}),
 				{ flag: "wx", mode: 0o600 },
 			);
 		await writeFile(

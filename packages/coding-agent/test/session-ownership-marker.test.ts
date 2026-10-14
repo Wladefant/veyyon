@@ -2,35 +2,52 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { consumeSessionOwnershipClaim, readSessionOwnershipMarker } from "../src/checkpoints/session-ownership-marker";
+import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../src/checkpoints/session-ownership-marker";
 
 const roots: string[] = [];
+const identity = { version: 1 as const, targetNode: "laptop-b", transferId: "transfer-uuid", transferEpoch: 7 };
+const marker = {
+	version: 1 as const,
+	sessionId: "transfer",
+	...identity,
+	claimToken: "a-claim-capability-long-enough",
+	epoch: 7,
+};
 afterEach(async () => {
 	await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-test("restored transfer marker activates once and fails closed when marker data disappears", async () => {
+test("native handoff identity fails closed without matching recovery marker and rotates its capability", async () => {
 	const root = await mkdtemp(join(tmpdir(), "session-ownership-marker-"));
 	roots.push(root);
 	const sessions = join(root, "sessions");
 	await mkdir(sessions);
 	const sessionFile = join(sessions, "session.jsonl");
-	await writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "transfer" })}\n`);
+	await writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity })}\n`);
 	await writeFile(join(root, "recovery.json"), JSON.stringify({ sessionId: "transfer", checkpointTransfer: true }));
 	const markerPath = join(sessions, "checkpoint-ownership.json");
-	const marker = { version: 1 as const, sessionId: "transfer", targetNode: "laptop-b", claimToken: "one-use", epoch: 7 };
 	await writeFile(markerPath, JSON.stringify(marker), { mode: 0o600 });
 
 	const pending = await readSessionOwnershipMarker(sessionFile, "transfer");
 	expect(pending?.marker).toEqual(marker);
-	await consumeSessionOwnershipClaim(markerPath, marker);
+	await persistSessionResumeCapability(markerPath, marker, "a-resume-capability-long-enough", 8);
 	const consumed = await readSessionOwnershipMarker(sessionFile, "transfer");
 	expect(consumed?.marker.claimToken).toBeUndefined();
+	expect(consumed?.marker.resumeToken).toBe("a-resume-capability-long-enough");
+	expect(consumed?.marker.epoch).toBe(8);
 	expect(JSON.parse(await readFile(markerPath, "utf8"))).not.toHaveProperty("claimToken");
 
 	await rm(markerPath);
 	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/marker is missing/i);
 	await rm(join(root, "recovery.json"));
 	await writeFile(markerPath, JSON.stringify(marker), { mode: 0o600 });
-	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/recovery metadata is missing/i);
+	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/recovery metadata/i);
+});
+
+test("a copied native journal without sidecars never resumes as an ordinary checkpoint", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-copy-"));
+	roots.push(root);
+	const file = join(root, "copied.jsonl");
+	await writeFile(file, `${JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity })}\n`);
+	await expect(readSessionOwnershipMarker(file, "transfer")).rejects.toThrow(/marker is missing/i);
 });

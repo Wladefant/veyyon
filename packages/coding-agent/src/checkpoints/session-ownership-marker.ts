@@ -1,13 +1,93 @@
 import { randomUUID } from "node:crypto";
-import { lstat, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
 
-export interface SessionOwnershipMarker {
-	version: 1;
+export interface SessionOwnershipMarker extends SessionHandoffIdentity {
 	sessionId: string;
-	targetNode: string;
-	claimToken?: string;
 	epoch: number;
+	claimToken?: string;
+	resumeToken?: string;
+}
+
+function isSessionOwnershipMarker(value: unknown): value is SessionOwnershipMarker {
+	if (
+		!value ||
+		typeof value !== "object" ||
+		!("version" in value) ||
+		value.version !== 1 ||
+		!("sessionId" in value) ||
+		typeof value.sessionId !== "string" ||
+		!("targetNode" in value) ||
+		!isCheckpointNodeLabel(value.targetNode) ||
+		!("transferId" in value) ||
+		typeof value.transferId !== "string" ||
+		!/^[A-Za-z0-9_-]{1,128}$/.test(value.transferId) ||
+		!("transferEpoch" in value) ||
+		typeof value.transferEpoch !== "number" ||
+		!Number.isSafeInteger(value.transferEpoch) ||
+		value.transferEpoch < 1 ||
+		!("epoch" in value) ||
+		typeof value.epoch !== "number" ||
+		!Number.isSafeInteger(value.epoch) ||
+		value.epoch < value.transferEpoch ||
+		("claimToken" in value && (typeof value.claimToken !== "string" || value.claimToken.length < 16)) ||
+		("resumeToken" in value && (typeof value.resumeToken !== "string" || value.resumeToken.length < 16)) ||
+		(Boolean("claimToken" in value) === Boolean("resumeToken" in value))
+	)
+		return false;
+	return true;
+}
+
+async function readNativeHandoffIdentity(
+	sessionFile: string,
+	sessionId: string,
+): Promise<SessionHandoffIdentity | undefined> {
+	const file = await open(sessionFile, "r");
+	const bytes = Buffer.alloc(64 * 1024);
+	let text: string;
+	try {
+		const { bytesRead } = await file.read(bytes, 0, bytes.byteLength, 0);
+		text = bytes.subarray(0, bytesRead).toString("utf8");
+	} finally {
+		await file.close();
+	}
+	for (const line of text.split(/\r?\n/, 2)) {
+		if (!line) continue;
+		let value: unknown;
+		try {
+			value = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (!value || typeof value !== "object" || !("type" in value) || value.type !== "session") continue;
+		if (!("id" in value) || value.id !== sessionId) throw new Error("Native session identity does not match the active session");
+		if (!("checkpointHandoff" in value)) return undefined;
+		const marker: unknown = value.checkpointHandoff;
+		if (
+			!marker ||
+			typeof marker !== "object" ||
+			!("version" in marker) ||
+			marker.version !== 1 ||
+			!("targetNode" in marker) ||
+			!isCheckpointNodeLabel(marker.targetNode) ||
+			!("transferId" in marker) ||
+			typeof marker.transferId !== "string" ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(marker.transferId) ||
+			!("transferEpoch" in marker) ||
+			typeof marker.transferEpoch !== "number" ||
+			!Number.isSafeInteger(marker.transferEpoch) ||
+			marker.transferEpoch < 1
+		)
+			throw new Error("Native session handoff identity is invalid");
+		return {
+			version: 1,
+			targetNode: marker.targetNode,
+			transferId: marker.transferId,
+			transferEpoch: marker.transferEpoch,
+		};
+	}
+	return undefined;
 }
 
 export async function readSessionOwnershipMarker(sessionFile: string, sessionId: string): Promise<{
@@ -15,50 +95,61 @@ export async function readSessionOwnershipMarker(sessionFile: string, sessionId:
 	marker: SessionOwnershipMarker;
 } | null> {
 	const directory = dirname(sessionFile);
-	let recovery: { sessionId?: unknown; checkpointTransfer?: unknown };
-	try {
-		recovery = JSON.parse(await readFile(join(directory, "..", "recovery.json"), "utf8"));
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-			try {
-				await lstat(join(directory, "checkpoint-ownership.json"));
-				throw new Error("Transferred session recovery metadata is missing");
-			} catch (markerError) {
-				if ((markerError as NodeJS.ErrnoException).code === "ENOENT") return null;
-				throw markerError;
-			}
-		}
-		throw new Error("Cannot verify restored checkpoint ownership", { cause: error });
-	}
-	if (recovery.sessionId !== sessionId) throw new Error("Recovery metadata does not match the active session");
-	if (recovery.checkpointTransfer !== true) return null;
 	const path = join(directory, "checkpoint-ownership.json");
-	let marker: SessionOwnershipMarker;
+	const identity = await readNativeHandoffIdentity(sessionFile, sessionId);
+	let recoveryValue: unknown;
 	try {
-		marker = JSON.parse(await readFile(path, "utf8"));
+		recoveryValue = JSON.parse(await readFile(join(directory, "..", "recovery.json"), "utf8"));
 	} catch (error) {
-		throw new Error("Transferred session ownership marker is missing or unreadable", { cause: error });
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+			throw new Error("Cannot verify restored checkpoint ownership", { cause: error });
 	}
+	let recovery: { sessionId: string; checkpointTransfer: boolean } | undefined;
+	if (recoveryValue !== undefined) {
+		if (
+			!recoveryValue ||
+			typeof recoveryValue !== "object" ||
+			!("sessionId" in recoveryValue) ||
+			typeof recoveryValue.sessionId !== "string" ||
+			!("checkpointTransfer" in recoveryValue) ||
+			typeof recoveryValue.checkpointTransfer !== "boolean"
+		)
+			throw new Error("Restored checkpoint recovery metadata is invalid");
+		recovery = { sessionId: recoveryValue.sessionId, checkpointTransfer: recoveryValue.checkpointTransfer };
+	}
+	let markerValue: unknown;
+	try {
+		markerValue = JSON.parse(await readFile(path, "utf8"));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+			throw new Error("Transferred session ownership marker is unreadable", { cause: error });
+	}
+	if (!identity && recovery?.checkpointTransfer !== true) {
+		if (markerValue !== undefined || recovery?.checkpointTransfer === true)
+			throw new Error("Transferred session native handoff identity is missing");
+		return null;
+	}
+	if (!identity || !isSessionOwnershipMarker(markerValue))
+		throw new Error("Transferred session ownership marker is missing or invalid; prompt admission is blocked");
+	if (!recovery || recovery.sessionId !== sessionId || recovery.checkpointTransfer !== true)
+		throw new Error("Recovery metadata does not match the native handoff identity");
 	if (
-		marker?.version !== 1 ||
-		marker.sessionId !== sessionId ||
-		typeof marker.targetNode !== "string" ||
-		!marker.targetNode ||
-		marker.targetNode.length > 128 ||
-		!Number.isSafeInteger(marker.epoch) ||
-		marker.epoch < 1 ||
-		(marker.claimToken !== undefined &&
-			(typeof marker.claimToken !== "string" || !marker.claimToken || marker.claimToken.length > 128))
+		markerValue.sessionId !== sessionId ||
+		markerValue.targetNode !== identity.targetNode ||
+		markerValue.transferId !== identity.transferId ||
+		markerValue.transferEpoch !== identity.transferEpoch
 	)
-		throw new Error("Transferred session ownership marker is invalid");
-	return { path, marker };
+		throw new Error("Transferred session ownership marker does not match its native journal");
+	return { path, marker: markerValue };
 }
 
-export async function consumeSessionOwnershipClaim(
+export async function persistSessionResumeCapability(
 	path: string,
 	marker: SessionOwnershipMarker,
+	resumeToken: string,
+	epoch: number,
 ): Promise<void> {
-	const consumed = { ...marker };
+	const consumed: SessionOwnershipMarker = { ...marker, resumeToken, epoch };
 	delete consumed.claimToken;
 	const temporary = `${path}.${randomUUID()}.tmp`;
 	await writeFile(temporary, JSON.stringify(consumed), { flag: "wx", mode: 0o600 });
@@ -66,6 +157,6 @@ export async function consumeSessionOwnershipClaim(
 		await rename(temporary, path);
 	} catch (error) {
 		await rm(temporary, { force: true });
-		throw new Error("Could not persist the consumed session ownership claim", { cause: error });
+		throw new Error("Could not persist the rotated session resume capability", { cause: error });
 	}
 }

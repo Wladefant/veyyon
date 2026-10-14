@@ -1,7 +1,8 @@
+import { isCheckpointNodeLabel } from "@veyyon/session/checkpoint-ownership";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { captureNativeCheckpoint, forkNativeCheckpoint, restoreNativeCheckpoint } from "../checkpoints/native-recovery";
+import { captureNativeCheckpoint, forkNativeCheckpoint, persistNativeHandoffIdentity, restoreNativeCheckpoint } from "../checkpoints/native-recovery";
 import { settings } from "../config/settings";
 
 export interface CheckpointCommandArgs {
@@ -24,9 +25,9 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 	if (!client.enabled) throw new Error("Cloud checkpoint URL, bearer token, and encryption key must be configured.");
 	if (args.action === "export" || args.action === "handoff") {
 		if (!args.sessionFile) throw new Error(`Checkpoint ${args.action} requires --file <session.jsonl>`);
-		if (args.action === "handoff" && !args.targetNode)
-			throw new Error("Session handoff requires --to <destination node>");
-		if (args.action === "handoff" && !process.env.VEYYON_CHECKPOINT_NODE)
+		if (args.action === "handoff" && !isCheckpointNodeLabel(args.targetNode))
+			throw new Error("Session handoff requires a valid --to device label");
+		if (args.action === "handoff" && !isCheckpointNodeLabel(process.env.VEYYON_CHECKPOINT_NODE))
 			throw new Error("Session handoff requires VEYYON_CHECKPOINT_NODE, the stable source device label");
 		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
 		if (args.action === "handoff" && args.id && args.id !== bundle.native.sessionId)
@@ -38,35 +39,88 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 			if (pending?.handoff) {
 				if (pending.handoff.targetNode !== args.targetNode)
 					throw new Error(`A pending handoff already targets ${pending.handoff.targetNode}`);
-				const next = await client.transferLease(sessionId, args.targetNode!, pending.handoff.claimToken, {
-					ownerNode,
-					epoch: pending.handoff.epoch - 1,
+				try {
+					const next = await client.transferLease(
+						sessionId,
+						pending.handoff.targetNode,
+						pending.handoff.claimToken,
+						pending.handoff.transferId,
+						{ ownerNode, epoch: pending.handoff.epoch - 1 },
+					);
+					console.log(JSON.stringify({
+						sessionId,
+						transferred: true,
+						targetNode: pending.handoff.targetNode,
+						epoch: next.epoch,
+					}));
+					return;
+				} catch (error) {
+					if (!(error instanceof Error) || !error.message.includes("HTTP 409")) throw error;
+				}
+				const lease = await client.acquireLease(sessionId, ownerNode);
+				const handoff = {
+					targetNode: pending.handoff.targetNode,
+					claimToken: randomUUID(),
+					transferId: randomUUID(),
+					epoch: lease.epoch + 1,
+				};
+				await persistNativeHandoffIdentity(args.sessionFile, {
+					version: 1,
+					targetNode: handoff.targetNode,
+					transferId: handoff.transferId,
+					transferEpoch: handoff.epoch,
 				});
-				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: args.targetNode, epoch: next.epoch }));
+				const refreshed = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
+				refreshed.handoff = handoff;
+				const head = await client.head(sessionId);
+				await client.commit(sessionId, refreshed, head?.sequence ?? lease.headSequence);
+				const next = await client.transferLease(
+					sessionId,
+					handoff.targetNode,
+					handoff.claimToken,
+					handoff.transferId,
+				);
+				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: handoff.targetNode, epoch: next.epoch }));
 				return;
 			}
 		}
 		const lease = await client.acquireLease(sessionId, ownerNode);
-		let transferred = false;
+		let handoffCommitted = false;
 		try {
 			const head = await client.head(sessionId);
+			let currentBundle = bundle;
 			if (args.action === "handoff") {
-				bundle.handoff = {
+				const handoff = {
 					targetNode: args.targetNode!,
 					claimToken: randomUUID(),
+					transferId: randomUUID(),
 					epoch: lease.epoch + 1,
 				};
+				await persistNativeHandoffIdentity(args.sessionFile, {
+					version: 1,
+					targetNode: handoff.targetNode,
+					transferId: handoff.transferId,
+					transferEpoch: handoff.epoch,
+				});
+				currentBundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
+				currentBundle.handoff = handoff;
 			}
-			await client.commit(sessionId, bundle, head?.sequence ?? lease.headSequence);
+			await client.commit(sessionId, currentBundle, head?.sequence ?? lease.headSequence);
 			if (args.action === "handoff") {
-				const next = await client.transferLease(sessionId, args.targetNode!, bundle.handoff!.claimToken);
-				transferred = true;
-				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: args.targetNode, epoch: next.epoch }));
+				handoffCommitted = true;
+				const handoff = currentBundle.handoff!;
+				const next = await client.transferLease(
+					sessionId,
+					handoff.targetNode,
+					handoff.claimToken,
+					handoff.transferId,
+				);
+				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: handoff.targetNode, epoch: next.epoch }));
 			} else {
 				console.log(JSON.stringify({ sessionId, exported: true }));
 			}
 		} finally {
-			if (!transferred) await client.releaseLease(sessionId).catch(() => undefined);
+			if (!handoffCommitted) await client.releaseLease(sessionId).catch(() => undefined);
 		}
 		return;
 	}

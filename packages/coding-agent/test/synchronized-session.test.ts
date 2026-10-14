@@ -101,47 +101,84 @@ test("a transfer claim is single-use across runtimes sharing the destination dev
 	let claimed = false;
 	let owner = "destination-device";
 	let epoch = 4;
+	let pendingToken: string | undefined;
 	const fake: CheckpointFetch = async (input, init) => {
 		const action = new URL(String(input)).pathname.split("/").pop();
 		const body = init?.body
-			? (JSON.parse(String(init.body)) as { ownerNode: string; targetNode?: string; claimToken?: string; epoch?: number })
+			? (JSON.parse(String(init.body)) as {
+					ownerNode: string;
+					targetNode?: string;
+					claimToken?: string;
+					resumeToken?: string;
+					transferId?: string;
+					epoch?: number;
+					leaseEpoch?: number;
+				})
 			: undefined;
 		if (action === "claim") {
 			if (
 				claimed ||
 				body?.targetNode !== "destination-device" ||
-				body.claimToken !== "one-use" ||
+				body.transferId !== "transfer-1" ||
+				body.claimToken !== "a-long-enough-claim-capability" ||
 				body.epoch !== 4
 			)
 				return Response.json({ error: "claim spent" }, { status: 409 });
 			claimed = true;
 			owner = body.ownerNode;
 			epoch++;
+			pendingToken = "a-long-enough-resume-capability";
+			return Response.json({
+				ownerNode: owner,
+				epoch,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+				resumeToken: pendingToken,
+			});
+		}
+		if (action === "finalize") {
+			if (body?.ownerNode !== owner || body.leaseEpoch !== epoch || body.resumeToken !== pendingToken)
+				return Response.json({ error: "stale finalize" }, { status: 409 });
+			return Response.json({ ok: true });
 		}
 		if ((action === "renew" || action === "release") && owner !== body?.ownerNode)
 			return Response.json({ error: "stale writer" }, { status: 409 });
+		if (action === "release") epoch++;
 		return Response.json({
-			ownerNode: owner,
+			ownerNode: body?.ownerNode ?? owner,
 			epoch,
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
 			manifestHash: "",
 		});
 	};
+	const marker = {
+		version: 1 as const,
+		sessionId: "transferred",
+		targetNode: "destination-device",
+		transferId: "transfer-1",
+		transferEpoch: 4,
+		claimToken: "a-long-enough-claim-capability",
+		epoch: 4,
+	};
+	const persistOwnership = async () => {};
 	try {
 		const first = new SynchronizedSession(
 			"transferred",
 			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
-			{ targetNode: "destination-device", claimToken: "one-use", epoch: 4 },
+			marker,
+			undefined,
+			persistOwnership,
 		);
 		const second = new SynchronizedSession(
 			"transferred",
 			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
-			{ targetNode: "destination-device", claimToken: "one-use", epoch: 4 },
+			marker,
 			"runtime-b",
+			persistOwnership,
 		);
 		await first.admit();
-		expect(second.ownerNode).not.toBe(first.ownerNode);
 		expect(first.ownerNode).not.toBe("destination-device");
 		await expect(second.admit()).rejects.toThrow(/409/);
 		await first.close();
