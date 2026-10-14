@@ -105,7 +105,8 @@ describe("MCP Events per-server config validation", () => {
 					mode: "webhook",
 					webhook: {
 						callbackUrl: "https://example.com/webhook",
-						secretRef: "vault:mcp/srv/secret",
+						listenPort: 8787,
+						secretRef: "$MCP_TEST_SECRET",
 						secret: "raw_secret_value",
 					},
 				},
@@ -121,11 +122,11 @@ describe("MCP Events per-server config validation", () => {
 				{
 					name: "item.created",
 					mode: "webhook",
-					webhook: { callbackUrl: "http://example.com/webhook", secretRef: "vault:mcp/srv/secret" },
+					webhook: { callbackUrl: "http://example.com/webhook", listenPort: 8787, secretRef: "$MCP_TEST_SECRET" },
 				},
 			],
 		});
-		expect(httpErrors.some(e => e.includes("must use HTTPS scheme"))).toBe(true);
+		expect(httpErrors.some(e => e.includes("must use HTTPS without embedded credentials"))).toBe(true);
 
 		const missingErrors = validateMCPEventsConfig("srv", {
 			enabled: true,
@@ -133,7 +134,7 @@ describe("MCP Events per-server config validation", () => {
 				{
 					name: "item.created",
 					mode: "webhook",
-					webhook: { callbackUrl: "", secretRef: "vault:mcp/srv/secret" },
+					webhook: { callbackUrl: "", listenPort: 8787, secretRef: "$MCP_TEST_SECRET" },
 				},
 			],
 		});
@@ -147,11 +148,11 @@ describe("MCP Events per-server config validation", () => {
 				{
 					name: "item.created",
 					mode: "webhook",
-					webhook: { callbackUrl: "https://example.com/webhook", secretRef: "whsec_ABC123456" },
+					webhook: { callbackUrl: "https://example.com/webhook", listenPort: 8787, secretRef: "whsec_ABC123456" },
 				},
 			],
 		});
-		expect(errors.some(e => e.includes('looks like a raw Standard Webhooks secret key ("whsec_...")'))).toBe(true);
+		expect(errors.some(e => e.includes('must be an explicit $ENV or ${ENV} reference'))).toBe(true);
 	});
 
 	it("accepts valid poll, push, and webhook subscriptions", () => {
@@ -165,7 +166,8 @@ describe("MCP Events per-server config validation", () => {
 					mode: "webhook",
 					webhook: {
 						callbackUrl: "https://relay.example.com/events/cb",
-						secretRef: "vault:mcp/srv/webhook-secret",
+						listenPort: 8787,
+						secretRef: "$MCP_TEST_SECRET",
 					},
 				},
 			],
