@@ -67,7 +67,7 @@ describe("an agent that inherits runs the session's model and effort", () => {
 		tempDir[Symbol.dispose]();
 	});
 
-	async function spawn(
+	async function dispatchAgent(
 		agent: string,
 		lanes: Record<string, Record<string, unknown>> = {},
 		sessionModel: () => string = () => SESSION_MODEL,
@@ -101,7 +101,7 @@ describe("an agent that inherits runs the session's model and effort", () => {
 	it("makes deep, and only deep, of the bundled agents follow the session", async () => {
 		const following: string[] = [];
 		for (const { name } of bundled) {
-			const options = await spawn(name);
+			const options = await dispatchAgent(name);
 			const model = options.modelOverride;
 			if (model?.[0] === SESSION_MODEL) {
 				following.push(name);
@@ -116,22 +116,22 @@ describe("an agent that inherits runs the session's model and effort", () => {
 
 	it("follows the session's model as it changes between spawns", async () => {
 		let live = SESSION_MODEL;
-		const first = await spawn("deep", {}, () => live);
+		const first = await dispatchAgent("deep", {}, () => live);
 		live = LANE_MODEL;
-		const second = await spawn("deep", {}, () => live);
+		const second = await dispatchAgent("deep", {}, () => live);
 		expect(first.modelOverride).toEqual([SESSION_MODEL]);
 		expect(second.modelOverride).toEqual([LANE_MODEL]);
 	});
 
 	it("runs a model named on deep's lane instead of the session's", async () => {
-		const options = await spawn("deep", { deep: { model: LANE_MODEL } });
+		const options = await dispatchAgent("deep", { deep: { model: LANE_MODEL } });
 		expect(options.modelOverride).toEqual([LANE_MODEL]);
 	});
 
 	it("makes any agent follow the session when its lane names inherit", async () => {
 		const other = bundled.find(definition => definition.name !== "deep");
 		if (!other) throw new Error("no bundled agent besides deep");
-		const inheriting = await spawn(other.name, { [other.name]: { model: "inherit" } });
+		const inheriting = await dispatchAgent(other.name, { [other.name]: { model: "inherit" } });
 		expect(inheriting.modelOverride).toEqual([SESSION_MODEL]);
 	});
 });
