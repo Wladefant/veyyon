@@ -516,4 +516,60 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		await shortRefusal;
 		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
 	});
+
+	test("a block that runs to another account's reset is lifted once live usage proves the Gemini counter healthy", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const sessionId = "misattributed-block";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const [credentialIdA, credentialIdB] = authStorage.listStoredCredentials(provider).map(entry => entry.id);
+		usageByAccount.set(
+			"acct-a",
+			createAntigravityReport({
+				accountId: "acct-a",
+				projectId: "proj-a",
+				windows: [{ counter: "google", usedFraction: 1, resetInMs: 48 * HOUR_MS }],
+			}),
+		);
+		// B is healthy for Gemini and spent for Claude/GPT, as in the live report.
+		usageByAccount.set(
+			"acct-b",
+			createAntigravityReport({
+				accountId: "acct-b",
+				projectId: "proj-b",
+				windows: [
+					{ counter: "google", usedFraction: 0.01, resetInMs: 5 * HOUR_MS },
+					{ counter: "claude-gpt", usedFraction: 1, resetInMs: 48 * HOUR_MS },
+				],
+			}),
+		);
+		// A 429 relayed for B carried A's reset (48 hours out) and blocked B on both counters.
+		for (const modelId of ["gemini-3.8-flash", "claude-opus-4-6"]) {
+			await authStorage.markUsageLimitReached(provider, sessionId, {
+				credentialId: credentialIdB,
+				modelId,
+				retryAfterMs: 48 * HOUR_MS,
+			});
+		}
+		await authStorage.markUsageLimitReached(provider, sessionId, {
+			credentialId: credentialIdA,
+			modelId: "gemini-3.8-flash",
+			retryAfterMs: 48 * HOUR_MS,
+		});
+		expect(store.getCredentialBlock?.(credentialIdB!, "google-antigravity:oauth", "counter:google")).toBeDefined();
+
+		// Past the usage-cache window the next selection reads fresh usage for both accounts.
+		now += 6 * 60 * 1000;
+		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+		expect(store.getCredentialBlock?.(credentialIdB!, "google-antigravity:oauth", "counter:google")).toBeUndefined();
+		// The Claude/GPT counter of B is still exhausted in its report, so that block stands.
+		expect(store.getCredentialBlock?.(credentialIdB!, "google-antigravity:oauth", "counter:claude-gpt")).toBeDefined();
+		// A is still exhausted for Gemini, so its block stands too.
+		expect(store.getCredentialBlock?.(credentialIdA!, "google-antigravity:oauth", "counter:google")).toBeDefined();
+	});
 });

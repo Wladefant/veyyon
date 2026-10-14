@@ -712,6 +712,15 @@ export const antigravityRankingStrategy: CredentialRankingStrategy = {
 		const counterKey = getAntigravityCounterKeyForModel(context);
 		return `counter:${counterKey ?? "unknown"}`;
 	},
+	reportedBlockScopes(report) {
+		const named = [GEMINI_COUNTER, CLAUDE_AND_GPT_COUNTER].map(counter => ({
+			scope: `counter:${counter.key}`,
+			limits: getAntigravityCounterLimits(report, counter.key),
+		}));
+		// A lookup that names no model blocks under `counter:unknown`; it is healthy only when every
+		// counter is.
+		return [...named, { scope: "counter:unknown", limits: report.limits }];
+	},
 	// Antigravity windows carry `durationMs` when the response identifies them
 	// as daily/weekly. Fall back to daily for legacy unlabelled quotaInfo
 	// entries from `daily-cloudcode-pa.googleapis.com`.

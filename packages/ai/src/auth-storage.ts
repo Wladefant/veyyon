@@ -4720,10 +4720,56 @@ export class AuthStorage {
 	}
 
 	#reconcileCodexUsageBlock(request: UsageRequestDescriptor, report: UsageReport): void {
-		if (request.provider !== "openai-codex") return;
+		if (request.provider !== "openai-codex" && request.provider !== "google-antigravity") return;
 		const credentialId = this.#findStoredCredentialIdForUsageCredential(request.provider, request.credential);
 		if (credentialId === undefined) return;
+		if (request.provider === "google-antigravity") {
+			this.#reconcileScopedUsageBlocksForCredential(request.provider, credentialId, report);
+			return;
+		}
 		this.#reconcileCodexUsageBlockForCredential(request.provider, credentialId, report);
+	}
+
+	/**
+	 * Heals a stale scoped block from a fresh usage report, scope by scope. A 429 relayed through a
+	 * sidecar can name another account's reset, so the block it leaves on this account runs to a date
+	 * the account itself never reported, and nothing but time cleared it. A scope the report proves
+	 * healthy is lifted once the usage-cache window has passed; a scope still exhausted or not
+	 * named by the report keeps its deadline. The store has no per-scope delete, so every block of
+	 * the credential is cleared and the kept scopes are written back.
+	 */
+	#reconcileScopedUsageBlocksForCredential(provider: Provider, credentialId: number, report: UsageReport): void {
+		const scopes = this.#rankingStrategyResolver?.(provider)?.reportedBlockScopes?.(report);
+		if (!scopes) return;
+		const credentialIndex = this.#getStoredCredentials(provider).findIndex(entry => entry.id === credentialId);
+		if (credentialIndex < 0) return;
+		const providerKey = getProviderTypeKey(provider, "oauth");
+		// A credential-wide block (a failed refresh, a rejected grant) is not a quota window.
+		if (this.#blocks.getCredentialBlockedUntil(provider, providerKey, credentialIndex) !== undefined) return;
+		const nowMs = Date.now();
+		const getStoreReconcileAfter = this.#store.getCredentialBlockReconcileAfter?.bind(this.#store);
+		const healed: string[] = [];
+		const kept: Array<{ scope: string; blockedUntilMs: number }> = [];
+		for (const { scope, limits } of scopes) {
+			const blockedUntilMs = this.#blocks.getCredentialBlockedUntil(provider, providerKey, credentialIndex, scope);
+			if (blockedUntilMs === undefined) continue;
+			const reconcileAfterMs = Math.max(
+				this.#blocks.reconcileAfterMs(providerKey, scope, credentialIndex),
+				getStoreReconcileAfter?.(credentialId, providerKey, scope) ?? 0,
+			);
+			if (limits.length > 0 && !isUsageLimitReached(limits) && reconcileAfterMs <= nowMs) healed.push(scope);
+			else kept.push({ scope, blockedUntilMs });
+		}
+		if (healed.length === 0) return;
+		this.clearCredentialBlocks(provider, credentialId);
+		for (const { scope, blockedUntilMs } of kept) {
+			this.#blocks.markCredentialBlocked(provider, providerKey, credentialIndex, blockedUntilMs, scope);
+		}
+		logger.info("Cleared stale usage-limit block after healthy live usage report", {
+			credentialId,
+			provider,
+			healedScopes: healed,
+		});
 	}
 
 	#findStoredCredentialIdsForUsageReport(report: UsageReport): number[] {
