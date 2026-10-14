@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The bundled `deep` agent runs the spawning session's live model and effort by default, so picking a model interactively no longer changes deep's model through the default role; an agent lane or frontmatter `model: inherit` does the same for any agent.
+
+### Fixed
+
+- An agent whose effort is inherited or configured runs at the level its own model accepts, and its badge shows that level, rather than the parent's level for a model that lacks it; a parent with no effort leaves the agent at its own default instead of none.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes
