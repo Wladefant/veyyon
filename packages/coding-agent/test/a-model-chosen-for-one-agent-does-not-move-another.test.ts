@@ -4,10 +4,11 @@
  * Model and effort used to be choosable for MANY agents at once:
  * `agent.sharedModel` put every agent on `agent.model` and
  * `agent.thinkingLevel`, `agent.modelByDepth` bound a chain to a spawn
- * depth whatever agent ran there, and an unconfigured agent followed the LIVE
- * session model, so a keystroke aimed at the main assistant moved the whole
- * roster with it. "I changed the model" and "my agents changed model" were
- * the same event, and nothing on screen said which one had happened.
+ * depth whatever agent ran there, and an unconfigured agent followed the
+ * default model role, which an interactive pick rewrites, so a keystroke aimed
+ * at the main assistant moved the whole roster through a role nobody chose for
+ * agents. "I changed the model" and "my agents changed model" were the same
+ * event, and nothing on screen said which one had happened.
  *
  * There are two scopes now, and `agent.sharedModel` selects which one is in
  * force rather than layering them. This suite defends that as an invariant
@@ -22,9 +23,8 @@
  *     is off, and moves nobody while it is on.
  *  3. The shared scope is all-or-nothing: on, every agent runs the blanket
  *     chain at the blanket effort.
- *  4. Every agent resolves to a CONCRETE model and a CONCRETE effort with
- *     nothing configured, from the documented default rather than from whatever
- *     the operator happens to be looking at.
+ *  4. Every agent with nothing configured runs the spawning session's live
+ *     model at the session's live effort, and never the default model role.
  *  5. The depth-keyed key still loads, still gets named, and decides nothing.
  *
  * The probe machinery is proved by a negative control before it is trusted: the
@@ -42,7 +42,6 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { getDefault, getType, SETTINGS_SCHEMA, type SettingPath } from "@veyyon/coding-agent/config/settings-schema";
 import { getSettingsForTab } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
 import {
-	AGENT_DEFAULT_EFFORT,
 	RETIRED_AGENT_MODEL_SETTINGS,
 	rejectedAgentModelSettings,
 	resolveAgentModel,
@@ -52,7 +51,10 @@ import {
 /** The bundled roster plus a user-authored name, which resolves through the same chain. */
 const ROSTER = ["task", "scout", "reviewer", "designer", "librarian", "sonic", "my-agent"] as const;
 
-const PROFILE_DEFAULT = "anthropic/claude-opus-4-5";
+/** The spawning session's live model, which an agent nobody configured runs. */
+const SESSION_MODEL = "anthropic/claude-opus-4-5";
+/** The profile's default model role: a model no agent may land on, so a spawn that read it shows. */
+const DEFAULT_ROLE_MODEL = "openai/gpt-4.1";
 /** A second real model, so "moved" means a different answer rather than an empty one. */
 const PROBE_MODEL = "openai/gpt-5";
 const PROBE_EFFORT = "minimal";
@@ -70,7 +72,7 @@ type SettingsSeed = Parameters<typeof Settings.isolated>[0];
 
 function seeded(seed: SettingsSeed): Settings {
 	const settings = Settings.isolated(seed);
-	settings.setModelRole("default", PROFILE_DEFAULT);
+	settings.setModelRole("default", DEFAULT_ROLE_MODEL);
 	return settings;
 }
 
@@ -78,7 +80,7 @@ function seeded(seed: SettingsSeed): Settings {
 function rosterRuns(settings: Settings): Record<string, string> {
 	const runs: Record<string, string> = {};
 	for (const name of ROSTER) {
-		const model = resolveAgentModel({ settings, agentName: name, taskDepth: 1 });
+		const model = resolveAgentModel({ settings, agentName: name, sessionModelPattern: SESSION_MODEL, taskDepth: 1 });
 		const effort = resolveAgentThinkingLevel({ settings, agentName: name, taskDepth: 1 });
 		runs[name] = `${model.patterns.join(",")}|${model.source}|${effort}`;
 	}
@@ -181,26 +183,20 @@ describe("no agent setting outside the per-agent table and the shared trio chang
 describe("every agent resolves to a concrete model and effort with nothing configured", () => {
 	/**
 	 * A stock install must answer for every agent without reading a global. The
-	 * documented default is the profile's default model role at
-	 * {@link AGENT_DEFAULT_EFFORT}, and both are asserted per agent so an agent
-	 * that quietly resolved to nothing cannot hide inside a roster-wide check.
+	 * documented default is the spawning session's live model at `inherit`, the
+	 * session's live effort, and both are asserted per agent so an agent that
+	 * quietly resolved elsewhere cannot hide inside a roster-wide check. The
+	 * default model role is set to a different model, so an agent that read it
+	 * fails here.
 	 */
-	it.each([...ROSTER])("%s runs the default model role at the default effort", name => {
+	it.each([...ROSTER])("%s runs the session's model at the session's effort", name => {
 		const settings = seeded({});
 
-		const model = resolveAgentModel({ settings, agentName: name, taskDepth: 1 });
-		expect(model.patterns).toEqual([PROFILE_DEFAULT]);
+		const model = resolveAgentModel({ settings, agentName: name, sessionModelPattern: SESSION_MODEL, taskDepth: 1 });
+		expect(model.patterns).toEqual([SESSION_MODEL]);
 		expect(model.source).toBe("default");
-		expect(resolveAgentThinkingLevel({ settings, agentName: name, taskDepth: 1 })).toBe(AGENT_DEFAULT_EFFORT);
-	});
-
-	/**
-	 * The default effort is a real level, not the inherit sentinel. An agent that
-	 * resolved to "inherit" with nothing configured is an agent whose effort is
-	 * decided by whoever spawned it, which is the coupling being removed.
-	 */
-	it("names a real effort as the default", () => {
-		expect(AGENT_DEFAULT_EFFORT).not.toBe(ThinkingLevel.Inherit);
+		expect(model.inherited).toBe(true);
+		expect(resolveAgentThinkingLevel({ settings, agentName: name, taskDepth: 1 })).toBe(ThinkingLevel.Inherit);
 	});
 });
 
@@ -228,7 +224,7 @@ describe("the shared scope moves the whole roster, or nobody", () => {
 			seeded({
 				"agent.sharedModel": true,
 				"agent.model": PROBE_MODEL,
-				"agent.agents": { scout: { model: PROFILE_DEFAULT, thinkingLevel: PROBE_EFFORT } },
+				"agent.agents": { scout: { model: SESSION_MODEL, thinkingLevel: PROBE_EFFORT } },
 			} as SettingsSeed),
 		);
 

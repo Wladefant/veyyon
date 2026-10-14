@@ -364,7 +364,7 @@ export class VibeSessionRegistry {
 		if (resolvedModel.unresolved) {
 			const { source, value, depth } = resolvedModel.unresolved;
 			throw new ToolError(
-				`Cannot start vibe worker "${agentName}": ${agentModelSourceLabel(source, agentName, depth)} is set to "${value}", which matches no available model. Fix that setting in Agents → Roster → ${agentName} (or clear it to fall back to the default model role) and try again.`,
+				`Cannot start vibe worker "${agentName}": ${agentModelSourceLabel(source, agentName, depth)} is set to "${value}", which matches no available model. Fix that setting in Agents → Roster → ${agentName} (or clear it to run the session's model) and try again.`,
 			);
 		}
 		const modelOverride = resolvedModel.patterns;

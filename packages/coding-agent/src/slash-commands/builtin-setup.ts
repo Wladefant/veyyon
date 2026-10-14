@@ -56,24 +56,22 @@ export const ACCOUNT_VERBS: readonly string[] = BUILTIN_SLASH_COMMAND_DECLARATIO
  * looking at, the models spawned agents run on, and the web-search backend. They are read from the
  * settings the runtime itself obeys, so the block cannot claim a role the router does not honor.
  *
- * Spawned agents are a UNION of every chain a spawn can land on: the default model role, the shared
- * chain, and every lane that names a model of its own. Both scopes are read, because the scope
- * switch is one keystroke and re-annotating providers on it would make the badges flicker.
- * Nothing resolvable at all falls back to the main provider, which is what a spawn reaches when
- * the default role is unset.
+ * Spawned agents run the session's model unless a setting names another, so the main provider is
+ * an agent provider, followed by every chain a setting names: the shared chain and every lane that
+ * names a model of its own. Both scopes are read, because the scope switch is one keystroke and
+ * re-annotating providers on it would make the badges flicker.
  */
 export function accountRoleSources(session: AgentSession): AccountRoleSources {
 	const model = session.model;
 	const available = session.modelRegistry.getAvailable();
 	const preferences = getModelMatchPreferences(session.settings);
-	const agentProviders: string[] = [];
+	const agentProviders: string[] = model ? [model.provider] : [];
 	for (const chain of configuredAgentModelChains(session.settings)) {
 		for (const pattern of resolveConfiguredModelPatterns(chain, session.settings)) {
 			const resolved = resolveModelFromString(pattern, available, preferences);
 			if (resolved && !agentProviders.includes(resolved.provider)) agentProviders.push(resolved.provider);
 		}
 	}
-	if (agentProviders.length === 0 && model) agentProviders.push(model.provider);
 	const webSearch = session.settings.get("providers.webSearch");
 	return {
 		...(model ? { mainModel: { provider: model.provider, id: model.id } } : {}),

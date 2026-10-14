@@ -12,10 +12,9 @@
  * Two rules hold this shape together:
  *
  *  1. ONE SCOPE, THE AGENT. A model or an effort is chosen for one agent, on
- *     that agent's page. An agent that names neither runs the `default` model
- *     role at the documented default effort. Nothing here answers for the whole
- *     roster at once, and the session model the operator is looking at reaches
- *     no agent but the main assistant.
+ *     that agent's page. An agent that names neither runs the spawning
+ *     session's model at the session's effort, fitted to that model. Nothing
+ *     here answers for the whole roster at once.
  *  2. ONLY TASK DELEGATION IS ON BY DEFAULT. The bundled specialists are listed
  *     but disabled, because most sessions need a general delegate and nothing
  *     else, and every extra agent type costs tokens in the tool description and
@@ -249,7 +248,7 @@ export const AGENTS_SETTINGS = {
 			group: "Agents",
 			label: "Roster",
 			description:
-				"Which agent types the model may spawn and what each one runs. Enabled: the model may pick that agent. Disabled: it may not. With no rows, only the deep agent is enabled. Each agent's page sets its Model, its Effort and which agents it may spawn in turn; an unset value follows the level above, then the default model role.",
+				"Which agent types the model may spawn and what each one runs. Enabled: the model may pick that agent. Disabled: it may not. With no rows, only the deep agent is enabled. Each agent's page sets its Model, its Effort and which agents it may spawn in turn; an unset value follows the level above, then the session's model and effort.",
 			keywords: [
 				"agents",
 				"roster",
@@ -287,7 +286,7 @@ export const AGENTS_SETTINGS = {
 	 * roster.
 	 *
 	 * Off, the default, is per agent — a lane under `agent.agents`, then the
-	 * agent's frontmatter, then the default model role. On, `agent.model` and
+	 * agent's frontmatter, then the session's model. On, `agent.model` and
 	 * `agent.thinkingLevel` answer for every agent and outrank both.
 	 *
 	 * The two scopes are EXCLUSIVE, not layered, which is the whole difference
@@ -321,7 +320,7 @@ export const AGENTS_SETTINGS = {
 			group: "Agents",
 			label: "Shared Model",
 			description:
-				"The model chain every spawned agent runs while Same Model for All Agents is on. Unset: the default model role.",
+				"The model chain every spawned agent runs while Same Model for All Agents is on. Unset: the session's model.",
 			condition: "agentSharedModel",
 			keywords: ["shared", "model", "all agents", "chain"],
 		},
@@ -336,7 +335,7 @@ export const AGENTS_SETTINGS = {
 			group: "Agents",
 			label: "Shared Effort",
 			description:
-				"The effort every spawned agent runs at while Same Model for All Agents is on. Limited to the levels the shared model supports; a `:level` suffix on the model chain takes precedence. Inherit: the model's default.",
+				"The effort every spawned agent runs at while Same Model for All Agents is on. Limited to the levels the shared model supports; a `:level` suffix on the model chain takes precedence. Inherit: the session's effort.",
 			condition: "agentSharedModel",
 			keywords: ["shared", "effort", "thinking", "all agents"],
 		},

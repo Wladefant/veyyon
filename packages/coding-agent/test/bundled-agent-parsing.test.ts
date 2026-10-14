@@ -1,10 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { resolveConfiguredModelPatterns, resolveModelOverride } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { namesInheritedModel } from "@veyyon/coding-agent/task/agent-settings";
 import { getBundledAgent, loadBundledAgents } from "@veyyon/coding-agent/task/agents";
 
 describe("bundled agent parsing", () => {
@@ -23,7 +21,7 @@ describe("bundled agent parsing", () => {
 	});
 
 	/**
-	 * No bundled agent pins a model.
+	 * No bundled agent pins a model or an effort.
 	 *
 	 * They used to: the default lane carried `@task`, `scout`/`sonic` carried
 	 * `@smol`, `reviewer` carried `@slow`, `designer` carried `@designer`. Those
@@ -31,16 +29,17 @@ describe("bundled agent parsing", () => {
 	 * consulted, so a stock install fanned its agents across several different
 	 * models and changing the agent model appeared to do nothing. The models now
 	 * come from the Agents settings area, so a definition that names a model here
-	 * is a regression of that bug. `deep` states `inherit`, which names no model:
-	 * it runs the spawning session's. A thinking level is still fine: it is not a
-	 * model choice.
+	 * is a regression of that bug. An effort is the same: a pinned level (scout and
+	 * sonic carried `medium`, librarian `minimal`) outranks the session's effort
+	 * for an agent nobody configured, which is the case that must follow the
+	 * session.
 	 *
 	 * The roster is READ OFF the loader rather than listed here. A hand-written list
 	 * goes stale silently in both directions: a renamed lane makes
 	 * `getBundledAgent(name)?.model` undefined and the case passes for the wrong
 	 * reason, and a NEW lane that pins a model is never asked about at all.
 	 */
-	it("ships no model on any bundled agent, so the agent settings decide", () => {
+	it("ships no model and no effort on any bundled agent, so the session decides", () => {
 		const bundled = loadBundledAgents();
 
 		expect(bundled.map(agent => agent.name).sort()).toEqual([
@@ -52,16 +51,10 @@ describe("bundled agent parsing", () => {
 			"sonic",
 		]);
 		for (const agent of bundled) {
-			if (agent.name === "deep") {
-				expect(namesInheritedModel(agent.model), "deep runs the session's model").toBe(true);
-			} else {
-				expect(agent.model, `${agent.name} must not pin a model`).toBeUndefined();
-			}
+			expect(agent.model, `${agent.name} must not pin a model`).toBeUndefined();
+			expect(agent.thinkingLevel, `${agent.name} must not pin an effort`).toBeUndefined();
 			expect(agent.source, agent.name).toBe("bundled");
 		}
-		// `deep` states `inherit` for effort too, so it runs at the session's live effort, fitted to
-		// its model, rather than on the agent default.
-		expect(getBundledAgent("deep")?.thinkingLevel).toBe(ThinkingLevel.Inherit);
 	});
 
 	// Issue #4761: with `modelRoles.slow: ...:xhigh`, the role's explicit effort

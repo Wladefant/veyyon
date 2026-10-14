@@ -15,7 +15,6 @@ import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { isRecord, logger } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
 import { resolveConfiguredModelPatterns } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
 import type { SettingPath, Settings } from "../config/settings";
 import type { AgentLaneSettings, AgentSettings } from "../config/settings-domains/agents";
 import {
@@ -545,7 +544,7 @@ export type AgentModelSource =
 	| "lane"
 	/** The agent definition's `model:` frontmatter. */
 	| "frontmatter"
-	/** Nothing named a model for this agent, so the documented default answered. */
+	/** Nothing named a model for this agent, so it runs the spawning session's model. */
 	| "default";
 
 /** A resolved agent model: the patterns to try, and the layer that chose them. */
@@ -570,30 +569,17 @@ export interface ResolvedAgentModel {
 }
 
 /**
- * The model an agent runs when neither its lane nor its definition names one:
- * the profile's default model role, which is also the model the main assistant
- * starts on.
- *
- * The PERSISTED slot, not the model on screen. The live session model moves on
- * a temporary pick, on role cycling, on prewalk and on a plan-mode switch, and
- * an agent that followed it changed model with nobody having chosen that for
- * the agent — one keystroke aimed at the main assistant moved the whole roster.
- * The slot moves only when someone picks a model to keep, and an agent that
- * should not move with it names its own model on its roster page.
- */
-const AGENT_DEFAULT_MODEL_ROLE = DEFAULT_MODEL_SLOT;
-
-/**
  * The effort an agent runs at when neither its lane nor its definition names
- * one. Clamped against the model at dispatch, so a model with a shorter ladder
- * still runs at a level it declares.
+ * one: the spawning session's live effort, which the executor fits to the
+ * agent's own model at dispatch.
  */
-export const AGENT_DEFAULT_EFFORT: ConfiguredThinkingLevel = ThinkingLevel.Medium;
+export const AGENT_DEFAULT_EFFORT: ConfiguredThinkingLevel = ThinkingLevel.Inherit;
 
 /**
  * The model value that runs an agent on the spawning session's live model, at
- * whatever that session is running when the spawn starts. Accepted on every
- * layer {@link resolveAgentModel} reads; the bundled `deep` agent declares it.
+ * whatever that session is running when the spawn starts. It is also what an
+ * agent runs when no layer {@link resolveAgentModel} reads names a model; a
+ * layer states it to override a model named by a layer below it.
  */
 export const INHERIT_AGENT_MODEL = "inherit";
 
@@ -625,7 +611,7 @@ export function agentModelSourceLabel(source: AgentModelSource, agentName: strin
 		case "frontmatter":
 			return `${agentName} agent frontmatter`;
 		case "default":
-			return `the ${AGENT_DEFAULT_MODEL_ROLE} model role`;
+			return "the session's model";
 	}
 }
 
@@ -835,8 +821,8 @@ type AgentModelLayer = { source: AgentModelSource; value: string | string[] | un
 /**
  * The layers the shared scope offers: the blanket chain, or none.
  *
- * An unset chain is not an error and is not a layer: it means every agent runs the default model
- * role, which is the same thing the switch being off with no lane anywhere would produce. It is
+ * An unset chain is not an error and is not a layer: it means every agent runs the session's
+ * model, which is the same thing the switch being off with no lane anywhere would produce. It is
  * NOT a fall-through to the per-agent layers, which the scope has turned off.
  */
 function sharedModelLayers(settings: Settings): AgentModelLayer[] {
@@ -871,20 +857,18 @@ function perAgentModelLayers(
  *     spawn. Deepest lane first, then up the chain: a level naming no model inherits the level
  *     above, which is what makes "inherit" on a nested page mean the page you came from.
  *  3. The agent definition's `model:` frontmatter.
- *  4. {@link AGENT_DEFAULT_MODEL_ROLE}, the documented default.
+ *  4. The spawning session's model, the documented default.
  *
- * Layers 2 to 4 are skipped entirely while the switch is on, so an agent with a lane does not
+ * Layers 2 and 3 are skipped entirely while the switch is on, so an agent with a lane does not
  * silently keep its own model against a switch that says every agent shares one. What that lane
  * holds stays in the file and answers again the moment the switch goes off.
  *
- * A spawn follows the model the operator is viewing only when the deciding layer says so with
- * {@link INHERIT_AGENT_MODEL}. Any other agent keeps its own model, so a keystroke aimed at the main
- * assistant does not move it.
+ * A layer naming {@link INHERIT_AGENT_MODEL} answers with the session's model as well, which is how a
+ * lane overrides a definition that names its own model. The bundled agents name no model, so on a
+ * stock install every agent runs the session's model until someone sets one for it.
  *
  * A configured layer that expands to nothing returns `unresolved` rather than falling through, so
- * the caller can refuse to spawn and name the setting that is wrong. The bundled `deep` agent
- * inherits; the other bundled agents carry no `model:` frontmatter, so on a stock install each of
- * them with no lane lands on the default role.
+ * the caller can refuse to spawn and name the setting that is wrong.
  */
 export function resolveAgentModel(options: {
 	settings: Settings;
@@ -892,8 +876,8 @@ export function resolveAgentModel(options: {
 	/** The agent definition's `model:` frontmatter, if any. */
 	agentModel?: string | string[];
 	/**
-	 * Bootstrap for a profile that has never recorded a default model role. Not
-	 * a layer: it is read only when {@link AGENT_DEFAULT_MODEL_ROLE} is unset.
+	 * The session's configured model, what an inheriting agent runs when the caller passed no live
+	 * model in `sessionModelPattern`.
 	 */
 	fallbackModelPattern?: string;
 	/**
@@ -904,8 +888,8 @@ export function resolveAgentModel(options: {
 	 */
 	taskDepth?: number;
 	/**
-	 * The spawning session's live model, what an {@link INHERIT_AGENT_MODEL} layer runs. A surface
-	 * describing an agent rather than spawning one omits it.
+	 * The spawning session's live model, what an inheriting agent runs. A surface describing an agent
+	 * rather than spawning one omits it.
 	 */
 	sessionModelPattern?: string;
 }): ResolvedAgentModel {
@@ -919,15 +903,19 @@ export function resolveAgentModel(options: {
 		? sharedModelLayers(settings)
 		: perAgentModelLayers(settings, agentName, agentModel, taskDepth);
 
+	const session = sessionModelPattern?.trim() || fallbackModelPattern?.trim();
+	const inherit = (source: AgentModelSource, depth?: number): ResolvedAgentModel => ({
+		patterns: session ? [session] : [],
+		source,
+		...(depth !== undefined ? { depth } : {}),
+		inherited: true,
+	});
 	for (const layer of layers) {
 		const raw = Array.isArray(layer.value) ? layer.value : layer.value?.trim();
 		if (raw === undefined || (typeof raw === "string" && raw.length === 0)) continue;
 		if (Array.isArray(raw) && raw.length === 0) continue;
+		if (namesInheritedModel(raw)) return inherit(layer.source, layer.depth);
 		const depthFields = layer.depth !== undefined ? { depth: layer.depth } : {};
-		if (namesInheritedModel(raw)) {
-			const session = sessionModelPattern?.trim();
-			return { patterns: session ? [session] : [], source: layer.source, ...depthFields, inherited: true };
-		}
 		const patterns = resolveConfiguredModelPatterns(raw, settings);
 		if (patterns.length > 0) return { patterns, source: layer.source, ...depthFields };
 		return {
@@ -937,10 +925,7 @@ export function resolveAgentModel(options: {
 			unresolved: { source: layer.source, value: Array.isArray(raw) ? raw.join(",") : raw, ...depthFields },
 		};
 	}
-
-	const recorded = settings.getModelRole(AGENT_DEFAULT_MODEL_ROLE)?.trim();
-	const fallback = recorded || fallbackModelPattern?.trim() || "";
-	return { patterns: resolveConfiguredModelPatterns(fallback, settings), source: "default" };
+	return inherit("default");
 }
 
 /**
@@ -952,12 +937,12 @@ export function resolveAgentModel(options: {
  *     nested page's "inherit" means the page above it.
  *  3. The agent definition's `thinkingLevel` frontmatter, or `thinking`. The bundled definitions
  *     spell it `thinking-level`, which `normalizeKeys` folds onto the same field.
- *  4. {@link AGENT_DEFAULT_EFFORT}, the documented default.
+ *  4. {@link AGENT_DEFAULT_EFFORT}: the session's live effort.
  *
  * Effort follows the model's scope, never its own: a switch that moved every agent's model and
  * left each agent's effort behind would run the shared model at whatever level the old per-agent
- * row happened to name. The parent session's live effort reaches a child only through the level
- * `inherit` (the bundled `deep` agent's default), which the executor fits to the child's model.
+ * row happened to name. An inherited level is the parent session's live effort, which the executor
+ * fits to the child's model.
  *
  * An explicit `:level` suffix on the resolved model pattern outranks all of these. The executor
  * applies that, since only it knows whether the suffix was present (see
@@ -997,9 +982,10 @@ export function resolveAgentThinkingLevel(options: {
 }
 
 /**
- * Every model chain a spawn in this profile can land on without anyone editing
- * a setting: the default model role, the blanket chain while the roster is on
- * shared scope, and each lane's own chain at every nesting level.
+ * Every model chain a setting names for a spawn: the blanket chain while the
+ * roster is on shared scope, and each lane's own chain at every nesting level.
+ * An agent no setting names a model for runs the session's model, which is
+ * not a chain here; a caller that reports where spawns land adds it.
  *
  * A surface that annotates providers by role reads this union rather than one
  * key, because which key decides depends on the scope and on the agent. Lanes
@@ -1010,8 +996,6 @@ export function resolveAgentThinkingLevel(options: {
  */
 export function configuredAgentModelChains(settings: Settings): Array<string | string[]> {
 	const chains: Array<string | string[]> = [];
-	const role = settings.getModelRole(AGENT_DEFAULT_MODEL_ROLE)?.trim();
-	if (role) chains.push(role);
 	const shared: unknown = settings.get("agent.model");
 	if (typeof shared === "string" && shared.trim().length > 0) chains.push(shared);
 	else if (Array.isArray(shared) && shared.length > 0) {

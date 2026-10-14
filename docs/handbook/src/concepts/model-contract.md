@@ -145,7 +145,7 @@ under `modelRoles`:
 
 Agent models are not roles. They are configured in the Agents settings area, on two exclusive scopes.
 With **Same Model for All Agents** off, the first of these sets the model: that agent's row in
-`agent.agents`, then the agent definition's own `model:`, otherwise the `default` model role.
+`agent.agents`, then the agent definition's own `model:`, otherwise the spawning session's live model.
 With it on, `agent.model` sets it for every agent and the rows above are not read. There is no
 silent blend, and a configured value that matches no available model rejects the spawn instead of
 falling through to the next layer. `/agents` shows the resolved model and which

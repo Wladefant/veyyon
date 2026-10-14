@@ -597,11 +597,11 @@ veyyon config get compaction.threshold
 
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
-| `agent.agents` | Roster | record | `{}` | Which agent types the model may spawn and what each one runs. Enabled: the model may pick that agent. Disabled: it may not. With no rows, only the deep agent is enabled. Each agent's page sets its Model, its Effort and which agents it may spawn in turn; an unset value follows the level above, then the default model role. |
+| `agent.agents` | Roster | record | `{}` | Which agent types the model may spawn and what each one runs. Enabled: the model may pick that agent. Disabled: it may not. With no rows, only the deep agent is enabled. Each agent's page sets its Model, its Effort and which agents it may spawn in turn; an unset value follows the level above, then the session's model and effort. |
 | `agent.maxNestedSpawnDepth` | Max Nested Spawn Depth | number | `0` | How many levels deep spawned agents may spawn further agents, where an agent's own page does not set it. Parent only: agents this session spawns do not receive the task tool. |
 | `agent.sharedModel` | Same Model for All Agents | boolean | `false` | Run every spawned agent on one Model and one Effort. Off: each agent's page sets its own. On: Shared Model and Shared Effort below apply to every agent and the per-agent rows are hidden; their values are kept for when this is off again. |
-| `agent.model` | Shared Model | modelChain | _(unset)_ | The model chain every spawned agent runs while Same Model for All Agents is on. Unset: the default model role. |
-| `agent.thinkingLevel` | Shared Effort | string | _(unset)_ | The effort every spawned agent runs at while Same Model for All Agents is on. Limited to the levels the shared model supports; a `:level` suffix on the model chain takes precedence. Inherit: the model's default. |
+| `agent.model` | Shared Model | modelChain | _(unset)_ | The model chain every spawned agent runs while Same Model for All Agents is on. Unset: the session's model. |
+| `agent.thinkingLevel` | Shared Effort | string | _(unset)_ | The effort every spawned agent runs at while Same Model for All Agents is on. Limited to the levels the shared model supports; a `:level` suffix on the model chain takes precedence. Inherit: the session's effort. |
 | `agent.showResolvedModelBadge` | Show Resolved Model Badge | boolean | `true` | Show each spawned agent's resolved model, and the setting that selected it, in the task widget status line and on the agent surfaces. Shown under the tab's Advanced fold. |
 
 ### Limits

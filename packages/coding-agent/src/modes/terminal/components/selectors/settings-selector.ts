@@ -154,7 +154,7 @@ export function parseNumberSetting(path: SettingPath, text: string): number | ty
 }
 
 const AGENT_LIST_DESCRIPTION =
-	"Which agents the model may spawn and what each one runs. Open an agent to set its model and effort and which agents it may spawn in turn. An agent with neither set runs what its definition states: deep runs the session's model and effort, the others the default model at medium effort.";
+	"Which agents the model may spawn and what each one runs. Open an agent to set its model and effort and which agents it may spawn in turn. An agent with neither set runs the session's model at the session's effort.";
 
 const AGENTS_PATH = "agent.agents" satisfies SettingPath;
 const DEFAULT_EFFORT_PATH = "defaultEffort" satisfies SettingPath;
@@ -1838,9 +1838,7 @@ function modelSummary(agent: AgentDefinition, depth = 0): string {
 	if (!pattern) return theme.fg("dim", "no model resolved");
 	const fallbacks = resolved.patterns.length - 1;
 	const summary = formatModelSummaryWithFallbacks(pattern, fallbacks, true);
-	return resolved.source === "default"
-		? theme.fg("dim", `default · ${summary}`)
-		: `${summary} ${theme.fg("dim", `· ${agentModelSourceLabel(resolved.source, agent.name, resolved.depth)}`)}`;
+	return `${summary} ${theme.fg("dim", `· ${agentModelSourceLabel(resolved.source, agent.name, resolved.depth)}`)}`;
 }
 
 /**
@@ -1854,9 +1852,11 @@ function laneModelSummary(lane: AgentLaneSettings, depth: number, agent?: AgentD
 	const chain = lane.model;
 	if (chain === undefined || (Array.isArray(chain) ? chain.length === 0 : chain.trim().length === 0)) {
 		if (depth > 0) return theme.fg("dim", "inherit · the level above");
+		const own = agent?.model;
+		const named = own !== undefined && own.length > 0 && !namesInheritedModel(own);
 		return theme.fg(
 			"dim",
-			namesInheritedModel(agent?.model) ? "inherit · the session's model" : "default · the default model role",
+			named ? `definition · ${Array.isArray(own) ? own.join(", ") : own}` : "inherit · the session's model",
 		);
 	}
 	const entries = Array.isArray(chain) ? chain : [chain];
@@ -1870,9 +1870,10 @@ function laneEffortSummary(lane: AgentLaneSettings, depth: number, agent: AgentD
 	const level = lane.thinkingLevel?.trim() ?? "";
 	if (level.length > 0) return level;
 	if (depth > 0) return theme.fg("dim", "inherit · the level above");
+	const own = agent.thinkingLevel;
 	return theme.fg(
 		"dim",
-		agent.thinkingLevel === ThinkingLevel.Inherit ? "inherit · the session's effort" : "default · the default effort",
+		own !== undefined && own !== ThinkingLevel.Inherit ? `definition · ${own}` : "inherit · the session's effort",
 	);
 }
 
@@ -3394,7 +3395,7 @@ export class SettingsSelectorComponent implements Component {
 	 * the switch is on that chain is what every spawn resolves to, and narrowing
 	 * against the model on screen would offer levels no agent endpoint
 	 * accepts. An unset chain falls back to the session model, which is what an
-	 * unset chain resolves to through the default role.
+	 * unset chain resolves to.
 	 */
 	createAgentSharedEffortInput(done: (value?: string) => void): Container {
 		const chain: unknown = settings.get("agent.model");

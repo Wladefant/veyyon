@@ -247,24 +247,26 @@ describe("agent model precedence: one scope, the agent", () => {
 	const LANE_ROW = "openai/gpt-5";
 	const NESTED = "anthropic/claude-sonnet-4-5";
 	const FRONTMATTER = "google/gemini-2.5-pro";
+	/** The profile's default model role: set beside the session's model so a spawn that read it shows. */
 	const PROFILE_DEFAULT = "anthropic/claude-opus-4-5";
+	const SESSION = "openai/gpt-5-codex";
 
 	/**
-	 * A stock install runs every agent on the profile's default model.
+	 * A stock install runs every agent on the spawning session's live model.
 	 *
-	 * The documented default, and the only fallback: it is the model the main
-	 * assistant starts on, so a fresh roster is coherent without anyone
-	 * configuring a row. What it is NOT is the live session model, which moves on
-	 * a temporary pick, on role cycling and on prewalk.
+	 * The default role is NOT consulted: an interactive pick rewrites it, so an
+	 * agent that read it moved on a keystroke nobody aimed at agents, and ran a
+	 * model other than the one the session runs after a temporary pick.
 	 */
-	it("falls back to the profile default model role when nothing is configured", () => {
+	it("runs the session's model when nothing is configured", () => {
 		const settings = Settings.isolated();
 		settings.setModelRole("default", PROFILE_DEFAULT);
 
 		for (const name of ["task", "scout", "reviewer", "designer", "librarian", "sonic"]) {
-			const resolved = resolveAgentModel({ settings, agentName: name });
-			expect(resolved.patterns, `${name} must fall back to the default role`).toEqual([PROFILE_DEFAULT]);
+			const resolved = resolveAgentModel({ settings, agentName: name, sessionModelPattern: SESSION });
+			expect(resolved.patterns, `${name} must run the session's model`).toEqual([SESSION]);
 			expect(resolved.source).toBe("default");
+			expect(resolved.inherited).toBe(true);
 			expect(resolved.unresolved).toBeUndefined();
 		}
 	});
@@ -281,10 +283,12 @@ describe("agent model precedence: one scope, the agent", () => {
 		} as Parameters<typeof Settings.isolated>[0]);
 		settings.setModelRole("default", PROFILE_DEFAULT);
 
-		expect(resolveAgentModel({ settings, agentName: "scout" }).patterns).toEqual([LANE_ROW]);
+		expect(resolveAgentModel({ settings, agentName: "scout", sessionModelPattern: SESSION }).patterns).toEqual([
+			LANE_ROW,
+		]);
 		for (const other of ["task", "reviewer", "librarian"]) {
-			const resolved = resolveAgentModel({ settings, agentName: other });
-			expect(resolved.patterns, `${other} must not move with scout`).toEqual([PROFILE_DEFAULT]);
+			const resolved = resolveAgentModel({ settings, agentName: other, sessionModelPattern: SESSION });
+			expect(resolved.patterns, `${other} must not move with scout`).toEqual([SESSION]);
 			expect(resolved.source).toBe("default");
 		}
 	});
@@ -380,25 +384,30 @@ describe("agent model precedence: one scope, the agent", () => {
 	});
 
 	/**
-	 * A profile that has never recorded a default model role (a headless start
-	 * before onboarding) takes the caller's bootstrap pattern. It is not a layer:
-	 * a recorded role always outranks it.
+	 * A caller with no live model (a headless start before the first turn)
+	 * passes its configured model as the bootstrap. The live model outranks it,
+	 * and the default role is read by neither.
 	 */
-	it("uses the caller's bootstrap pattern only when the default role is unset", () => {
-		const empty = Settings.isolated();
+	it("uses the caller's bootstrap pattern only when the session has no live model", () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("default", LANE_ROW);
 		const bootstrapped = resolveAgentModel({
-			settings: empty,
+			settings,
 			agentName: "task",
 			fallbackModelPattern: PROFILE_DEFAULT,
 		});
 		expect(bootstrapped.patterns).toEqual([PROFILE_DEFAULT]);
 		expect(bootstrapped.source).toBe("default");
 
-		const recorded = Settings.isolated();
-		recorded.setModelRole("default", LANE_ROW);
 		expect(
-			resolveAgentModel({ settings: recorded, agentName: "task", fallbackModelPattern: PROFILE_DEFAULT }).patterns,
-		).toEqual([LANE_ROW]);
+			resolveAgentModel({
+				settings,
+				agentName: "task",
+				fallbackModelPattern: PROFILE_DEFAULT,
+				sessionModelPattern: SESSION,
+			}).patterns,
+		).toEqual([SESSION]);
+		expect(resolveAgentModel({ settings, agentName: "task" }).patterns).toEqual([]);
 	});
 });
 
@@ -417,9 +426,14 @@ describe("agent model: the two scopes, and the key that is retired in both", () 
 			const settings = Settings.isolated(stored);
 			settings.setModelRole("default", "anthropic/claude-opus-4-5");
 
-			const resolved = resolveAgentModel({ settings, agentName: "scout", taskDepth: 1 });
+			const resolved = resolveAgentModel({
+				settings,
+				agentName: "scout",
+				sessionModelPattern: "openai/gpt-5-codex",
+				taskDepth: 1,
+			});
 
-			expect(resolved.patterns).toEqual(["anthropic/claude-opus-4-5"]);
+			expect(resolved.patterns).toEqual(["openai/gpt-5-codex"]);
 			expect(resolved.source).toBe("default");
 		},
 	);
@@ -435,9 +449,14 @@ describe("agent model: the two scopes, and the key that is retired in both", () 
 		} as Parameters<typeof Settings.isolated>[0]);
 		settings.setModelRole("default", "anthropic/claude-opus-4-5");
 
-		const resolved = resolveAgentModel({ settings, agentName: "scout", taskDepth: 1 });
+		const resolved = resolveAgentModel({
+			settings,
+			agentName: "scout",
+			sessionModelPattern: "openai/gpt-5-codex",
+			taskDepth: 1,
+		});
 
-		expect(resolved.patterns).toEqual(["anthropic/claude-opus-4-5"]);
+		expect(resolved.patterns).toEqual(["openai/gpt-5-codex"]);
 		expect(resolved.source).toBe("default");
 	});
 
@@ -465,11 +484,11 @@ describe("agent model: the two scopes, and the key that is retired in both", () 
 	});
 
 	/**
-	 * The switch on with no chain set is every agent on the default model role, not a fall-through
+	 * The switch on with no chain set is every agent on the session's model, not a fall-through
 	 * to the agent's own layers. Falling through would make the switch look on while frontmatter
 	 * still decided, which is a screen saying one thing and a spawn doing another.
 	 */
-	it("lands every agent on the default role when the switch is on and no chain is set", () => {
+	it("lands every agent on the session's model when the switch is on and no chain is set", () => {
 		const settings = Settings.isolated({ "agent.sharedModel": true });
 		settings.setModelRole("default", "anthropic/claude-opus-4-5");
 
@@ -477,10 +496,11 @@ describe("agent model: the two scopes, and the key that is retired in both", () 
 			settings,
 			agentName: "scout",
 			agentModel: "openai/gpt-5",
+			sessionModelPattern: "openai/gpt-5-codex",
 			taskDepth: 1,
 		});
 
-		expect(resolved.patterns).toEqual(["anthropic/claude-opus-4-5"]);
+		expect(resolved.patterns).toEqual(["openai/gpt-5-codex"]);
 		expect(resolved.source).toBe("default");
 	});
 
@@ -614,7 +634,7 @@ describe("agent model: a configured value that resolves to nothing refuses", () 
 			// the exact sequence of pages an operator walked to set it.
 			lane: "agent.agents.scout.agents.agents",
 			frontmatter: "scout agent frontmatter",
-			default: "the default model role",
+			default: "the session's model",
 		};
 		for (const [source, label] of Object.entries(expected)) {
 			expect(agentModelSourceLabel(source as AgentModelSource, "scout", 2)).toBe(label);
@@ -659,7 +679,7 @@ describe("agent thinking level", () => {
 		} as Parameters<typeof Settings.isolated>[0]);
 
 		expect(resolveAgentThinkingLevel({ settings, agentName: "scout" })).toBe(ThinkingLevel.High);
-		expect(resolveAgentThinkingLevel({ settings, agentName: "reviewer" })).toBe(AGENT_DEFAULT_EFFORT);
+		expect(resolveAgentThinkingLevel({ settings, agentName: "reviewer" })).toBe(ThinkingLevel.Inherit);
 	});
 
 	/** With no lane, the definition's own level is what is left to use. */
@@ -674,13 +694,14 @@ describe("agent thinking level", () => {
 	});
 
 	/**
-	 * Nothing configured resolves to a concrete documented effort rather than
-	 * undefined. An agent that resolved to "no effort" was an agent whose effort
-	 * was decided somewhere else, which is the coupling this scope change removes.
+	 * Nothing configured resolves to `inherit`, the session's live effort, rather
+	 * than undefined or a fixed level. Undefined would leave the effort to whatever
+	 * the child session's own settings say; a fixed level is an effort nobody
+	 * chose for this agent.
 	 */
-	it("returns the documented default when nothing sets a level", () => {
+	it("inherits the session's effort when nothing sets a level", () => {
 		expect(resolveAgentThinkingLevel({ settings: Settings.isolated(), agentName: "scout" })).toBe(
-			AGENT_DEFAULT_EFFORT,
+			ThinkingLevel.Inherit,
 		);
 	});
 

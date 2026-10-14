@@ -6,7 +6,7 @@
 
 ### Changed
 
-- The bundled `deep` agent runs the spawning session's live model and effort by default, so picking a model interactively no longer changes deep's model through the default role; an agent lane or frontmatter `model: inherit` does the same for any agent.
+- An agent with no model or effort set on its roster page or in its definition runs the spawning session's live model and effort instead of the `default` model role at medium effort; bundled `scout`, `sonic` and `librarian` no longer pin an effort, `model: inherit` on a lane overrides a definition's model, and `/account status` counts the session's provider as an agent provider.
 
 ### Fixed
 
