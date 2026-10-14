@@ -409,6 +409,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 				agentName,
 				agentModel: effectiveAgent.model,
 				fallbackModelPattern: options.session.getModelString?.(),
+				sessionModelPattern: parentActiveModelPattern,
 				taskDepth: (options.session.taskDepth ?? 0) + 1,
 			});
 	if ("unresolved" in resolvedModel && resolvedModel.unresolved) {

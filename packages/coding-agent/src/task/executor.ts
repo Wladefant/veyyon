@@ -59,7 +59,7 @@ import { rootBudgetGroupOwnerId, withInheritedBudgetGroup } from "../session/cpu
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { truncateTail } from "../session/streaming-output";
-import type { ConfiguredThinkingLevel } from "../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
 import { isIrcEnabled } from "../tools/agent/irc";
 import { type ReportFindingDetails, toReviewFinding } from "../tools/agent/review";
@@ -1863,7 +1863,8 @@ interface ChildSessionContext {
 interface RunModel {
 	modelRegistry: ModelRegistry;
 	model: Model<Api> | undefined;
-	thinkingLevel: ConfiguredThinkingLevel;
+	/** Already fitted to `model`; undefined lets the child session resolve its own default. */
+	thinkingLevel: ConfiguredThinkingLevel | undefined;
 }
 
 type ChildSessionOptionsBuilder = (sessionManager: SessionManager, settings: Settings) => CreateAgentSessionOptions;
@@ -1936,10 +1937,16 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 		resolution.thinkingLevel,
 		options.thinkingLevel,
 	);
+	// `inherit` takes the parent's live effort, which was fitted to the PARENT's model. Fitting it, or a
+	// configured level, to the model this agent resolved to here makes the badge and the child session
+	// state the one level the child runs at; a level its model does not accept named a run that never
+	// happened. A parent with no level leaves nothing to inherit, so the child resolves its own default.
+	const requested =
+		selected === undefined || selected === ThinkingLevel.Inherit ? options.parentThinkingLevel : selected;
 	const thinkingLevel =
-		selected === undefined || selected === ThinkingLevel.Inherit
-			? (options.parentThinkingLevel ?? ThinkingLevel.Inherit)
-			: selected;
+		model === undefined || requested === undefined || requested === AUTO_THINKING
+			? requested
+			: resolveThinkingLevelForModel(model, requested);
 	if (model) {
 		if (model.contextWindow && model.contextWindow > 0) monitor.progress.contextWindow = model.contextWindow;
 		// The badge carries the effort this agent ACTUALLY runs at, not only an effort somebody typed as
@@ -2177,10 +2184,11 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	// events; the subscription survives this run.
 	syncStatusWithTurns(AgentRegistry.global(), options.id, session);
 	// No override resolved, so the session picked its model itself: the parent's, or the persisted
-	// default. The badge names what runs either way, at the effort the session settled on — `auto`
-	// resolved, an unsupported level clamped — the same authority the follow-up turn reads.
+	// default. Or no effort was requested, so the session picked its own level. The badge names what
+	// runs either way, at the effort the session settled on — `auto` resolved, an unsupported level
+	// clamped — the same authority the follow-up turn reads.
 	const progress = monitor.progress;
-	if (!progress.resolvedModel && session.model) {
+	if (session.model && (!progress.resolvedModel || runModel.thinkingLevel === undefined)) {
 		progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);
 		progress.contextWindow ??= session.model.contextWindow || undefined;
 	}

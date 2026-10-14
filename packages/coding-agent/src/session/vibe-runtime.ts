@@ -356,6 +356,7 @@ export class VibeSessionRegistry {
 			agentName,
 			agentModel: agent.model,
 			fallbackModelPattern: session.getModelString?.(),
+			sessionModelPattern: session.getActiveModelString?.(),
 			// The worker session runs one level below its spawner (the executor
 			// derives the same value as `childDepth`), and lane rows key on that.
 			taskDepth: (session.taskDepth ?? 0) + 1,

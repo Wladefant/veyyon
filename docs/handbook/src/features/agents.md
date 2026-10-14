@@ -19,9 +19,11 @@ agent:
   delegation: preferred   # the default; the prompt requests that substantial work be delegated
 ```
 
-Each agent runs the model and effort set on its own page in the roster. An agent
-with neither set runs the profile's default model at medium effort. Changing the
-model you are talking to moves that session and nothing else.
+Each agent runs the model and effort set on its own page in the roster. The `deep`
+worker with neither set runs the model and effort your session runs when it spawns.
+Any other agent with neither set runs the profile's default model at medium effort.
+Changing the model you are talking to moves that session, the `deep` workers it
+spawns from then on, and nothing else.
 
 Veyyon also ships five specialists (`scout`, `reviewer`, `designer`, `librarian`,
 `sonic`), and they are **disabled** by default. During first-run setup, the
@@ -137,6 +139,9 @@ that sets a model wins:
 2. the agent definition's own `model:` frontmatter, for an agent you wrote
 3. the profile's `default` model role
 
+The value `inherit` on either of the first two runs the spawning session's live model.
+The bundled `deep` agent declares `model: inherit` and `thinking-level: inherit`.
+
 ```yaml
 agent:
   agents:
@@ -147,7 +152,10 @@ agent:
 ```
 
 Effort resolves on the same three layers, ending at `medium`. An explicit `:effort`
-suffix on the resolved model pattern outranks all of them.
+suffix on the resolved model pattern outranks all of them. The level `inherit` takes the
+spawning session's live effort and fits it to the agent's model: a session at `xhigh`
+spawning an agent on a model whose highest level is `high` runs that agent at `high`, and
+its badge shows `high`.
 
 When enabled, one pair applies to the whole roster, and the per-agent Model and Effort rows are
 hidden. **Shared Model** (`agent.model`) and **Shared Effort**
@@ -167,8 +175,8 @@ switch goes off.
 The `default` model role is the model the main assistant starts on, and it is the
 one keystroke path for the common case: `/model` writes it, and every agent with no
 model of its own follows it. A temporary pick, role cycling and plan mode move the
-live session model only, so an agent never changes model because of a keystroke
-aimed at the main assistant.
+live session model only, so only an agent set to `inherit` changes model because of a
+keystroke aimed at the main assistant.
 
 `agent.modelByDepth` bound a chain to a spawn depth rather than to an agent and has
 no effect. A config that still contains it is reported once, with the roster page that
@@ -211,7 +219,8 @@ In the `Agents` block above the composer, an agent that fell back is marked with
 model badge, which distinguishes a fallback model from the configured one.
 
 Effort is chosen from a list: `off`, `minimal` through `max`, `auto`, or `Inherit`.
-`Inherit` on an agent's own page means the default effort; on a nested page it means the
+`Inherit` on an agent's own page means the agent definition's effort, which is the session's
+effort for `deep` and the default effort for the others; on a nested page it means the
 page above it. `auto` requests that the provider choose. The same list appears in both
 places, so you cannot set a level that does not exist. If a hand-written config
 holds one that does not, veyyon reports the levels that work, rather than

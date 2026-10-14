@@ -235,10 +235,11 @@ function planModeAgent(agent: AgentDefinition): AgentDefinition {
 /**
  * The model and effort the child runs, or why the spawn is refused. The model resolves through the ONE
  * owner, whose only scope is this agent: the lane row governing this spawn, then the definition's
- * frontmatter, then the default model role. The parent's live model is not a layer, so a keystroke aimed
- * at this session cannot move a child. A configured-but-unresolvable pattern refuses the spawn instead of
- * quietly running whatever the next layer names. Depth rows key on the CHILD's depth, one below this
- * session, matching the executor's `childDepth`.
+ * frontmatter, then the default model role. The parent's live model is not a layer; it answers only
+ * where one of those layers says `inherit`, so a keystroke aimed at this session moves no other child.
+ * A configured-but-unresolvable pattern refuses the spawn instead of quietly running whatever the next
+ * layer names. Depth rows key on the CHILD's depth, one below this session, matching the executor's
+ * `childDepth`.
  */
 function resolveSpawnModel(session: ToolSession, agentName: string, runAgent: AgentDefinition): SpawnModel | string {
 	const taskDepth = (session.taskDepth ?? 0) + 1;
@@ -247,6 +248,7 @@ function resolveSpawnModel(session: ToolSession, agentName: string, runAgent: Ag
 		agentName,
 		agentModel: runAgent.model,
 		fallbackModelPattern: session.getModelString?.(),
+		sessionModelPattern: session.getActiveModelString?.(),
 		taskDepth,
 	});
 	if (resolved.unresolved) {

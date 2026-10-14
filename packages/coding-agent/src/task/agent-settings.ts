@@ -556,6 +556,12 @@ export interface ResolvedAgentModel {
 	/** The lane level that decided, when `source` is "lane". */
 	depth?: number;
 	/**
+	 * Set when the deciding layer names {@link INHERIT_AGENT_MODEL}: the agent runs the
+	 * spawning session's live model. `patterns` then holds that model when the caller
+	 * passed one, and is empty otherwise, which leaves the child session to pick its own.
+	 */
+	inherited?: true;
+	/**
 	 * Set when a CONFIGURED pattern expanded to nothing (a role alias pointing at
 	 * an unset role, or an empty value). The caller must surface this rather than
 	 * fall through to the next layer.
@@ -583,6 +589,19 @@ const AGENT_DEFAULT_MODEL_ROLE = DEFAULT_MODEL_SLOT;
  * still runs at a level it declares.
  */
 export const AGENT_DEFAULT_EFFORT: ConfiguredThinkingLevel = ThinkingLevel.Medium;
+
+/**
+ * The model value that runs an agent on the spawning session's live model, at
+ * whatever that session is running when the spawn starts. Accepted on every
+ * layer {@link resolveAgentModel} reads; the bundled `deep` agent declares it.
+ */
+export const INHERIT_AGENT_MODEL = "inherit";
+
+/** Whether a configured agent model value is {@link INHERIT_AGENT_MODEL}. */
+export function namesInheritedModel(value: string | readonly string[] | undefined): boolean {
+	const head = typeof value === "string" ? value : value?.length === 1 ? value[0] : undefined;
+	return head?.trim().toLowerCase() === INHERIT_AGENT_MODEL;
+}
 
 /**
  * Human-readable name of the setting behind a {@link AgentModelSource}. For
@@ -858,12 +877,14 @@ function perAgentModelLayers(
  * silently keep its own model against a switch that says every agent shares one. What that lane
  * holds stays in the file and answers again the moment the switch goes off.
  *
- * A spawn does not follow the model the operator is viewing, which moved every agent without a
- * choice of its own on a keystroke aimed at one.
+ * A spawn follows the model the operator is viewing only when the deciding layer says so with
+ * {@link INHERIT_AGENT_MODEL}. Any other agent keeps its own model, so a keystroke aimed at the main
+ * assistant does not move it.
  *
  * A configured layer that expands to nothing returns `unresolved` rather than falling through, so
- * the caller can refuse to spawn and name the setting that is wrong. Bundled specialists carry no
- * `model:` frontmatter, so on a stock install every agent with no lane lands on the default role.
+ * the caller can refuse to spawn and name the setting that is wrong. The bundled `deep` agent
+ * inherits; the other bundled agents carry no `model:` frontmatter, so on a stock install each of
+ * them with no lane lands on the default role.
  */
 export function resolveAgentModel(options: {
 	settings: Settings;
@@ -882,8 +903,13 @@ export function resolveAgentModel(options: {
 	 * spawn — reads the agent's own row.
 	 */
 	taskDepth?: number;
+	/**
+	 * The spawning session's live model, what an {@link INHERIT_AGENT_MODEL} layer runs. A surface
+	 * describing an agent rather than spawning one omits it.
+	 */
+	sessionModelPattern?: string;
 }): ResolvedAgentModel {
-	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth } = options;
+	const { settings, agentName, agentModel, fallbackModelPattern, taskDepth, sessionModelPattern } = options;
 
 	reportSupersededAgentRows(settings);
 	reportRejectedAgentModelSettings(settings);
@@ -898,6 +924,10 @@ export function resolveAgentModel(options: {
 		if (raw === undefined || (typeof raw === "string" && raw.length === 0)) continue;
 		if (Array.isArray(raw) && raw.length === 0) continue;
 		const depthFields = layer.depth !== undefined ? { depth: layer.depth } : {};
+		if (namesInheritedModel(raw)) {
+			const session = sessionModelPattern?.trim();
+			return { patterns: session ? [session] : [], source: layer.source, ...depthFields, inherited: true };
+		}
 		const patterns = resolveConfiguredModelPatterns(raw, settings);
 		if (patterns.length > 0) return { patterns, source: layer.source, ...depthFields };
 		return {
@@ -926,7 +956,8 @@ export function resolveAgentModel(options: {
  *
  * Effort follows the model's scope, never its own: a switch that moved every agent's model and
  * left each agent's effort behind would run the shared model at whatever level the old per-agent
- * row happened to name. The parent session's live effort does not reach a child in either scope.
+ * row happened to name. The parent session's live effort reaches a child only through the level
+ * `inherit` (the bundled `deep` agent's default), which the executor fits to the child's model.
  *
  * An explicit `:level` suffix on the resolved model pattern outranks all of these. The executor
  * applies that, since only it knows whether the suffix was present (see

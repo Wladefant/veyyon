@@ -1,4 +1,4 @@
-import { AUTO_COMPACTION_THRESHOLD, parseCompactionThreshold, type ThinkingLevel } from "@veyyon/agent-core";
+import { AUTO_COMPACTION_THRESHOLD, parseCompactionThreshold, ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, Effort, Model } from "@veyyon/ai";
 import { UNSET_NUMBER, UNSET_NUMBER_OPTION_VALUE } from "@veyyon/kernel/settings/optional-number";
 import { Ellipsis } from "@veyyon/natives";
@@ -74,6 +74,7 @@ import {
 	agentSettingsFor,
 	delegationBlockedNotice,
 	isAgentEnableDefaulted,
+	namesInheritedModel,
 	nextAgentEnableValue,
 	resolveAgentMaxNestedSpawnDepth,
 	resolveAgentModel,
@@ -1628,8 +1629,8 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 			...(shared
 				? []
 				: [
-						{ value: AGENT_ROW_MODEL, label: "Model", description: laneModelSummary(lane, depth) },
-						{ value: AGENT_ROW_EFFORT, label: "Effort", description: laneEffortSummary(lane, depth) },
+						{ value: AGENT_ROW_MODEL, label: "Model", description: laneModelSummary(lane, depth, agent) },
+						{ value: AGENT_ROW_EFFORT, label: "Effort", description: laneEffortSummary(lane, depth, agent) },
 					]),
 			{
 				value: AGENT_ROW_NESTED,
@@ -1789,6 +1790,7 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 		const head = resolveAgentModel({
 			settings,
 			agentName: name,
+			agentModel: this.#agent(name)?.model,
 			taskDepth: depth + 1,
 		}).patterns[0];
 		return effortScopeForPattern(this.models, head, this.sessionModel);
@@ -1830,6 +1832,7 @@ function modelSummary(agent: AgentDefinition, depth = 0): string {
 		taskDepth: depth + 1,
 	});
 	if (resolved.unresolved) return theme.fg("error", `${resolved.unresolved.value} matches no model`);
+	if (resolved.inherited) return theme.fg("dim", "inherit · the session's model");
 	const pattern = resolved.patterns[0];
 	if (!pattern) return theme.fg("dim", "no model resolved");
 	const fallbacks = resolved.patterns.length - 1;
@@ -1846,10 +1849,14 @@ function modelSummary(agent: AgentDefinition, depth = 0): string {
  * stored value — a row showing a resolved answer it does not own is how a
  * screen comes to look configured when it has not been.
  */
-function laneModelSummary(lane: AgentLaneSettings, depth: number): string {
+function laneModelSummary(lane: AgentLaneSettings, depth: number, agent?: AgentDefinition): string {
 	const chain = lane.model;
 	if (chain === undefined || (Array.isArray(chain) ? chain.length === 0 : chain.trim().length === 0)) {
-		return theme.fg("dim", depth === 0 ? "default · the default model role" : "inherit · the level above");
+		if (depth > 0) return theme.fg("dim", "inherit · the level above");
+		return theme.fg(
+			"dim",
+			namesInheritedModel(agent?.model) ? "inherit · the session's model" : "default · the default model role",
+		);
 	}
 	const entries = Array.isArray(chain) ? chain : [chain];
 	const head = entries[0] ?? "";
@@ -1858,11 +1865,14 @@ function laneModelSummary(lane: AgentLaneSettings, depth: number): string {
 }
 
 /** One lane's Effort row, on the same stored-not-resolved rule as the model. */
-function laneEffortSummary(lane: AgentLaneSettings, depth: number): string {
+function laneEffortSummary(lane: AgentLaneSettings, depth: number, agent: AgentDefinition): string {
 	const level = lane.thinkingLevel?.trim() ?? "";
-	return level.length > 0
-		? level
-		: theme.fg("dim", depth === 0 ? "default · the default effort" : "inherit · the level above");
+	if (level.length > 0) return level;
+	if (depth > 0) return theme.fg("dim", "inherit · the level above");
+	return theme.fg(
+		"dim",
+		agent.thinkingLevel === ThinkingLevel.Inherit ? "inherit · the session's effort" : "default · the default effort",
+	);
 }
 
 const ADD_EFFORT_ROW = "\u0000add-effort-row";

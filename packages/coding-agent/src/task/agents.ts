@@ -10,6 +10,7 @@ import { Effort } from "@veyyon/catalog/effort";
 import { parseFrontmatter, prompt } from "@veyyon/utils";
 import { parseAgentFields } from "../discovery/helpers";
 import { agentsPrompts } from "../prompts/agents/rows";
+import { INHERIT_AGENT_MODEL } from "./agent-settings";
 // Embed agent markdown files at build time
 
 import type { AgentDefinition, AgentSource } from "./types";
@@ -48,6 +49,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			description:
 				"Vague outcome, multi-step, owned end to end: works out what to change, changes it, tests it, and reviews its own work before returning. Scale it can carry: building a whole package from nothing. The most expensive lane, so do not reach for it when the outcome is already clear.",
 			spawns: "*",
+			model: INHERIT_AGENT_MODEL,
 			thinkingLevel: ThinkingLevel.Inherit,
 		},
 		template: agentsPrompts["agents/deep"].text,

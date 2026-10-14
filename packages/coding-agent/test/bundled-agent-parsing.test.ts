@@ -4,6 +4,7 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { resolveConfiguredModelPatterns, resolveModelOverride } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { namesInheritedModel } from "@veyyon/coding-agent/task/agent-settings";
 import { getBundledAgent, loadBundledAgents } from "@veyyon/coding-agent/task/agents";
 
 describe("bundled agent parsing", () => {
@@ -29,9 +30,10 @@ describe("bundled agent parsing", () => {
 	 * aliases resolved through role expansion before any agent model setting was
 	 * consulted, so a stock install fanned its agents across several different
 	 * models and changing the agent model appeared to do nothing. The models now
-	 * come from the Agents settings area, which inherits the session model when
-	 * unset, so a definition that names a model here is a regression of that bug.
-	 * A thinking level is still fine: it is not a model choice.
+	 * come from the Agents settings area, so a definition that names a model here
+	 * is a regression of that bug. `deep` states `inherit`, which names no model:
+	 * it runs the spawning session's. A thinking level is still fine: it is not a
+	 * model choice.
 	 *
 	 * The roster is READ OFF the loader rather than listed here. A hand-written list
 	 * goes stale silently in both directions: a renamed lane makes
@@ -50,11 +52,15 @@ describe("bundled agent parsing", () => {
 			"sonic",
 		]);
 		for (const agent of bundled) {
-			expect(agent.model, `${agent.name} must not pin a model`).toBeUndefined();
+			if (agent.name === "deep") {
+				expect(namesInheritedModel(agent.model), "deep runs the session's model").toBe(true);
+			} else {
+				expect(agent.model, `${agent.name} must not pin a model`).toBeUndefined();
+			}
 			expect(agent.source, agent.name).toBe("bundled");
 		}
-		// `deep` is the lane that states `inherit`, so it runs at whatever effort the
-		// resolved agent model already carries rather than on the `auto` ladder.
+		// `deep` states `inherit` for effort too, so it runs at the session's live effort, fitted to
+		// its model, rather than on the agent default.
 		expect(getBundledAgent("deep")?.thinkingLevel).toBe(ThinkingLevel.Inherit);
 	});
 
