@@ -82,6 +82,7 @@ class RecordingStorage extends FileSessionStorage {
 				return written;
 			},
 			flush: () => writer.flush(),
+			sync: () => writer.sync(),
 			isOpen: () => writer.isOpen(),
 			close: () => writer.close(),
 			getError: () => writer.getError(),

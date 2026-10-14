@@ -742,6 +742,7 @@ export class MCPManager {
 		subscription: ActiveMCPEventSubscription,
 		event: MCPEventOccurrence,
 		cursor?: string | null,
+		commitOccurrenceCursor = true,
 	): Promise<boolean> {
 		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return false;
 		if (!isMCPEventOccurrence(event) || event.name !== subscription.config?.name) {
@@ -753,7 +754,7 @@ export class MCPManager {
 		if (subscription.seen.has(event.eventId)) return false;
 		const deliveryEvent = { ...event, cursor: eventCursor };
 		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
-		if (hasEventCursor) await this.#recordEventCursor(subscription, eventCursor);
+		if (commitOccurrenceCursor && hasEventCursor) await this.#recordEventCursor(subscription, eventCursor);
 		subscription.seen.add(event.eventId);
 		if (subscription.seen.size > 10_000) subscription.seen.delete(subscription.seen.values().next().value!);
 		return outcome !== "duplicate";
@@ -776,7 +777,7 @@ export class MCPManager {
 					{ signal: subscription.controller.signal },
 				);
 				for (const event of result.events) {
-					await this.#deliverEvent(serverName, key, subscription, event);
+					await this.#deliverEvent(serverName, key, subscription, event, undefined, false);
 				}
 				if (result.truncated) {
 					await this.#recordEventControl(serverName, key, {

@@ -36,6 +36,9 @@ class DetachingRewriteStorage extends MemorySessionStorage {
 			async flush(): Promise<void> {
 				await inner.flush();
 			},
+			async sync(): Promise<void> {
+				await inner.sync();
+			},
 			isOpen(): boolean {
 				const open = inner.isOpen();
 				return open;
@@ -101,6 +104,9 @@ class CloseGatedRewriteStorage extends MemorySessionStorage {
 			},
 			async flush(): Promise<void> {
 				await inner.flush();
+			},
+			async sync(): Promise<void> {
+				await inner.sync();
 			},
 			isOpen(): boolean {
 				return inner.isOpen();
@@ -572,6 +578,9 @@ class SequencedRewriteStorage extends MemorySessionStorage {
 			},
 			async flush(): Promise<void> {
 				await inner.flush();
+			},
+			async sync(): Promise<void> {
+				await inner.sync();
 			},
 			isOpen(): boolean {
 				return inner.isOpen();

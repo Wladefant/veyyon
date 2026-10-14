@@ -201,7 +201,7 @@ describe("MCPManager event subscription contracts", () => {
 				pollRequests.push(params);
 				if (pollRequests.length === 1) {
 					return {
-						events: [event("batch-first"), event("batch-second")],
+						events: [event("batch-first", "batch-event-cursor"), event("batch-second", "second-event-cursor")],
 						cursor: "batch-final-cursor",
 						hasMore: false,
 						nextPollMs: 30_000,
@@ -486,6 +486,7 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		const manager = new MCPManager(process.cwd());
 		manager.setOnEvent(() => {});
+		manager.setOnEventCursor(() => {});
 		const oldSecret = process.env.MCP_EVENTS_CONTRACT_SECRET;
 		process.env.MCP_EVENTS_CONTRACT_SECRET = CALLBACK_SECRET;
 		vi.useFakeTimers();
@@ -530,6 +531,8 @@ describe("MCPManager event subscription contracts", () => {
 		probe.stop(true);
 		const server = fakeMcpServer({ delivery: "webhook" });
 		const manager = new MCPManager(process.cwd());
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor(() => {});
 		const serverName = "missing-secret-server";
 		const subscriptionConfig: MCPServerEventSubscriptionConfig = {
 			name: EVENT_NAME,

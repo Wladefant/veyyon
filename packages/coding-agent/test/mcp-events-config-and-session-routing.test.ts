@@ -8,7 +8,12 @@ import {
 import { resolveConfigEnvReference } from "../src/config/config-value-resolution";
 import { MCPManager } from "../src/mcp/manager";
 import { wireReactiveMCPManager } from "../src/session/factory-mcp";
-import { buildMcpEventBatchMessage, type McpEventEntry } from "../src/session/factory-notices";
+import {
+	buildMcpEventBatchMessage,
+	buildMcpNotificationBatchMessage,
+	type McpEventEntry,
+	type McpNotificationEntry,
+} from "../src/session/factory-notices";
 import { createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import { Agent } from "@veyyon/agent-core";
@@ -409,6 +414,55 @@ describe("MCP event prompt receipts and session isolation", () => {
 		}
 	});
 
+	it("fsyncs a cold session journal after creation", async () => {
+		const owner = await realSession(temporarySetup(), undefined, true);
+		const file = owner.journal.getSessionFile();
+		if (!file) throw new Error("Missing persistent session file");
+		expect(await Bun.file(file).exists()).toBe(false);
+		await owner.journal.ensureOnDisk();
+		const writeFsync = fs.fsyncSync;
+		const fsync = spyOn(fs, "fsyncSync").mockImplementation(fd => writeFsync(fd));
+		try {
+			await owner.journal.sync();
+			expect(fsync).toHaveBeenCalledTimes(1);
+		} finally {
+			fsync.mockRestore();
+		}
+	});
+
+	it("fsyncs the published journal after an atomic rewrite", async () => {
+		const owner = await realSession(temporarySetup(), undefined, true);
+		await owner.journal.ensureOnDisk();
+		owner.journal.appendCustomEntry("sync-probe", { value: 1 });
+		await owner.journal.flush();
+		await owner.journal.rewriteEntries();
+		const writeFsync = fs.fsyncSync;
+		const fsync = spyOn(fs, "fsyncSync").mockImplementation(fd => writeFsync(fd));
+		try {
+			await owner.journal.sync();
+			expect(fsync).toHaveBeenCalledTimes(1);
+		} finally {
+			fsync.mockRestore();
+		}
+	});
+
+	it("opens and fsyncs the journal after a synchronous first-turn rewrite", async () => {
+		const owner = await realSession(temporarySetup(), undefined, true);
+		const file = owner.journal.getSessionFile();
+		if (!file) throw new Error("Missing persistent session file");
+		await owner.session.agent.prompt("persist the first assistant turn");
+		await owner.session.waitForIdle();
+		expect(await Bun.file(file).exists()).toBe(true);
+		const writeFsync = fs.fsyncSync;
+		const fsync = spyOn(fs, "fsyncSync").mockImplementation(fd => writeFsync(fd));
+		try {
+			await owner.journal.sync();
+			expect(fsync).toHaveBeenCalledTimes(1);
+		} finally {
+			fsync.mockRestore();
+		}
+	});
+
 	it("keeps an event pending after a rejected prompt and retries it without restarting", async () => {
 		const owner = await realSession(temporarySetup(), undefined, true);
 		const prompt = spyOn(owner.session.agent, "prompt").mockImplementationOnce(async () => {
@@ -423,6 +477,38 @@ describe("MCP event prompt receipts and session isolation", () => {
 		await owner.session.waitForIdle();
 		expect(prompt).toHaveBeenCalledTimes(2);
 		expect(receipts(owner.journal)).toHaveLength(1);
+	});
+
+	it("retries only receipt persistence after prompting and leaves unrelated notices delivered", async () => {
+		const owner = await realSession(temporarySetup(), undefined, true);
+		owner.session.yieldQueue.register<McpNotificationEntry>("mcp-notification", {
+			build: buildMcpNotificationBatchMessage,
+			skipIdleFlush: true,
+		});
+		const prompt = spyOn(owner.session.agent, "prompt");
+		const originalSync = owner.journal.sync.bind(owner.journal);
+		let syncCalls = 0;
+		const sync = spyOn(owner.journal, "sync").mockImplementation(async () => {
+			syncCalls++;
+			if (syncCalls === 1) throw new Error("transient receipt fsync failure");
+			await originalSync();
+		});
+		try {
+			await owner.accept(occurrence("evt-receipt-retry"));
+			owner.session.yieldQueue.enqueue("mcp-notification", {
+				serverName: "alerts",
+				uri: "file:///fixture",
+			});
+			await owner.session.yieldQueue.flush("idle");
+			await owner.session.waitForIdle();
+			expect(prompt).toHaveBeenCalledTimes(1);
+			expect(sync).toHaveBeenCalledTimes(2);
+			expect(owner.session.yieldQueue.has("mcp-event")).toBe(false);
+			expect(owner.session.yieldQueue.has("mcp-notification")).toBe(false);
+			expect(receipts(owner.journal)).toHaveLength(1);
+		} finally {
+			sync.mockRestore();
+		}
 	});
 
 	it("(c) replays after a crash after enqueue but before the prompt drain persists a receipt", async () => {
@@ -597,6 +683,7 @@ describe("MCP Events user config loading", () => {
 				const subscription = result.configs["routing-alerts"]?.events?.subscriptions?.[0];
 				if (!subscription) throw new Error("Missing loaded webhook subscription");
 				manager.setOnEvent(async () => "queued");
+				manager.setOnEventCursor(async () => {});
 				const connected = await manager.connectServers(result.configs, result.sources);
 				// Startup runs in the background. Observe its state, not an early load-result snapshot.
 				const deadline = Date.now() + 2_000;
