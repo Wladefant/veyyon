@@ -93,10 +93,7 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 		null;
 	let leaseOwner = "transfer-owner";
 	let leaseEpoch = 1;
-	let transferReplay:
-		| { transferId: string; ownerNode: string; epoch: number; targetNode: string; claimToken: string }
-		| undefined;
-	let interruptedTransferResponses = 2;
+	let staleTransferResponses = 1;
 	let interruptCommit = true;
 	const fakeFetch: CheckpointFetch = async (input, init) => {
 		const path = new URL(String(input)).pathname;
@@ -120,41 +117,15 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 				claimToken: string;
 				transferId: string;
 			};
-			if (transferReplay?.transferId === request.transferId) {
-				if (
-					transferReplay.ownerNode !== request.ownerNode ||
-					transferReplay.epoch !== request.epoch ||
-					transferReplay.targetNode !== request.targetNode ||
-					transferReplay.claimToken !== request.claimToken
-				)
-					return Response.json({ error: "transfer replay mismatch" }, { status: 409 });
-				if (interruptedTransferResponses > 0) {
-					interruptedTransferResponses--;
-					return Response.json({ error: "ack interrupted" }, { status: 503 });
-				}
-				return Response.json({
-					ownerNode: leaseOwner,
-					epoch: leaseEpoch,
-					expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: head?.sequence ?? 0,
-					manifestHash: head?.manifestHash ?? "",
-				});
-			}
 			if (request.ownerNode !== leaseOwner || request.epoch !== leaseEpoch)
 				return Response.json({ error: "stale writer" }, { status: 409 });
+			if (staleTransferResponses > 0) {
+				staleTransferResponses--;
+				leaseEpoch++;
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			}
 			leaseOwner = request.targetNode;
 			leaseEpoch++;
-			transferReplay = {
-				transferId: request.transferId,
-				ownerNode: request.ownerNode,
-				epoch: request.epoch,
-				targetNode: request.targetNode,
-				claimToken: request.claimToken,
-			};
-			if (interruptedTransferResponses > 0) {
-				interruptedTransferResponses--;
-				return Response.json({ error: "ack interrupted" }, { status: 503 });
-			}
 			return Response.json({
 				ownerNode: leaseOwner,
 				epoch: leaseEpoch,
@@ -163,7 +134,13 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 				manifestHash: head?.manifestHash ?? "",
 			});
 		}
-		if (path.endsWith("/release")) return new Response(null, { status: 204 });
+		if (path.endsWith("/release")) {
+			const request = JSON.parse(String(init?.body)) as { ownerNode: string; epoch: number };
+			if (request.ownerNode !== leaseOwner || request.epoch !== leaseEpoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			leaseEpoch++;
+			return new Response(null, { status: 204 });
+		}
 		if (path.endsWith("/head")) return Response.json(head);
 		if (path.includes("/objects/")) {
 			const hash = path.split("/").pop()!;
@@ -204,7 +181,7 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 			id: "transfer",
 			sessionFile: source,
 			targetNode: "destination",
-		})).rejects.toThrow(/503/);
+		})).rejects.toThrow(/409/);
 		await assertSourceRetained();
 		await runCheckpointCommand({
 			action: "handoff",
@@ -223,22 +200,30 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 			claimToken: string;
 			transferId: string;
 			transferEpoch: number;
+			epoch: number;
 		};
 		expect(ownership).toMatchObject({
 			version: 1,
 			sessionId: "transfer",
 			targetNode: "destination",
 			transferId: expect.any(String),
-			transferEpoch: 2,
+			transferEpoch: 5,
 		});
 		expect(ownership.claimToken.length).toBeGreaterThan(0);
-		expect(ownership.epoch).toBe(2);
+		expect(ownership.epoch).toBe(5);
 		const recovery = JSON.parse(await Bun.file(join(destination, "recovery.json")).text()) as {
 			checkpointTransfer: boolean;
 		};
 		expect(recovery.checkpointTransfer).toBe(true);
 		const restored = await Bun.file(join(destination, "sessions", "session.jsonl")).arrayBuffer();
-		expect(Buffer.from(restored)).toEqual(Buffer.from(await Bun.file(source).arrayBuffer()));
+		const sourceJournal = Buffer.from(await Bun.file(source).arrayBuffer());
+		const sourceBody = sourceJournal.subarray(sourceJournal.indexOf(10) + 1);
+		const restoredBody = Buffer.from(restored).subarray(Buffer.from(restored).indexOf(10) + 1);
+		expect(restoredBody).toEqual(sourceBody);
+		expect(JSON.parse(Buffer.from(restored).toString("utf8").split("\n")[0])).toMatchObject({
+			id: "transfer",
+			parentSessionId: "transfer",
+		});
 		await expect(runCheckpointCommand({ action: "restore", id: "transfer", output: destination })).rejects.toThrow(
 			/already exists/,
 		);

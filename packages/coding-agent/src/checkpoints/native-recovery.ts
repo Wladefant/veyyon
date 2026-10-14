@@ -288,7 +288,11 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 		headerStart = headerEnd + 1;
 		headerEnd = journalText.indexOf("\n", headerStart);
 	}
-	const outputHeader = { ...header, id: newId, parentSessionId: bundle.native.sessionId };
+	const outputHeader: Record<string, unknown> = {
+		...header,
+		id: newId,
+		parentSessionId: bundle.native.sessionId,
+	};
 	if (fork) delete outputHeader.checkpointHandoff;
 	else if (identity) outputHeader.checkpointHandoff = identity;
 	const headerLine = JSON.stringify(outputHeader);

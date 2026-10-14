@@ -96,7 +96,12 @@ export class SessionAuthority {
    if(claim?.spent && resumeHash!==undefined && resumeHash!==claim.resumeHash && resumeHash!==claim.pendingResumeHash)
     return json({error:"stale resume capability"},409);
    if(claim?.spent && claimHash===undefined && resumeHash===undefined)return json({error:"resume capability required"},409);
-   if(live && current.ownerNode!==body.ownerNode)return json({error:"another runtime holds the live checkpoint lease"},409);
+   const pendingTransferReservation =
+    !claim?.spent &&
+    current.ownerNode===targetNode &&
+    current.epoch===transfer.targetEpoch &&
+    current.claimHash===transfer.claimHash;
+   if(live && current.ownerNode!==body.ownerNode && !pendingTransferReservation)return json({error:"another runtime holds the live checkpoint lease"},409);
    if(claim?.spent && claimHash!==undefined && !claim.pendingResumeToken)return json({error:"transfer claim has already been spent"},409);
    if(!claim?.spent && claimHash===undefined)return json({error:"resume capability required"},409);
    if(!claim?.spent && (current.ownerNode!==targetNode || current.epoch!==transfer.targetEpoch || current.claimHash!==transfer.claimHash))

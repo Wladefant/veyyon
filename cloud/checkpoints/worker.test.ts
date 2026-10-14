@@ -87,7 +87,7 @@ test("competing handoffs cannot both take ownership",async()=>{
  ]);
  expect(results.map(result=>result.status).sort()).toEqual([200,409]);
 });
-test("same source owner with a stale epoch cannot return after transfer or capability rotation",async()=>{
+test("same source and current runtime owners cannot act with stale epochs or rotated capabilities",async()=>{
  const {post,objects,data}=fixture();
  const original=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
  const transferId="temporary-transfer";
@@ -101,15 +101,20 @@ test("same source owner with a stale epoch cannot return after transfer or capab
  const resumed=await (await post("claim",{targetNode:"temporary-node",transferId,resumeToken:claimed.resumeToken,epoch:transfer.epoch,ownerNode:"temporary-runtime-next"})).json() as {ownerNode:string;epoch:number;resumeToken:string};
  expect(resumed.epoch).toBeGreaterThan(original.epoch);
  await post("finalize",{ownerNode:resumed.ownerNode,targetNode:"temporary-node",transferId,epoch:transfer.epoch,leaseEpoch:resumed.epoch,resumeToken:resumed.resumeToken});
- expect((await post("lease",{ownerNode:"source"})).status).toBe(409);
+ const staleRuntime={ownerNode:resumed.ownerNode,epoch:transfer.epoch};
+ expect((await post("renew",staleRuntime)).status).toBe(409);
+ expect((await post("release",staleRuntime)).status).toBe(409);
+ expect((await post("transfer",{...staleRuntime,targetNode:"destination",claimToken:"stale-transfer-capability",transferId:"stale-epoch"})).status).toBe(409);
  expect((await post("renew",original)).status).toBe(409);
- expect((await post("release",original)).status).toBe(409);
- expect((await post("transfer",{...original,targetNode:"destination",claimToken:"stale-transfer-capability",transferId:"stale-epoch"})).status).toBe(409);
- expect((await post("claim",{targetNode:"temporary-node",transferId,resumeToken:claimed.resumeToken,epoch:transfer.epoch,ownerNode:"copied-runtime"})).status).toBe(409);
  const bytes=new Uint8Array([7,8,9]);
  const hash=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
  objects.set(hash,bytes);
- expect((await post("commit",{...original,expectedHead:0,idempotencyKey:"stale-epoch",manifest:{version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]}})).status).toBe(409);
+ expect((await post("commit",{...staleRuntime,expectedHead:0,idempotencyKey:"stale-epoch",manifest:{version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]}})).status).toBe(409);
+ expect((await post("release",resumed)).status).toBe(200);
+ const releasedLease=data.get("lease") as {expiresAt:string};
+ releasedLease.expiresAt=new Date(0).toISOString();
+ expect((await post("claim",{targetNode:"temporary-node",transferId,resumeToken:claimed.resumeToken,epoch:transfer.epoch,ownerNode:"copied-runtime"})).status).toBe(409);
+ expect((await post("lease",{ownerNode:"source"})).status).toBe(409);
 });
 test("a crash after redemption reclaims the pending capability after expiry and storage failure rolls back",async()=>{
  const {post,data,failPut}=fixture();

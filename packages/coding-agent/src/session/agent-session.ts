@@ -82,6 +82,7 @@ import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
+import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
 import { SynchronizedSession } from "../checkpoints/synchronized-session";
 import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../checkpoints/session-ownership-marker";
 // Session initialization registers usage backends without loading the AI package barrel.
