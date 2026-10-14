@@ -33,7 +33,10 @@ export function splitTasks(tasks: readonly TaskDescriptor[], seed: string): Task
 	const ordered = [...byId.values()].sort((left, right) => {
 		const leftHash = hash(`${seed}\0${left.id}`);
 		const rightHash = hash(`${seed}\0${right.id}`);
-		return leftHash.localeCompare(rightHash) || left.id.localeCompare(right.id);
+		return (
+			(leftHash < rightHash ? -1 : leftHash > rightHash ? 1 : 0) ||
+			(left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+		);
 	});
 
 	return {
@@ -41,6 +44,10 @@ export function splitTasks(tasks: readonly TaskDescriptor[], seed: string): Task
 		score: ordered.slice(TASK_SPLIT_SIZES.feedback, TASK_SPLIT_SIZES.feedback + TASK_SPLIT_SIZES.score),
 		final: ordered.slice(TASK_SPLIT_SIZES.feedback + TASK_SPLIT_SIZES.score),
 	};
+}
+
+function compareCodeUnits(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function hash(value: string): string {
