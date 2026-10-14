@@ -398,6 +398,7 @@ import { UserExecutions } from "./runtime/user-executions";
 import { YieldTracker } from "./runtime/yield-tracker";
 import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
+import { startingServiceTierByFamily } from "./startup-model";
 import { incompleteTodoItems } from "./todo-reminder";
 import { parseTurnBudgetDirective } from "./turn-budget";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
@@ -8602,7 +8603,6 @@ export class AgentSession {
 	#restoreTranscriptThinkingAndTier(sessionContext: SessionContext): void {
 		const branch = this.sessionManager.getBranch();
 		const hasThinkingEntry = branch.some(entry => entry.type === "thinking_level_change");
-		const hasServiceTierEntry = branch.some(entry => entry.type === "service_tier_change");
 		const defaultThinkingLevel = parseConfiguredThinkingLevel(this.settings.get("defaultThinkingLevel"));
 		const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
 			hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
@@ -8611,13 +8611,11 @@ export class AgentSession {
 					: (sessionContext.thinkingLevel as ThinkingLevel | undefined)
 				: defaultThinkingLevel;
 		this.#thinking.seed(restoredThinkingLevel);
-		this.#serviceTierByFamily = hasServiceTierEntry
-			? (sessionContext.serviceTier ?? {})
-			: buildServiceTierByFamily(
-					this.settings.get("tier.openai"),
-					this.settings.get("tier.anthropic"),
-					this.settings.get("tier.google"),
-				);
+		this.#serviceTierByFamily = startingServiceTierByFamily(
+			branch.some(entry => entry.type === "service_tier_change"),
+			sessionContext,
+			this.settings,
+		);
 	}
 
 	/**
