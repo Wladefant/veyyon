@@ -24943,9 +24943,9 @@
 		}
 	},
 	"google-antigravity": {
-		"claude-opus-5-5-high": {
-			"id": "claude-opus-5-5-high",
-			"name": "Claude Opus 5.5 (High)",
+		"claude-opus-5-5": {
+			"id": "claude-opus-5-5",
+			"name": "Claude Opus 5.5",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
 			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
@@ -24963,21 +24963,24 @@
 			"pricing": "unknown",
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
+			"requestModelId": "claude-opus-5-5-low",
 			"thinking": {
-				"mode": "budget",
+				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
-				"prefixBinding": true
+				"effortRouting": {
+					"low": "claude-opus-5-5-low",
+					"medium": "claude-opus-5-5-medium",
+					"high": "claude-opus-5-5-high"
+				}
 			}
 		},
-		"claude-opus-5-5-low": {
-			"id": "claude-opus-5-5-low",
-			"name": "Claude Opus 5.5 (Low)",
+		"claude-sonnet-5-5": {
+			"id": "claude-sonnet-5-5",
+			"name": "Claude Sonnet 5.5",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
 			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
@@ -24995,144 +24998,19 @@
 			"pricing": "unknown",
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
+			"requestModelId": "claude-sonnet-5-5-low",
 			"thinking": {
-				"mode": "budget",
+				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
-				"prefixBinding": true
-			}
-		},
-		"claude-opus-5-5-medium": {
-			"id": "claude-opus-5-5-medium",
-			"name": "Claude Opus 5.5 (Medium)",
-			"api": "google-gemini-cli",
-			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"pricing": "unknown",
-			"contextWindow": 1000000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "budget",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"prefixBinding": true
-			}
-		},
-		"claude-sonnet-5-5-high": {
-			"id": "claude-sonnet-5-5-high",
-			"name": "Claude Sonnet 5.5 (High)",
-			"api": "google-gemini-cli",
-			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"pricing": "unknown",
-			"contextWindow": 1000000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "budget",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"prefixBinding": true
-			}
-		},
-		"claude-sonnet-5-5-low": {
-			"id": "claude-sonnet-5-5-low",
-			"name": "Claude Sonnet 5.5 (Low)",
-			"api": "google-gemini-cli",
-			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"pricing": "unknown",
-			"contextWindow": 1000000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "budget",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"prefixBinding": true
-			}
-		},
-		"claude-sonnet-5-5-medium": {
-			"id": "claude-sonnet-5-5-medium",
-			"name": "Claude Sonnet 5.5 (Medium)",
-			"api": "google-gemini-cli",
-			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"pricing": "unknown",
-			"contextWindow": 1000000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "budget",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"prefixBinding": true
+				"effortRouting": {
+					"low": "claude-sonnet-5-5-low",
+					"medium": "claude-sonnet-5-5-medium",
+					"high": "claude-sonnet-5-5-high"
+				}
 			}
 		},
 		"gemini-2.5-flash": {

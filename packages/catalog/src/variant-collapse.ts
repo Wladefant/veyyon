@@ -280,7 +280,7 @@ function geminiFlashFamily(mode: "budget" | "google-level"): EffortVariantFamily
 		// (exact match wins in every resolver).
 		//
 		// `gemini-3.6-flash` is deliberately NOT aliased here. It is the id of a
-		// real, separate family ({@link geminiTierFamily}) whose per-tier wire
+		// real, separate family ({@link tierFamily}) whose per-tier wire
 		// ids come from the same Antigravity discovery list this family is built
 		// from, so the two CAN be live on one provider — they are presence
 		// filtered, not provider partitioned. Aliasing it meant that whenever
@@ -342,8 +342,14 @@ function geminiProFamily(mode: "budget" | "google-level"): EffortVariantFamily {
  * tokens), listed only to a client that reports `antigravity/hub` 3.0.0 or later.
  * Google rejects MINIMAL for Argon and the Antigravity client offers low, medium
  * and high, so its ladder has no minimal tier.
+ *
+ * Claude Opus 5.5 and Claude Sonnet 5.5 are served the same way on Antigravity:
+ * `claude-{opus,sonnet}-5-5-{low,medium,high}`, with no bare id. Each collapses to
+ * one row whose effort picks the tier. They carry no `off` route: thinking off
+ * runs the `-low` deployment with thinking disabled in the body, which the
+ * endpoint accepts.
  */
-function geminiTierFamily(id: string, name: string, efforts: readonly Effort[]): EffortVariantFamily {
+function tierFamily(id: string, name: string, efforts: readonly Effort[]): EffortVariantFamily {
 	const low = `${id}-low`;
 	return {
 		id,
@@ -413,8 +419,10 @@ function geminiLevelFamily(
 
 /** CCA families shared verbatim by both providers (transport-agnostic, or one transport both endpoints speak). */
 const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
-	geminiTierFamily("gemini-3.6-flash", "Gemini 3.6 Flash", GEMINI_3_FLASH_FAMILY_EFFORTS),
-	geminiTierFamily("gemini-4-argon", "Gemini 4 Argon", [Effort.Low, Effort.Medium, Effort.High]),
+	tierFamily("gemini-3.6-flash", "Gemini 3.6 Flash", GEMINI_3_FLASH_FAMILY_EFFORTS),
+	tierFamily("gemini-4-argon", "Gemini 4 Argon", [Effort.Low, Effort.Medium, Effort.High]),
+	tierFamily("claude-opus-5-5", "Claude Opus 5.5", [Effort.Low, Effort.Medium, Effort.High]),
+	tierFamily("claude-sonnet-5-5", "Claude Sonnet 5.5", [Effort.Low, Effort.Medium, Effort.High]),
 	geminiLevelFamily("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.8-flash-tiered", [
 		"gemini-3.8-flash-low",
 		"gemini-3.8-flash-medium",

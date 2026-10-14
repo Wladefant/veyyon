@@ -248,6 +248,29 @@ describe("collapseEffortVariants", () => {
 		}
 	});
 
+	// Antigravity serves Claude Opus 5.5 and Sonnet 5.5 as `-{low,medium,high}` deployments with no bare id.
+	// Without a family each tier showed as its own row, and a tier row took a separate effort on top, so a
+	// status line could read "Opus 5.5 (Low) · high". Thinking off stays available and runs the low tier.
+	it.each(["claude-opus-5-5", "claude-sonnet-5-5"])("collapses the per-tier %s deployments onto one row", id => {
+		const tiers = [`${id}-low`, `${id}-medium`, `${id}-high`];
+		const out = collapseEffortVariants(
+			tiers.map(tier => memberSpec(tier)),
+			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+		);
+		expect(out.map(spec => spec.id)).toEqual([id]);
+		for (const tier of tiers) expect(resolveVariantAlias("google-antigravity", tier)).toBe(id);
+
+		const model = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
+		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+		expect(model.thinking?.prefixBinding).toBe(true);
+		expect(resolveWireModelId(model, Effort.Low)).toBe(`${id}-low`);
+		expect(resolveWireModelId(model, Effort.Medium)).toBe(`${id}-medium`);
+		expect(resolveWireModelId(model, Effort.High)).toBe(`${id}-high`);
+		const off = resolveReasoningSelection(model, { disabled: true });
+		expect(off.enabled).toBe(false);
+		expect(off.wireModelId).toBe(`${id}-low`);
+	});
+
 	// A client reporting 3.0.0 or later is also listed `gemini-3.8-flash-{low,medium,high}` beside the
 	// tiered deployment. They join the 3.8 row instead of adding three raw rows, and requests stay on
 	// the tiered id the row has always used.

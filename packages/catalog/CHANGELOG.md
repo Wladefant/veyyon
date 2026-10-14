@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
+
+### Changed
+
+- Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
+
 ## [1.5.6] - 2026-10-13
 
 ### Added
