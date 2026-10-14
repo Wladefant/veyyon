@@ -4,14 +4,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
+
 ### Changed
 
 - An agent with no model or effort set on its roster page or in its definition runs the spawning session's live model and effort instead of the `default` model role at medium effort; bundled `scout`, `sonic` and `librarian` no longer pin an effort, `model: inherit` on a lane overrides a definition's model, and `/account status` counts the session's provider as an agent provider.
+- Resuming or switching to a transcript reads its starting service tier through the same function a new session uses; no user-visible change.
+- Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
+- `Markdown` borders a nested quote's laid-out rows without first checking whether the border symbol leads with a blank, since the final row wrap writes the same bytes either way; output is unchanged.
 
 ### Fixed
 
 - An agent whose effort is inherited or configured runs at the level its own model accepts, and its badge shows that level, rather than the parent's level for a model that lacks it; a parent with no effort leaves the agent at its own default instead of none.
 - An agent that resolves no effort of its own shows the effort its session settles on in its badge, and the `/settings` agent roster shows an agent that runs the session's model as `session model`, which leaves room for a read-only source marker.
+- The `Runs` line on a `/settings` agent page reads `the session's model and effort` for an agent with neither set, and `session effort` instead of `inherit effort` when only the model is set.
+- A Google or Cloud Code Assist request with thinking off names the model's lowest declared thinking level instead of `MINIMAL`, which a model without a minimal level rejects.
 
 ## [1.5.6] - 2026-10-13
 
