@@ -2203,12 +2203,8 @@ export class Markdown implements Component {
 		};
 		const contentWidth = quoteContentWidth(width);
 		const border = width > QUOTE_BORDER_CELLS ? this.#theme.quoteBorder(`${this.#theme.symbols.quoteBorder} `) : "";
-		// The rows fit `width` only if the border fits the cells reserved for it. A bordered row opens
-		// with the border symbol, so it has an indent to hang only when the symbol leads with a blank; a
-		// row without the border is at most two cells wide, too narrow to hang one.
-		let rowsLaidOut =
-			border === "" ||
-			(visibleWidth(border) <= QUOTE_BORDER_CELLS && /^[^ \t]/.test(this.#theme.symbols.quoteBorder));
+		// The rows fit `width` only if the border fits the cells reserved for it.
+		let rowsLaidOut = border === "" || visibleWidth(border) <= QUOTE_BORDER_CELLS;
 		let run = 0;
 		for (let i = 0; i < renderedLines.length; i++) {
 			const styled = applyQuoteStyle(renderedLines[i]!);

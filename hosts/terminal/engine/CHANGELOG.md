@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `Markdown` borders a nested quote's laid-out rows without first checking whether the border symbol leads with a blank, since the final row wrap writes the same bytes either way; output is unchanged.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes
