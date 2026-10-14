@@ -34,6 +34,8 @@
 - An agent that resolves no effort of its own shows the effort its session settles on in its badge, and the `/settings` agent roster shows an agent that runs the session's model as `session model`, which leaves room for a read-only source marker.
 - The `Runs` line on a `/settings` agent page reads `the session's model and effort` for an agent with neither set, and `session effort` instead of `inherit effort` when only the model is set.
 - The plan-approval slider no longer offers the plan model as a second choice when it is the default model at the same effort.
+- Mnemopi online memory runs the session's model when no memory helper model is set, instead of the persisted `defaultModel`.
+- The `/settings` Roster page shows eight rows before it scrolls and a shorter description, so its `Enter to configure · Esc to go back` footer stays on screen in a 40-row terminal.
 - A Google or Cloud Code Assist request with thinking off names the model's lowest declared thinking level instead of `MINIMAL`, which a model without a minimal level rejects.
 
 ## [1.5.6] - 2026-10-13
