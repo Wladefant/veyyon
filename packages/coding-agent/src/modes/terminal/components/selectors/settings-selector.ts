@@ -29,7 +29,7 @@ import {
 	type DefaultEffortList,
 	withLegacyDefaultEffort,
 } from "../../../../config/effort-resolver";
-import { normalizeModelPatternList } from "../../../../config/model-pattern-list";
+import { namesInheritedModel, normalizeModelPatternList } from "../../../../config/model-pattern-list";
 import type { ModelRegistry } from "../../../../config/model-registry";
 import { extractExplicitThinkingSelector, resolveModelSelectorValue } from "../../../../config/model-resolver";
 import { BUILTIN_PERSONALITY_DESCRIPTIONS, NONE_PERSONALITY } from "../../../../config/personality-resolver";
@@ -64,7 +64,6 @@ import {
 	agentSettingsFor,
 	delegationBlockedNotice,
 	isAgentEnableDefaulted,
-	namesInheritedModel,
 	nextAgentEnableValue,
 	resolveAgentMaxNestedSpawnDepth,
 	resolveAgentModel,
@@ -151,7 +150,7 @@ export function parseNumberSetting(path: SettingPath, text: string): number | ty
 }
 
 const AGENT_LIST_DESCRIPTION =
-	"What each helper and each agent runs. Helpers are the model calls features make on their own; subagents are the agents the model may spawn. Open a row to set its model and effort. A row with neither set runs the session's model at the session's effort.";
+	"Helpers are model calls features make on their own; subagents are agents the model may spawn. Unset rows run the session's model and effort.";
 
 const AGENTS_PATH = "agent.agents" satisfies SettingPath;
 const HELPERS_PATH = "agent.helpers" satisfies SettingPath;
@@ -874,8 +873,11 @@ class DefaultModelSubmenu extends MouseRoutedSubmenu {
 }
 
 const RULE_LIST_MAX_ROWS = 12;
-/** Rows the roster shows at once: the whole Helpers section, then it scrolls into Subagents. */
-const ROSTER_MAX_ROWS = 10;
+/**
+ * Rows the roster shows at once before it scrolls. Eight keeps the page's footer on screen in a
+ * 40-row terminal with a three-line agent description under the list.
+ */
+const ROSTER_MAX_ROWS = 8;
 
 const BUNDLED_SECTION_ORDER: readonly BuiltinRuleSection[] = Object.keys(BUILTIN_RULE_SECTIONS) as BuiltinRuleSection[];
 

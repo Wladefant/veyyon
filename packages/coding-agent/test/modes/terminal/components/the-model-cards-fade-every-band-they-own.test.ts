@@ -327,30 +327,30 @@ describe("the model hub fades every band it owns", () => {
 		hub.dispose();
 	});
 
-	it("fades the roles pane and hands every one of its bands back when disposed", () => {
+	it("fades the default & fallbacks pane and hands every one of its bands back when disposed", () => {
 		const hub = makeHub();
-		const roles = locate(hub, "Roles");
-		hub.handleInput(`\x1b[<0;${roles.col};${roles.row}M`);
-		hub.handleInput(`\x1b[<0;${roles.col};${roles.row}m`);
-		const rolesRow = locate(hub, "▫ VISION");
-		const bare = rowText(hub, rolesRow.row);
+		const chains = locate(hub, "Default & fallbacks");
+		hub.handleInput(`\x1b[<0;${chains.col};${chains.row}M`);
+		hub.handleInput(`\x1b[<0;${chains.col};${chains.row}m`);
+		const defaultRow = locate(hub, "(auto-select on launch)");
+		const bare = rowText(hub, defaultRow.row);
 
 		// The sidebar band is put in flight first and never allowed to land: the pointer leaves it
-		// for the roles pane, so at the moment of dispose the card owns TWO travelling fades. A
+		// for the chain pane, so at the moment of dispose the card owns TWO travelling fades. A
 		// dispose that settles only the surface the pointer is over passes otherwise.
 		hub.handleInput(motionAt(locate(hub, "All models")));
 		advance(15);
-		hub.handleInput(motionAt(rolesRow));
-		expect(rowText(hub, rolesRow.row), "the roles row does not switch its band on").toBe(bare);
+		hub.handleInput(motionAt(defaultRow));
+		expect(rowText(hub, defaultRow.row), "the default row does not switch its band on").toBe(bare);
 		advance(15);
-		expect(bandRgb(rowText(hub, rolesRow.row)), "the roles row bands mid-fade").not.toBeNull();
+		expect(bandRgb(rowText(hub, defaultRow.row)), "the default row bands mid-fade").not.toBeNull();
 		expect(motionClock.liveCount).toBeGreaterThan(0);
 
 		// One dispose settles all three surfaces: the card owns the frames all three run on.
 		hub.dispose();
 		advance(FRAME);
 		expect(motionClock.liveCount, "a disposed hub leaves nothing on the clock").toBe(0);
-		expect(rowText(hub, rolesRow.row)).toBe(bare);
+		expect(rowText(hub, defaultRow.row)).toBe(bare);
 	});
 
 	it("settles and stops asking for frames", () => {

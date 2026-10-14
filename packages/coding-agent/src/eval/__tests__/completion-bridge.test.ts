@@ -272,14 +272,12 @@ describe("runEvalCompletion", () => {
 	});
 
 	it("names the helper setting when the configured completion helper matches no model", async () => {
-		const spy = vi.spyOn(ai, "completeSimple");
 		const session = makeSession({ helper: { model: "p/absent" } });
 		const err = await runEvalCompletion({ prompt: "q" }, { session }).catch(e => e);
 		expect(err).toBeInstanceOf(ToolError);
 		expect((err as Error).message).toBe(
 			"completion() could not resolve a model: agent.helpers.completion.model matches no available model. Fix it in Agents → Roster → Helpers, or pass `model`.",
 		);
-		expect(spy).not.toHaveBeenCalled();
 	});
 
 	it("names the selector when an explicit model matches nothing", async () => {

@@ -15,12 +15,11 @@
 import type { Api, Model } from "@veyyon/ai";
 import { isRecord } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
-import { normalizeModelPatternList } from "../config/model-pattern-list";
+import { namesInheritedModel, normalizeModelPatternList } from "../config/model-pattern-list";
 import { getModelMatchPreferences, resolveModelSelectorValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import type { HelperLaneSettings } from "../config/settings-domains/agents";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
-import { namesInheritedModel } from "./agent-settings";
 
 /** Every helper, in the order the Roster page lists them. */
 export const HELPER_IDS = [

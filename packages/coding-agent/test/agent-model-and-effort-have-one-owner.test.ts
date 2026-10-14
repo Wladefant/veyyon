@@ -745,16 +745,17 @@ async function openAgentEditor(agentName: string): Promise<AgentEditor> {
 			.find(line => line.startsWith("›"))
 			?.slice(1)
 			.trim();
-	// Agent discovery is filesystem IO started in the submenu's constructor and it exposes no
-	// settled signal, so there is nothing to await and no clock to fake. Yielding the event loop
-	// lets the IO completion run without a wall-clock delay tuned to "long enough"; the bound is
-	// an iteration count, so a discovery that never completes fails fast instead of hanging.
-	for (let spin = 0; !content().some(line => line.includes(agentName)); spin++) {
-		if (spin > 20_000) throw new Error(`agent discovery never listed ${agentName}:\n${frame().join("\n")}`);
+	// Agent discovery is filesystem IO started in the submenu's constructor, and the page shows
+	// "Reading agents" until it lands. Yielding the event loop lets the IO completion run without a
+	// wall-clock delay tuned to "long enough"; the bound is an iteration count, so a discovery that
+	// never completes fails fast instead of hanging. The subagent rows sit below the helpers, past
+	// the list window, so the wait reads the loading line rather than the agent's own row.
+	for (let spin = 0; content().some(line => line.includes("Reading agents")); spin++) {
+		if (spin > 20_000) throw new Error(`agent discovery never finished:\n${frame().join("\n")}`);
 		await setImmediate();
 	}
-	// Walk to the row by name: the roster is alphabetical, so a fixed number of Down presses
-	// configures whichever agent happens to sort first.
+	// Walk to the row by name: the roster lists the helpers first and then the agents
+	// alphabetically, so a fixed number of Down presses configures whichever row sorts there.
 	for (let step = 0; ; step++) {
 		if (selectedRow()?.startsWith(agentName)) break;
 		if (step > 64) throw new Error(`never landed on the ${agentName} row`);

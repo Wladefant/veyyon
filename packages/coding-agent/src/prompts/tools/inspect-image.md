@@ -18,5 +18,5 @@ Inspects an image file with a vision-capable model and returns compact text anal
 
 <critical>
 - If image submission is blocked by settings, the tool will fail with an actionable error
-- If configured model does not support image input, set a vision-capable model on the vision helper (agent.helpers.vision.model) before retrying
+- If configured model does not support image input, set agent.helpers.vision.model to a vision-capable model before retrying
 </critical>

@@ -111,24 +111,11 @@ describe("agent runtime model resolution", () => {
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		let firstFallbackRole: string | undefined;
-		let agentFallbackChain: string[] | undefined;
-		let inheritedFallbackChain: string[] | undefined;
-		for (const role in childFallbackChains) {
-			const chain = childFallbackChains[role];
-			if (!firstFallbackRole) {
-				firstFallbackRole = role;
-			}
-			if (role === "agent:issue-2750") {
-				agentFallbackChain = chain;
-			}
-			if (role === "default") {
-				inheritedFallbackChain = chain;
-			}
-		}
-		expect(firstFallbackRole).toBe("agent:issue-2750");
-		expect(agentFallbackChain).toEqual(["fallback/working-model"]);
-		expect(inheritedFallbackChain).toEqual(["global/inherited-model"]);
+		// The chain is keyed by the primary's own selector and listed first, ahead of the inherited chains.
+		const chainKeys = Object.keys(childFallbackChains ?? {});
+		expect(chainKeys[0]).toBe("primary/bad-runtime-model");
+		expect(childFallbackChains?.["primary/bad-runtime-model"]).toEqual(["fallback/working-model"]);
+		expect(childFallbackChains?.default).toEqual(["global/inherited-model"]);
 		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
 		expect(result.resolvedModel).toBe("fallback/working-model");
 	});

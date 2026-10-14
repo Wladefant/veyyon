@@ -418,4 +418,3 @@ The split binary measures a 37ms first byte and a 42ms composer row, medians of 
 with an AMD Ryzen 9 9950X. The ceiling runs where the bench runs, not in CI: a first-frame median
 moves by more than 50% between repetitions, and by more than that when a type check shares the
 machine.
-*Verified against `0946265f23` on 2026-10-04.*

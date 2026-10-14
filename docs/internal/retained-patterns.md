@@ -21,9 +21,10 @@ These are genuinely good patterns. Refactors must preserve behavior.
    new session. Engineering detail:
    [`docs/internal/handoff-generation-pipeline.md`](./handoff-generation-pipeline.md).
 2. **Agent spawn model**: `packages/coding-agent/src/task/executor.ts` (spawn, soft
-   request-budget steering notice, background output capture) plus the session-wide spawn
-   concurrency semaphore in `packages/coding-agent/src/task/index.ts` (`agent.maxConcurrency`,
-   resized in place before every acquire), `packages/coding-agent/src/task/agents.ts` (bundled
+   request-budget steering notice, background output capture) plus the spawn concurrency
+   semaphore shared by a session tree in `packages/coding-agent/src/task/spawn-semaphore.ts`
+   (`agent.maxConcurrency`, resized on every acquire and release by
+   `packages/coding-agent/src/task/spawn-scheduler.ts`), `packages/coding-agent/src/task/agents.ts` (bundled
    agent definitions) and the `task` tool registered in
    `packages/coding-agent/src/tools/index.ts`.
 3. **Addressed inter-agent messaging**: the `irc` tool (`packages/coding-agent/src/tools/agent/irc.ts`,
@@ -81,4 +82,4 @@ the shipped model-slots-plus-3-knob-compaction design (see [Compaction & project
 handoff prompt, preserve behavior. If it touches model-routing *settings knobs*, follow the shipped
 model-slots design above, do not resurrect a role→model matrix because an old fork had one.
 
-*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*
+*Verified against `577745ddc5` on 2026-10-14.*

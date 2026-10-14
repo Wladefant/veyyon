@@ -543,10 +543,11 @@ async function resolveMnemopiProviderOptions(
 	}
 
 	try {
-		const model = resolveHelperModel(settings, "memory", modelRegistry.getAvailable())?.model;
+		// An unset memory helper runs the session's model, as every helper does.
+		const model = resolveHelperModel(settings, "memory", modelRegistry.getAvailable(), session.model)?.model;
 		if (!model) {
 			logger.warn(
-				`Mnemopi: llmMode=online but ${helperSettingPath("memory", "model")} and defaultModel resolve to no model; continuing without LLM.`,
+				`Mnemopi: llmMode=online but the memory helper (${helperSettingPath("memory", "model")}) resolves to no available model; continuing without LLM.`,
 			);
 			return base;
 		}

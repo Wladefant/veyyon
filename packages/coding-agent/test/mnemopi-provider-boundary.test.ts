@@ -108,4 +108,71 @@ describe("coding-agent Mnemopi online memory-helper boundary", () => {
 			await root.remove();
 		}
 	});
+
+	/**
+	 * Why: an unset memory helper runs the session's model like every other helper. The Mnemopi
+	 * backend has a session but once resolved the helper without it, so a `--model` launch sent
+	 * memory extraction to the persisted `defaultModel` instead of the model the session runs.
+	 */
+	it("runs the session's model when the memory helper names none", async () => {
+		const sessionModel = getBundledModel("anthropic", "claude-sonnet-4-5") as Model<Api> | undefined;
+		const persistedDefault = getBundledModel("anthropic", "claude-opus-4-1") as Model<Api> | undefined;
+		if (!sessionModel || !persistedDefault) throw new Error("Expected bundled memory helper test models");
+		const root = TempDir.createSync("mnemopi-online-session-model-");
+		const settings = Settings.isolated({
+			"mnemopi.dbPath": root.join("mnemopi.db"),
+			"mnemopi.llmMode": "online",
+			"mnemopi.noEmbeddings": true,
+			"mnemopi.autoRecall": false,
+			"mnemopi.autoRetain": false,
+			"providers.memoryModel": "online",
+			defaultModel: `${persistedDefault.provider}/${persistedDefault.id}`,
+		});
+		const obfuscator = new SecretObfuscator([]);
+		const session = {
+			sessionId: "mnemopi-online-session-model",
+			settings,
+			model: sessionModel,
+			obfuscator,
+			obfuscateProviderText: (text: string) => obfuscator.obfuscate(text),
+			sessionManager: { getCwd: () => "/tmp", getEntries: () => [] },
+			subscribe: () => () => {},
+			emitNotice: () => {},
+		} as never;
+		const registry = {
+			getAvailable: () => [persistedDefault, sessionModel],
+			getApiKeyForProvider: async () => undefined,
+			getApiKey: async () => "test-key",
+			resolver: () => async () => "test-key",
+		} as never;
+		let ranModel: string | undefined;
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (model, _context, options?: SimpleStreamOptions) => {
+			ranModel = `${model.provider}/${model.id}`;
+			await options?.fetch?.("http://provider.test/v1/messages", { method: "POST", body: "{}" });
+			return { stopReason: "stop", content: [{ type: "text", text: "online result" }] } as never;
+		});
+
+		try {
+			await mnemopiBackend.start({
+				session,
+				settings,
+				modelRegistry: registry,
+				agentDir: root.path(),
+				taskDepth: 0,
+			});
+			const state = getMnemopiSessionState(session);
+			if (!state) throw new Error("Mnemopi state did not start");
+			const physicalFetch: FetchImpl = async () => new Response("", { status: 200 });
+			const result = await withMnemopiRuntimeOptions(state.memory.runtimeOptions, () =>
+				complete("extract harmless", 0, { fetch: physicalFetch }),
+			);
+
+			expect(result).toBe("online result");
+			expect(ranModel).toBe(`${sessionModel.provider}/${sessionModel.id}`);
+			await state.dispose({ consolidate: false });
+			setMnemopiSessionState(session, undefined);
+		} finally {
+			await root.remove();
+		}
+	});
 });

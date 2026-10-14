@@ -128,17 +128,23 @@ chit-chat → NONE example is the best mitigation.
 
 ### Recommendation
 
-Extraction favors **precision** (do not pollute long-term memory) → **Qwen3-1.7B is the best single
-pick** (its consolidation is good enough). If running a second model for consolidation, **gemma-3-1b**
-wins that task.
+Extraction favors **precision** (do not pollute long-term memory) → **Qwen3-1.7B was the best single
+pick** in these experiments (its consolidation is good enough). If running a second model for
+consolidation, **gemma-3-1b** wins that task. Qwen3-1.7B does not run in the shipped worker:
+onnxruntime-node cannot run the RotaryEmbedding cache updates in `onnx-community/Qwen3-1.7B-ONNX`, so the
+worker rejects it before load.
 
-**Shipped local options**: `llama3.2:3b`, `qwen3-1.7b` (recommended), `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`.
+**Shipped local options**: `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b` (recommended,
+`DEFAULT_MEMORY_LOCAL_MODEL_KEY`), and `qwen3-1.7b`, which is listed but blocked (`unsupportedReason`);
+`veyyon tiny-models download all` skips it.
 **Default**: `online` (the `memory` helper, else the session's model).
 
-### Known Mnemopi parser bugs (surfaced by these experiments)
+### Mnemopi parser findings (surfaced by these experiments)
 
-- `String(item)` produces `[object Object]` on object array items.
-- The line-fallback drops items `<=10` chars, so a correct short fact like `Name: Can` is discarded.
+- `String(item)` turned object array items into `[object Object]`. The JSON parser now reads an object
+  item's first non-blank text field (every field for timelines) and drops an object that has none.
+- The line fallback drops items of 10 characters or fewer, so a correct short fact like `Name: Can` is
+  discarded.
 
 
 ## Integration notes
@@ -152,4 +158,4 @@ wins that task.
   unchanged**.
 - `providers.autoThinkingModel` uses the same shipped local options as `providers.memoryModel`.
 
-*Verified against `d3e3db30` on 2026-07-23.*
+*Verified against `577745ddc5` on 2026-10-14.*

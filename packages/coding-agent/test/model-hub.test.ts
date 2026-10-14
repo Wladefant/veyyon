@@ -231,10 +231,11 @@ describe("ModelHub", () => {
 	});
 
 	describe("pick strip", () => {
-		test("Enter opens the pick strip; default fires onSetDefault and opens the thinking strip", () => {
+		test("Enter opens the pick strip; default sets the default model and opens the thinking strip", () => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
-			const { hub, onSetDefault } = createHub({ models: [model], scoped: true });
+			const settings = Settings.isolated({});
+			const { hub } = createHub({ models: [model], scoped: true, settings });
 
 			hub.handleInput("\n");
 			// The ModalShell card caps at MODAL_SIZING_LARGE.maxWidth, so the chip
@@ -245,8 +246,7 @@ describe("ModelHub", () => {
 			expect(strip).toContain("fallbacks:gpt-5.5");
 
 			hub.handleInput("\n"); // the first chip sets the default
-			expect(onSetDefault).toHaveBeenCalledTimes(1);
-			expect(onSetDefault.mock.calls[0]).toEqual([model, ThinkingLevel.Inherit, "openai/gpt-5.5"]);
+			expect(settings.get("defaultModel")).toEqual("openai/gpt-5.5");
 
 			// The thinking strip follows immediately, scoped to the model's
 			// real ladder: gpt-5.5 tops out at xhigh — no invented max tier.
@@ -291,13 +291,13 @@ describe("ModelHub", () => {
 		test("Enter on the default chip of the current default clears it", () => {
 			const model = makeModel("test", "toggled-model");
 			const settings = Settings.isolated({ defaultModel: "test/toggled-model" });
-			const { hub, onSetDefault, onClearDefault } = createHub({ models: [model], scoped: true, settings });
+			const { hub } = createHub({ models: [model], scoped: true, settings });
 
 			hub.handleInput("\n"); // pick strip — cursor on the default chip
 			hub.handleInput("\n");
 
-			expect(onClearDefault).toHaveBeenCalledTimes(1);
-			expect(onSetDefault).not.toHaveBeenCalled();
+			// Cleared, and not re-set by a thinking step.
+			expect(settings.get("defaultModel")).toBeUndefined();
 			// Clearing closes the strip without a thinking step.
 			expect(footerLine(hub.render(220))).not.toContain("inherit");
 			expect(normalize(hub.render(220))).not.toContain(`${theme.status.enabled}default`);

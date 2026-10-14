@@ -14,7 +14,7 @@
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { isRecord, logger } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
-import { normalizeModelPatternList } from "../config/model-pattern-list";
+import { namesInheritedModel, normalizeModelPatternList } from "../config/model-pattern-list";
 import type { SettingPath, Settings } from "../config/settings";
 import type { AgentLaneSettings, AgentSettings } from "../config/settings-domains/agents";
 import {
@@ -573,20 +573,6 @@ export interface ResolvedAgentModel {
  * agent's own model at dispatch.
  */
 export const AGENT_DEFAULT_EFFORT: ConfiguredThinkingLevel = ThinkingLevel.Inherit;
-
-/**
- * The model value that runs an agent on the spawning session's live model, at
- * whatever that session is running when the spawn starts. It is also what an
- * agent runs when no layer {@link resolveAgentModel} reads names a model; a
- * layer states it to override a model named by a layer below it.
- */
-export const INHERIT_AGENT_MODEL = "inherit";
-
-/** Whether a configured agent model value is {@link INHERIT_AGENT_MODEL}. */
-export function namesInheritedModel(value: string | readonly string[] | undefined): boolean {
-	const head = typeof value === "string" ? value : value?.length === 1 ? value[0] : undefined;
-	return head?.trim().toLowerCase() === INHERIT_AGENT_MODEL;
-}
 
 /**
  * Human-readable name of the setting behind a {@link AgentModelSource}. For
