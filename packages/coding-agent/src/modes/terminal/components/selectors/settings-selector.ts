@@ -154,7 +154,7 @@ export function parseNumberSetting(path: SettingPath, text: string): number | ty
 }
 
 const AGENT_LIST_DESCRIPTION =
-	"Which agents the model may spawn and what each one runs. Open an agent to set its model and effort and which agents it may spawn in turn. An agent with neither set runs the default model at medium effort.";
+	"Which agents the model may spawn and what each one runs. Open an agent to set its model and effort and which agents it may spawn in turn. An agent with neither set runs what its definition states: deep runs the session's model and effort, the others the default model at medium effort.";
 
 const AGENTS_PATH = "agent.agents" satisfies SettingPath;
 const DEFAULT_EFFORT_PATH = "defaultEffort" satisfies SettingPath;
