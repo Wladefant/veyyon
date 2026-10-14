@@ -173,4 +173,26 @@ describe("shared knowledge catalog security", () => {
 		await fs.symlink(realCatalog, catalogDir, "junction");
 		await expect(readCatalog(catalogDir)).rejects.toThrow();
 	});
+	it("rejects credential-bearing accepted metadata before serializing output without echoing it", async () => {
+		await fs.writeFile(path.join(workflowsDir, "safe.py"), "print('safe')");
+		await exportCatalog();
+		const original = await manifest();
+		const credential = `sk-${"a".repeat(32)}`;
+		const cases = [
+			{ ...original, generatorVersion: "apiToken = synthetic_credential_value" },
+			{ ...original, generatorVersion: `1.0.0-${credential}` },
+			{ ...original, baselineId: credential },
+			{ ...original, items: original.items.map(item => ({ ...item, name: credential })) },
+		];
+		for (const tampered of cases) {
+			await writeManifest(tampered);
+			let output: string;
+			let rejected = false;
+			try { output = JSON.stringify((await readCatalog(catalogDir)).manifest); }
+			catch (error) { rejected = true; output = (error as Error).message; }
+			expect(output).not.toContain(credential);
+			expect(output).not.toContain("synthetic_credential_value");
+			expect(rejected).toBe(true);
+		}
+	});
 });

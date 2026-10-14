@@ -378,6 +378,8 @@ export async function validateCatalogItem(value: unknown): Promise<CatalogItem> 
 		!Number.isSafeInteger(item.size) || item.size < 0 ||
 		(item.category === "skills" ? item.tier !== "authored" : item.category === "managed-skills" ? item.tier !== "managed" : item.tier !== undefined) ||
 		!(await validateSecurityAllowlist(item.relativePath)).valid) throw new Error("Invalid catalog item fields");
+	const expectedName = item.category === "lessons" ? "learned-lessons" : deriveItemName(item.relativePath, item.category);
+	if (item.name !== expectedName || !scanContentForSecrets(JSON.stringify({ name: item.name, relativePath: item.relativePath })).valid) throw new Error("Invalid catalog item identity");
 	return item;
 }
 
@@ -388,9 +390,12 @@ async function validateCatalogManifest(value: unknown): Promise<KnowledgeManifes
 	if (Object.keys(data).some(key => !["schemaVersion", "createdAt", "generator", "generatorVersion", "baselineId", "categories", "items", "hindsightReference"].includes(key)) ||
 		data.schemaVersion !== KNOWLEDGE_SCHEMA_VERSION || typeof data.createdAt !== "string" || !Number.isFinite(Date.parse(data.createdAt)) ||
 		data.generator !== GENERATOR_ID || typeof data.generatorVersion !== "string" ||
+		!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(data.generatorVersion) ||
 		(data.baselineId !== undefined && (typeof data.baselineId !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(data.baselineId))) ||
+		!scanContentForSecrets(JSON.stringify({ generatorVersion: data.generatorVersion, baselineId: data.baselineId })).valid ||
 		!Array.isArray(data.categories) || data.categories.some(category => !KNOWLEDGE_CATEGORIES.includes(category)) ||
 		new Set(data.categories).size !== data.categories.length || !Array.isArray(data.items)) throw new Error("Invalid catalog manifest fields");
+	if (new Date(data.createdAt as string).toISOString() !== data.createdAt) throw new Error("Invalid catalog timestamp");
 	if (data.hindsightReference !== undefined) validateHindsightReference(data.hindsightReference);
 	const manifest = data as unknown as KnowledgeManifest;
 	const destinations = new Set<string>();

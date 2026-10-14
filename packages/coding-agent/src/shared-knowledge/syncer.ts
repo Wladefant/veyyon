@@ -280,7 +280,7 @@ export async function applyKnowledgeCatalog(options: ApplyOptions): Promise<Appl
 					changes.push({ root: rootFor(conflict.item), target, content });
 					conflictFiles.push(target);
 				}
-				await commitTransaction(roots.agentDir, changes);
+				await commitTransaction(roots.agentDir, changes, options.transaction);
 			}
 			return { success: false, appliedCount: 0, conflictCount: comparison.conflicts.length, comparison, writtenFiles: [], conflictFiles, errors: ["Divergent edits detected; target files preserved"] };
 		}
@@ -301,7 +301,7 @@ export async function applyKnowledgeCatalog(options: ApplyOptions): Promise<Appl
 			if (!fullBaseline?.itemDetails?.[key]) nextBaseline.items[key] = hash;
 		}
 		changes.push({ root: roots.agentDir, target: baselinePath, content: `${JSON.stringify(nextBaseline, null, 2)}\n` });
-		await commitTransaction(roots.agentDir, changes);
+		await commitTransaction(roots.agentDir, changes, options.transaction);
 		return { success: true, appliedCount: applied.length, conflictCount: 0, comparison, writtenFiles: changes.map(change => change.target), conflictFiles: [], errors: [] };
 	};
 	for (const root of Object.values(roots)) await assertSafePath(root, root);

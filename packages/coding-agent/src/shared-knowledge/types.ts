@@ -1,3 +1,5 @@
+import type * as fs from "node:fs/promises";
+
 /**
  * Core types for Veyyon shared text knowledge synchronization.
  */
@@ -138,6 +140,8 @@ export interface ApplyOptions {
 	dryRun?: boolean;
 	preserveConflicts?: boolean;
 	categories?: KnowledgeCategory[];
+	/** Per-operation filesystem seam for deterministic commit-failure verification. */
+	transaction?: { rename?: typeof fs.rename };
 }
 
 export interface ApplyResult {

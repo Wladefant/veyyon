@@ -170,12 +170,14 @@ describe("shared knowledge apply safety", () => {
 		const target = path.join(agentDir, "skills", "guide", "SKILL.md");
 		await fs.writeFile(target, "local divergent edit");
 		const baseline = await fs.readFile(path.join(agentDir, ".knowledge-baseline.json"));
-		const result = await apply({ dryRun: true });
+		const directoryBefore = await fs.readdir(path.dirname(target));
+		const result = await apply({ dryRun: true, preserveConflicts: true });
 		expect(result.success).toBe(false);
 		expect(result.conflictCount).toBe(1);
 		expect(result.conflictFiles).toEqual([]);
 		expect(await fs.readFile(target, "utf8")).toBe("local divergent edit");
 		expect(await fs.readFile(path.join(agentDir, ".knowledge-baseline.json"))).toEqual(baseline);
+		expect(await fs.readdir(path.dirname(target))).toEqual(directoryBefore);
 	});
 
 	it("applies selected categories while retaining other category files and baseline entries", async () => {
@@ -190,11 +192,19 @@ describe("shared knowledge apply safety", () => {
 		const lessonBefore = await fs.readFile(lessonPath);
 		const baselinePath = path.join(agentDir, ".knowledge-baseline.json");
 		const before = JSON.parse(await fs.readFile(baselinePath, "utf8"));
+		await fs.writeFile(path.join(root, "source", "memories", "learned.md"), "excluded incoming lesson change");
+		await exportReviewedCatalog({ agentDir: path.join(root, "source"), outDir: catalogDir });
 		const result = await apply({ categories: ["skills"] });
 		expect(result.success).toBe(true);
 		expect(await fs.readFile(lessonPath)).toEqual(lessonBefore);
 		const after = JSON.parse(await fs.readFile(baselinePath, "utf8"));
 		expect(after.items["lessons/learned.md"]).toBe(before.items["lessons/learned.md"]);
+		await fs.rm(path.join(root, "source", "memories", "learned.md"));
+		await exportReviewedCatalog({ agentDir: path.join(root, "source"), outDir: catalogDir });
+		expect((await apply({ categories: ["skills"] })).success).toBe(true);
+		expect(await fs.readFile(lessonPath)).toEqual(lessonBefore);
+		expect(JSON.parse(await fs.readFile(baselinePath, "utf8")).items["lessons/learned.md"]).toBe(before.items["lessons/learned.md"]);
+		await fs.writeFile(path.join(root, "source", "memories", "learned.md"), "lesson");
 		const sourceDir = path.join(root, "source");
 		await fs.mkdir(path.join(sourceDir, "rules"), { recursive: true });
 		await fs.mkdir(path.join(sourceDir, "workflows"), { recursive: true });
@@ -243,5 +253,72 @@ describe("shared knowledge apply safety", () => {
 		} })).rejects.toThrow("Local edit during apply");
 		expect(await fs.readFile(first, "utf8")).toBe("first before");
 		expect(await fs.readFile(second, "utf8")).toBe("concurrent local edit");
+	});
+	it("keeps incoming owned paths through repeat apply, clean update, local-only edits, and single divergence", async () => {
+		const source = path.join(root, "source", "skills", "guide", "SKILL.md");
+		const target = path.join(agentDir, "skills", "guide", "SKILL.md");
+		await fs.mkdir(path.dirname(source), { recursive: true });
+		await fs.writeFile(source, "baseline bytes");
+		await exportSkills();
+		expect((await apply()).success).toBe(true);
+		const baseline = JSON.parse(await fs.readFile(path.join(agentDir, ".knowledge-baseline.json"), "utf8"));
+		expect(baseline.itemDetails["skills/guide/SKILL.md"].category).toBe("skills");
+		const repeated = await apply();
+		expect(repeated.success).toBe(true);
+		expect(repeated.comparison.deletes).toHaveLength(0);
+		expect(await fs.readFile(target, "utf8")).toBe("baseline bytes");
+		await fs.writeFile(source, "clean upstream update");
+		await exportSkills();
+		const update = await apply();
+		expect(update.success).toBe(true);
+		expect(update.comparison.updates).toHaveLength(1);
+		expect(update.comparison.deletes).toHaveLength(0);
+		expect(await fs.readFile(target, "utf8")).toBe("clean upstream update");
+		await fs.writeFile(target, "saved local-only edit");
+		const localOnly = await apply();
+		expect(localOnly.success).toBe(true);
+		expect(localOnly.conflictCount).toBe(0);
+		expect(localOnly.comparison.deletes).toHaveLength(0);
+		expect(await fs.readFile(target, "utf8")).toBe("saved local-only edit");
+		await fs.writeFile(source, "divergent upstream update");
+		await exportSkills();
+		const divergent = await apply({ preserveConflicts: true });
+		expect(divergent.success).toBe(false);
+		expect(divergent.conflictCount).toBe(1);
+		expect(divergent.comparison.conflicts).toHaveLength(1);
+		expect(divergent.conflictFiles).toHaveLength(1);
+		expect(await fs.readFile(target, "utf8")).toBe("saved local-only edit");
+	});
+	it("restores the complete apply state when baseline publication fails after asset and settings replacements", async () => {
+		const source = path.join(root, "source", "skills", "guide", "SKILL.md");
+		const target = path.join(agentDir, "skills", "guide", "SKILL.md");
+		const configPath = path.join(agentDir, "config.yml");
+		const baselinePath = path.join(agentDir, ".knowledge-baseline.json");
+		await fs.mkdir(path.dirname(source), { recursive: true });
+		await fs.writeFile(source, "prior skill");
+		await exportReviewedCatalog({ agentDir: path.join(root, "source"), outDir: catalogDir, hindsightConfig: { apiUrl: "https://memory.example", bankId: "prior-bank" } });
+		expect((await apply()).success).toBe(true);
+		const configBefore = await fs.readFile(configPath);
+		const baselineBefore = await fs.readFile(baselinePath);
+		const referencePath = path.join(agentDir, "config", "hindsight-reference.json");
+		const referenceBefore = await fs.readFile(referencePath);
+		await fs.writeFile(source, "incoming skill");
+		await exportReviewedCatalog({ agentDir: path.join(root, "source"), outDir: catalogDir, hindsightConfig: { apiUrl: "https://memory.example", bankId: "incoming-bank" } });
+		let failedAtBaseline = false;
+		await expect(apply({ transaction: { rename: async (from: PathLike, to: PathLike) => {
+			if (to === baselinePath) {
+				expect(await fs.readFile(target, "utf8")).toBe("incoming skill");
+				expect(await fs.readFile(configPath, "utf8")).toContain("incoming-bank");
+				failedAtBaseline = true;
+				throw new Error("injected baseline publication failure");
+			}
+			await fs.rename(from, to);
+		} } })).rejects.toThrow("injected baseline publication failure");
+		expect(failedAtBaseline).toBe(true);
+		expect(await fs.readFile(target, "utf8")).toBe("prior skill");
+		expect(await fs.readFile(configPath)).toEqual(configBefore);
+		expect(await fs.readFile(referencePath)).toEqual(referenceBefore);
+		expect(await fs.readFile(baselinePath)).toEqual(baselineBefore);
+		await expect(fs.access(path.join(agentDir, ".knowledge-transaction.json"))).rejects.toThrow();
 	});
 });

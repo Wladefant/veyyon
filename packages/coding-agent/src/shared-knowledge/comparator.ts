@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { KNOWLEDGE_CATEGORIES } from "./types";
 import { computeSha256 } from "./catalog";
@@ -249,6 +248,7 @@ export async function compareCatalogToTarget(
 
 	// 4. Check for baseline items deleted in incoming catalog
 	for (const [relPath, baseSha256] of Object.entries(baselineItems)) {
+		if (incomingPathSet.has(relPath)) continue;
 		// Legacy baselines do not identify category ownership. Never guess a target.
 		const deletedItem = baseline?.itemDetails?.[relPath];
 		if (
