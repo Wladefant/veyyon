@@ -62,6 +62,7 @@ import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flo
 import { MCP_CONFIG_STATUS_LABEL, type McpConnectionStatusEvent } from "./startup-events";
 import { DeferredMCPTool, MCPTool, type MCPToolDetails, mcpToolNamePrefix } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
+import { describeMCPServerTarget } from "./transports/transport-failure";
 import {
 	type MCPEventOccurrence,
 	type MCPGetPromptResult,
@@ -430,6 +431,21 @@ export class MCPManager {
 	 * crash-storm circuit breaker.
 	 */
 	#reconnectHistory = new Map<string, number[]>();
+	/** Monotonic epoch incremented on disconnectAll to invalidate stale reconnections. */
+	#epoch = 0;
+
+	constructor(
+		private cwd: string,
+		private toolCache: MCPToolCache | null = null,
+	) {}
+
+	/**
+	 * Set a callback to receive all server notifications.
+	 */
+	setOnNotification(handler: (serverName: string, method: string, params: unknown) => void): void {
+		this.#onNotification = handler;
+	}
+
 
 	setOnEvent(
 		handler:

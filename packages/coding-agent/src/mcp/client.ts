@@ -12,6 +12,7 @@ import { describeMCPTimeout, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "./
 import { MAX_TOOL_LIST_PAGES, validateToolListPage } from "./tool-list-validation";
 import { createHttpTransport } from "./transports/http";
 import { createSseTransport } from "./transports/sse";
+import { createStdioTransport, StdioTransport } from "./transports/stdio";
 import type {
 	MCPEventDescriptor,
 	MCPEventOccurrence,
