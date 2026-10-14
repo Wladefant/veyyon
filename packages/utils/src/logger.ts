@@ -260,6 +260,11 @@ export function withLogRedaction<T>(redact: (line: string) => string, run: () =>
 	return logRedaction.run(redact, run);
 }
 
+/** Request debug capture must not start inside a private gateway request. */
+export function isLogRedactionActive(): boolean {
+	return logRedaction.getStore() !== undefined;
+}
+
 /** Apply the active privacy scope to provider diagnostics that write directly to a sink. */
 export function redactDiagnosticLine(line: string): string {
 	return logRedaction.getStore()?.(line) ?? line;

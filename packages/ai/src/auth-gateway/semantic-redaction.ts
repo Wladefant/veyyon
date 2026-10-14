@@ -1,36 +1,63 @@
+import { Buffer } from "node:buffer";
+
+export const GATEWAY_SEMANTIC_MAX_HELD_FRAMES = 64;
+export const GATEWAY_SEMANTIC_MAX_HELD_BYTES = 64 * 1024;
+
 type Slot = { owner: Record<string, unknown>; key: string; channel: string };
-type Frame = { raw: string; prefix?: string; value?: Record<string, unknown>; slots: Slot[]; changed: boolean };
+type Frame = { raw: string; prefix?: string; value?: Record<string, unknown>; slots: Slot[]; completed: string[]; changed: boolean };
 
 /** Keep possible credential prefixes private until the next semantic delta resolves them. */
 export class GatewaySemanticRedactor {
 	readonly #pending: Frame[] = [];
+	readonly #tails = new Map<string, string>();
+	#heldBytes = 0;
 	constructor(private readonly secrets: readonly string[]) {}
 
 	push(raw: string, final = false): string {
 		if (raw) {
-			const frame: Frame = { raw, slots: [], changed: false };
+			const frame: Frame = { raw, slots: [], completed: [], changed: false };
 			const match = /^((?:[^\n]*\n)*data: )([^\n]*)\n\n$/.exec(raw);
+			if (match?.[2] === "[DONE]") final = true;
 			if (match && match[2] !== "[DONE]") {
 				try {
 					const value: unknown = JSON.parse(match[2]);
 					if (value && typeof value === "object" && !Array.isArray(value)) {
 						frame.value = value as Record<string, unknown>;
+						if (value.type === "error" || value.type === "response.failed") {
+							this.#pending.length = 0;
+							this.#heldBytes = 0;
+							this.#tails.clear();
+							return raw;
+						}
 						frame.prefix = match[1];
 						this.#slots(frame.value, frame.slots);
+						frame.completed = this.#completed(frame.value);
+						if (value.type === "done" || value.type === "response.completed") final = true;
 					}
 				} catch { /* Non-JSON SSE data still passes through the byte redactor. */ }
 			}
 			this.#pending.push(frame);
+			this.#heldBytes += Buffer.byteLength(raw, "utf8");
 		}
 		const channels = new Map<string, { frame: Frame; slot: Slot }[]>();
-		for (const frame of this.#pending) for (const slot of frame.slots) {
-			const parts = channels.get(slot.channel) ?? [];
-			parts.push({ frame, slot });
-			channels.set(slot.channel, parts);
+		const completed = new Set<string>();
+		for (const frame of this.#pending) {
+			for (const slot of frame.slots) {
+				completed.delete(slot.channel);
+				const parts = channels.get(slot.channel) ?? [];
+				parts.push({ frame, slot });
+				channels.set(slot.channel, parts);
+			}
+			for (const prefix of frame.completed) for (const channel of channels.keys()) {
+				if (channel.startsWith(prefix)) completed.add(channel);
+			}
 		}
 		let prefixPending = false;
-		for (const parts of channels.values()) {
-			const text = parts.map(({ slot }) => String(slot.owner[slot.key])).join("");
+		const capped = this.#pending.length >= GATEWAY_SEMANTIC_MAX_HELD_FRAMES || this.#heldBytes >= GATEWAY_SEMANTIC_MAX_HELD_BYTES;
+		const nextTails = new Map<string, string>();
+		for (const [channel, parts] of channels) {
+			const history = this.#tails.get(channel) ?? "";
+			const text = history + parts.map(({ slot }) => String(slot.owner[slot.key])).join("");
 			const ranges: { start: number; end: number }[] = [];
 			for (const secret of this.secrets) {
 				if (!secret) continue;
@@ -40,6 +67,13 @@ export class GatewaySemanticRedactor {
 					start = text.indexOf(secret, start + secret.length);
 				}
 			}
+			if (capped && !final) {
+				let longestPrefix = 0;
+				for (const secret of this.secrets) for (let length = 1; length < secret.length && length <= text.length; length++) {
+					if (text.endsWith(secret.slice(0, length))) longestPrefix = Math.max(longestPrefix, length);
+				}
+				if (longestPrefix) ranges.push({ start: text.length - longestPrefix, end: text.length });
+			}
 			ranges.sort((a, b) => a.start - b.start || b.end - a.end);
 			const merged: typeof ranges = [];
 			for (const range of ranges) {
@@ -47,7 +81,7 @@ export class GatewaySemanticRedactor {
 				if (previous && range.start < previous.end) previous.end = Math.max(previous.end, range.end);
 				else merged.push({ ...range });
 			}
-			let offset = 0;
+			let offset = history.length;
 			for (const { frame, slot } of parts) {
 				const original = String(slot.owner[slot.key]);
 				let output = "";
@@ -57,24 +91,52 @@ export class GatewaySemanticRedactor {
 					const end = Math.min(original.length, range.end - offset);
 					if (end <= start) continue;
 					output += original.slice(cursor, start);
-					if (range.start >= offset) output += "[REDACTED]";
+					if (range.start >= offset || offset === history.length) output += "[REDACTED]";
 					cursor = end;
 				}
 				output += original.slice(cursor);
 				if (output !== original) { slot.owner[slot.key] = output; frame.changed = true; }
 				offset += original.length;
 			}
-			const safe = parts.map(({ slot }) => String(slot.owner[slot.key])).join("");
+			const pendingText = parts.map(({ slot }) => String(slot.owner[slot.key])).join("");
+			const safe = history + pendingText;
+			let tail = "";
 			for (const secret of this.secrets) {
 				for (let length = 1; length < secret.length && length <= safe.length; length++) {
-					if (safe.endsWith(secret.slice(0, length))) { prefixPending = true; break; }
+					if (safe.endsWith(secret.slice(0, length)) && length > tail.length) tail = secret.slice(0, length);
 				}
 			}
+			nextTails.set(channel, tail);
+			if (tail && pendingText && !completed.has(channel)) prefixPending = true;
 		}
-		if (prefixPending && !final) return "";
+		if (prefixPending && !final && !capped) return "";
 		const output = this.#pending.map(frame => frame.changed ? `${frame.prefix}${JSON.stringify(frame.value)}\n\n` : frame.raw).join("");
 		this.#pending.length = 0;
+		this.#heldBytes = 0;
+		for (const [channel, tail] of nextTails) {
+			if (tail) this.#tails.set(channel, tail);
+			else this.#tails.delete(channel);
+		}
+		while (this.#tails.size > GATEWAY_SEMANTIC_MAX_HELD_FRAMES) {
+			const oldest = this.#tails.keys().next().value;
+			if (oldest !== undefined) this.#tails.delete(oldest);
+		}
 		return output;
+	}
+
+	#completed(value: Record<string, unknown>): string[] {
+		switch (value.type) {
+			case "text_end": return ["text_delta"];
+			case "thinking_end": return ["thinking_delta"];
+			case "toolcall_end": return [`toolcall_delta:${value.contentIndex}:`];
+			case "content_block_stop": return ["anthropic::text", "anthropic::thinking", `anthropic:${value.index}:partial_json`];
+			case "response.output_text.done": return ["response.output_text.delta"];
+			case "response.reasoning_text.done": return ["response.reasoning_text.delta"];
+			case "response.function_call_arguments.done": return [`response.function_call_arguments.delta:${value.output_index ?? value.item_id ?? ""}:`];
+		}
+		return Array.isArray(value.choices)
+			? value.choices.filter(choice => choice.finish_reason != null).map(choice => `chat:${choice.index}:`)
+			: [];
 	}
 
 	#slots(value: Record<string, unknown>, slots: Slot[]): void {
