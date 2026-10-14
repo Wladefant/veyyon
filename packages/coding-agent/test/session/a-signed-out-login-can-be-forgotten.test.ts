@@ -16,21 +16,27 @@
  * Driven through a REAL `SqliteAuthCredentialStore`: what is under test is how the store's disabled
  * rows read back, so a fake returning rows would prove nothing.
  *
- * WHAT IT DOES NOT CATCH. The host callback in `SelectorController` is not constructed here; it calls
- * `forgetSignedOutLogins` and rebuilds the inventory, and a wiring mistake there would pass.
+ * The host callback is driven through the real `SelectorController`: the card it mounts is pressed,
+ * and the store, the rebuilt card and the status line are read back, on both of its branches.
+ *
+ * WHAT IT DOES NOT CATCH. The account card opened from `/account status` rather than `/login`
+ * shares this controller method, so a second entry point with its own callback would go unseen.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { isRefreshFailureDisableCause } from "@veyyon/ai/auth-credential-rows";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	type AccountManagerCallbacks,
 	AccountManagerComponent,
 } from "@veyyon/coding-agent/modes/terminal/components/account/account-manager";
 import { providerDisabledNote } from "@veyyon/coding-agent/modes/terminal/components/account/account-manager-rows";
+import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import {
 	type AccountInventory,
 	type AccountRow,
@@ -213,4 +219,97 @@ describe("the forget control on the account card", () => {
 			expect(forgotten).toEqual(expected ? [PROVIDER] : []);
 		});
 	}
+});
+
+describe("the host forgets through the controller", () => {
+	let tempDir = "";
+	let store: SqliteAuthCredentialStore | null = null;
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-forget-host-"));
+		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		store?.close();
+		store = null;
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	/** A provider with one live account and one login torn down by a failed refresh, on the real card. */
+	async function openCard() {
+		if (!store) throw new Error("test setup failed");
+		store.upsertAuthCredentialForProvider(PROVIDER, oauth(LIVE, "live"));
+		const rows = store.upsertAuthCredentialForProvider(PROVIDER, oauth(DEAD, "dead"));
+		const dead = rows.find(row => row.credential.type === "oauth" && row.credential.email === DEAD)!.id;
+		store.deleteAuthCredential(dead, REFRESH_FAILURE);
+		const storage = new AuthStorage(store);
+		await storage.reload();
+		// Opening the card probes every credential over the network; the contract here is the store.
+		vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
+
+		const statuses: string[] = [];
+		const warnings: string[] = [];
+		let mounted: AccountManagerComponent | undefined;
+		const ctx = {
+			editorContainer: { children: [], clear: () => {}, addChild: () => {} },
+			editor: {},
+			ui: {
+				setFocus: vi.fn(),
+				requestRender: vi.fn(),
+				requestComponentRender: vi.fn(),
+				showOverlay: vi.fn((component: unknown) => {
+					mounted = component as AccountManagerComponent;
+					return { hide: vi.fn() };
+				}),
+			},
+			session: {
+				sessionId: "session-forget-test",
+				settings: Settings.isolated(),
+				modelRegistry: { authStorage: storage, refresh: vi.fn(async () => undefined) },
+				fetchUsageReports: async () => [],
+			},
+			showStatus: (message: string) => statuses.push(message),
+			showWarning: (message: string) => warnings.push(message),
+			showError: vi.fn(),
+			refreshComposerShortcuts: vi.fn(),
+			dismissWelcome: vi.fn(),
+		} as unknown as InteractiveModeContext;
+
+		await new SelectorController(ctx).showAccountManager(PROVIDER);
+		if (!(mounted instanceof AccountManagerComponent)) throw new Error("the controller mounted no account card");
+		const card = mounted;
+		const offersChip = (): boolean =>
+			card
+				.render(140)
+				.map(line => stripVTControlCharacters(line))
+				.some(line => line.includes(CHIP));
+		return { card, storage, statuses, warnings, offersChip };
+	}
+
+	test("forgets the signed-out login, rebuilds the card without the note, and reports it", async () => {
+		const { card, storage, statuses, warnings, offersChip } = await openCard();
+		expect(offersChip()).toBe(true);
+
+		card.handleInput("f");
+
+		expect(storage.listProvidersWithFailedRefresh().map(entry => entry.provider)).not.toContain(PROVIDER);
+		expect(offersChip()).toBe(false);
+		expect(statuses.some(line => line.includes("forgot the signed-out login"))).toBe(true);
+		expect(warnings).toEqual([]);
+	});
+
+	test("warns instead of reporting success when the store has nothing left to forget", async () => {
+		const { card, storage, statuses, warnings, offersChip } = await openCard();
+		// Another process dismissed it after the card painted: the note is still on screen.
+		storage.forgetSignedOutLogins(PROVIDER);
+		expect(offersChip()).toBe(true);
+
+		card.handleInput("f");
+
+		expect(warnings.some(line => line.includes("no signed-out login to forget"))).toBe(true);
+		expect(statuses.some(line => line.includes("forgot the signed-out login"))).toBe(false);
+		expect(offersChip()).toBe(false);
+	});
 });
