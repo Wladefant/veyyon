@@ -225,6 +225,8 @@ interface RoutingFixture {
 	journal: SessionManager;
 	calls: () => number;
 	accept: (event: MCPEventOccurrence) => Promise<"queued" | "duplicate">;
+	recordCursor: (cursor: string | null) => Promise<void>;
+	cursor: () => string | null;
 }
 async function realSession(temp: TempDir, journal?: SessionManager, pauseBeforeDrain = false): Promise<RoutingFixture> {
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -255,6 +257,10 @@ async function realSession(temp: TempDir, journal?: SessionManager, pauseBeforeD
 		// Manual flush below still uses AgentSession's real injectIdle path.
 		skipIdleFlush: pauseBeforeDrain,
 	});
+	let recordCursor:
+		| ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>)
+		| undefined;
+	let cursorProvider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined;
 	expect(session.yieldQueue).toBeInstanceOf(YieldQueue);
 	let accept: ((server: string, event: MCPEventOccurrence, key: string) => Promise<"queued" | "duplicate">) | undefined;
 	const manager = {
@@ -263,6 +269,8 @@ async function realSession(temp: TempDir, journal?: SessionManager, pauseBeforeD
 		setOnToolsChanged() {},
 		setOnPromptsChanged() {},
 		setOnResourcesChanged() {},
+		setOnEventCursor(handler: typeof recordCursor) { recordCursor = handler; },
+		setEventCursorProvider(handler: typeof cursorProvider) { cursorProvider = handler; },
 		setOnEvent(handler: typeof accept) { accept = handler; },
 	};
 	wireReactiveMCPManager({
@@ -279,6 +287,11 @@ async function realSession(temp: TempDir, journal?: SessionManager, pauseBeforeD
 			if (!accept) throw new Error("Missing MCP event callback");
 			return accept("alerts", event, "alerts:incident.created");
 		},
+		recordCursor: async (cursor: string | null) => {
+			if (!recordCursor) throw new Error("Missing MCP event cursor callback");
+			await recordCursor("alerts", "alerts:incident.created", cursor);
+		},
+		cursor: () => cursorProvider?.("alerts", "alerts:incident.created") ?? null,
 	};
 }
 
@@ -479,6 +492,29 @@ describe("MCP event prompt receipts and session isolation", () => {
 		expect(receipts(owner.journal)).toHaveLength(1);
 	});
 
+	it("restores the last full-page watermark after a partial-page event failure", async () => {
+		const temp = temporarySetup();
+		const owner = await realSession(temp, undefined, true);
+		await owner.recordCursor("last-full-page-watermark");
+		const first = occurrence("evt-partial-page-first");
+		first.cursor = "partial-occurrence-cursor";
+		expect(await owner.accept(first)).toBe("queued");
+
+		const sync = spyOn(owner.journal, "sync").mockImplementation(async () => {
+			throw new Error("second event persistence failed");
+		});
+		try {
+			const second = occurrence("evt-partial-page-second");
+			second.cursor = "uncommitted-page-watermark";
+			await expect(owner.accept(second)).rejects.toThrow("second event persistence failed");
+		} finally {
+			sync.mockRestore();
+		}
+
+		const resumed = await restart(temp, owner);
+		expect(resumed.cursor()).toBe("last-full-page-watermark");
+	});
+
 	it("retries only receipt persistence after prompting and leaves unrelated notices delivered", async () => {
 		const owner = await realSession(temporarySetup(), undefined, true);
 		owner.session.yieldQueue.register<McpNotificationEntry>("mcp-notification", {
@@ -488,13 +524,13 @@ describe("MCP event prompt receipts and session isolation", () => {
 		const prompt = spyOn(owner.session.agent, "prompt");
 		const originalSync = owner.journal.sync.bind(owner.journal);
 		let syncCalls = 0;
+		await owner.accept(occurrence("evt-receipt-retry"));
 		const sync = spyOn(owner.journal, "sync").mockImplementation(async () => {
 			syncCalls++;
 			if (syncCalls === 1) throw new Error("transient receipt fsync failure");
 			await originalSync();
 		});
 		try {
-			await owner.accept(occurrence("evt-receipt-retry"));
 			owner.session.yieldQueue.enqueue("mcp-notification", {
 				serverName: "alerts",
 				uri: "file:///fixture",

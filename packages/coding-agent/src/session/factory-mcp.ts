@@ -507,18 +507,15 @@ export function wireReactiveMCPManager({ manager, session, settings, refreshTool
 				if (session.isDisposed) throw new Error("MCP session is disposed");
 				const key = scopedId(subscriptionKey, id);
 				if (seenEventIds.has(key)) return "duplicate";
-				const cursor = "event" in item ? item.event.cursor ?? null : undefined;
 				session.sessionManager.appendCustomEntry("mcp-events-state", {
 					serverName,
 					subscriptionKey,
-					cursor,
 					eventId: id,
 					event: "event" in item ? item.event : undefined,
 					control: "control" in item ? item.control : undefined,
 				});
 				await ensureDurableJournal();
 				if (session.isDisposed) throw new Error("MCP session is disposed");
-				if (cursor !== undefined) cursors.set(subscriptionKey, cursor);
 				seenEventIds.add(key);
 				try {
 					session.yieldQueue.enqueue<McpEventEntry>("mcp-event", item);
