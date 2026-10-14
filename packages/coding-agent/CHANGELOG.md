@@ -5,11 +5,13 @@
 ### Changed
 
 - An agent with no model or effort set on its roster page or in its definition runs the spawning session's live model and effort instead of the `default` model role at medium effort; bundled `scout`, `sonic` and `librarian` no longer pin an effort, `model: inherit` on a lane overrides a definition's model, and `/account status` counts the session's provider as an agent provider.
+- Resuming or switching to a transcript reads its starting service tier through the same function a new session uses; no user-visible change.
 
 ### Fixed
 
 - An agent whose effort is inherited or configured runs at the level its own model accepts, and its badge shows that level, rather than the parent's level for a model that lacks it; a parent with no effort leaves the agent at its own default instead of none.
 - An agent that resolves no effort of its own shows the effort its session settles on in its badge, and the `/settings` agent roster shows an agent that runs the session's model as `session model`, which leaves room for a read-only source marker.
+- The `Runs` line on a `/settings` agent page reads `the session's model and effort` for an agent with neither set, and `session effort` instead of `inherit effort` when only the model is set.
 
 ## [1.5.6] - 2026-10-13
 

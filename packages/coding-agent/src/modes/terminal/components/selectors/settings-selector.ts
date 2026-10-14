@@ -1448,12 +1448,13 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 
 	#runsSummary(agent: AgentDefinition, depth = 0): string {
 		const model = modelSummary(agent, depth);
-		const head = resolveAgentModel({
+		const resolved = resolveAgentModel({
 			settings,
 			agentName: agent.name,
 			agentModel: agent.model,
 			taskDepth: depth + 1,
-		}).patterns[0];
+		});
+		const head = resolved.patterns[0];
 		if (head && extractExplicitThinkingSelector(head, settings) !== undefined) return model;
 		const effort = resolveAgentThinkingLevel({
 			settings,
@@ -1461,7 +1462,9 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 			agentThinkingLevel: agent.thinkingLevel,
 			taskDepth: depth + 1,
 		});
-		return `${model} ${theme.fg("dim", `· ${effort} effort`)}`;
+		if (effort !== ThinkingLevel.Inherit) return `${model} ${theme.fg("dim", `· ${effort} effort`)}`;
+		if (resolved.inherited) return theme.fg("dim", "the session's model and effort");
+		return `${model} ${theme.fg("dim", "· session effort")}`;
 	}
 
 	#showAgentList(): void {

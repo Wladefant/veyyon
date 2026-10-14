@@ -848,6 +848,26 @@ describe("every row the lane page shows is a row the lane page changes", () => {
 		expect(screen).toContain(`${AGENT} › agents`);
 		expect(screen).toContain("inherit · the level above");
 	});
+
+	/**
+	 * The line above the rows states what the lane runs. With nothing set it runs the session's model
+	 * and effort and says so in one phrase; once the lane sets one half, the line names that half and
+	 * leaves the other on the session.
+	 */
+	it("states the session's model and effort until the lane sets one of them", async () => {
+		const runs = async (): Promise<string | undefined> => {
+			const editor = await openAgentEditor(AGENT);
+			return editor
+				.frame()
+				.map(line => contentColumn(line).trim())
+				.find(line => line.startsWith("Runs "));
+		};
+		expect(await runs()).toBe("Runs the session's model and effort");
+		settings.set("agent.agents", { [AGENT]: { thinkingLevel: "high" } });
+		expect(await runs()).toBe("Runs session model · high effort");
+		settings.set("agent.agents", { [AGENT]: { model: "anthropic/claude-sonnet-4-5" } });
+		expect(await runs()).toMatch(/^Runs \S.* · session effort$/);
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
