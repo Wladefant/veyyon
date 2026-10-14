@@ -166,3 +166,19 @@ it("redacts credentials in three or more semantic fragments and after a complete
 	expect(reconstructed).not.toContain("provider-secret");
 	expect(reconstructed).toContain("[REDACTED]");
 });
+
+it("never evicts emitted text privacy history under completed tool-channel pressure", () => {
+	const semantic = new GatewaySemanticRedactor(["provider-secret"]);
+	expect(semantic.push('data: {"type":"text_delta","delta":"provider-"}\n\n')).toBe("");
+	let emitted = semantic.push('data: {"type":"text_end"}\n\n');
+	for (let index = 0; index < GATEWAY_SEMANTIC_MAX_HELD_FRAMES; index++) {
+		emitted += semantic.push(`data: ${JSON.stringify({ type: "toolcall_delta", contentIndex: index, delta: "p" })}\n\n`);
+		emitted += semantic.push(`data: ${JSON.stringify({ type: "toolcall_end", contentIndex: index })}\n\n`);
+	}
+	emitted += semantic.push('data: {"type":"text_delta","delta":"secret"}\n\n');
+	const frames = emitted.trim().split("\n\n").map(frame => JSON.parse(frame.slice(6)));
+	const text = frames.filter(frame => frame.type === "text_delta").map(frame => frame.delta).join("");
+	expect(text).not.toContain("provider-secret");
+	expect(text).toBe("provider-[REDACTED]");
+	expect(frames.some(frame => frame.type === "toolcall_delta" && frame.delta === "[REDACTED]")).toBe(true);
+});

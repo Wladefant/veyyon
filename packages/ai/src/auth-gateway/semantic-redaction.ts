@@ -55,6 +55,9 @@ export class GatewaySemanticRedactor {
 		let prefixPending = false;
 		const capped = this.#pending.length >= GATEWAY_SEMANTIC_MAX_HELD_FRAMES || this.#heldBytes >= GATEWAY_SEMANTIC_MAX_HELD_BYTES;
 		const nextTails = new Map<string, string>();
+		let historyCount = this.#tails.size;
+		let historyBytes = 0;
+		for (const tail of this.#tails.values()) historyBytes += Buffer.byteLength(tail, "utf8");
 		for (const [channel, parts] of channels) {
 			const history = this.#tails.get(channel) ?? "";
 			const text = history + parts.map(({ slot }) => String(slot.owner[slot.key])).join("");
@@ -67,13 +70,14 @@ export class GatewaySemanticRedactor {
 					start = text.indexOf(secret, start + secret.length);
 				}
 			}
-			if (capped && !final) {
-				let longestPrefix = 0;
-				for (const secret of this.secrets) for (let length = 1; length < secret.length && length <= text.length; length++) {
-					if (text.endsWith(secret.slice(0, length))) longestPrefix = Math.max(longestPrefix, length);
-				}
-				if (longestPrefix) ranges.push({ start: text.length - longestPrefix, end: text.length });
+			let longestPrefix = 0;
+			for (const secret of this.secrets) for (let length = 1; length < secret.length && length <= text.length; length++) {
+				if (text.endsWith(secret.slice(0, length))) longestPrefix = Math.max(longestPrefix, length);
 			}
+			const candidateBytes = Buffer.byteLength(text.slice(text.length - longestPrefix), "utf8");
+			const historyFull = historyCount + (!history && longestPrefix ? 1 : 0) > GATEWAY_SEMANTIC_MAX_HELD_FRAMES
+				|| historyBytes - Buffer.byteLength(history, "utf8") + candidateBytes > GATEWAY_SEMANTIC_MAX_HELD_BYTES;
+			if (longestPrefix && (capped || historyFull)) ranges.push({ start: text.length - longestPrefix, end: text.length });
 			ranges.sort((a, b) => a.start - b.start || b.end - a.end);
 			const merged: typeof ranges = [];
 			for (const range of ranges) {
@@ -106,6 +110,11 @@ export class GatewaySemanticRedactor {
 					if (safe.endsWith(secret.slice(0, length)) && length > tail.length) tail = secret.slice(0, length);
 				}
 			}
+			historyCount += (tail ? 1 : 0) - (history ? 1 : 0);
+			historyBytes += Buffer.byteLength(tail, "utf8") - Buffer.byteLength(history, "utf8");
+			if (historyCount > GATEWAY_SEMANTIC_MAX_HELD_FRAMES || historyBytes > GATEWAY_SEMANTIC_MAX_HELD_BYTES) {
+				throw new Error("Gateway semantic privacy history exceeded");
+			}
 			nextTails.set(channel, tail);
 			if (tail && pendingText && !completed.has(channel)) prefixPending = true;
 		}
@@ -116,10 +125,6 @@ export class GatewaySemanticRedactor {
 		for (const [channel, tail] of nextTails) {
 			if (tail) this.#tails.set(channel, tail);
 			else this.#tails.delete(channel);
-		}
-		while (this.#tails.size > GATEWAY_SEMANTIC_MAX_HELD_FRAMES) {
-			const oldest = this.#tails.keys().next().value;
-			if (oldest !== undefined) this.#tails.delete(oldest);
 		}
 		return output;
 	}
