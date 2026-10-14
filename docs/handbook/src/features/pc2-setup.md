@@ -118,6 +118,11 @@ A failed or interrupted handoff does not prove that PC2 owns the session.
 Offline continuation needs an explicit new fork, not a second writer with the old session ID.
 Running processes, eval kernels, browser connections and debugger state stay on the source PC.
 
+The handoff contract allows only one active runtime. The authority refuses spent or stale capabilities after rotation.
+A fresh, byte-identical copy of the full current capability can redeem first.
+That copy wins the same single-use claim. The protocol cannot identify the legitimate copy without a device identity that cannot be exported.
+This known limit does not permit two active runtimes. Do not copy ownership markers or resume capabilities.
+
 ## Documentation and verified constraints
 
 - https://git-scm.com/docs/git-pull: fast-forward pulls refuse diverged history.
