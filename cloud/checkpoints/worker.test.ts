@@ -104,7 +104,6 @@ test("same source and current runtime owners cannot act with stale epochs or rot
  const staleRuntime={ownerNode:resumed.ownerNode,epoch:transfer.epoch};
  expect((await post("renew",staleRuntime)).status).toBe(409);
  expect((await post("release",staleRuntime)).status).toBe(409);
- expect((await post("transfer",{...staleRuntime,targetNode:"destination",claimToken:"stale-transfer-capability",transferId:"stale-epoch"})).status).toBe(409);
  expect((await post("renew",original)).status).toBe(409);
  const bytes=new Uint8Array([7,8,9]);
  const hash=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
@@ -116,6 +115,19 @@ test("same source and current runtime owners cannot act with stale epochs or rot
  expect((await post("claim",{targetNode:"temporary-node",transferId,resumeToken:claimed.resumeToken,epoch:transfer.epoch,ownerNode:"copied-runtime"})).status).toBe(409);
  expect((await post("lease",{ownerNode:"source"})).status).toBe(409);
 });
+test("transfer epoch fencing isolates a same-owner stale lease from valid transfer",async()=>{
+ const {post}=fixture();
+ const original=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ expect((await post("release",original)).status).toBe(200);
+ const current=await (await post("lease",{ownerNode:original.ownerNode})).json() as {ownerNode:string;epoch:number};
+ expect(current.ownerNode).toBe(original.ownerNode);
+ expect(current.epoch).toBeGreaterThan(original.epoch);
+ const stale=await post("transfer",{...current,epoch:original.epoch,targetNode:"destination",claimToken:"valid-stale-epoch-token",transferId:"stale-epoch-transfer"});
+ expect(stale.status).toBe(409);
+ const valid=await post("transfer",{...current,targetNode:"destination",claimToken:"valid-current-epoch-token",transferId:"current-epoch-transfer"});
+ expect(valid.status).toBe(200);
+});
+
 test("a crash after redemption reclaims the pending capability after expiry and storage failure rolls back",async()=>{
  const {post,data,failPut}=fixture();
  const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
