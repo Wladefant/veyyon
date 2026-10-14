@@ -4757,8 +4757,13 @@ export class AuthStorage {
 				this.#blocks.reconcileAfterMs(providerKey, scope, credentialIndex),
 				getStoreReconcileAfter?.(credentialId, providerKey, scope) ?? 0,
 			);
-			if (limits.length > 0 && !isUsageLimitReached(limits) && reconcileAfterMs <= nowMs) healed.push(scope);
-			else kept.push({ scope, blockedUntilMs });
+			// A refusal this process saw from the provider can rest on a cap the usage report never
+			// shows (Flash's daily cap), so a healthy report cannot lift it before its own deadline.
+			const confirmedUntil = this.#confirmedAntigravityQuota.get(`${credentialId}:${scope}`);
+			const confirmedHere = confirmedUntil !== undefined && confirmedUntil > nowMs;
+			if (!confirmedHere && limits.length > 0 && !isUsageLimitReached(limits) && reconcileAfterMs <= nowMs) {
+				healed.push(scope);
+			} else kept.push({ scope, blockedUntilMs });
 		}
 		if (healed.length === 0) return;
 		const confirmedBefore = new Map(this.#confirmedAntigravityQuota);
