@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A Google or Cloud Code Assist request with thinking off names the model's lowest declared thinking level instead of `MINIMAL`, which a model without a minimal level rejects.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes

@@ -3,6 +3,7 @@
  */
 
 import { scheduler } from "node:timers/promises";
+import { googleThinkingLevelWhenOff } from "@veyyon/catalog/model-thinking";
 import {
 	calculateCost,
 	discardAttemptUsage,
@@ -894,7 +895,8 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 	if (options.thinking && model.reasoning) {
 		const cfg: ThinkingConfig = { includeThoughts: options.thinking.enabled && !options.hideThinkingSummary };
 		if (!options.thinking.enabled) {
-			if (model.thinking?.mode === "google-level") cfg.thinkingLevel = "MINIMAL" as ThinkingLevel;
+			if (model.thinking?.mode === "google-level")
+				cfg.thinkingLevel = googleThinkingLevelWhenOff(model) as ThinkingLevel;
 			else cfg.thinkingBudget = 0;
 		} else if (options.thinking.level !== undefined) {
 			// GoogleThinkingLevel mirrors the SDK's `ThinkingLevel` string enum values 1:1.

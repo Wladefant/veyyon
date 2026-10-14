@@ -574,6 +574,17 @@ export function mapEffortToGoogleThinkingLevel(effort: Effort): "MINIMAL" | "LOW
 }
 
 /**
+ * The `thinkingLevel` a thinking-off request sends to a `google-level` model. Gemini 3 cannot switch
+ * thinking off, so the request names the lowest level the model declares: `MINIMAL` only where the
+ * model accepts it, `LOW` on a model whose ladder starts there.
+ */
+export function googleThinkingLevelWhenOff<TApi extends Api>(
+	model: ApiModel<TApi>,
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
+	return mapEffortToGoogleThinkingLevel(minimumSupportedEffort(model) ?? Effort.Minimal);
+}
+
+/**
  * Maps a normalized thinking effort to Anthropic adaptive effort values via
  * the model's baked `thinking.effortMap` (identity for unmapped efforts).
  */
