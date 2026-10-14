@@ -9,6 +9,7 @@
 ### Fixed
 
 - An agent whose effort is inherited or configured runs at the level its own model accepts, and its badge shows that level, rather than the parent's level for a model that lacks it; a parent with no effort leaves the agent at its own default instead of none.
+- An agent that resolves no effort of its own shows the effort its session settles on in its badge, and the `/settings` agent roster shows an agent that runs the session's model as `session model`, which leaves room for a read-only source marker.
 
 ## [1.5.6] - 2026-10-13
 
