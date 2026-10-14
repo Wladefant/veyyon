@@ -161,7 +161,9 @@ describe("an inherited subagent model still has a badge and a label", () => {
 			artifactsDir: artifactsDir(),
 		});
 
-		expect(result.resolvedModel).toBe("configured/fast-model:low");
+		// The configured model states no effort ladder, so the `:low` it was asked for is not a level it
+		// runs at and the badge drops it; the model is still the override, not the session's.
+		expect(result.resolvedModel).toBe("configured/fast-model");
 	});
 
 	it("carries the badge through a follow-up turn instead of erasing it", async () => {

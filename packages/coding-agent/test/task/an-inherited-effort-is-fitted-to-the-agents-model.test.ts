@@ -83,11 +83,11 @@ async function spawnAt(
 	channel: { thinkingLevel?: ConfiguredThinkingLevel; parentThinkingLevel?: ConfiguredThinkingLevel },
 	id: string,
 ) {
-	const spy = vi
-		.spyOn(sdkModule, "createAgentSession")
-		.mockResolvedValue(
-			createSessionResult(createMockSession(({ emit }) => emit(yieldSuccessEvent({ ok: true }, "fit")))),
-		);
+	const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(
+		// The session reports the model it runs and no effort, so where nothing was requested the badge
+		// is the session's: the bare model.
+		createSessionResult(createMockSession(({ emit }) => emit(yieldSuccessEvent({ ok: true }, "fit")), { model })),
+	);
 	const selector = `${model.provider}/${model.id}`;
 	const result = await runSubprocess({
 		cwd: "/tmp",

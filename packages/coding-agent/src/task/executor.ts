@@ -1953,8 +1953,9 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 		// a `:level` suffix. Effort inherits on its own axis (this agent's row, then the blanket agent
 		// effort, then frontmatter, then the session), so the ordinary case is an agent running at a
 		// definite effort that no suffix names; a bare model there reads as "no effort level" next to a
-		// sibling that shows one.
-		monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
+		// sibling that shows one. With no level requested the session picks its own, so the badge waits
+		// for the session to state it.
+		if (requested !== undefined) monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
 	}
 	return { modelRegistry, model, thinkingLevel };
 }
@@ -2188,7 +2189,7 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	// runs either way, at the effort the session settled on — `auto` resolved, an unsupported level
 	// clamped — the same authority the follow-up turn reads.
 	const progress = monitor.progress;
-	if (session.model && (!progress.resolvedModel || runModel.thinkingLevel === undefined)) {
+	if (!progress.resolvedModel && session.model) {
 		progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);
 		progress.contextWindow ??= session.model.contextWindow || undefined;
 	}

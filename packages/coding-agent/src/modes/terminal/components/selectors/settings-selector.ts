@@ -1832,7 +1832,8 @@ function modelSummary(agent: AgentDefinition, depth = 0): string {
 		taskDepth: depth + 1,
 	});
 	if (resolved.unresolved) return theme.fg("error", `${resolved.unresolved.value} matches no model`);
-	if (resolved.inherited) return theme.fg("dim", "inherit · the session's model");
+	// Short, because a roster row also has to fit the agent's state and a read-only source marker.
+	if (resolved.inherited) return theme.fg("dim", "session model");
 	const pattern = resolved.patterns[0];
 	if (!pattern) return theme.fg("dim", "no model resolved");
 	const fallbacks = resolved.patterns.length - 1;
