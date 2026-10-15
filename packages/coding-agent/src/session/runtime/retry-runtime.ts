@@ -511,15 +511,10 @@ export class RetryRuntime {
 		) {
 			const retryAfterMs =
 				parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "credential-park");
-			const failedCredentialId = Number(message.usage.credentialId);
 			const outcome = await session.modelRegistry.authStorage.markUsageLimitReached(
 				model.provider,
 				session.sessionId,
 				{
-					// The resolver may have moved sticky routing after this request failed.
-					// Keep an explicit nonmatching target when identity is absent or invalid.
-					credentialId:
-						Number.isSafeInteger(failedCredentialId) && failedCredentialId > 0 ? failedCredentialId : Number.NaN,
 					retryAfterMs,
 					baseUrl: model.baseUrl,
 					modelId: model.id,
