@@ -31,9 +31,10 @@
  * body sweep and the abort sweep read `PROVIDER_REGISTRY` at run time, so a new refresher is covered
  * by default.
  *
- * Not caught: a refresher that ignores its signal still holds the flight only for the abort grace; a
- * rotation it answers after that can race a second flight at a provider with reuse detection, and
- * the late commit only refuses to overwrite a newer row. The abort sweep drives each refresher's
+ * Not caught: a refresher whose aborted request never settles holds its row, and the cross-process
+ * lease, for as long as that request stays open; each caller times out its own wait meanwhile. The
+ * holding of the lease across processes is not driven here, since its renewal runs on real time. The
+ * late commit only refuses to overwrite a newer row. The abort sweep drives each refresher's
  * first token request only, so a refresher's identity lookup (Anthropic's bootstrap) and an xAI OIDC
  * discovery stay bounded by their own timers.
  */
@@ -42,6 +43,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	type AuthCredentialStore,
 	AuthStorage,
 	type CredentialDisabledEvent,
 	type OAuthCredential,
@@ -56,10 +58,9 @@ import { PROVIDER_REGISTRY } from "../src/registry/registry";
 
 const PROVIDER = "anthropic";
 const SESSION = "refresh-failure-session";
-/** The caller wait, flight ceiling and abort grace in `oauth-refresh.ts`, restated so a change to any is a decision. */
+/** The caller wait and flight ceiling in `oauth-refresh.ts`, restated so a change to either is a decision. */
 const CALLER_WAIT_MS = 10_000;
 const FLIGHT_CEILING_MS = 120_000;
-const ABORT_GRACE_MS = 5_000;
 
 let tempDir = "";
 let store: SqliteAuthCredentialStore | undefined;
@@ -99,9 +100,10 @@ async function storageWith(
 	rows: OAuthCredential[],
 	refresh: (credentialId: number, signal: AbortSignal | undefined) => Promise<OAuthCredentials>,
 	loadBalancing = false,
+	viewStore: (target: SqliteAuthCredentialStore) => AuthCredentialStore = target => target,
 ): Promise<{ storage: AuthStorage; ids: number[] }> {
 	for (const row of rows) store!.saveOAuth(PROVIDER, row);
-	const storage = new AuthStorage(store!, {
+	const storage = new AuthStorage(viewStore(store!), {
 		loadBalancing,
 		refreshOAuthCredential: (_provider, credentialId, _credential, signal) => refresh(credentialId, signal),
 		// Load balancing ranks accounts by usage. This suite drives refresh outcomes, not ranking, and
@@ -195,7 +197,7 @@ describe("a refresh flight outlives the caller that started it", () => {
 		expect(storedRefresh(ids[0]!)).toBe("refresh-rotated");
 	});
 
-	it("persists a rotation that answers after the flight's ceiling and its abort grace", async () => {
+	it("persists a rotation that answers after the flight's ceiling", async () => {
 		const held = heldRefresh();
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();
@@ -205,8 +207,6 @@ describe("a refresh flight outlives the caller that started it", () => {
 		vi.advanceTimersByTime(CALLER_WAIT_MS);
 		await caller;
 		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
-		await settle();
-		vi.advanceTimersByTime(ABORT_GRACE_MS);
 		await settle();
 		expect(storedRefresh(ids[0]!)).toBe("refresh-home");
 
@@ -232,28 +232,59 @@ describe("a refresh flight outlives the caller that started it", () => {
 		expect(held.signal?.aborted).toBe(true);
 	});
 
-	it("holds the flight through the abort grace, so a second request does not spend the token again", async () => {
-		const held = heldRefresh();
-		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
-		vi.useFakeTimers();
+	/**
+	 * The store as one without the durable-lease surface sees it: the flight is fenced in this process
+	 * only. The methods are bound to the store, whose private fields a proxy receiver cannot read.
+	 */
+	function withoutDurableLease(target: SqliteAuthCredentialStore): AuthCredentialStore {
+		const lease = new Set<PropertyKey>([
+			"tryAcquireCredentialRefreshLease",
+			"getCredentialRefreshLeaseExpiresAt",
+			"releaseCredentialRefreshLease",
+			"renewCredentialRefreshLease",
+		]);
+		return new Proxy(target, {
+			get(store, property) {
+				if (lease.has(property)) return undefined;
+				const value: unknown = Reflect.get(store, property, store);
+				return typeof value === "function" ? value.bind(store) : value;
+			},
+		});
+	}
 
-		const first = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
-		await held.started;
-		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
-		await first;
-		await settle();
-		vi.advanceTimersByTime(ABORT_GRACE_MS - 1);
-		await settle();
+	it.each([
+		["a durable lease", false],
+		["no durable lease", true],
+	])(
+		"holds the flight until its aborted request settles, so a second request never spends the token again (%s)",
+		async (_label, leaseless) => {
+			const held = heldRefresh();
+			const { storage, ids } = await storageWith(
+				[oauth("home", 0)],
+				held.refresh,
+				false,
+				leaseless ? withoutDurableLease : undefined,
+			);
+			vi.useFakeTimers();
 
-		const second = storage.refreshCredentialById(ids[0]!);
-		await settle();
-		held.answer.resolve(ROTATED);
-		expect((await second).credential.type).toBe("oauth");
-		expect(held.calls).toBe(1);
-		expect(storedRefresh(ids[0]!)).toBe("refresh-rotated");
-	});
+			const first = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+			await held.started;
+			vi.advanceTimersByTime(FLIGHT_CEILING_MS);
+			await first;
+			await settle();
+			vi.advanceTimersByTime(FLIGHT_CEILING_MS * 10);
+			await settle();
 
-	it("ends the flight at the ceiling when the aborted request settles, without waiting out the grace", async () => {
+			const second = storage.refreshCredentialById(ids[0]!);
+			await settle();
+			held.answer.resolve(ROTATED);
+			expect((await second).credential.type).toBe("oauth");
+			expect(held.calls).toBe(1);
+			expect(storedRefresh(ids[0]!)).toBe("refresh-rotated");
+		},
+	);
+
+	it("ends the flight at the ceiling when the aborted request settles", async () => {
 		const held = heldRefresh(true);
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();

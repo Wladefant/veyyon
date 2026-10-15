@@ -29,15 +29,6 @@ export const OAUTH_REFRESH_CALLER_WAIT_MS = 10_000;
  */
 export const OAUTH_REFRESH_FLIGHT_CEILING_MS = 120_000;
 /**
- * How long a lease-fenced flight that reached {@link OAUTH_REFRESH_FLIGHT_CEILING_MS} holds the
- * lease and the in-flight entry after aborting its token request, waiting for the request to settle.
- *
- * Releasing them at the ceiling while the request was still open let a second flight spend the same
- * single-use refresh token beside it. The abort settles a refresher that honours its signal at once;
- * the grace bounds one that does not, and a rotation that arrives after it is still persisted.
- */
-export const OAUTH_REFRESH_ABORT_GRACE_MS = 5_000;
-/**
  * Refresh OAuth access tokens this many ms before their stated expiry. The
  * skew exists so callers downstream of {@link AuthStorage} (stream providers,
  * usage probes, web_search) never observe a credential that is expired or
@@ -262,17 +253,16 @@ export class OAuthRefresher {
 	 * No caller signal reaches this function. The ownership wait and the refresh both
 	 * run under {@link OAUTH_REFRESH_FLIGHT_CEILING_MS}, because aborting after the
 	 * provider has rotated the token would strand it — the same loss this whole path
-	 * exists to prevent. At the ceiling the token request is aborted and the lease is held
-	 * until it settles or {@link OAUTH_REFRESH_ABORT_GRACE_MS} passes; a rotation that
-	 * arrives later still is persisted.
+	 * exists to prevent. At the ceiling the token request is aborted, and the lease and the
+	 * in-flight entry are held until that request settles: while it is open the provider may
+	 * still rotate the grant, so no second flight in this process or a peer spends the same
+	 * refresh token. Callers stay bounded by their own wait.
 	 */
 	async #leaseFencedRefresh(
 		provider: Provider,
 		credential: OAuthCredential,
 		credentialId: number,
 	): Promise<OAuthCredentials> {
-		const commitLate = (late: OAuthCredentials) =>
-			this.#commitRotatedOAuthCredential(provider, credentialId, credential, late);
 		if (!this.storeSupportsDurableLease()) {
 			return this.#refreshOAuthCredentialUnshared(
 				provider,
@@ -280,7 +270,7 @@ export class OAuthRefresher {
 				credentialId,
 				undefined,
 				OAUTH_REFRESH_FLIGHT_CEILING_MS,
-				commitLate,
+				true,
 			);
 		}
 
@@ -322,7 +312,7 @@ export class OAuthRefresher {
 					credentialId,
 					undefined,
 					OAUTH_REFRESH_FLIGHT_CEILING_MS,
-					commitLate,
+					true,
 				),
 			);
 
@@ -431,7 +421,7 @@ export class OAuthRefresher {
 		credentialId: number | undefined,
 		signal: AbortSignal | undefined,
 		timeoutMs: number,
-		onLateResult?: (late: OAuthCredentials) => void,
+		holdUntilSettled = false,
 	): Promise<OAuthCredentials> {
 		let providerRefresh: Promise<OAuthCredentials>;
 		// Aborts the token request when the caller aborts or the bound fires, so an abandoned request
@@ -492,33 +482,21 @@ export class OAuthRefresher {
 		} catch (error) {
 			if (providerSettled) throw error;
 			request.abort(error);
-			if (!onLateResult) throw error;
-			// Lease-fenced: the provider may already have rotated the grant. Hold the flight while the
-			// aborted request settles, so no second flight spends the same refresh token beside it.
-			const graceElapsed = Promise.withResolvers<undefined>();
-			const grace = setTimeout(() => graceElapsed.resolve(undefined), OAUTH_REFRESH_ABORT_GRACE_MS);
-			try {
-				const settled = await Promise.race([
-					observed.then(
-						refreshed => ({ refreshed }),
-						() => null,
-					),
-					graceElapsed.promise,
-				]);
-				if (settled) return settled.refreshed;
-				if (settled === null) throw error;
-			} finally {
-				clearTimeout(grace);
-			}
-			// The request ignored its abort. A rotation that arrives after the grace is still the only
-			// valid token for this grant, so it is handed on rather than dropped.
-			observed.then(
-				late => {
-					logger.warn("OAuth refresh answered after its ceiling; persisting the late rotation", { provider });
-					onLateResult(late);
-				},
+			if (!holdUntilSettled) throw error;
+			// Lease-fenced: the provider may already have rotated the grant. The flight holds the lease
+			// and the in-flight entry until the aborted request settles, so no second flight spends the
+			// same refresh token beside it. A refresher that honours its signal settles at once; one
+			// that ignores it holds its row for as long as its request stays open. A rotation it returns
+			// is the only valid token for the grant and is handed back to be persisted; a rejection
+			// after the abort reports the ceiling, never an account fact.
+			const settled = await observed.then(
+				refreshed => refreshed,
 				() => undefined,
 			);
+			if (settled) {
+				logger.warn("OAuth refresh answered after its ceiling; persisting the late rotation", { provider });
+				return settled;
+			}
 			throw error;
 		} finally {
 			clearTimeout(timeout);
