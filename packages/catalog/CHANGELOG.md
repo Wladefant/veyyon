@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-10-15
+
 ### Added
 
 - `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.

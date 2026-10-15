@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-10-15
+
 ### Breaking Changes
 
 - Model roles are removed: `modelRoles`, `modelTags`, `cycleOrder`, custom roles, the `@role`, `pi/role` and `*` selectors, the `--smol` and `--slow` flags, the `VEYYON_SMOL_MODEL`, `VEYYON_SLOW_MODEL` and `VEYYON_PLAN_MODEL` variables and the `/settings` Roles tab no longer exist; `defaultModel` holds the model chain a session starts on, and `agent.helpers.<id>` (`advisor`, `plan`, `vision`, `commit`, `title`, `memory`, `autoThinking`, `unexpectedStop`, `speech`, `completion`) sets the model and effort of each feature's own model call.
