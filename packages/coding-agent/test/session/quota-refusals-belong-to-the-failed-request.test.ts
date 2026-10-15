@@ -113,7 +113,7 @@ describe("quota refusals belong to the failed request", () => {
 			expect(blocks[0]).toMatchObject({
 				credentialId: failedId,
 				providerKey: `${PROVIDER}:api_key`,
-				blockScope: "",
+				blockScope: "counter:google",
 			});
 			expect(blocks[0]!.blockedUntilMs).toBeGreaterThan(Date.now());
 		} finally {
