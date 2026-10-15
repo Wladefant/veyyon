@@ -4,11 +4,24 @@ import { RetryRuntime, type RetryHost, type RetrySession } from "../../src/sessi
 
 function refused(credentialId?: string): AssistantMessage {
 	return {
-		role: "assistant", content: [], api: "google-gemini-cli", provider: "google-antigravity",
-		model: "gemini-3.8-flash", timestamp: 1, stopReason: "error", errorStatus: 429,
+		role: "assistant",
+		content: [],
+		api: "google-gemini-cli",
+		provider: "google-antigravity",
+		model: "gemini-3.8-flash",
+		timestamp: 1,
+		stopReason: "error",
+		errorStatus: 429,
 		errorMessage: "Individual quota reached. QUOTA_EXHAUSTED. retry-after-ms=80000000",
-		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, credentialId },
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			credentialId,
+		},
 	};
 }
 
@@ -17,12 +30,15 @@ async function recover(message: AssistantMessage) {
 	// Only an explicit target prevents the store from parking the healthy sticky.
 	const blocked: number[] = [];
 	const mark = mock(async (_provider: string, _session: string, options: { credentialId?: number }) => {
-		blocked.push(options.credentialId ?? 13);
+		if (options.credentialId === undefined) blocked.push(13);
+		else if (options.credentialId === 20) blocked.push(20);
+		else if (options.credentialId === 0) blocked.push(0);
 		return { switched: false };
 	});
 	const session = {
 		model: { id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli" },
-		sessionId: "quota-attribution", thinkingLevel: "high",
+		sessionId: "quota-attribution",
+		thinkingLevel: "high",
 		settings: {
 			getGroup: () => ({ enabled: true, maxRetries: 1, baseDelayMs: 1, maxDelayMs: 10, modelFallback: false }),
 			get: () => undefined,
@@ -31,8 +47,11 @@ async function recover(message: AssistantMessage) {
 		agent: { state: { messages: [message] } },
 	} as unknown as RetrySession;
 	const host = {
-		emitSessionEvent: async () => {}, promptGeneration: () => 1, abortIsDeliberate: () => false,
-		maybeAutoRedeemCodexReset: async () => false, persistLifecycleErrorMessage: async () => {},
+		emitSessionEvent: async () => {},
+		promptGeneration: () => 1,
+		abortIsDeliberate: () => false,
+		maybeAutoRedeemCodexReset: async () => false,
+		persistLifecycleErrorMessage: async () => {},
 		resetSessionStopContinuationState: () => {},
 	} as unknown as RetryHost;
 	const runtime = new RetryRuntime(session, host);
@@ -48,11 +67,12 @@ describe("quota refusals belong to the failed request", () => {
 		expect(mark.mock.calls[0][2]).toMatchObject({ credentialId: 20 });
 	});
 
-	for (const identity of [undefined, "gateway-account", "", "0", "-1", "1.5"]) {
+	for (const identity of [undefined, "gateway-account", "", " ", "0", "-1", "1.5", "9007199254740992"]) {
 		it(`does not guess an account when request identity is ${String(identity)}`, async () => {
 			const { blocked, mark } = await recover(refused(identity));
 			expect(blocked).toEqual([]);
-			expect(mark).not.toHaveBeenCalled();
+			// An explicit nonmatching id must not fall back to sticky routing.
+			expect(mark.mock.calls[0][2].credentialId).toBeNaN();
 		});
 	}
 });
