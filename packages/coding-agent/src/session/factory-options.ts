@@ -64,7 +64,7 @@ export interface CreateAgentSessionOptions {
 	modelPattern?: string | string[];
 	/** Authenticated fallback selector for deferred agent model patterns. */
 	modelPatternAuthFallback?: string;
-	/** Role name used to install retry fallbacks after deferred agent patterns resolve. */
+	/** Explicit spawn fallback role, also used to install deferred pattern chains. */
 	modelPatternFallbackRole?: string;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;

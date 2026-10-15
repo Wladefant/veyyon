@@ -1103,6 +1103,10 @@ export class AgentSession {
 	 */
 	readonly #config: AgentSessionConfig;
 
+	get modelPatternFallbackRole(): string | undefined {
+		return this.#config.modelPatternFallbackRole;
+	}
+
 	readonly configWarnings: string[] = [];
 
 	#scopedModels: Array<{
