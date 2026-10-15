@@ -292,14 +292,41 @@ export function cursorStreamFailure(code: string, message: string, label: string
 	return new AIError.ProviderResponseError(text, { provider: "cursor", kind: "envelope" });
 }
 
+/**
+ * The sentence Cursor writes for a stream failure, read out of its `aiserver.v1.ErrorDetails`.
+ *
+ * Cursor's top-level `message` is often the bare word `Error`; what the failure IS sits in
+ * `details[].debug`: a machine code (`ERROR_RATE_LIMITED_CHANGEABLE`) and a title and sentence
+ * (`Named models unavailable`, `Free plans can only use Auto…`). Dropping them rendered a Free
+ * plan's refusal of a named model as `resource_exhausted: Error`, which reads as a rate limit on
+ * an account that has usage left. The code is kept in the text because the classifier reads it.
+ */
+function cursorErrorDetail(error: { message?: unknown; details?: unknown }): string {
+	const fallback = typeof error.message === "string" ? error.message : "Unknown error";
+	if (!Array.isArray(error.details)) return fallback;
+	for (const entry of error.details) {
+		const detailEntry = entry as {
+			debug?: { error?: unknown; details?: { title?: unknown; detail?: unknown } | null } | null;
+		} | null;
+		const debug = detailEntry?.debug;
+		if (!debug) continue;
+		const sentence = [debug.details?.title, debug.details?.detail]
+			.filter((part): part is string => typeof part === "string" && part.length > 0)
+			.join(": ");
+		const code = typeof debug.error === "string" ? debug.error : undefined;
+		if (!sentence && !code) continue;
+		return code ? `${sentence || fallback} (${code})` : sentence;
+	}
+	return fallback;
+}
+
 export function parseConnectEndStream(data: Uint8Array): Error | null {
 	try {
 		const payload = JSON.parse(new TextDecoder().decode(data));
 		const error = payload?.error;
 		if (error) {
 			const code = typeof error.code === "string" ? error.code : "unknown";
-			const message = typeof error.message === "string" ? error.message : "Unknown error";
-			return cursorStreamFailure(code, message, "Connect error");
+			return cursorStreamFailure(code, cursorErrorDetail(error), "Connect error");
 		}
 		return null;
 	} catch {

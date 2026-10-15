@@ -856,6 +856,7 @@ export class AdvisorRoster {
 						retryAfterMs: extractRetryHint(undefined, message),
 						baseUrl: advisorModel.baseUrl,
 						modelId: advisorModel.id,
+						modelNotInPlan: AIError.isModelNotInPlan(error),
 					},
 				);
 			},

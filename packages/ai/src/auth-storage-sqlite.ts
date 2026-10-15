@@ -828,18 +828,31 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * List disabled rows, newest first. See
+	 * List disabled rows no later login has answered, newest first. See
 	 * {@link AuthCredentialStore.listDisabledAuthCredentials}.
 	 *
 	 * Ordered by id descending because the row that matters is the one disabled
 	 * most recently: an account that was replaced and then re-added leaves older
 	 * disabled rows behind, and reporting one of those would name a cause the user
 	 * already resolved.
+	 *
+	 * A row disabled BEFORE a login that is still active for its provider was created
+	 * is left out. That login is the answer to the signed-out note, whichever account
+	 * it signed in: without the cut, a login to a different account left the provider
+	 * reported as signed out for good, naming a login months dead beside the one now
+	 * serving. `updated_at` of a disabled row is the moment of its disable, since a
+	 * disabled row is never written again; `created_at` of an active row is its login.
 	 */
 	listDisabledAuthCredentials(provider?: string): StoredAuthCredential[] {
+		const unanswered = `NOT EXISTS (
+				SELECT 1 FROM auth_credentials AS later
+				WHERE later.provider = auth_credentials.provider
+					AND later.disabled_cause IS NULL
+					AND later.created_at > auth_credentials.updated_at
+			)`;
 		const sql = provider
-			? "SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL AND provider = ? ORDER BY id DESC"
-			: "SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL ORDER BY id DESC";
+			? `SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL AND provider = ? AND ${unanswered} ORDER BY id DESC`
+			: `SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL AND ${unanswered} ORDER BY id DESC`;
 		const stmt = this.#db.prepare(sql);
 		try {
 			const rows = (provider ? stmt.all(provider) : stmt.all()) as AuthRow[];

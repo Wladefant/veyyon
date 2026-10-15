@@ -5,6 +5,11 @@
 ### Fixed
 
 - A Google or Cloud Code Assist request with thinking off names the model's lowest declared thinking level instead of `MINIMAL`, which a model without a minimal level rejects.
+- A Cursor end stream that refuses a request keeps its title, detail and error code, so a Free plan's refusal of a named model reports "Free plans can only use Auto" instead of `Error`.
+- A provider's refusal of a model for the account's plan is classified as `ModelNotInPlan`, recorded for that model only, and moves the session to an account that serves the model only when `accounts.loadBalancing` is on; with it off nothing moves and `onUsageLimitWithheld` reports the account and its idle siblings.
+- An OAuth refresh failure includes the HTTP status, so a token endpoint answering 401 with no OAuth error code disables the login instead of retrying it forever; the Gemini CLI refresh error body is redacted.
+- A login disabled by a failed refresh is no longer reported as signed out once a later login for the same provider is active.
+- Kimi Code and Synthetic models sent through the Anthropic-format shim accept every thinking effort the catalog declares, so `kimi-code/k3` at `max` no longer fails, and a model with no effort control is not sent thinking `disabled`.
 
 ## [1.5.6] - 2026-10-13
 

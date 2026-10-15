@@ -99,6 +99,7 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 				provider: PROVIDER,
 				from: { credentialId: targetId, label: "target@example.com" },
 				to: { credentialId: siblingId, label: "sibling@example.com" },
+				reason: "auth",
 				cause: "invalid_grant: token revoked",
 			},
 		]);
@@ -148,6 +149,7 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 					provider: PROVIDER,
 					account: { credentialId: targetId, label: "target@example.com" },
 					idleSiblings: 1,
+					reason: "quota",
 					retryAtMs: NOW_MS + 60_000,
 				},
 			]);

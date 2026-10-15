@@ -11,10 +11,13 @@ import { Flag } from "../flag";
 import { isOpaqueStatusBody, matchesUsageLimitText, parseRateLimitReason } from "../rate-limit";
 import type { ErrorDomain, GatewayStructuralRule, GatewayVerdict, GatewayWordingRule } from "./types";
 
+/** The provider codes that refuse a model for the account's plan rather than for its spent quota. */
+const MODEL_NOT_IN_PLAN_PATTERN = /\bERROR_RATE_LIMITED_CHANGEABLE\b/;
+
 export const quotaDomain: ErrorDomain = {
 	id: "quota",
 	why: "The account's allowance is spent, so the same request needs a different credential rather than another attempt.",
-	recovers: [Flag.UsageLimit],
+	recovers: [Flag.UsageLimit, Flag.ModelNotInPlan],
 	recovery: {
 		transport: { action: "surface" },
 		credential: { action: "rotate-credential" },
@@ -33,6 +36,12 @@ export const quotaDomain: ErrorDomain = {
 			why: "A 429 whose body is opaque or names an exhausted quota is a wall, not a throttle: the structure decides and the prose only says which.",
 			structural: signal => signal.status === 429,
 			text: text => isOpaqueStatusBody(text) || parseRateLimitReason(text) === "QUOTA_EXHAUSTED",
+		},
+		{
+			flags: Flag.UsageLimit | Flag.ModelNotInPlan,
+			name: "model-not-in-plan",
+			why: "Cursor refuses a named model on a Free plan with the machine code ERROR_RATE_LIMITED_CHANGEABLE over a resource_exhausted trailer; the account cannot serve the model and no window changes that, so only another account (with load balancing on) or another model can serve the request.",
+			text: text => MODEL_NOT_IN_PLAN_PATTERN.test(text),
 		},
 	],
 };

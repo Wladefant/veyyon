@@ -251,10 +251,13 @@ export async function refreshGoogleCloudToken(refreshToken: string, projectId: s
 	});
 
 	if (!response.ok) {
-		const error = await response.text();
-		throw new AIError.OAuthError(`Google Cloud token refresh failed: ${error}`, {
+		// A refresh endpoint's error body can echo the credential it refused, so it is read
+		// through the shared bounded reader and its redactor.
+		const error = await AIError.readProviderErrorDetail(response);
+		throw new AIError.OAuthError(`Google Cloud token refresh failed: ${response.status} ${error}`, {
 			kind: "token-refresh",
 			provider: "google-gemini-cli",
+			status: response.status,
 		});
 	}
 

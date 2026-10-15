@@ -121,10 +121,13 @@ export async function refreshCursorToken(apiKeyOrRefreshToken: string): Promise<
 	if (!response.ok) {
 		// A refresh endpoint's error body can echo the credential it refused, so it is read
 		// through the shared bounded reader and its redactor.
+		// The status leads the message: a dead Cursor key answers `401 {"message":"Invalid User API
+		// Key"}`, which carries no OAuth error code, so the status is the only definitive signal.
 		const error = await AIError.readProviderErrorDetail(response);
-		throw new AIError.OAuthError(`Cursor token refresh failed: ${error}`, {
+		throw new AIError.OAuthError(`Cursor token refresh failed: ${response.status} ${error}`, {
 			kind: "token-refresh",
 			provider: "cursor",
+			status: response.status,
 		});
 	}
 

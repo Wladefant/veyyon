@@ -89,6 +89,7 @@ import type {
 	CheckCredentialsOptions,
 	CredentialDisabledEvent,
 	CredentialFailoverEvent,
+	CredentialFailoverReason,
 	CredentialHealthResult,
 	CredentialOrigin,
 	InvalidateCredentialMatchingOptions,
@@ -261,6 +262,19 @@ function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStr
 
 const defaultBackoffMs = 60_000;
 
+/**
+ * How long an account stays recorded as unable to serve a model its plan does not include. Persisted
+ * through the block store, so every process sharing the credentials skips the account for that model
+ * instead of each one failing a request to learn it. One hour: an upgraded plan is used again once the
+ * hold lapses, and an account still without the model costs one refused request per hour.
+ */
+const MODEL_NOT_IN_PLAN_HOLD_MS = 60 * 60_000;
+
+/** The block scope recording that an account's plan does not include `modelId`. */
+function modelNotInPlanScope(modelId: string): string {
+	return `model-not-in-plan:${modelId}`;
+}
+
 /** How one OAuth credential attempt checks usage and handles a failed refresh. */
 interface OAuthAttemptOptions {
 	checkUsage: boolean;
@@ -397,8 +411,10 @@ export class AuthStorage {
 	#sourceLabel?: string;
 	readonly #events = new AuthStorageEvents();
 	/** Provider → the account auth death just retired, awaiting the resolve that names its replacement. */
-	#pendingFailover: Map<string, { from: { credentialId: number; label: string }; cause: string; at: number }> =
-		new Map();
+	#pendingFailover: Map<
+		string,
+		{ from: { credentialId: number; label: string }; reason: CredentialFailoverReason; cause: string; at: number }
+	> = new Map();
 	/**
 	 * `provider:credentialId:retryAtMs` of every withheld-quota notice already emitted, so one
 	 * exhausted window is announced once however many times the turn retries into it. Keyed by the
@@ -855,6 +871,7 @@ export class AuthStorage {
 			provider,
 			from: pending.from,
 			to: { credentialId: servedCredentialId, label: this.#accountNoticeLabel(provider, servedCredentialId) },
+			reason: pending.reason,
 			cause: pending.cause,
 		});
 	}
@@ -3038,6 +3055,12 @@ export class AuthStorage {
 			apiKey?: string;
 			credentialId?: number;
 			signal?: AbortSignal;
+			/**
+			 * The provider refused `modelId` for this account's plan ({@link AIError.isModelNotInPlan}).
+			 * Recorded per model instead of as a quota window, and moved off whatever
+			 * `accounts.loadBalancing` says, because no wait lets this account serve the model.
+			 */
+			modelNotInPlan?: boolean;
 		},
 	): Promise<UsageLimitMarkResult> {
 		let sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
@@ -3064,6 +3087,9 @@ export class AuthStorage {
 		const targetCredentialId = target.id;
 
 		const providerKey = getProviderTypeKey(provider, credentialType);
+		if (options?.modelNotInPlan && options.modelId !== undefined) {
+			return this.#markModelNotInPlan(provider, sessionCredential.index, target, options.modelId);
+		}
 		const strategy = this.#rankingStrategyResolver?.(provider);
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
@@ -3129,6 +3155,7 @@ export class AuthStorage {
 							label: this.#accountNoticeLabel(provider, targetCredentialId),
 						},
 						idleSiblings,
+						reason: "quota",
 						retryAtMs: blockedUntil,
 					});
 				}
@@ -3143,6 +3170,75 @@ export class AuthStorage {
 			if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) retryAtMs = candidateBlockedUntil;
 		}
 		return { switched: false, retryAtMs };
+	}
+
+	/**
+	 * Record that `target`'s plan does not include `modelId`, and say whether another account can
+	 * serve it now.
+	 *
+	 * Not a quota window: the account answers every request for the model the same way until its plan
+	 * changes, so waiting is never the recovery. The account is recorded under a per-model scope (it
+	 * still serves every other model, a Free Cursor plan serves Auto). Moving the session to another
+	 * account is a move like any other, so `accounts.loadBalancing` governs it: with the setting on the
+	 * session moves, with a failover notice naming both accounts; with it off nothing moves, and the
+	 * withheld notice names the account and the idle siblings that could serve the model. `switched`
+	 * is false whenever nothing moved, and then the refusal is final for this request.
+	 */
+	#markModelNotInPlan(
+		provider: string,
+		index: number,
+		target: StoredCredential,
+		modelId: string,
+	): UsageLimitMarkResult {
+		const providerKey = getProviderTypeKey(provider, target.credential.type);
+		this.#blocks.markCredentialBlocked(
+			provider,
+			providerKey,
+			index,
+			Date.now() + MODEL_NOT_IN_PLAN_HOLD_MS,
+			modelNotInPlanScope(modelId),
+		);
+		const idleSiblings = this.#getStoredCredentials(provider).filter(
+			(entry, candidate) =>
+				candidate !== index &&
+				entry.credential.type === target.credential.type &&
+				!this.#authDeadCredentials.has(entry.id) &&
+				!this.#planExcludesModel(provider, candidate, modelId),
+		).length;
+		if (idleSiblings === 0) return { switched: false };
+		if (!this.#loadBalancingEnabled()) {
+			const noticeKey = `${provider}:${target.id}:${modelNotInPlanScope(modelId)}`;
+			if (!this.#withheldQuotaNotices.has(noticeKey)) {
+				if (this.#withheldQuotaNotices.size >= MAX_WITHHELD_QUOTA_NOTICES) this.#withheldQuotaNotices.clear();
+				this.#withheldQuotaNotices.add(noticeKey);
+				this.#events.emitUsageLimitWithheld({
+					provider,
+					account: { credentialId: target.id, label: this.#accountNoticeLabel(provider, target.id) },
+					idleSiblings,
+					reason: "model-not-in-plan",
+					modelId,
+				});
+			}
+			return { switched: false };
+		}
+		this.#pendingFailover.set(provider, {
+			from: { credentialId: target.id, label: this.#accountNoticeLabel(provider, target.id) },
+			reason: "model-not-in-plan",
+			cause: `its plan does not include ${modelId}`,
+			at: Date.now(),
+		});
+		return { switched: true };
+	}
+
+	/** Whether the account at `index` is recorded as unable to serve `modelId` on its plan. */
+	#planExcludesModel(provider: string, index: number, modelId: string | undefined): boolean {
+		if (modelId === undefined) return false;
+		const entry = this.#getStoredCredentials(provider)[index];
+		if (!entry) return false;
+		const providerKey = getProviderTypeKey(provider, entry.credential.type);
+		return (
+			this.#blocks.getScopedBlockedUntil(provider, providerKey, index, modelNotInPlanScope(modelId)) !== undefined
+		);
 	}
 
 	/**
@@ -3334,23 +3430,28 @@ export class AuthStorage {
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
 		// with the most headroom proactively and fall back intelligently when rate-limited.
+		const movementAllowed = this.#loadBalancingEnabled();
+		// A plan refusal on record steers selection only when the session may move: with movement off
+		// the home account keeps leading for every model, and its refusal reaches the caller.
+		const excludesModel = (index: number): boolean =>
+			movementAllowed && this.#planExcludesModel(provider, index, options?.modelId);
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&
+			!excludesModel(sessionPreferredIndex) &&
 			!this.#blocks.isCredentialBlocked(provider, providerKey, sessionPreferredIndex, blockScope);
 		// The explicitly chosen account, which outranks every automatic decision below:
 		// ranking may reorder around it, a hold may not displace it, and the strict pass may not skip
 		// it. `sessionPreferredIndex` is not the same thing — it also carries sticky routing, which is
 		// a record of what served last rather than anything anybody asked for.
 		const chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
-		const movementAllowed = this.#loadBalancingEnabled();
 		// Ranking is a headroom contest among accounts, i.e. a move. With movement off it runs only
 		// for a plan requirement, where the usage report is what says whether an account can serve
 		// the model at all; a session that already has a working account never re-ranks either way.
 		const shouldRank =
 			checkUsage && (movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement);
 		const rankingOrder = shouldRank && sessionId ? credentials.map((_credential, index) => index) : order;
-		const candidates = shouldRank
+		const rankedCandidates = shouldRank
 			? await this.#rankOAuthSelections({
 					providerKey,
 					provider,
@@ -3373,6 +3474,12 @@ export class AuthStorage {
 					order.map(idx => credentials[idx]),
 					blockScope,
 				).map(selection => ({ selection, usage: null, usageChecked: false }));
+		// An account whose plan was refused this model sorts last, in both modes, like a refused grant:
+		// the provider has already answered for it, so it is reached only when no other account is left.
+		const candidates = [
+			...rankedCandidates.filter(candidate => !excludesModel(candidate.selection.index)),
+			...rankedCandidates.filter(candidate => excludesModel(candidate.selection.index)),
+		];
 
 		// Enforce a tier only when at least one account is confirmed eligible. If
 		// every report is unknown or ineligible, preserve trial/grandfathered access
@@ -3388,15 +3495,18 @@ export class AuthStorage {
 		//
 		// A plan requirement is the one thing that can still displace a lead: an account without
 		// the entitlement cannot serve the model at all, so leading with it would fail the request
-		// rather than honour anything. An eligible lead still leads.
+		// rather than honour anything. An eligible lead still leads. An account whose plan was refused
+		// the model is displaced the same way, chosen or not.
+		const servesModel = (index: number | undefined): number | undefined =>
+			index === undefined || excludesModel(index) ? undefined : index;
 		const leadIndex = movementAllowed
-			? (chosenIndex ?? sessionPreferredIndex)
-			: (this.#homeIndex(provider, sessionId, "oauth") ??
+			? (servesModel(chosenIndex) ?? servesModel(sessionPreferredIndex))
+			: (servesModel(this.#homeIndex(provider, sessionId, "oauth")) ??
 				// Storage order, not `candidates` order: a plan requirement ranks candidates by headroom,
 				// and the first of THOSE would be a headroom winner, i.e. a move.
 				credentials.find(entry => {
 					const id = this.#getStoredCredentials(provider)[entry.index]?.id;
-					return id === undefined || !this.#authDeadCredentials.has(id);
+					return (id === undefined || !this.#authDeadCredentials.has(id)) && !excludesModel(entry.index);
 				})?.index);
 		if (leadIndex !== undefined) {
 			const leadCandidate = candidates.findIndex(
@@ -3769,6 +3879,7 @@ export class AuthStorage {
 		if (credentialId !== undefined && siblingRemains && allowFallback) {
 			this.#pendingFailover.set(provider, {
 				from: { credentialId, label: this.#accountNoticeLabel(provider, credentialId) },
+				reason: "auth",
 				cause: authFailureCause(error),
 				at: Date.now(),
 			});
@@ -4432,6 +4543,7 @@ export class AuthStorage {
 		if (siblingRemains) {
 			this.#pendingFailover.set(provider, {
 				from: { credentialId: matched.id, label: this.#accountNoticeLabel(provider, matched.id) },
+				reason: "auth",
 				cause: "credential rejected",
 				at: Date.now(),
 			});
@@ -4485,6 +4597,7 @@ export class AuthStorage {
 					apiKey: options?.apiKey,
 					credentialId: options?.credentialId,
 					signal: options?.signal,
+					modelNotInPlan: AIError.isModelNotInPlan(error),
 				})
 			).switched;
 		}
@@ -4524,6 +4637,7 @@ export class AuthStorage {
 			// The replacement is named later, by the resolve that actually serves.
 			this.#pendingFailover.set(provider, {
 				from: { credentialId: target.id, label: this.#accountNoticeLabel(provider, target.id) },
+				reason: "auth",
 				// The cause the operator reads, from the error itself: the notice is written after the
 				// row is soft-deleted, so nothing else can answer what killed this credential.
 				cause: authFailureCause(error),

@@ -1295,26 +1295,31 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.#syncStatusLineSettings();
 				this.#handleSessionAccentInputsChanged();
 			}),
-			// Auth death moved a provider to a different account. Not gated by
-			// `accounts.loadBalancing` — a revoked credential cannot serve the request at all — so
-			// it is the one account move that can happen without the operator asking, and it says
-			// so, naming both accounts. Silently spending a second subscription is exactly the
-			// surprise this notice exists to prevent.
+			// A provider moved to a different account because the one serving could not serve at all.
+			// A refused grant moves regardless of `accounts.loadBalancing`; a plan that does not include
+			// the model moves only with that setting on. Either way the notice names both accounts, so a
+			// second subscription is never spent silently.
 			this.session.modelRegistry.authStorage.onCredentialFailover(event => {
+				const why =
+					event.reason === "model-not-in-plan"
+						? `cannot serve this model (${event.cause})`
+						: `could not authenticate (${event.cause})`;
 				this.showWarning(
-					`${formatProviderName(event.provider)}: ${event.from.label} could not authenticate (${event.cause}), now using ${event.to.label}`,
+					`${formatProviderName(event.provider)}: ${event.from.label} ${why}, now using ${event.to.label}`,
 				);
 			}),
-			// The move that did NOT happen: quota is out, other accounts are idle, and
-			// `accounts.loadBalancing` is off. The turn is already waiting out a window that can be
-			// hours long, so the notice names what is spent, when it returns, how many accounts are
+			// The move that did NOT happen: the account cannot serve, other accounts are idle, and
+			// `accounts.loadBalancing` is off. The notice names what is wrong, how many accounts are
 			// sitting unused, and the one toggle that would use them. AuthStorage emits this once per
-			// exhausted window, so a retrying turn does not repeat it.
+			// exhausted window, or per refused model, so a retrying turn does not repeat it.
 			this.session.modelRegistry.authStorage.onUsageLimitWithheld(event => {
-				const returnsAt = new Date(event.retryAtMs).toLocaleTimeString();
 				const idle = event.idleSiblings === 1 ? "1 other account is" : `${event.idleSiblings} other accounts are`;
+				const problem =
+					event.reason === "quota"
+						? `is out of quota until ${new Date(event.retryAtMs).toLocaleTimeString()}`
+						: `cannot use ${event.modelId} on its plan`;
 				this.showWarning(
-					`${formatProviderName(event.provider)}: ${event.account.label} is out of quota until ${returnsAt}. ${idle} idle; turn on Account Load Balancing in /settings (Providers) to use them.`,
+					`${formatProviderName(event.provider)}: ${event.account.label} ${problem}. ${idle} idle; turn on Account Load Balancing in /settings (Providers) to use them.`,
 				);
 			}),
 		);

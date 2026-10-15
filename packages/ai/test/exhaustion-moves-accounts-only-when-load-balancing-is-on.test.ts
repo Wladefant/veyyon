@@ -252,6 +252,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 				provider: PROVIDER,
 				from: { credentialId: targetId, label: targetEmail },
 				to: { credentialId: siblingId, label: siblingEmail },
+				reason: "auth",
 				cause: "invalid_grant: token revoked",
 			},
 		]);
@@ -379,6 +380,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 				provider: PROVIDER,
 				account: { credentialId: targetId, label: targetEmail },
 				idleSiblings: 1,
+				reason: "quota",
 				retryAtMs: NOW_MS + 60_000,
 			},
 		]);
@@ -410,7 +412,10 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		setSystemTime(new Date(NOW_MS + 2 * 60_000));
 		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
 
-		expect(withheld.map(event => event.retryAtMs)).toEqual([NOW_MS + 60_000, NOW_MS + 3 * 60_000]);
+		expect(withheld.map(event => (event.reason === "quota" ? event.retryAtMs : undefined))).toEqual([
+			NOW_MS + 60_000,
+			NOW_MS + 3 * 60_000,
+		]);
 	});
 
 	/**

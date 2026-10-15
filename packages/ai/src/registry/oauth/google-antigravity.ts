@@ -200,7 +200,11 @@ export async function refreshAntigravityToken(refreshToken: string, projectId: s
 		// A refresh endpoint's error body can echo the credential it refused, so it is read
 		// through the shared bounded reader and its redactor.
 		const error = await AIError.readProviderErrorDetail(response);
-		throw new AIError.OAuthError(`Antigravity token refresh failed: ${error}`, { kind: "token-refresh" });
+		throw new AIError.OAuthError(`Antigravity token refresh failed: ${response.status} ${error}`, {
+			kind: "token-refresh",
+			provider: "google-antigravity",
+			status: response.status,
+		});
 	}
 
 	const data = (await response.json()) as {

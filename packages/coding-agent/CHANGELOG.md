@@ -30,6 +30,8 @@
 - The plan-approval slider no longer offers the plan model as a second choice when it is the default model at the same effort.
 - Mnemopi online memory runs the session's model when no memory helper model is set, instead of the persisted `defaultModel`.
 - The `/settings` Roster page shows eight rows before it scrolls and a shorter description, so its `Enter to configure · Esc to go back` footer stays on screen in a 40-row terminal.
+- A turn whose model no account's plan includes, and no fallback model can take over, ends with the provider's refusal instead of retrying it.
+- The notice for a move `accounts.loadBalancing` withheld names a plan that does not include the model as well as a spent quota window, and the failover notice states why the previous account could not serve.
 
 ## [1.5.6] - 2026-10-13
 
