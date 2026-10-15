@@ -16,6 +16,7 @@
 ### Added
 
 - A config written before this release migrates on load: `modelRoles.default` (or `interactive`) becomes `defaultModel`, the `advisor`, `plan`, `vision`, `commit`, `tiny` and `smol` roles become the matching helpers' models with `@role` references expanded, `mnemopi.llmMode: smol` becomes `online`, and each dropped key is reported once in the log.
+- An extension provider's `oauth.refreshToken(credentials, signal)` receives an `AbortSignal` that aborts when the refresh is abandoned.
 - `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
 
 ### Changed
@@ -51,6 +52,9 @@
 - A token endpoint answering 200 without a usable access token keeps the login and its stored token instead of storing an empty token (Anthropic, Antigravity, Gemini CLI) or failing with a `TypeError` (Cursor).
 - A health probe that refreshes a credential writes the refreshed token onto that credential's row when the stored rows have no account identity.
 - An MCP server's OAuth refresh no longer aborts the token request after 10 seconds; the connection proceeds with the held credential and a rotation that answers later is persisted, so a slow token endpoint no longer signs the server out.
+- A token endpoint answering 200 with JSON `null`, a string or a number fails the refresh as an invalid response and keeps the login, instead of a `TypeError` in the Anthropic, OpenAI Codex, Cursor, Kimi, Antigravity, Gemini CLI, GitLab Duo and Nous Research refreshers.
+- A refresh refused with 403 and a JSON body `{"error":"invalid_grant"}` (or `invalid_token`, `unauthorized_client`) disables the dead login even when the status text says "Forbidden"; a bare 403 stays transient.
+- A token refresh that reaches the 120-second flight ceiling aborts its token request and holds the refresh lease until the request settles or 5 seconds pass, so a second refresh no longer spends the same refresh token beside it; `refreshToken` on an OAuth provider receives an `AbortSignal` for its token request.
 
 ## [1.5.6] - 2026-10-13
 
