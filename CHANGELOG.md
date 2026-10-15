@@ -36,7 +36,14 @@
 - The plan-approval slider no longer offers the plan model as a second choice when it is the default model at the same effort.
 - Mnemopi online memory runs the session's model when no memory helper model is set, instead of the persisted `defaultModel`.
 - The `/settings` Roster page shows eight rows before it scrolls and a shorter description, so its `Enter to configure · Esc to go back` footer stays on screen in a 40-row terminal.
+- A turn whose model no account's plan includes, and no fallback model can take over, ends with the provider's refusal instead of retrying it.
+- The notice for a move `accounts.loadBalancing` withheld names a plan that does not include the model as well as a spent quota window, and the failover notice states why the previous account could not serve.
 - A Google or Cloud Code Assist request with thinking off names the model's lowest declared thinking level instead of `MINIMAL`, which a model without a minimal level rejects.
+- A Cursor end stream that refuses a request keeps its title, detail and error code, so a Free plan's refusal of a named model reports "Free plans can only use Auto" instead of `Error`.
+- A provider's refusal of a model for the account's plan is classified as `ModelNotInPlan`, recorded for that model only, and moves the session to an account that serves the model only when `accounts.loadBalancing` is on; with it off nothing moves and `onUsageLimitWithheld` reports the account and its idle siblings.
+- An OAuth refresh failure includes the HTTP status, so a token endpoint answering 401 with no OAuth error code disables the login instead of retrying it forever; the Gemini CLI refresh error body is redacted.
+- A login disabled by a failed refresh is no longer reported as signed out once a later login for the same provider is active.
+- Kimi Code and Synthetic models sent through the Anthropic-format shim accept every thinking effort the catalog declares, so `kimi-code/k3` at `max` no longer fails, and a model with no effort control is not sent thinking `disabled`.
 
 ## [1.5.6] - 2026-10-13
 
