@@ -131,17 +131,18 @@ export async function refreshCursorToken(apiKeyOrRefreshToken: string): Promise<
 		});
 	}
 
-	const data = (await response.json()) as {
-		accessToken: string;
-		refreshToken: string;
-	};
-
-	const expiresAt = getTokenExpiry(data.accessToken);
+	const data = (await response.json()) as { accessToken?: unknown; refreshToken?: unknown };
+	if (typeof data.accessToken !== "string" || data.accessToken.length === 0) {
+		throw new AIError.OAuthError("Cursor token refresh response missing accessToken", {
+			kind: "validation",
+			provider: "cursor",
+		});
+	}
 
 	return {
 		access: data.accessToken,
-		refresh: data.refreshToken || apiKeyOrRefreshToken,
-		expires: expiresAt,
+		refresh: typeof data.refreshToken === "string" && data.refreshToken ? data.refreshToken : apiKeyOrRefreshToken,
+		expires: getTokenExpiry(data.accessToken),
 	};
 }
 

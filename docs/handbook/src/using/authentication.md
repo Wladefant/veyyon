@@ -86,10 +86,11 @@ with no further action.
 
 ## When a login is signed out for you
 
-A stored login can stop working without you doing anything: the provider revokes the grant, or a
-token refresh fails and the credential is set aside. Veyyon does not hide that. The account manager
-marks the provider and prints the provider's own reason, so you can tell a revoked grant from a
-temporary outage:
+A stored login can stop working without you doing anything: the provider revokes the grant, or
+refuses a token refresh, and the credential is set aside. A refresh that times out, fails on the
+network, or meets a provider outage does not set the login aside: the account stays in place and the
+next request refreshes again. The account manager marks a signed-out provider and prints the
+provider's own reason:
 
 ```text
 Kimi Code · 1 account
