@@ -54,7 +54,7 @@
 - An MCP server's OAuth refresh no longer aborts the token request after 10 seconds; the connection proceeds with the held credential and a rotation that answers later is persisted, so a slow token endpoint no longer signs the server out.
 - A token endpoint answering 200 with JSON `null`, a string or a number fails the refresh as an invalid response and keeps the login, instead of a `TypeError` in the Anthropic, OpenAI Codex, Cursor, Kimi, Antigravity, Gemini CLI, GitLab Duo and Nous Research refreshers.
 - A refresh refused with 403 and a JSON body `{"error":"invalid_grant"}` (or `invalid_token`, `unauthorized_client`) disables the dead login even when the status text says "Forbidden"; a bare 403 stays transient.
-- A token refresh that reaches the 120-second flight ceiling aborts its token request and holds the refresh lease until the request settles or 5 seconds pass, so a second refresh no longer spends the same refresh token beside it; `refreshToken` on an OAuth provider receives an `AbortSignal` for its token request.
+- A token refresh that reaches the 120-second flight ceiling aborts its token request and holds the refresh lease until that request settles, so a second refresh, in this process or another, no longer spends the same refresh token beside it; `refreshToken` on an OAuth provider receives an `AbortSignal` for its token request.
 
 ## [1.5.6] - 2026-10-13
 
