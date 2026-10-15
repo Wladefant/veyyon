@@ -142,7 +142,7 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 				spawnId: `quota-${index}`,
 				modelRegistry: registry,
 			});
-			expect(resolved.patterns.slice(2)).toEqual([fallback]);
+			expect(resolved.patterns).toContain(fallback);
 			counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
 		}
 		return counts;
@@ -175,13 +175,12 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		expect(afterReset[antigravityFlash]).toBeLessThanOrEqual(60);
 	});
 
-	it("keeps the hash split when both pools are suppressed", () => {
+	it("starts on the healthy tail when both shared pools are suppressed", () => {
 		registry.clearSuppressedSelectors();
 		registry.suppressSelector(luna, Date.now() + 60_000);
 		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
 		const counts = firstChoices();
-		expect(counts[antigravityFlash]).toBeGreaterThanOrEqual(40);
-		expect(counts[luna]).toBeGreaterThanOrEqual(40);
+		expect(counts[fallback]).toBe(100);
 		registry.clearSuppressedSelectors();
 	});
 
@@ -201,8 +200,8 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		registry.suppressSelector(luna, Date.now() + 60_000);
 		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
 		const exhausted = resolve("tail-1");
-		expect(exhausted.slice(0, 2).sort()).toEqual([antigravityFlash, luna].sort());
-		expect(exhausted.slice(2)).toEqual([fallback]);
+		expect(exhausted[0]).toBe(fallback);
+		expect(exhausted.slice(1).sort()).toEqual([antigravityFlash, luna].sort());
 		registry.clearSuppressedSelectors();
 	});
 });
