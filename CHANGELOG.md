@@ -44,6 +44,13 @@
 - An OAuth refresh failure includes the HTTP status, so a token endpoint answering 401 with no OAuth error code disables the login instead of retrying it forever; the Gemini CLI refresh error body is redacted.
 - A login disabled by a failed refresh is no longer reported as signed out once a later login for the same provider is active.
 - Kimi Code and Synthetic models sent through the Anthropic-format shim accept every thinking effort the catalog declares, so `kimi-code/k3` at `max` no longer fails, and a model with no effort control is not sent thinking `disabled`.
+- An OAuth refresh that answers after its caller stopped waiting is persisted, and no second refresh spends the old refresh token while the first is still running, so a slow token endpoint no longer revokes the login.
+- The account health probe reports a refresh that timed out or met a network or provider failure as unverifiable and keeps the account serving; only a refusal of the grant marks it as failed.
+- A transient refresh failure while the access token is still valid serves that token instead of blocking the account for five minutes.
+- Aborting a request during a token refresh no longer blocks the account or serves the request from another account.
+- A token endpoint answering 200 without a usable access token keeps the login and its stored token instead of storing an empty token (Anthropic, Antigravity, Gemini CLI) or failing with a `TypeError` (Cursor).
+- A health probe that refreshes a credential writes the refreshed token onto that credential's row when the stored rows have no account identity.
+- An MCP server's OAuth refresh no longer aborts the token request after 10 seconds; the connection proceeds with the held credential and a rotation that answers later is persisted, so a slow token endpoint no longer signs the server out.
 
 ## [1.5.6] - 2026-10-13
 
