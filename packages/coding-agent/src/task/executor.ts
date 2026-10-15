@@ -2062,7 +2062,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		model,
 		modelPattern: deferredPattern ? modelPatterns : undefined,
 		modelPatternAuthFallback: deferredPattern ? options.parentActiveModelPattern : undefined,
-		modelPatternFallbackRole: deferredPattern ? `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}` : undefined,
+		modelPatternFallbackRole: `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`,
 		thinkingLevel,
 		toolNames,
 		requireYieldTool: true,

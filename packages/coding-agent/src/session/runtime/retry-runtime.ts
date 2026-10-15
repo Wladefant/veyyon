@@ -557,12 +557,17 @@ export class RetryRuntime {
 		const activeModel = session.model;
 		const currentSelector = activeModel ? formatRetryFallbackSelector(activeModel, session.thinkingLevel) : undefined;
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
+			// Quota cooldowns guide later spawns even when global model fallback is disabled.
+			if (
+				allowModelFallback &&
+				!classifierRefusal &&
+				(this.#fallback.chainEnabled || AIError.is(id, AIError.Flag.UsageLimit))
+			) {
+				this.#fallback.noteCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
+			}
 			// A refusal chain stops at the retry budget: the exhausted-attempt
 			// last resort is for provider failures, not classifier decisions.
-			if (allowModelFallback && retrySettings.modelFallback && !(retryBudgetExhausted && classifierRefusal)) {
-				if (!classifierRefusal) {
-					this.#fallback.noteCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
-				}
+			if (allowModelFallback && this.#fallback.chainEnabled && !(retryBudgetExhausted && classifierRefusal)) {
 				switchedModel = await this.#fallback.tryChain(currentSelector, { pinFallback: classifierRefusal });
 			}
 			// Auto fallback from a Fireworks Fast variant to its base model. Independent

@@ -22,8 +22,15 @@ const selectors = [
 const models = selectors.map(selector => {
 	const [provider, id] = selector.split(":")[0].split("/");
 	return buildModel({
-		provider, id, name: id, api: "openai-completions", baseUrl: "https://example.invalid",
-		reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 8192,
+		provider,
+		id,
+		name: id,
+		api: "openai-completions",
+		baseUrl: "https://example.invalid",
+		reasoning: true,
+		input: ["text"],
+		contextWindow: 128000,
+		maxTokens: 8192,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	});
 });
@@ -42,7 +49,8 @@ function fixture(explicit = true, global = false) {
 	const session = {
 		agent: new Agent({ initialState: { model: models[0], messages: [], tools: [] } }),
 		sessionManager: {
-			appendModelChange: () => "change", getBranch: () => [],
+			appendModelChange: () => "change",
+			getBranch: () => [],
 		} as unknown as SessionManager,
 		settings,
 		modelRegistry: {
@@ -63,8 +71,12 @@ function fixture(explicit = true, global = false) {
 		operatorNotices: { warn: () => {} },
 	} as unknown as RetrySession & { modelPatternFallbackRole?: string };
 	const runtime = new RetryRuntime(session, {
-		emitSessionEvent: async event => { events.push(event); },
-		setModelWithProviderSessionReset: model => { Object.assign(session, { model }); },
+		emitSessionEvent: async event => {
+			events.push(event);
+		},
+		setModelWithProviderSessionReset: model => {
+			Object.assign(session, { model });
+		},
 		promptGeneration: () => 0,
 		scheduleAgentContinue: () => {},
 		abortIsDeliberate: () => false,
@@ -79,19 +91,33 @@ function fixture(explicit = true, global = false) {
 
 function quota(): AssistantMessage {
 	return {
-		role: "assistant", content: [], api: "openai-completions", provider: "fake", model: "fake",
-		stopReason: "error", timestamp: 0, errorStatus: 429,
+		role: "assistant",
+		content: [],
+		api: "openai-completions",
+		provider: "fake",
+		model: "fake",
+		stopReason: "error",
+		timestamp: 0,
+		errorStatus: 429,
 		errorMessage: "429 QUOTA_EXHAUSTED: usage limit reached. retry-after-ms=172800000",
 		usage: {
-			input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 	};
 }
 
 describe("spawn quota fallback", () => {
-	beforeEach(() => { vi.spyOn(AgentStorage, "forAgentDir").mockReturnValue(null); });
-	afterEach(() => { vi.restoreAllMocks(); });
+	beforeEach(() => {
+		vi.spyOn(AgentStorage, "forAgentDir").mockReturnValue(null);
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 
 	it.each([false, true])("walks the explicit chain and stops at its end (global=%s)", async global => {
 		const { runtime, session, events } = fixture(true, global);
@@ -101,10 +127,13 @@ describe("spawn quota fallback", () => {
 				expect(session.model).toBe(expected);
 			}
 			expect(await runtime.recoverFailedTurn(quota())).toBe(false);
-			expect(events.filter(event => event.type === "retry_fallback_applied").map(event => event.to))
-				.toEqual(selectors.slice(1));
+			expect(events.filter(event => event.type === "retry_fallback_applied").map(event => event.to)).toEqual(
+				selectors.slice(1),
+			);
 			expect(runtime.isRetrying).toBe(false);
-		} finally { runtime.abort(); }
+		} finally {
+			runtime.abort();
+		}
 	});
 
 	it("does not enable inherited chains for a session without an explicit list", async () => {
@@ -112,7 +141,9 @@ describe("spawn quota fallback", () => {
 		try {
 			expect(await runtime.recoverFailedTurn(quota())).toBe(false);
 			expect(session.model).toBe(models[0]);
-		} finally { runtime.abort(); }
+		} finally {
+			runtime.abort();
+		}
 	});
 
 	it("starts new spawns on the healthy tail after both pools return quota errors", async () => {
@@ -123,19 +154,29 @@ describe("spawn quota fallback", () => {
 			const settings = Settings.isolated({ "agent.agents": { "qa-verifier": { model: selectors } } });
 			for (let index = 0; index < 20; index++) {
 				const resolved = resolveAgentModel({
-					settings, agentName: "qa-verifier", spawnId: `quota-${index}`, modelRegistry: session.modelRegistry,
+					settings,
+					agentName: "qa-verifier",
+					spawnId: `quota-${index}`,
+					modelRegistry: session.modelRegistry,
 				});
 				expect(resolved.patterns[0]).toBe(selectors[2]);
 			}
 			cooldowns.clear();
 			const healthyFirst = new Set<string>();
 			for (let index = 0; index < 100; index++) {
-				healthyFirst.add(resolveAgentModel({
-					settings, agentName: "qa-verifier", spawnId: `quota-${index}`, modelRegistry: session.modelRegistry,
-				}).patterns[0]);
+				healthyFirst.add(
+					resolveAgentModel({
+						settings,
+						agentName: "qa-verifier",
+						spawnId: `quota-${index}`,
+						modelRegistry: session.modelRegistry,
+					}).patterns[0],
+				);
 			}
 			expect([...healthyFirst].sort()).toEqual(selectors.slice(0, 2).sort());
-		} finally { runtime.abort(); }
+		} finally {
+			runtime.abort();
+		}
 	});
 
 	it("backtests the recorded Cloud Code Assist quota response without global fallback", async () => {
@@ -148,17 +189,24 @@ describe("spawn quota fallback", () => {
 		message.errorId = 659456;
 		message.errorMessage = `Cloud Code Assist API error (429): ${JSON.stringify({
 			error: {
-				code: 429, status: "RESOURCE_EXHAUSTED",
+				code: 429,
+				status: "RESOURCE_EXHAUSTED",
 				message: "Individual quota reached. Resets in 30h46m49s.",
-				details: [{
-					"@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "QUOTA_EXHAUSTED",
-					metadata: { quotaResetDelay: "30h46m49.374072376s" },
-				}, { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "110809.374072376s" }],
+				details: [
+					{
+						"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+						reason: "QUOTA_EXHAUSTED",
+						metadata: { quotaResetDelay: "30h46m49.374072376s" },
+					},
+					{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "110809.374072376s" },
+				],
 			},
 		})}`;
 		try {
 			expect(await runtime.recoverFailedTurn(message)).toBe(true);
 			expect(session.model).toBe(models[2]);
-		} finally { runtime.abort(); }
+		} finally {
+			runtime.abort();
+		}
 	});
 });

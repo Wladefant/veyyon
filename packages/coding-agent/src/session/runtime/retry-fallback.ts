@@ -28,6 +28,7 @@ import {
 	type RetryFallbackSelector,
 	resolveRetryFallbackRole,
 	retryFallbackChainsForRoles,
+	sanitizeRetryFallbackChains,
 } from "../agent-session-retry-fallback";
 import type { AgentSessionEvent } from "../agent-session-types";
 import { hasReplayUnsafeOutput, isClassifierRefusal } from "../failed-turn";
@@ -41,6 +42,8 @@ export interface RetryFallbackSession {
 	readonly model: Model | undefined;
 	readonly thinkingLevel: ThinkingLevel | undefined;
 	readonly sessionId: string;
+	/** The explicit spawn list's chain, independent of the global fallback switch. */
+	readonly modelPatternFallbackRole?: string;
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
 	setThinkingLevel(
 		level: ConfiguredThinkingLevel | undefined,
@@ -73,6 +76,14 @@ export class RetryFallback {
 		return this.#activeFallback?.role;
 	}
 
+	get chainEnabled(): boolean {
+		const role = this.#session.modelPatternFallbackRole;
+		return (
+			(role !== undefined && Array.isArray(this.#session.settings.get("retry.fallbackChains")?.[role])) ||
+			this.#session.settings.get("retry.modelFallback")
+		);
+	}
+
 	/** Forget the active fallback: an explicit model change supersedes it. */
 	clear(): void {
 		this.#activeFallback = undefined;
@@ -81,11 +92,13 @@ export class RetryFallback {
 	/** What chain resolution reads, as of this call: the sanitized chains, role assignments and active model. */
 	#source(): RetryFallbackChainSource {
 		const settings = this.#session.settings;
+		const explicitRole = this.#session.modelPatternFallbackRole;
+		const chains = sanitizeRetryFallbackChains(settings.get("retry.fallbackChains"));
 		return {
-			chains: retryFallbackChainsForRoles(
-				settings.get("retry.fallbackChains"),
-				Object.keys(settings.getModelRoles()),
-			),
+			chains:
+				explicitRole && chains[explicitRole]
+					? { [explicitRole]: chains[explicitRole] }
+					: retryFallbackChainsForRoles(chains, Object.keys(settings.getModelRoles())),
 			modelRole: role => settings.getModelRole(role),
 			models: this.#session.modelRegistry,
 			activeModel: this.#session.model,
@@ -229,7 +242,7 @@ export class RetryFallback {
 		const model = this.#session.model;
 		if (!model) return false;
 		const retrySettings = this.#session.settings.getGroup("retry");
-		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
+		if (!retrySettings.enabled || !this.chainEnabled) return false;
 		if (isClassifierRefusal(message)) return false;
 		const id = this.#host.classify(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;

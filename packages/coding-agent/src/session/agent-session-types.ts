@@ -159,6 +159,8 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	/** The explicit spawn list's fallback role; does not enable global fallback chains. */
+	modelPatternFallbackRole?: string;
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */
 	autoApprove?: boolean;
 	/**
