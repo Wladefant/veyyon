@@ -51,8 +51,10 @@ describe("quota refusals belong to the failed request", () => {
 
 	async function recover(identity: string | undefined) {
 		const store = await SqliteAuthCredentialStore.open(dbPath);
-		store.saveApiKey(PROVIDER, "failed-api-key");
-		store.saveApiKey(PROVIDER, "healthy-api-key");
+		store.replaceAuthCredentialsForProvider(PROVIDER, [
+			{ type: "api_key", key: "failed-api-key" },
+			{ type: "api_key", key: "healthy-api-key" },
+		]);
 		const [failed, healthy] = store.listAuthCredentials(PROVIDER);
 		if (!failed || !healthy) throw new Error("expected two stored credentials");
 		const storage = new AuthStorage(store, { loadBalancing: true });
