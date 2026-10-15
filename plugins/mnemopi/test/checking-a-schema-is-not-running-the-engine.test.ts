@@ -158,9 +158,13 @@ describe("asking whether a model is configured is not calling one", () => {
 	 * `catalog/catalog-spans.ts`, `utils/local-time.ts`, `ai/dialect/json-tool-call-scanner.ts`,
 	 * `ai/dialect/bracket-walk.ts` and `catalog/wire/kimi-code.ts`. None is a mnemopi edge, so the cut this
 	 * file holds did not move.
+	 *
+	 * RE-MEASURED 2026-10-15 at 217: `ai/registry/oauth/token-response.ts`, the shared reader that requires
+	 * a token endpoint's JSON to be an object, reached through `ai/registry/oauth/nous-research.ts`. Not a
+	 * mnemopi edge.
 	 */
-	it("local-llm reaches at most 216 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(216);
+	it("local-llm reaches at most 217 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(217);
 	});
 
 	/**

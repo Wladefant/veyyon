@@ -163,8 +163,13 @@ const PRUNING_CEILING = 197;
  * `catalog/wire/kimi-code.ts`, the Kimi Code region table the Kimi provider resolves a token's deployment
  * from. It imports only `@veyyon/utils/url`, already on the engine's reach, so the growth is that one file
  * and no subtree.
+ *
+ * RE-MEASURED 2026-10-15: engine 308. The one new module is `ai/registry/oauth/token-response.ts`, the
+ * shared reader that requires a token endpoint's JSON to be an object, which `registry/oauth/nous-research.ts`
+ * reads its token responses through. It imports only `@veyyon/utils/type-guards` and `ai/error`, both
+ * already on the engine's reach, so the growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 307;
+const COMPACTION_ENGINE_CEILING = 308;
 const REMOTE_SUMMARIZER_CEILING = 101;
 
 describe("the estimator is a leaf", () => {

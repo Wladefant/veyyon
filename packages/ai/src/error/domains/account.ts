@@ -120,8 +120,18 @@ const OAUTH_DEFINITIVE_FAILURE_PATTERN = new RegExp(
 	].join("|"),
 	"i",
 );
-const OAUTH_TRANSIENT_FAILURE_PATTERN =
-	/timeout|network|fetch failed|ECONN(?:REFUSED|RESET)|ETIMEDOUT|EAI_AGAIN|socket hang up|\b(?:408|425|429|5\d{2})\b|rate.?limit|too many requests|temporar|unavailable|forbidden|permission_denied|cloudflare|captcha/i;
+// A fact about the transport: the request did not reach a verdict on the grant. Nothing the body says
+// outranks it, because a throttle or a gateway page can repeat any token from the request it refused.
+const OAUTH_TRANSPORT_FAILURE_PATTERN =
+	/timeout|network|fetch failed|ECONN(?:REFUSED|RESET)|ETIMEDOUT|EAI_AGAIN|socket hang up|\b(?:408|425|429|5\d{2})\b|rate.?limit|too many requests|temporar|unavailable/i;
+// Access denied to the REQUEST, not a verdict on the grant: a WAF, a challenge page, a permission the
+// project lacks. A bare 403 says this and nothing more, so it stays transient.
+const OAUTH_ACCESS_DENIAL_PATTERN = /forbidden|permission_denied|cloudflare|captcha/i;
+// The token endpoint's own RFC 6749 §5.2 answer, as the `error` member of its JSON body (escaped quotes
+// included, for a body nested in another JSON string). A WAF does not mint one, so it outranks the
+// access-denial prose: `403 Forbidden {"error":"invalid_grant"}` is the endpoint refusing the grant.
+const OAUTH_ERROR_CODE_FIELD_PATTERN =
+	/\\?"error\\?"\s*:\s*\\?"(?:invalid_grant|invalid_token|unauthorized_client)\\?"/i;
 const OAUTH_HTTP_AUTH_PATTERN = /\b401\b/;
 
 /**
@@ -166,10 +176,17 @@ export function withoutStackTrace(errorMessage: string): string {
  * definitive token matched and returned before the transient guard was ever consulted, and the guard
  * was only ever reached on the 401 branch. A throttled auth endpoint could permanently tear down a
  * healthy account.
+ *
+ * The transient check has two halves. A transport fact (a timeout, a 429, a 5xx) always wins. Access
+ * denial (`forbidden`, a Cloudflare page) wins over everything except the endpoint's own JSON `error`
+ * code, so a 403 whose body is `{"error":"invalid_grant"}` disables the dead grant instead of
+ * retrying it forever, while a bare 403 stays transient.
  */
 export function isDefinitiveOAuthFailure(errorMessage: string): boolean {
 	const diagnostic = withoutStackTrace(errorMessage);
-	if (OAUTH_TRANSIENT_FAILURE_PATTERN.test(diagnostic)) return false;
+	if (OAUTH_TRANSPORT_FAILURE_PATTERN.test(diagnostic)) return false;
+	if (OAUTH_ERROR_CODE_FIELD_PATTERN.test(diagnostic)) return true;
+	if (OAUTH_ACCESS_DENIAL_PATTERN.test(diagnostic)) return false;
 	if (OAUTH_DEFINITIVE_FAILURE_PATTERN.test(diagnostic)) return true;
 	return OAUTH_HTTP_AUTH_PATTERN.test(diagnostic);
 }

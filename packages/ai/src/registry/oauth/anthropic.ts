@@ -9,6 +9,7 @@ import type { FetchImpl } from "../../types";
 import { DEFAULT_CALLBACK_PATH, OAuthCallbackFlow } from "./callback-server";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { generatePKCE } from "./pkce";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const decode = (s: string) => atob(s);
@@ -47,10 +48,12 @@ async function postJson(
 	body: Record<string, string | number>,
 	fetchImpl: FetchImpl,
 	extraHeaders?: Record<string, string>,
+	callerSignal?: AbortSignal,
 ): Promise<string> {
 	// The fence spans the body read and its timer is cleared on settle
 	// (a bare AbortSignal.timeout stays armed for the full 30s).
-	return await withScopedTimeoutSignal(30_000, async signal => {
+	return await withScopedTimeoutSignal(30_000, async scopedSignal => {
+		const signal = callerSignal ? AbortSignal.any([scopedSignal, callerSignal]) : scopedSignal;
 		const response = await fetchImpl(url, {
 			method: "POST",
 			headers: {
@@ -117,14 +120,16 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 function parseOAuthTokenResponse(responseBody: string, operation: string): AnthropicTokenResponse {
+	let parsed: unknown;
 	try {
-		return JSON.parse(responseBody) as AnthropicTokenResponse;
+		parsed = JSON.parse(responseBody);
 	} catch (error) {
 		throw new AIError.OAuthError(
 			`Anthropic ${operation} returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
 			{ kind: "validation", provider: "anthropic", cause: error },
 		);
 	}
+	return requireTokenResponseObject<AnthropicTokenResponse>(parsed, "anthropic", operation);
 }
 
 /**
@@ -307,11 +312,12 @@ export async function loginAnthropic(ctrl: OAuthController): Promise<OAuthCreden
 }
 
 /**
- * Refresh Anthropic OAuth token
+ * Refresh Anthropic OAuth token. `signal` aborts the token request.
  */
 export async function refreshAnthropicToken(
 	refreshToken: string,
 	fetchOverride?: FetchImpl,
+	signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
 	const fetchImpl = fetchOverride ?? fetch;
 	let responseBody: string;
@@ -329,6 +335,7 @@ export async function refreshAnthropicToken(
 				"anthropic-beta": "oauth-2025-04-20",
 				"User-Agent": "anthropic-sdk-typescript/0.94.0 userOAuthProvider",
 			},
+			signal,
 		);
 	} catch (error) {
 		throw new AIError.OAuthError(

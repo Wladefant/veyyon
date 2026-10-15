@@ -96,7 +96,7 @@ describe("provider registry auth surface", () => {
 		const refreshed: OAuthCredentials = { refresh: "r2", access: "a2", expires: Date.now() + 120_000 };
 		const spy = vi.spyOn(anthropicOauth, "refreshAnthropicToken").mockResolvedValue(refreshed);
 		expect(await refreshOAuthToken("anthropic", creds)).toBe(refreshed);
-		expect(spy).toHaveBeenCalledWith("r");
+		expect(spy).toHaveBeenCalledWith("r", undefined, undefined);
 
 		await expect(refreshOAuthToken("nonexistent-provider" as OAuthProvider, creds)).rejects.toThrow(
 			"Unknown OAuth provider",

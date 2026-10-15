@@ -119,8 +119,13 @@ function runtimeImportsOf(relative: string): string[] {
  * 228 since 2026-10-13, measured: `catalog/wire/kimi-code.ts`, the Kimi Code region table.
  * `catalog/compat/kimi.ts`, already in this closure, resolves a token's deployment from it, and its only
  * import is `@veyyon/utils/url`, already reached, so it adds one module and no subtree.
+ *
+ * 229 since 2026-10-15, measured: `registry/oauth/token-response.ts`, the shared reader that requires a
+ * token endpoint's JSON to be an object. `registry/oauth/nous-research.ts`, already in this closure,
+ * reads its token responses through it, and its imports are `@veyyon/utils/type-guards` and `./error`,
+ * both already reached, so it adds one module and no subtree.
  */
-const AUTH_STORAGE_CEILING = 228;
+const AUTH_STORAGE_CEILING = 229;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc

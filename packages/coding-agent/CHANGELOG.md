@@ -14,6 +14,7 @@
 ### Added
 
 - A config written before this release migrates on load: `modelRoles.default` (or `interactive`) becomes `defaultModel`, the `advisor`, `plan`, `vision`, `commit`, `tiny` and `smol` roles become the matching helpers' models with `@role` references expanded, `mnemopi.llmMode: smol` becomes `online`, and each dropped key is reported once in the log.
+- An extension provider's `oauth.refreshToken(credentials, signal)` receives an `AbortSignal` that aborts when the refresh is abandoned.
 
 ### Changed
 

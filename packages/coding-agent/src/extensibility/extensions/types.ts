@@ -1331,8 +1331,8 @@ export interface ProviderConfig {
 		name: string;
 		/** Run the provider login flow and return credentials (or a plain API key) to persist. */
 		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		/** Refresh expired credentials. */
-		refreshToken?(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+		/** Refresh expired credentials. Pass `signal` to the token request so an abandoned refresh stops. */
+		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
 		/** Convert credentials to an API key string for requests. */
 		getApiKey?(credentials: OAuthCredentials): string;
 		/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */

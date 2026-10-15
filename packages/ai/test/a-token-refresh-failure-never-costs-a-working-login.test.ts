@@ -1,5 +1,5 @@
 /**
- * WHY: six ways a refresh that did not succeed cost the operator a login that still worked.
+ * WHY: eight ways a refresh that did not succeed cost the operator a login that still worked.
  *
  * 1. A refresh that answered after its caller stopped waiting was dropped. The 10 s bound ended the
  *    whole flight, released the lease and the in-flight entry, and nobody persisted the rotation
@@ -18,17 +18,24 @@
  * 6. An MCP server's refresh aborted the token request itself after 10 s. A token endpoint that
  *    answered later had already spent the old refresh token, and the abort discarded the new one,
  *    so the next connection refreshed with a dead token and the server was signed out.
+ * 7. A token endpoint answering 200 with JSON `null`, a string or a number crashed ten refreshers
+ *    with a TypeError whose message was the crash text.
+ * 8. A flight that reached its ceiling released the lease and the in-flight entry with its token
+ *    request still open, and no refresher was handed a signal to stop it. The next request started a
+ *    second flight beside it, spending the same single-use refresh token twice.
  *
  * Class closed: a refresh outcome that is not the provider refusing the grant never disables, marks
  * dead, blocks or moves off the row, and a rotation the provider minted is always persisted. The probe
  * sweep derives its verdict from `isDefinitiveOAuthFailure`, the one classifier the request path uses,
  * over a corpus holding both kinds, so the probe and the request path cannot disagree. The malformed
- * body sweep reads `PROVIDER_REGISTRY` at run time, so a new refresher is covered by default.
+ * body sweep and the abort sweep read `PROVIDER_REGISTRY` at run time, so a new refresher is covered
+ * by default.
  *
- * Not caught: a token endpoint answering JSON `null` still crashes several refreshers with a TypeError.
- * The error is not definitive, so the row is kept and retried, but its message is the crash text. A
- * rotation answered more than the flight ceiling after a SECOND flight already started can still race
- * that flight at a provider with reuse detection; the late commit only refuses to overwrite a newer row.
+ * Not caught: a refresher that ignores its signal still holds the flight only for the abort grace; a
+ * rotation it answers after that can race a second flight at a provider with reuse detection, and
+ * the late commit only refuses to overwrite a newer row. The abort sweep drives each refresher's
+ * first token request only, so a refresher's identity lookup (Anthropic's bootstrap) and an xAI OIDC
+ * discovery stay bounded by their own timers.
  */
 import { afterEach, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -40,17 +47,19 @@ import {
 	type OAuthCredential,
 	SqliteAuthCredentialStore,
 } from "@veyyon/ai/auth-storage";
+import * as AIError from "@veyyon/ai/error";
 import { isDefinitiveOAuthFailure } from "@veyyon/ai/error/flags";
-import type { OAuthCredentials } from "@veyyon/ai/registry/oauth";
+import { type OAuthCredentials, registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
 import { getHashedIndex } from "../src/auth-storage/credentials";
 import { PROVIDER_REGISTRY } from "../src/registry/registry";
 
 const PROVIDER = "anthropic";
 const SESSION = "refresh-failure-session";
-/** The caller wait and flight ceiling in `oauth-refresh.ts`, restated so a change to either is a decision. */
+/** The caller wait, flight ceiling and abort grace in `oauth-refresh.ts`, restated so a change to any is a decision. */
 const CALLER_WAIT_MS = 10_000;
 const FLIGHT_CEILING_MS = 120_000;
+const ABORT_GRACE_MS = 5_000;
 
 let tempDir = "";
 let store: SqliteAuthCredentialStore | undefined;
@@ -88,13 +97,13 @@ function oauth(suffix: string, expires: number): OAuthCredential {
 /** A storage whose refresh is `refresh`, holding the given rows in order; returns their ids. */
 async function storageWith(
 	rows: OAuthCredential[],
-	refresh: (credentialId: number) => Promise<OAuthCredentials>,
+	refresh: (credentialId: number, signal: AbortSignal | undefined) => Promise<OAuthCredentials>,
 	loadBalancing = false,
 ): Promise<{ storage: AuthStorage; ids: number[] }> {
 	for (const row of rows) store!.saveOAuth(PROVIDER, row);
 	const storage = new AuthStorage(store!, {
 		loadBalancing,
-		refreshOAuthCredential: (_provider, credentialId) => refresh(credentialId),
+		refreshOAuthCredential: (_provider, credentialId, _credential, signal) => refresh(credentialId, signal),
 		// Load balancing ranks accounts by usage. This suite drives refresh outcomes, not ranking, and
 		// the default strategy and usage provider would read the real endpoint and process-wide caches.
 		usageProviderResolver: () => undefined,
@@ -107,20 +116,34 @@ async function storageWith(
 	return { storage, ids: store!.listAuthCredentials(PROVIDER).map(row => row.id) };
 }
 
-/** A refresh the test answers by hand, counting how many times the token endpoint was asked. */
-function heldRefresh() {
+/**
+ * A refresh the test answers by hand, counting how many times the token endpoint was asked and keeping
+ * the signal of the latest request. `honoursAbort` makes it reject when that signal aborts, as a
+ * refresher passing it to `fetch` does; otherwise it ignores the abort.
+ */
+function heldRefresh(honoursAbort = false) {
 	const answer = Promise.withResolvers<OAuthCredentials>();
 	const started = Promise.withResolvers<void>();
 	let calls = 0;
+	let signal: AbortSignal | undefined;
 	return {
 		answer,
 		started: started.promise,
 		get calls() {
 			return calls;
 		},
-		refresh: (): Promise<OAuthCredentials> => {
+		get signal() {
+			return signal;
+		},
+		refresh: (_credentialId?: number, requestSignal?: AbortSignal): Promise<OAuthCredentials> => {
 			calls += 1;
+			signal = requestSignal;
 			started.resolve();
+			if (honoursAbort && requestSignal) {
+				const aborted = Promise.withResolvers<never>();
+				requestSignal.addEventListener("abort", () => aborted.reject(requestSignal.reason), { once: true });
+				return Promise.race([answer.promise, aborted.promise]);
+			}
 			return answer.promise;
 		},
 	};
@@ -172,7 +195,7 @@ describe("a refresh flight outlives the caller that started it", () => {
 		expect(storedRefresh(ids[0]!)).toBe("refresh-rotated");
 	});
 
-	it("persists a rotation that answers after the flight's own ceiling", async () => {
+	it("persists a rotation that answers after the flight's ceiling and its abort grace", async () => {
 		const held = heldRefresh();
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();
@@ -183,11 +206,71 @@ describe("a refresh flight outlives the caller that started it", () => {
 		await caller;
 		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
 		await settle();
+		vi.advanceTimersByTime(ABORT_GRACE_MS);
+		await settle();
 		expect(storedRefresh(ids[0]!)).toBe("refresh-home");
 
 		held.answer.resolve(ROTATED);
 		await settle();
 		expect(storedRefresh(ids[0]!)).toBe("refresh-rotated");
+	});
+
+	it("aborts the token request at the flight ceiling, not at the caller wait", async () => {
+		const held = heldRefresh();
+		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
+		vi.useFakeTimers();
+
+		const caller = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		await held.started;
+		vi.advanceTimersByTime(CALLER_WAIT_MS);
+		await caller;
+		await settle();
+		expect(held.signal?.aborted).toBe(false);
+
+		vi.advanceTimersByTime(FLIGHT_CEILING_MS - CALLER_WAIT_MS);
+		await settle();
+		expect(held.signal?.aborted).toBe(true);
+	});
+
+	it("holds the flight through the abort grace, so a second request does not spend the token again", async () => {
+		const held = heldRefresh();
+		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
+		vi.useFakeTimers();
+
+		const first = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		await held.started;
+		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
+		await first;
+		await settle();
+		vi.advanceTimersByTime(ABORT_GRACE_MS - 1);
+		await settle();
+
+		const second = storage.refreshCredentialById(ids[0]!);
+		await settle();
+		held.answer.resolve(ROTATED);
+		expect((await second).credential.type).toBe("oauth");
+		expect(held.calls).toBe(1);
+		expect(storedRefresh(ids[0]!)).toBe("refresh-rotated");
+	});
+
+	it("ends the flight at the ceiling when the aborted request settles, without waiting out the grace", async () => {
+		const held = heldRefresh(true);
+		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
+		vi.useFakeTimers();
+
+		const first = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		await held.started;
+		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
+		expect(String(await first)).toContain("timed out");
+		await settle();
+
+		const second = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		await settle();
+		expect(held.calls).toBe(2);
+		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
+		await second;
+		expect(storedRefresh(ids[0]!)).toBe("refresh-home");
+		expect(disabled).toEqual([]);
 	});
 });
 
@@ -459,6 +542,9 @@ const MALFORMED_BODIES = {
 	blank: JSON.stringify({ access_token: "", accessToken: "", expires_in: 3600, expiresIn: 3600 }),
 	array: "[]",
 	html: "<html>ok</html>",
+	null: "null",
+	string: JSON.stringify("ok"),
+	number: "42",
 };
 
 describe("a token endpoint answering 200 without a usable token", () => {
@@ -501,10 +587,149 @@ describe("a token endpoint answering 200 without a usable token", () => {
 				expect(row.credential.access.length).toBeGreaterThan(0);
 				return;
 			}
-			expect(outcome).not.toBeInstanceOf(TypeError);
+			// An unparsable body fails in `response.json()`; every other malformed answer is a validation
+			// error. A TypeError, ReferenceError or any other class is a crash inside the refresher.
+			const failure = outcome instanceof AIError.OAuthError || outcome instanceof SyntaxError ? "handled" : outcome;
+			expect(failure, `${provider} ${bodyName}`).toBe("handled");
 			expect(isDefinitiveOAuthFailure(String(outcome))).toBe(false);
 			expect(row.credential.access).toBe("access-token");
 			expect(disabled).toEqual([]);
 		},
 	);
+});
+
+describe("a refresher aborted by its flight", () => {
+	/**
+	 * The flight aborts the token request at its ceiling and holds the lease until the request
+	 * settles. A refresher that drops the signal leaves the request open beside the next flight, which
+	 * then spends the same single-use refresh token. Every registry refresher is driven: its token
+	 * request must carry the signal and settle once it aborts. The one refresher that makes no request
+	 * is pinned by name, so a new refresher with no request is a decision, not a silent pass.
+	 */
+	it("passes the signal to the token request and settles when it aborts", async () => {
+		const unsignalled: string[] = [];
+		const noRequest: string[] = [];
+		for (const provider of REFRESHERS) {
+			const definition = PROVIDER_REGISTRY.find(entry => entry.id === provider)!;
+			const posted = Promise.withResolvers<"posted">();
+			let tokenRequestSignal: AbortSignal | undefined;
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+				Object.assign(
+					async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+						if (String(input).includes("/.well-known/")) {
+							return Response.json({ token_endpoint: "https://auth.x.ai/oauth2/token" });
+						}
+						const signal = init?.signal ?? undefined;
+						tokenRequestSignal = signal;
+						posted.resolve("posted");
+						// An unsignalled request answers a 503 so the sweep ends and reports it.
+						if (!signal) return new Response("unavailable", { status: 503 });
+						const aborted = Promise.withResolvers<never>();
+						signal.addEventListener("abort", () => aborted.reject(signal.reason), { once: true });
+						return aborted.promise;
+					},
+					{ preconnect: (): void => {} },
+				),
+			);
+			const controller = new AbortController();
+			const refresh = definition.refreshToken!(
+				{
+					access: "access-token",
+					refresh: "refresh-token",
+					expires: 0,
+					projectId: "project",
+					accountId: "account",
+					email: "someone@example.com",
+				},
+				controller.signal,
+			).then(
+				() => "resolved",
+				() => "rejected",
+			);
+			const first = await Promise.race([posted.promise, refresh]);
+			if (first !== "posted") {
+				noRequest.push(provider);
+			} else if (tokenRequestSignal === undefined) {
+				unsignalled.push(provider);
+				await refresh;
+			} else {
+				controller.abort(new Error("flight ceiling"));
+				// A request bounded only by the refresher's own timer is not the caller's: it stays open.
+				if (!tokenRequestSignal.aborted) {
+					unsignalled.push(provider);
+				} else {
+					expect(await refresh, provider).toBe("rejected");
+				}
+			}
+			fetchSpy.mockRestore();
+		}
+		expect(unsignalled).toEqual([]);
+		expect(noRequest).toEqual(["github-copilot"]);
+	});
+
+	/** A refresh that hangs until `signal` aborts, recording the signal it was handed. */
+	interface HangingRefresh {
+		started: Promise<AbortSignal | undefined>;
+		run(signal: AbortSignal | undefined): Promise<never>;
+	}
+
+	function hangingUntilAborted(): HangingRefresh {
+		const started = Promise.withResolvers<AbortSignal | undefined>();
+		return {
+			started: started.promise,
+			run: (signal: AbortSignal | undefined): Promise<never> => {
+				started.resolve(signal);
+				const aborted = Promise.withResolvers<never>();
+				signal?.addEventListener("abort", () => aborted.reject(signal.reason), { once: true });
+				return aborted.promise;
+			},
+		};
+	}
+
+	async function abortedAtCeiling(provider: string, hang: HangingRefresh) {
+		store!.saveOAuth(provider, { ...oauth("flight", 0), projectId: "project" });
+		const storage = new AuthStorage(store!, { onCredentialDisabled: event => void disabled.push(event) });
+		await storage.reload();
+		vi.useFakeTimers();
+		const caller = storage
+			.refreshCredentialById(store!.listAuthCredentials(provider)[0]!.id)
+			.catch((error: unknown) => error);
+		const signal = await hang.started;
+		await settle();
+		expect(signal?.aborted).toBe(false);
+		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
+		await caller;
+		await settle();
+		expect(signal?.aborted).toBe(true);
+		expect(disabled).toEqual([]);
+	}
+
+	it("hands the flight's signal to a registry refresher's token request", async () => {
+		const hang = hangingUntilAborted();
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			Object.assign(
+				async (_input: string | URL | Request, init?: RequestInit) => hang.run(init?.signal ?? undefined),
+				{
+					preconnect: (): void => {},
+				},
+			),
+		);
+		await abortedAtCeiling("cursor", hang);
+	});
+
+	it("hands the flight's signal to a custom provider's refresher", async () => {
+		const hang = hangingUntilAborted();
+		registerOAuthProvider({
+			id: "custom-refresh-signal",
+			name: "Custom",
+			sourceId: "custom-refresh-signal-test",
+			login: async () => "unused",
+			refreshToken: (_credentials, signal) => hang.run(signal),
+		});
+		try {
+			await abortedAtCeiling("custom-refresh-signal", hang);
+		} finally {
+			unregisterOAuthProviders("custom-refresh-signal-test");
+		}
+	});
 });

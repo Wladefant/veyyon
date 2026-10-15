@@ -21,6 +21,7 @@ import packageJson from "../../../package.json" with { type: "json" };
 import * as AIError from "../../error";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 // One client id serves both regions; only the hosts differ.
@@ -326,11 +327,12 @@ export async function loginKimi(options: OAuthController, region: KimiCodeRegion
 
 /**
  * Refresh a Kimi OAuth token at the OAuth host of the region the credential's `apiEndpoint` names, so
- * a kimi.ai credential is never posted to kimi.com.
+ * a kimi.ai credential is never posted to kimi.com. `signal` aborts the token request.
  */
 export async function refreshKimiToken(
 	refreshToken: string,
 	apiEndpoint: string | undefined,
+	signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
 	const region = kimiCodeRegionOfApiEndpoint(apiEndpoint);
 	const response = await fetch(`${resolveOAuthHost(region)}/api/oauth/token`, {
@@ -344,6 +346,7 @@ export async function refreshKimiToken(
 			refresh_token: refreshToken,
 			client_id: CLIENT_ID,
 		}),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -368,6 +371,6 @@ export async function refreshKimiToken(
 		});
 	}
 
-	const payload = (await response.json()) as TokenResponse;
+	const payload = requireTokenResponseObject<TokenResponse>(await response.json(), "kimi", "token refresh");
 	return parseTokenPayload(payload, kimiCodeApiEndpointOf(region), refreshToken);
 }

@@ -2,6 +2,7 @@ import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
 import { credentialExpiryFromJwtExp } from "./expiry";
 import { generatePKCE } from "./pkce";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthCredentials } from "./types";
 
 const CURSOR_LOGIN_URL = "https://cursor.com/loginDeepControl";
@@ -108,7 +109,10 @@ export async function loginCursor(
 	};
 }
 
-export async function refreshCursorToken(apiKeyOrRefreshToken: string): Promise<OAuthCredentials> {
+export async function refreshCursorToken(
+	apiKeyOrRefreshToken: string,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	const response = await fetch(CURSOR_REFRESH_URL, {
 		method: "POST",
 		headers: {
@@ -116,6 +120,7 @@ export async function refreshCursorToken(apiKeyOrRefreshToken: string): Promise<
 			"Content-Type": "application/json",
 		},
 		body: "{}",
+		signal,
 	});
 
 	if (!response.ok) {
@@ -131,7 +136,11 @@ export async function refreshCursorToken(apiKeyOrRefreshToken: string): Promise<
 		});
 	}
 
-	const data = (await response.json()) as { accessToken?: unknown; refreshToken?: unknown };
+	const data = requireTokenResponseObject<{ accessToken?: unknown; refreshToken?: unknown }>(
+		await response.json(),
+		"cursor",
+		"token refresh",
+	);
 	if (typeof data.accessToken !== "string" || data.accessToken.length === 0) {
 		throw new AIError.OAuthError("Cursor token refresh response missing accessToken", {
 			kind: "validation",

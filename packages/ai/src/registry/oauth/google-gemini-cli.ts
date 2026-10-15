@@ -14,6 +14,7 @@ import { $env } from "@veyyon/utils/env";
 import * as AIError from "../../error";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { runGoogleOAuthLogin, TIER_FREE, TIER_LEGACY, TIER_STANDARD } from "./google-oauth-shared";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const decode = (s: string) => atob(s);
@@ -236,9 +237,13 @@ export async function loginGeminiCli(ctrl: OAuthController): Promise<OAuthCreden
 }
 
 /**
- * Refresh Google Cloud Code Assist token
+ * Refresh Google Cloud Code Assist token. `signal` aborts the token request.
  */
-export async function refreshGoogleCloudToken(refreshToken: string, projectId: string): Promise<OAuthCredentials> {
+export async function refreshGoogleCloudToken(
+	refreshToken: string,
+	projectId: string,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	const response = await fetch(TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -248,6 +253,7 @@ export async function refreshGoogleCloudToken(refreshToken: string, projectId: s
 			refresh_token: refreshToken,
 			grant_type: "refresh_token",
 		}),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -261,11 +267,11 @@ export async function refreshGoogleCloudToken(refreshToken: string, projectId: s
 		});
 	}
 
-	const data = (await response.json()) as {
+	const data = requireTokenResponseObject<{
 		access_token: string;
 		expires_in: number;
 		refresh_token?: string;
-	};
+	}>(await response.json(), "google-gemini-cli", "token refresh");
 
 	return {
 		refresh: data.refresh_token || refreshToken,

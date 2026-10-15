@@ -25,9 +25,18 @@ export const OAUTH_REFRESH_CALLER_WAIT_MS = 10_000;
  * the lease and the in-flight entry while the provider was still minting the rotation, so the next
  * request refreshed again with the old token (which providers with reuse detection answer by
  * revoking the whole grant), and the rotation that arrived a moment later was dropped on the floor.
- * The flight now runs to this ceiling and persists whatever it gets; only the callers stop waiting.
+ * The flight runs to this ceiling and persists whatever it gets; only the callers stop waiting.
  */
 export const OAUTH_REFRESH_FLIGHT_CEILING_MS = 120_000;
+/**
+ * How long a lease-fenced flight that reached {@link OAUTH_REFRESH_FLIGHT_CEILING_MS} holds the
+ * lease and the in-flight entry after aborting its token request, waiting for the request to settle.
+ *
+ * Releasing them at the ceiling while the request was still open let a second flight spend the same
+ * single-use refresh token beside it. The abort settles a refresher that honours its signal at once;
+ * the grace bounds one that does not, and a rotation that arrives after it is still persisted.
+ */
+export const OAUTH_REFRESH_ABORT_GRACE_MS = 5_000;
 /**
  * Refresh OAuth access tokens this many ms before their stated expiry. The
  * skew exists so callers downstream of {@link AuthStorage} (stream providers,
@@ -253,7 +262,9 @@ export class OAuthRefresher {
 	 * No caller signal reaches this function. The ownership wait and the refresh both
 	 * run under {@link OAUTH_REFRESH_FLIGHT_CEILING_MS}, because aborting after the
 	 * provider has rotated the token would strand it — the same loss this whole path
-	 * exists to prevent — and a rotation that arrives after the ceiling is still persisted.
+	 * exists to prevent. At the ceiling the token request is aborted and the lease is held
+	 * until it settles or {@link OAUTH_REFRESH_ABORT_GRACE_MS} passes; a rotation that
+	 * arrives later still is persisted.
 	 */
 	async #leaseFencedRefresh(
 		provider: Provider,
@@ -423,13 +434,16 @@ export class OAuthRefresher {
 		onLateResult?: (late: OAuthCredentials) => void,
 	): Promise<OAuthCredentials> {
 		let providerRefresh: Promise<OAuthCredentials>;
+		// Aborts the token request when the caller aborts or the bound fires, so an abandoned request
+		// does not stay open beside the next flight.
+		const request = new AbortController();
 		// Caller override > store-level hook > local per-provider refresh.
 		// `RemoteAuthCredentialStore` exposes the hook so a broker-backed gateway
 		// routes refresh through the broker without explicit wiring.
 		const storeRefresh = this.#store.refreshOAuthCredential?.bind(this.#store);
 		const overrideRefresh = this.#override ?? storeRefresh;
 		if (overrideRefresh && credentialId !== undefined) {
-			providerRefresh = overrideRefresh(provider, credentialId, credential, signal);
+			providerRefresh = overrideRefresh(provider, credentialId, credential, request.signal);
 		} else {
 			const customProvider = getOAuthProvider(provider);
 			if (customProvider) {
@@ -439,9 +453,9 @@ export class OAuthRefresher {
 						provider,
 					});
 				}
-				providerRefresh = customProvider.refreshToken(credential);
+				providerRefresh = customProvider.refreshToken(credential, request.signal);
 			} else {
-				providerRefresh = refreshOAuthToken(provider as OAuthProvider, credential);
+				providerRefresh = refreshOAuthToken(provider as OAuthProvider, credential, request.signal);
 			}
 		}
 		const refreshPromise = providerRefresh.then(refreshed => requireUsableRefresh(provider, refreshed));
@@ -476,17 +490,35 @@ export class OAuthRefresher {
 		try {
 			return await Promise.race([observed, cancellation.promise]);
 		} catch (error) {
-			// The bound fired while the provider was still answering. A rotation that arrives after it
-			// is still the only valid token for this grant, so it is handed on rather than dropped.
-			if (!providerSettled && onLateResult) {
-				observed.then(
-					late => {
-						logger.warn("OAuth refresh answered after its ceiling; persisting the late rotation", { provider });
-						onLateResult(late);
-					},
-					() => undefined,
-				);
+			if (providerSettled) throw error;
+			request.abort(error);
+			if (!onLateResult) throw error;
+			// Lease-fenced: the provider may already have rotated the grant. Hold the flight while the
+			// aborted request settles, so no second flight spends the same refresh token beside it.
+			const graceElapsed = Promise.withResolvers<undefined>();
+			const grace = setTimeout(() => graceElapsed.resolve(undefined), OAUTH_REFRESH_ABORT_GRACE_MS);
+			try {
+				const settled = await Promise.race([
+					observed.then(
+						refreshed => ({ refreshed }),
+						() => null,
+					),
+					graceElapsed.promise,
+				]);
+				if (settled) return settled.refreshed;
+				if (settled === null) throw error;
+			} finally {
+				clearTimeout(grace);
 			}
+			// The request ignored its abort. A rotation that arrives after the grace is still the only
+			// valid token for this grant, so it is handed on rather than dropped.
+			observed.then(
+				late => {
+					logger.warn("OAuth refresh answered after its ceiling; persisting the late rotation", { provider });
+					onLateResult(late);
+				},
+				() => undefined,
+			);
 			throw error;
 		} finally {
 			clearTimeout(timeout);

@@ -314,11 +314,16 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * 1477 to 1478: `session/runtime/turn-context-check.ts`, the end-of-turn context check that left
  * `session/agent-session.ts`. It imports only what that code imported there, so no other module arrived.
  *
+ * 1478 to 1479: `ai/src/registry/oauth/token-response.ts`, the one reader that requires a token
+ * endpoint's JSON to be an object. `ai/src/registry/oauth/nous-research.ts`, already here, reads its
+ * token responses through it; its imports, `utils/src/type-guards.ts` and `ai/src/error`, were
+ * already here.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1478;
+const LAUNCH_REACH_CEILING = 1479;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

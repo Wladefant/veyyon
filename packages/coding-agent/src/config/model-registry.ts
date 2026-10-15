@@ -2992,7 +2992,7 @@ export interface ProviderConfigInput {
 	oauth?: {
 		name: string;
 		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		refreshToken?(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
 		getApiKey?(credentials: OAuthCredentials): string;
 		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 	};
