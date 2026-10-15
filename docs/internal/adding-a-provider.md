@@ -130,4 +130,4 @@ and answering "which variable holds the key" must not.
   `registerOAuthProvider` (the `AuthStorage.login` dispatcher handles built-ins
   and extensions through the same path).
 
-*Verified against `ad7ede4a` on 2026-07-28.*
+*Verified against `10d91f75bd` on 2026-10-15.*
