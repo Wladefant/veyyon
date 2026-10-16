@@ -16,13 +16,14 @@ import type { OAuthAccess } from "@veyyon/ai/auth-storage";
 import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 import { getGitLabDuoModels } from "@veyyon/ai/providers/gitlab-duo";
 import { $env, getSharedAuthDir } from "@veyyon/utils";
-import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
+import { fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { fetchCodexModels } from "../src/discovery/codex";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { isOpenAIOSeriesModelId } from "../src/identity/family";
 import { createModelManager } from "../src/model-manager";
 import { hasBillableCost } from "../src/models";
 import prevModelsJson from "../src/models.json" with { type: "json" };
+import { ANTIGRAVITY_PRIMARY_ENDPOINT } from "../src/provider-endpoints";
 import { toModelSpec } from "../src/provider-models/bundled-references";
 import { COMMAND_CODE_STATIC_MODELS } from "../src/provider-models/command-code";
 import {
@@ -487,8 +488,6 @@ function normalizeAntigravityEndpoint(models: readonly ModelSpec[]): ModelSpec[]
 	});
 }
 
-const ANTIGRAVITY_ENDPOINT = ANTIGRAVITY_PRIMARY_ENDPOINT;
-
 async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
 	try {
 		const authStorage = await discoverAuthStorage();
@@ -574,7 +573,7 @@ async function fetchAntigravityModels(): Promise<ModelSpec<"google-gemini-cli">[
 		console.log("Fetching models from Antigravity API...");
 		const discovered = await fetchAntigravityDiscoveryModels({
 			token: access.accessToken,
-			endpoint: ANTIGRAVITY_ENDPOINT,
+			endpoint: ANTIGRAVITY_PRIMARY_ENDPOINT,
 		});
 		if (discovered === null) {
 			console.warn("Antigravity API fetch failed, will use previous models");

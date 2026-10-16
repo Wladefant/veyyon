@@ -89,6 +89,7 @@
 - The auth broker command imports the credential store from `@veyyon/ai/auth-storage-sqlite`, with no user-visible change.
 - Modules import the timeout, whitespace, advisor transcript name and slash-command category helpers from their owning modules; the `utils/fetch-timeout` re-export module is removed, with no user-visible change.
 - The LSP client and diagnostics, the web search tool and the `web-search` command import the language-id, grouped-diagnostic and search-provider metadata helpers from their owning modules instead of the `lsp/utils` and `search/provider` re-exports, which are removed; no user-visible change.
+Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 
 ### Fixed
 

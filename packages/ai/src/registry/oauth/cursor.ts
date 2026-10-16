@@ -1,3 +1,4 @@
+import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
 import { credentialExpiryFromJwtExp } from "./expiry";
@@ -6,8 +7,8 @@ import { requireTokenResponseObject } from "./token-response";
 import type { OAuthCredentials } from "./types";
 
 const CURSOR_LOGIN_URL = "https://cursor.com/loginDeepControl";
-const CURSOR_POLL_URL = "https://api2.cursor.sh/auth/poll";
-const CURSOR_REFRESH_URL = "https://api2.cursor.sh/auth/exchange_user_api_key";
+const CURSOR_POLL_URL = `${CURSOR_API_ENDPOINT}/auth/poll`;
+const CURSOR_REFRESH_URL = `${CURSOR_API_ENDPOINT}/auth/exchange_user_api_key`;
 
 const POLL_MAX_ATTEMPTS = 150;
 const POLL_BASE_DELAY = 1000;

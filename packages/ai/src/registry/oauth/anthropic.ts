@@ -2,6 +2,7 @@
  * Anthropic OAuth flow (Claude Pro/Max)
  */
 
+import { ANTHROPIC_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import * as AIError from "../../error";
@@ -15,8 +16,8 @@ import type { OAuthController, OAuthCredentials } from "./types";
 const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
-const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
-const BOOTSTRAP_URL = "https://api.anthropic.com/api/claude_cli/bootstrap";
+const TOKEN_URL = `${ANTHROPIC_API_ENDPOINT}/v1/oauth/token`;
+const BOOTSTRAP_URL = `${ANTHROPIC_API_ENDPOINT}/api/claude_cli/bootstrap`;
 const CLAUDE_CODE_BOOTSTRAP_MODEL = "claude-opus-4-8";
 const CLAUDE_CODE_BOOTSTRAP_USER_AGENT = `claude-code/${claudeCodeVersion}`;
 const CALLBACK_PORT = 54545;

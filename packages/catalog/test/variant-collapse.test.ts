@@ -3,12 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@veyyon/catalog/build";
-import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "@veyyon/catalog/discovery/antigravity";
+import { fetchAntigravityDiscoveryModels } from "@veyyon/catalog/discovery/antigravity";
 import { Effort } from "@veyyon/catalog/effort";
 import { stripThinkingVariantToken } from "@veyyon/catalog/identity/family";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
 import { resolveReasoningSelection, resolveWireModelId } from "@veyyon/catalog/model-thinking";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { ANTIGRAVITY_PRIMARY_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { googleGeminiCliModelManagerOptions } from "@veyyon/catalog/provider-models/google";
 import type { ModelSpec } from "@veyyon/catalog/types";
 import {
