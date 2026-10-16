@@ -152,6 +152,7 @@
 
 - The headless browser no longer returns a made-up font list from `queryLocalFonts`.
 - Removed the `tinyModelClient` alias of `tinyTitleClient` and the `OPENROUTER_BASE_URL` alias in the Perplexity search provider; no user-visible change.
+Removed the `parseSha256Sidecar` re-export from `@veyyon/coding-agent/cli/update-cli`; import it from `@veyyon/natives/sha256-sidecar`.
 
 ## [1.5.8] - 2026-10-16
 

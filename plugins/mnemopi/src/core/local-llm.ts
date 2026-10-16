@@ -5,10 +5,8 @@
  * `local-llm-config.ts`, which reaches a handful of leaves. This file imports `completeSimple` and
  * therefore the streaming engine, which is correct for a module whose job is the round trip, and is
  * why the two halves are separate files: `core/extraction.ts` asks whether an LLM is available far
- * more often than it calls one, and the memory engine sits behind extraction.
- *
- * The configuration names are re-exported so the module's public surface is unchanged. There is no
- * cycle to worry about: the config half imports nothing from here.
+ * more often than it calls one, and the memory engine sits behind extraction. The config half imports
+ * nothing from here.
  */
 
 import type { Api, FetchImpl, Model } from "@veyyon/ai";
@@ -47,8 +45,6 @@ import {
 	type MnemopiLlmCompletion,
 	type MnemopiLlmPayloadHook,
 } from "./runtime-options";
-
-export * from "./local-llm-config";
 
 /** Transport override for {@link callRemoteLlm}, so a test can supply its own `fetch`. */
 export interface RemoteLlmOptions {

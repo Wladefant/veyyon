@@ -7,11 +7,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	isValidNameSegment,
-	type MarketplaceCatalog,
-	type MarketplaceSourceType,
-} from "@veyyon/kernel/loader/plugins/marketplace/types";
+import type { MarketplaceCatalog, MarketplaceSourceType } from "@veyyon/kernel/loader/plugins/marketplace/types";
+import { isValidNameSegment } from "@veyyon/kernel/loader/plugins/plugin-id";
 import { isEnoent, isRecord, logger, removeTempPath, reportFault, scopedTimeoutSignal } from "@veyyon/utils";
 import * as git from "../../../utils/git";
 

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { TUI } from "@veyyon/tui";
-import { Image, ImageBudget } from "@veyyon/tui/components/image";
+import { Image } from "@veyyon/tui/components/image";
 import { Text } from "@veyyon/tui/components/text";
+import { ImageBudget } from "@veyyon/tui/core/image-budget";
 import {
 	type CellDimensions,
 	encodeKitty,

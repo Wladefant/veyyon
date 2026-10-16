@@ -29,6 +29,7 @@
 - Removed the `getEnvApiKey`, `getEnvApiKeyName`, `listProvidersWithEnvKey` and `configureProviderMaxInFlightRequests` re-exports from `@veyyon/ai/stream`; import them from `@veyyon/ai/env-api-key`, `@veyyon/ai/provider-inflight-limits` or the package root, which still exports all four.
 - Removed the `CURSOR_API_URL` alias from `providers/cursor`; import `CURSOR_API_ENDPOINT` from `@veyyon/catalog/provider-endpoints`.
 - Removed the `createInitialResponsesAssistantMessage` re-export from `providers/openai-shared`; import it from `providers/initial-message`.
+Removed the `escapeXmlAttr` and `escapeXmlText` re-exports from `@veyyon/ai/dialect/rendering`; import `escapeXmlAttribute` and `escapeXmlText` from `@veyyon/utils/sanitize-text`.
 
 ## [1.5.8] - 2026-10-16
 

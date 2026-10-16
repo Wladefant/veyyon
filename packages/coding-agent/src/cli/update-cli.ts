@@ -629,13 +629,6 @@ export function formatBinaryDownloadFailure(
 }
 
 /**
- * Re-exported so the self-updater's callers and tests have one import site.
- * The definition lives in `@veyyon/natives`, the lowest layer shared with the
- * native-addon provisioning that reads the same sidecar format.
- */
-export { parseSha256Sidecar };
-
-/**
  * Verify a downloaded release binary against its published `.sha256` sidecar,
  * failing closed on any problem.
  *

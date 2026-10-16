@@ -12,13 +12,13 @@ import * as pluginCli from "@veyyon/coding-agent/cli/plugin-cli";
 import * as updateCli from "@veyyon/coding-agent/cli/update-cli";
 import {
 	formatBinaryDownloadFailure,
-	parseSha256Sidecar,
 	replaceBinaryForUpdate,
 	resolveUpdateMethod,
 	sweepStaleBackups,
 	verifyDownloadChecksum,
 } from "@veyyon/coding-agent/cli/update-cli";
 import Update from "@veyyon/coding-agent/commands/update";
+import { parseSha256Sidecar } from "@veyyon/natives/sha256-sidecar";
 import { removeWithRetries, VERSION } from "@veyyon/utils";
 import type { CliConfig } from "@veyyon/utils/cli";
 import { LATEST_RELEASE_URL, releaseRedirect } from "./helpers/release-redirect";

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
+
 ### Added
 
 - `TextChunk`, the element type `wordWrapLine` returns, is exported from `components/editor`.

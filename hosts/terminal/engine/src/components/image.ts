@@ -48,10 +48,6 @@ export interface ImageDisplayListener {
 	imageDisplayed(fallback: ImageFallbackReason | undefined): void;
 }
 
-// `ImageBudget` is engine state and lives in `../core/image-budget`; it is re-exported here because
-// the budget and the picture are one concept to a caller.
-export * from "../core/image-budget";
-
 export class Image implements Component {
 	#base64Data: string;
 	#mimeType: string;
