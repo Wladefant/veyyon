@@ -259,7 +259,6 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		};
 		const payload = buildGitLabDuoWorkflowStartRequest("workflow-1", model, systemContext, undefined, undefined, {
 			workflowDefinition: "ambient",
-			inlineFlow: true,
 		});
 		expect(payload.flowConfigSchemaVersion).toBe("v1");
 		expect(payload).not.toHaveProperty("flowConfigId");

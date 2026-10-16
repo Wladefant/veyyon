@@ -276,7 +276,6 @@ interface GitLabDuoWorkflowStartMetadataOptions {
 	namespaceId?: string;
 	rootNamespaceId?: string;
 	workflowDefinition?: GitLabDuoWorkflowDefinition;
-	inlineFlow?: boolean;
 }
 export interface GitLabMcpToolDefinition {
 	name: string;
@@ -988,12 +987,11 @@ interface GitLabDuoWorkflowRequest {
 }
 
 /**
- * What every namespace a request tries shares: the flow definition, the goal a workflow is created
- * with, the project the caller configured, and the signal bounding the whole setup phase.
+ * What every namespace a request tries shares: the flow definition, the project the caller configured,
+ * and the signal bounding the whole setup phase.
  */
 interface GitLabDuoWorkflowSetupScope {
 	readonly workflowDefinition: GitLabDuoWorkflowDefinition;
-	readonly goal: string;
 	readonly configuredProjectPath: string | undefined;
 	readonly configuredProjectId: string | undefined;
 	readonly signal: AbortSignal | undefined;
@@ -1049,10 +1047,9 @@ async function runGitLabDuoWorkflow(
 	};
 	if (await resumeGitLabDuoWorkflowSession(request)) return;
 	const workflowDefinition = resolveGitLabDuoWorkflowDefinition(options.workflowDefinition);
-	const goal = extractLatestUserPrompt(context.messages);
-	const setup = await setUpGitLabDuoWorkflow(request, workflowDefinition, goal);
+	const setup = await setUpGitLabDuoWorkflow(request, workflowDefinition);
 	if (await refuseOversizedGitLabDuoWorkflowGoal(request, setup)) return;
-	await driveGitLabDuoWorkflow(request, setup, workflowDefinition, goal);
+	await driveGitLabDuoWorkflow(request, setup, workflowDefinition);
 }
 
 /**
@@ -1169,7 +1166,6 @@ async function abandonGitLabDuoWorkflowSession(
 async function setUpGitLabDuoWorkflow(
 	request: GitLabDuoWorkflowRequest,
 	workflowDefinition: GitLabDuoWorkflowDefinition,
-	goal: string,
 ): Promise<GitLabDuoWorkflowNamespaceSetup> {
 	const { options } = request;
 	const configuredProjectPath = nonEmptyString(options.projectPath) ?? nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_PATH);
@@ -1181,7 +1177,6 @@ async function setUpGitLabDuoWorkflow(
 	const setupFence = setupBudget.fence(options.signal);
 	const scope: GitLabDuoWorkflowSetupScope = {
 		workflowDefinition,
-		goal,
 		configuredProjectPath,
 		configuredProjectId,
 		signal: setupFence.signal,
@@ -1264,7 +1259,7 @@ async function setUpGitLabDuoWorkflowNamespace(
 		namespaceSource: namespaceSelection.source,
 		toolCount: context.tools?.length ?? 0,
 	});
-	await enableGitLabDuoWorkflowNamespaceFlags(request, workflowDefinition, restNamespaceId, signal);
+	await enableGitLabDuoWorkflowNamespaceFlags(request, restNamespaceId, signal);
 	const project = await resolveGitLabDuoWorkflowProjectScope(request, scope, namespaceSelection, restNamespaceId);
 	const workflowConnection: GitLabDuoWorkflowDirectAccessConnection = options.workflowToken
 		? { token: options.workflowToken, headers: {}, serviceEndpoint: false }
@@ -1284,7 +1279,6 @@ async function setUpGitLabDuoWorkflowNamespace(
 			baseUrl,
 			apiKey,
 			createNamespaceId,
-			scope.goal,
 			project.restProjectId,
 			workflowDefinition,
 			model,
@@ -1316,7 +1310,6 @@ async function setUpGitLabDuoWorkflowNamespace(
 			namespaceId: restNamespaceId,
 			rootNamespaceId: restNamespaceId,
 			workflowDefinition,
-			inlineFlow: isGitLabDuoWorkflowInlineFlow(workflowDefinition),
 		},
 	);
 	return {
@@ -1338,12 +1331,10 @@ async function setUpGitLabDuoWorkflowNamespace(
  */
 async function enableGitLabDuoWorkflowNamespaceFlags(
 	request: GitLabDuoWorkflowRequest,
-	workflowDefinition: GitLabDuoWorkflowDefinition,
 	restNamespaceId: string,
 	signal: AbortSignal | undefined,
 ): Promise<void> {
 	const { options, apiKey, baseUrl, fetchImpl } = request;
-	if (!isGitLabDuoWorkflowInlineFlow(workflowDefinition)) return;
 	if (isGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl, options.cwd)) return;
 	// Mark the workspace ensured only after a definitive attempt (HTTP response,
 	// success or 4xx). A transient network error / 5xx returns false so a later
@@ -1409,7 +1400,6 @@ async function discoverGitLabDuoWorkflowNamespaceProject(
 	restNamespaceId: string,
 ): Promise<GitLabDuoWorkflowDiscoveredProject | undefined> {
 	if (scope.configuredProjectPath || scope.configuredProjectId) return undefined;
-	if (!isGitLabDuoWorkflowInlineFlow(scope.workflowDefinition)) return undefined;
 	const project = namespaceSelection.projectPath
 		? { path: namespaceSelection.projectPath }
 		: await discoverGitLabDuoWorkflowProject(
@@ -1485,7 +1475,6 @@ async function driveGitLabDuoWorkflow(
 	request: GitLabDuoWorkflowRequest,
 	setup: GitLabDuoWorkflowNamespaceSetup,
 	workflowDefinition: GitLabDuoWorkflowDefinition,
-	goal: string,
 ): Promise<void> {
 	const { model, options, state, apiKey, baseUrl, fetchImpl, providerSessionState } = request;
 	let workflowId = setup.workflowId;
@@ -1520,7 +1509,6 @@ async function driveGitLabDuoWorkflow(
 				baseUrl,
 				apiKey,
 				setup.createNamespaceId,
-				goal,
 				setup.restProjectId,
 				workflowDefinition,
 				model,
@@ -1906,7 +1894,6 @@ async function createGitLabDuoWorkflow(
 	baseUrl: string,
 	apiKey: string,
 	namespaceId: string,
-	goal: string | undefined,
 	projectId: string | undefined,
 	workflowDefinition: GitLabDuoWorkflowDefinition,
 	model: Model<"gitlab-duo-agent">,
@@ -1914,7 +1901,6 @@ async function createGitLabDuoWorkflow(
 	signal?: AbortSignal,
 ): Promise<string> {
 	const body = buildGitLabDuoWorkflowCreateBody(namespaceId, {
-		goal: isGitLabDuoWorkflowInlineFlow(workflowDefinition) ? "" : goal,
 		projectId,
 		workflowDefinition,
 	});
@@ -3187,13 +3173,6 @@ function resolveGitLabDuoWorkflowDefinition(
 		nonEmptyString(Bun.env.GITLAB_DUO_WORKFLOW_DEFINITION) ??
 		GITLAB_DUO_WORKFLOW_DEFINITION;
 	return configured;
-}
-
-// Every workflow definition veyyon ships is the inline ambient flow (Path B /
-// `flowConfig`); the predicate is kept as a seam for future server-side flows.
-function isGitLabDuoWorkflowInlineFlow(workflowDefinition: GitLabDuoWorkflowDefinition): boolean {
-	void workflowDefinition;
-	return true;
 }
 
 function parseGitLabDuoWorkflowSocketData(data: unknown): Record<string, unknown> | null {
