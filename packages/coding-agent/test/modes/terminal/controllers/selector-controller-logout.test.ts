@@ -31,7 +31,7 @@
  * Subject: `modes/terminal/controllers/account-flows.ts`, driven through `SelectorController.showLogout`.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -105,7 +105,7 @@ interface Harness {
 	readonly presented: () => string;
 	readonly statuses: string[];
 	readonly errors: string[];
-	readonly refresh: ReturnType<typeof vi.fn<() => Promise<void>>>;
+	readonly refresh: Mock<() => Promise<void>>;
 }
 
 async function harness(seed: { provider: string; credentials: AuthCredential[] }): Promise<Harness> {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { mnemopiBackend } from "@veyyon/coding-agent/memory/mnemopi/backend";
-import { loadMnemopiConfig } from "@veyyon/coding-agent/memory/mnemopi/config";
+import { loadMnemopiConfig, type MnemopiBackendConfig } from "@veyyon/coding-agent/memory/mnemopi/config";
 import { getMnemopiSessionState, setMnemopiSessionState } from "@veyyon/coding-agent/memory/mnemopi/state";
 import { MNEMOPI_MEMORY_EDIT_OPERATIONS } from "@veyyon/coding-agent/memory/mnemopi/verbs";
 import { MemoryEditTool } from "@veyyon/coding-agent/tools/agent/memory-edit";
@@ -34,7 +34,7 @@ import { TempDir } from "@veyyon/utils";
  * model registry and is covered by the provider-boundary suite.
  */
 
-function configFor(overrides: Record<string, unknown>): ReturnType<typeof loadMnemopiConfig> {
+function configFor(overrides: Record<string, unknown>): MnemopiBackendConfig {
 	const settings = Settings.isolated({ "mnemopi.scoping": "global", ...overrides });
 	return loadMnemopiConfig(settings, "/nonexistent/mnemopi-llm-request-test");
 }

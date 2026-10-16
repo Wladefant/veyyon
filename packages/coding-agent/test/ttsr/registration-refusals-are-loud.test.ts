@@ -50,10 +50,12 @@ function manager(overrides: Partial<TtsrSettings> = {}): TtsrManager {
  * The whole point of these branches is that a rule which cannot work says so. A test that only checks
  * the return value would pass for a silent refusal, which is the defect.
  */
-function captureWarnings(): {
+interface CapturedWarnings {
 	entries: Array<{ message: string; fields?: Record<string, unknown> }>;
 	restore: () => void;
-} {
+}
+
+function captureWarnings(): CapturedWarnings {
 	const entries: Array<{ message: string; fields?: Record<string, unknown> }> = [];
 	const spy = vi.spyOn(logger, "warn").mockImplementation(((message: string, fields?: Record<string, unknown>) => {
 		entries.push({ message, fields });
@@ -61,7 +63,7 @@ function captureWarnings(): {
 	return { entries, restore: () => spy.mockRestore() };
 }
 
-let warnings: ReturnType<typeof captureWarnings> | undefined;
+let warnings: CapturedWarnings | undefined;
 
 afterEach(() => {
 	warnings?.restore();

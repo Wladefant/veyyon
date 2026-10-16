@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `TextChunk`, the element type `wordWrapLine` returns, is exported from `components/editor`.
+
 ### Changed
 
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.

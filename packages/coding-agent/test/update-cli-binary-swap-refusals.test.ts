@@ -47,14 +47,17 @@ const OLD_BINARY = "#!/bin/sh\necho old\n";
 const NEW_BINARY = "#!/bin/sh\necho new\n";
 
 /** A bin directory holding the installed binary and a downloaded replacement. */
-async function stageSwap(options: { symlinkTargetOutside?: boolean } = {}): Promise<{
+/** The directories and paths one staged swap uses. */
+interface StagedSwap {
 	root: string;
 	binDir: string;
 	targetPath: string;
 	tempPath: string;
 	backupPath: string;
 	checkoutPath: string;
-}> {
+}
+
+async function stageSwap(options: { symlinkTargetOutside?: boolean } = {}): Promise<StagedSwap> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "swap-"));
 	tempDirs.push(root);
 	const binDir = path.join(root, "bin");
@@ -205,7 +208,7 @@ describe("a symlinked install target", () => {
 describe("a failure inside a directory that cannot be written", () => {
 	/** Stage a swap whose rename will fail, in a directory whose cleanup unlink
 	 * will fail too. That combination is what produced the masked error. */
-	async function stageReadOnly(): Promise<Awaited<ReturnType<typeof stageSwap>>> {
+	async function stageReadOnly(): Promise<StagedSwap> {
 		const staged = await stageSwap();
 		await fs.chmod(staged.binDir, 0o500);
 		return staged;

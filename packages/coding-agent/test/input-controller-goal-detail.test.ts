@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
@@ -44,7 +44,7 @@ function createFakeEditor(): { editor: unknown; setText: (t: string) => void } {
 
 function createContext(opts: { goalModeEnabled?: boolean; goalModePaused?: boolean; focused?: boolean }): {
 	ctx: InteractiveModeContext;
-	openGoalDetail: ReturnType<typeof vi.fn>;
+	openGoalDetail: Mock<() => Promise<void>>;
 	setText: (t: string) => void;
 	feedDown: () => { consume?: boolean } | undefined;
 } {

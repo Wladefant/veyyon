@@ -54,7 +54,7 @@ function sanitizeLoadedText(text: string): string {
  * Represents a chunk of text for word-wrap layout.
  * Tracks both the text content and its position in the original line.
  */
-interface TextChunk {
+export interface TextChunk {
 	text: string;
 	startIndex: number;
 	endIndex: number;
