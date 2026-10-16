@@ -16,7 +16,7 @@
 
 import type { Context, Message, Tool } from "@veyyon/ai";
 import type { Dialect } from "@veyyon/ai/dialect";
-import { normalizeTools } from "./agent-loop";
+import { normalizeTools } from "./tool-normalization";
 import type { AgentContext } from "./types";
 
 // ---------------------------------------------------------------------------

@@ -35,11 +35,11 @@ import {
 	agentLoop,
 	agentLoopContinue,
 	normalizeMessagesForProvider,
-	normalizeTools,
 	resolveConfiguredDialect,
 } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import { isProviderRefusalMessage } from "./replay-policy";
+import { normalizeTools } from "./tool-normalization";
 import type {
 	AgentContext,
 	AgentEvent,

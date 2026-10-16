@@ -3,7 +3,7 @@
  * handles empty description and name collisions without throw.
  */
 import { describe, expect, it } from "bun:test";
-import { normalizeTools } from "@veyyon/agent-core/agent-loop";
+import { normalizeTools } from "@veyyon/agent-core/tool-normalization";
 import type { AgentTool } from "@veyyon/agent-core/types";
 import { type } from "arktype";
 
