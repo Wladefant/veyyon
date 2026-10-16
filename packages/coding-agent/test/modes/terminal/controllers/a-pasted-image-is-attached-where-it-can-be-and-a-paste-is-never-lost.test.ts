@@ -1,7 +1,9 @@
 /**
  * What a paste becomes in the composer: a clipboard image is labelled with its pixel size and resized only
- * while `images.autoResize` is on; an image arriving over the enhanced-paste protocol while a modal prompt
- * holds focus is refused rather than buried; a pasted path that is too large to attach is pasted as text
+ * while `images.autoResize` is on; text arriving over the enhanced-paste protocol lands in a focused modal
+ * prompt that takes pastes (an OAuth API key typed into a login prompt once landed in the editor behind it)
+ * and in the editor otherwise; an image arriving over that protocol while a modal prompt holds focus is
+ * refused rather than buried; a pasted path that is too large to attach is pasted as text
  * with the size error; over SSH a missing path never reaches for the clipboard, which belongs to the remote
  * host; and a large paste whose file attachment cannot be written is pasted inline instead.
  *
@@ -56,7 +58,7 @@ interface Recorded {
 	errors: string[];
 }
 
-function harness(options: { focused?: object; artifactsDir?: string; clipboardImage?: boolean } = {}) {
+function harness(options: { focused?: object | null; artifactsDir?: string; clipboardImage?: boolean } = {}) {
 	const recorded: Recorded = { inserted: [], pastedText: [], insertedPastes: [], statuses: [], errors: [] };
 	const inputListeners: Array<(data: string) => unknown> = [];
 	const editor = {
@@ -80,7 +82,7 @@ function harness(options: { focused?: object; artifactsDir?: string; clipboardIm
 		showError: (message: string) => recorded.errors.push(message),
 		showHookSelector: async () => "Attach as local file",
 		ui: {
-			getFocused: () => options.focused ?? editor,
+			getFocused: () => ("focused" in options ? options.focused : editor),
 			requestRender: () => {},
 			addInputListener: (listener: (data: string) => unknown) => inputListeners.push(listener),
 			addStartListener: () => {},
@@ -149,6 +151,43 @@ describe("an image over the enhanced-paste protocol", () => {
 
 		expect(recorded.statuses).toEqual(["Image paste is not supported in this prompt"]);
 		expect(editor.pendingImages).toEqual([]);
+	});
+});
+
+describe("text over the enhanced-paste protocol", () => {
+	function pasteTextWhileFocused(focused: object | null | undefined, text: string) {
+		const h = focused === undefined ? harness() : harness({ focused });
+		h.paste.installEnhancedPaste();
+		deliverEnhancedPaste(h.inputListeners[0]!, "text/plain", Buffer.from(text, "utf8"));
+		return h;
+	}
+
+	it("lands in the modal prompt that holds focus, not in the editor behind it", () => {
+		const modalPasted: string[] = [];
+		const modal = { pasteText: (text: string) => modalPasted.push(text) };
+
+		const { recorded } = pasteTextWhileFocused(modal, "sk-test-123");
+
+		expect(modalPasted).toEqual(["sk-test-123"]);
+		expect(recorded.pastedText).toEqual([]);
+	});
+
+	it("lands in the editor while the editor holds focus", () => {
+		const { recorded } = pasteTextWhileFocused(undefined, "regular paste body");
+
+		expect(recorded.pastedText).toEqual(["regular paste body"]);
+	});
+
+	it("lands in the editor when nothing holds focus", () => {
+		const { recorded } = pasteTextWhileFocused(null, "unfocused body");
+
+		expect(recorded.pastedText).toEqual(["unfocused body"]);
+	});
+
+	it("lands in the editor when the focused component cannot take a paste", () => {
+		const { recorded } = pasteTextWhileFocused({}, "fallback body");
+
+		expect(recorded.pastedText).toEqual(["fallback body"]);
 	});
 });
 
