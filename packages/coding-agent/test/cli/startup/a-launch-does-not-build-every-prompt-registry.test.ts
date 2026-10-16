@@ -330,11 +330,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `session/agent-session.ts`. It imports only what that code imported there, so no other module
  * arrived. Measured 2026-10-16 at 1482.
  *
+ * 1482 to 1483: `session/runtime/session-handoff.ts`, the handoff document and the new session it
+ * seeds, which left `session/agent-session.ts`. It imports only what that code imported there, so
+ * no other module arrived. Measured 2026-10-16 at 1483.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1482;
+const LAUNCH_REACH_CEILING = 1483;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

@@ -68,8 +68,10 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * `session-switch.ts` collaborator (-371).
  * RE-MEASURED 2026-10-16 at 8654: branching, the `/btw` branch and tree navigation with its
  * branch summary left as the `session-branch.ts` collaborator (-361).
+ * RE-MEASURED 2026-10-16 at 8446: the handoff document and the new session it seeds left as the
+ * `session-handoff.ts` collaborator (-208).
  */
-const RUNTIME_CEILING = 8_700;
+const RUNTIME_CEILING = 8_500;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -104,6 +106,7 @@ const COLLABORATORS = [
 	"retry-runtime.ts",
 	"session-approvals.ts",
 	"session-branch.ts",
+	"session-handoff.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
 	"session-switch.ts",

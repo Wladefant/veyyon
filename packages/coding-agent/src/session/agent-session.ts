@@ -30,7 +30,6 @@ import {
 	type AgentTurnEndContext,
 	AppendOnlyContextManager,
 	type AsideMessage,
-	resolveTelemetry,
 	type StreamFn,
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
 	type ThinkingLevel,
@@ -41,16 +40,10 @@ import {
 	type CompactionResult,
 	calculateContextTokens,
 	compactionContextTokens,
-	computeFileLists,
-	createFileOps,
-	extractFileOpsFromMessages,
-	generateHandoffFromContext,
-	renderHandoffPrompt,
 	resolveCompactionBoundaryIndex,
 	type SessionMessageEntry,
 	type ShakeConfig,
 	shouldCompact,
-	upsertFileOperations,
 } from "@veyyon/agent-core/compaction";
 import type {
 	Api,
@@ -134,7 +127,6 @@ import {
 	errorMessage,
 	escapeXmlText,
 	getActiveAuthDbPath,
-	isAbortError,
 	isEnoent,
 	logger,
 	postmortem,
@@ -257,7 +249,6 @@ import {
 	prioritizeTodoItems,
 	TODO_ITEM_PREVIEW_WIDTH,
 	type TodoPhase,
-	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../tools/agent/todo";
 import { validateApprovalModeSetting, validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
@@ -367,6 +358,7 @@ import { ReplanTitleRefresh } from "./runtime/replan-title-refresh";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { SessionApprovals } from "./runtime/session-approvals";
 import { SessionBranch, type TreeNavigationResult } from "./runtime/session-branch";
+import { SessionHandoff } from "./runtime/session-handoff";
 import { SessionScope } from "./runtime/session-scope";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
 import { SessionSwitch } from "./runtime/session-switch";
@@ -421,15 +413,6 @@ const noOpUIContext: ExtensionUIContext = {
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
 };
-
-function createHandoffContext(document: string): string {
-	return `<handoff-context>\n${document}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
-}
-
-function createHandoffFileName(date = new Date()): string {
-	const fileTimestamp = date.toISOString().replace(/[:.]/g, "-");
-	return `handoff-${fileTimestamp}.md`;
-}
 
 /**
  * Ask the active memory backend for an extra-context block to splice into
@@ -1098,10 +1081,6 @@ export class AgentSession {
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 	});
 
-	// Handoff state
-	#handoffAbortController: AbortController | undefined = undefined;
-	#skipPostTurnMaintenanceAssistantTimestamp: number | undefined = undefined;
-
 	readonly #retry = new RetryRuntime(this, {
 		emitSessionEvent: event => this.#emitSessionEvent(event),
 		promptGeneration: () => this.#promptGeneration,
@@ -1184,6 +1163,7 @@ export class AgentSession {
 	/** Loads another transcript into this session, and rolls back a load that fails part way. */
 	readonly #sessionSwitch: SessionSwitch;
 	readonly #sessionBranch: SessionBranch;
+	readonly #sessionHandoff: SessionHandoff;
 	/**
 	 * The stream function every side request runs on, fixed when the session is built:
 	 * `config.sideStreamFn`, or the `streamSimple` export as it stood at construction.
@@ -1944,6 +1924,7 @@ export class AgentSession {
 		this.#advisorRoster.enableFromSettings();
 		this.#sessionSwitch = this.#createSessionSwitch();
 		this.#sessionBranch = this.#createSessionBranch();
+		this.#sessionHandoff = this.#createSessionHandoff();
 
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
 
@@ -2078,6 +2059,30 @@ export class AgentSession {
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			restoreMCPSelectionsForSessionContext: sessionContext =>
 				this.#restoreMCPSelectionsForSessionContext(sessionContext),
+		});
+	}
+
+	/** The handoff, reaching this session only through the host it declares. */
+	#createSessionHandoff(): SessionHandoff {
+		return new SessionHandoff(this, {
+			checkpoint: this.#checkpoint,
+			todo: this.#todo,
+			providerSessions: this.#providerSessions,
+			memory: this.#memory,
+			secrets: this.#secrets,
+			sideComplete: this.#sideCompleteImpl,
+			extensionRunner: () => this.#config.extensionRunner,
+			modelRegistry: () => this.#config.modelRegistry,
+			baseSystemPrompt: () => this.#baseSystemPrompt,
+			effectiveServiceTier: model => this.#effectiveServiceTier(model),
+			clearNextTurnMessages: () => {
+				this.#pendingNextTurnMessages = [];
+				this.#scheduledHiddenNextTurnGeneration = undefined;
+			},
+			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
+			rescopeAgentRegistry: () => this.#rescopeAgentRegistry(),
+			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
+			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
 	}
 
@@ -3024,9 +3029,7 @@ export class AgentSession {
 			);
 		}
 		this.#ttsr.onAssistantSettled(message);
-		if (this.#handoffAbortController) {
-			this.#skipPostTurnMaintenanceAssistantTimestamp = message.timestamp;
-		}
+		this.#sessionHandoff.noteAssistantSettled(message);
 		await this.#retry.closeRecovered(message);
 		this.#usage.recordTurnCost(message);
 	}
@@ -3175,8 +3178,7 @@ export class AgentSession {
 
 		await this.#invalidateCopilotOnAuthFailure(msg);
 
-		if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
-			this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
+		if (this.#sessionHandoff.takeMaintenanceSkip(msg.timestamp)) {
 			this.#yields.clear();
 			route("skip-post-turn-maintenance");
 			return;
@@ -7048,7 +7050,7 @@ export class AgentSession {
 	 */
 	abortCompaction(): void {
 		this.#compaction.abort();
-		this.#handoffAbortController?.abort();
+		this.#sessionHandoff.abort();
 	}
 
 	/** Trigger idle compaction through the auto-compaction flow (with UI events). */
@@ -7071,14 +7073,14 @@ export class AgentSession {
 	 * Cancel in-progress handoff generation.
 	 */
 	abortHandoff(): void {
-		this.#handoffAbortController?.abort();
+		this.#sessionHandoff.abort();
 	}
 
 	/**
 	 * Check if handoff generation is in progress.
 	 */
 	get isGeneratingHandoff(): boolean {
-		return this.#handoffAbortController !== undefined;
+		return this.#sessionHandoff.active;
 	}
 
 	/**
@@ -7088,218 +7090,8 @@ export class AgentSession {
 	 * @param options Handoff execution options
 	 * @returns The handoff document text, or undefined if cancelled/failed
 	 */
-	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
-		const entries = this.sessionManager.getBranch();
-		const messageCount = entries.filter(e => e.type === "message").length;
-
-		if (messageCount < 2) {
-			throw new Error("Nothing to hand off (no messages yet)");
-		}
-
-		this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
-
-		this.#handoffAbortController = new AbortController();
-		const handoffAbortController = this.#handoffAbortController;
-		const handoffSignal = handoffAbortController.signal;
-		const sourceSignal = options?.signal;
-		const onSourceAbort = () => {
-			if (!handoffSignal.aborted) {
-				handoffAbortController.abort();
-			}
-		};
-		if (sourceSignal) {
-			sourceSignal.addEventListener("abort", onSourceAbort, { once: true });
-			if (sourceSignal.aborted) {
-				onSourceAbort();
-			}
-		}
-
-		try {
-			if (handoffSignal.aborted) {
-				throw new Error("Handoff cancelled");
-			}
-
-			const model = this.model;
-			if (!model) {
-				throw new Error(
-					"No model selected, so the handoff summary cannot be written. Fix: in an interactive veyyon session run /model to choose one; from a terminal pass `--model <provider>/<id>`. `veyyon models` lists what this profile can reach.",
-				);
-			}
-			const apiKey = await this.#config.modelRegistry.getApiKey(model, this.sessionId);
-			if (!apiKey) {
-				throw new Error(missingCredentialsMessage(model.provider, model.id, "the handoff summary model"));
-			}
-
-			// Build the handoff request through the SAME pipeline a live turn uses
-			// (`runEphemeralTurn` / `/btw` share it) so the oneshot reads the
-			// provider prompt cache the main turn populated instead of cold-missing
-			// the whole prefix: identical system prompt, normalized tools, and
-			// transform-/obfuscation-matched message history via
-			// `convertMessagesToLlm` + `buildSideRequestContext`, plus the live turn's
-			// effective provider cache key with a unique side `sessionId` so
-			// OpenAI/Codex append-only state never mixes with the live turn.
-			const cacheSessionId = this.sessionId;
-			// The loop sends `promptCacheKey` (providerPromptCacheKey) and falls back to
-			// the provider session id; providers route on `promptCacheKey ?? sessionId`.
-			// Both can diverge from this.sessionId (tan/agent/shared sessions), so
-			// mirror exactly what the live turn populated the cache under.
-			const handoffPromptCacheKey = this.agent.promptCacheKey ?? this.agent.sessionId;
-			const handoffPromptText = renderHandoffPrompt(this.#secrets.obfuscateTextForProvider(customInstructions));
-			const handoffSnapshot: AgentMessage[] = [
-				...this.agent.state.messages,
-				{
-					role: "user",
-					content: [{ type: "text", text: handoffPromptText }],
-					attribution: "agent",
-					timestamp: Date.now(),
-				},
-			];
-			const handoffLlmMessages = await this.convertMessagesToLlm(handoffSnapshot, handoffSignal);
-			// Base system prompt, not a per-turn `before_agent_start` hook override —
-			// the handoff seeds a fresh session and must not carry prompt-specific
-			// hook state. Matches the prompt the old handoff path sent.
-			const handoffContext = await this.agent.buildSideRequestContext(handoffLlmMessages, this.#baseSystemPrompt);
-			const handoffStreamOptions = await this.prepareSimpleStreamOptions(
-				{
-					apiKey: this.#config.modelRegistry.resolver(model, cacheSessionId),
-					sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
-					promptCacheKey: handoffPromptCacheKey,
-					preferWebsockets: false,
-					serviceTier: this.#effectiveServiceTier(model),
-					hideThinkingSummary: this.agent.hideThinkingSummary,
-					initiatorOverride: "agent",
-					signal: handoffSignal,
-				},
-				model.provider,
-			);
-			const rawHandoffText = await generateHandoffFromContext(
-				this.#secrets.obfuscateContext(handoffContext),
-				model,
-				{
-					streamOptions: handoffStreamOptions,
-					completeImpl: this.#sideCompleteImpl,
-					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
-					// Honor the user's /model thinking selection on the handoff path.
-					// Clamped per-model inside generateHandoffFromContext via
-					// resolveCompactionEffort so unsupported-effort models don't trip
-					// requireSupportedEffort.
-					thinkingLevel: this.thinkingLevel,
-				},
-			);
-			// Append the same deterministic `<files>` block the summary strategy gets.
-			// It is machine-generated from the live messages, costs no LLM work, and is
-			// byte-identical across models, so the handoff had been giving the next
-			// session strictly less than a summary of the same history for no reason.
-			const handoffFileOps = createFileOps();
-			extractFileOpsFromMessages(this.agent.state.messages, handoffFileOps);
-			const handoffFileLists = computeFileLists(handoffFileOps);
-			const handoffText = upsertFileOperations(
-				this.#secrets.expandForDisplay(rawHandoffText),
-				handoffFileLists.readFiles,
-				handoffFileLists.modifiedFiles,
-				handoffFileOps.read,
-			);
-			const carriedTodoPhases = this.#todo.phases();
-
-			if (handoffSignal.aborted) {
-				throw new Error("Handoff cancelled");
-			}
-			if (!handoffText) {
-				return undefined;
-			}
-
-			// Start a new session
-			const previousSessionFile = this.sessionFile;
-			if (this.#config.extensionRunner?.hasHandlers("session_before_switch")) {
-				const result = (await this.#config.extensionRunner.emit({
-					type: "session_before_switch",
-					reason: "handoff",
-				})) as SessionBeforeSwitchResult | undefined;
-
-				if (result?.cancel) {
-					options?.onSwitchCancelled?.();
-					return undefined;
-				}
-			}
-			await this.sessionManager.flush();
-			this.#cancelOwnAsyncJobs();
-			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
-			// A handoff continues the work in a NEW transcript. The pre-handoff
-			// spawned agents wrote into the old one and their jobs were just cancelled;
-			// leaving them registered would list them under the new conversation.
-			await this.#rescopeAgentRegistry();
-
-			this.#checkpoint.clear();
-			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
-			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
-			// pre-loader TUI steer) so they survive into the post-handoff session instead of
-			// being silently dropped. Capture is synchronous immediately before reset and
-			// restore is synchronous immediately after — no await gap — so a steer arriving
-			// later (during ensureOnDisk/Bun.write below) appends to the restored queue
-			// rather than being clobbered.
-			const preservedSteering = this.agent.peekSteeringQueue().slice();
-			const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
-			this.agent.reset();
-			this.agent.replaceQueues(preservedSteering, preservedFollowUp);
-			this.#providerSessions.freshId = undefined;
-			this.#providerSessions.sync();
-			this.#memory.rekey();
-			this.#resetMemoryContextForNewTranscript();
-			this.#pendingNextTurnMessages = [];
-			this.#scheduledHiddenNextTurnGeneration = undefined;
-			this.#todo.resetForNewContext();
-
-			// Inject the handoff document as a custom message
-			const handoffContent = createHandoffContext(handoffText);
-			this.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
-			if (carriedTodoPhases.length > 0) {
-				// Todos survive a handoff through their own persisted snapshot entry, the
-				// same one `/todo` writes, so a reload of the new transcript still finds them.
-				this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: carriedTodoPhases });
-			}
-			await this.sessionManager.ensureOnDisk();
-			let savedPath: string | undefined;
-			if (options?.autoTriggered && this.settings.get("compaction.handoffSaveToDisk")) {
-				const artifactsDir = this.sessionManager.getArtifactsDir();
-				if (artifactsDir) {
-					const handoffFilePath = path.join(artifactsDir, createHandoffFileName());
-					try {
-						await Bun.write(handoffFilePath, `${handoffText}\n`);
-						savedPath = handoffFilePath;
-					} catch (error) {
-						logger.warn("Failed to save handoff document to disk", {
-							path: handoffFilePath,
-							error: errorMessage(error),
-						});
-					}
-				} else {
-					logger.debug("Skipping handoff document save because session is not persisted");
-				}
-			}
-
-			// Rebuild agent messages from session
-			const sessionContext = this.buildDisplaySessionContext();
-			this.agent.replaceMessages(sessionContext.messages);
-			this.#resetAllAdvisorRuntimes();
-			this.#todo.syncFromBranch();
-			if (this.#config.extensionRunner) {
-				await this.#config.extensionRunner.emit({
-					type: "session_switch",
-					reason: "handoff",
-					previousSessionFile,
-				});
-			}
-
-			return { document: handoffText, savedPath };
-		} catch (error) {
-			if (handoffSignal.aborted || isAbortError(error)) {
-				throw new Error("Handoff cancelled");
-			}
-			throw error;
-		} finally {
-			sourceSignal?.removeEventListener("abort", onSourceAbort);
-			this.#handoffAbortController = undefined;
-		}
+	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
+		return this.#sessionHandoff.run(customInstructions, options);
 	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {

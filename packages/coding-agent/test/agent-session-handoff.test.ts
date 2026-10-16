@@ -1,3 +1,9 @@
+/**
+ * The handoff: the document a oneshot request writes from the live conversation, the new session
+ * it seeds, cancellation, the steering queues it carries across and the document saved to disk.
+ *
+ * Subject: `session/runtime/session-handoff.ts`, driven through `AgentSession.handoff`.
+ */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type StreamFn, ThinkingLevel } from "@veyyon/agent-core";
@@ -176,6 +182,59 @@ describe("AgentSession handoff", () => {
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+	});
+
+	/**
+	 * A turn that settles while a handoff is generating belongs to the transcript the handoff
+	 * replaces, so its post-turn maintenance is skipped: compacting it would rewrite a
+	 * conversation the session has already left.
+	 */
+	it("skips post-turn maintenance for an assistant message that settles while a handoff is generating", async () => {
+		session.settings.set("compaction.strategy", "summary");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+		const generationStarted = Promise.withResolvers<void>();
+		const generated = Promise.withResolvers<string>();
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockImplementation(() => {
+			generationStarted.resolve();
+			return generated.promise;
+		});
+		// Rejects at once, so a regression reads as a call on this spy rather than a hung test.
+		const compactSpy = vi
+			.spyOn(compactionModule, "compact")
+			.mockRejectedValue(new Error("compaction ran for a transcript the handoff replaced"));
+
+		const handoff = session.handoff();
+		await generationStarted.promise;
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "settled during the handoff" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		generated.resolve("## Goal\nContinue from here");
+		await handoff;
+		await drainMaintenance();
+
+		expect(compactSpy).not.toHaveBeenCalled();
+		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 	});
 
 	/**
@@ -1584,6 +1643,31 @@ describe("AgentSession handoff", () => {
 		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("## Goal\nManual handoff");
 
 		const result = await session.handoff();
+		expect(result?.savedPath).toBeUndefined();
+	});
+
+	it("saves an auto-triggered handoff document into the new session's artifacts directory", async () => {
+		session.settings.set("compaction.handoffSaveToDisk", true);
+		const handoffText = "## Goal\nAutomatic handoff";
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(handoffText);
+
+		const result = await session.handoff(undefined, { autoTriggered: true });
+
+		const artifactsDir = session.sessionManager.getArtifactsDir();
+		if (!result?.savedPath || !artifactsDir) {
+			throw new Error("Expected a saved handoff document in the session's artifacts directory");
+		}
+		expect(path.dirname(result.savedPath)).toBe(artifactsDir);
+		expect(path.basename(result.savedPath)).toMatch(/^handoff-\d{4}-\d{2}-\d{2}T[\d-]+Z\.md$/);
+		expect(await Bun.file(result.savedPath).text()).toBe(`${result.document}\n`);
+		expect(result.document.startsWith(handoffText)).toBe(true);
+	});
+
+	it("does not save an auto-triggered handoff document while the save setting is off", async () => {
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("## Goal\nAutomatic handoff");
+
+		const result = await session.handoff(undefined, { autoTriggered: true });
+		expect(result?.document).toStartWith("## Goal\nAutomatic handoff");
 		expect(result?.savedPath).toBeUndefined();
 	});
 
