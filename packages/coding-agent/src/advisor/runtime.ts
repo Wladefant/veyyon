@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
 import type { AssistantMessage, ImageContent, TextContent } from "@veyyon/ai";
@@ -213,6 +214,8 @@ export class AdvisorRuntime {
 	 *  being retried/requeued into the post-reset conversation. */
 	#epoch = 0;
 	disposed = false;
+	/** Aborted by {@link dispose}; ends the review loop's retry delay. */
+	readonly #disposal = new AbortController();
 
 	constructor(
 		private readonly agent: AdvisorAgent,
@@ -282,6 +285,7 @@ export class AdvisorRuntime {
 
 	dispose(): void {
 		this.disposed = true;
+		this.#disposal.abort();
 		this.#epoch++;
 		this.#pending = [];
 		this.#backlog = 0;
@@ -647,7 +651,12 @@ export class AdvisorRuntime {
 						success = true;
 					} else {
 						this.#pending.unshift({ text: batch, turns: finalTurns, wip });
-						await Bun.sleep(this.retryDelayMs);
+						// A zero delay retries at once; a timer would only defer it a clamped tick.
+						if (this.retryDelayMs > 0) {
+							await delay(this.retryDelayMs, undefined, { signal: this.#disposal.signal }).catch(
+								() => undefined,
+							);
+						}
 					}
 				}
 
