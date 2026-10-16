@@ -33,6 +33,7 @@
 - `tests/evals/docs/` is the evals manual, replacing `EVALS.md`.
 - `benches/browser-fill.ts` times `tab.fill` in headless Chromium for 16, 256 and 4,096 characters and counts a fill correct only when the field holds the value.
 - `benches/natural-input.ts` times `tab.click`, `tab.type`, `tab.fill` on a text field, a date input and a range, and `tab.select` on a drop-down with `browser.naturalInput` off and on, and `benches/bot-detection.ts` opens public bot-detector pages through the browser tool and prints each verdict and the signals it flags.
+- An enum `SettingDef` may declare `invalid`, the member a configured value outside `values` reads as.
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 
@@ -79,12 +80,16 @@
 - The model registry builds custom-model and provider-override headers through `createLiveConfigHeaders` directly instead of two single-use wrappers; no user-visible change.
 - The live config-header builder moved from `config/model-registry.ts` to `config/live-config-headers.ts`; no user-visible change.
 - Model override, custom model and provider compat application moved from `config/model-registry.ts` to `config/model-patch.ts`; no user-visible change.
+- The session appends a custom message without a turn, and merges queue-chip text into a queued message's details, through one helper each instead of four and two copies; no user-visible change.
+- The last-assistant-message readers moved from `session/agent-session.ts` to `session/agent-session-message-shapes.ts`; no user-visible change.
 - Doc comments that module splits left above the wrong declaration (`stageModels`, `AUTO_THINKING`, `ConfiguredThinkingLevel`) are back on their definitions; no user-visible change.
 - Source comments that named a moved or deleted symbol's old module now name its current one; no user-visible change.
+- Dropping a failed assistant turn and its never-ran tool results from active context moved from `session/agent-session.ts` to `session/runtime/turn-context-check.ts`, beside the function that puts one back; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
+- An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
 
 ### Removed
@@ -93,6 +98,7 @@
 
 ### Fixed
 
+- A `tools.approvalMode` in a config file that is not one of its values reads as `ask` instead of the default `auto`, and every configured value that does not match its declared type is shown at startup with the file to edit.
 - A failing `!command` for a provider API key or header in `models.yml` names the setting it was resolving in its log report, as the other config values already did.
 - `ctrl+g` in a hook or ask-input editor whose `$VISUAL`/`$EDITOR` cannot start shows the failure under the text instead of ending the session, and with no editor configured shows that instead of doing nothing.
 - A provider error that ends a turn is logged at warn with the provider's message, model and error classification, and a failure's retry classification is logged once instead of once per recovery check ([#935](https://github.com/santhreal/veyyon/issues/935)).
