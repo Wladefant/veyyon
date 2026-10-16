@@ -591,23 +591,21 @@ export class StatusPresentationProducer implements StatusDataSource {
 		);
 	}
 
+	/** The provider the session is spending on and the OAuth account this session spends through. */
+	#activeAccount(): { provider: string | undefined; identity: OAuthAccountIdentity | undefined } {
+		const session = this.#session;
+		const provider = session.state?.model?.provider ?? session.model?.provider;
+		const identity = provider
+			? session.modelRegistry?.authStorage?.getOAuthAccountIdentity?.(provider, session.sessionId)
+			: undefined;
+		return { provider, identity };
+	}
+
 	getUsageContextKey(): string {
-		const session = this.#session as unknown as Record<string, unknown>;
-		const stateModel = (session.state as { model?: { provider?: string } } | undefined)?.model;
-		const model = session.model as { provider?: string } | undefined;
-		const activeProvider =
-			stateModel?.provider ??
-			model?.provider ??
-			(session.session as AgentSession | undefined)?.state?.model?.provider ??
-			"";
-		if (!activeProvider) return "";
-		const modelRegistry =
-			(session.modelRegistry as AgentSession["modelRegistry"] | undefined) ??
-			(session.session as AgentSession | undefined)?.modelRegistry;
-		const authStorage = modelRegistry?.authStorage;
-		const identity = authStorage?.getOAuthAccountIdentity?.(activeProvider, session.sessionId as string | undefined);
+		const { provider, identity } = this.#activeAccount();
+		if (!provider) return "";
 		return [
-			activeProvider,
+			provider,
 			identity?.accountId ?? "",
 			identity?.email ?? "",
 			identity?.projectId ?? "",
@@ -616,32 +614,9 @@ export class StatusPresentationProducer implements StatusDataSource {
 	}
 
 	async fetchUsage(signal: AbortSignal): Promise<StatusProviderUsage | null> {
-		const session = this.#session as unknown as Record<string, unknown>;
-		const fetcher =
-			typeof session.fetchUsageReports === "function"
-				? (session.fetchUsageReports as (signal?: AbortSignal) => Promise<unknown>)
-				: typeof (session.session as Record<string, unknown> | undefined)?.fetchUsageReports === "function"
-					? ((session.session as Record<string, unknown>).fetchUsageReports as (
-							signal?: AbortSignal,
-						) => Promise<unknown>)
-					: undefined;
-		if (!fetcher) return null;
-		const stateModel = (session.state as { model?: { provider?: string } } | undefined)?.model;
-		const model = session.model as { provider?: string } | undefined;
-		const activeProvider =
-			stateModel?.provider ??
-			model?.provider ??
-			(session.session as AgentSession | undefined)?.state?.model?.provider;
-		const modelRegistry =
-			(session.modelRegistry as AgentSession["modelRegistry"] | undefined) ??
-			(session.session as AgentSession | undefined)?.modelRegistry;
-		const authStorage = modelRegistry?.authStorage;
-		const activeIdentity =
-			activeProvider && authStorage
-				? authStorage.getOAuthAccountIdentity?.(activeProvider, session.sessionId as string | undefined)
-				: undefined;
-		const reports = await fetcher.call(session, signal);
-		return normalizeUsageReports(reports, activeProvider, activeIdentity);
+		const { provider, identity } = this.#activeAccount();
+		const reports = await this.#session.fetchUsageReports(signal);
+		return normalizeUsageReports(reports, provider, identity);
 	}
 
 	recordLaunchFacts(contextPercent: number | null, contextLimit: number): void {

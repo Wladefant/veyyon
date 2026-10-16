@@ -69,6 +69,7 @@
 - Doc comments that module splits left above the wrong declaration (`stageModels`, `AUTO_THINKING`, `ConfiguredThinkingLevel`) are back on their definitions; no user-visible change.
 - Source comments that named a moved or deleted symbol's old module now name its current one; no user-visible change.
 - Dropping a failed assistant turn and its never-ran tool results from active context moved from `session/agent-session.ts` to `session/runtime/turn-context-check.ts`, beside the function that puts one back; no user-visible change.
+- The status line reads the session's provider and OAuth account through its typed members instead of a reflective record with a fallback for a session shape that no longer exists; no user-visible change.
 
 ### Fixed
 

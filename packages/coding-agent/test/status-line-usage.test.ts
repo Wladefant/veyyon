@@ -170,6 +170,67 @@ describe("usage status-line segment", () => {
 		expect(content).not.toContain("other");
 	});
 
+	it("scopes reports to the active provider when no OAuth account is known", async () => {
+		const component = makeComponent(
+			[
+				{ provider: "openai-codex", limits: [{ scope: { windowId: "5h" }, amount: { usedFraction: 0.66 } }] },
+				{ provider: "anthropic", limits: [{ scope: { windowId: "5h" }, amount: { usedFraction: 0.24 } }] },
+			],
+			{ provider: "anthropic" },
+		);
+
+		component.refreshUsageInBackground();
+		await flushUsageRefresh();
+		const content = stripVTControlCharacters(component.renderQuietLine(200) ?? "");
+
+		expect(content).toContain("24%");
+		expect(content).not.toContain("66%");
+	});
+
+	it("reads the account this session selected, not the provider's default", async () => {
+		const reports = [
+			{
+				provider: "anthropic",
+				metadata: { accountId: "default-account" },
+				limits: [{ scope: { windowId: "5h" }, amount: { usedFraction: 0.66 } }],
+			},
+			{
+				provider: "anthropic",
+				metadata: { accountId: "session-account" },
+				limits: [{ scope: { windowId: "5h" }, amount: { usedFraction: 0.24 } }],
+			},
+		];
+		const model = { contextWindow: 1000, provider: "anthropic" };
+		const component = new StatusLineComponent(
+			new StatusPresentationProducer({
+				...statusLineSessionParts({ contextWindow: 1000, contextUsage: undefined }),
+				sessionId: "session-1",
+				state: { messages: [], model },
+				model,
+				fetchUsageReports: async () => reports,
+				modelRegistry: {
+					isUsingOAuth: () => false,
+					authStorage: {
+						// A session that pinned an account reads it by its id; without the id the store
+						// answers with the provider's default account.
+						getOAuthAccountIdentity: (_provider: string, sessionId?: string) => ({
+							accountId: sessionId === "session-1" ? "session-account" : "default-account",
+						}),
+						listStoredCredentials: () => [],
+					},
+				},
+			} as unknown as AgentSession),
+		);
+		component.updateSettings({ preset: "custom", leftSegments: [], rightSegments: ["usage"] });
+
+		component.refreshUsageInBackground();
+		await flushUsageRefresh();
+		const content = stripVTControlCharacters(component.renderQuietLine(200) ?? "");
+
+		expect(content).toContain("24%");
+		expect(content).not.toContain("66%");
+	});
+
 	it("invalidates cached usage when the active provider changes", async () => {
 		let provider = "openai-codex";
 		const model = { contextWindow: 1000, provider };
