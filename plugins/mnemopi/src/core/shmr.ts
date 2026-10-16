@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { batched } from "@veyyon/utils/array";
 import * as logger from "@veyyon/utils/logger";
 import { clampLow } from "@veyyon/utils/math";
+import { sqlPlaceholders, tableExists } from "@veyyon/utils/sqlite";
 import {
 	shmrBatchSize,
 	shmrHarmonyThreshold,
@@ -10,7 +11,7 @@ import {
 	shmrMinClusterSize,
 	shmrSimilarityThreshold,
 } from "../config";
-import { SQLITE_IN_CLAUSE_BATCH, sqlPlaceholders, tableExists } from "../util/sqlite";
+import { SQLITE_IN_CLAUSE_BATCH } from "../util/sqlite";
 import * as embeddings from "./embeddings";
 import { cosineSimilarity, decodeEmbeddingJson } from "./vector-math";
 

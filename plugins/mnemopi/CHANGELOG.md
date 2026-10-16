@@ -11,6 +11,7 @@
 
 ### Removed
 
+- Removed the `escapeLike`, `sqlPlaceholders` and `tableExists` re-exports from `util/sqlite`; import them from `@veyyon/utils/sqlite`.
 - Removed the unused `deferredTransaction`, `REV_CATEGORY`, `REV_PHRASE`, `VEC_TYPE`, `vecSearch`, `fastembedCacheDir`, `modelCacheDir`, `HOST_LLM_TIMEOUT_SECONDS` and no-op `resetRecoveryForTests` exports; loading `core/binary-vectors` no longer reads `MNEMOPI_VEC_TYPE` at import time.
 
 ## [1.5.6] - 2026-10-13

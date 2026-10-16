@@ -16,8 +16,8 @@
  * one shared function still splits the way both call sites expect.
  */
 import { describe, expect, it } from "bun:test";
-import { splitReadSelector as compactionSplitReadSelector } from "@veyyon/agent-core/compaction/utils";
 import { splitReadSelector as utilsSplitReadSelector } from "@veyyon/utils";
+import { splitReadSelector as compactionSplitReadSelector } from "@veyyon/utils/read-selector";
 import { splitPathAndSel } from "../../src/tools/core/path-utils";
 
 describe("read-tool selector splitter has exactly one owner", () => {

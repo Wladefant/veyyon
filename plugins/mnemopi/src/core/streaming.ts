@@ -2,8 +2,8 @@ import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as logger from "@veyyon/utils/logger";
+import { sqlPlaceholders } from "@veyyon/utils/sqlite";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import { sqlPlaceholders } from "../util/sqlite";
 
 export const ALLOWED_DELTA_TABLES = new Set(["working_memory", "episodic_memory"] as const);
 export type DeltaTable = "working_memory" | "episodic_memory";

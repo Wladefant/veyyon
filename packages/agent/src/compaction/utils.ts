@@ -6,14 +6,7 @@ import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall, To
 import type { Dialect } from "@veyyon/ai/dialect";
 // The factory declares it; the dialect barrel re-exports every definition alongside it.
 import { getDialectDefinition } from "@veyyon/ai/dialect/factory";
-import {
-	containsUrlScheme,
-	formatGroupedPaths,
-	prompt,
-	splitReadSelector,
-	stringifyJson,
-	stripReadSelector,
-} from "@veyyon/utils";
+import { containsUrlScheme, formatGroupedPaths, prompt, stringifyJson, stripReadSelector } from "@veyyon/utils";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentMessage } from "../types";
 
@@ -34,13 +27,6 @@ export function createFileOps(): FileOperations {
 		edited: new Set(),
 	};
 }
-
-// The read-tool selector grammar + splitter live in @veyyon/utils
-// (read-selector.ts), the single owner shared with the coding-agent read tool's
-// `splitPathAndSel`. Re-exported here so existing compaction callers
-// (`stripReadSelector` for the file-operations list, `readToolSupersedeKey`
-// keying on both parts) keep their import site unchanged.
-export { splitReadSelector, stripReadSelector };
 
 /**
  * Whether `path` references a `scheme://` URL (internal URI or web URL) rather

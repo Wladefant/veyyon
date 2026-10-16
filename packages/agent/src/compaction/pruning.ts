@@ -3,6 +3,7 @@
  */
 
 import type { ToolResultMessage } from "@veyyon/ai";
+import { splitReadSelector } from "@veyyon/utils/read-selector";
 import { toolResultNeverRan } from "../tool-result-never-ran";
 import type { AgentMessage, AgentToolCall } from "../types";
 import type { SessionEntry, SessionMessageEntry } from "./entries";
@@ -14,7 +15,6 @@ import {
 	isSkillReadToolResult,
 	type ProtectedToolMatcher,
 } from "./tool-protection";
-import { splitReadSelector } from "./utils";
 
 export interface PruneConfig {
 	/** Keep the most recent tool output tokens intact. */

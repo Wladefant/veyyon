@@ -7,8 +7,9 @@ import { parseQueryTime, recencyDecay, temporalBoost, toUtcIso } from "../../uti
 // the recall surface has always exposed so callers keep importing them here.
 export { parseQueryTime, temporalBoost } from "../../util/datetime";
 
+import { sqlPlaceholders, tableExists as tableExistsIn } from "@veyyon/utils/sqlite";
 import { unicodeWordTokens } from "../../util/regex";
-import { SQLITE_IN_CLAUSE_BATCH, sqlPlaceholders, tableExists as tableExistsIn } from "../../util/sqlite";
+import { SQLITE_IN_CLAUSE_BATCH } from "../../util/sqlite";
 import { embedQuery } from "../embeddings";
 import { mmrRerank } from "../mmr";
 import { adjustWeights, classifyIntent } from "../query-intent";

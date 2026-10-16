@@ -24,13 +24,6 @@ import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { $env, logger, scopedTimeoutSignal, stringifyJson } from "@veyyon/utils";
 
 /**
- * Re-exported for callers that already import compaction transports from here.
- * The two dead provider-native keys, and why they are looked past rather than
- * read, are documented at the definition.
- */
-export * from "./legacy-provider-native";
-
-/**
  * Hard ceiling on a remote summarizer call. A hung connection or a body a
  * middlebox never finishes would otherwise stall the whole compaction pipeline
  * forever (frozen maintenance spinner, manual `/compact` queued behind it).

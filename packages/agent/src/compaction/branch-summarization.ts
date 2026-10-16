@@ -9,6 +9,7 @@ import type { Api, ApiKey, AssistantMessage, Context, Model, ServiceTier, Simple
 import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { logger, prompt } from "@veyyon/utils";
+import { stripReadSelector } from "@veyyon/utils/read-selector";
 import { instrumentedCompleteSimple } from "../instrumented-complete";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentTelemetry } from "../telemetry";
@@ -29,7 +30,6 @@ import {
 	type FileOperations,
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversationForSummary,
-	stripReadSelector,
 	truncateToolResultForSummary,
 	upsertFileOperations,
 } from "./utils";

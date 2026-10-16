@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
+import { tableExists } from "@veyyon/utils/sqlite";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 import { toUtcIso } from "../util/datetime";
 import { unicodeWordTokens, WORD_TOKEN_HYPHEN_RE } from "../util/regex";
-import { parseStoredStringList, tableExists } from "../util/sqlite";
+import { parseStoredStringList } from "../util/sqlite";
 import { jaccardIndex, overlapScore } from "../util/text-similarity";
 import { CONTENT_STOPWORDS } from "./stopwords";
 

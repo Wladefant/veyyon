@@ -1,12 +1,13 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import * as logger from "@veyyon/utils/logger";
+import { escapeLike, sqlPlaceholders } from "@veyyon/utils/sqlite";
 import { DAY_MS, HOUR_MS } from "@veyyon/utils/time";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { degradeBatchSize, sleepBatchSize, tier2Days, tier3Days, tier3MaxChars } from "../../config";
 import { generateId, stableMemoryId } from "../../util/ids";
 import { unicodeWordTokens, WORD_TOKEN_DOT_HYPHEN_RE } from "../../util/regex";
-import { escapeLike, getMemoryTableStats, sqlPlaceholders } from "../../util/sqlite";
+import { getMemoryTableStats } from "../../util/sqlite";
 import { aaakEncode } from "../aaak";
 import { REGEX_EXTRACTION_MAX_INPUT_CHARS } from "../entities";
 import { EpisodicGraph } from "../episodic-graph";

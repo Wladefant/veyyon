@@ -1,10 +1,10 @@
 import type { Database } from "bun:sqlite";
+import { tableExists } from "@veyyon/utils/sqlite";
 import { DAY_MS, WEEK_MS } from "@veyyon/utils/time";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { type Env, envDisabled, polyphonicRecallEnabled } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 import { unicodeWordTokens, WORD_TOKEN_HYPHEN_RE } from "../util/regex";
-import { tableExists } from "../util/sqlite";
 import type { BeamMemoryState, JsonValue, Metadata, RecallResult } from "./beam/types";
 import { EpisodicGraph } from "./episodic-graph";
 import { type ConsolidatedFact, VeracityConsolidator } from "./veracity-consolidation";

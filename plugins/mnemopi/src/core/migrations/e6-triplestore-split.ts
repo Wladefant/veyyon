@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, writeFileSync } from "node:fs";
+import { sqlPlaceholders } from "@veyyon/utils/sqlite";
 import { closeQuietly, type DatabasePath, openDatabase } from "../../db";
-import { sqlPlaceholders } from "../../util/sqlite";
 
 export const ANNOTATION_KINDS = ["mentions", "fact", "occurred_on", "has_source"] as const;
 export type AnnotationKind = (typeof ANNOTATION_KINDS)[number];

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import * as logger from "@veyyon/utils/logger";
 import { clamp01 } from "@veyyon/utils/math";
+import { tableExists } from "@veyyon/utils/sqlite";
 import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
 import {
 	cjkFtsTerms,
@@ -13,7 +14,6 @@ import {
 	recallTokens,
 	unicodeWordTokens,
 } from "../../util/regex";
-import { tableExists } from "../../util/sqlite";
 import { currentEmbeddingModel, embed } from "../embeddings";
 import { getMnemopiRuntimeOptions, mnemopiDebugEnabled, withMnemopiRuntimeOptions } from "../runtime-options";
 import { buildExactVectorIndex, searchExactVectorIndex } from "../vector-index";

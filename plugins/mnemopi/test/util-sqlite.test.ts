@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { tableExists } from "../src/util/sqlite";
+import { tableExists } from "@veyyon/utils/sqlite";
 
 describe("tableExists", () => {
 	it("sees regular AND virtual tables — shmr's old type='table' copy missed FTS/vec tables", () => {

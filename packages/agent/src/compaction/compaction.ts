@@ -34,6 +34,7 @@ import { Effort } from "@veyyon/catalog/effort";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { clampThinkingLevelForModel } from "@veyyon/catalog/model-thinking";
 import { errorMessage, logger, prompt } from "@veyyon/utils";
+import { stripReadSelector } from "@veyyon/utils/read-selector";
 import { instrumentedCompleteSimple } from "../instrumented-complete";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentTelemetry } from "../telemetry";
@@ -83,7 +84,6 @@ import {
 } from "./threshold";
 import { estimateTokens } from "./token-estimate";
 import { collectToolCallsById, isSkillReadToolResult } from "./tool-protection";
-
 import {
 	computeFileLists,
 	createFileOps,
@@ -91,7 +91,6 @@ import {
 	type FileOperations,
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversationForSummary,
-	stripReadSelector,
 	transformMessagesForSummary,
 	upsertFileOperations,
 } from "./utils";
