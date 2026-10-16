@@ -1,3 +1,7 @@
+/**
+ * Language-server configuration per working directory, and the server selection the `lsp` tool, the
+ * diagnostics fetch and the writethrough share.
+ */
 import { setIdleTimeout } from "./client";
 import { getServersForFile, type LspConfig, loadConfig } from "./config";
 import type { ServerConfig } from "./types";
