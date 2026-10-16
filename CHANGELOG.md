@@ -103,6 +103,8 @@
 - The read tool's default line limit is bounded through the shared `clampLow` helper; no user-visible change.
 - Internal modules import output notices, tool status icons, formatters, the memory root, the active skill set, the IRC switch and the GitHub fetchers from the modules that define them instead of through compatibility re-exports; no user-visible change.
 - The `github` tool's Actions run model, fetches, outcome rules and watch reports moved from `tools/web/gh.ts` to `tools/web/gh-run-watch.ts`; no user-visible change.
+- Extension and custom slash-command resolution and the command context a session builds without an extension runner moved from `session/agent-session.ts` to `session/agent-session-commands.ts`; no user-visible change.
+- The process agent lifecycle manager is rebuilt when the process agent registry is replaced, so it never terminates or parks agents through a registry nothing reads; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
