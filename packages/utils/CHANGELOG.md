@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
+
+### Fixed
+
+- `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes

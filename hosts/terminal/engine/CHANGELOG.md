@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
+
+### Fixed
+
+- A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
+
 ## [1.5.7] - 2026-10-15
 
 ### Changed

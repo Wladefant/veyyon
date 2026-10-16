@@ -1939,6 +1939,7 @@ export class AgentSession {
 			isSpawned: () => config.isSpawned === true,
 			awaitingRewind: () => this.#checkpoint.awaitingRewind,
 			scheduleContinue: () => this.#scheduleAgentContinue({ generation: this.#promptGeneration }),
+			activeToolNames: () => this.getActiveToolNames(),
 		});
 		this.#ttsr = new TtsrRuntime(
 			{

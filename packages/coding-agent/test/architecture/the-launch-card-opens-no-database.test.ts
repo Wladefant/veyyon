@@ -123,10 +123,15 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * 312 rather than 311 is `config/model-pattern-list.ts`, the splitter `launch-facts.ts` reads the
  * first `defaultModel` selector through. It imports nothing.
  *
+ * 316 rather than 312 is four modules the engine split out of files the card already evaluates, each
+ * importing only what its source did: `core/committed-prefix.ts` from `core/renderer.ts`, and
+ * `core/render-scheduler.ts`, `core/frame-segments.ts` and `core/render-intent.ts` from `core/tui.ts`
+ * and `core/frame-plan.ts`.
+ *
  * The floor is what stops a resolution table that stopped resolving from satisfying the ceiling with
  * a handful of modules while measuring nothing.
  */
-const LAUNCH_CARD_CEILING = 312;
+const LAUNCH_CARD_CEILING = 316;
 const LAUNCH_CARD_FLOOR = 150;
 
 describe("the launch card opens no database", () => {

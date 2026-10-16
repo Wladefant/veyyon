@@ -102,8 +102,12 @@ const ADMITTED_THIRD_PARTY = ["chalk", "lru-cache"];
  *
  * 334 rather than 333 is `config/model-pattern-list.ts`, the splitter `config/launch-facts.ts` reads
  * the first `defaultModel` selector through. It imports nothing.
+ *
+ * 338 rather than 334 is four more splits of modules the card already evaluates, each importing only
+ * what its source did: `core/committed-prefix.ts` from `core/renderer.ts`, and `core/render-scheduler.ts`,
+ * `core/frame-segments.ts` and `core/render-intent.ts` from `core/tui.ts` and `core/frame-plan.ts`.
  */
-const CARD_PATH_CEILING = 334;
+const CARD_PATH_CEILING = 338;
 const CARD_PATH_FLOOR = 250;
 
 describe("nothing joins the launch card path uncounted", () => {
