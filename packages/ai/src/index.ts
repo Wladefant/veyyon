@@ -22,6 +22,7 @@ export * from "./provider-details";
 export * from "./providers/anthropic";
 export * from "./providers/anthropic-client";
 export * from "./providers/anthropic-session-state";
+export * from "./providers/anthropic-tool-schema";
 export * from "./providers/azure-openai-responses";
 export * from "./providers/claude-device-id";
 export type * from "./providers/cursor";

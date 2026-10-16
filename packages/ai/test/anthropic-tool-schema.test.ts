@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeAnthropicToolSchema } from "@veyyon/ai/providers/anthropic";
+import { normalizeAnthropicToolSchema } from "@veyyon/ai/providers/anthropic-tool-schema";
 
 describe("normalizeAnthropicToolSchema — SDK whitelist", () => {
 	describe("number / integer nodes", () => {
@@ -74,6 +74,22 @@ describe("normalizeAnthropicToolSchema — SDK whitelist", () => {
 			}) as { properties: { email: Record<string, unknown>; weird: Record<string, unknown> } };
 			expect(out.properties.email).toEqual({ type: "string", format: "email" });
 			expect(out.properties.weird).toEqual({ type: "string", description: '{format: "color-hex"}' });
+		});
+
+		// `SupportedStringFormats` in the Anthropic SDK's `_transform.py`: each is sent as `format`.
+		it.each([
+			"date-time",
+			"time",
+			"date",
+			"duration",
+			"email",
+			"hostname",
+			"uri",
+			"ipv4",
+			"ipv6",
+			"uuid",
+		])("keeps the SDK-supported `%s` format", (format: string) => {
+			expect(normalizeAnthropicToolSchema({ type: "string", format })).toEqual({ type: "string", format });
 		});
 	});
 

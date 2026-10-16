@@ -7,6 +7,7 @@
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
+- Moved Anthropic tool `input_schema` normalization and the strict-tool plan out of `providers/anthropic.ts` into `providers/anthropic-tool-schema.ts`, with no user-visible change.
 
 ### Fixed
 
