@@ -197,6 +197,11 @@ interface EnumDef<T extends readonly string[]> extends SettingDefBase {
 	type: "enum";
 	values: T;
 	default: T[number];
+	/**
+	 * The member a configured value outside `values` reads as. Absent, it reads as `default`. A
+	 * safety control sets its strictest member, so a misspelled value never loosens it.
+	 */
+	invalid?: T[number];
 	ui?: UiEnum<T>;
 }
 

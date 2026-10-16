@@ -159,6 +159,7 @@ import {
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
 import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
+import { getType } from "../config/settings-schema";
 import { onAppendOnlyModeChanged, onHelperModelsChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
@@ -233,7 +234,7 @@ import { theme } from "../theme/theme-binding";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { buildResolveReminderMessage } from "../tools/agent/resolve";
 import type { TodoPhase } from "../tools/agent/todo";
-import { validateApprovalModeSetting, validateApprovalPolicySettings } from "../tools/core/approval";
+import { validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
 import { TOOL } from "../tools/core/builtin-names";
 import { reportLostOutputArtifact } from "../tools/core/output-artifact";
@@ -485,18 +486,21 @@ function serviceTierEntry(byFamily: ServiceTierByFamily): ServiceTierByFamily | 
 }
 
 /**
- * Warnings for hand-edited settings that resolve to a fallback the operator would not notice.
+ * Warnings for hand-edited settings that resolve to a value other than the one written.
  *
- * An unrecognized `tools.approvalMode` fails closed to `ask` (see `normalizeApprovalMode`), so a
- * typo'd safety mode would otherwise read as a prompting bug. A malformed `tools.approval.<tool>`
- * policy DENIES the tool (see `normalizePolicy`), so the warning states which entry did it and the
- * accepted values. Neither fires when the value is not configured.
+ * Every configured value that does not match its declared type is reported with the file to edit,
+ * and an enum also states the member it reads as instead: a misspelled `tools.approvalMode` reads
+ * as `ask`, its declared fail-closed member. A malformed `tools.approval.<tool>` policy DENIES the
+ * tool (see `normalizePolicy`), so its warning states which entry did it and the accepted values;
+ * the type report for `tools.approval` is left to that validator, which names the same defect
+ * more specifically. Nothing fires for a value that is not configured.
  */
 function configWarningsFor(settings: Settings, modelRegistry: ModelRegistry): string[] {
 	const warnings = retryFallbackChainWarnings(settings.get("retry.fallbackChains"), modelRegistry);
-	if (settings.isConfigured("tools.approvalMode")) {
-		const warning = validateApprovalModeSetting(settings.get("tools.approvalMode"));
-		if (warning) warnings.push(warning);
+	for (const { path, file, reason } of settings.invalidValues) {
+		if (path === "tools.approval") continue;
+		const readsAs = getType(path) === "enum" ? `; it reads as ${JSON.stringify(settings.get(path))}` : "";
+		warnings.push(`${reason} in ${shortenPath(file)}${readsAs}`);
 	}
 	if (settings.isConfigured("tools.approval")) {
 		warnings.push(...validateApprovalPolicySettings(settings.get("tools.approval")));

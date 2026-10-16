@@ -38,6 +38,7 @@ export interface RegisteredSettingDef {
 	type: SettingType;
 	default: unknown;
 	values?: readonly string[];
+	invalid?: string;
 	retiredBy?: string;
 	ui?: AnyUiMetadata;
 	validateEntry?: (key: string, value: unknown) => string | undefined;
@@ -170,6 +171,12 @@ export function settingsSchemaPaths(): readonly SettingPath[] {
 /** Get the default value for a setting path */
 export function getDefault<P extends SettingPath>(path: P): SettingValue<P> {
 	return declared(path).default as SettingValue<P>;
+}
+
+/** The value an enum setting reads as when its configured value is not one of `values`: `invalid`, else `default`. */
+export function getInvalidValue<P extends SettingPath>(path: P): SettingValue<P> {
+	const def = declared(path);
+	return (def.invalid ?? def.default) as SettingValue<P>;
 }
 
 /** Check if a path has UI metadata (should appear in settings panel) */

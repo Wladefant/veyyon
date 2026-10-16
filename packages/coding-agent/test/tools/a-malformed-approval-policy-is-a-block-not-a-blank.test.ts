@@ -457,6 +457,25 @@ describe("the session surfaces the diagnostic at startup", () => {
 		expect(session.configWarnings.some(w => w.includes("tools.approval.bash") && w.includes("DENIED"))).toBe(true);
 	});
 
+	it("reports a tools.approval that is not a record once, in the policy validator's words", async () => {
+		const settings = await settingsFromFile({ tools: { approval: "deny" } });
+
+		const scalar = new AgentSession({
+			agent: makeAgent(),
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		try {
+			expect(scalar.configWarnings.filter(w => w.startsWith("tools.approval"))).toEqual(
+				validateApprovalPolicySettings("deny"),
+			);
+		} finally {
+			await scalar.dispose();
+		}
+	});
+
 	it("says nothing for a sound record, so the warning above is the value and not the path", async () => {
 		const settings = await settingsFromFile(approvalFile({ bash: "deny" }));
 

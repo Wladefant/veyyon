@@ -57,6 +57,9 @@ export const TOOLS_SETTINGS = {
 		// onboarding, in `/settings`, or per session with `/permissions`, and the
 		// status line then says which of those is in force.
 		default: DEFAULT_APPROVAL_MODE,
+		// A value outside `values` (a hand-edited typo) reads as the strictest rung, not the
+		// default: a misspelled `ask` must not grant `auto`.
+		invalid: "ask",
 		ui: {
 			tab: "interaction",
 			group: "Approvals",

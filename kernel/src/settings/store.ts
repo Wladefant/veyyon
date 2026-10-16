@@ -38,6 +38,7 @@ import {
 	describeSettingTypeMismatch,
 	enumMember,
 	getDefault,
+	getInvalidValue,
 	getType,
 	isUnsetNumberPath,
 	type SettingPath,
@@ -527,23 +528,25 @@ export class SettingsStore {
 
 	/**
 	 * `value` as the setting reads it: unchanged, unless `path` is an enum and `value` is not one of
-	 * its members, in which case the declared default, reported once per path.
+	 * its members, in which case the declared `invalid` member (the default when none is declared),
+	 * reported once per path.
 	 *
 	 * A value written into a config file by hand reaches here unchecked, and every consumer compares
 	 * it against its own literals, so an out-of-set value takes whichever branch a consumer's `else`
-	 * happens to be. Answering with the default here gives every consumer the value the schema
-	 * declares. The load-time report states the file to edit; this one states the value in use.
+	 * happens to be. Answering with a declared member here gives every consumer a value the schema
+	 * names. A safety control declares its strictest member as `invalid`, so a typo cannot loosen
+	 * it. The load-time report states the file to edit; this one states the value in use.
 	 */
 	#declaredValue<P extends SettingPath>(path: P, value: unknown): SettingValue<P> {
 		if (getType(path) !== "enum") return value as SettingValue<P>;
 		const member = enumMember(path, value);
 		if (member !== undefined) return member as SettingValue<P>;
-		const fallback = getDefault(path);
+		const fallback = getInvalidValue(path);
 		if (!this.#reportedInvalidEnums.has(path)) {
 			this.#reportedInvalidEnums.add(path);
-			logger.warn("Settings: enum value is not one of its declared values; using the default", {
+			logger.warn("Settings: enum value is not one of its declared values; using its declared fallback", {
 				reason: describeSettingTypeMismatch(path, value),
-				default: fallback,
+				fallback,
 			});
 		}
 		return fallback;

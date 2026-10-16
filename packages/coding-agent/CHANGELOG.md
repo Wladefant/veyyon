@@ -72,6 +72,7 @@
 
 ### Fixed
 
+- A `tools.approvalMode` in a config file that is not one of its values reads as `ask` instead of the default `auto`, and every configured value that does not match its declared type is shown at startup with the file to edit.
 - A failing `!command` for a provider API key or header in `models.yml` names the setting it was resolving in its log report, as the other config values already did.
 - `ctrl+g` in a hook or ask-input editor whose `$VISUAL`/`$EDITOR` cannot start shows the failure under the text instead of ending the session, and with no editor configured shows that instead of doing nothing.
 - A provider error that ends a turn is logged at warn with the provider's message, model and error classification, and a failure's retry classification is logged once instead of once per recovery check ([#935](https://github.com/santhreal/veyyon/issues/935)).

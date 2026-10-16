@@ -150,10 +150,11 @@ export const RUNG_BY_ACCEPTED_MODE: Record<ApprovalMode, AutonomyLevel> = {
  * place the unset case is decided, so this agrees with the schema default by
  * construction rather than by two literals happening to match.
  *
- * An unrecognized NON-EMPTY value (a hand-edited config typo like `askk`) is a
- * different question and fails closed to `ask`, never up the ladder and never
- * to the default. The typo is surfaced loudly by the startup config check (see
- * `validateApprovalModeSetting`), so this is not a silent fallback.
+ * An unrecognized NON-EMPTY value (a typo like `askk` from the CLI or a caller
+ * that bypasses the settings store) is a different question and fails closed to
+ * `ask`, never up the ladder and never to the default. A typo in a config file
+ * never reaches here: the store reads it as the setting's declared `invalid`
+ * member, `ask`, and the startup config check reports the file to edit.
  */
 export function normalizeApprovalMode(mode: string | undefined): AutonomyLevel {
 	if (mode === undefined) return DEFAULT_APPROVAL_MODE;

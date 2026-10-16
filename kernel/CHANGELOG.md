@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes

@@ -3,17 +3,21 @@
  * `config.yml` by hand reached every consumer verbatim, and each consumer compared it against its own
  * literals and took whichever branch its `else` happened to be. The defect class is any enum setting
  * whose read returns a value the schema does not declare. The store's read path now answers such a
- * value with the declared default and reports it once per path.
+ * value with the declaration's `invalid` member, else its default, and reports it once per path.
+ * `tools.approvalMode` declares `invalid: "ask"`: its default is `auto`, and a misspelled `ask`
+ * read as the default granted the rung it was written to withhold.
  *
  * The suite sweeps every `type: "enum"` setting in `SETTINGS_SCHEMA` at run time, so a new enum joins
  * with no edit here. It loads each variant from a real `config.yml` through `Settings.init`: an
- * unknown string, a non-scalar and `null` read as the default; a non-default member reads back
+ * unknown string, a non-scalar and `null` read as the fallback; a non-default member reads back
  * unchanged; an unquoted YAML scalar whose string form is a member reads as that member. It asserts
  * one warning per path across a rebuild of the merged view, which drops every cached read.
  *
  * Not caught: a global-scoped enum, whose value the store reads through its binding from
  * `~/.veyyon/config.yml` rather than the profile file. None exists, and the last cell pins that set
- * empty so the first one turns this suite red until the sweep covers it.
+ * empty so the first one turns this suite red until the sweep covers it. Nor can it tell whether an
+ * enum's default is its strictest member; the set that declares `invalid` is pinned by exact equality,
+ * so adding one is a recorded decision.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -30,19 +34,22 @@ interface EnumSetting {
 	path: SettingPath;
 	values: readonly string[];
 	default: string;
+	/** What an out-of-set value reads as: `invalid` when declared, else `default`. */
+	fallback: string;
 }
 
 const ENUMS: EnumSetting[] = Object.entries(
-	SETTINGS_SCHEMA as Record<string, { type: string; values?: readonly string[]; default: unknown }>,
+	SETTINGS_SCHEMA as Record<string, { type: string; values?: readonly string[]; default: unknown; invalid?: string }>,
 )
 	.filter(([, def]) => def.type === "enum")
 	.map(([settingPath, def]) => ({
 		path: settingPath as SettingPath,
 		values: def.values ?? [],
 		default: def.default as string,
+		fallback: def.invalid ?? (def.default as string),
 	}));
 
-const INVALID_ENUM_WARNING = "Settings: enum value is not one of its declared values; using the default";
+const INVALID_ENUM_WARNING = "Settings: enum value is not one of its declared values; using its declared fallback";
 
 /** A nested config tree holding `pick(setting)` at every enum path. */
 function configWith(pick: (setting: EnumSetting) => unknown): Record<string, unknown> {
@@ -59,7 +66,7 @@ function configWith(pick: (setting: EnumSetting) => unknown): Record<string, unk
 	return tree;
 }
 
-describe("an enum value outside its set reads as the declared default", () => {
+describe("an enum value outside its set reads as its declared fallback", () => {
 	let settingsState: SettingsTestState | undefined;
 	let tempDir: TempDir;
 	let agentDir: string;
@@ -98,7 +105,16 @@ describe("an enum value outside its set reads as the declared default", () => {
 
 	it("sweeps the enum settings the schema declares", () => {
 		expect(ENUMS.map(setting => setting.path)).toContain("edit.afterEdit");
-		for (const setting of ENUMS) expect(setting.values, setting.path).toContain(setting.default);
+		for (const setting of ENUMS) {
+			expect(setting.values, setting.path).toContain(setting.default);
+			expect(setting.values, setting.path).toContain(setting.fallback);
+		}
+	});
+
+	it("reads a stray value as something other than the default only where a declaration says so", () => {
+		expect(
+			ENUMS.filter(setting => setting.fallback !== setting.default).map(setting => [setting.path, setting.fallback]),
+		).toEqual([["tools.approvalMode", "ask"]]);
 	});
 
 	/**
@@ -110,12 +126,17 @@ describe("an enum value outside its set reads as the declared default", () => {
 		["an unknown string", "not-a-declared-member", ["compaction.strategy"]],
 		["an object", { nested: true }, []],
 		["null", null, []],
-	])("%s reads as the default, reported once per path across a rebuild", async (_name, invalid, migratedAtLoad) => {
+	])("%s reads as the fallback, reported once per path across a rebuild", async (_name, invalid, migratedAtLoad) => {
 		const settings = await loadWith(configWith(() => invalid));
-		const defaults = Object.fromEntries(ENUMS.map(setting => [setting.path, setting.default]));
-		expect(readAll(settings)).toEqual(defaults);
+		const fallbacks = Object.fromEntries(
+			ENUMS.map(setting => [
+				setting.path,
+				migratedAtLoad.includes(setting.path) ? setting.default : setting.fallback,
+			]),
+		);
+		expect(readAll(settings)).toEqual(fallbacks);
 		settings.rebuildMerged();
-		expect(readAll(settings)).toEqual(defaults);
+		expect(readAll(settings)).toEqual(fallbacks);
 
 		const reported = warnings.filter(warning => warning.message === INVALID_ENUM_WARNING);
 		expect(reported.map(warning => warning.context?.reason).sort()).toEqual(

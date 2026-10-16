@@ -48,12 +48,16 @@ The nested form is the one this documentation uses and the one every write from
 `/settings` and `veyyon config set` produces. A flat key is expanded into the nested
 form when the file is read, so you can type it either way.
 
-Two rules cover the corners:
+These rules cover the corners:
 
 - If a setting is written **both** ways, the nested value wins, the flat key is
   dropped from the file the next time it is written, and a warning states both values.
 - A key this build does not recognize is left as written, whether or not it has
   dots in it. That keeps a config usable across versions and alongside other tools.
+- A value whose type does not match the setting's declaration is named in a startup
+  warning with the file to edit. An enum value outside its list reads as the setting's
+  default, except `tools.approvalMode`, which reads as `ask`; the warning states the
+  value in force.
 
 ## Reading and writing settings
 
@@ -492,7 +496,7 @@ tools:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `tools.approvalMode` | enum | `auto` | Canonical: `plan` (read auto; write prompts with an active plan-mode session, otherwise write/exec denied), `ask` (nothing auto; every tier prompts, reads included), `ask-command` (read+write auto; exec prompt), `auto` (all tiers auto, with the per-tool, working-directory, credential and critical-call checks still prompting), `yolo` (all tiers auto). Legacy aliases still accepted: `always-ask` → `ask`, `write` and `auto-edit` → `ask-command`. Override per run with `--approval-mode` / `--auto-approve` / `--yolo`. |
+| `tools.approvalMode` | enum | `auto` | Canonical: `plan` (read auto; write prompts with an active plan-mode session, otherwise write/exec denied), `ask` (nothing auto; every tier prompts, reads included), `ask-command` (read+write auto; exec prompt), `auto` (all tiers auto, with the per-tool, working-directory, credential and critical-call checks still prompting), `yolo` (all tiers auto). Legacy aliases still accepted: `always-ask` → `ask`, `write` and `auto-edit` → `ask-command`. Any other value reads as `ask` and is named in a startup warning. Override per run with `--approval-mode` / `--auto-approve` / `--yolo`. |
 | `tools.approval` | record | `{}` | Per-tool policy keyed by tool name; each value is `allow`, `deny`, or `prompt`. Any other value denies that tool and is named in a startup warning. e.g. `veyyon config set tools.approval '{"bash":"prompt"}'`. |
 | `tools.discoveryMode` | enum | `auto` | `auto`, `off`, `mcp-only`, `all`. `all` hides non-essential built-ins and first-party heavyweight tools such as `generate_image` until the discovery search activates them. |
 | `tools.essentialOverride` | array | `[]` | Tool names kept available even when tools are narrowed. |
