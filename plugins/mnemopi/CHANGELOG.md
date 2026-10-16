@@ -7,6 +7,7 @@
 ### Changed
 
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
+- Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
 
 ### Removed
 

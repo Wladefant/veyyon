@@ -258,7 +258,7 @@ export class VeracityConsolidator {
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				`)
 				.run(factId, subject, predicate, object, baseConfidence, 1, now, now, JSON.stringify(sources), veracity);
-			for (const conflict of conflicts) this.recordConflict(factId, conflict.id, "contradiction", false);
+			for (const conflict of conflicts) this.recordConflict(factId, conflict.id, "contradiction");
 			return {
 				subject,
 				predicate,
@@ -275,11 +275,10 @@ export class VeracityConsolidator {
 		});
 	}
 
-	recordConflict(factAId: string, factBId: string, conflictType: string, commit = true): void {
+	recordConflict(factAId: string, factBId: string, conflictType: string): void {
 		this.conn
 			.query("INSERT INTO conflicts (fact_a_id, fact_b_id, conflict_type) VALUES (?, ?, ?)")
 			.run(factAId, factBId, conflictType);
-		void commit;
 	}
 
 	resolveConflict(conflictId: number, winningFactId: string): void {

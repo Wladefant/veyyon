@@ -659,7 +659,7 @@ describe("runAutoUpdate", () => {
 		const outcome = await updateCli.runAutoUpdate("1.0.0", undefined, await statePath(), () => "binary");
 
 		expect(outcome).toEqual({ status: "updated", version: "9.9.9", warnings: [] });
-		expect(install).toHaveBeenCalledWith("9.9.9", false, updateCli.SILENT_UPDATE_REPORTER);
+		expect(install).toHaveBeenCalledWith("9.9.9", updateCli.SILENT_UPDATE_REPORTER);
 	});
 
 	it("skips a source install instead of clobbering its launcher with a binary", async () => {
@@ -685,7 +685,7 @@ describe("runAutoUpdate", () => {
 		const outcome = await updateCli.runAutoUpdate("1.0.0", undefined, await statePath(), () => "binary");
 
 		expect(outcome).toEqual({ status: "updated", version: "9.9.9", warnings: [] });
-		expect(install).toHaveBeenCalledWith("9.9.9", false, updateCli.SILENT_UPDATE_REPORTER);
+		expect(install).toHaveBeenCalledWith("9.9.9", updateCli.SILENT_UPDATE_REPORTER);
 	});
 
 	it("reports an install failure instead of claiming success", async () => {

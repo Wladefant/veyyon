@@ -1749,9 +1749,6 @@ export async function updateViaSourceAt(
  * startup update go through it, so they can never drift into updating by
  * different rules.
  *
- * `force` is accepted for API symmetry with callers (the rollback path passes
- * it); a binary swap is unconditional, so it does not change binary behavior.
- *
  * A successful move is recorded here, which is the only place that sees every
  * one of them. It used to be recorded by `rollbackToVersion` alone, so the
  * history held rollbacks and nothing else: an update that took you from 1.0.30
@@ -1767,12 +1764,10 @@ export async function updateViaSourceAt(
  */
 export async function installRelease(
 	version: string,
-	force: boolean,
 	report: UpdateReporter = CONSOLE_UPDATE_REPORTER,
 	currentVersion: string = VERSION,
 	historyPath: string = getUpdateHistoryPath(),
 ): Promise<InstallReleaseResult> {
-	void force;
 	const target = await resolveUpdateTarget();
 	const result =
 		target.method === "source"
@@ -1918,7 +1913,7 @@ export async function rollbackToVersion(
 	report(`Moving from ${currentVersion} to ${version}...`);
 	// installRelease records the move: it is the one function every version change
 	// goes through, so recording here as well would file each rollback twice.
-	await installRelease(version, true, report, currentVersion, historyPath);
+	await installRelease(version, report, currentVersion, historyPath);
 	report(`Now on ${version}. Restart ${APP_NAME} to run it.`);
 }
 
@@ -1979,7 +1974,7 @@ export async function runAutoUpdate(
 	install: (
 		version: string,
 		reporter: typeof SILENT_UPDATE_REPORTER,
-	) => Promise<void> | Promise<InstallReleaseResult> = (version, reporter) => installRelease(version, false, reporter),
+	) => Promise<void> | Promise<InstallReleaseResult> = (version, reporter) => installRelease(version, reporter),
 ): Promise<AutoUpdateOutcome> {
 	let release: ReleaseInfo;
 	if (knownRelease) {
@@ -2063,7 +2058,7 @@ export async function runAutoUpdate(
  * running git against a real checkout; production always uses
  * {@link installRelease}, which owns the binary-vs-source decision.
  */
-export type ReleaseInstaller = (version: string, force: boolean) => Promise<void> | Promise<InstallReleaseResult>;
+export type ReleaseInstaller = (version: string) => Promise<void> | Promise<InstallReleaseResult>;
 
 /**
  * Run the update command.
@@ -2120,7 +2115,7 @@ export async function runUpdateCommand(
 	// here made that code unreachable from the only command a user runs, so the
 	// fix shipped and nobody could get at it.
 	try {
-		await install(release.version, opts.force);
+		await install(release.version);
 	} catch (err) {
 		// errorMessage(err), not `${err}`: the latter stringifies as "Error: …"
 		// and doubles the prefix into "Update failed: Error: …".

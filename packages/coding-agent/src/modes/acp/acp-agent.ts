@@ -2434,7 +2434,6 @@ function getAvailableModes(session: AgentSession): Array<{ id: string; name: str
 			description: "Read-only planning mode that drafts a plan to a markdown file before any code changes",
 		});
 	}
-	void session;
 	return modes;
 }
 

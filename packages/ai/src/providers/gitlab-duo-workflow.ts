@@ -1195,7 +1195,7 @@ async function resolveGitLabDuoWorkflowSetup(
 	request: GitLabDuoWorkflowRequest,
 	scope: GitLabDuoWorkflowSetupScope,
 ): Promise<GitLabDuoWorkflowNamespaceSetup> {
-	const { model, options, apiKey, baseUrl, fetchImpl } = request;
+	const { options, apiKey, baseUrl, fetchImpl } = request;
 	const setupOptions: GitLabDuoWorkflowOptions = { ...options, signal: scope.signal };
 	const explicitNamespace = hasGitLabDuoWorkflowExplicitNamespace(options);
 	const cachedNamespace = explicitNamespace
@@ -1213,7 +1213,6 @@ async function resolveGitLabDuoWorkflowSetup(
 			});
 			clearGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, options.cwd);
 			const rediscovered = await resolveGitLabDuoWorkflowNamespaceSelection(
-				model,
 				setupOptions,
 				apiKey,
 				baseUrl,
@@ -1225,7 +1224,6 @@ async function resolveGitLabDuoWorkflowSetup(
 		}
 	}
 	const namespaceSelection = await resolveGitLabDuoWorkflowNamespaceSelection(
-		model,
 		setupOptions,
 		apiKey,
 		baseUrl,
@@ -3112,7 +3110,6 @@ export function extractGitLabWorkflowToken(payload: GitLabDirectAccessResponse):
 }
 
 export async function resolveGitLabDuoWorkflowNamespaceSelection(
-	model: Model<"gitlab-duo-agent">,
 	options: GitLabDuoWorkflowOptions,
 	apiKey: string,
 	baseUrl: string,
@@ -3121,7 +3118,6 @@ export async function resolveGitLabDuoWorkflowNamespaceSelection(
 	// Re-discover the namespace from the current credentials/cwd each turn rather than
 	// trusting model.gitlabDuoWorkflowRootNamespaceId, which can be stale (the account's
 	// other top-level groups, or a cwd/env shift between model refresh and this turn).
-	void model;
 	const configured =
 		nonEmptyString(options.rootNamespaceId) ??
 		nonEmptyString(options.namespaceId) ??
@@ -3151,13 +3147,12 @@ export async function resolveGitLabDuoWorkflowNamespaceSelection(
 }
 
 export async function resolveGitLabDuoWorkflowRootNamespaceId(
-	model: Model<"gitlab-duo-agent">,
 	options: GitLabDuoWorkflowOptions,
 	apiKey: string,
 	baseUrl: string,
 	fetchImpl: FetchImpl,
 ): Promise<string> {
-	const selection = await resolveGitLabDuoWorkflowNamespaceSelection(model, options, apiKey, baseUrl, fetchImpl);
+	const selection = await resolveGitLabDuoWorkflowNamespaceSelection(options, apiKey, baseUrl, fetchImpl);
 	return selection.rootNamespaceId;
 }
 

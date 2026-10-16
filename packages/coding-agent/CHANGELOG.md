@@ -85,6 +85,7 @@
 - The process agent lifecycle manager is rebuilt when the process agent registry is replaced, so it never terminates or parks agents through a registry nothing reads; no user-visible change.
 - Deleted tool-renderer, output-notice, image and LSP helpers that nothing called (`renderCollapsedOutputLines`, `formatMeta`, `formatEmptyMessage`, `formatTitle`, the rendered-string memo, `appendParseErrorsBulletList`, the styled truncation notices, `SUPPORTED_INPUT_IMAGE_MIME_TYPES`, `getServerForFile`, `hasCapability`); no user-visible change.
 - The benchmark CLIs share one time-to-first-token predicate, the guided-goal turn and the memory passes share one per-attempt credential refresh, the model registry and the sign-in list share one reader of `disabledProviders`, and the legacy plugin loader resolves package `imports` and `exports` targets through one function; no user-visible change.
+- Removed the parameters autoresearch branch handling and the release installer accepted and never read; `veyyon update --force` still reinstalls the running version, with no user-visible change.
 
 ### Fixed
 

@@ -933,8 +933,7 @@ function factLine(result: RecallResult): string {
 	return `${content} (${ts}, ${source}, c:${score.toFixed(1)})`;
 }
 
-export function formatContext(beam: BeamMemoryState, results: readonly RecallResult[], format = "bullet"): string {
-	void beam;
+export function formatContext(results: readonly RecallResult[], format = "bullet"): string {
 	const sandwich = sandwichOrder(results);
 	if (format === "json") {
 		return JSON.stringify(

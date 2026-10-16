@@ -11,6 +11,7 @@
 - Moved the Cursor native exec result builders (read, write, delete, shell, ls, grep, diagnostics) out of `providers/cursor.ts` into `providers/cursor-exec-results.ts`, with no user-visible change.
 - Moved the Codex WebSocket transport out of `providers/openai-codex-responses.ts` into `providers/openai-codex/websocket.ts`, and the turn-state headers and progress-event check both transports share into `providers/openai-codex/wire.ts`, with no user-visible change.
 - Removed the GitLab Duo Workflow inline-flow predicate that always held, the unread `inlineFlow` start-metadata option, and the user prompt threaded into workflow creation only to be discarded, with no user-visible change.
+- Removed the AWS region and GitLab Duo model parameters that credential and namespace resolution accepted and never read, with no user-visible change.
 
 ### Fixed
 

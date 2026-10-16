@@ -482,11 +482,7 @@ describe("GitLab Duo Workflow provider protocol", () => {
 });
 
 describe("GitLab Duo Workflow namespace resolution", () => {
-	it("discovers runtime namespace from current credentials instead of stale model metadata", async () => {
-		const modelWithStaleNamespace = {
-			...model,
-			gitlabDuoWorkflowRootNamespaceId: "gid://gitlab/Group/stale-root",
-		} as Model<"gitlab-duo-agent"> & { gitlabDuoWorkflowRootNamespaceId: string };
+	it("discovers runtime namespace from current credentials instead of stale request metadata", async () => {
 		const requests: string[] = [];
 		const fetchImpl: FetchImpl = async (input: string | URL | Request) => {
 			const url = String(input);
@@ -498,7 +494,6 @@ describe("GitLab Duo Workflow namespace resolution", () => {
 		};
 
 		const selection = await resolveGitLabDuoWorkflowNamespaceSelection(
-			modelWithStaleNamespace,
 			{ apiKey: "redacted", cwd: "/", metadata: { rootNamespaceId: "gid://gitlab/Group/stale-metadata" } },
 			"redacted",
 			"https://gitlab.example.com",
@@ -536,7 +531,6 @@ describe("GitLab Duo Workflow namespace resolution", () => {
 			delete Bun.env.GITLAB_DUO_PROJECT_ID;
 			delete Bun.env.GITLAB_DUO_PROJECT_PATH;
 			const selection = await resolveGitLabDuoWorkflowNamespaceSelection(
-				model,
 				{ apiKey: "redacted", cwd: "/" },
 				"redacted",
 				"https://gitlab.example.com",
@@ -550,7 +544,6 @@ describe("GitLab Duo Workflow namespace resolution", () => {
 			});
 			expect(
 				await resolveGitLabDuoWorkflowRootNamespaceId(
-					model,
 					{ apiKey: "redacted", cwd: "/" },
 					"redacted",
 					"https://gitlab.example.com",
@@ -589,7 +582,6 @@ describe("GitLab Duo Workflow namespace resolution", () => {
 		try {
 			Bun.env.GITLAB_DUO_PROJECT_ID = "env-project";
 			const resolved = await resolveGitLabDuoWorkflowRootNamespaceId(
-				model,
 				{ apiKey: "redacted", projectPath: "group/project" },
 				"redacted",
 				"https://gitlab.example.com",
