@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
+
 ## [1.5.6] - 2026-10-13
 
 ### Changed
