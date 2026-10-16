@@ -13,6 +13,7 @@
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
+- A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
 
 ## [1.5.6] - 2026-10-13
 
