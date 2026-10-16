@@ -1,6 +1,6 @@
 import { STATUS_CODES } from "node:http";
 import { scheduler } from "node:timers/promises";
-import { cancellationError, isAbortError } from "./abortable";
+import { cancellationError, isAbortError, isTimeoutError } from "./abortable";
 import { exponentialBackoffDelay } from "./backoff";
 
 // "reset after 1h2m3s" / "10m15s" / "39s"
@@ -374,7 +374,8 @@ const DEFAULT_MAX_ATTEMPTS = 5;
  * goes to `shouldRetryResponse`, or to `isRetryableStatus` (5xx, 408, 429) when the caller passes no
  * verdict. Transient network errors are retried. Server `Retry-After`/quota hints are honoured up to
  * `maxDelayMs`; a hint that exceeds the cap returns the current response so the caller can fail fast.
- * Aborts on `init.signal` propagate as `"Request was aborted"`.
+ * An abort on `init.signal` propagates as `"Request was aborted"`, an `AbortError`; a deadline, whose
+ * reason is a `TimeoutError` (`AbortSignal.timeout()`, a pre-response fence), propagates as that reason.
  *
  * The caller is responsible for inspecting `!response.ok` once the call returns.
  */
@@ -413,7 +414,7 @@ export async function fetchWithRetry(
 		prepareInit || !("timeout" in options) ? baseInit : ({ ...baseInit, timeout } as unknown as RequestInit);
 
 	for (let attempt = 0; ; attempt++) {
-		if (signal?.aborted) throw cancellationError();
+		if (signal?.aborted) throw abortedError(signal);
 		const requestUrl = typeof url === "function" ? url(attempt) : url;
 		const init = prepareInit ? mergeInit(baseInit, await prepareInit(attempt), timeout) : fixedInit;
 
@@ -436,7 +437,7 @@ export async function fetchWithRetry(
 		if (response.ok) return response;
 		const delayMs = await failedResponseDelay(response, attempt, policy);
 		if (delayMs === undefined) return response;
-		await scheduler.wait(delayMs, { signal });
+		await backOff(delayMs, signal);
 	}
 }
 
@@ -452,10 +453,10 @@ interface RetryPolicy {
 
 /**
  * Waits out the backoff before replaying a request whose transport threw. Throws instead when the
- * failure ends the loop: a cancellation once the caller's signal aborted, otherwise the wrapped error.
+ * failure ends the loop: the abort once the caller's signal aborted, otherwise the wrapped error.
  */
 async function backOffAfterTransportFailure(error: unknown, attempt: number, policy: RetryPolicy): Promise<void> {
-	if (policy.signal?.aborted) throw cancellationError();
+	if (policy.signal?.aborted) throw abortedError(policy.signal);
 	const wrapped = wrapNetworkError(error);
 	// A named HTTP/2 code this module has already ruled deterministic
 	// (`NON_RETRYABLE_HTTP2_ERROR_CODES`) fails the same way on every replay,
@@ -466,9 +467,27 @@ async function backOffAfterTransportFailure(error: unknown, attempt: number, pol
 	if (http2RetryVerdict(wrapped.message) === false) throw wrapped;
 	if (attempt + 1 >= policy.maxAttempts) throw wrapped;
 	if (policy.shouldRetryError && !(await policy.shouldRetryError(wrapped, attempt))) throw wrapped;
-	await scheduler.wait(resolveDefaultDelay(policy.defaultDelayMs, attempt, policy.maxDelayMs), {
-		signal: policy.signal,
-	});
+	await backOff(resolveDefaultDelay(policy.defaultDelayMs, attempt, policy.maxDelayMs), policy.signal);
+}
+
+/** Sleep `delayMs` before the next attempt, ending with {@link abortedError} when `signal` aborts first. */
+async function backOff(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
+	try {
+		await scheduler.wait(delayMs, { signal });
+	} catch (error) {
+		if (signal?.aborted) throw abortedError(signal);
+		throw error;
+	}
+}
+
+/**
+ * The error an aborted `signal` ends the loop with. A deadline is rethrown as the signal's
+ * `TimeoutError`, so the caller reports and classifies a timeout; any other reason is the caller
+ * cancelling, a named cancellation.
+ */
+function abortedError(signal: AbortSignal): Error {
+	const { reason } = signal;
+	return isTimeoutError(reason) ? (reason as Error) : cancellationError();
 }
 
 /**
