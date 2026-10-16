@@ -6,6 +6,10 @@
 
 - A `read` refused because its lines are unchanged and still in context is now a tool error naming the earlier output's `[path#TAG]` header, rendered and sent to the model like any other failed read instead of as a read card holding the refusal text.
 
+### Fixed
+
+- A session started with `--tools`, and every spawned agent with a tool list, no longer logs a false "TTSR rule is scoped to a tool that does not exist" warning for each built-in rule scoped to a tool the session did not build.
+
 ## [1.5.7] - 2026-10-15
 
 ### Breaking Changes
