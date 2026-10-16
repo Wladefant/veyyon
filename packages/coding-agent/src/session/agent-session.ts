@@ -40,12 +40,10 @@ import {
 import {
 	type CompactionResult,
 	calculateContextTokens,
-	collectEntriesForBranchSummary,
 	compactionContextTokens,
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessages,
-	generateBranchSummary,
 	generateHandoffFromContext,
 	renderHandoffPrompt,
 	resolveCompactionBoundaryIndex,
@@ -117,7 +115,6 @@ import {
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
 import {
-	type BranchSummaryEntry,
 	type CompactionEntry,
 	EPHEMERAL_MODEL_CHANGE_ROLE,
 	type NewSessionOptions,
@@ -195,11 +192,8 @@ import type {
 	ExtensionCommandContext,
 	ExtensionRunner,
 	ExtensionUIContext,
-	SessionBeforeBranchResult,
 	SessionBeforeSwitchResult,
-	SessionBeforeTreeResult,
 	SessionStopEventResult,
-	TreePreparation,
 } from "../extensibility/extensions";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
@@ -284,7 +278,7 @@ import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallba
 import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
-import { isSameAssistantMessage, sanitizeAssistantForReparentedHistory } from "./agent-session-message-shapes";
+import { isSameAssistantMessage } from "./agent-session-message-shapes";
 import { contextPromotionTarget } from "./agent-session-model-targets";
 import { isToolOrderPermutation } from "./agent-session-provider-request";
 import {
@@ -372,6 +366,7 @@ import { ProviderWire } from "./runtime/provider-wire";
 import { ReplanTitleRefresh } from "./runtime/replan-title-refresh";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { SessionApprovals } from "./runtime/session-approvals";
+import { SessionBranch, type TreeNavigationResult } from "./runtime/session-branch";
 import { SessionScope } from "./runtime/session-scope";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
 import { SessionSwitch } from "./runtime/session-switch";
@@ -527,13 +522,6 @@ function sanitizeGoalTodoText(text: string): string {
 
 function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
 	return contentText(message.content, { separator: "" });
-}
-
-function extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
-	// Persisted entry content arrives loosely typed here; keep the defensive
-	// guard for malformed data, then delegate to the shared flattener.
-	if (typeof content !== "string" && !Array.isArray(content)) return "";
-	return contentText(content, { separator: "" });
 }
 
 /** The persisted form of a per-family tier map: `null` when no family carries a tier. */
@@ -1110,9 +1098,6 @@ export class AgentSession {
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 	});
 
-	// Branch summarization state
-	#branchSummaryAbortController: AbortController | undefined = undefined;
-
 	// Handoff state
 	#handoffAbortController: AbortController | undefined = undefined;
 	#skipPostTurnMaintenanceAssistantTimestamp: number | undefined = undefined;
@@ -1198,6 +1183,7 @@ export class AgentSession {
 	readonly #scope: SessionScope;
 	/** Loads another transcript into this session, and rolls back a load that fails part way. */
 	readonly #sessionSwitch: SessionSwitch;
+	readonly #sessionBranch: SessionBranch;
 	/**
 	 * The stream function every side request runs on, fixed when the session is built:
 	 * `config.sideStreamFn`, or the `streamSimple` export as it stood at construction.
@@ -1957,6 +1943,7 @@ export class AgentSession {
 		this.#advisorRoster = this.#createAdvisorRoster(config);
 		this.#advisorRoster.enableFromSettings();
 		this.#sessionSwitch = this.#createSessionSwitch();
+		this.#sessionBranch = this.#createSessionBranch();
 
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
 
@@ -2066,6 +2053,32 @@ export class AgentSession {
 			saveArtifact: (content, toolType) => this.sessionManager.saveArtifact(content, toolType),
 		};
 		return new AdvisorRoster(host, config.loadAdvisorTools, config);
+	}
+
+	/** Branching and tree navigation, reaching this session only through the host it declares. */
+	#createSessionBranch(): SessionBranch {
+		return new SessionBranch(this, {
+			checkpoint: this.#checkpoint,
+			todo: this.#todo,
+			providerSessions: this.#providerSessions,
+			memory: this.#memory,
+			advisorRoster: this.#advisorRoster,
+			secrets: this.#secrets,
+			extensionRunner: () => this.#config.extensionRunner,
+			modelRegistry: () => this.#config.modelRegistry,
+			payloadHook: () => this.#config.payloadHook?.(),
+			sideComplete: this.#sideCompleteImpl,
+			effectiveServiceTier: model => this.#effectiveServiceTier(model),
+			clearNextTurnMessages: () => {
+				this.#pendingNextTurnMessages = [];
+				this.#scheduledHiddenNextTurnGeneration = undefined;
+			},
+			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
+			cancelPostPromptTasks: () => this.#cancelPostPromptTasks(),
+			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
+			restoreMCPSelectionsForSessionContext: sessionContext =>
+				this.#restoreMCPSelectionsForSessionContext(sessionContext),
+		});
 	}
 
 	/** The session switch, reaching this session only through the host it declares. */
@@ -7051,7 +7064,7 @@ export class AgentSession {
 	 * Cancel in-progress branch summarization.
 	 */
 	abortBranchSummary(): void {
-		this.#branchSummaryAbortController?.abort();
+		this.#sessionBranch.abortSummary();
 	}
 
 	/**
@@ -8262,412 +8275,38 @@ export class AgentSession {
 	}
 
 	/**
-	 * Create a branch from a specific entry.
-	 * Emits before_branch/branch session events to hooks.
+	 * Create a branch from a user message entry; see {@link SessionBranch.branch}.
 	 *
-	 * @param entryId ID of the entry to branch from
-	 * @returns Object with:
-	 *   - selectedText: The text of the selected user message (for editor pre-fill)
-	 *   - cancelled: True if a hook cancelled the branch
+	 * @returns the selected message's text for editor pre-fill, and whether a hook cancelled
 	 */
-	async branch(entryId: string): Promise<{
-		selectedText: string;
-		cancelled: boolean;
-	}> {
-		const previousSessionFile = this.sessionFile;
-		const selectedEntry = this.sessionManager.getEntry(entryId);
-
-		if (selectedEntry?.type !== "message" || selectedEntry.message.role !== "user") {
-			throw new Error("Invalid entry ID for branching");
-		}
-
-		const selectedText = extractUserMessageText(selectedEntry.message.content);
-
-		let skipConversationRestore = false;
-
-		// Emit session_before_branch event (can be cancelled)
-		if (this.#config.extensionRunner?.hasHandlers("session_before_branch")) {
-			const result = (await this.#config.extensionRunner.emit({
-				type: "session_before_branch",
-				entryId,
-			})) as SessionBeforeBranchResult | undefined;
-
-			if (result?.cancel) {
-				return { selectedText, cancelled: true };
-			}
-			skipConversationRestore = result?.skipConversationRestore ?? false;
-		}
-
-		// Clear pending messages (bound to old session state)
-		this.#pendingNextTurnMessages = [];
-		this.#scheduledHiddenNextTurnGeneration = undefined;
-
-		// Flush pending writes before branching
-		await this.sessionManager.flush();
-		this.#cancelOwnAsyncJobs();
-
-		if (!selectedEntry.parentId) {
-			await this.sessionManager.newSession({
-				parentSession: previousSessionFile,
-				// Branching at the root user message discards the transcript but keeps
-				// the system prompt and toolset, which is the bulk of the cached
-				// prefix. Carry the cache identity so the re-ask reads it.
-				providerPromptCacheKey:
-					this.sessionManager.getHeader()?.providerPromptCacheKey ?? this.sessionManager.getSessionId(),
-			});
-		} else {
-			this.sessionManager.createBranchedSession(selectedEntry.parentId);
-		}
-		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
-		this.#todo.syncFromBranch();
-		this.#providerSessions.freshId = undefined;
-		// A branch retains a genuine prefix of the source transcript, so the source
-		// cache identity stays valid: `createBranchedSession` seeds it onto the new
-		// header and this adopts it. No discard is recorded because nothing is
-		// discarded — the retained prefix keeps reading the cache the source
-		// populated instead of cold-missing every token of it.
-		this.#providerSessions.adoptInheritedCacheKey();
-		this.#providerSessions.sync();
-		this.#memory.rekey();
-		this.#resetMemoryContextForNewTranscript();
-
-		// Reload messages from entries (works for both file and in-memory mode)
-		const sessionContext = this.buildDisplaySessionContext();
-
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
-
-		// Emit session_branch event to hooks (after branch completes)
-		if (this.#config.extensionRunner) {
-			await this.#config.extensionRunner.emit({
-				type: "session_branch",
-				previousSessionFile,
-			});
-		}
-
-		if (!skipConversationRestore) {
-			this.agent.replaceMessages(sessionContext.messages);
-			this.#advisorRoster.resetSessionState();
-			this.#providerSessions.closeCodexForHistoryRewrite(this.model);
-		}
-
-		return { selectedText, cancelled: false };
+	branch(entryId: string): Promise<{ selectedText: string; cancelled: boolean }> {
+		return this.#sessionBranch.branch(entryId);
 	}
 
-	async branchFromBtw(
+	/** Branch at the live leaf with a `/btw` exchange appended; see {@link SessionBranch.branchFromBtw}. */
+	branchFromBtw(
 		question: string,
 		assistantMessage: AssistantMessage,
 	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
-		const previousSessionFile = this.sessionFile;
-		if (!this.sessionManager.getSessionFile()) {
-			throw new Error("Cannot branch /btw: session is not persisted");
-		}
-
-		const leafId = this.sessionManager.getLeafId();
-		if (!leafId) {
-			throw new Error("Cannot branch /btw: current session has no leaf");
-		}
-
-		if (
-			this.isBashRunning ||
-			this.isEvalRunning ||
-			this.isCompacting ||
-			this.isGeneratingHandoff ||
-			this.isRetrying
-		) {
-			throw new Error("Cannot branch /btw while session maintenance or user work is still running");
-		}
-
-		if (this.#config.extensionRunner?.hasHandlers("session_before_branch")) {
-			const result = (await this.#config.extensionRunner.emit({
-				type: "session_before_branch",
-				entryId: leafId,
-			})) as SessionBeforeBranchResult | undefined;
-
-			if (result?.cancel) {
-				return { cancelled: true, sessionFile: previousSessionFile };
-			}
-		}
-
-		await this.#cancelPostPromptTasks();
-		if (
-			this.isBashRunning ||
-			this.isEvalRunning ||
-			this.isCompacting ||
-			this.isGeneratingHandoff ||
-			this.isRetrying
-		) {
-			throw new Error("Cannot branch /btw while session maintenance or user work is still running");
-		}
-
-		this.#pendingNextTurnMessages = [];
-		this.#scheduledHiddenNextTurnGeneration = undefined;
-		this.agent.replaceQueues([], []);
-		if (this.isStreaming) {
-			await this.abort({ goalReason: "internal", reason: "branching /btw" });
-			this.agent.replaceQueues([], []);
-		}
-		await this.sessionManager.flush();
-		this.#cancelOwnAsyncJobs();
-
-		this.sessionManager.createBranchedSession(leafId);
-
-		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
-		this.sessionManager.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: question }],
-			timestamp: Date.now(),
-		});
-		this.sessionManager.appendMessage(sanitizeAssistantForReparentedHistory(assistantMessage));
-		this.#todo.syncFromBranch();
-		this.#providerSessions.freshId = undefined;
-		// `/btw` branches at the live leaf, so the entire retained prefix is
-		// byte-identical to what the source session just cached. Adopt the branch
-		// header's inherited cache identity instead of routing the next turn under
-		// the freshly minted session id, which would cold-miss the whole transcript.
-		this.#providerSessions.adoptInheritedCacheKey();
-		this.#providerSessions.sync();
-		this.#memory.rekey();
-		this.#resetMemoryContextForNewTranscript();
-
-		const sessionContext = this.buildDisplaySessionContext();
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
-
-		if (this.#config.extensionRunner) {
-			await this.#config.extensionRunner.emit({
-				type: "session_branch",
-				previousSessionFile,
-			});
-		}
-
-		this.agent.replaceMessages(sessionContext.messages);
-		this.#advisorRoster.resetSessionState();
-		this.#providerSessions.closeCodexForHistoryRewrite(this.model);
-
-		return { cancelled: false, sessionFile: this.sessionFile };
+		return this.#sessionBranch.branchFromBtw(question, assistantMessage);
 	}
 
-	// =========================================================================
-	// Tree Navigation
-	// =========================================================================
-
 	/**
-	 * Navigate to a different node in the session tree.
-	 * Unlike branch() which creates a new session file, this stays in the same file.
-	 *
-	 * @param targetId The entry ID to navigate to
-	 * @param options.summarize Whether user wants to summarize abandoned branch
-	 * @param options.customInstructions Custom instructions for summarizer
-	 * @returns Result with editorText (if user message) and cancelled status
+	 * Navigate to a different node in the session tree, in the same session file; see
+	 * {@link SessionBranch.navigateTree}.
 	 */
-	async navigateTree(
+	navigateTree(
 		targetId: string,
 		options: { summarize?: boolean; customInstructions?: string } = {},
-	): Promise<{
-		editorText?: string;
-		cancelled: boolean;
-		aborted?: boolean;
-		summaryEntry?: BranchSummaryEntry;
-		/** Raw session context built during navigation — pass to renderInitialMessages to skip a second O(N) walk. */
-		sessionContext?: SessionContext;
-	}> {
-		const oldLeafId = this.sessionManager.getLeafId();
-
-		// No-op if already at target
-		if (targetId === oldLeafId) {
-			return { cancelled: false };
-		}
-
-		// Model required for summarization
-		if (options.summarize && !this.model) {
-			throw new Error("No model available for summarization");
-		}
-
-		const targetEntry = this.sessionManager.getEntry(targetId);
-		if (!targetEntry) {
-			throw new Error(`Entry ${targetId} not found`);
-		}
-
-		// Collect entries to summarize (from old leaf to common ancestor)
-		const { entries: entriesToSummarize, commonAncestorId } = collectEntriesForBranchSummary(
-			this.sessionManager,
-			oldLeafId,
-			targetId,
-		);
-
-		// Prepare event data
-		const preparation: TreePreparation = {
-			targetId,
-			oldLeafId,
-			commonAncestorId,
-			entriesToSummarize,
-			userWantsSummary: options.summarize ?? false,
-		};
-
-		// Set up abort controller for summarization
-		this.#branchSummaryAbortController = new AbortController();
-		let hookSummary: { summary: string; details?: unknown } | undefined;
-		let fromExtension = false;
-
-		// Emit session_before_tree event
-		if (this.#config.extensionRunner?.hasHandlers("session_before_tree")) {
-			const result = (await this.#config.extensionRunner.emit({
-				type: "session_before_tree",
-				preparation,
-				signal: this.#branchSummaryAbortController.signal,
-			})) as SessionBeforeTreeResult | undefined;
-
-			if (result?.cancel) {
-				this.#branchSummaryAbortController = undefined;
-				return { cancelled: true };
-			}
-
-			if (result?.summary && options.summarize) {
-				hookSummary = result.summary;
-				fromExtension = true;
-			}
-		}
-
-		// Run default summarizer if needed
-		let summaryText: string | undefined;
-		let summaryDetails: unknown;
-		if (options.summarize && entriesToSummarize.length > 0 && !hookSummary) {
-			const model = this.model!;
-			const apiKey = await this.#config.modelRegistry.getApiKey(model, this.sessionId);
-			if (!apiKey) {
-				throw new Error(missingCredentialsMessage(model.provider, model.id, "the branch summary model"));
-			}
-			await this.leaseSecretRuntime();
-			const result = await generateBranchSummary(entriesToSummarize, {
-				model,
-				apiKey: this.#config.modelRegistry.resolver(model, this.sessionId),
-				signal: this.#branchSummaryAbortController.signal,
-				sessionId: this.sessionId,
-				promptCacheKey: this.agent.promptCacheKey ?? this.sessionId,
-				customInstructions: options.customInstructions,
-				reserveTokens: this.settings.get("branchSummary.reserveTokens"),
-				metadata: this.agent.metadataForProvider(model.provider),
-				convertToLlm,
-				resolveObfuscateProviderText: () => this.#secrets.snapshotProviderTextRedactor(),
-				onPayload: this.#config.payloadHook?.(),
-				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
-				// Same per-provider concurrency cap rationale as the compaction
-				// path above (chatgpt-codex review on #3751).
-				completeImpl: this.#sideCompleteImpl,
-				serviceTier: this.#effectiveServiceTier(model),
-			});
-			this.#branchSummaryAbortController = undefined;
-			if (result.aborted) {
-				return { cancelled: true, aborted: true };
-			}
-			if (result.error) {
-				throw new Error(result.error);
-			}
-			summaryText = result.summary;
-			summaryDetails = {
-				readFiles: result.readFiles || [],
-				modifiedFiles: result.modifiedFiles || [],
-			};
-		} else if (hookSummary) {
-			// Hook supplied the summary directly: the signal was only needed for the
-			// session_before_tree emit above, so release it now instead of relying on
-			// the unconditional clear near the end of this method.
-			summaryText = hookSummary.summary;
-			summaryDetails = hookSummary.details;
-			this.#branchSummaryAbortController = undefined;
-		} else {
-			// No summarization requested (or nothing to summarize): the controller was
-			// only ever used for the session_before_tree signal above, so it can be
-			// released immediately rather than staying set until the method returns.
-			this.#branchSummaryAbortController = undefined;
-		}
-
-		// Determine the new leaf position based on target type
-		let newLeafId: string | null;
-		let editorText: string | undefined;
-
-		if (targetEntry.type === "message" && targetEntry.message.role === "user") {
-			// User message: leaf = parent (null if root), text goes to editor
-			newLeafId = targetEntry.parentId;
-			editorText = extractUserMessageText(targetEntry.message.content);
-		} else if (targetEntry.type === "custom_message" && targetEntry.customType !== SKILL_PROMPT_MESSAGE_TYPE) {
-			// Custom message: leaf = parent (null if root), text goes to editor
-			newLeafId = targetEntry.parentId;
-			editorText = contentText(targetEntry.content, { separator: "" });
-		} else {
-			// Non-user message (or a user-invoked skill-prompt injection): land the
-			// leaf on the selected node so it stays on the active branch. Skill
-			// prompts are custom_message entries but must not be re-editable — their
-			// content is a large expanded body, not a user turn (issue #5374).
-			newLeafId = targetId;
-		}
-
-		// Switch leaf (with or without summary)
-		// Summary is attached at the navigation target position (newLeafId), not the old branch
-		let summaryEntry: BranchSummaryEntry | undefined;
-		if (summaryText) {
-			// Create summary at target position (can be null for root)
-			const summaryId = this.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
-
-			summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
-		} else if (newLeafId === null) {
-			// No summary, navigating to root - reset leaf
-			this.sessionManager.resetLeaf();
-		} else {
-			// No summary, navigating to non-root
-			this.sessionManager.branch(newLeafId);
-		}
-
-		// Update agent state — build display context to populate agent messages.
-		const stateContext = this.sessionManager.buildSessionContext();
-		// RENDER PATH, and async: this rebuilds the agent's display state after a
-		// branch move, so a throw left the TUI with no transcript at all. Await the
-		// refresh a stale revision needs, then degrade per string.
-		await this.#secrets.awaitRefreshForRender(this.#secrets.messagesCarryLivePlaceholder(stateContext.messages));
-		const displayContext = this.#secrets.deobfuscateSessionContextForDisplay(stateContext);
-		await this.#restoreMCPSelectionsForSessionContext(displayContext);
-		this.agent.replaceMessages(displayContext.messages);
-		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
-		this.#advisorRoster.resetSessionState();
-		this.#todo.syncFromBranch();
-		this.#providerSessions.closeCodexForHistoryRewrite(this.model);
-
-		this.#branchSummaryAbortController = undefined;
-
-		// Emit session_tree event; only handlers can mutate session entries, so skip
-		// the emit and the context rebuild when no handlers are registered (mirrors
-		// the session_before_tree guard above).
-		if (this.#config.extensionRunner?.hasHandlers("session_tree")) {
-			await this.#config.extensionRunner.emit({
-				type: "session_tree",
-				newLeafId: this.sessionManager.getLeafId(),
-				oldLeafId,
-				summaryEntry,
-				fromExtension: summaryText ? fromExtension : undefined,
-			});
-			const rawContext = this.sessionManager.buildSessionContext();
-			return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
-		}
-		return { editorText, cancelled: false, summaryEntry, sessionContext: stateContext };
+	): Promise<TreeNavigationResult> {
+		return this.#sessionBranch.navigateTree(targetId, options);
 	}
 
 	/**
 	 * Get all user messages from session for branch selector.
 	 */
 	getUserMessagesForBranching(): Array<{ entryId: string; text: string }> {
-		const entries = this.sessionManager.getEntries();
-		const result: Array<{ entryId: string; text: string }> = [];
-
-		for (const entry of entries) {
-			if (entry.type !== "message") continue;
-			if (entry.message.role !== "user") continue;
-
-			const text = extractUserMessageText(entry.message.content);
-			if (text) {
-				result.push({ entryId: entry.id, text });
-			}
-		}
-
-		return result;
+		return this.#sessionBranch.userMessages();
 	}
 
 	/**

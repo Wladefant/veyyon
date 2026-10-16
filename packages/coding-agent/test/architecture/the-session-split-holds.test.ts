@@ -66,8 +66,10 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * (+11) and the verification reminder's active-tool-name source (+1) grew the class in place.
  * RE-MEASURED 2026-10-16 at 9015: session-switch adoption and rollback left as the
  * `session-switch.ts` collaborator (-371).
+ * RE-MEASURED 2026-10-16 at 8654: branching, the `/btw` branch and tree navigation with its
+ * branch summary left as the `session-branch.ts` collaborator (-361).
  */
-const RUNTIME_CEILING = 9_100;
+const RUNTIME_CEILING = 8_700;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -101,6 +103,7 @@ const COLLABORATORS = [
 	"retry-fallback.ts",
 	"retry-runtime.ts",
 	"session-approvals.ts",
+	"session-branch.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
 	"session-switch.ts",

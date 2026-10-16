@@ -326,11 +326,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * ingest, which left `ai/src/auth-storage.ts`. Its imports were already here through that file.
  * Measured 2026-10-16 at 1481.
  *
+ * 1481 to 1482: `session/runtime/session-branch.ts`, branching and tree navigation, which left
+ * `session/agent-session.ts`. It imports only what that code imported there, so no other module
+ * arrived. Measured 2026-10-16 at 1482.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1481;
+const LAUNCH_REACH_CEILING = 1482;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
