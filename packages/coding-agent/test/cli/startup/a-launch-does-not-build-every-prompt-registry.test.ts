@@ -350,11 +350,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * notices, which left `session/agent-session.ts`. It imports only what that code imported there, so
  * no other module arrived. Measured 2026-10-16 at 1487.
  *
+ * 1487 to 1488: `config/resolved-model-stage.ts`, the codec for the registry's persisted
+ * `resolved-models.json` stage, which left `config/model-registry.ts`. It imports only what that code
+ * imported there. Measured 2026-10-16 at 1488.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1487;
+const LAUNCH_REACH_CEILING = 1488;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
