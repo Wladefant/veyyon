@@ -122,6 +122,7 @@
 - A discovered custom tool's factory-scoped `ui` and `hasUI` receive the host's UI, instead of staying a no-op context and `false` in every mode.
 - The image-generation, speech and Exa tools join a session's custom tools without a type cast; no user-visible change.
 - Fixed the task card crashing or drawing `NaN% confidence` when a reviewer yields a verdict whose explanation, confidence or correctness has the wrong type; the card now draws the last well-formed verdict.
+- Fixed a resumed session restoring a goal whose recorded status is not one this build writes, which ran as neither active nor finished while its badge showed it running; a usage record with such a status no longer overwrites the goal's counters.
 
 ### Removed
 
