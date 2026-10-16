@@ -332,9 +332,13 @@ export async function quit(code: number = 0): Promise<void> {
 	}
 
 	if (process.stdout.writableLength > 0) {
+		// One promise settled by whichever comes first, the drain or the 5s bound; the timer is
+		// cleared either way so it cannot hold the loop open past the drain.
 		const { promise, resolve } = Promise.withResolvers<void>();
 		process.stdout.once("drain", resolve);
-		await Promise.race([promise, Bun.sleep(5000)]);
+		const timer = setTimeout(resolve, 5000);
+		await promise;
+		clearTimeout(timer);
 	}
 	process.exit(code);
 }

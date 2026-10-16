@@ -7,6 +7,7 @@
 ### Added
 
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
+- `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 
 ### Fixed
 
@@ -14,6 +15,7 @@
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
 - A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
+- `postmortem.quit` clears its 5 s stdout-drain timer when the drain finishes first.
 
 ## [1.5.6] - 2026-10-13
 

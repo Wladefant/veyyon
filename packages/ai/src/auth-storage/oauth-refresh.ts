@@ -6,6 +6,7 @@
 
 import * as logger from "@veyyon/utils/logger";
 import { clamp } from "@veyyon/utils/math";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import * as AIError from "../error";
 import { getOAuthProvider, refreshOAuthToken } from "../registry/oauth";
 import type { OAuthCredentials, OAuthProvider } from "../registry/oauth/types";
@@ -114,7 +115,7 @@ export class OAuthRefresher {
 		const stopped = Promise.withResolvers<void>();
 		const renewal = (async () => {
 			while (!stop) {
-				await Promise.race([Bun.sleep(OAUTH_REFRESH_LEASE_RENEW_MS), stopped.promise]);
+				await settleWithin(stopped.promise, OAUTH_REFRESH_LEASE_RENEW_MS, undefined);
 				if (stop) return;
 				const renewed = this.#store.renewCredentialRefreshLease?.(
 					credentialId,

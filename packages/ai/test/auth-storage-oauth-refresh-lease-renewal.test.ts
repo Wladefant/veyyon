@@ -10,10 +10,47 @@ const SOURCE_ID = "auth-storage-oauth-refresh-lease-renewal-test";
 
 /**
  * Mirrors `OAUTH_REFRESH_LEASE_RENEW_MS` in auth-storage/oauth-refresh.ts (module-private). Every
- * test that needs the lease to lapse mid-refresh has to outlast one renewal tick, so
- * those tests are deliberately slow; keep this in sync if the source constant changes.
+ * test that needs the lease to lapse mid-refresh has to outlast one renewal tick; fake time makes
+ * that instant. Keep this in sync if the source constant changes.
  */
 const LEASE_RENEW_TICK_MS = 5_000;
+
+/**
+ * Fake timers for the renewal loop's deadline and for the refreshes below that wait out a tick:
+ * `setTimeout` and `Date` are faked, and `Bun.sleep` is routed onto a fake `setTimeout` so a
+ * pending sleep counts in `vi.getTimerCount()` like any other timer.
+ */
+function installFakeTime(): void {
+	vi.useFakeTimers();
+	vi.spyOn(Bun, "sleep").mockImplementation(((ms: number) => {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, ms);
+		return promise;
+	}) as typeof Bun.sleep);
+}
+
+/** Settle `work` by alternating a real event-loop turn with a 10ms step of fake time. */
+async function driveFakeTime<T>(work: Promise<T>): Promise<T> {
+	let settled = false;
+	// Handled now, not after the loop: a rejection left unhandled across a turn fails the test.
+	const outcome = work.then(
+		value => ({ ok: true as const, value }),
+		(error: unknown) => ({ ok: false as const, error }),
+	);
+	void outcome.then(() => {
+		settled = true;
+	});
+	for (let step = 0; !settled; step++) {
+		if (step === 10_000) throw new Error("work did not settle within 100s of fake time");
+		const turn = Promise.withResolvers<void>();
+		setImmediate(turn.resolve);
+		await turn.promise;
+		if (!settled) vi.advanceTimersByTime(10);
+	}
+	const result = await outcome;
+	if (!result.ok) throw result.error;
+	return result.value;
+}
 
 /**
  * Both fenced refresh paths renew the lease through ONE helper
@@ -46,6 +83,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		vi.useRealTimers();
 		oauthUtils.unregisterOAuthProviders(SOURCE_ID);
 		for (const c of closers.splice(0)) {
 			try {
@@ -68,15 +106,15 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		return { store, authStorage };
 	}
 
-	test(
-		"the MCP path surfaces the refresh's own error when the lease is lost at the same time",
-		async () => {
-			const provider = "unit-oauth-renewal-mcp-error";
-			const { store, authStorage } = await seedExpiredCredential(provider);
-			// The lease lapses and a peer steals the row: every renewal fails from here.
-			vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
+	test("the MCP path surfaces the refresh's own error when the lease is lost at the same time", async () => {
+		const provider = "unit-oauth-renewal-mcp-error";
+		const { store, authStorage } = await seedExpiredCredential(provider);
+		// The lease lapses and a peer steals the row: every renewal fails from here.
+		vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
+		installFakeTime();
 
-			const thrown = await authStorage
+		const thrown = await driveFakeTime(
+			authStorage
 				.refreshStoredOAuthCredential(provider, {
 					credentialFromRow: credential => credential,
 					async refresh() {
@@ -89,80 +127,76 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 				.then(
 					() => undefined,
 					(error: unknown) => error,
-				);
+				),
+		);
 
-			expect(thrown).toBeInstanceOf(Error);
-			expect((thrown as Error).message).toContain("refresh_token_expired");
-			// The generic lease message must not have replaced it.
-			expect((thrown as Error).message).not.toContain("ownership");
-		},
-		LEASE_RENEW_TICK_MS * 4,
-	);
+		expect(thrown).toBeInstanceOf(Error);
+		expect((thrown as Error).message).toContain("refresh_token_expired");
+		// The generic lease message must not have replaced it.
+		expect((thrown as Error).message).not.toContain("ownership");
+	});
 
-	test(
-		"the model-provider path classifies on the refresh's own error, not on a lost lease",
-		async () => {
-			// getApiKey does not rethrow: it CLASSIFIES the refresh error, and a revoked
-			// grant is the one case that disables the row instead of blocking it for five
-			// minutes. Replacing that error with "ownership was lost before persistence"
-			// made every revoked credential look transient, so it stayed enabled and was
-			// retried forever, and the cause recorded on the row named the lease rather
-			// than the revocation. The disabled cause is the operator's only view of why.
-			const provider = "unit-oauth-renewal-provider-error";
-			oauthUtils.registerOAuthProvider({
-				id: provider,
-				name: "Unit OAuth Renewal Provider Error",
-				sourceId: SOURCE_ID,
-				async login() {
-					return { access: "unused", refresh: "unused", expires: Date.now() + 60_000 };
-				},
-				async refreshToken() {
-					// Outlast the renewal tick so the ownership loss is recorded BEFORE
-					// this throws, which is the exact ordering that used to clobber it.
-					await Bun.sleep(LEASE_RENEW_TICK_MS + 400);
-					throw new Error("invalid_grant: refresh token has been revoked");
-				},
-				getApiKey(credentials) {
-					return credentials.access;
-				},
-			});
-			const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
-			closers.push(store);
-			const disabled: CredentialDisabledEvent[] = [];
-			const authStorage = new AuthStorage(store, {
-				onCredentialDisabled: event => {
-					disabled.push(event);
-				},
-			});
-			await authStorage.set(provider, [
-				{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
-			]);
-			vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
+	test("the model-provider path classifies on the refresh's own error, not on a lost lease", async () => {
+		// getApiKey does not rethrow: it CLASSIFIES the refresh error, and a revoked
+		// grant is the one case that disables the row instead of blocking it for five
+		// minutes. Replacing that error with "ownership was lost before persistence"
+		// made every revoked credential look transient, so it stayed enabled and was
+		// retried forever, and the cause recorded on the row named the lease rather
+		// than the revocation. The disabled cause is the operator's only view of why.
+		const provider = "unit-oauth-renewal-provider-error";
+		oauthUtils.registerOAuthProvider({
+			id: provider,
+			name: "Unit OAuth Renewal Provider Error",
+			sourceId: SOURCE_ID,
+			async login() {
+				return { access: "unused", refresh: "unused", expires: Date.now() + 60_000 };
+			},
+			async refreshToken() {
+				// Outlast the renewal tick so the ownership loss is recorded BEFORE
+				// this throws, which is the exact ordering that used to clobber it.
+				await Bun.sleep(LEASE_RENEW_TICK_MS + 400);
+				throw new Error("invalid_grant: refresh token has been revoked");
+			},
+			getApiKey(credentials) {
+				return credentials.access;
+			},
+		});
+		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		closers.push(store);
+		const disabled: CredentialDisabledEvent[] = [];
+		const authStorage = new AuthStorage(store, {
+			onCredentialDisabled: event => {
+				disabled.push(event);
+			},
+		});
+		await authStorage.set(provider, [
+			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
+		]);
+		vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
+		installFakeTime();
 
-			const key = await authStorage.getApiKey(provider, "renewal-session");
+		const key = await driveFakeTime(authStorage.getApiKey(provider, "renewal-session"));
 
-			expect(key).toBeUndefined();
-			expect(disabled).toHaveLength(1);
-			expect(disabled[0]?.disabledCause).toContain("invalid_grant");
-			expect(disabled[0]?.disabledCause).not.toContain("ownership");
-			expect(store.listAuthCredentials(provider)).toHaveLength(0);
-		},
-		LEASE_RENEW_TICK_MS * 4,
-	);
+		expect(key).toBeUndefined();
+		expect(disabled).toHaveLength(1);
+		expect(disabled[0]?.disabledCause).toContain("invalid_grant");
+		expect(disabled[0]?.disabledCause).not.toContain("ownership");
+		expect(store.listAuthCredentials(provider)).toHaveLength(0);
+	});
 
-	test(
-		"a caller that keeps its credential on refresh failure still keeps it when the lease is also lost",
-		async () => {
-			// The keep decision is made INSIDE the renewal helper now and its answer has
-			// to cross that boundary intact. If the helper threw the ownership loss, this
-			// caller would see a hard failure instead of the credential it asked to keep,
-			// and a transient network blip would read as a logout.
-			const provider = "unit-oauth-renewal-keep";
-			const { store, authStorage } = await seedExpiredCredential(provider);
-			vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
-			const failures: unknown[] = [];
+	test("a caller that keeps its credential on refresh failure still keeps it when the lease is also lost", async () => {
+		// The keep decision is made INSIDE the renewal helper now and its answer has
+		// to cross that boundary intact. If the helper threw the ownership loss, this
+		// caller would see a hard failure instead of the credential it asked to keep,
+		// and a transient network blip would read as a logout.
+		const provider = "unit-oauth-renewal-keep";
+		const { store, authStorage } = await seedExpiredCredential(provider);
+		vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
+		const failures: unknown[] = [];
+		installFakeTime();
 
-			const result = await authStorage.refreshStoredOAuthCredential(provider, {
+		const result = await driveFakeTime(
+			authStorage.refreshStoredOAuthCredential(provider, {
 				credentialFromRow: credential => credential,
 				keepCredentialOnRefreshFailure: true,
 				onRefreshFailure: error => failures.push(error),
@@ -170,21 +204,20 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 					await Bun.sleep(LEASE_RENEW_TICK_MS + 400);
 					throw new Error("network_unreachable");
 				},
-			});
+			}),
+		);
 
-			expect(result.refreshed).toBe(false);
-			expect(result.removed).toBe(false);
-			expect(result.credential?.access).toBe("stale-access");
-			expect(result.credential?.refresh).toBe("stale-refresh");
-			expect(failures).toHaveLength(1);
-			expect(String(failures[0])).toContain("network_unreachable");
-			// The row is untouched and still usable.
-			const active = store.listAuthCredentials(provider);
-			expect(active).toHaveLength(1);
-			expect(active[0]?.disabledCause).toBe(null);
-		},
-		LEASE_RENEW_TICK_MS * 4,
-	);
+		expect(result.refreshed).toBe(false);
+		expect(result.removed).toBe(false);
+		expect(result.credential?.access).toBe("stale-access");
+		expect(result.credential?.refresh).toBe("stale-refresh");
+		expect(failures).toHaveLength(1);
+		expect(String(failures[0])).toContain("network_unreachable");
+		// The row is untouched and still usable.
+		const active = store.listAuthCredentials(provider);
+		expect(active).toHaveLength(1);
+		expect(active[0]?.disabledCause).toBe(null);
+	});
 
 	/**
 	 * A definitive failure (the provider says the grant is dead) must still disable the
@@ -274,5 +307,31 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		if (active[0]?.credential.type === "oauth") {
 			expect(active[0].credential.refresh).toBe("retry-refresh");
 		}
+	});
+
+	// The renewal loop used to sleep with `Bun.sleep(5_000)` raced against the refresh's end. A
+	// refresh that finished first left that sleep armed for the rest of the tick, so every token
+	// refresh held the event loop open for up to five seconds after it returned.
+	test("a refresh leaves no renewal timer armed once it settles", async () => {
+		const provider = "unit-oauth-renewal-no-timer";
+		const { authStorage } = await seedExpiredCredential(provider);
+		installFakeTime();
+
+		const result = await driveFakeTime(
+			authStorage.refreshStoredOAuthCredential(provider, {
+				credentialFromRow: credential => credential,
+				async refresh(credential) {
+					return {
+						...credential,
+						access: "fresh-access",
+						refresh: "fresh-refresh",
+						expires: Date.now() + 3_600_000,
+					};
+				},
+			}),
+		);
+
+		expect(result.refreshed).toBe(true);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

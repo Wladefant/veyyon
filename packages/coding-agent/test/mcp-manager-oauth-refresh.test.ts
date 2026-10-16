@@ -282,6 +282,7 @@ describe("MCPManager OAuth refresh failure", () => {
 
 describe("MCPManager shared SQLite OAuth refresh", () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		setSystemTime();
 		vi.restoreAllMocks();
 	});
@@ -289,6 +290,8 @@ describe("MCPManager shared SQLite OAuth refresh", () => {
 	test("renews refresh ownership while the token endpoint is blocked", async () => {
 		await withSharedSQLiteAuth(async ({ authA, authB, storeA }) => {
 			const startMs = Date.parse("2026-07-10T12:00:00.000Z");
+			// The renewal tick is a timer; the peer's lease poll is a `Bun.sleep`, held until released.
+			vi.useFakeTimers();
 			setSystemTime(new Date(startMs));
 			const sleeps = installControlledBunSleep();
 			const renewSpy = vi.spyOn(storeA, "renewCredentialRefreshLease");
@@ -344,10 +347,8 @@ describe("MCPManager shared SQLite OAuth refresh", () => {
 
 				const preparedA = managerA.prepareConfig(config);
 				await refreshStarted.promise;
-				const renewalSleep = await waitForControlledSleep(sleeps, 5_000);
-
+				vi.advanceTimersByTime(5_000);
 				setSystemTime(new Date(startMs + 5_000));
-				renewalSleep.resolve();
 				await drainMicrotasks();
 				expect(renewSpy).toHaveBeenCalledTimes(1);
 

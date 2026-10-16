@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { errorMessage, isEnoent, logger, postmortem, ptree, untilAborted } from "@veyyon/utils";
+import { errorMessage, isEnoent, logger, postmortem, ptree, settleWithin, untilAborted } from "@veyyon/utils";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
 import { scopedTimeoutSignal } from "../utils/fetch-timeout";
@@ -1126,13 +1126,14 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 }
 
 async function waitForExit(client: LspClient, timeoutMs: number): Promise<boolean> {
-	return await Promise.race([
+	return await settleWithin(
 		client.proc.exited.then(
 			() => true,
 			() => true,
 		),
-		Bun.sleep(timeoutMs).then(() => false),
-	]);
+		timeoutMs,
+		false,
+	);
 }
 
 /**

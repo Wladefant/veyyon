@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { errorMessage, isTimeoutError, postmortem, Snowflake, untilAborted } from "@veyyon/utils";
+import { errorMessage, isTimeoutError, postmortem, Snowflake, settleWithin, untilAborted } from "@veyyon/utils";
 // The owner, not the barrel: this module reaches the two discard contracts and nothing else.
 import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
 import type { HTMLElement } from "linkedom";
@@ -1780,10 +1780,7 @@ export class WorkerCore {
 	async #selectorTimeoutHint(selector: string): Promise<string> {
 		if (parseAriaRefSelector(selector) !== null) return "";
 		try {
-			const handles = await Promise.race([
-				this.#requirePage().$$(normalizeSelector(selector)),
-				Bun.sleep(1_000).then(() => null),
-			]);
+			const handles = await settleWithin(this.#requirePage().$$(normalizeSelector(selector)), 1_000, null);
 			if (!handles) return "";
 			const count = handles.length;
 			for (const handle of handles) void releaseHandle(handle);
@@ -2514,9 +2511,7 @@ export class WorkerCore {
 			});
 			let opened: FileChooser | null;
 			try {
-				opened = await untilAborted(signal, () =>
-					Promise.race([chooser, delay(CHOOSER_WAIT_MS, null, { signal })]),
-				);
+				opened = await untilAborted(signal, () => settleWithin(chooser, CHOOSER_WAIT_MS, null));
 			} catch (err) {
 				if (!isTimeoutError(err)) throw err;
 				opened = null;

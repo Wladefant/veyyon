@@ -12,7 +12,17 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-import { clampLow, errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
+import {
+	clampLow,
+	errorMessage,
+	isEnoent,
+	lazy,
+	logger,
+	prompt,
+	SIGNAL_EXIT_BASE,
+	settleWithin,
+	signalNumber,
+} from "@veyyon/utils";
 import type { AsyncJobManager } from "../../async/job-manager";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
@@ -64,6 +74,8 @@ export const BASH_DEFAULT_PREVIEW_LINES = DEFAULT_TERMINAL_PREVIEW_LINES;
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 300_000;
 const DEFAULT_STALL_DETECTION_MS = 30_000;
+/** How often a client-bridge terminal's output is pushed while its command runs. */
+const BRIDGE_POLL_INTERVAL_MS = 250;
 
 /**
  * Shape a shell command line for an ACP-conformant `terminal/create` request.
@@ -854,11 +866,6 @@ export class BashTool
 		const waiters: Array<
 			Promise<ManagedBashJobCompletion | { kind: "background"; reason: BackgroundReason } | { kind: "aborted" }>
 		> = [job.completion];
-		if (thresholdMs > 0) {
-			waiters.push(
-				Bun.sleep(thresholdMs).then(() => ({ kind: "background" as const, reason: "threshold" as const })),
-			);
-		}
 		if (stallMs > 0) {
 			waiters.push(watchStall(job, stallMs, internal.signal));
 		}
@@ -881,7 +888,9 @@ export class BashTool
 		}
 
 		try {
-			return await Promise.race(waiters);
+			const raced = Promise.race(waiters);
+			if (thresholdMs <= 0) return await raced;
+			return await settleWithin(raced, thresholdMs, { kind: "background" as const, reason: "threshold" as const });
 		} finally {
 			internal.abort();
 			unregisterManual();
@@ -1436,22 +1445,29 @@ async function waitForClientTerminal(
 	};
 	signal?.addEventListener("abort", onAbortSignal, { once: true });
 
+	// The deadline spans every poll tick, so it is one timer cleared on every exit path rather
+	// than a sleep that stays armed for the full timeout after the command finishes.
+	let deadlineTimer: NodeJS.Timeout | undefined;
+	let timeoutPromise: Promise<{ kind: "timeout" }> | undefined;
 	try {
 		if (signal?.aborted) {
 			await fireKill();
 			throw new ToolAbortError("Command aborted");
 		}
-		const timeoutPromise = timeoutMs ? Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const })) : undefined;
+		if (timeoutMs) {
+			const { promise, resolve } = Promise.withResolvers<{ kind: "timeout" }>();
+			deadlineTimer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+			timeoutPromise = promise;
+		}
 		for (;;) {
 			const racers: Array<Promise<BridgeRaceResult>> = [
 				exitPromise.then(s => ({ kind: "exit" as const, status: s })),
-				Bun.sleep(250).then(() => ({ kind: "poll" as const })),
 			];
 			if (timeoutPromise) racers.push(timeoutPromise);
 			if (signal) {
 				racers.push(abortedP.then(() => ({ kind: "aborted" as const })));
 			}
-			const raced = await Promise.race(racers);
+			const raced = await settleWithin(Promise.race(racers), BRIDGE_POLL_INTERVAL_MS, { kind: "poll" as const });
 			if (raced.kind === "aborted" || signal?.aborted) {
 				await fireKill();
 				throw new ToolAbortError("Command aborted");
@@ -1478,6 +1494,7 @@ async function waitForClientTerminal(
 			});
 		}
 	} finally {
+		clearTimeout(deadlineTimer);
 		signal?.removeEventListener("abort", onAbortSignal);
 	}
 }

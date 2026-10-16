@@ -8,6 +8,7 @@ import type * as MnemopiCoreNs from "@veyyon/mnemopi/core";
 import type { LocalModelInitializer } from "@veyyon/mnemopi/core";
 import * as logger from "@veyyon/utils/logger";
 import { escapeRegExp } from "@veyyon/utils/regex";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import type { AgentSession } from "../../session/agent-session";
 import type { AgentSessionEvent } from "../../session/agent-session-types";
 import {
@@ -652,10 +653,7 @@ export class MnemopiSessionState {
 		const { timeoutMs } = options;
 		if (timeoutMs !== undefined && timeoutMs > 0) {
 			const TIMED_OUT = Symbol("mnemopi.dispose.timedOut");
-			const winner = await Promise.race([
-				consolidatePromise.then(() => undefined as unknown),
-				Bun.sleep(timeoutMs).then(() => TIMED_OUT as unknown),
-			]);
+			const winner = await settleWithin(consolidatePromise, timeoutMs, TIMED_OUT);
 			if (winner === TIMED_OUT) {
 				logger.warn("Mnemopi: consolidate-on-dispose exceeded shutdown budget; detaching to background.", {
 					timeoutMs,

@@ -131,6 +131,7 @@ import {
 	postmortem,
 	prompt,
 	Snowflake,
+	settleWithin,
 	withTimeout,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
@@ -5313,7 +5314,7 @@ export class AgentSession {
 				// abandoned at its first await and anything not yet written was
 				// lost. Wait for it, but bound the wait so a wedged teardown still
 				// exits instead of hanging the caller forever.
-				void Promise.race([this.dispose(), Bun.sleep(SHUTDOWN_DISPOSE_TIMEOUT_MS)])
+				void settleWithin(this.dispose(), SHUTDOWN_DISPOSE_TIMEOUT_MS, undefined)
 					.catch(error => {
 						logger.error("Session dispose failed during shutdown", { error: errorMessage(error) });
 					})

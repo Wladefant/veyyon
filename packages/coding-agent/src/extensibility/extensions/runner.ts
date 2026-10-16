@@ -4,7 +4,7 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CredentialDisabledEvent, ImageContent, Model, ProviderResponseMetadata } from "@veyyon/ai";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { errorMessage, logger, reportFault } from "@veyyon/utils";
+import { errorMessage, logger, reportFault, settleWithin } from "@veyyon/utils";
 import type { KeyId } from "@veyyon/utils/keys";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
@@ -98,32 +98,6 @@ function handlerTimeoutForEvent(eventType: string): number {
 }
 
 const EXTENSION_HANDLER_TIMEOUT = Symbol("extensionHandlerTimeout");
-
-/**
- * Race `work` against a `timeoutMs` budget, clearing the pending timer the
- * instant the work settles.
- *
- * We deliberately avoid `Bun.sleep(timeoutMs).then(...)` here: that leaves an
- * uncancellable timer registered with the event loop, so every successful
- * handler race leaks a timer that keeps the process alive until the deadline
- * fires — up to the default 30s cap, which stalls non-interactive CLI exit
- * after any subscribed `tool_call`/`tool_result` handler runs (issue #3948
- * review, `chatgpt-codex-connector[bot]`). `setTimeout` returns a handle we
- * can `clearTimeout` on the winning branch.
- */
-async function raceHandlerWithTimeout<T>(
-	work: Promise<T>,
-	timeoutMs: number,
-): Promise<T | typeof EXTENSION_HANDLER_TIMEOUT> {
-	const { promise: timeoutPromise, resolve: resolveTimeout } =
-		Promise.withResolvers<typeof EXTENSION_HANDLER_TIMEOUT>();
-	const timer = setTimeout(() => resolveTimeout(EXTENSION_HANDLER_TIMEOUT), timeoutMs);
-	try {
-		return await Promise.race([work, timeoutPromise]);
-	} finally {
-		clearTimeout(timer);
-	}
-}
 
 const MAX_PENDING_CREDENTIAL_DISABLED = 32;
 
@@ -625,7 +599,11 @@ export class ExtensionRunner {
 		timeoutMs: number,
 	): Promise<TResult | undefined> {
 		try {
-			const handlerResult = await raceHandlerWithTimeout(Promise.resolve(handler(event, ctx)), timeoutMs);
+			const handlerResult = await settleWithin(
+				Promise.resolve(handler(event, ctx)),
+				timeoutMs,
+				EXTENSION_HANDLER_TIMEOUT,
+			);
 			if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
 				const error =
 					`Its "${event.type}" handler did not finish within ${timeoutMs}ms, so veyyon carried on without ` +
@@ -789,7 +767,11 @@ export class ExtensionRunner {
 
 			for (const handler of handlers) {
 				try {
-					const handlerResult = await raceHandlerWithTimeout(Promise.resolve(handler(event, ctx)), timeoutMs);
+					const handlerResult = await settleWithin(
+						Promise.resolve(handler(event, ctx)),
+						timeoutMs,
+						EXTENSION_HANDLER_TIMEOUT,
+					);
 
 					if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
 						const error =

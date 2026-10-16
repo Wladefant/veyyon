@@ -54,6 +54,7 @@
 - The anchored todo board, the agent HUD, their shared motion clock, the todo auto-clear and the agent-change rebuild moved out of `interactive-mode.ts` into `anchored-blocks.ts`; no user-visible change.
 - The ACP plan-approval resolve types its input as `ResolveParams`, as the terminal plan mode does; no user-visible change.
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
+- The extension handler time budget and the lspmux liveness probe use `settleWithin` from `@veyyon/utils` instead of their own deadline racers; no user-visible change.
 
 ### Fixed
 
@@ -97,6 +98,7 @@
 - A `browser` `tab.drag()` or multiple `tab.select()` cut short by its deadline or an abort releases the mouse button or modifier it pressed, instead of leaving it held so every later click on the tab failed with `'left' is already pressed` or arrived as a Control-click.
 - A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
 - A browser the `browser` tool spawned is killed on session end or a failed attach when the native addon cannot load, instead of being left running.
+- A foreground `bash` command that finishes before the auto-background threshold, a client-terminal command that exits before its timeout, an edit whose LSP diagnostics arrive inside the 500 ms inline wait, MCP startup, an LSP or DAP adapter shutdown, the GPU probe, the speech recorder's start wait, an async job delivery wait, the browser's selector hint, file-chooser and frame-draw waits, memory dispose and session shutdown clear their deadline timer when the work finishes, instead of leaving it armed for the rest of the window (up to 300 s for the bash threshold) and holding the process open.
 
 ### Removed
 

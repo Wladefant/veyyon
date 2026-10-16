@@ -5,7 +5,7 @@
  */
 
 import { setTimeout as delay } from "node:timers/promises";
-import { untilAborted } from "@veyyon/utils";
+import { settleWithin, untilAborted } from "@veyyon/utils";
 import { optionalResult } from "@veyyon/utils/discarded-fault";
 import type { ElementHandle, Frame } from "puppeteer-core";
 import { ToolError } from "../../core/tool-errors";
@@ -266,13 +266,14 @@ async function drawnThroughFrames(frame: Frame, signal: AbortSignal | undefined)
 	for (let at: Frame | null = frame; at; at = at.parentFrame()) {
 		const drawing = at;
 		await untilAborted(signal, () =>
-			Promise.race([
+			settleWithin(
 				optionalResult(
 					drawing.evaluate(twoAnimationFrames),
 					"a frame that navigates or detaches has nothing left to draw before the press",
 				),
-				delay(FRAME_DRAW_WAIT_MS, undefined, { signal }),
-			]),
+				FRAME_DRAW_WAIT_MS,
+				undefined,
+			),
 		);
 	}
 }

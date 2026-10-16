@@ -63,8 +63,9 @@ export async function withScopedTimeoutSignal<T>(
  * `options.signal` aborts first the race rejects with the signal's reason
  * instead. The backing timer is cleared as soon as any side settles.
  *
- * This is the one promise-vs-deadline racer; `withTimeout` in ./async is a
- * message-string convenience wrapper over it.
+ * This is the one promise-vs-deadline racer that rejects; `withTimeout` in ./async
+ * is a message-string convenience wrapper over it. {@link settleWithin} is its
+ * sibling for a deadline that resolves to a fallback value instead.
  */
 export async function raceWithTimeout<T>(
 	promise: Promise<T>,
@@ -96,5 +97,24 @@ export async function raceWithTimeout<T>(
 	} finally {
 		timeout.cancel();
 		timeout.signal.removeEventListener("abort", onAbort);
+	}
+}
+
+/**
+ * Resolve with `promise`'s value, or with `fallback` once `timeoutMs` elapses
+ * first. A rejection from `promise` before the deadline propagates. The backing
+ * timer is cleared as soon as `promise` settles.
+ *
+ * Racing work against `Bun.sleep(ms)` instead leaves the sleep's timer armed for
+ * the full window after the work wins: it cannot be cancelled, and it keeps the
+ * event loop alive until it fires, which delays process exit by up to `ms`.
+ */
+export async function settleWithin<T, F>(promise: Promise<T>, timeoutMs: number, fallback: F): Promise<T | F> {
+	const { promise: deadline, resolve } = Promise.withResolvers<F>();
+	const timer = setTimeout(() => resolve(fallback), timeoutMs);
+	try {
+		return await Promise.race([promise, deadline]);
+	} finally {
+		clearTimeout(timer);
 	}
 }

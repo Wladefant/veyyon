@@ -3,7 +3,7 @@
  * by its language servers, and its diagnostics are fetched inline or delivered late.
  */
 
-import { atomicWriteFilePreservingMode, errorMessage, lazy, logger, untilAborted } from "@veyyon/utils";
+import { atomicWriteFilePreservingMode, errorMessage, lazy, logger, settleWithin, untilAborted } from "@veyyon/utils";
 import type { BunFile } from "bun";
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
@@ -456,12 +456,9 @@ async function fetchDiagnosticsWithDeferral(args: {
 		timeoutMs: DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 	});
 	const INLINE_TIMEOUT = Symbol("inline-diagnostics-timeout");
-	const raced = await Promise.race([
-		fetchPromise,
-		Bun.sleep(INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS).then(() => INLINE_TIMEOUT),
-	]);
+	const raced = await settleWithin(fetchPromise, INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS, INLINE_TIMEOUT);
 	if (raced !== INLINE_TIMEOUT) {
-		return apply(raced as FileDiagnosticsResult | undefined);
+		return apply(raced);
 	}
 	// Slow server: deliver late via the deferred channel; nothing inline. The
 	// deferred sink (edit tool) applies its own dedup, so pass the raw result.
