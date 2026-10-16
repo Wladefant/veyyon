@@ -15,7 +15,8 @@
  * The reserved-label contract made the split sharper rather than harmless: `tools/agent/ask.ts` REJECTS a question
  * whose own options collide with one of these labels, so the validator and the renderer had to agree about the
  * same three strings while reading two different declarations of them. Two of ask.ts's three copies existed
- * only to populate that record, while the module that actually renders and compares them is the controller.
+ * only to populate that record, while the module that actually renders and compares them is the controller. The
+ * controller's copy moved with the collab guest dialogs into `modes/terminal/controllers/collab-guest-dialogs.ts`.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -37,7 +38,7 @@ const OWNER_REL = "tools/agent/ask-option-labels.ts";
 const FORMER_DECLARERS: readonly string[] = [
 	"tools/agent/ask.ts",
 	"modes/terminal/components/dialogs/ask-dialog.ts",
-	"modes/terminal/controllers/extension-ui-controller.ts",
+	"modes/terminal/controllers/collab-guest-dialogs.ts",
 ];
 
 const RETIRED_NAMES: readonly string[] = [

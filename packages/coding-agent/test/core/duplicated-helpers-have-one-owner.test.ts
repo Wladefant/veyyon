@@ -211,7 +211,7 @@ describe("formatProviderName", () => {
 		for (const file of [
 			"slash-commands/helpers/usage-report.ts",
 			"cli/usage-cli.ts",
-			"modes/terminal/controllers/command-controller.ts",
+			"modes/terminal/controllers/usage-report-view.ts",
 		]) {
 			expect(importsOf(file), file).toContain("session/account-format");
 		}

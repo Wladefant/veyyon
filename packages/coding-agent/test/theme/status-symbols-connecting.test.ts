@@ -69,6 +69,7 @@ describe("status.connecting / status.active symbols", () => {
 			"modes/terminal/controllers/mcp-command-output.ts",
 			"modes/terminal/controllers/mcp-server-reports.ts",
 			"modes/terminal/controllers/command-controller.ts",
+			"modes/terminal/controllers/usage-report-view.ts",
 			"modes/terminal/components/dialogs/advisor-config.ts",
 		]) {
 			const src = fs.readFileSync(path.join(SRC, rel), "utf8");
