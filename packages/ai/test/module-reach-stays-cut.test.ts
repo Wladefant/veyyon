@@ -202,8 +202,13 @@ const AUTH_STORAGE_CEILING = 230;
  * 86 since 2026-10-13, measured: `catalog/wire/kimi-code.ts`, the Kimi Code region table.
  * `catalog/compat/kimi.ts`, already in this closure, resolves a token's deployment from it, and its only
  * import is `@veyyon/utils/url`, already reached, so it adds one module and no subtree.
+ *
+ * 87 since 2026-10-16, measured: `@veyyon/utils/scoped-timeout`. `catalog/discovery/openai-compatible.ts`
+ * and `catalog/provider-models/openai-compat.ts`, already in this closure, bound their discovery fetches
+ * with its `withScopedTimeoutSignal` instead of each keeping a private timer, and it imports nothing, so it
+ * adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 86;
+const ENV_API_KEY_CEILING = 87;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;
