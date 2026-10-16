@@ -1,4 +1,4 @@
-import { withScopedTimeoutSignal } from "../utils/fetch-timeout";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 
 /**
  * How long any single Smithery HTTP request may take.

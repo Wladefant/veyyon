@@ -43,7 +43,6 @@ import type {
 	TuiSlashCommandRuntime,
 } from "./types";
 
-export { BUILTIN_SLASH_COMMAND_CATEGORIES } from "./builtin-categories";
 export type { BuiltinSlashCommandRuntime, TuiBuiltinSlashCommand } from "./handler-types";
 export type { BuiltinSlashCommand, SubcommandDef } from "./types";
 
@@ -93,17 +92,6 @@ for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 		BUILTIN_SLASH_COMMAND_LOOKUP.set(alias, command);
 	}
 }
-
-// Re-exported for the consumers that already take it from here. `extensibility` takes it from the
-// declarations module directly, which is the point of the split: it wants the names, not the app.
-export { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "./builtin-declarations";
-
-/**
- * The browse order, owned by `./category-order.ts` and re-exported here because this is the name callers
- * already import. It moved because it is eight strings about presentation, and reaching it through this
- * module means importing every command implementation: the autocomplete paid 1,149 marginal modules for it.
- */
-export { BUILTIN_SLASH_COMMAND_CATEGORY_ORDER } from "./category-order";
 
 /** Builtin command metadata used for slash-command autocomplete and help text. */
 export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BUILTIN_SLASH_COMMAND_REGISTRY.map(

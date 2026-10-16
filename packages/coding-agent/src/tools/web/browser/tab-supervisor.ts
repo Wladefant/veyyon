@@ -2,10 +2,10 @@ import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-reso
 import { errorMessage, isCancellation, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 // The owner, not the barrel: this module reaches the two discard contracts and nothing else.
 import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
+import { raceWithTimeout } from "@veyyon/utils/scoped-timeout";
 import type { BrowserContext } from "puppeteer-core";
 import { callSessionTool } from "../../../eval/js/tool-bridge";
 import { logWorkerMessage } from "../../../subprocess/worker-log";
-import { raceWithTimeout } from "../../../utils/fetch-timeout";
 import { webpExclusionForModel } from "../../../utils/image-loading";
 import { TAB_WORKER_ARG } from "../../../worker-args";
 import { expandPath } from "../../core/path-utils";

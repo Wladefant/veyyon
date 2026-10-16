@@ -4,6 +4,7 @@
  */
 import { scheduler } from "node:timers/promises";
 import { errorMessage, getMCPConfigPath, getProjectDir } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { readMCPConfigFile } from "../../../mcp/config-writer";
 import {
 	clearSmitheryApiKey,
@@ -23,7 +24,6 @@ import type { MCPServerConfig } from "../../../mcp/types";
 import { parseMcpSearchArgs } from "../../../slash-commands/helpers/mcp-args";
 import { theme } from "../../../theme/theme";
 import { shortenPath } from "../../../tools/core/render-utils";
-import { scopedTimeoutSignal } from "../../../utils/fetch-timeout";
 import { openPath } from "../../../utils/open";
 import type { InteractiveModeContext } from "../types";
 import { showCommandMessage } from "./command-controller-shared";

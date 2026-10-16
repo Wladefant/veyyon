@@ -8,7 +8,9 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import { errorMessage, logger, prompt, truncate, untilAborted } from "@veyyon/utils";
+import { isTimeoutError } from "@veyyon/utils/abortable";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { theme } from "../theme/theme-binding";
 import type { ToolSession } from "../tools";
@@ -19,7 +21,6 @@ import { formatPathRelativeToCwd, resolveToCwd } from "../tools/core/path-utils"
 import { prependResultNotice } from "../tools/core/result-notice";
 import { ToolAbortError, ToolError, throwIfAborted } from "../tools/core/tool-errors";
 import { clampTimeout, formatTimeoutClampNotice } from "../tools/core/tool-timeouts";
-import { isTimeoutError, scopedTimeoutSignal } from "../utils/fetch-timeout";
 import {
 	ensureFileOpen,
 	getActiveClients,

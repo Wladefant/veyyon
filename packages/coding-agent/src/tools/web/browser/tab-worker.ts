@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { errorMessage, isTimeoutError, postmortem, Snowflake, settleWithin, untilAborted } from "@veyyon/utils";
 // The owner, not the barrel: this module reaches the two discard contracts and nothing else.
 import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { HTMLElement } from "linkedom";
 import type {
 	Browser,
@@ -27,7 +28,6 @@ import type {
 	Target,
 } from "puppeteer-core";
 import { JsRuntime, type RuntimeHooks } from "../../../eval/js/shared/runtime";
-import { scopedTimeoutSignal } from "../../../utils/fetch-timeout";
 import { resizeImage } from "../../../utils/image-resize";
 import { resolveToCwd } from "../../core/path-utils";
 import { formatScreenshot } from "../../core/render-utils";

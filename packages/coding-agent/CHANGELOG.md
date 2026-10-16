@@ -87,6 +87,7 @@
 - The benchmark CLIs share one time-to-first-token predicate, the guided-goal turn and the memory passes share one per-attempt credential refresh, the model registry and the sign-in list share one reader of `disabledProviders`, and the legacy plugin loader resolves package `imports` and `exports` targets through one function; no user-visible change.
 - Removed the parameters autoresearch branch handling and the release installer accepted and never read; `veyyon update --force` still reinstalls the running version, with no user-visible change.
 - The auth broker command imports the credential store from `@veyyon/ai/auth-storage-sqlite`, with no user-visible change.
+- Modules import the timeout, whitespace, advisor transcript name and slash-command category helpers from their owning modules; the `utils/fetch-timeout` re-export module is removed, with no user-visible change.
 
 ### Fixed
 

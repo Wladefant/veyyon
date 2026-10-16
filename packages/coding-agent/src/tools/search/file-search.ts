@@ -3,6 +3,8 @@ import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import * as natives from "@veyyon/natives";
 import { formatGroupedPaths, isCancellation, isEnoent, untilAborted } from "@veyyon/utils";
+import { isTimeoutError } from "@veyyon/utils/abortable";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { InternalUrlRouter } from "../../internal-urls";
 import {
 	artifactFooter,
@@ -10,7 +12,6 @@ import {
 	truncateHead,
 	truncationSummary,
 } from "../../session/streaming-output";
-import { isTimeoutError, scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import type { ToolSession } from "..";
 import { applyListLimit } from "../core/list-limit";
 import { inlineBudgetFor, saveOutputArtifact } from "../core/output-artifact";

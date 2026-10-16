@@ -2,8 +2,8 @@ import * as net from "node:net";
 import { ProcessStatus } from "@veyyon/natives";
 import { procmgr, trimTrailingSlashes } from "@veyyon/utils";
 import { processHandle, processHandlesByPath } from "@veyyon/utils/native-process";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { Browser, Page } from "puppeteer-core";
-import { scopedTimeoutSignal } from "../../../utils/fetch-timeout";
 import { ToolError, throwIfAborted } from "../../core/tool-errors";
 
 const ATTACH_TARGET_SKIP_PATTERN =

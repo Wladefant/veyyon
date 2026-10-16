@@ -3,6 +3,7 @@ import type { AgentMessage, AgentTelemetryConfig } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import type { TUI } from "@veyyon/tui";
+import { isAdvisorTranscriptName } from "@veyyon/utils/session-file";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { type } from "arktype";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -32,7 +33,6 @@ import {
 	formatAdvisorBatchContent,
 	formatAdvisorContextPrompt,
 	isAdvisorInterruptImmuneTurnActive,
-	isAdvisorTranscriptName,
 	isInterruptingSeverity,
 	quarantineAdvisorUnsafeOutput,
 	resolveAdvisorDeliveryChannel,

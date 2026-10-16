@@ -1,7 +1,7 @@
 import { clampLow, logger } from "@veyyon/utils";
+import { isTimeoutError } from "@veyyon/utils/abortable";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { type ProviderTextTransformResolver, resolveProviderTextTransform } from "../provider-boundary";
-import { isTimeoutError } from "../utils/fetch-timeout";
 import { withSmitheryDeadline } from "./smithery-http";
 import type { MCPServerConfig } from "./types";
 

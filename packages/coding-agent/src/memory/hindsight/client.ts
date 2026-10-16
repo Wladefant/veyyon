@@ -9,7 +9,8 @@
  */
 
 import { errorMessage, trimTrailingSlashes, tryParseJson } from "@veyyon/utils";
-import { isTimeoutError, scopedTimeoutSignal } from "../../utils/fetch-timeout";
+import { isTimeoutError } from "@veyyon/utils/abortable";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { HindsightConfig } from "./config";
 
 const USER_AGENT = "veyyon-coding-agent";

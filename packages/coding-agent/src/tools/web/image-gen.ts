@@ -30,6 +30,7 @@ import {
 	trimTrailingSlashes,
 	untilAborted,
 } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import packageJson from "../../../package.json" with { type: "json" };
 import { isAuthenticated } from "../../config/auth-state";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -37,7 +38,6 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { settings } from "../../config/settings-instance";
 import type { CustomTool } from "../../extensibility/custom-tools/types";
 import { toolsPrompts } from "../../prompts/tools/rows";
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { canonicalizeImageContent } from "../../utils/image-resize";
 import { resolveReadPath } from "../core/path-utils";
 import { missingXAICredentialsMessage, resolveXAIHttpCredentials, veyyonXAIUserAgent } from "./xai-http";

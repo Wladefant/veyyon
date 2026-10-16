@@ -12,6 +12,9 @@ import { isEnoent } from "@veyyon/utils/fs-error";
 // Owners, not the `@veyyon/utils` barrel: 8 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import * as ptree from "@veyyon/utils/ptree";
+// Each from its owner, not the `../tui` barrel: the barrel is 768 modules because it re-exports the
+// hyperlink module, and `read.ts` imports this file.
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { $which } from "@veyyon/utils/which";
@@ -38,9 +41,6 @@ import { type ProviderTextTransformResolver, resolveProviderTextTransform } from
 import type { ToolSession } from "../../sdk";
 import { primarySessionCpuAdoption } from "../../session/cpu-limit";
 import { truncateHead } from "../../session/streaming-output";
-// Each from its owner, not the `../tui` barrel: the barrel is 768 modules because it re-exports the
-// hyperlink module, and `read.ts` imports this file.
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { webpExclusionForModel } from "../../utils/image-loading";
 import { formatDimensionNote, type ResizedImage, resizeImage } from "../../utils/image-resize";
 import { ensureTool } from "../../utils/tools-manager";

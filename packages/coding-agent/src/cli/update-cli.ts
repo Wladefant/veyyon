@@ -29,10 +29,11 @@ import {
 	VERSION,
 	withFileLock,
 } from "@veyyon/utils";
+import { isTimeoutError } from "@veyyon/utils/abortable";
+import { scopedTimeoutSignal, withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../theme/theme";
-import { isTimeoutError, scopedTimeoutSignal, withScopedTimeoutSignal } from "../utils/fetch-timeout";
 import {
 	AUTO_UPDATE_FAILURE_COOLDOWN_MS,
 	AUTO_UPDATE_LOCK_STALE_MS,

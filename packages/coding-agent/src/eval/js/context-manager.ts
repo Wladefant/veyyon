@@ -2,6 +2,7 @@
 // hidden argv mode, so compiled/standalone builds only need one JavaScript entry.
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
 import { errorMessage, isAbortError, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
+import { raceWithTimeout } from "@veyyon/utils/scoped-timeout";
 import {
 	createWorkerHandle,
 	createWorkerSubprocess,
@@ -11,7 +12,6 @@ import {
 import { logWorkerMessage } from "../../subprocess/worker-log";
 import type { ToolSession } from "../../tools";
 import { ToolAbortError, ToolError } from "../../tools/core/tool-errors";
-import { raceWithTimeout } from "../../utils/fetch-timeout";
 import { safeSend as safeSendIpc } from "../../utils/ipc";
 import { JS_EVAL_PROCESS_ARG, JS_EVAL_WORKER_ARG } from "../../worker-args";
 import { attachSessionOwner } from "../executor-base";

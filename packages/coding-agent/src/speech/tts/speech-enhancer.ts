@@ -19,12 +19,12 @@ import type { ApiKeyResolver, AssistantMessage, Context, Model } from "@veyyon/a
 import { completeSimple } from "@veyyon/ai/stream";
 import { assistantText } from "@veyyon/ai/utils/message-text";
 import { logger, prompt } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import { sideChannelPrompts } from "../../prompts/side-channel/rows";
 import { withAtomicSecretPlaceholders } from "../../secrets/placeholder";
 import { resolveHelperModel } from "../../task/helper-settings";
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 
 const SYSTEM_PROMPT = prompt.render(sideChannelPrompts["side-channel/speech-rewrite"].text);
 // Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out.

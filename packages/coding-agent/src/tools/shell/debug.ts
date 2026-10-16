@@ -9,6 +9,7 @@ import type {
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { isEnoent, lazy, prompt } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type {
 	DapBreakpointRecord,
 	DapCapabilities,
@@ -41,7 +42,6 @@ import {
 } from "../../debug/dap/config";
 import { formatLocation, formatSessionSnapshot } from "../../debug/session-snapshot";
 import { toolsPrompts } from "../../prompts/tools/rows";
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import type { OutputMeta } from "../core/output-notice";

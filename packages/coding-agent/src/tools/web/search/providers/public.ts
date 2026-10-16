@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AuthStorage } from "@veyyon/ai";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { SEARCH_HARD_TIMEOUT_MS } from "@veyyon/web/hard-timeout";
-import { scopedTimeoutSignal } from "../../../../utils/fetch-timeout";
 import { formatSearchProviderFailures, getSearchProvider, isSearchProviderExcluded } from "../provider";
 import type { SearchProviderId, SearchResponse, SearchSource } from "../types";
 import { SearchProviderError } from "../types";
