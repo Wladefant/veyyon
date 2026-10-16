@@ -375,23 +375,6 @@ export function collapseProgressRuns(
 }
 
 /**
- * {@link collapseProgressRuns} themed for a tool card's collapsed output
- * section: the counted-away lines are named in `dim` so the count reads as
- * chrome rather than as output. `styleLine` owns per-line styling (a failed eval
- * cell paints its output in `error`), and defaults to tab-replaced tool output.
- */
-export function renderCollapsedOutputLines(
-	lines: readonly string[],
-	theme: Theme,
-	styleLine: (line: string) => string = line => theme.fg("toolOutput", replaceTabs(shortenEmbeddedPaths(line))),
-): string[] {
-	return collapseProgressRuns(lines).map(row => {
-		const text = styleLine(row.text);
-		return row.hidden === 0 ? text : `${text}${theme.fg("dim", ` … +${row.hidden} earlier`)}`;
-	});
-}
-
-/**
  * Format collapsed output rows as ViewLines, appending ` … +N earlier` badge in dim tone for runs.
  */
 export function collapsedProgressViewLines(
@@ -510,10 +493,6 @@ export function capPreviewLines(
 	return [`${options.prefix ?? ""}${theme.fg("dim", marker)}`, ...visible];
 }
 
-export function formatMeta(meta: string[], theme: Theme): string {
-	return meta.length > 0 ? ` ${theme.fg("muted", meta.join(theme.sep.dot))}` : "";
-}
-
 /**
  * The error text a card shows, with no colour in it.
  *
@@ -551,10 +530,6 @@ export function formatErrorDetail(message: string | undefined, theme: Theme): st
 		.join("\n");
 }
 
-export function formatEmptyMessage(message: string, theme: Theme): string {
-	return `${theme.styledSymbol("status.warning", "warning")} ${theme.fg("muted", message)}`;
-}
-
 // =============================================================================
 // Code Frame Formatting
 // =============================================================================
@@ -578,15 +553,6 @@ export function formatCodeFrameLine(
 // =============================================================================
 
 export type ToolUIColor = "success" | "error" | "warning" | "accent" | "muted";
-
-export interface ToolUITitleOptions {
-	bold?: boolean;
-}
-
-export function formatTitle(label: string, theme: Theme, options?: ToolUITitleOptions): string {
-	const content = options?.bold === false ? label : theme.bold(label);
-	return theme.fg("toolTitle", content);
-}
 
 // =============================================================================
 // Diff Utilities
@@ -943,84 +909,6 @@ export function capParseErrors(
 ): { errors: string[]; total: number } {
 	const deduped = dedupeParseErrors(errors);
 	return { errors: deduped.slice(0, limit), total: deduped.length };
-}
-
-/**
- * Single-slot memo for an expensive rendered string (syntax highlighting, diff
- * coloring) keyed by the exact inputs that shape the bytes: theme instance,
- * expanded state, a caller-chosen salt (path/language), and the source content.
- * Field-wise comparison instead of a concatenated key string: a cache hit costs
- * one string value-compare (engines short-circuit on length) and a miss never
- * allocates a key. Comparing the {@link Theme} by reference is sound because
- * theme switches replace the instance wholesale (`setTheme`/`previewTheme`/
- * `setSymbolPreset` in theme/theme.ts) — themes are never mutated in
- * place.
- */
-export interface RenderedStringCache {
-	theme: Theme | null;
-	expanded: boolean;
-	salt: string;
-	content: string;
-	value: string;
-}
-
-export function createRenderedStringCache(): RenderedStringCache {
-	return { theme: null, expanded: false, salt: "", content: "", value: "" };
-}
-
-/** Drop the memo so the next lookup re-renders (e.g. the render function identity changed). */
-export function invalidateRenderedStringCache(cache: RenderedStringCache): void {
-	cache.theme = null;
-}
-
-export function cachedRenderedString(
-	cache: RenderedStringCache | undefined,
-	theme: Theme,
-	expanded: boolean,
-	salt: string,
-	content: string,
-	render: () => string,
-): string {
-	if (
-		cache !== undefined &&
-		cache.theme === theme &&
-		cache.expanded === expanded &&
-		cache.salt === salt &&
-		cache.content === content
-	) {
-		return cache.value;
-	}
-	const value = render();
-	if (cache !== undefined) {
-		cache.theme = theme;
-		cache.expanded = expanded;
-		cache.salt = salt;
-		cache.content = content;
-		cache.value = value;
-	}
-	return value;
-}
-
-/**
- * Append the indented bullet list of parse errors (capped at
- * {@link PARSE_ERRORS_LIMIT}) to `lines`, with an overflow summary line if the
- * total exceeds the cap. No-op when `parseErrors` is empty.
- */
-export function appendParseErrorsBulletList(
-	lines: string[],
-	parseErrors: readonly string[] | undefined,
-	theme: Theme,
-	total?: number,
-): void {
-	if (!parseErrors || parseErrors.length === 0) return;
-	const fullCount = total ?? parseErrors.length;
-	const capped = parseErrors.slice(0, PARSE_ERRORS_LIMIT);
-	for (const err of capped) {
-		lines.push(theme.fg("warning", `  - ${err}`));
-	}
-	if (fullCount > capped.length) {
-		lines.push(theme.fg("dim", `  … ${fullCount - capped.length} more`));
-	}
 }
 
 /**

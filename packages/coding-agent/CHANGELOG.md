@@ -83,6 +83,7 @@
 - The `github` tool's Actions run model, fetches, outcome rules and watch reports moved from `tools/web/gh.ts` to `tools/web/gh-run-watch.ts`; no user-visible change.
 - Extension and custom slash-command resolution and the command context a session builds without an extension runner moved from `session/agent-session.ts` to `session/agent-session-commands.ts`; no user-visible change.
 - The process agent lifecycle manager is rebuilt when the process agent registry is replaced, so it never terminates or parks agents through a registry nothing reads; no user-visible change.
+- Deleted tool-renderer, output-notice, image and LSP helpers that nothing called (`renderCollapsedOutputLines`, `formatMeta`, `formatEmptyMessage`, `formatTitle`, the rendered-string memo, `appendParseErrorsBulletList`, the styled truncation notices, `SUPPORTED_INPUT_IMAGE_MIME_TYPES`, `getServerForFile`, `hasCapability`); no user-visible change.
 
 ### Fixed
 

@@ -26,11 +26,9 @@ import {
 	truncateMiddle,
 	truncateTail,
 } from "../../session/streaming-output";
-import type { Theme } from "../../theme/theme";
 import { inlineBudgetFor } from "./output-artifact";
 import type { OutputMeta, TruncationMeta } from "./output-notice";
-import { formatFullOutputReference, formatOutputNotice, formatTruncationMetaNotice } from "./output-notice";
-import { wrapBrackets } from "./render-utils";
+import { formatOutputNotice } from "./output-notice";
 import { renderError } from "./tool-errors";
 
 // =============================================================================
@@ -350,32 +348,6 @@ export class OutputMetaBuilder {
 /** Create a new OutputMetaBuilder. */
 export function outputMeta(): OutputMetaBuilder {
 	return new OutputMetaBuilder();
-}
-
-// =============================================================================
-// Notice formatting
-// =============================================================================
-
-/**
- * Format styled artifact reference with warning color and brackets.
- * For TUI rendering of truncation warnings.
- */
-export function formatStyledArtifactReference(artifactId: string, theme: Theme): string {
-	return theme.fg("warning", formatFullOutputReference(artifactId));
-}
-
-/**
- * Format notices from OutputMeta for LLM consumption.
- * Returns empty string if no notices needed.
- */
-/**
- * Format a styled truncation warning message.
- * Returns null if no truncation metadata present.
- */
-export function formatStyledTruncationWarning(meta: OutputMeta | undefined, theme: Theme): string | null {
-	if (!meta?.truncation) return null;
-	const message = formatTruncationMetaNotice(meta.truncation);
-	return theme.fg("warning", wrapBrackets(message, theme));
 }
 
 // =============================================================================
