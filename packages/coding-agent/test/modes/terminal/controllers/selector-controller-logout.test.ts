@@ -43,6 +43,7 @@ import { AccountManagerComponent } from "@veyyon/coding-agent/modes/terminal/com
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { getActiveAuthDbPath } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../../../helpers/isolated-agent-dir";
 
 useIsolatedAgentDir({ globalSettings: true });
@@ -214,7 +215,8 @@ describe("/logout lands in the account card", () => {
 		expect(h.storage.listStoredCredentials("anthropic").map(row => row.id)).toEqual([before[0]]);
 		const report = h.presented();
 		expect(report).toContain("Successfully logged out b@example.com from Anthropic");
-		expect(report).toContain("Credential removed from");
+		// The store that is open, which under profile sharing is not this profile's own agent.db.
+		expect(report).toContain(`Credential removed from ${getActiveAuthDbPath()}`);
 		expect(h.refresh).toHaveBeenCalled();
 		expect(h.errors).toEqual([]);
 	});

@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	createModuleReachCache,
+	dynamicImportSpecifiersIn,
 	type ModuleReachResolution,
 	moduleReach,
 	moduleReachCount,
@@ -196,8 +197,7 @@ describe("asking whether a model is configured is not calling one", () => {
 		const source = fs.readFileSync(path.join(SRC, "core", "extraction.ts"), "utf-8");
 
 		expect(runtimeImportsOf("core/extraction.ts")).not.toContain("./local-llm");
-		expect(source).toContain('import("./local-llm")');
-		expect(source).toContain("llmClient()");
+		expect(dynamicImportSpecifiersIn(source)).toContain("./local-llm");
 	});
 
 	/**

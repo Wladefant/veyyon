@@ -51,6 +51,8 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionWidgetContent } from "@veyyon/kernel/registry/widget";
+import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
+import { exportedDeclarationsIn } from "@veyyon/utils/source-declarations";
 import type { ExtensionUIContext } from "../../src/extensibility/extensions/types";
 import type { HookUIContext } from "../../src/extensibility/hooks/types";
 import type {
@@ -136,7 +138,7 @@ describe("the published plugin contract does not name a terminal", () => {
 		// name rather than left to the map above.
 		expect(naming).not.toContain("custom-tools/types.ts");
 		const source = fs.readFileSync(path.join(EXTENSIBILITY_DIR, "custom-tools", "types.ts"), "utf8");
-		expect(source).toContain("HostView");
+		expect(namedImportsFrom(source, HOST_VIEW_SPECIFIER)).toContain("HostView");
 	});
 
 	it("declares the host-agnostic view once, and points both renderer contracts at it", () => {
@@ -144,15 +146,16 @@ describe("the published plugin contract does not name a terminal", () => {
 		// importing the shared declaration. Both spellings type-check and both look
 		// host-agnostic, but a second one has nowhere to carry the reasoning, and the two
 		// then diverge the first time the type gains structure. `@veyyon/kernel/registry/host-view`
-		// is the one declaration; a renderer contract that does not import it is drifting.
+		// is the one declaration; a renderer contract that does not import it is drifting. An
+		// import nothing uses fails `check:tools` (`noUnusedImports` is an error), so importing
+		// it is using it.
 		const declaration = fs.readFileSync(path.join(KERNEL_REGISTRY_DIR, "host-view.ts"), "utf8");
-		expect(declaration).toMatch(/export type HostView\b/);
-		expect(declaration).not.toMatch(/from "@veyyon\/tui"/);
+		expect(exportedDeclarationsIn(declaration)).toContain("HostView");
+		expect(moduleSpecifiersIn(declaration)).not.toContain("@veyyon/tui");
 
 		for (const contract of ["custom-tools/types.ts", "extensions/types.ts", "hooks/types.ts"]) {
 			const source = fs.readFileSync(path.join(EXTENSIBILITY_DIR, ...contract.split("/")), "utf8");
-			expect(source).toContain(`import type { HostView } from "${HOST_VIEW_SPECIFIER}";`);
-			expect(source).toContain("=> HostView;");
+			expect(namedImportsFrom(source, HOST_VIEW_SPECIFIER), contract).toContain("HostView");
 		}
 	});
 

@@ -31,6 +31,7 @@ import {
 	setProfile,
 } from "@veyyon/utils/dirs";
 import { Snowflake } from "@veyyon/utils/snowflake";
+import { stringConstantsIn } from "@veyyon/utils/source-declarations";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "./helpers/isolated-config-root";
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -593,7 +594,9 @@ describe("profile path segment ownership", () => {
 		const dirsSource = await fs.readFile(path.join(import.meta.dir, "..", "src", "dirs.ts"), "utf-8");
 		const literals = dirsSource.match(/"profiles"/g) ?? [];
 		expect(literals).toHaveLength(1);
-		expect(dirsSource).toContain('export const PROFILES_DIR_NAME = "profiles";');
+		expect(stringConstantsIn(dirsSource).filter(constant => constant.value === "profiles")).toEqual([
+			{ name: "PROFILES_DIR_NAME", value: "profiles", exported: true },
+		]);
 	});
 
 	/**

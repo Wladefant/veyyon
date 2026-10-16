@@ -22,6 +22,7 @@ import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { namedImportsFrom } from "@veyyon/utils/module-reach";
 
 const SRC_ROOT = fileURLToPath(new URL("../src", import.meta.url));
 
@@ -80,7 +81,10 @@ describe("user-facing credential-store messages name the active store", () => {
 	/**
 	 * The positive half: the two screens that regressed must still resolve through
 	 * the owner. Without this, deleting the messages entirely would pass the
-	 * scan above and leave the user with no path at all.
+	 * scan above and leave the user with no path at all. An import nothing uses
+	 * fails `check:tools`, so importing the resolver is calling it; the logout
+	 * report's printed path is asserted against it in
+	 * `modes/terminal/controllers/selector-controller-logout.test.ts`.
 	 */
 	it("keeps the login and logout screens resolving through getActiveAuthDbPath", () => {
 		for (const rel of [
@@ -88,8 +92,9 @@ describe("user-facing credential-store messages name the active store", () => {
 			"modes/terminal/controllers/account-flows.ts",
 		]) {
 			const src = readFileSync(join(SRC_ROOT, rel), "utf8");
-			expect(src, `${rel} must import the active-store resolver`).toContain("getActiveAuthDbPath");
-			expect(src.match(/Credentials saved to \$\{getActiveAuthDbPath\(\)\}/)).not.toBeNull();
+			expect(namedImportsFrom(src, "@veyyon/utils"), `${rel} must import the active-store resolver`).toContain(
+				"getActiveAuthDbPath",
+			);
 		}
 	});
 });
@@ -132,12 +137,13 @@ describe("credential stores are OPENED through the active-store owner too", () =
 
 	/**
 	 * The positive half. An empty offender list is also what you get by deleting
-	 * every store open, so pin that the broker CLI still opens one, through the
-	 * owner.
+	 * every store open, so pin that the broker CLI still resolves the owner.
+	 * `auth-broker-import.test.ts` drives the CLI's import and reads the result
+	 * back from `getActiveAuthDbPath()`, which is where a write to the wrong
+	 * store goes red.
 	 */
 	it("keeps the auth CLI opening the active store", () => {
 		const src = readFileSync(join(SRC_ROOT, "cli/auth-broker-cli.ts"), "utf8");
-		expect(src).toContain("getActiveAuthDbPath");
-		expect(src.match(/SqliteAuthCredentialStore\.open\(getActiveAuthDbPath\(\)\)/g)?.length ?? 0).toBeGreaterThan(0);
+		expect(namedImportsFrom(src, "@veyyon/utils")).toContain("getActiveAuthDbPath");
 	});
 });

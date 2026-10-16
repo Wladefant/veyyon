@@ -21,6 +21,7 @@
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { AskTool } from "@veyyon/coding-agent/tools/agent/ask";
 import {
 	ASK_CHAT_OPTION_LABEL,
 	ASK_NEXT_OPTION_LABEL,
@@ -30,6 +31,8 @@ import {
 } from "@veyyon/coding-agent/tools/agent/ask-option-labels";
 import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 import { RECOMMENDED_SUFFIX, stripRecommendedSuffix, withRecommendedSuffix } from "@veyyon/wire";
+import { type } from "arktype";
+import { makeToolSession } from "../helpers/tool-session";
 
 const SRC = path.resolve(import.meta.dir, "../../src");
 const OWNER_REL = "tools/agent/ask-option-labels.ts";
@@ -194,14 +197,22 @@ describe("the ask option labels have one owner", () => {
 	});
 
 	/**
-	 * The validator and the renderers now read one declaration. Asserted structurally because the consequence is
-	 * invisible at runtime: `tools/agent/ask.ts` rejects a question whose options collide with a reserved label, and
-	 * while that check read its own copy it could have been rejecting a string no UI ever rendered.
+	 * The validator and the renderers read one declaration: the ask schema rejects a question whose option collides
+	 * with each label the owner reserves, and accepts an ordinary one. While the check read its own copy it could
+	 * have been rejecting a string no UI ever rendered. A private copy equal to the owner's today is not caught; it
+	 * fails here the moment the owner's list changes without it.
 	 */
-	it("has the question validator using the shared predicate", async () => {
-		const ask = await Bun.file(path.join(SRC, "tools/agent/ask.ts")).text();
-		expect(ask).toContain("isReservedAskOptionLabel(option.label)");
-		expect(ask).not.toContain("RESERVED_OPTION_LABELS[option.label]");
+	it("has the question validator rejecting every reserved label, and only those", () => {
+		const parameters = new AskTool(makeToolSession()).parameters;
+		const askWithOption = (label: string) =>
+			parameters({ questions: [{ id: "pick", question: "Which one?", options: [{ label }] }] });
+
+		for (const label of RESERVED_ASK_OPTION_LABELS) {
+			const parsed = askWithOption(label);
+			expect(parsed instanceof type.errors, label).toBe(true);
+			if (parsed instanceof type.errors) expect(parsed.summary).toContain(label);
+		}
+		expect(askWithOption("Keep the current layout") instanceof type.errors).toBe(false);
 	});
 
 	/**
