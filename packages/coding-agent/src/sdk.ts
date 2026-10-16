@@ -385,7 +385,6 @@ class SessionStartup {
 	#customCommands!: LoadedCustomCommand[];
 	#extensionRunner!: ExtensionRunner;
 	#toolContextStore!: ToolContextStore;
-	/** Installs the host's UI on the discovered custom tools' factory-scoped API. */
 	#setCustomToolUIContext!: SessionCustomTools["setUIContext"];
 	#registeredTools!: RegisteredTool[];
 	#sdkTools!: RegisteredTool[];
