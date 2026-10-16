@@ -1182,7 +1182,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 	try {
 		const parsed = JSON.parse(text) as unknown;
 		if (isRecord(parsed)) {
-			return parsed as Record<string, unknown>;
+			return parsed;
 		}
 	} catch {
 		const match = text.match(/\{[\s\S]*\}/);
@@ -1190,7 +1190,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 		try {
 			const parsed = JSON.parse(match[0]) as unknown;
 			if (isRecord(parsed)) {
-				return parsed as Record<string, unknown>;
+				return parsed;
 			}
 		} catch {
 			return undefined;
@@ -1219,17 +1219,16 @@ function parseConsolidationOutputSchema(value: Record<string, unknown>): Consoli
 	const skills: ConsolidationSkillSchema[] = [];
 	for (const item of value.skills) {
 		if (!isRecord(item)) return undefined;
-		const data = item as Record<string, unknown>;
-		if (!hasExactKeys(data, ["name", "content", "scripts", "templates", "examples"], true)) return undefined;
-		if (typeof data.name !== "string") return undefined;
-		if (!(typeof data.content === "string" || data.content === undefined)) return undefined;
-		const scripts = parseConsolidationSkillFileArray(data.scripts);
-		const templates = parseConsolidationSkillFileArray(data.templates);
-		const examples = parseConsolidationSkillFileArray(data.examples);
+		if (!hasExactKeys(item, ["name", "content", "scripts", "templates", "examples"], true)) return undefined;
+		if (typeof item.name !== "string") return undefined;
+		if (!(typeof item.content === "string" || item.content === undefined)) return undefined;
+		const scripts = parseConsolidationSkillFileArray(item.scripts);
+		const templates = parseConsolidationSkillFileArray(item.templates);
+		const examples = parseConsolidationSkillFileArray(item.examples);
 		if (!scripts || !templates || !examples) return undefined;
 		skills.push({
-			name: data.name,
-			content: data.content,
+			name: item.name,
+			content: item.content,
 			scripts,
 			templates,
 			examples,
@@ -1289,10 +1288,9 @@ function parseConsolidationSkillFileArray(value: unknown): ConsolidationSkillFil
 	const files: ConsolidationSkillFileSchema[] = [];
 	for (const item of value) {
 		if (!isRecord(item)) return undefined;
-		const data = item as Record<string, unknown>;
-		if (!hasExactKeys(data, ["path", "content"])) return undefined;
-		if (typeof data.path !== "string" || typeof data.content !== "string") return undefined;
-		files.push({ path: data.path, content: data.content });
+		if (!hasExactKeys(item, ["path", "content"])) return undefined;
+		if (typeof item.path !== "string" || typeof item.content !== "string") return undefined;
+		files.push({ path: item.path, content: item.content });
 	}
 	return files;
 }
