@@ -8,6 +8,7 @@
 
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
 - Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
+- Backup checksums use the shared `sha256Hex16` helper instead of a private copy; no user-visible change.
 
 ### Fixed
 
