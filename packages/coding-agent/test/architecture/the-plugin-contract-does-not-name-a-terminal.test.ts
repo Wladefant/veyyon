@@ -175,17 +175,12 @@ describe("the published plugin contract does not name a terminal", () => {
 			})
 			.sort();
 
-		// All four are in the capability module, and none in a context interface: the widget
-		// factory alias, the two `custom(factory)` forms that hand a live `TUI` to the caller,
-		// and the editor factory. Screen takeover is terminal by construction, and a host that
-		// is not a terminal offers no `ui.terminal` at all rather than declaring these and
-		// leaving the bodies empty.
-		expect(returning).toEqual([
-			"terminal-capability.ts",
-			"terminal-capability.ts",
-			"terminal-capability.ts",
-			"terminal-capability.ts",
-		]);
+		// All three are in the capability module, and none in a context interface: the widget
+		// factory alias, the one `custom(factory)` form that hands a live `TUI` to the caller
+		// (hooks and extensions share it), and the editor factory. Screen takeover is terminal
+		// by construction, and a host that is not a terminal offers no `ui.terminal` at all
+		// rather than declaring these and leaving the bodies empty.
+		expect(returning).toEqual(["terminal-capability.ts", "terminal-capability.ts", "terminal-capability.ts"]);
 	});
 
 	it("keeps the screen-takeover capability off every context a host must implement", () => {
