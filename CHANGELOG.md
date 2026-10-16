@@ -53,6 +53,7 @@
 - The `browser` tool no longer scans every evaluated script for a `sourceURL` suffix the pinned puppeteer never appends; no user-visible change.
 - The `browser` tool description (1,815 estimated tokens, from 1,440) states that run code executes outside the page, that raw `page.evaluate` cannot see page globals, that a click never presses a cover and that refs chain, that a state file loads only into a headless tab, that iframe content nests in a snapshot with `f1e3` refs, which selector forms act, what `profile` and `visible` do, and that a `Challenge:` line needing a person is handed off rather than solved, and asks the model to act on an open's snapshot without reading the page again, to act and read back in one run, and to act through `tab` actions instead of probing hit targets or page scripts first.
 - The retry recovery helpers moved from `session/runtime/retry-runtime.ts` to `session/failed-turn.ts`; no user-visible change.
+- Session switching and its rollback moved from `session/agent-session.ts` to the `session/runtime/session-switch.ts` collaborator; no user-visible change.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
 
@@ -64,6 +65,8 @@
 
 - A provider error that ends a turn is logged at warn with the provider's message, model and error classification, and a failure's retry classification is logged once instead of once per recovery check ([#935](https://github.com/santhreal/veyyon/issues/935)).
 - A headless `browser` launch reads the binary's product and version again after a `--version` probe that failed or timed out, instead of launching every later tab of that binary without a matching `--user-agent`, which named itself `HeadlessChrome`.
+- A credential-free web search that returns before its soft or hard deadline cancels the deadline's timer instead of holding the embedding process open until the deadline passes.
+- Disposing an advisor during the one-second delay before it retries a failed review ends the delay instead of holding a timer, and the embedding process, until it runs out.
 - A web search cancelled while its headless-browser fallback is opening a page closes that page once it opens instead of leaving it open in the shared browser, and a search cancelled during the fallback's retry delay ends at once instead of after the delay.
 - When several sessions start the `launch` process broker for one directory at once, one broker runs instead of a second one that read the first one's lease before its claim was written and took it as stale.
 - With `browser.naturalInput` on, a click whose `delay` an op deadline or abort cuts short releases the button at once instead of holding it for the rest of the `delay`, which failed the tab's next press with `'left' is already pressed`.
