@@ -109,28 +109,48 @@
 - The process agent lifecycle manager is rebuilt when the process agent registry is replaced, so it never terminates or parks agents through a registry nothing reads; no user-visible change.
 - Deleted tool-renderer, output-notice, image and LSP helpers that nothing called (`renderCollapsedOutputLines`, `formatMeta`, `formatEmptyMessage`, `formatTitle`, the rendered-string memo, `appendParseErrorsBulletList`, the styled truncation notices, `SUPPORTED_INPUT_IMAGE_MIME_TYPES`, `getServerForFile`, `hasCapability`); no user-visible change.
 - The benchmark CLIs share one time-to-first-token predicate, the guided-goal turn and the memory passes share one per-attempt credential refresh, the model registry and the sign-in list share one reader of `disabledProviders`, and the legacy plugin loader resolves package `imports` and `exports` targets through one function; no user-visible change.
+- Removed the parameters autoresearch branch handling and the release installer accepted and never read; `veyyon update --force` still reinstalls the running version, with no user-visible change.
+- The auth broker command imports the credential store from `@veyyon/ai/auth-storage-sqlite`, with no user-visible change.
+- Modules import the timeout, whitespace, advisor transcript name and slash-command category helpers from their owning modules; the `utils/fetch-timeout` re-export module is removed, with no user-visible change.
+- `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved Anthropic tool `input_schema` normalization and the strict-tool plan out of `providers/anthropic.ts` into `providers/anthropic-tool-schema.ts`, with no user-visible change.
 - Moved the Cursor native exec result builders (read, write, delete, shell, ls, grep, diagnostics) out of `providers/cursor.ts` into `providers/cursor-exec-results.ts`, with no user-visible change.
 - Moved the Codex WebSocket transport out of `providers/openai-codex-responses.ts` into `providers/openai-codex/websocket.ts`, and the turn-state headers and progress-event check both transports share into `providers/openai-codex/wire.ts`, with no user-visible change.
+- Removed the GitLab Duo Workflow inline-flow predicate that always held, the unread `inlineFlow` start-metadata option, and the user prompt threaded into workflow creation only to be discarded, with no user-visible change.
+- Removed the AWS region and GitLab Duo model parameters that credential and namespace resolution accepted and never read, with no user-visible change.
+- Moved the GitLab Duo Workflow goal transcript and system-slot rendering out of `providers/gitlab-duo-workflow.ts` into `providers/gitlab-duo-workflow/goal.ts`, and socket frame, checkpoint and tool-action reading into `providers/gitlab-duo-workflow/frames.ts`, with no user-visible change.
+- Moved the Responses stream decoder and the per-block accumulators it shares with the Codex decoder out of `providers/openai-shared.ts` into `providers/openai-responses-stream.ts`, with no user-visible change.
 - OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
+- The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
 - A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
 - `declareSettings` rejects a table in which one setting path is the parent of another, since one config key holds a value or a group of settings, not both.
 - `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
+- Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
+- Backup checksums use the shared `sha256Hex16` helper instead of a private copy; no user-visible change.
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
 
 ### Removed
 
 - The headless browser no longer returns a made-up font list from `queryLocalFonts`.
+- Removed the `tinyModelClient` alias of `tinyTitleClient` and the `OPENROUTER_BASE_URL` alias in the Perplexity search provider; no user-visible change.
 - Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.
+- Removed the threshold and `estimateTokens` re-exports from `@veyyon/agent-core/compaction/compaction`; import them from `@veyyon/agent-core/compaction/threshold`, `@veyyon/agent-core/compaction/token-estimate` or `@veyyon/agent-core/compaction`, which still exports all of them.
+- Removed the `splitReadSelector` and `stripReadSelector` re-exports from `@veyyon/agent-core/compaction/utils` and the legacy provider-native re-exports from `@veyyon/agent-core/compaction/remote-summarizer`; `@veyyon/agent-core/compaction` and the package root still export all four.
 - Removed the unused `isCursorTokenExpiringSoon`, `configuredProviderMaxInFlightRequests` and `mapToAnthropicToolChoice` exports and the `AnthropicToolChoice` type; `mapAnthropicToolChoice` in `stream.ts` is the Anthropic tool-choice mapping.
+- Removed the `SqliteAuthCredentialStore`, `isSqliteBusyError`, `isRefreshFailureDisableCause` and `OAUTH_REFRESH_FAILURE_DISABLE_PREFIX` re-exports from `@veyyon/ai/auth-storage`; import them from `@veyyon/ai/auth-storage-sqlite`, `@veyyon/ai/auth-credential-rows` or the package root, which still exports all four.
+- Removed the `getEnvApiKey`, `getEnvApiKeyName`, `listProvidersWithEnvKey` and `configureProviderMaxInFlightRequests` re-exports from `@veyyon/ai/stream`; import them from `@veyyon/ai/env-api-key`, `@veyyon/ai/provider-inflight-limits` or the package root, which still exports all four.
+- Removed the `CURSOR_API_URL` alias from `providers/cursor`; import `CURSOR_API_ENDPOINT` from `@veyyon/catalog/provider-endpoints`.
+- Removed the `escapeLike`, `sqlPlaceholders` and `tableExists` re-exports from `util/sqlite`; import them from `@veyyon/utils/sqlite`.
 - Removed the unused `deferredTransaction`, `REV_CATEGORY`, `REV_PHRASE`, `VEC_TYPE`, `vecSearch`, `fastembedCacheDir`, `modelCacheDir`, `HOST_LLM_TIMEOUT_SECONDS` and no-op `resetRecoveryForTests` exports; loading `core/binary-vectors` no longer reads `MNEMOPI_VEC_TYPE` at import time.
+- Removed the `setEmbeddingProvider`, `resetEmbeddingStateForTests`, `setLocalModelInitializerForTests`, `aaakEncode` and `containsSpacelessCjk` aliases, the duplicate `resetModuleStateForTests`, and the `beam/helpers` re-exports of the binary-vector, regex and id helpers; use `setEmbeddingProviderForTests`, `resetEmbeddingProviderForTests`, `setLocalModelInitializer`, `encode`, `hasCjk` and `resetMemoryForTests`.
 - Removed the unused `easeInCubic` easing and `getHangulCompatibilityJamoWidth` getter.
+- Removed the `stackoverflowDeclaration` alias; import `stackOverflowDeclaration`.
 
 ### Fixed
 
@@ -201,6 +221,7 @@
 - A plan whose variant names reduce to one directory name is refused, naming both variants.
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
+- Sleep consolidation compacts "complete", "completed" and "working" only as whole words, so "incomplete" no longer becomes "inDONE" and "completed" no longer becomes "DONEd".
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
