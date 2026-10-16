@@ -114,6 +114,8 @@ export class Loader extends Text {
 	}
 
 	start() {
+		// A second start replaces the running timer; leaving it armed orphans a timer `stop()` cannot reach.
+		this.stop();
 		this.#lastSpinnerTick = performance.now();
 		this.#updateDisplay();
 		const intervalMs = this.messageColorFn.animated === true ? RENDER_INTERVAL_MS : SPINNER_ADVANCE_MS;
