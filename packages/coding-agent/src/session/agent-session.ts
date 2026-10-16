@@ -5178,10 +5178,13 @@ export class AgentSession {
 
 		// Get command context from extension runner (includes session control methods)
 		const baseCtx = this.#createCommandContext();
-		const ctx = {
+		const ctx: HookCommandContext = {
 			...baseCtx,
 			hasQueuedMessages: baseCtx.hasPendingMessages,
-		} as unknown as HookCommandContext;
+			// Optional on the extension context, required on the hook one: a session built without an
+			// extension runner has no runner transform, and the session's own is the same boundary.
+			obfuscateProviderText: baseCtx.obfuscateProviderText ?? (text => this.obfuscateProviderText(text)),
+		};
 
 		try {
 			const args = parseCommandArgs(argsString);

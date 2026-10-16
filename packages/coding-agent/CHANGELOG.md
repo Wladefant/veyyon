@@ -115,6 +115,8 @@
 - A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
 - A browser the `browser` tool spawned is killed on session end or a failed attach when the native addon cannot load, instead of being left running.
 - A foreground `bash` command that finishes before the auto-background threshold, a client-terminal command that exits before its timeout, an edit whose LSP diagnostics arrive inside the 500 ms inline wait, MCP startup, an LSP or DAP adapter shutdown, the GPU probe, the speech recorder's start wait, an async job delivery wait, the browser's selector hint, file-chooser and frame-draw waits, memory dispose and session shutdown clear their deadline timer when the work finishes, instead of leaving it armed for the rest of the window (up to 300 s for the bash threshold) and holding the process open.
+- A hook or custom command's `ctx.ui.terminal.custom` factory is typed `(tui, theme, keybindings, done)`, the arguments the terminal passes, and the `qna` and `handoff` hook examples call `done` instead of the keybindings manager.
+- A custom command on a session built without an extension runner redacts through `ctx.obfuscateProviderText` instead of throwing a TypeError.
 
 ### Removed
 
