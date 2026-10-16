@@ -209,7 +209,7 @@ describe("the wiring is performed where an AuthStorage is built", () => {
 	 * already reached these backends.
 	 */
 	it("is wired in the package barrel", () => {
-		expect(read("index.ts")).toContain('import "./usage/defaults";');
+		expect(moduleSpecifiersIn(read("index.ts"))).toContain("./usage/defaults");
 	});
 
 	/**
@@ -218,6 +218,6 @@ describe("the wiring is performed where an AuthStorage is built", () => {
 	 * a convention is what silently stops holding.
 	 */
 	it("is wired in the broker discovery path that bypasses the barrel", () => {
-		expect(read("auth-broker/discover.ts")).toContain('import "../usage/defaults";');
+		expect(moduleSpecifiersIn(read("auth-broker/discover.ts"))).toContain("../usage/defaults");
 	});
 });
