@@ -1,11 +1,49 @@
 /**
  * The shapes of a failed assistant turn the retry ladder reads before it re-sends the turn, switches
- * the model, or continues from the results already in context.
+ * the model, or continues from the results already in context, and how a retried failure is recorded.
  */
 
 import { type AgentMessage, toolResultNeverRan } from "@veyyon/agent-core";
-import type { AssistantMessage } from "@veyyon/ai";
+import type { AssistantMessage, AssistantRetryRecoveryKind } from "@veyyon/ai";
+import * as AIError from "@veyyon/ai/error";
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
+
+/** Whether the turn ended on the provider client's generic abort text rather than a reason of its own. */
+export function isGenericAbortSentinel(message: AssistantMessage): boolean {
+	return message.errorMessage === "Request was aborted" || message.errorMessage === "Request was aborted.";
+}
+
+/** What a retry switched to recover a failure classified as `id`. */
+export function retryRecoveryKind(
+	id: number,
+	switchedCredential: boolean,
+	switchedModel: boolean,
+	delayMs: number,
+): AssistantRetryRecoveryKind {
+	if (switchedCredential) return "credential";
+	if (switchedModel) return "model";
+	if (AIError.is(id, AIError.Flag.UsageLimit) && delayMs > 0) return "wait";
+	return "plain";
+}
+
+/** The note a retried failure is recorded with, such as `rate-limited; switched account; retried`. */
+export function retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimited: boolean): string {
+	const parts: string[] = [];
+	if (rateLimited) {
+		parts.push("rate-limited");
+	} else if (recovery === "plain") {
+		parts.push("error");
+	}
+	if (recovery === "credential") {
+		parts.push("switched account");
+	} else if (recovery === "model") {
+		parts.push("switched model");
+	} else if (recovery === "wait") {
+		parts.push("waited");
+	}
+	parts.push("retried");
+	return parts.join("; ");
+}
 
 /** Whether the turn ended on a content-classifier refusal or sensitivity stop. */
 export function isClassifierRefusal(message: AssistantMessage): boolean {

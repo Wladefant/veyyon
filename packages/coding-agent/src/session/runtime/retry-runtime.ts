@@ -8,7 +8,7 @@
  * {@link RetryHost}.
  */
 import { scheduler } from "node:timers/promises";
-import type { AssistantMessage, AssistantRetryRecovery, AssistantRetryRecoveryKind, Model } from "@veyyon/ai";
+import type { AssistantMessage, AssistantRetryRecovery, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
@@ -30,7 +30,14 @@ import type {
 	PendingRecoveredRetryError,
 	ScheduledAgentContinueOptions,
 } from "../agent-session-types";
-import { hasReplayUnsafeToolOutput, isClassifierRefusal, toolBatchCanContinue } from "../failed-turn";
+import {
+	hasReplayUnsafeToolOutput,
+	isClassifierRefusal,
+	isGenericAbortSentinel,
+	retryRecoveryKind,
+	retryRecoveryNote,
+	toolBatchCanContinue,
+} from "../failed-turn";
 import { THINKING_LOOP_REDIRECT_TYPE } from "../nudges";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../turn-persistence";
 import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
@@ -94,40 +101,6 @@ export interface RetryHost {
 	/** Persist an empty error turn the retry ladder is about to drop, once. */
 	persistLifecycleErrorMessage(message: AssistantMessage): Promise<void>;
 	resetSessionStopContinuationState(): void;
-}
-
-function isGenericAbortSentinel(message: AssistantMessage): boolean {
-	return message.errorMessage === "Request was aborted" || message.errorMessage === "Request was aborted.";
-}
-
-function retryRecoveryKind(
-	id: number,
-	switchedCredential: boolean,
-	switchedModel: boolean,
-	delayMs: number,
-): AssistantRetryRecoveryKind {
-	if (switchedCredential) return "credential";
-	if (switchedModel) return "model";
-	if (AIError.is(id, AIError.Flag.UsageLimit) && delayMs > 0) return "wait";
-	return "plain";
-}
-
-function retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimited: boolean): string {
-	const parts: string[] = [];
-	if (rateLimited) {
-		parts.push("rate-limited");
-	} else if (recovery === "plain") {
-		parts.push("error");
-	}
-	if (recovery === "credential") {
-		parts.push("switched account");
-	} else if (recovery === "model") {
-		parts.push("switched model");
-	} else if (recovery === "wait") {
-		parts.push("waited");
-	}
-	parts.push("retried");
-	return parts.join("; ");
 }
 
 export class RetryRuntime {
