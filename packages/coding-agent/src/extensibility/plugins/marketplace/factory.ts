@@ -1,5 +1,8 @@
 import { getInstalledPluginsRegistryPath, getPluginsCacheDir } from "@veyyon/kernel/loader/plugins/installed-registry";
-import { getMarketplacesCacheDir, getMarketplacesRegistryPath } from "@veyyon/kernel/loader/plugins/marketplace/registry";
+import {
+	getMarketplacesCacheDir,
+	getMarketplacesRegistryPath,
+} from "@veyyon/kernel/loader/plugins/marketplace/registry";
 import { clearPluginRootsAndCaches, resolveOrDefaultProjectRegistryPath } from "../../../discovery/helpers";
 import { MarketplaceManager } from "./manager";
 
