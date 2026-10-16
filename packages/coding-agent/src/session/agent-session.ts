@@ -4605,6 +4605,30 @@ export class AgentSession {
 	}
 
 	/**
+	 * The content of a text message carrying image attachments: the text, then the images normalized
+	 * for the active model. When the model is text-only, the hidden companion describing the images is
+	 * returned beside it; the image stays in the message itself.
+	 */
+	async #textWithImages(
+		text: string,
+		images: ImageContent[] | undefined,
+	): Promise<{
+		content: (TextContent | ImageContent)[];
+		images: ImageContent[] | undefined;
+		imageDescriptionNotice: CustomMessage | undefined;
+	}> {
+		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
+		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		if (!normalizedImages?.length) return { content, images: normalizedImages, imageDescriptionNotice: undefined };
+		content.push(...normalizedImages);
+		return {
+			content,
+			images: normalizedImages,
+			imageDescriptionNotice: await this.#buildImageDescriptionNotice(normalizedImages),
+		};
+	}
+
+	/**
 	 * Hand startup work to the session instead of awaiting it on the boot path.
 	 *
 	 * Chained, so several deferrals order the way they were handed over, and swallowed, so a failure
@@ -4722,17 +4746,11 @@ export class AgentSession {
 			!options?.synthetic && !hasPendingUserDirective ? this.#todo.eagerPrelude(expandedText) : undefined;
 		const eagerTaskPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTaskPrelude(expandedText) : undefined;
-		const normalizedImages = await normalizeModelContextImages(options?.images, { model: this.model });
-
-		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-		if (normalizedImages?.length) {
-			userContent.push(...normalizedImages);
-		}
-		// Text-only model + image attachment: describe via a vision model and inject the
-		// description as a hidden companion (the image stays in the visible user message).
-		const imageDescriptionNotice = normalizedImages?.length
-			? await this.#buildImageDescriptionNotice(normalizedImages)
-			: undefined;
+		const {
+			content: userContent,
+			images: normalizedImages,
+			imageDescriptionNotice,
+		} = await this.#textWithImages(expandedText, options?.images);
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		const message = options?.synthetic
@@ -5300,14 +5318,7 @@ export class AgentSession {
 		// #queueUserMessage (which clears advisor auto-resume suppression and
 		// enqueues as a user-attributed message) and place the developer message
 		// directly on the follow-up queue.
-		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-		if (normalizedImages?.length) {
-			content.push(...normalizedImages);
-		}
-		const imageDescriptionNotice = normalizedImages?.length
-			? await this.#buildImageDescriptionNotice(normalizedImages)
-			: undefined;
+		const { content, imageDescriptionNotice } = await this.#textWithImages(expandedText, images);
 		if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
 		this.agent.followUp({
 			role: "developer",
@@ -5327,16 +5338,7 @@ export class AgentSession {
 		// while streaming) is a deliberate resume; re-enable advisor auto-resume that
 		// a user interrupt suppressed.
 		this.#advisorRoster.allowAutoResume();
-		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (normalizedImages?.length) {
-			content.push(...normalizedImages);
-		}
-		// Text-only model + image attachment: describe via a vision model and enqueue the
-		// description as a hidden companion immediately before the user message.
-		const imageDescriptionNotice = normalizedImages?.length
-			? await this.#buildImageDescriptionNotice(normalizedImages)
-			: undefined;
+		const { content, imageDescriptionNotice } = await this.#textWithImages(text, images);
 		if (mode === "followUp") {
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
 			this.agent.followUp({
