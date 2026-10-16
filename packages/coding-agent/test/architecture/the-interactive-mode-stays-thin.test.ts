@@ -58,12 +58,11 @@ const CONTROLLER_CEILING = 1000;
  * `selector-controller.ts` left on 2026-10-16 at 953 lines: the login, logout,
  * account card and reset flows moved to `account-flows.ts`, and the session
  * picker, resume and delete to `session-flows.ts`.
+ * `command-controller.ts` left on 2026-10-16 at 990 lines: the `/usage` and
+ * `/session` panels moved to `usage-report-view.ts` and `session-info-view.ts`,
+ * and `/memory` to `memory-command-controller.ts`.
  */
-const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = [
-	"command-controller.ts",
-	"event-controller.ts",
-	"input-controller.ts",
-];
+const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = ["event-controller.ts", "input-controller.ts"];
 
 function controllers(): string[] {
 	return typeScriptFiles(CONTROLLERS).filter(file => !file.endsWith(".test.ts"));

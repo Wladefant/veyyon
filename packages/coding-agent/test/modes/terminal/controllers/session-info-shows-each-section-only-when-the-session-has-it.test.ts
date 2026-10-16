@@ -13,6 +13,8 @@
  *  - the LSP section appears only with servers, each status in its colour and an error with its message;
  *  - the MCP section appears only with a manager, "None connected" without servers, and each server's tools.
  *
+ * Subject: `modes/terminal/controllers/session-info-view.ts`, driven through `CommandController.handleSessionCommand`.
+ *
  * Gap: provider detail fields beyond their presence are owned by `getProviderDetails` and asserted there.
  */
 import { describe, expect, it } from "bun:test";

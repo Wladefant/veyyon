@@ -73,13 +73,19 @@ describe("an interactive session's static import graph", () => {
 			// Carved out of extension-ui-controller.ts, which loads with the session.
 			"hook-widgets.ts",
 			"input-controller.ts",
+			// Carved out of command-controller.ts; the Hindsight helpers it calls still load on the first `/memory mm`.
+			"memory-command-controller.ts",
 			"omfg-controller.ts",
 			"omfg-rule.ts",
 			"session-focus-controller.ts",
+			// Carved out of command-controller.ts, which loads with the session.
+			"session-info-view.ts",
 			"streaming-reveal.ts",
 			"tiny-title-download-row.ts",
 			"tool-args-reveal.ts",
 			"transcript-composer.ts",
+			// Carved out of command-controller.ts, which loads with the session.
+			"usage-report-view.ts",
 			"voice-controller.ts",
 			"welcome-controller.ts",
 			"working-loader.ts",

@@ -85,8 +85,12 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	// Carved out of selector-controller.ts, keeping the imports it already used.
 	"controllers/session-flows.ts",
 	"controllers/session-focus-controller.ts",
+	// Carved out of command-controller.ts, keeping the imports it already used.
+	"controllers/session-info-view.ts",
 	"controllers/tan-command-controller.ts",
 	"controllers/transcript-composer.ts",
+	// Carved out of command-controller.ts, keeping the imports it already used.
+	"controllers/usage-report-view.ts",
 	"image-references.ts",
 	"interactive-mode.ts",
 	"setup-wizard/scenes/sign-in.ts",

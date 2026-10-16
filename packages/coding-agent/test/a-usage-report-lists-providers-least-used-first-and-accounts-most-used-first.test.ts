@@ -3,6 +3,8 @@
  * (`renderUsageReports`). The renderer groups the reports twice, by provider and then by limit title and
  * window, and both groupings set an order a reader relies on to pick the account to switch to.
  *
+ * Subject: `modes/terminal/controllers/usage-report-view.ts`, driven through `renderUsageReports`.
+ *
  * Contracts:
  *  - providers appear least used first, ties ordered by provider id;
  *  - a provider's limits of one title and window form one row, its accounts ordered most used first, a limit
@@ -22,7 +24,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { UsageLimit, UsageReport } from "@veyyon/ai";
 import type { OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
-import { renderUsageReports } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
+import { renderUsageReports } from "@veyyon/coding-agent/modes/terminal/controllers/usage-report-view";
 import { formatProviderName } from "@veyyon/coding-agent/session/account-format";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { formatDuration } from "@veyyon/utils";
