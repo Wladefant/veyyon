@@ -143,6 +143,8 @@ export class RetryRuntime {
 	#release: (() => void) | undefined = undefined;
 	readonly #fallback: RetryFallback;
 	#pendingRecoveredErrors: PendingRecoveredRetryError[] = [];
+	/** The classification each failed message last logged: one failure is classified at each recovery check, and logged once. */
+	readonly #loggedClassification = new WeakMap<AssistantMessage, string>();
 
 	constructor(session: RetrySession, host: RetryHost) {
 		this.#session = session;
@@ -203,7 +205,13 @@ export class RetryRuntime {
 		// The rules that decided it, not only what it decided: a retry nobody expected, or a failure
 		// that surfaced when a retry was due, is diagnosed from this line instead of by re-running the
 		// classifier's conditions by hand against the provider's sentence.
-		logger.debug("retry classification", { errorId: id, kind: AIError.stringify(id), rules: [...new Set(trace)] });
+		const kind = AIError.stringify(id);
+		const rules = [...new Set(trace)];
+		const logged = `${kind}|${rules.join(",")}`;
+		if (this.#loggedClassification.get(message) !== logged) {
+			this.#loggedClassification.set(message, logged);
+			logger.debug("retry classification", { errorId: id, kind, rules });
+		}
 		message.errorId = id;
 		return id;
 	}
@@ -430,7 +438,19 @@ export class RetryRuntime {
 		// Retry was refused because the batch cannot be resent, not because the failure was final.
 		// The turn now in context IS sendable, so continue it rather than leaving the session parked
 		// mid-batch.
-		return this.#continueAfterUnreplayableBatch(msg);
+		if (await this.#continueAfterUnreplayableBatch(msg)) return true;
+		// The provider's own words are the only record of why the request failed; the session file holds
+		// them, and without this line the log held only the classification.
+		if (msg.stopReason === "error") {
+			logger.warn("Provider error ended the turn", {
+				provider: msg.provider,
+				model: msg.model,
+				status: msg.errorStatus,
+				kind: msg.errorId === undefined ? undefined : AIError.stringify(msg.errorId),
+				error: msg.errorMessage,
+			});
+		}
+		return false;
 	}
 
 	/**
