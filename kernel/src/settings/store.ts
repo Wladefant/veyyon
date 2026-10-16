@@ -40,6 +40,7 @@ import {
 	getDefault,
 	getInvalidValue,
 	getType,
+	hasDeclaredKind,
 	isUnsetNumberPath,
 	type SettingPath,
 	type SettingValue,
@@ -436,8 +437,8 @@ export class SettingsStore {
 
 	/** Dotted-key problems already reported, so each one is said once per process rather than once per read. */
 	#reportedDottedKeyProblems = new Set<string>();
-	/** Enum settings already reported as holding a value outside their declared set, one warning per path. */
-	#reportedInvalidEnums = new Set<SettingPath>();
+	/** Settings already reported as holding a value the schema does not declare, one warning per path. */
+	#reportedInvalidValues = new Set<SettingPath>();
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
@@ -527,29 +528,46 @@ export class SettingsStore {
 	}
 
 	/**
-	 * `value` as the setting reads it: unchanged, unless `path` is an enum and `value` is not one of
-	 * its members, in which case the declared `invalid` member (the default when none is declared),
-	 * reported once per path.
+	 * `value` as the setting reads it: unchanged when the schema declares it, else a value the schema
+	 * names, reported once per path. An enum outside its members reads as its declared `invalid`
+	 * member (the default when none is declared); any other setting whose value is not of its
+	 * declared kind reads as its default.
 	 *
-	 * A value written into a config file by hand reaches here unchecked, and every consumer compares
-	 * it against its own literals, so an out-of-set value takes whichever branch a consumer's `else`
-	 * happens to be. Answering with a declared member here gives every consumer a value the schema
-	 * names. A safety control declares its strictest member as `invalid`, so a typo cannot loosen
-	 * it. The load-time report states the file to edit; this one states the value in use.
+	 * A value written into a config file by hand reaches here unchecked, and every consumer reads it
+	 * as the type the declaration promises: `compaction.enabled: "no"` is a truthy string, and an empty
+	 * `disabledExtensions:` is `null` to a reader that calls `.slice()`. An enum consumer compares it
+	 * against its own literals, so an out-of-set value takes whichever branch its `else` happens to
+	 * be. A safety control declares its strictest member as `invalid`, so a typo cannot loosen it.
+	 * The load-time report states the file to edit; this one states the value in use.
 	 */
 	#declaredValue<P extends SettingPath>(path: P, value: unknown): SettingValue<P> {
-		if (getType(path) !== "enum") return value as SettingValue<P>;
-		const member = enumMember(path, value);
-		if (member !== undefined) return member as SettingValue<P>;
-		const fallback = getInvalidValue(path);
-		if (!this.#reportedInvalidEnums.has(path)) {
-			this.#reportedInvalidEnums.add(path);
-			logger.warn("Settings: enum value is not one of its declared values; using its declared fallback", {
-				reason: describeSettingTypeMismatch(path, value),
+		if (getType(path) === "enum") {
+			const member = enumMember(path, value);
+			if (member !== undefined) return member as SettingValue<P>;
+			const fallback = getInvalidValue(path);
+			this.#reportInvalidValue(
+				path,
+				value,
 				fallback,
-			});
+				"Settings: enum value is not one of its declared values; using its declared fallback",
+			);
+			return fallback;
 		}
+		if (hasDeclaredKind(path, value)) return value as SettingValue<P>;
+		const fallback = getDefault(path);
+		this.#reportInvalidValue(
+			path,
+			value,
+			fallback,
+			"Settings: configured value is not of its declared kind; using its default",
+		);
 		return fallback;
+	}
+
+	#reportInvalidValue(path: SettingPath, value: unknown, fallback: unknown, message: string): void {
+		if (this.#reportedInvalidValues.has(path)) return;
+		this.#reportedInvalidValues.add(path);
+		logger.warn(message, { reason: describeSettingTypeMismatch(path, value), fallback });
 	}
 
 	/**
