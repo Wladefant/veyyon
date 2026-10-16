@@ -74,6 +74,10 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"controllers/account-flows.ts",
 	"controllers/btw-controller.ts",
 	"controllers/command-controller.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/composer-escape.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/composer-paste.ts",
 	// Drives the session's composer prediction side request at each turn end, as btw-controller drives /btw.
 	"controllers/composer-prediction-controller.ts",
 	"controllers/event-controller.ts",
@@ -81,12 +85,18 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"controllers/goal-mode-controller.ts",
 	"controllers/input-controller.ts",
 	"controllers/omfg-rule.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/prompt-submission.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/queued-submissions.ts",
 	"controllers/selector-controller.ts",
 	// Carved out of selector-controller.ts, keeping the imports it already used.
 	"controllers/session-flows.ts",
 	"controllers/session-focus-controller.ts",
 	// Carved out of command-controller.ts, keeping the imports it already used.
 	"controllers/session-info-view.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/submitted-input.ts",
 	"controllers/tan-command-controller.ts",
 	// Carved out of event-controller.ts, keeping the imports it already used.
 	"controllers/tool-call-cards.ts",

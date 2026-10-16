@@ -4,6 +4,8 @@
  * Custom queued chips now ride on the queued AgentMessage itself via
  * details.__queueChipText. The session derives pending display directly from
  * the agent-core queue; there is no separate display mirror to splice.
+ *
+ * Subject: `modes/terminal/controllers/queued-submissions.ts`, driven through `InputController`.
  */
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as path from "node:path";

@@ -65,8 +65,12 @@ const CONTROLLER_CEILING = 1000;
  * the compaction and retry loaders with the pinned turn error, the idle
  * compaction and recap, the IRC cards, the displaceable blocks and the speech
  * hooks moved into their own modules.
+ * `input-controller.ts` left on 2026-10-16 at 777 lines: paste intake moved to
+ * `composer-paste.ts`, the `/queue` batch and the dequeue to
+ * `queued-submissions.ts`, submission routing to `prompt-submission.ts`, and
+ * the Esc chain to `composer-escape.ts`.
  */
-const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = ["input-controller.ts"];
+const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = [];
 
 function controllers(): string[] {
 	return typeScriptFiles(CONTROLLERS).filter(file => !file.endsWith(".test.ts"));

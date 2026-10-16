@@ -200,7 +200,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/input-controller-followup-paste-expansion.test.ts": 2,
 	"packages/coding-agent/test/input-controller-goal-detail.test.ts": 5,
 	"packages/coding-agent/test/input-controller-keybindings.test.ts": 33,
-	"packages/coding-agent/test/input-controller-large-paste.test.ts": 9,
+	"packages/coding-agent/test/input-controller-large-paste.test.ts": 6,
 	"packages/coding-agent/test/input-controller-orphan-submit.test.ts": 9,
 	"packages/coding-agent/test/input-controller-python-prefix.test.ts": 10,
 	"packages/coding-agent/test/input-controller-skill-queue.test.ts": 15,

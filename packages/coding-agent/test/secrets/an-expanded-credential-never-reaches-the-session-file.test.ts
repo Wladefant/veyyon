@@ -342,7 +342,10 @@ describe("the redaction authority the rest of the app reads", () => {
 			"../../src/modes/terminal/controllers/event-controller.ts",
 			// The speech enhancer's provider-bound seam, carved out of event-controller.ts.
 			"../../src/modes/terminal/controllers/turn-speech.ts",
-			"../../src/modes/terminal/controllers/input-controller.ts",
+			// The prompt submission's provider-bound seam, carved out of input-controller.ts.
+			"../../src/modes/terminal/controllers/prompt-submission.ts",
+			"../../src/modes/terminal/controllers/extension-ui-controller.ts",
+			"../../src/modes/terminal/controllers/mcp-smithery-commands.ts",
 			"../../src/memory/hindsight/state.ts",
 			"../../src/memory/mnemopi/backend.ts",
 		];

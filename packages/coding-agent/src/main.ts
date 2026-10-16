@@ -1378,7 +1378,7 @@ export async function buildSessionOptions(
 	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt);
 	// Replan-driven title refresh resolves the override from this same field on
 	// `AgentSession`, so threading it through `CreateAgentSessionOptions` keeps
-	// both first-input titling (`input-controller.ts`) and replan refresh
+	// both first-input titling (`prompt-submission.ts`) and replan refresh
 	// (`AgentSession.#refreshTitleAfterReplan`) on one source of truth.
 	if (titleSystemPrompt) {
 		options.titleSystemPrompt = titleSystemPrompt;

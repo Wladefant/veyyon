@@ -62,6 +62,10 @@ describe("an interactive session's static import graph", () => {
 			"collab-guest-dialogs.ts",
 			"command-controller-shared.ts",
 			"command-controller.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"composer-escape.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"composer-paste.ts",
 			// Asked for a composer prediction at the end of every turn, before any command runs.
 			"composer-prediction-controller.ts",
 			// Carved out of extension-ui-controller.ts, which loads with the session.
@@ -83,10 +87,16 @@ describe("an interactive session's static import graph", () => {
 			"memory-command-controller.ts",
 			"omfg-controller.ts",
 			"omfg-rule.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"prompt-submission.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"queued-submissions.ts",
 			"session-focus-controller.ts",
 			// Carved out of command-controller.ts, which loads with the session.
 			"session-info-view.ts",
 			"streaming-reveal.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"submitted-input.ts",
 			"tiny-title-download-row.ts",
 			"tool-args-reveal.ts",
 			// Carved out of event-controller.ts, which loads with the session.

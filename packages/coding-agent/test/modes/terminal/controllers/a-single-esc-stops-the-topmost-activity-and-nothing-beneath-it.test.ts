@@ -13,6 +13,8 @@
  * WHAT THIS SUITE DOES NOT CATCH. A second press: the draft discard and the double-Esc action are
  * defended by the Esc-Esc suites. A side-channel panel that declines its Esc, and a pending
  * submission that cannot be cancelled and restores its queue, are defended there too.
+ *
+ * Subject: `modes/terminal/controllers/composer-escape.ts`, driven through `InputController`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";

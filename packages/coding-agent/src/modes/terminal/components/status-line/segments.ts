@@ -66,7 +66,7 @@ function thinkingGlyph(display: string): string {
  * "clear the line". That is how people got stuck in a view whose edge they could not see.
  *
  * `esc` is spelled literally, unlike every other chord in the TUI, because it is not a remappable
- * action: `input-controller.ts` handles the raw Esc key for focus exit, so there is no `KeyId` for
+ * action: `composer-escape.ts` handles the raw Esc key for focus exit, so there is no `KeyId` for
  * `keyHint` to resolve and nothing a user can rebind. If it ever becomes a binding, this must go
  * through `actionKeyHint`.
  */

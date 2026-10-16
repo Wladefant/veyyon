@@ -12,6 +12,9 @@
  *
  * The rows are the routes `InputController` exposes today; a route added to the controller without a row here
  * is not caught. A skill whose file fails to load fails before dispatch and is not exercised.
+ *
+ * Subject: `modes/terminal/controllers/prompt-submission.ts` and `modes/terminal/controllers/submitted-input.ts`,
+ * driven through `InputController`.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
