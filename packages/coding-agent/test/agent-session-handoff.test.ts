@@ -203,10 +203,10 @@ describe("AgentSession handoff", () => {
 			generationStarted.resolve();
 			return generated.promise;
 		});
-		// Rejects at once, so a regression reads as a call on this spy rather than a hung test.
-		const compactSpy = vi
-			.spyOn(compactionModule, "compact")
-			.mockRejectedValue(new Error("compaction ran for a transcript the handoff replaced"));
+		// Rejects at once, so a regression reads as an auto-compaction that started and failed rather than a hung test.
+		vi.spyOn(compactionModule, "compact").mockRejectedValue(
+			new Error("compaction ran for a transcript the handoff replaced"),
+		);
 
 		const handoff = session.handoff();
 		await generationStarted.promise;
@@ -233,8 +233,8 @@ describe("AgentSession handoff", () => {
 		await handoff;
 		await drainMaintenance();
 
-		expect(compactSpy).not.toHaveBeenCalled();
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
+		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 	});
 
 	/**
