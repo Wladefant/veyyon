@@ -150,6 +150,7 @@
 - `/mcp smithery-login` falls back to API-key entry after five minutes when a browser-login poll request stalls, instead of hanging.
 - The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
 - Fixed the `/tree` and `/branch` pickers cancelling themselves 100 ms after opening over an empty list, which also cancelled twice when dismissed inside that window; they now stay open on their empty state until dismissed.
+- The `!` command block draws every streamed output window instead of skipping any that arrive within 50 ms of the previous one, which left the last line before a quiet period undrawn and joined the lines on either side of a skipped window; the `!` and `%` blocks also no longer overflow the call stack on an output window of about a million lines.
 
 ### Removed
 

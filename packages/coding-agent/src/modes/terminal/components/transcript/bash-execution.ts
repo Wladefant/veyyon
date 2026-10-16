@@ -14,21 +14,16 @@ import {
 import {
 	buildExecutionFrame,
 	buildStatusFooter,
-	capExecutionOutputLines,
 	clampExecutionDisplayLine,
 	createCollapsedPreview,
 	EXECUTION_PREVIEW_LINES,
 	type ExecutionStatus,
 	resolveExecutionStatus,
+	StreamedOutputLines,
 } from "./execution-shared";
 
-// Minimum interval between processing incoming chunks for display (ms).
-// Chunks arriving faster than this are accumulated and processed in one batch.
-const CHUNK_THROTTLE_MS = 50;
-
 export class BashExecutionComponent extends Container {
-	#outputLines: string[] = [];
-	#droppedLineCount = 0;
+	#output = new StreamedOutputLines(clampLinesPreservingSixel);
 	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#signal?: string;
@@ -36,7 +31,6 @@ export class BashExecutionComponent extends Container {
 	#truncation?: TruncationMeta;
 	#expanded = false;
 	#displayDirty = false;
-	#chunkGate = false;
 	#contentContainer: Container;
 	#headerText: Text;
 
@@ -83,31 +77,8 @@ export class BashExecutionComponent extends Container {
 	}
 
 	appendOutput(chunk: string): void {
-		// During high-throughput output (e.g. seq 1 500M), processing every
-		// chunk would saturate the event loop. Instead, accept one chunk per
-		// throttle window and drop the rest — the OutputSink captures everything
-		// for the artifact, and setComplete() replaces with the final output.
-		if (this.#chunkGate) return;
-		this.#chunkGate = true;
-		setTimeout(() => {
-			this.#chunkGate = false;
-		}, CHUNK_THROTTLE_MS);
-
-		const incomingLines = chunk.split("\n");
-		if (this.#outputLines.length > 0 && incomingLines.length > 0) {
-			const lastIndex = this.#outputLines.length - 1;
-			const mergedLines = [`${this.#outputLines[lastIndex]}${incomingLines[0]}`, ...incomingLines.slice(1)];
-			const clampedMergedLines = clampLinesPreservingSixel(mergedLines);
-			this.#outputLines[lastIndex] = clampedMergedLines[0] ?? "";
-			this.#outputLines.push(...clampedMergedLines.slice(1));
-		} else {
-			this.#outputLines.push(...clampLinesPreservingSixel(incomingLines));
-		}
-
-		// Cap stored lines during streaming to avoid unbounded memory growth, and remember how many went, so the
-		// footer can say so instead of folding them into a hidden-line count that promises to reveal them.
-		this.#droppedLineCount += capExecutionOutputLines(this.#outputLines);
-
+		// Held until the next draw, so a burst of chunks costs one fold.
+		this.#output.push(chunk);
 		this.#displayDirty = true;
 	}
 
@@ -144,7 +115,7 @@ export class BashExecutionComponent extends Container {
 	}
 
 	#updateDisplay(): void {
-		const availableLines = this.#outputLines;
+		const availableLines = this.#output.lines();
 
 		// Apply preview truncation based on expanded state
 		const previewLogicalLines = availableLines.slice(-EXECUTION_PREVIEW_LINES);
@@ -185,7 +156,7 @@ export class BashExecutionComponent extends Container {
 				signal: this.#signal,
 				truncation: this.#truncation,
 				hiddenLineCount,
-				droppedLineCount: this.#droppedLineCount,
+				droppedLineCount: this.#output.dropped(),
 				suppressHiddenCount: hasSixelOutput,
 			});
 			if (footer) this.#contentContainer.addChild(footer);
@@ -194,16 +165,13 @@ export class BashExecutionComponent extends Container {
 
 	#setOutput(output: string): void {
 		const clean = sanitizeWithOptionalSixelPassthrough(output, sanitizeText);
-		this.#outputLines = clean ? clampLinesPreservingSixel(clean.split("\n")) : [];
 		// The authoritative output replaces whatever streaming kept, so nothing is missing any more.
-		this.#droppedLineCount = 0;
+		this.#output.replace(clean ? clampLinesPreservingSixel(clean.split("\n")) : []);
 	}
 
-	/**
-	 * Get the raw output for creating BashExecutionMessage.
-	 */
+	/** The output kept for display: the streamed tail while running, all of it once the final output arrives. */
 	getOutput(): string {
-		return this.#outputLines.join("\n");
+		return this.#output.lines().join("\n");
 	}
 
 	/**
