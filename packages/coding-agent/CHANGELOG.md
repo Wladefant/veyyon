@@ -57,6 +57,7 @@
 - The extension handler time budget and the lspmux liveness probe use `settleWithin` from `@veyyon/utils` instead of their own deadline racers; no user-visible change.
 - The ephemeral side-channel turn behind `/btw`, `/omfg`, the idle recap and the composer prediction moved from `session/agent-session.ts` to `session/agent-session-ephemeral-turn.ts`; no user-visible change.
 - The synchronous `!command` and environment config-value resolver moved from `config/model-registry.ts` to `config/resolve-config-value-sync.ts`; no user-visible change.
+- The goal-continuation todo context and the magic keyword notices moved from `session/agent-session.ts` to `session/agent-session-turn-notices.ts`; no user-visible change.
 
 ### Fixed
 

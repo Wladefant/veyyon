@@ -123,7 +123,6 @@ import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import {
 	errorMessage,
-	escapeXmlText,
 	getActiveAuthDbPath,
 	isEnoent,
 	logger,
@@ -199,9 +198,6 @@ import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-ur
 import { resolveMemoryBackend } from "../memory/backend";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
-import { containsOrchestrate } from "../modes/keywords/orchestrate-keyword";
-import { containsUltrathink } from "../modes/keywords/ultrathink-keyword";
-import { containsWorkflow } from "../modes/keywords/workflow-keyword";
 import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import type { PlanModeState } from "../plan-mode/state";
 import { goalsPrompts } from "../prompts/goals/rows";
@@ -237,12 +233,7 @@ import {
 import { theme } from "../theme/theme-binding";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { buildResolveReminderMessage } from "../tools/agent/resolve";
-import {
-	boundedTodoPreviewText,
-	prioritizeTodoItems,
-	TODO_ITEM_PREVIEW_WIDTH,
-	type TodoPhase,
-} from "../tools/agent/todo";
+import type { TodoPhase } from "../tools/agent/todo";
 import { validateApprovalModeSetting, validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
 import { TOOL } from "../tools/core/builtin-names";
@@ -277,6 +268,7 @@ import {
 	toRestoredQueuedMessage,
 } from "./agent-session-queue";
 import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
+import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
 import {
 	type AdvisorStats,
 	type AgentContinueSkipReason,
@@ -312,7 +304,6 @@ import {
 import { computeStoredMessagesTokens } from "./context-usage";
 import { initSessionCpuLimit, rekeySessionCpuLimit, sessionCpuLimit } from "./cpu-limit";
 import { isClassifierRefusal } from "./failed-turn";
-import { ORCHESTRATE_NOTICE, renderWorkflowNotice, ULTRATHINK_NOTICE } from "./magic-keyword-notices";
 import {
 	type CustomMessage,
 	type CustomMessagePayload,
@@ -367,8 +358,6 @@ import { UserExecutions } from "./runtime/user-executions";
 import { YieldTracker } from "./runtime/yield-tracker";
 import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
-import { incompleteTodoItems } from "./todo-reminder";
-import { parseTurnBudgetDirective } from "./turn-budget";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
 import type { VibeModeState } from "./vibe-runtime";
 
@@ -485,15 +474,6 @@ function sessionStopContinuationContext(result: SessionStopEventResult | undefin
 		return reason ?? additionalContext;
 	}
 	return undefined;
-}
-
-function sanitizeGoalTodoText(text: string): string {
-	return escapeXmlText(text)
-		.replace(/\r\n/g, "\\n")
-		.replace(/\r/g, "\\r")
-		.replace(/\n/g, "\\n")
-		.replace(/\t/g, "\\t")
-		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 }
 
 function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
@@ -694,40 +674,6 @@ async function sendModeContext(
 	);
 }
 
-function buildGoalTodoContext(session: AgentSession): string | undefined {
-	if (!session.settings.get("todo.enabled")) return undefined;
-	const activeToolNames = session.getActiveToolNames();
-	const canCallTodoTool = activeToolNames.includes(TOOL.todo);
-	const canDiscoverTodoTool =
-		!canCallTodoTool && session.getDiscoverableTools({ source: "builtin" }).some(tool => tool.name === TOOL.todo);
-	const canActivateTodoTool = canDiscoverTodoTool && activeToolNames.includes(TOOL.search_tool_bm25);
-	if (!canCallTodoTool && !canDiscoverTodoTool) return undefined;
-	const phases = session.getTodoPhases().filter(phase => phase.tasks.length > 0);
-	if (phases.length === 0) return undefined;
-
-	const tasks = phases.flatMap(phase => phase.tasks);
-	const closed = tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
-	const openItems = prioritizeTodoItems(incompleteTodoItems(phases));
-	const next = openItems[0];
-	const nextItem = next
-		? {
-				status: next.status,
-				text: sanitizeGoalTodoText(
-					boundedTodoPreviewText(`${next.content} (${next.phase})`, TODO_ITEM_PREVIEW_WIDTH),
-				),
-			}
-		: undefined;
-
-	return prompt.render(goalsPrompts["goals/goal-todo-context"].text, {
-		canCallTodoTool,
-		canActivateTodoTool,
-		closed: String(closed),
-		nextItem,
-		open: String(openItems.length),
-		total: String(tasks.length),
-	});
-}
-
 async function normalizeMessageContentImages(
 	content: string | (TextContent | ImageContent)[],
 	model: Model | undefined,
@@ -748,53 +694,6 @@ async function normalizeAgentMessageImages<T extends AgentMessage>(message: T, m
 	const normalized = await normalizeMessageContentImages(content as string | (TextContent | ImageContent)[], model);
 	if (normalized === content) return message;
 	return { ...message, content: normalized } as T;
-}
-
-function magicKeywordEnabled(settings: Settings, keyword: "orchestrate" | "ultrathink" | "workflow"): boolean {
-	return settings.get("magicKeywords.enabled") && settings.get(`magicKeywords.${keyword}`);
-}
-
-function createMagicKeywordNotices(session: AgentSession, text: string): CustomMessage[] {
-	const settings = session.settings;
-	const timestamp = Date.now();
-	const turnBudget = parseTurnBudgetDirective(settings, text);
-	session.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
-	const keywordNotices: CustomMessage[] = [];
-	if (magicKeywordEnabled(settings, "ultrathink") && containsUltrathink(text)) {
-		keywordNotices.push({
-			role: "custom",
-			customType: "ultrathink-notice",
-			content: ULTRATHINK_NOTICE,
-			display: false,
-			attribution: "user",
-			timestamp,
-		});
-	}
-	if (magicKeywordEnabled(settings, "orchestrate") && containsOrchestrate(text)) {
-		keywordNotices.push({
-			role: "custom",
-			customType: "orchestrate-notice",
-			content: ORCHESTRATE_NOTICE,
-			display: false,
-			attribution: "user",
-			timestamp,
-		});
-	}
-	if (
-		magicKeywordEnabled(settings, "workflow") &&
-		containsWorkflow(text) &&
-		session.getActiveToolNames().includes(TOOL.task)
-	) {
-		keywordNotices.push({
-			role: "custom",
-			customType: "workflow-notice",
-			content: renderWorkflowNotice({ taskBatch: settings.get("agent.batch") }),
-			display: false,
-			attribution: "user",
-			timestamp,
-		});
-	}
-	return keywordNotices;
 }
 
 async function saveBashOriginalArtifact(

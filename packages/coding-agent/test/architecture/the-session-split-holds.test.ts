@@ -76,8 +76,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-16 at 7834: the ephemeral side-channel turn and its history snapshot left
  * as the `agent-session-ephemeral-turn.ts` sibling (-160); it holds no instance state and reads
  * the session through a host interface.
+ * RE-MEASURED 2026-10-16 at 7733: the goal todo context and the magic keyword notices left as the
+ * `agent-session-turn-notices.ts` sibling (-101); it reads the session through a host interface
+ * the session satisfies structurally.
  */
-const RUNTIME_CEILING = 7_850;
+const RUNTIME_CEILING = 7_750;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -140,7 +143,7 @@ const FACADE_CEILING = 500;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
- * equality. A ninth sibling, or one renamed, fails here before it fails anywhere
+ * equality. A tenth sibling, or one renamed, fails here before it fails anywhere
  * useful. The compaction policy was one of them and is no longer here: it moved to
  * `@veyyon/kernel/session/agent-session-compaction-policy` with the session spine,
  * so a copy reappearing under `src/session/` is a drift this cell reports.
@@ -153,6 +156,7 @@ const SIBLINGS = [
 	"agent-session-provider-request.ts",
 	"agent-session-queue.ts",
 	"agent-session-retry-fallback.ts",
+	"agent-session-turn-notices.ts",
 	"agent-session-types.ts",
 ] as const;
 

@@ -201,4 +201,23 @@ describe("AgentSession magic keyword settings", () => {
 		expect(userIdx).toBeGreaterThanOrEqual(0);
 		expect(noticeIdx).toBeLessThan(userIdx);
 	});
+
+	/**
+	 * A budget directive in the prompt opens the turn's budget window on the session file's
+	 * manager, and the next prompt without one reopens it with no ceiling, so a budget never
+	 * outlives the turn it was written in.
+	 */
+	it("opens the turn budget a directive names and clears it on the next prompt", async () => {
+		const created = await createMagicKeywordSession(root);
+		session = created.session;
+		authStorage = created.authStorage;
+		created.settings.set("magicKeywords.turnBudget", true);
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		await session.prompt("use +500k! for this turn");
+		expect(session.sessionManager.getTurnBudget()).toEqual({ total: 500_000, spent: 0, hard: true });
+
+		await session.prompt("carry on");
+		expect(session.sessionManager.getTurnBudget()).toEqual({ total: null, spent: 0, hard: false });
+	});
 });
