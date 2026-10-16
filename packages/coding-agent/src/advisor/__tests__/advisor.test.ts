@@ -456,7 +456,7 @@ describe("advisor", () => {
 			const valid = tool.parameters({ note: "x", severity: "concern" });
 			expect(valid instanceof type.errors).toBe(false);
 
-			const invalid = tool.parameters({ note: 123, severity: "invalid" as any });
+			const invalid = tool.parameters({ note: 123, severity: "invalid" });
 			expect(invalid instanceof type.errors).toBe(true);
 		});
 	});
