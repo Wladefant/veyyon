@@ -12,7 +12,9 @@
  * WHAT IT DOES. Builds every tool the registry builds (`BUILTIN_TOOLS`, `HIDDEN_TOOLS`, the vibe-mode tools)
  * against a session that turns every feature flag on, reads each tool's wire schema for top-level string
  * arguments, and renders the real `ToolExecutionComponent` pending preview with a sentinel in each one, once
- * per value of each enum argument so an op-dependent preview is reached. For every argument the preview shows,
+ * per value of each enum argument so an op-dependent preview is reached. It builds the registry a second time
+ * with `agent.batch` off, because the task tool declares a different argument set in each mode and the batch
+ * one is the default. For every argument the preview shows,
  * it streams a value past the throttle window through `ToolArgsRevealController` exactly as the event
  * controller does, grows it by fewer bytes than the throttle, and requires the fresh value, then requires
  * `decodeStreamedToolArgs` (the transcript rebuild) to produce the same value. A new tool, or a new argument a
@@ -150,15 +152,21 @@ function streamPastTheThrottle(toolName: string, key: string): { live: unknown; 
 	return { live, rebuilt, expected: `${body}tail` };
 }
 
+interface BuiltTool {
+	readonly tool: AgentTool;
+	readonly args: ToolArguments;
+}
+
 interface Sweep {
 	readonly unconstructable: string[];
 	readonly notRegistered: string[];
-	readonly built: Map<string, { tool: AgentTool; args: ToolArguments }>;
+	/** Every argument shape a tool was built with, one entry per distinct set of declared arguments. */
+	readonly built: Map<string, BuiltTool[]>;
 }
 
 const agentDir = TempDir.createSync("@streamed-keys-profile-");
 
-async function buildRegistry(): Promise<Sweep> {
+async function buildRegistry(settings: Record<string, unknown>): Promise<Sweep> {
 	// One host registers `ssh`; one adapter command that resolves registers `debug`. Without them each
 	// factory returns null and the tool drops out of the sweep.
 	fs.writeFileSync(
@@ -179,7 +187,7 @@ async function buildRegistry(): Promise<Sweep> {
 		isToolDiscoveryEnabled: () => true,
 		getSelectedDiscoveredToolNames: () => [],
 		activateDiscoveredTools: async () => [],
-		settings: { get: (key: string) => SWEEP_SETTINGS[key], getAgentDir: () => agentDir.path() },
+		settings: { get: (key: string) => settings[key], getAgentDir: () => agentDir.path() },
 	});
 	const unconstructable: string[] = [];
 	const notRegistered: string[] = [];
@@ -194,9 +202,24 @@ async function buildRegistry(): Promise<Sweep> {
 		}
 	}
 	tools.push(...((await createVibeModeTools(session)) as AgentTool[]));
-	const built = new Map<string, { tool: AgentTool; args: ToolArguments }>();
-	for (const tool of tools) built.set(tool.name, { tool, args: argumentsOf(tool) });
+	const built = new Map<string, BuiltTool[]>();
+	for (const tool of tools) built.set(tool.name, [{ tool, args: argumentsOf(tool) }]);
 	return { unconstructable, notRegistered, built };
+}
+
+/** `base` plus every tool shape in `other` whose declared arguments `base` has not seen. */
+function mergeShapes(base: Sweep, other: Sweep): Sweep {
+	const built = new Map(base.built);
+	for (const [name, shapes] of other.built) {
+		const known = built.get(name) ?? [];
+		const seen = new Set(known.map(shape => shape.args.declared.join(",")));
+		built.set(name, [...known, ...shapes.filter(shape => !seen.has(shape.args.declared.join(",")))]);
+	}
+	return {
+		unconstructable: [...base.unconstructable, ...other.unconstructable],
+		notRegistered: [...base.notRegistered, ...other.notRegistered],
+		built,
+	};
 }
 
 describe("a string argument the preview shows streams as it arrives", () => {
@@ -206,12 +229,17 @@ describe("a string argument the preview shows streams as it arrives", () => {
 
 	beforeAll(async () => {
 		await initTheme();
-		sweep = await buildRegistry();
-		shown = [];
-		for (const [name, { tool, args }] of sweep.built) {
-			for (const key of shownArguments(tool, args)) shown.push(`${name}.${key}`);
+		sweep = mergeShapes(
+			await buildRegistry(SWEEP_SETTINGS),
+			await buildRegistry({ ...SWEEP_SETTINGS, "agent.batch": false }),
+		);
+		const seen = new Set<string>();
+		for (const [name, shapes] of sweep.built) {
+			for (const { tool, args } of shapes) {
+				for (const key of shownArguments(tool, args)) seen.add(`${name}.${key}`);
+			}
 		}
-		shown.sort();
+		shown = [...seen].sort();
 	});
 
 	afterEach(() => {
@@ -259,9 +287,11 @@ describe("a string argument the preview shows streams as it arrives", () => {
 	it("lists only declared arguments, apart from the pinned legacy spellings", () => {
 		const undeclared: string[] = [];
 		for (const [name, keys] of Object.entries(STREAMING_STRING_KEYS_BY_TOOL)) {
-			const built = sweep.built.get(name);
-			if (!built) continue;
-			for (const key of keys) if (!built.args.declared.includes(key)) undeclared.push(`${name}.${key}`);
+			const shapes = sweep.built.get(name);
+			if (!shapes) continue;
+			for (const key of keys) {
+				if (!shapes.some(shape => shape.args.declared.includes(key))) undeclared.push(`${name}.${key}`);
+			}
 		}
 		expect(undeclared.sort()).toEqual(["edit._input", "edit.file_path", "edit.path", "write.file_path"]);
 	});

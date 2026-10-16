@@ -67,7 +67,7 @@ export const STREAMING_STRING_KEYS_BY_TOOL: Readonly<Record<string, readonly str
 	search_tool_bm25: ["query"],
 	set_cwd: ["path"],
 	ssh: ["host", "command"],
-	task: ["task", "name"],
+	task: ["task", "name", "context"],
 	todo: ["task", "phase"],
 	vibe_kill: ["session"],
 	vibe_send: ["session", "message"],

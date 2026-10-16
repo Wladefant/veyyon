@@ -132,6 +132,7 @@
 - Fixed a scalar where a settings group belongs in `config.yml` (such as `tools: on`) moving the whole file aside to `config.yml.corrupt`; the scalar is ignored and every other setting in the file still loads.
 - Setting the todo reminder limit no longer turns todo reminders back on, and turning reminders off no longer drops the limit; the limit is `todo.reminderLimit`, and a stored `todo.reminders.max` moves there on load.
 - Startup configuration warnings state what a setting of the wrong kind or outside its allowed values reads as, and report such values in `--config` overlay files as well as the profile config.
+- The task tool's `context` argument streams into the pending preview as it arrives in batch mode instead of advancing in throttle-sized steps.
 
 ### Removed
 
