@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import http2 from "node:http2";
 import { setImmediate as yieldToProtocolEvents } from "node:timers/promises";
-import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson } from "@bufbuild/protobuf";
+import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson, type UnknownField } from "@bufbuild/protobuf";
+import { BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { McpToolDefinition } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import {
@@ -12,6 +13,9 @@ import {
 	AgentRunRequestSchema,
 	type AgentServerMessage,
 	AgentServerMessageSchema,
+	AskQuestionInteractionResponseSchema,
+	AskQuestionRejectedSchema,
+	AskQuestionResultSchema,
 	AssistantMessageSchema,
 	BackgroundShellSpawnResultSchema,
 	ClientHeartbeatSchema,
@@ -22,6 +26,9 @@ import {
 	ConversationStepSchema,
 	type ConversationTokenDetails,
 	ConversationTurnStructureSchema,
+	CreatePlanErrorSchema,
+	CreatePlanRequestResponseSchema,
+	CreatePlanResultSchema,
 	DeleteErrorSchema,
 	DeleteRejectedSchema,
 	DeleteResultSchema,
@@ -30,10 +37,15 @@ import {
 	DiagnosticsRejectedSchema,
 	DiagnosticsResultSchema,
 	DiagnosticsSuccessSchema,
+	ExaFetchRequestResponse_ApprovedSchema,
+	ExaFetchRequestResponseSchema,
+	ExaSearchRequestResponse_ApprovedSchema,
+	ExaSearchRequestResponseSchema,
 	ExecClientControlMessageSchema,
 	type ExecClientMessage,
 	ExecClientMessageSchema,
 	ExecClientStreamCloseSchema,
+	ExecClientThrowSchema,
 	type ExecServerMessage,
 	FetchErrorSchema,
 	FetchResultSchema,
@@ -50,6 +62,9 @@ import {
 	GrepSuccessSchema,
 	type GrepUnionResult,
 	GrepUnionResultSchema,
+	type InteractionQuery,
+	type InteractionResponse,
+	InteractionResponseSchema,
 	type InteractionUpdate,
 	KvClientMessageSchema,
 	type KvServerMessage,
@@ -85,6 +100,7 @@ import {
 	SelectedContextSchema,
 	SelectedImageSchema,
 	SetBlobResultSchema,
+	SetupVmEnvironmentResultSchema,
 	type ShellArgs,
 	ShellFailureSchema,
 	ShellRejectedSchema,
@@ -97,8 +113,12 @@ import {
 	ShellStreamStderrSchema,
 	ShellStreamStdoutSchema,
 	ShellSuccessSchema,
+	SwitchModeRequestResponse_RejectedSchema,
+	SwitchModeRequestResponseSchema,
 	UserMessageActionSchema,
 	UserMessageSchema,
+	WebSearchRequestResponse_ApprovedSchema,
+	WebSearchRequestResponseSchema,
 	WriteErrorSchema,
 	WriteRejectedSchema,
 	WriteResultSchema,
@@ -1200,7 +1220,145 @@ export async function handleServerMessage(
 		);
 	} else if (msgCase === "conversationCheckpointUpdate") {
 		handleConversationCheckpointUpdate(msg.message.value, state.usage, onConversationCheckpoint);
+	} else if (msgCase === "interactionQuery") {
+		answerInteractionQuery(msg.message.value, h2Request);
 	}
+}
+
+const ASK_QUESTION_REJECTED =
+	"This client does not show Cursor's question prompt. Ask the question in your reply or with an available tool.";
+const SWITCH_MODE_REJECTED = "This client does not switch Cursor agent modes.";
+const CREATE_PLAN_REJECTED = "This client does not store Cursor plans. Write the plan in your reply.";
+
+/**
+ * A response message whose oneof is `rejected` (or `error`, `failure`) with no fields set.
+ *
+ * Every InteractionResponse case Cursor defines puts its refusal at field 2 of its result message,
+ * so this is the answer for a query this client's generated protocol has no case for.
+ */
+const REJECTED_RESPONSE_FIELD = new BinaryWriter()
+	.bytes(new BinaryWriter().tag(2, WireType.LengthDelimited).bytes(new Uint8Array(0)).finish())
+	.finish();
+
+/**
+ * Answer an interaction query, the server's request for the client's approval or input.
+ *
+ * WHY. The server holds the turn until every query is answered. A query left unanswered stalls the
+ * turn with nothing but heartbeats on the wire until the progress ceiling ends it as an error, 30
+ * minutes later. Read-only lookups Cursor runs on its own servers (web search, Exa search and fetch)
+ * are approved; anything that needs a Cursor UI this client lacks is rejected with its reason; a query
+ * the generated protocol does not know is rejected by mirroring its field number.
+ */
+function answerInteractionQuery(query: InteractionQuery, h2Request: http2.ClientHttp2Stream): void {
+	const response = interactionResponseFor(query);
+	const clientMessage = create(AgentClientMessageSchema, {
+		message: { case: "interactionResponse", value: response },
+	});
+	h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
+	log("interactionResponse", response.result.case ?? "unknown", { id: query.id });
+}
+
+/** Exported for tests: the response {@link answerInteractionQuery} sends for `query`. */
+export function interactionResponseFor(query: InteractionQuery): InteractionResponse {
+	const id = query.id;
+	switch (query.query.case) {
+		case "webSearchRequestQuery":
+			return create(InteractionResponseSchema, {
+				id,
+				result: {
+					case: "webSearchRequestResponse",
+					value: create(WebSearchRequestResponseSchema, {
+						result: { case: "approved", value: create(WebSearchRequestResponse_ApprovedSchema) },
+					}),
+				},
+			});
+		case "exaSearchRequestQuery":
+			return create(InteractionResponseSchema, {
+				id,
+				result: {
+					case: "exaSearchRequestResponse",
+					value: create(ExaSearchRequestResponseSchema, {
+						result: { case: "approved", value: create(ExaSearchRequestResponse_ApprovedSchema) },
+					}),
+				},
+			});
+		case "exaFetchRequestQuery":
+			return create(InteractionResponseSchema, {
+				id,
+				result: {
+					case: "exaFetchRequestResponse",
+					value: create(ExaFetchRequestResponseSchema, {
+						result: { case: "approved", value: create(ExaFetchRequestResponse_ApprovedSchema) },
+					}),
+				},
+			});
+		case "askQuestionInteractionQuery":
+			return create(InteractionResponseSchema, {
+				id,
+				result: {
+					case: "askQuestionInteractionResponse",
+					value: create(AskQuestionInteractionResponseSchema, {
+						result: create(AskQuestionResultSchema, {
+							result: {
+								case: "rejected",
+								value: create(AskQuestionRejectedSchema, { reason: ASK_QUESTION_REJECTED }),
+							},
+						}),
+					}),
+				},
+			});
+		case "switchModeRequestQuery":
+			return create(InteractionResponseSchema, {
+				id,
+				result: {
+					case: "switchModeRequestResponse",
+					value: create(SwitchModeRequestResponseSchema, {
+						result: {
+							case: "rejected",
+							value: create(SwitchModeRequestResponse_RejectedSchema, { reason: SWITCH_MODE_REJECTED }),
+						},
+					}),
+				},
+			});
+		case "createPlanRequestQuery":
+			return create(InteractionResponseSchema, {
+				id,
+				result: {
+					case: "createPlanRequestResponse",
+					value: create(CreatePlanRequestResponseSchema, {
+						result: create(CreatePlanResultSchema, {
+							result: { case: "error", value: create(CreatePlanErrorSchema, { error: CREATE_PLAN_REJECTED }) },
+						}),
+					}),
+				},
+			});
+		case "setupVmEnvironmentArgs":
+			// The result defines only `success`; an empty result is the answer that claims nothing.
+			return create(InteractionResponseSchema, {
+				id,
+				result: { case: "setupVmEnvironmentResult", value: create(SetupVmEnvironmentResultSchema) },
+			});
+		case undefined: {
+			const response = create(InteractionResponseSchema, { id });
+			response.$unknown = unknownOneofFields(query).map(no => ({
+				no,
+				wireType: WireType.LengthDelimited,
+				data: REJECTED_RESPONSE_FIELD,
+			}));
+			logger.warn("Cursor sent an interaction query this client has no case for; rejected it", {
+				fields: response.$unknown.map(field => field.no),
+			});
+			return response;
+		}
+	}
+}
+
+/**
+ * The field numbers of the length-delimited fields `message` carried that its generated schema does
+ * not define: the oneof cases a newer server sent. A scalar unknown field is a flag, never a case.
+ */
+function unknownOneofFields(message: { $unknown?: UnknownField[] }): number[] {
+	return (message.$unknown ?? []).filter(field => field.wireType === WireType.LengthDelimited).map(field => field.no);
 }
 
 /**
@@ -1602,10 +1760,6 @@ async function handleExecServerMessage(
 		return;
 	}
 
-	if (!execCase) {
-		return;
-	}
-
 	const run = () => runExecCall(execMsg, h2Request, execHandlers, onToolResult, output, stream, state);
 	const toolCallId = execToolCallId(execMsg);
 	if (toolCallId === undefined) {
@@ -1933,11 +2087,14 @@ async function runExecCall(
 			const execResult = create(ComputerUseResultSchema, {});
 			return sendExecReply(h2Request, execMsg, { case: "computerUseResult", value: execResult });
 		}
-		default:
-			log("warn", "unhandledExecMessage", { execCase: execMsg.message.case });
-			// A bare ExecClientMessage (id + execId only, no typed result) so the
-			// server gets an acknowledgement and doesn't hang waiting forever.
-			return sendExecReply(h2Request, execMsg, { case: undefined });
+		default: {
+			// A case the generated protocol has (requestContextArgs is answered before dispatch) or,
+			// with `case` unset, one a newer server added that this client cannot decode.
+			const execCase = execMsg.message.case ?? `field ${unknownOneofFields(execMsg).join(", ")}`;
+			logger.warn("Cursor sent an exec request this client does not run; failed it", { execCase });
+			sendExecClientThrow(h2Request, execMsg, `This client does not run Cursor exec ${execCase}.`);
+			return { case: undefined };
+		}
 	}
 }
 
@@ -1977,6 +2134,26 @@ function sendExecClientStreamClose(h2Request: http2.ClientHttp2Stream, execMsg: 
 	const responseBytes = toBinary(AgentClientMessageSchema, clientMessage);
 	h2Request.write(frameConnectMessage(responseBytes));
 	log("execClientControl", "streamClose", { id: execMsg.id, execId: execMsg.execId });
+}
+
+/**
+ * Fail an exec request this client cannot run, as Cursor's own client does: an `ExecClientThrow`
+ * carrying the reason, then the stream close.
+ *
+ * WHY. The server holds the turn until every exec request is answered. A request dropped without an
+ * answer stalled the turn with nothing but heartbeats on the wire until the progress ceiling ended it
+ * as an error, 30 minutes later.
+ */
+function sendExecClientThrow(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMessage, error: string): void {
+	const throwMessage = create(ExecClientControlMessageSchema, {
+		message: { case: "throw", value: create(ExecClientThrowSchema, { id: execMsg.id, error }) },
+	});
+	const clientMessage = create(AgentClientMessageSchema, {
+		message: { case: "execClientControlMessage", value: throwMessage },
+	});
+	h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
+	log("execClientControl", "throw", { id: execMsg.id, execId: execMsg.execId, error });
+	sendExecClientStreamClose(h2Request, execMsg);
 }
 
 /** Exported for tests: verifies handler is invoked with correct `this` when passed as bound. */
