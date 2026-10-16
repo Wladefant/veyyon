@@ -223,10 +223,12 @@
 - `/mcp smithery-login` falls back to API-key entry after five minutes when a browser-login poll request stalls, instead of hanging.
 - The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
 - Fixed the `/tree` and `/branch` pickers cancelling themselves 100 ms after opening over an empty list, which also cancelled twice when dismissed inside that window; they now stay open on their empty state until dismissed.
+- The `!` command block draws every streamed output window instead of skipping any that arrive within 50 ms of the previous one, which left the last line before a quiet period undrawn and joined the lines on either side of a skipped window; the `!` and `%` blocks also no longer overflow the call stack on an output window of about a million lines.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
 - An OAuth token refresh clears its 5 s lease-renewal timer when the refresh finishes, instead of leaving it armed and holding the process open for up to 5 s after every refresh.
+- Moonshot-hosted Kimi K2.7 Code ids spelled with underscores (`kimi_k2_7_code`) force thinking on through the OpenAI-compatible path, as they already did through the Anthropic-compatible one.
 - A trial cut short by a cancelled run gets no journal row, so `--resume` runs it again, and the retry backoff ends when the run is cancelled.
 - A trial whose agent exited before any provider request succeeded is retried as infrastructure whatever its stderr says, and a failed request no longer counts as a turn.
 - A journal whose last line was cut off by a killed process is repaired before the next append instead of becoming unreadable.
@@ -237,6 +239,7 @@
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
 - Sleep consolidation compacts "complete", "completed" and "working" only as whole words, so "incomplete" no longer becomes "inDONE" and "completed" no longer becomes "DONEd".
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
+- `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
