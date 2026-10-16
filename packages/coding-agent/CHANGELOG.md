@@ -125,6 +125,7 @@
 - Fixed the task card crashing or drawing `NaN% confidence` when a reviewer yields a verdict whose explanation, confidence or correctness has the wrong type; the card now draws the last well-formed verdict.
 - Fixed a resumed session restoring a goal whose recorded status is not one this build writes, which ran as neither active nor finished while its badge showed it running; a usage record with such a status no longer overwrites the goal's counters.
 - Fixed a scalar where a settings group belongs in `config.yml` (such as `tools: on`) moving the whole file aside to `config.yml.corrupt`; the scalar is ignored and every other setting in the file still loads.
+- Setting the todo reminder limit no longer turns todo reminders back on, and turning reminders off no longer drops the limit; the limit is `todo.reminderLimit`, and a stored `todo.reminders.max` moves there on load.
 
 ### Removed
 

@@ -8,6 +8,7 @@
 
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
 - A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
+- `declareSettings` rejects a table in which one setting path is the parent of another, since one config key holds a value or a group of settings, not both.
 
 ## [1.5.6] - 2026-10-13
 

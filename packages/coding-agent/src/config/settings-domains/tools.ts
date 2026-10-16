@@ -123,7 +123,7 @@ export const TOOLS_SETTINGS = {
 		},
 	},
 
-	"todo.reminders.max": {
+	"todo.reminderLimit": {
 		type: "number",
 		default: 3,
 		ui: {

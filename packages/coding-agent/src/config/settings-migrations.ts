@@ -1281,6 +1281,29 @@ function dropReadSubsumptionThreshold(raw: RawSettings): void {
 }
 
 /**
+ * todo.reminders.max -> todo.reminderLimit.
+ *
+ * The limit was declared beneath the `todo.reminders` switch, and one config key cannot hold a
+ * boolean and a group: writing the limit replaced a stored `todo.reminders: false` with
+ * `{ max: N }`, which turned reminders back on, and writing the switch dropped the limit. A
+ * `todo.reminders` group held nothing but the limit and read as reminders on, so it is folded
+ * onto the limit and dropped, which leaves the switch at its default. A `todo.reminderLimit`
+ * already present wins. Both spellings, flat and nested, are folded and dropped, which makes
+ * this a fixed point.
+ */
+function migrateTodoReminderLimit(raw: RawSettings): void {
+	const flat = raw["todo.reminders.max"];
+	delete raw["todo.reminders.max"];
+	const todo = recordAt(raw.todo);
+	const group = recordAt(todo?.reminders);
+	if (todo && group) delete todo.reminders;
+	const limit = group?.max ?? flat;
+	if (limit === undefined) return;
+	if (todo?.reminderLimit !== undefined) return;
+	setByPath(raw, ["todo", "reminderLimit"], limit);
+}
+
+/**
  * Every field-level migration, in the order it runs.
  *
  * Optional numeric settings once stored `-1` to mean "unset", which made -1
@@ -1333,6 +1356,7 @@ const RAW_SETTINGS_MIGRATIONS: readonly RawSettingsMigration[] = [
 	migrateArgotEncode,
 	migrateComposerPredictionsMode,
 	dropReadSubsumptionThreshold,
+	migrateTodoReminderLimit,
 ];
 
 /**

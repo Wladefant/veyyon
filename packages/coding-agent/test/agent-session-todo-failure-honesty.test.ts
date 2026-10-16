@@ -202,7 +202,7 @@ describe("AgentSession todo failure honesty", () => {
 			settings: Settings.isolated({
 				"compaction.enabled": false,
 				"todo.enabled": true,
-				"todo.reminders.max": 3,
+				"todo.reminderLimit": 3,
 			}),
 			modelRegistry,
 		});

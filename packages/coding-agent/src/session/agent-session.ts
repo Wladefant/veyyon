@@ -1613,7 +1613,7 @@ export class AgentSession {
 			todoSettings: () => ({
 				enabled: this.settings.get("todo.enabled"),
 				reminders: this.settings.get("todo.reminders"),
-				remindersMax: this.settings.get("todo.reminders.max"),
+				remindersMax: this.settings.get("todo.reminderLimit"),
 				eager: this.settings.get("todo.eager"),
 			}),
 			model: () => this.model,

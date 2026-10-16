@@ -105,14 +105,7 @@ describe("a setting of the wrong kind reads as its default", () => {
 	});
 
 	const globalScoped = SETTINGS.filter(setting => setting.global);
-	/**
-	 * A file-backed setting whose path is the parent of another declared path. One config file cannot
-	 * hold a scalar there and the child beneath it, so these are swept in a file of their own.
-	 */
-	const parents = SETTINGS.filter(
-		setting => !setting.global && SETTINGS.some(other => other.path.startsWith(`${setting.path}.`)),
-	);
-	const fileBacked = SETTINGS.filter(setting => !setting.global && !parents.includes(setting));
+	const fileBacked = SETTINGS.filter(setting => !setting.global);
 
 	async function loadWith(raw: Record<string, unknown>): Promise<Settings> {
 		fs.writeFileSync(path.join(agentDir, "config.yml"), YAML.stringify(raw, null, 2));
@@ -132,7 +125,6 @@ describe("a setting of the wrong kind reads as its default", () => {
 		expect([...new Set(SETTINGS.map(setting => setting.type))].sort()).toEqual(Object.keys(SAMPLES).sort());
 		expect(fileBacked.map(setting => setting.path)).toContain("disabledExtensions");
 		expect(globalScoped.length, "anti-vacuity: some setting is global-scoped").toBeGreaterThan(0);
-		expect(parents.map(setting => setting.path)).toEqual(["todo.reminders"]);
 	});
 
 	for (const [name, pick, migratedAtLoad] of [
@@ -159,11 +151,6 @@ describe("a setting of the wrong kind reads as its default", () => {
 					.filter(settingPath => !(migratedAtLoad as readonly string[]).includes(settingPath))
 					.sort(),
 			);
-		});
-
-		it(`${name} at a path that parents another setting reads as the default`, async () => {
-			const settings = await loadWith(configWith(parents, pick));
-			expect(readAll(settings, parents)).toEqual(defaults(parents));
 		});
 
 		it(`${name} for a global-scoped setting reads as the default`, () => {

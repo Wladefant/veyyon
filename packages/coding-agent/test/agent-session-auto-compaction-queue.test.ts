@@ -133,7 +133,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			settings: Settings.isolated({
 				"compaction.autoContinue": false,
 				"todo.reminders": true,
-				"todo.reminders.max": 3,
+				"todo.reminderLimit": 3,
 			}),
 			modelRegistry,
 			extensionRunner,

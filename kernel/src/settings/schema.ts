@@ -97,11 +97,28 @@ let schemaPaths: readonly SettingPath[] = [];
  * A path already registered fails loud. Two packages declaring one key is a defect in whichever
  * arrived second, and resolving it by overwrite would let the panel show one declaration while
  * the store read another.
+ *
+ * A path that is the parent of another path fails loud too. One config key holds a value or a
+ * group of settings, not both: writing `a.b.c` replaces a stored `a.b: false` with `{ c: … }`,
+ * and writing `a.b` drops `a.b.c`.
+ *
+ * A rejected table registers none of its paths.
  */
 export function declareSettings<T extends SettingsTable>(table: T): T {
 	for (const path of Object.keys(table)) {
 		if (Object.hasOwn(schema, path)) {
 			throw new Error(`Setting "${path}" is declared twice; a setting has one owner.`);
+		}
+	}
+	const paths = new Set([...schemaPaths, ...Object.keys(table)]);
+	for (const path of paths) {
+		for (let dot = path.indexOf("."); dot !== -1; dot = path.indexOf(".", dot + 1)) {
+			const parent = path.slice(0, dot);
+			if (paths.has(parent)) {
+				throw new Error(
+					`Setting "${parent}" is the parent of setting "${path}"; a config key holds a value or a group of settings, not both.`,
+				);
+			}
 		}
 	}
 	try {
