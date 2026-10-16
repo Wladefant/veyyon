@@ -13,7 +13,6 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -164,7 +163,6 @@ import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config
 import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
 import { onAppendOnlyModeChanged, onHelperModelsChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
-import { loadCapability, reset as resetCapabilities } from "../discovery/capability";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
 import { type DiscoverableTool, type DiscoverableToolSearchIndex, isMCPToolName } from "../discovery/tool-index";
 // The owning module, not the `../edit` barrel, which `export *`s the streaming applier, the hashline
@@ -179,7 +177,6 @@ import { type BashResult, executeBash as executeBashCommand } from "../exec/bash
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
-import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import type {
 	ExtensionCommandContext,
 	ExtensionRunner,
@@ -189,7 +186,6 @@ import type {
 } from "../extensibility/extensions";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
-import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
@@ -222,7 +218,6 @@ import {
 	unknownSlashCommandMessage,
 	unresolvedSlashCommandName,
 } from "../slash-commands/helpers/parse";
-import { invalidateHostMetadata } from "../ssh/connection-manager";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
 import { enabledAgentNames, resolveDelegation } from "../task/agent-settings";
 import {
@@ -239,10 +234,8 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
-import { usesCodexTaskPrompt } from "../task/prompt-policy";
 import { theme } from "../theme/theme-binding";
 import { type ConfiguredThinkingLevel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
-import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
 import { buildResolveReminderMessage } from "../tools/agent/resolve";
 import {
 	boundedTodoPreviewText,
@@ -252,9 +245,9 @@ import {
 } from "../tools/agent/todo";
 import { validateApprovalModeSetting, validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
-import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
+import { TOOL } from "../tools/core/builtin-names";
 import { reportLostOutputArtifact } from "../tools/core/output-artifact";
-import { outputMeta, wrapToolWithMetaNotice } from "../tools/core/output-meta";
+import { outputMeta } from "../tools/core/output-meta";
 import { shortenPath } from "../tools/core/render-utils";
 import { clampTimeout } from "../tools/core/tool-timeouts";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
@@ -271,7 +264,6 @@ import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { isSameAssistantMessage } from "./agent-session-message-shapes";
 import { contextPromotionTarget } from "./agent-session-model-targets";
-import { isToolOrderPermutation } from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
 	isAdvisorCard,
@@ -366,6 +358,7 @@ import { StopRetries } from "./runtime/stop-retries";
 import { StreamingEditGuard } from "./runtime/streaming-edit-guard";
 import { ThinkingRuntime } from "./runtime/thinking-runtime";
 import { TodoRuntime } from "./runtime/todo-runtime";
+import { ToolActivation } from "./runtime/tool-activation";
 import { sameToolNames, ToolDiscovery } from "./runtime/tool-discovery";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { TurnContextCheck } from "./runtime/turn-context-check";
@@ -680,13 +673,6 @@ function resolveActiveEditMode(settings: Settings, model: Model | undefined): Ed
 		settings,
 		getActiveModelString: () => (model ? formatModelString(model) : undefined),
 	});
-}
-
-/** Cache key for model-dependent prompt content: displayed id or hidden-policy cohort. */
-function promptModelKeyFor(settings: Settings, model: Model | undefined): string | undefined {
-	const id = model ? formatModelString(model) : undefined;
-	if (!id || settings.get("includeModelInPrompt")) return id;
-	return usesCodexTaskPrompt(id) ? "task-policy:gpt-5.6" : "task-policy:default";
 }
 
 /** Deliver a built mode-context message with its attribution; a `null` message (mode off) sends nothing. */
@@ -1043,7 +1029,7 @@ export class AgentSession {
 		convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
 		providerSessionState: () => this.#providerSessions.states,
 		effectiveServiceTier: model => this.#effectiveServiceTier(model),
-		baseSystemPrompt: () => this.#baseSystemPrompt,
+		baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
@@ -1150,7 +1136,6 @@ export class AgentSession {
 
 	// Tool registry and prompt builder for extensions
 	#toolRegistry: Map<string, AgentTool>;
-	#installedVibeToolNames = new Set<string>();
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	/** Per-request provider shaping every request of this session goes out through. */
@@ -1202,32 +1187,10 @@ export class AgentSession {
 	get sideComplete(): SideCompleteImpl {
 		return this.#sideCompleteImpl;
 	}
-	#baseSystemPrompt: string[];
-	/**
-	 * Every mid-session system-prompt change, in order, by the reason its caller
-	 * gave. Each entry is one full prefix-cache invalidation, so this doubles as
-	 * the running count of "turns that had to re-read the whole context as fresh
-	 * input". Exposed through {@link systemPromptInvalidations} so a bench or a
-	 * cost report can attribute cache misses to the subsystem that caused them.
-	 */
-	readonly #baseSystemPromptInvalidations: string[] = [];
-	/**
-	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
-	 * recent successful `rebuildSystemPrompt` call. Used to skip redundant rebuilds
-	 * when MCP servers reconnect without changing their tool definitions, which is
-	 * the dominant cause of prompt-cache invalidation in long sessions.
-	 */
-	#lastAppliedToolSignature: string | undefined;
-	/**
-	 * Model identifier (`provider/id`) currently rendered into `#baseSystemPrompt`.
-	 * The prompt surfaces the active model to the agent, so a model switch must
-	 * trigger a rebuild. Compared against the live model after every model change
-	 * to decide whether the cached prompt is stale.
-	 */
-	#promptModelKey: string | undefined;
+	/** The active tool set and the base system prompt rendered for it. */
+	readonly #toolActivation: ToolActivation;
 	/** Which registered tools the model can discover and which it selected. Owns all discovery state. */
 	readonly #discovery: ToolDiscovery;
-	#rpcHostToolNames = new Set<string>();
 
 	/** Time-Traveling Stream Rules: match rules against a streaming turn and
 	 *  deliver matched bodies back to the model. Owns all TTSR state. */
@@ -1761,8 +1724,6 @@ export class AgentSession {
 			thunks.push(() => this.#ttsr.takePendingToolReminders());
 			return thunks;
 		});
-		this.#baseSystemPrompt = this.agent.state.systemPrompt;
-		this.#promptModelKey = promptModelKeyFor(this.settings, this.model);
 		this.#discovery = new ToolDiscovery(
 			{
 				registry: this.#toolRegistry,
@@ -1771,6 +1732,14 @@ export class AgentSession {
 			},
 			config,
 		);
+		this.#toolActivation = new ToolActivation(this, {
+			registry: this.#toolRegistry,
+			discovery: this.#discovery,
+			approvals: this.#approvals,
+			providerSessions: this.#providerSessions,
+			config,
+			customToolContext: () => this.#customToolContext(),
+		});
 		const persistInitialMCPToolSelection =
 			config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0;
 		if (this.#discovery.mcpEnabled && persistInitialMCPToolSelection) {
@@ -2058,7 +2027,7 @@ export class AgentSession {
 			cancelPostPromptTasks: () => this.#cancelPostPromptTasks(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			restoreMCPSelectionsForSessionContext: sessionContext =>
-				this.#restoreMCPSelectionsForSessionContext(sessionContext),
+				this.#toolActivation.restoreMCPSelections(sessionContext),
 		});
 	}
 
@@ -2073,7 +2042,7 @@ export class AgentSession {
 			sideComplete: this.#sideCompleteImpl,
 			extensionRunner: () => this.#config.extensionRunner,
 			modelRegistry: () => this.#config.modelRegistry,
-			baseSystemPrompt: () => this.#baseSystemPrompt,
+			baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 			effectiveServiceTier: model => this.#effectiveServiceTier(model),
 			clearNextTurnMessages: () => {
 				this.#pendingNextTurnMessages = [];
@@ -2105,13 +2074,13 @@ export class AgentSession {
 			captureFields: () => ({
 				pendingNextTurnMessages: [...this.#pendingNextTurnMessages],
 				scheduledHiddenNextTurnGeneration: this.#scheduledHiddenNextTurnGeneration,
-				baseSystemPrompt: this.#baseSystemPrompt,
+				baseSystemPrompt: this.#toolActivation.baseSystemPrompt,
 				serviceTierByFamily: this.#serviceTierByFamily,
 			}),
 			restoreFields: fields => {
 				this.#pendingNextTurnMessages = fields.pendingNextTurnMessages;
 				this.#scheduledHiddenNextTurnGeneration = fields.scheduledHiddenNextTurnGeneration;
-				this.#baseSystemPrompt = fields.baseSystemPrompt;
+				this.#toolActivation.baseSystemPrompt = fields.baseSystemPrompt;
 				this.#serviceTierByFamily = fields.serviceTierByFamily;
 			},
 			clearNextTurnMessages: () => {
@@ -2122,7 +2091,7 @@ export class AgentSession {
 				this.#serviceTierByFamily = byFamily;
 			},
 			restoreMCPSelectionsForSessionContext: (sessionContext, options) =>
-				this.#restoreMCPSelectionsForSessionContext(sessionContext, options),
+				this.#toolActivation.restoreMCPSelections(sessionContext, options),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			rescopeAgentRegistry: () => this.#rescopeAgentRegistry(),
@@ -4033,47 +4002,18 @@ export class AgentSession {
 		return Array.from(this.#toolRegistry.keys());
 	}
 
-	#wrapRuntimeTool(tool: AgentTool): AgentTool {
-		const wrapped = wrapToolWithMetaNotice(tool);
-		return this.#config.extensionRunner ? new ExtensionToolWrapper(wrapped, this.#config.extensionRunner) : wrapped;
-	}
-
 	/**
 	 * Registers the ephemeral vibe tools and activates them alongside `baseToolNames`.
 	 *
 	 * @throws When this session cannot create vibe tools or the factory returns duplicate names.
 	 */
 	async activateVibeTools(baseToolNames: string[]): Promise<void> {
-		const createVibeTools = this.#config.createVibeTools;
-		if (!createVibeTools) {
-			throw new Error("Vibe tools are unavailable in this session.");
-		}
-
-		const tools = await createVibeTools();
-		const vibeToolNames = tools.map(tool => tool.name);
-		if (new Set(vibeToolNames).size !== vibeToolNames.length) {
-			throw new Error("Vibe tool names must be unique.");
-		}
-
-		for (const tool of tools) {
-			if (this.#toolRegistry.has(tool.name)) continue;
-			this.#toolRegistry.set(tool.name, this.#wrapRuntimeTool(tool));
-			this.#discovery.addBuiltIn(tool.name);
-			this.#installedVibeToolNames.add(tool.name);
-		}
-
-		await this.#applyActiveToolsByName(Array.from(new Set(baseToolNames.concat(vibeToolNames))));
+		await this.#toolActivation.activateVibeTools(baseToolNames);
 	}
 
 	/** Removes tools installed by {@link activateVibeTools} and activates `nextToolNames`. */
 	async deactivateVibeTools(nextToolNames: string[]): Promise<void> {
-		for (const name of this.#installedVibeToolNames) {
-			this.#toolRegistry.delete(name);
-			this.#discovery.removeBuiltIn(name);
-			this.#discovery.deselect(name);
-		}
-		this.#installedVibeToolNames.clear();
-		await this.#applyActiveToolsByName(nextToolNames);
+		await this.#toolActivation.deactivateVibeTools(nextToolNames);
 	}
 
 	/**
@@ -4100,7 +4040,7 @@ export class AgentSession {
 		const currentEditMode = resolveActiveEditMode(this.settings, this.model);
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes(TOOL.edit);
 		// The system prompt selects model-specific policy even when it does not display the model id.
-		const modelChanged = promptModelKeyFor(this.settings, this.model) !== this.#promptModelKey;
+		const modelChanged = this.#toolActivation.promptModelMoved();
 		if (!editModeChanged && !modelChanged) return;
 		const moved = [modelChanged ? "prompt-model-key" : undefined, editModeChanged ? "edit-mode" : undefined]
 			.filter(part => part !== undefined)
@@ -4199,139 +4139,12 @@ export class AgentSession {
 		return this.#approvals.toolDecisions();
 	}
 
-	async #applyActiveToolsByName(
-		toolNames: string[],
-		options?: { persistMCPSelection?: boolean; previousSelectedMCPToolNames?: string[] },
-	): Promise<void> {
-		toolNames = normalizeToolNames(toolNames);
-		const previousSelectedMCPToolNames = options?.previousSelectedMCPToolNames ?? this.getSelectedMCPToolNames();
-		const tools: AgentTool[] = [];
-		let validToolNames: string[] = [];
-		// A requested name the registry does not hold is dropped, because a stale
-		// selection naming a tool this build no longer ships must not fail a whole
-		// session. It is LOGGED because dropping it silently is how a tool goes
-		// missing for weeks: the session advertised 22 tools and sent 21, the model
-		// simply never called the absent one, and nothing anywhere said a name had
-		// been asked for and not found. Any future wiring defect that removes a tool
-		// from the registry now leaves a record naming it.
-		const droppedToolNames: string[] = [];
-		for (const name of toolNames) {
-			const tool = this.#toolRegistry.get(name);
-			if (tool) {
-				tools.push(this.#approvals.wrapForClient(tool));
-				validToolNames.push(name);
-			} else {
-				droppedToolNames.push(name);
-			}
-		}
-		if (droppedToolNames.length > 0) {
-			logger.warn("requested tools are not in the session registry and were dropped", {
-				sessionId: this.sessionManager.getSessionId(),
-				dropped: droppedToolNames,
-				model: this.model ? `${this.model.provider}/${this.model.id}` : undefined,
-			});
-		}
-		// Auto-QA tool must survive any runtime tool-set mutation.
-		if (isAutoQaEnabled(this.settings) && !validToolNames.includes(TOOL.report_tool_issue)) {
-			const qaTool = this.#toolRegistry.get(TOOL.report_tool_issue);
-			if (qaTool) {
-				tools.push(this.#approvals.wrapForClient(qaTool));
-				validToolNames.push(TOOL.report_tool_issue);
-			}
-		}
-		// A permutation of the tool set already on the wire keeps the order it is
-		// replacing. The provider-bound `tools` array is part of the cached prompt
-		// prefix, and tools are addressed by name, so their order means nothing to the
-		// model and everything to the cache: reordering the same set re-serializes the
-		// prefix from the tools block onward and the next request pays full input rate
-		// for it. Several callers hand over a different order for an unchanged set --
-		// `refreshSshTool` filters `ssh` out and re-pushes it at the tail,
-		// `#restoreMCPSelectionsForSessionContext` emits every non-MCP tool ahead of
-		// every MCP one, and plan/goal-mode exit replays a list saved before later
-		// activations moved it. None of them intends a change, and the token count does
-		// not move, which is why the cost was invisible: the provider simply served
-		// fewer cached tokens than the system+tools prefix is long.
-		const currentToolNames = this.agent.state.tools.map(tool => tool.name);
-		if (isToolOrderPermutation(currentToolNames, validToolNames)) {
-			const byName = new Map(validToolNames.map((name, index) => [name, tools[index]]));
-			validToolNames = [...currentToolNames];
-			tools.length = 0;
-			for (const name of currentToolNames) {
-				const tool = byName.get(name);
-				if (tool) tools.push(tool);
-			}
-		}
-		this.#discovery.followActiveMCP(validToolNames);
-		this.#config.setActiveToolNames?.(validToolNames);
-		this.agent.setTools(tools);
-		// Active tool set changed → discoverable tool list (which excludes already-active tools)
-		// is now stale. Settle before any prompt-template hook reads the discovery list.
-		this.#discovery.settleActive(validToolNames);
-
-		// Rebuild base system prompt with new tool set, but only when the tool set
-		// actually changed. MCP servers can reconnect at arbitrary times and call
-		// `refreshMCPTools` -> `#applyActiveToolsByName` even though the resulting
-		// tool list is byte-identical. Skipping the rebuild keeps the system prompt
-		// stable, which is required for Anthropic prompt caching to keep hitting.
-		const rebuildSystemPrompt = this.#config.rebuildSystemPrompt;
-		if (rebuildSystemPrompt) {
-			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
-			if (signature !== this.#lastAppliedToolSignature) {
-				if (this.#lastAppliedToolSignature !== undefined) {
-					this.#providerSessions.clearInheritedCacheKey("tool-signature-change");
-				}
-				const built = await rebuildSystemPrompt(validToolNames, this.#toolRegistry);
-				this.#baseSystemPrompt = built.systemPrompt;
-				this.agent.setSystemPrompt(this.#baseSystemPrompt);
-				this.#lastAppliedToolSignature = signature;
-				this.#promptModelKey = promptModelKeyFor(this.settings, this.model);
-			}
-		}
-		if (options?.persistMCPSelection !== false) {
-			const nextSelectedMCPToolNames = this.#discovery.selectedMCPChangedFrom(previousSelectedMCPToolNames);
-			if (nextSelectedMCPToolNames) this.sessionManager.appendMCPToolSelection(nextSelectedMCPToolNames);
-		}
-	}
-
 	/**
 	 * Reload the SSH tool from disk-backed capability discovery and make the
 	 * refreshed definition visible to the next model call without restarting.
 	 */
 	async refreshSshTool(options?: { activateIfAvailable?: boolean }): Promise<void> {
-		resetCapabilities();
-		const reloadSshTool = this.#config.reloadSshTool;
-		if (!reloadSshTool) return;
-		const previousSshTool = this.#toolRegistry.get(TOOL.ssh);
-		const previousActiveToolNames = this.getActiveToolNames();
-		const hadSshTool = previousSshTool !== undefined;
-		const wasActive = previousActiveToolNames.includes(TOOL.ssh);
-		const previousHostNames =
-			previousSshTool && "hostNames" in previousSshTool && Array.isArray(previousSshTool.hostNames)
-				? [...previousSshTool.hostNames]
-				: [];
-		const candidateHostNames = new Set(previousHostNames);
-		const capability = await loadCapability<{ name: string }>(TOOL.ssh, { cwd: this.sessionManager.getCwd() });
-		for (const host of capability.items) {
-			if (typeof host?.name === "string") {
-				candidateHostNames.add(host.name);
-			}
-		}
-		await invalidateHostMetadata(candidateHostNames);
-		const requestedToolNames = this.#config.requestedToolNames;
-		const sshAllowed = requestedToolNames === undefined || requestedToolNames.has(TOOL.ssh);
-		const refreshedTool = await reloadSshTool();
-		if (refreshedTool) {
-			this.#toolRegistry.set(refreshedTool.name, refreshedTool);
-		} else {
-			this.#toolRegistry.delete(TOOL.ssh);
-			this.#discovery.deselect(TOOL.ssh);
-		}
-
-		const nextActive = previousActiveToolNames.filter(name => name !== TOOL.ssh && this.#toolRegistry.has(name));
-		if (refreshedTool && sshAllowed && (wasActive || (options?.activateIfAvailable && !hadSshTool))) {
-			nextActive.push(refreshedTool.name);
-		}
-		await this.#applyActiveToolsByName(nextActive);
+		await this.#toolActivation.refreshSshTool(options);
 	}
 
 	/**
@@ -4341,123 +4154,20 @@ export class AgentSession {
 	 * Changes take effect before the next model call.
 	 */
 	async setActiveToolsByName(toolNames: string[]): Promise<void> {
-		await this.#applyActiveToolsByName(toolNames);
+		await this.#toolActivation.apply(toolNames);
 	}
 
-	async #restoreMCPSelectionsForSessionContext(
-		sessionContext: SessionContext,
-		options?: { fallbackSelectedMCPToolNames?: Iterable<string> },
-	): Promise<void> {
-		if (!this.#discovery.mcpEnabled) return;
-		const nextActiveNonMCPToolNames = this.#discovery.activeNonMCP();
-		const fallbackSelectedMCPToolNames =
-			options?.fallbackSelectedMCPToolNames ?? this.#discovery.configuredDefaultMCP();
-		const restoredMCPToolNames = this.#discovery.selectableMCP(
-			sessionContext.hasPersistedMCPToolSelection
-				? sessionContext.selectedMCPToolNames
-				: fallbackSelectedMCPToolNames,
-		);
-		this.#discovery.rememberSessionDefaults(this.sessionFile);
-		await this.#applyActiveToolsByName([...nextActiveNonMCPToolNames, ...restoredMCPToolNames], {
-			persistMCPSelection: false,
-		});
-	}
-	/**
-	 * Rebuild the base system prompt using the current active tool set, and return
-	 * the prompt now in force.
-	 *
-	 * The return value exists so a caller can VERIFY what the rebuild produced.
-	 * The argot arm is the motivating case: it refreshes the prompt to teach the
-	 * handle table, and until this returned something there was no way for the
-	 * caller, a test, or an eval to confirm the table actually landed. The
-	 * transcript could not answer it either, because `session_init` snapshots the
-	 * prompt before the background arm ever completes.
-	 *
-	 * Returns the unchanged current prompt when no rebuild hook is installed.
-	 */
-	/**
-	 * Reasons for every prefix-cache invalidation this session has caused, in
-	 * order. Empty means the system prompt never changed after startup, which is
-	 * the cheap case: the provider served the whole prompt from cache all session.
-	 */
+	/** Every prefix-cache invalidation this session caused, by reason; see {@link ToolActivation.systemPromptInvalidations}. */
 	systemPromptInvalidations(): readonly string[] {
-		// A copy, and frozen. `readonly string[]` is a compile-time claim only:
-		// returning the live array hands a caller the session's own cost evidence
-		// to mutate, and a reader that trimmed or appended to it would silently
-		// misreport how many times the cache was invalidated.
-		return Object.freeze([...this.#baseSystemPromptInvalidations]);
+		return this.#toolActivation.systemPromptInvalidations();
 	}
 
 	/**
-	 * Rebuild the base system prompt, recording `reason` when the bytes change.
-	 *
-	 * `reason` is REQUIRED, and that is the point. It used to default to
-	 * "unspecified", and the three callers that omitted it were the frequent ones:
-	 * a cwd re-root, a secrets refresh, and a memory clear. A session that
-	 * re-rooted four times recorded four invalidations all reading
-	 * `reason='unspecified'`, each one rewriting a ~32k-char prompt, so the
-	 * recording could prove the cache had been thrown away but never which change
-	 * threw it. The whole value of this evidence is attribution; a default made
-	 * the unattributed case the easy one to write.
+	 * Rebuild the base system prompt for the active tool set and return the prompt now in force,
+	 * recording `reason` when the bytes change; see {@link ToolActivation.refreshBaseSystemPrompt}.
 	 */
 	async refreshBaseSystemPrompt(reason: string): Promise<string[]> {
-		const rebuildSystemPrompt = this.#config.rebuildSystemPrompt;
-		if (!rebuildSystemPrompt) return this.#baseSystemPrompt;
-		const activeToolNames = this.getActiveToolNames();
-		this.#config.setActiveToolNames?.(activeToolNames);
-		const previousBaseSystemPrompt = this.#baseSystemPrompt;
-		const built = await rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
-		this.#baseSystemPrompt = built.systemPrompt;
-		if (
-			previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||
-			previousBaseSystemPrompt.some((part, index) => part !== this.#baseSystemPrompt[index])
-		) {
-			this.#providerSessions.clearInheritedCacheKey("system-prompt-change");
-			// Changing the system prompt mid-session invalidates the provider's
-			// prefix cache, and the next request re-reads the ENTIRE context as
-			// fresh input. That is the most expensive thing a session can do
-			// silently: on a measured 66-turn trace, five turns came back with
-			// `cacheRead: 0` while resending 46-72k tokens each, about 8% of the
-			// session bill, and nothing in the transcript said why. The
-			// invalidation was already detected right here and simply never
-			// recorded, so every attempt to explain the misses was guesswork.
-			//
-			// Recorded loudly rather than at debug, because a caller that refreshes
-			// the prompt on a hot path is a cost bug, and the reason is the only
-			// thing that identifies which caller it was.
-			this.#baseSystemPromptInvalidations.push(reason);
-			const previousChars = previousBaseSystemPrompt.join("\n\n").length;
-			const nextChars = this.#baseSystemPrompt.join("\n\n").length;
-			logger.warn("system prompt changed mid-session; provider prompt cache invalidated", {
-				reason,
-				invalidationsThisSession: this.#baseSystemPromptInvalidations.length,
-				previousChars,
-				nextChars,
-			});
-			// Also written to the transcript, not just the log. An in-memory counter
-			// and a log line are invisible to anything reading a finished run, and a
-			// finished run is exactly where the cost question gets asked. Without
-			// this entry the bench sees `cacheRead: 0` turns and still cannot say
-			// which subsystem caused them, which is the state that made these misses
-			// unexplainable in the first place.
-			this.sessionManager.appendCustomMessageEntry(
-				"prompt_cache_invalidated",
-				`system prompt changed (${reason}); provider prefix cache invalidated`,
-				false,
-				{ reason, index: this.#baseSystemPromptInvalidations.length, previousChars, nextChars },
-				"agent",
-			);
-		}
-		this.agent.setSystemPrompt(this.#baseSystemPrompt);
-		this.#promptModelKey = promptModelKeyFor(this.settings, this.model);
-		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
-		// the same tool set does not re-rebuild on top of the explicit refresh we
-		// just performed (and conversely, a different set forces a fresh rebuild).
-		const activeTools = activeToolNames
-			.map(name => this.#toolRegistry.get(name))
-			.filter((tool): tool is AgentTool => tool != null);
-		this.#lastAppliedToolSignature = this.#computeAppliedToolSignature(activeToolNames, activeTools);
-		return this.#baseSystemPrompt;
+		return this.#toolActivation.refreshBaseSystemPrompt(reason);
 	}
 
 	/**
@@ -4481,93 +4191,6 @@ export class AgentSession {
 	}
 
 	/**
-	 * Compose a SHA-256 digest of the inputs that `rebuildSystemPrompt` reads.
-	 * Two calls producing the same digest produce identical system prompt bytes,
-	 * so the rebuild can be skipped.
-	 *
-	 * The session holds the digest, not the text it was computed from: the inputs
-	 * include every active tool's description, so the text is the size of the
-	 * whole tool catalog and a held copy of it would stay on the heap for the life
-	 * of every session and every live subagent. Each input is fed to the hash in
-	 * order, separators included, so the digest is that of the joined text without
-	 * the joined text being built.
-	 *
-	 * The signature covers:
-	 *   1. Active tool names in order (the prompt renders them in this order).
-	 *   2. Active tool labels, descriptions, and wire-visible names — all are
-	 *      rendered into the prompt body (see `system-prompt.md` `{{label}}: \`{{name}}\``
-	 *      and `toolPromptNames` in `buildSystemPrompt`). The wire name comes from
-	 *      `tool.customWireName` and overrides the internal name on the model wire
-	 *      (e.g. `edit` exposes itself as `apply_patch` to GPT-5 in apply_patch mode);
-	 *      a stale wire name would desync prompt guidance from actual tool routing.
-	 *   3. When MCP discovery is on, every registry tool's name+label+description+
-	 *      customWireName, since `rebuildSystemPrompt` summarizes discoverable MCP
-	 *      tools that are not in the active set.
-	 *   4. MCP server instructions text (per server), since `rebuildSystemPrompt`
-	 *      embeds these in the appended prompt under "## MCP Server Instructions".
-	 *      A server upgrade can change instructions while keeping tools identical.
-	 *
-	 * Settings-driven tool metadata is covered automatically: built-in tools that
-	 * depend on settings expose `description`/`label` via getters (see `TaskTool`,
-	 * `SearchToolBm25Tool`, `EditTool`), and the signature reads them live on every
-	 * call - so a settings flip that mutates the rendered string differs the signature
-	 * the next time `#applyActiveToolsByName` runs. Do not refactor `describeTool` to
-	 * cache per-tool strings without preserving this property.
-	 *
-	 * Inputs NOT covered: tool input schemas; memory instructions read from disk;
-	 * and SDK-init-time closure constants in `sdk.ts` (`inlineToolDescriptors`,
-	 * `eagerTasks`, `intentField`, `mcpDiscoveryEnabled`). The closure-captured
-	 * ones cannot change at runtime regardless of skip behavior. Secret guidance
-	 * is read from the live runtime and `refreshSecrets()` explicitly rebuilds it.
-	 * For everything else, callers must explicitly call `refreshBaseSystemPrompt()`
-	 * after side-effecting changes; see e.g. the memory hooks and
-	 * `#syncAfterModelChange`.
-	 *
-	 * The current calendar date IS covered (appended as a segment) because
-	 * `buildSystemPrompt` injects it into the prompt body (`Today is '{{date}}'`).
-	 * Without this, a session spanning midnight with only tool-stable MCP
-	 * reconnects would keep yesterday's date indefinitely.
-	 */
-	#computeAppliedToolSignature(toolNames: string[], tools: AgentTool[]): string {
-		const hash = createHash("sha256");
-		const feedJoined = (parts: readonly string[], separator: string): void => {
-			for (let index = 0; index < parts.length; index++) {
-				if (index > 0) hash.update(separator);
-				hash.update(parts[index]);
-			}
-		};
-		const describeTool = (tool: AgentTool): string =>
-			`${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}|${tool.customWireName ?? ""}`;
-		// Order-preserving: any reorder must produce a different digest so the
-		// rebuild fires and the new tool list reaches the API.
-		feedJoined(toolNames, "\u0001");
-		hash.update("\u0003");
-		feedJoined(tools.map(describeTool), "\u0002");
-		hash.update("\u0005");
-		if (this.#discovery.mcpEnabled) {
-			// Registry iteration order is not load-bearing for the prompt content, so we
-			// sort to keep the digest insensitive to incidental insertion order.
-			const entries: string[] = [];
-			for (const tool of this.#toolRegistry.values()) {
-				entries.push(describeTool(tool));
-			}
-			feedJoined(entries.sort(), "\u0004");
-		}
-		hash.update("\u0007");
-		const serverInstructions = this.#config.getMcpServerInstructions?.();
-		if (serverInstructions && serverInstructions.size > 0) {
-			// Sort by server name so transport flap order does not perturb the digest.
-			const entries: string[] = [];
-			for (const [server, instructions] of serverInstructions) {
-				entries.push(`${server}=${instructions}`);
-			}
-			feedJoined(entries.sort(), "\u0006");
-		}
-		hash.update(`|${this.#config.getLocalCalendarDate?.() ?? localCalendarDate(Date.now())}`);
-		return hash.digest("base64");
-	}
-
-	/**
 	 * Replace MCP tools in the registry and recompute the visible MCP tool set immediately.
 	 * This allows /mcp add/remove/reauth to take effect without restarting the session.
 	 *
@@ -4577,15 +4200,12 @@ export class AgentSession {
 	 *   arrive after initial session activation.
 	 */
 	async refreshMCPTools(mcpTools: CustomTool[], options?: { activateAll?: boolean }): Promise<void> {
-		const previousSelectedMCPToolNames = this.getSelectedMCPToolNames();
-		const existingNames = Array.from(this.#toolRegistry.keys());
-		for (const name of existingNames) {
-			if (isMCPToolName(name)) {
-				this.#toolRegistry.delete(name);
-			}
-		}
+		await this.#toolActivation.refreshMCPTools(mcpTools, options);
+	}
 
-		const getCustomToolContext = (): CustomToolContext => ({
+	/** The context an MCP custom tool runs against, read live on every call. */
+	#customToolContext(): CustomToolContext {
+		return {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#config.modelRegistry,
 			model: this.model,
@@ -4598,88 +4218,14 @@ export class AgentSession {
 			settings: this.settings,
 			getTurnIndex: () => this.getTurnIndex(),
 			localProtocolOptions: localProtocolOptions(this.sessionManager),
-		});
-
-		for (const customTool of mcpTools) {
-			const wrapped = wrapToolWithMetaNotice(CustomToolAdapter.wrap(customTool, getCustomToolContext) as AgentTool);
-			const finalTool = (
-				this.#config.extensionRunner ? new ExtensionToolWrapper(wrapped, this.#config.extensionRunner) : wrapped
-			) as AgentTool;
-			this.#toolRegistry.set(finalTool.name, finalTool);
-		}
-
-		this.#discovery.reindexMCPTools();
-		this.#discovery.pruneSelectedMCP();
-		if (this.sessionManager.getMCPToolSelection() === undefined) {
-			this.#discovery.addConfiguredDefaultMCP();
-		}
-		this.#discovery.rememberSessionDefaults(this.sessionFile);
-
-		if (options?.activateAll) {
-			// Force-activate every newly registered MCP tool. This path is used
-			// when MCP discovery is disabled and tools arrive after initial
-			// activation — without it, getSelectedMCPToolNames() returns only
-			// already-active tools (circular deadlock: tools can only become
-			// active if they're already active).
-			const newMcpNames = mcpTools.map(t => t.name);
-			const nextActive = [...new Set([...this.#discovery.activeNonMCP(), ...newMcpNames])];
-			await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
-			return;
-		}
-
-		const nextActive = [...this.#discovery.activeNonMCP(), ...this.getSelectedMCPToolNames()];
-		await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
+		};
 	}
 
 	/**
 	 * Replace RPC host-owned tools and refresh the active tool set before the next model call.
 	 */
 	async refreshRpcHostTools(rpcTools: AgentTool[]): Promise<void> {
-		const nextToolNames = rpcTools.map(tool => tool.name);
-		const uniqueToolNames = new Set(nextToolNames);
-		if (uniqueToolNames.size !== nextToolNames.length) {
-			throw new Error("RPC host tool names must be unique");
-		}
-
-		for (const name of uniqueToolNames) {
-			if (this.#toolRegistry.has(name) && !this.#rpcHostToolNames.has(name)) {
-				throw new Error(`RPC host tool "${name}" conflicts with an existing tool`);
-			}
-		}
-
-		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
-		const previousActiveToolNames = this.getActiveToolNames();
-		for (const name of previousRpcHostToolNames) {
-			this.#toolRegistry.delete(name);
-		}
-		this.#rpcHostToolNames.clear();
-
-		for (const tool of rpcTools) {
-			const metaWrapped = wrapToolWithMetaNotice(tool);
-			const finalTool = (
-				this.#config.extensionRunner
-					? new ExtensionToolWrapper(metaWrapped, this.#config.extensionRunner)
-					: metaWrapped
-			) as AgentTool;
-			this.#toolRegistry.set(finalTool.name, finalTool);
-			this.#rpcHostToolNames.add(finalTool.name);
-		}
-
-		// Registry contents changed — invalidate discovery caches so the next BM25 lookup sees
-		// the new RPC-host tool set. (#applyActiveToolsByName below also invalidates, but doing
-		// it here too keeps the contract local to "registry mutated".)
-		this.#discovery.invalidate();
-
-		const activeNonRpcToolNames = previousActiveToolNames.filter(name => !previousRpcHostToolNames.has(name));
-		const preservedRpcToolNames = previousActiveToolNames.filter(
-			name => previousRpcHostToolNames.has(name) && this.#rpcHostToolNames.has(name),
-		);
-		const autoActivatedRpcToolNames = rpcTools
-			.filter(tool => !tool.hidden && !previousRpcHostToolNames.has(tool.name))
-			.map(tool => tool.name);
-		await this.#applyActiveToolsByName(
-			Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),
-		);
+		await this.#toolActivation.refreshRpcHostTools(rpcTools);
 	}
 
 	/** Whether auto-compaction is currently running */
@@ -5617,7 +5163,7 @@ export class AgentSession {
 			// already know when it reads either.
 			const sessionStateMessage = this.#buildSessionStateMessage();
 			if (sessionStateMessage) messages.unshift(sessionStateMessage);
-			const beforeAgentStartSystemPrompt = this.#baseSystemPrompt;
+			const beforeAgentStartSystemPrompt = this.#toolActivation.baseSystemPrompt;
 			startupMarker("prompt:before-agent-start:start");
 			// Emit before_agent_start extension event
 			if (this.#config.extensionRunner) {
@@ -6581,7 +6127,7 @@ export class AgentSession {
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
 		this.sessionManager.appendServiceTierChange(serviceTierEntry(this.#serviceTierByFamily));
 		if (nextDiscoverySessionToolNames) {
-			await this.#applyActiveToolsByName(nextDiscoverySessionToolNames, { persistMCPSelection: false });
+			await this.#toolActivation.apply(nextDiscoverySessionToolNames, { persistMCPSelection: false });
 			if (this.getSelectedMCPToolNames().length > 0) {
 				this.sessionManager.appendMCPToolSelection(this.getSelectedMCPToolNames());
 			}
@@ -7254,7 +6800,7 @@ export class AgentSession {
 		if (activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
 		}
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
+		await this.#toolActivation.restoreMCPSelections(sessionContext);
 		this.agent.replaceMessages(activeMessages ?? sessionContext.messages);
 		this.#advisorRoster.resetSessionState();
 		this.#todo.syncFromBranch();

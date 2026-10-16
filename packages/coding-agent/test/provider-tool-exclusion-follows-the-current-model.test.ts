@@ -5,7 +5,7 @@
  * constructed on a cursor model. The registry is built exactly once, so the deletion was
  * permanent: a session that merely STARTED on a cursor model and then switched to Anthropic or
  * OpenAI spent the rest of its life with no edit tool. Nothing reported it, because
- * `#applyActiveToolsByName` discards a requested name that is absent from the registry with no
+ * `ToolActivation.apply` discards a requested name that is absent from the registry with no
  * log and no error — the session's own `session_init` record still listed `edit` among its 22
  * active tools while only 21 were ever advertised. With `defaultModel` pointing at a
  * cursor model, that is every session the operator starts, on every provider, forever.

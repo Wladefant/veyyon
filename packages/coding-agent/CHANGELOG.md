@@ -43,6 +43,7 @@
 - The settings card's agent roster, model-chain picker and shared submenu pieces moved out of `settings-selector.ts` into `agents-submenu.ts`, `model-chain-submenu.ts` and `settings-submenus.ts`; no user-visible change.
 - Branching, the `/btw` branch and tree navigation moved from `session/agent-session.ts` to the `session/runtime/session-branch.ts` collaborator; no user-visible change.
 - The handoff document and the new session it seeds moved from `session/agent-session.ts` to the `session/runtime/session-handoff.ts` collaborator; no user-visible change.
+- The active tool set, the base system prompt with its invalidation record, and the MCP, RPC host, SSH and vibe tool refreshes moved from `session/agent-session.ts` to the `session/runtime/tool-activation.ts` collaborator; no user-visible change.
 - The collab guest dialogs, the hook dialog queue and the extension widgets moved out of `extension-ui-controller.ts` into `collab-guest-dialogs.ts`, `dialog-queue.ts` and `hook-widgets.ts`; no user-visible change.
 - The login, logout, account card and saved-reset flows moved out of `selector-controller.ts` into `account-flows.ts`, and the session picker, resume and delete into `session-flows.ts`; no user-visible change.
 - The `/usage` and `/session` panels and the `/memory` command moved out of `command-controller.ts` into `usage-report-view.ts`, `session-info-view.ts` and `memory-command-controller.ts`; no user-visible change.

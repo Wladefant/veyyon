@@ -22,7 +22,7 @@ import { type BuiltinToolName, normalizeToolName, normalizeToolNames, TOOL } fro
  * refusals, several of which duplicate a branch of {@link isBuiltinToolAllowed}. That
  * duplication is intentional: `BUILTIN_TOOLS.debug(session)` is public API, so the factory has
  * to refuse on its own or a caller that bypasses `createTools` gets a tool the policy forbids.
- * Registry mutation (`AgentSession.#applyActiveToolsByName`, `refreshMCPTools`,
+ * Registry mutation (`ToolActivation.apply`, `refreshMCPTools`,
  * `refreshSshTool`, vibe/RPC tools, plan-mode swaps) stays with the session for the obvious
  * reason: it mutates private session state, which no pure function can own. The full decision
  * map, including every overlap and every site that resisted, is in `local://tool-load-map.md`.

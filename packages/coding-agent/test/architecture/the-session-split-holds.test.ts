@@ -70,8 +70,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * branch summary left as the `session-branch.ts` collaborator (-361).
  * RE-MEASURED 2026-10-16 at 8446: the handoff document and the new session it seeds left as the
  * `session-handoff.ts` collaborator (-208).
+ * RE-MEASURED 2026-10-16 at 7992: the active tool set, the base system prompt with its
+ * invalidation record and rebuild digest, and the MCP, RPC host, SSH and vibe registry refreshes
+ * left as the `tool-activation.ts` collaborator (-454).
  */
-const RUNTIME_CEILING = 8_500;
+const RUNTIME_CEILING = 8_050;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -114,6 +117,7 @@ const COLLABORATORS = [
 	"streaming-edit-guard.ts",
 	"thinking-runtime.ts",
 	"todo-runtime.ts",
+	"tool-activation.ts",
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
 	"turn-context-check.ts",
