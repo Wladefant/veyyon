@@ -15,6 +15,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import { TreeSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/tree-selector";
 import { UserMessageSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/user-message-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import type { Component } from "@veyyon/tui";
 
 beforeAll(async () => {
 	await initTheme();
@@ -31,10 +32,7 @@ afterEach(() => {
 interface EmptyPicker {
 	name: string;
 	emptyText: string;
-	open(
-		onSelect: (id: string) => void,
-		onCancel: () => void,
-	): { render(width: number): string[]; handleInput(data: string): void };
+	open(onSelect: (id: string) => void, onCancel: () => void): Component & { handleInput(data: string): void };
 }
 
 const PICKERS: EmptyPicker[] = [
@@ -50,7 +48,7 @@ const PICKERS: EmptyPicker[] = [
 	},
 ];
 
-function text(picker: { render(width: number): string[] }): string {
+function text(picker: Component): string {
 	return Bun.stripANSI(picker.render(100).join("\n"));
 }
 
