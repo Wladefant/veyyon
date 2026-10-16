@@ -45,6 +45,7 @@
 
 - A provider error that ends a turn is logged at warn with the provider's message, model and error classification, and a failure's retry classification is logged once instead of once per recovery check ([#935](https://github.com/santhreal/veyyon/issues/935)).
 - A headless `browser` launch reads the binary's product and version again after a `--version` probe that failed or timed out, instead of launching every later tab of that binary without a matching `--user-agent`, which named itself `HeadlessChrome`.
+- A credential-free web search that returns before its soft or hard deadline cancels the deadline's timer instead of holding the embedding process open until the deadline passes.
 - A web search cancelled while its headless-browser fallback is opening a page closes that page once it opens instead of leaving it open in the shared browser, and a search cancelled during the fallback's retry delay ends at once instead of after the delay.
 - When several sessions start the `launch` process broker for one directory at once, one broker runs instead of a second one that read the first one's lease before its claim was written and took it as stale.
 - With `browser.naturalInput` on, a click whose `delay` an op deadline or abort cuts short releases the button at once instead of holding it for the rest of the `delay`, which failed the tab's next press with `'left' is already pressed`.
