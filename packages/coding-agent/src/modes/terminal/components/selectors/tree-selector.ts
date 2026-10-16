@@ -959,10 +959,6 @@ export class TreeSelectorComponent implements Component {
 		this.#treeList.onSelect = onSelect;
 		this.#treeList.onCancel = onCancel;
 		this.#treeList.onLabelEdit = (entryId, currentLabel) => this.#showLabelInput(entryId, currentLabel);
-
-		if (tree.length === 0) {
-			setTimeout(() => onCancel(), 100);
-		}
 	}
 
 	setOnRequestRender(cb: () => void): void {

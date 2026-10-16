@@ -256,11 +256,6 @@ export class UserMessageSelectorComponent implements Component {
 		this.#messageList = new UserMessageList(messages);
 		this.#messageList.onSelect = onSelect;
 		this.#messageList.onCancel = onCancel;
-
-		// Auto-cancel if no messages
-		if (messages.length === 0) {
-			setTimeout(() => onCancel(), 100);
-		}
 	}
 
 	setOnRequestRender(cb: () => void): void {
