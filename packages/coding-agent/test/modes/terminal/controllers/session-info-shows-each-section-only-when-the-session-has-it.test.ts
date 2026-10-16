@@ -19,6 +19,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CommandController } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { theme } from "@veyyon/coding-agent/theme/theme";
@@ -68,7 +69,9 @@ async function sessionInfo(fixture: SessionFixture = {}): Promise<string> {
 		cost: fixture.cost ?? 0,
 	};
 	if ("premiumRequests" in fixture) stats.premiumRequests = fixture.premiumRequests;
-	const settings: Record<string, unknown> = { "provider.appendOnlyContext": fixture.appendOnly };
+	const settings = Settings.isolated(
+		fixture.appendOnly === undefined ? {} : { "provider.appendOnlyContext": fixture.appendOnly },
+	);
 	const mcp = fixture.mcp;
 	const ctx = {
 		session: {
@@ -85,7 +88,7 @@ async function sessionInfo(fixture: SessionFixture = {}): Promise<string> {
 			},
 			providerSessionState: new Map(),
 		},
-		settings: { get: (key: string) => settings[key] },
+		settings,
 		lspServers: fixture.lspServers,
 		mcpManager: mcp && {
 			getConnectedServers: () => mcp.map(server => server.name),
