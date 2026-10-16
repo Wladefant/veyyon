@@ -92,6 +92,8 @@
 - Permission intent and memory consolidation parsing read their arguments through the `isRecord` guard instead of repeating it as a cast; no user-visible change.
 - The inline tool-output budget no longer re-checks for a non-finite `tools.artifactSpillThreshold`, which the settings read already replaces with its default and reports; no user-visible change.
 - The session composition root drops a redundant field comment to stay within its measured size; no user-visible change.
+- Session creation applies the web search and image provider preferences through the one reader the session scope uses; no user-visible change.
+- Settings reads drop the fallbacks and kind re-checks the typed read already guarantees, and provider preferences read their declared types; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
@@ -160,6 +162,7 @@
 - Fixed a scalar where a settings group belongs in `config.yml` (such as `tools: on`) moving the whole file aside to `config.yml.corrupt`; the scalar is ignored and every other setting in the file still loads.
 - Setting the todo reminder limit no longer turns todo reminders back on, and turning reminders off no longer drops the limit; the limit is `todo.reminderLimit`, and a stored `todo.reminders.max` moves there on load.
 - Startup configuration warnings state what a setting of the wrong kind or outside its allowed values reads as, and report such values in `--config` overlay files as well as the profile config.
+- The task tool's `context` argument streams into the pending preview as it arrives in batch mode instead of advancing in throttle-sized steps.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
