@@ -75,6 +75,7 @@
 - `tab.observe()` no longer fails with `Cannot read properties of null (reading 'nodeType')` while a date, time or colour picker is open; the picker's own controls are left out of the list.
 - A `browser` `tab.drag()` or multiple `tab.select()` cut short by its deadline or an abort releases the mouse button or modifier it pressed, instead of leaving it held so every later click on the tab failed with `'left' is already pressed` or arrived as a Control-click.
 - A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
+- A browser the `browser` tool spawned is killed on session end or a failed attach when the native addon cannot load, instead of being left running.
 
 ### Removed
 

@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import { ProcessStatus } from "@veyyon/natives";
-import { trimTrailingSlashes } from "@veyyon/utils";
+import { procmgr, trimTrailingSlashes } from "@veyyon/utils";
 import { processHandle, processHandlesByPath } from "@veyyon/utils/native-process";
 import type { Browser, Page } from "puppeteer-core";
 import { scopedTimeoutSignal } from "../../../utils/fetch-timeout";
@@ -181,12 +181,28 @@ async function pickPageFromList(pages: Page[], matcher?: string): Promise<Page> 
 
 /**
  * SIGTERM the process tree, wait briefly, then SIGKILL anything still alive.
- * Single-process variant for our own spawned children.
+ * Single-process variant for our own spawned children. Without the native
+ * addon there is no tree walk, so the same sequence goes to `pid` alone.
  */
 export async function gracefulKillTreeOnce(pid: number, gracePeriodMs = 2000): Promise<void> {
-	const process = processHandle(pid);
-	if (!process) return;
-	await process.terminate({ gracefulMs: gracePeriodMs, timeoutMs: 500 });
+	const handle = processHandle(pid);
+	if (handle) {
+		await handle.terminate({ gracefulMs: gracePeriodMs, timeoutMs: 500 });
+		return;
+	}
+	if (!signalPid(pid, "SIGTERM")) return;
+	if (await procmgr.onProcessExit(pid, AbortSignal.timeout(gracePeriodMs))) return;
+	signalPid(pid, "SIGKILL");
+}
+
+/** Send `signal` to `pid`; false when the pid is already gone. */
+function signalPid(pid: number, signal: NodeJS.Signals): boolean {
+	try {
+		process.kill(pid, signal);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /**
