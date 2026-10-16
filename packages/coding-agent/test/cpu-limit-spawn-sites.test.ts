@@ -141,7 +141,7 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: true,
 		reason: "language servers are the big one: rust-analyzer is a sustained multi-core load, adopted on spawn",
 	},
-	"packages/coding-agent/src/lsp/index.ts": {
+	"packages/coding-agent/src/lsp/workspace-diagnostics.ts": {
 		wired: true,
 		reason: "the go.work probe and the project diagnostics build (cargo check, tsc, go build) are adopted",
 	},

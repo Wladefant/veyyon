@@ -1,3 +1,10 @@
+/**
+ * Regressions of the `lsp` tool and its client, driven through `LspTool` against in-process servers.
+ *
+ * Subject: `lsp/index.ts` and the modules it dispatches to, driven through `LspTool`: the server
+ * selection in `lsp/servers.ts`, the go.work and go.mod project checks in
+ * `lsp/workspace-diagnostics.ts`, and the `rename_file` move and edit collection in `lsp/rename-file.ts`.
+ */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";

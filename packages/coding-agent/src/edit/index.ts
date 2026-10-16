@@ -4,9 +4,14 @@ import { MismatchError as HashlineMismatchError, HL_MOVE_KEYWORD } from "@veyyon
 import hashlineGrammar from "@veyyon/hashline/grammar.lark" with { type: "text" };
 import { HASHLINE_PROMPTS } from "@veyyon/hashline/prompts/registry";
 import { errorMessage, isCancellation, prompt } from "@veyyon/utils";
-import { createLspWritethrough, flushLspWritethroughBatch, type WritethroughCallback, writethroughNoop } from "../lsp";
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
+import {
+	createLspWritethrough,
+	flushLspWritethroughBatch,
+	type WritethroughCallback,
+	writethroughNoop,
+} from "../lsp/writethrough";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { budgetedFileCommit, sessionBudgetLimits } from "../session/cpu-limit";
 import type { ToolSession } from "../tools";

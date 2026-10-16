@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createLspWritethrough, type FileDiagnosticsResult } from "@veyyon/coding-agent/lsp";
 import * as lspClient from "@veyyon/coding-agent/lsp/client";
 import * as lspConfig from "@veyyon/coding-agent/lsp/config";
+import type { FileDiagnosticsResult } from "@veyyon/coding-agent/lsp/diagnostics";
 import type { Diagnostic, LspClient, ServerConfig } from "@veyyon/coding-agent/lsp/types";
 import { fileToUri } from "@veyyon/coding-agent/lsp/utils";
+import { createLspWritethrough } from "@veyyon/coding-agent/lsp/writethrough";
 import type { DeferredDiagnosticsEntry, ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { type ptree, TempDir } from "@veyyon/utils";

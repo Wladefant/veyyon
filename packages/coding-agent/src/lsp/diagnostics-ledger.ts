@@ -1,4 +1,4 @@
-import type { FileDiagnosticsResult } from "./index";
+import type { FileDiagnosticsResult } from "./diagnostics";
 import { summarizeDiagnosticMessages } from "./utils";
 
 const DIAGNOSTIC_LOCATION_PREFIX_RE = /^.*?:\d+:\d+\s+/;

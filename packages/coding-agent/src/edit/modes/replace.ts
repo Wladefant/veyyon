@@ -8,7 +8,8 @@
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
-import type { FileDiagnosticsResult, WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
+import type { FileDiagnosticsResult } from "../../lsp/diagnostics";
+import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp/writethrough";
 import type { ToolSession } from "../../tools";
 import { routeWriteThroughBridge } from "../../tools/core/acp-bridge";
 import { invalidateFsScanAfterWrite } from "../../tools/core/fs-cache-invalidation";
