@@ -73,7 +73,7 @@ describe("the GitLab Duo registry entry", () => {
 				new Response(JSON.stringify({ error: "invalid_grant" }), {
 					status: 400,
 					headers: { "Content-Type": "application/json" },
-				})) as typeof globalThis.fetch,
+				})) as unknown as typeof globalThis.fetch,
 		);
 
 		try {
