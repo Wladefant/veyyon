@@ -1,7 +1,8 @@
 /**
  * Provider usage reports for the credentials `AuthStorage` holds: the per-credential fetch with
  * refresh-on-expiry, the persisted report cache and its failure backoff, rate-limit header ingest,
- * recorded history and cost, and the coalesced fan-out over every stored credential.
+ * recorded history and cost, the coalesced fan-out over every stored credential, and the
+ * credential health check that probes each stored row against its usage endpoint.
  *
  * Row writes, credential disabling, routing and rate-limit block reconciliation are defined in
  * `AuthStorage`; this module reaches them through {@link UsageReportingHost}.
@@ -9,6 +10,7 @@
 
 import * as logger from "@veyyon/utils/logger";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import { USAGE_REPORT_TTL_MS } from "../auth-credential-rows";
 import { getEnvApiKey } from "../env-api-key";
 import * as AIError from "../error";
@@ -30,9 +32,18 @@ import { resolveUsedFraction } from "../usage";
 import { listRegisteredUsageProviders, resolveRegisteredUsageProvider } from "../usage/registry";
 import { raceWithSignal } from "../utils/abort";
 import type { StoredCredential } from "./credentials";
+import { buildCompletionProbeCredential } from "./credentials";
 import { withAuthHttpConcurrency } from "./http-concurrency";
 import { OAUTH_REFRESH_SKEW_MS } from "./oauth-refresh";
-import type { AuthCredential, AuthCredentialStore, AuthStorageOptions, OAuthCredential } from "./types";
+import type {
+	AuthCredential,
+	AuthCredentialStore,
+	AuthStorageOptions,
+	CheckCredentialsOptions,
+	CredentialHealthResult,
+	OAuthCredential,
+} from "./types";
+import { REMOTE_REFRESH_SENTINEL } from "./types";
 import type { UsageCache } from "./usage-cache";
 import { AuthStorageUsageCache } from "./usage-cache";
 import {
@@ -112,6 +123,8 @@ export interface UsageReportingHost {
 	reconcileCodexUsageBlocksFromReports(reports: UsageReport[]): void;
 	/** Resolve a stored API key value (an env var name or a literal). */
 	resolveConfigValue(config: string): Promise<string | undefined>;
+	/** Record that the provider refused row `credentialId`'s grant. */
+	markAuthDead(credentialId: number): void;
 }
 
 export class UsageReporting {
@@ -717,6 +730,184 @@ export class UsageReporting {
 
 		this.#reportsInFlight.set(cacheKey, promise);
 		return promise;
+	}
+
+	/** See {@link AuthStorage.checkCredentials}. */
+	async checkCredentials(options?: CheckCredentialsOptions): Promise<CredentialHealthResult[]> {
+		options?.signal?.throwIfAborted();
+		const active = this.#store.listAuthCredentials();
+		// Filtered here rather than by the caller, so the per-row deadline, the refresh-on-expiry and
+		// the sequential pacing below all apply unchanged to a one-row probe.
+		const wanted = options?.credentialIds;
+		const stored = wanted === undefined ? active : active.filter(row => wanted.includes(row.id));
+		const timeoutMs = options?.timeoutMs ?? this.requestTimeoutMs;
+		const completionProbe = options?.completionProbe;
+		const completionTimeoutMs = options?.completionTimeoutMs ?? timeoutMs;
+		const ctx = this.fetchContext();
+
+		const results: CredentialHealthResult[] = [];
+		for (const row of stored) {
+			options?.signal?.throwIfAborted();
+			const base: CredentialHealthResult = {
+				id: row.id,
+				provider: row.provider,
+				type: row.credential.type,
+				ok: null,
+			};
+			if (row.credential.type === "oauth") {
+				if (row.credential.email) base.email = row.credential.email;
+				if (row.credential.accountId) base.accountId = row.credential.accountId;
+				if (row.credential.orgId) base.orgId = row.credential.orgId;
+				if (row.credential.orgName) base.orgName = row.credential.orgName;
+				if (row.credential.refresh === REMOTE_REFRESH_SENTINEL) base.remoteRefresh = true;
+			}
+
+			const baseUrl = options?.baseUrlResolver?.(row.provider as Provider);
+			const cred = row.credential;
+			const initialRequest: UsageRequestDescriptor =
+				cred.type === "api_key"
+					? buildUsageRequest(row.provider as Provider, { type: "api_key", apiKey: cred.key }, baseUrl)
+					: buildUsageRequestForOauth(row.provider as Provider, cred, baseUrl);
+
+			// Scoped per-row deadline: cancelled at both loop exits below so the
+			// backing timer never outlives the row's probes (a bare
+			// AbortSignal.timeout stays armed for the full timeout). Every await
+			// in between is individually try/caught, so the exits are exhaustive.
+			const probeTimeout = scopedTimeoutSignal(timeoutMs, options?.signal);
+			const probeSignal = probeTimeout.signal;
+			let params: UsageFetchParams & { signal: AbortSignal } = {
+				...initialRequest,
+				accountKey: buildUsageCacheIdentity(initialRequest.credential),
+				signal: probeSignal,
+			};
+			let refreshFailure: { reason: string; definitive: boolean } | undefined;
+
+			// Refresh expired OAuth before probing — without this an expired access
+			// token reports as `false` when the credential is actually healthy
+			// (broker would happily refresh it on the next real request). The
+			// refreshed bytes feed BOTH the usage probe and the optional
+			// completion probe; we do it up-front so it runs even when no
+			// `UsageProvider` is registered for this provider.
+			if (
+				cred.type === "oauth" &&
+				initialRequest.credential.type === "oauth" &&
+				initialRequest.credential.expiresAt !== undefined &&
+				Date.now() >= initialRequest.credential.expiresAt
+			) {
+				const refreshable = buildRefreshableOauthCredential(initialRequest.credential);
+				if (refreshable) {
+					try {
+						const refreshed = await this.#host.refreshOAuthCredential(
+							row.provider as Provider,
+							refreshable,
+							row.id,
+							probeSignal,
+						);
+						const refreshedCredential = mergeRefreshedUsageCredential(initialRequest.credential, refreshed);
+						this.#host.persistRefreshedUsageCredential(
+							row.provider as Provider,
+							initialRequest.credential,
+							refreshedCredential,
+							row.id,
+						);
+						params = {
+							...params,
+							credential: refreshedCredential,
+							accountKey: buildUsageCacheIdentity(refreshedCredential),
+						};
+					} catch (error) {
+						const message = errorMessage(error);
+						refreshFailure = AIError.isDefinitiveOAuthFailure(message)
+							? { reason: `oauth refresh failed: ${message}`, definitive: true }
+							: {
+									reason: `access token refresh did not complete: ${message}; the next request retries it`,
+									definitive: false,
+								};
+					}
+				}
+			}
+
+			if (refreshFailure) {
+				probeTimeout.cancel();
+				base.reason = refreshFailure.reason;
+				if (refreshFailure.definitive) {
+					base.ok = false;
+					// The provider refused this grant, and that is the same verdict the request path records
+					// when a turn dies on one. The mark belongs here too, because a probe is how a surface
+					// learns of the refusal BEFORE any request is sent: without it the account card could
+					// label a revoked grant as what serves next on the very row that printed the refusal,
+					// and the session's first request was then guaranteed to fail on an account the product
+					// had already been told about.
+					this.#host.markAuthDead(row.id);
+				}
+				// A refresh that timed out, hit the network, or met a provider outage says nothing about
+				// the grant, so the row stays `ok: null` and keeps serving: marking it dead would move a
+				// session off a working login because the probe's own deadline elapsed. Either way the
+				// access token is expired, so both probes are skipped; they would only re-surface the
+				// same failure.
+				results.push(base);
+				continue;
+			}
+
+			const providerImpl = this.providerFor(row.provider as Provider);
+			if (!providerImpl) {
+				base.reason = `no usage probe configured for provider ${row.provider}`;
+			} else if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
+				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+			} else if (providerImpl.validatesCredentials === false) {
+				base.reason = `usage probe for ${row.provider} does not validate credentials`;
+			} else {
+				try {
+					const report = await providerImpl.fetchUsage(params, ctx);
+					if (report === null) {
+						base.reason = "usage probe returned no data for this credential";
+					} else {
+						base.ok = true;
+						const accountId = getUsageReportMetadataValue(report, "accountId");
+						const email = getUsageReportMetadataValue(report, "email");
+						if (accountId) base.accountId = accountId;
+						if (email) base.email = email;
+						const { raw: _raw, ...trimmed } = report;
+						base.report = trimmed;
+					}
+				} catch (error) {
+					base.ok = false;
+					base.reason = errorMessage(error);
+				}
+			}
+			probeTimeout.cancel();
+
+			if (completionProbe) {
+				const probeCred = buildCompletionProbeCredential(params.credential);
+				if (!probeCred) {
+					base.completion = {
+						ok: null,
+						reason: `no bearer bytes available for ${row.credential.type} credential`,
+					};
+				} else {
+					const completionTimeout = scopedTimeoutSignal(completionTimeoutMs, options?.signal);
+					try {
+						base.completion = await completionProbe({
+							provider: row.provider as Provider,
+							credentialId: row.id,
+							credential: probeCred,
+							signal: completionTimeout.signal,
+						});
+					} catch (error) {
+						base.completion = {
+							ok: false,
+							reason: errorMessage(error),
+						};
+					} finally {
+						completionTimeout.cancel();
+					}
+				}
+			}
+
+			results.push(base);
+		}
+
+		return results;
 	}
 
 	/**
