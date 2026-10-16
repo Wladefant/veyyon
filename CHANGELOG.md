@@ -37,7 +37,9 @@
 - `tests/evals/docs/` is the evals manual, replacing `EVALS.md`.
 - `benches/browser-fill.ts` times `tab.fill` in headless Chromium for 16, 256 and 4,096 characters and counts a fill correct only when the field holds the value.
 - `benches/natural-input.ts` times `tab.click`, `tab.type`, `tab.fill` on a text field, a date input and a range, and `tab.select` on a drop-down with `browser.naturalInput` off and on, and `benches/bot-detection.ts` opens public bot-detector pages through the browser tool and prints each verdict and the signals it flags.
+- `@veyyon/hashline` exports `unquotePath`, which strips one matching pair of surrounding quotes from a path; the section-header parser uses it instead of a private copy.
 - An enum `SettingDef` may declare `invalid`, the member a configured value outside `values` reads as.
+- `TextChunk`, the element type `wordWrapLine` returns, is exported from `components/editor`.
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
 - `withScopedTimeoutSignal` accepts an optional parent signal, combined with its deadline.
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
@@ -105,11 +107,14 @@
 - The `github` tool's Actions run model, fetches, outcome rules and watch reports moved from `tools/web/gh.ts` to `tools/web/gh-run-watch.ts`; no user-visible change.
 - Extension and custom slash-command resolution and the command context a session builds without an extension runner moved from `session/agent-session.ts` to `session/agent-session-commands.ts`; no user-visible change.
 - The process agent lifecycle manager is rebuilt when the process agent registry is replaced, so it never terminates or parks agents through a registry nothing reads; no user-visible change.
+- Deleted tool-renderer, output-notice, image and LSP helpers that nothing called (`renderCollapsedOutputLines`, `formatMeta`, `formatEmptyMessage`, `formatTitle`, the rendered-string memo, `appendParseErrorsBulletList`, the styled truncation notices, `SUPPORTED_INPUT_IMAGE_MIME_TYPES`, `getServerForFile`, `hasCapability`); no user-visible change.
+- The benchmark CLIs share one time-to-first-token predicate, the guided-goal turn and the memory passes share one per-attempt credential refresh, the model registry and the sign-in list share one reader of `disabledProviders`, and the legacy plugin loader resolves package `imports` and `exports` targets through one function; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved Anthropic tool `input_schema` normalization and the strict-tool plan out of `providers/anthropic.ts` into `providers/anthropic-tool-schema.ts`, with no user-visible change.
 - Moved the Cursor native exec result builders (read, write, delete, shell, ls, grep, diagnostics) out of `providers/cursor.ts` into `providers/cursor-exec-results.ts`, with no user-visible change.
+- OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
 - A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
@@ -121,6 +126,10 @@
 ### Removed
 
 - The headless browser no longer returns a made-up font list from `queryLocalFonts`.
+- Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.
+- Removed the unused `isCursorTokenExpiringSoon`, `configuredProviderMaxInFlightRequests` and `mapToAnthropicToolChoice` exports and the `AnthropicToolChoice` type; `mapAnthropicToolChoice` in `stream.ts` is the Anthropic tool-choice mapping.
+- Removed the unused `deferredTransaction`, `REV_CATEGORY`, `REV_PHRASE`, `VEC_TYPE`, `vecSearch`, `fastembedCacheDir`, `modelCacheDir`, `HOST_LLM_TIMEOUT_SECONDS` and no-op `resetRecoveryForTests` exports; loading `core/binary-vectors` no longer reads `MNEMOPI_VEC_TYPE` at import time.
+- Removed the unused `easeInCubic` easing and `getHangulCompatibilityJamoWidth` getter.
 
 ### Fixed
 
