@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
+import { hermeticSpawnEnv } from "../../helpers/hermetic-spawn-env";
 
 /**
  * WHY: `gracefulKillTreeOnce` is how the browser tool ends a browser it spawned:
@@ -30,8 +31,18 @@ const ATTACH_URL = `file://${path.join(REPO_ROOT, "packages/coding-agent/src/too
  */
 function runWithoutAddon(body: string): { stdout: string; stderr: string; status: number | null } {
 	const snippet = `Object.defineProperty(process, "platform", { value: "sunos", configurable: true });\n${body}`;
-	const result = spawnSync(process.execPath, ["-e", snippet], { cwd: REPO_ROOT, encoding: "utf8", timeout: 20_000 });
-	return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", status: result.status };
+	const { env, cleanup } = hermeticSpawnEnv();
+	try {
+		const result = spawnSync(process.execPath, ["-e", snippet], {
+			cwd: REPO_ROOT,
+			env,
+			encoding: "utf8",
+			timeout: 20_000,
+		});
+		return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", status: result.status };
+	} finally {
+		cleanup();
+	}
 }
 
 function parseStdout(run: { stdout: string; stderr: string }): unknown {

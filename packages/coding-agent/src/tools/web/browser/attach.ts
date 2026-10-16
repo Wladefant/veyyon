@@ -191,7 +191,12 @@ export async function gracefulKillTreeOnce(pid: number, gracePeriodMs = 2000): P
 		return;
 	}
 	if (!signalPid(pid, "SIGTERM")) return;
-	if (await procmgr.onProcessExit(pid, AbortSignal.timeout(gracePeriodMs))) return;
+	const grace = scopedTimeoutSignal(gracePeriodMs);
+	try {
+		if (await procmgr.onProcessExit(pid, grace.signal)) return;
+	} finally {
+		grace.cancel();
+	}
 	signalPid(pid, "SIGKILL");
 }
 
