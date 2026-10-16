@@ -77,20 +77,12 @@ describe("normalizeAnthropicToolSchema — SDK whitelist", () => {
 		});
 
 		// `SupportedStringFormats` in the Anthropic SDK's `_transform.py`: each is sent as `format`.
-		it.each([
-			"date-time",
-			"time",
-			"date",
-			"duration",
-			"email",
-			"hostname",
-			"uri",
-			"ipv4",
-			"ipv6",
-			"uuid",
-		])("keeps the SDK-supported `%s` format", (format: string) => {
-			expect(normalizeAnthropicToolSchema({ type: "string", format })).toEqual({ type: "string", format });
-		});
+		it.each(["date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"])(
+			"keeps the SDK-supported `%s` format",
+			(format: string) => {
+				expect(normalizeAnthropicToolSchema({ type: "string", format })).toEqual({ type: "string", format });
+			},
+		);
 	});
 
 	describe("array nodes", () => {
