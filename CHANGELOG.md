@@ -61,6 +61,7 @@
 
 ### Fixed
 
+- With `browser.naturalInput` on, a click whose `delay` an op deadline or abort cuts short releases the button at once instead of holding it for the rest of the `delay`, which failed the tab's next press with `'left' is already pressed`.
 - A `browser` `:has-text()` selector matches the text Playwright matches, so a page whose `<title>`, inline `<script>`, `<style>` or `<noscript>` holds the words acts on the element showing them instead of timing out on an element with no box, and a submit input's value and a shadow root's text count as their element's text.
 - `tab.fill` on a time or datetime input whose `min` and `max` narrow the hour field, such as `min="13:00" max="17:00"`, types the hour as a person does instead of setting the value by script with untrusted `input` and `change` events.
 - With `browser.naturalInput` on, a click through a `tab.id()` or `tab.ref()` handle whose element the page replaces while the button is held is made again on the replacement instead of reporting success with no click sent.
@@ -92,6 +93,7 @@
 - `tab.observe()` no longer fails with `Cannot read properties of null (reading 'nodeType')` while a date, time or colour picker is open; the picker's own controls are left out of the list.
 - A `browser` `tab.drag()` or multiple `tab.select()` cut short by its deadline or an abort releases the mouse button or modifier it pressed, instead of leaving it held so every later click on the tab failed with `'left' is already pressed` or arrived as a Control-click.
 - A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
+- A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - A trial cut short by a cancelled run gets no journal row, so `--resume` runs it again, and the retry backoff ends when the run is cancelled.
 - A trial whose agent exited before any provider request succeeded is retried as infrastructure whatever its stderr says, and a failed request no longer counts as a turn.
 - A journal whose last line was cut off by a killed process is repaired before the next append instead of becoming unreadable.
@@ -102,6 +104,7 @@
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
+- `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 
 ## [1.5.8] - 2026-10-16
 
