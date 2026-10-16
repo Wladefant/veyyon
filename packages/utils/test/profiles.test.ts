@@ -30,6 +30,7 @@ import {
 	setAgentDir,
 	setProfile,
 } from "@veyyon/utils/dirs";
+import { withoutComments } from "@veyyon/utils/module-reach";
 import { Snowflake } from "@veyyon/utils/snowflake";
 import { stringConstantsIn } from "@veyyon/utils/source-declarations";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "./helpers/isolated-config-root";
@@ -592,7 +593,9 @@ describe("profile path segment ownership", () => {
 		// a future path builder would drift on a rename, so the only permitted
 		// occurrence is the const declaration itself.
 		const dirsSource = await fs.readFile(path.join(import.meta.dir, "..", "src", "dirs.ts"), "utf-8");
-		const literals = dirsSource.match(/"profiles"/g) ?? [];
+		// Code only, any quote style: prose naming the directory is not a path literal, and a
+		// single-quoted or template copy is the same drift as a double-quoted one.
+		const literals = withoutComments(dirsSource).match(/(["'`])profiles\1/g) ?? [];
 		expect(literals).toHaveLength(1);
 		expect(stringConstantsIn(dirsSource).filter(constant => constant.value === "profiles")).toEqual([
 			{ name: "PROFILES_DIR_NAME", value: "profiles", exported: true },
