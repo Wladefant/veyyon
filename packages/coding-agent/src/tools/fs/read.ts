@@ -135,10 +135,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 	constructor(private readonly session: ToolSession) {
 		this.#displayMode = resolveFileDisplayMode(session);
 		const autoResizeImages = session.settings.get("images.autoResize");
-		const defaultLimit = Math.max(
-			1,
-			Math.min(session.settings.get("read.defaultLimit") ?? DEFAULT_MAX_LINES, DEFAULT_MAX_LINES),
-		);
+		const defaultLimit = Math.max(1, Math.min(session.settings.get("read.defaultLimit"), DEFAULT_MAX_LINES));
 		const inspectImageEnabled = session.settings.get("inspect_image.enabled");
 		this.#ctx = { session, defaultLimit, autoResizeImages, inspectImageEnabled };
 	}

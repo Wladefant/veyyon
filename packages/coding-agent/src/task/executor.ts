@@ -1800,7 +1800,7 @@ function nonNegativeInt(value: unknown): number {
 }
 
 function resolveSoftRequestBudget(settings: Settings, agentName: string): number {
-	const configuredDefault = nonNegativeInt(settings.get("agent.softRequestBudget") ?? SOFT_REQUEST_BUDGET.default);
+	const configuredDefault = nonNegativeInt(settings.get("agent.softRequestBudget"));
 	return configuredDefault === 0 ? 0 : (SOFT_REQUEST_BUDGET[agentName] ?? configuredDefault);
 }
 
@@ -2520,7 +2520,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		detached: options.detached,
 		sessionFile,
 		softRequestBudget: resolveSoftRequestBudget(settings, agent.name),
-		softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice") ?? false,
+		softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice"),
 		maxRuntimeMs: nonNegativeInt(options.maxRuntimeMs ?? settings.get("agent.maxRuntimeMs")),
 	});
 

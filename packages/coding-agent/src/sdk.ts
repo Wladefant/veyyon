@@ -647,7 +647,7 @@ class SessionStartup {
 		});
 		this.#argotGate = buildArgotGate(
 			this.#argotEnabled,
-			settings.get("argot.encode.models") ?? [],
+			settings.get("argot.encode.models"),
 			settings.get("argot.encode.disableAboveTokens"),
 		);
 	}
@@ -1103,7 +1103,7 @@ class SessionStartup {
 			...this.#promptInputs.promptOptions(),
 			// The tree is scanned when the project is discovered, so this flag hides a scanned tree but
 			// cannot scan one; `gate-registry.ts` records that placement.
-			includeWorkspaceTree: settings.get("includeWorkspaceTree") ?? false,
+			includeWorkspaceTree: settings.get("includeWorkspaceTree"),
 			// A spawned agent gets no personality whatever the setting: a fact about this caller, not
 			// about the configuration.
 			personality: this.#identity.kind === "sub" ? "none" : gateInputs.personality,
@@ -1175,7 +1175,10 @@ class SessionStartup {
 		this.#requestedToolNames = new Set(requestedToolNames);
 		this.#ttsrManager.reportUnknownToolScopes(toolRegistry.keys());
 		this.#discoveryDefaultServers = new Set(
-			(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
+			settings
+				.get("mcp.discoveryDefaultServers")
+				.map(serverName => serverName.trim())
+				.filter(Boolean),
 		);
 		const registered = this.#registeredTools.map(tool => tool.definition);
 		this.#initialTools = resolveInitialActiveToolNames({
@@ -1279,9 +1282,9 @@ class SessionStartup {
 			deadline: options.deadline,
 			transformContext: hooks.transformContext,
 			transformProviderContext: hooks.transformProviderContext,
-			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
-			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",
-			interruptMode: settings.get("interruptMode") ?? "immediate",
+			steeringMode: settings.get("steeringMode"),
+			followUpMode: settings.get("followUpMode"),
+			interruptMode: settings.get("interruptMode"),
 			thinkingBudgets: settings.getGroup("thinkingBudgets"),
 			// Unset is exactly UNSET_NUMBER, read through its one owner, so a configured negative presence
 			// or repetition penalty (both providers accept them) reaches the request.
@@ -1292,7 +1295,7 @@ class SessionStartup {
 			presencePenalty: optionalNumber(settings.get("presencePenalty")),
 			repetitionPenalty: optionalNumber(settings.get("repetitionPenalty")),
 			hideThinkingSummary: settings.get("omitThinking"),
-			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
+			kimiApiFormat: settings.get("providers.kimiApiFormat"),
 			preferWebsockets: this.#preferWebsockets,
 			getToolContext: toolCall => this.#toolContextStore.getContext(toolCall),
 			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, agent.sessionId),

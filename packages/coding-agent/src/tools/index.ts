@@ -609,7 +609,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const includeYield = session.requireYieldTool === true;
 	const enableLsp = session.enableLsp ?? true;
 	const taskDepth = session.taskDepth ?? 0;
-	const memoryBackend = session.settings.get("memory.backend") ?? "";
+	const memoryBackend = session.settings.get("memory.backend");
 	const goalEnabled = session.settings.get("goal.enabled");
 	// An EXPLICIT whitelist gets widened with the tools its entries imply (see
 	// `./loading/policy`). With no whitelist there is nothing to widen: the default path below

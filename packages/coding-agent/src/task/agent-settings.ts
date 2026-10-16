@@ -17,13 +17,7 @@ import { parseConfiguredEffortSetting } from "../config/effort-resolver";
 import { namesInheritedModel, normalizeModelPatternList } from "../config/model-pattern-list";
 import type { SettingPath, Settings } from "../config/settings";
 import type { AgentLaneSettings, AgentSettings } from "../config/settings-domains/agents";
-import {
-	DEFAULT_AGENT_IDLE_TTL_MS,
-	DEFAULT_AGENT_MAX_NESTED_SPAWN_DEPTH,
-	DEFAULT_AGENT_PRUNE_MS,
-	DEFAULT_AGENT_WAITING_PRUNE_MS,
-	DEFAULT_ENABLED_BUNDLED_AGENT,
-} from "../config/settings-domains/agents";
+import { DEFAULT_AGENT_MAX_NESTED_SPAWN_DEPTH, DEFAULT_ENABLED_BUNDLED_AGENT } from "../config/settings-domains/agents";
 import { retiredBy, settingsSchemaPaths } from "../config/settings-schema";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { currentAgentName, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
@@ -43,7 +37,7 @@ export type DelegationStrength = "allowed" | "preferred" | "required";
 
 /** Resolved delegation strength (`agent.delegation`). */
 export function delegationStrength(settings: Settings): DelegationStrength {
-	return (settings.get("agent.delegation") ?? "preferred") as DelegationStrength;
+	return settings.get("agent.delegation");
 }
 
 /**
@@ -59,7 +53,7 @@ export function delegationStrength(settings: Settings): DelegationStrength {
  * for a turn.
  */
 export function agentsEnabled(settings: Settings): boolean {
-	return settings.get("agent.enabled") ?? true;
+	return settings.get("agent.enabled");
 }
 
 /**
@@ -70,9 +64,7 @@ export function agentsEnabled(settings: Settings): boolean {
  * completed agent process past the operator's configured limit.
  */
 export function resolveAgentIdleTtlMs(settings: Settings): number {
-	const configured = Number(settings.get("agent.idleTtlMs") ?? DEFAULT_AGENT_IDLE_TTL_MS);
-	if (!Number.isFinite(configured)) return DEFAULT_AGENT_IDLE_TTL_MS;
-	return Math.max(0, Math.trunc(configured));
+	return Math.max(0, Math.trunc(settings.get("agent.idleTtlMs")));
 }
 
 /** How long a parked agent survives before it is closed, by whether it was waiting. */
@@ -99,16 +91,13 @@ export interface AgentPruneBudget {
  * it below a quiet agent's.
  */
 export function resolveAgentPruneBudget(settings: Settings): AgentPruneBudget {
-	if ((settings.get("agent.prune.enabled") ?? true) !== true) {
+	if (!settings.get("agent.prune.enabled")) {
 		return { afterMs: 0, waitingAfterMs: 0 };
 	}
-	const readMs = (path: "agent.prune.afterMs" | "agent.prune.waitingAfterMs", fallback: number): number => {
-		const configured = Number(settings.get(path) ?? fallback);
-		if (!Number.isFinite(configured)) return fallback;
-		return Math.max(0, Math.trunc(configured));
-	};
-	const afterMs = readMs("agent.prune.afterMs", DEFAULT_AGENT_PRUNE_MS);
-	const waitingAfterMs = readMs("agent.prune.waitingAfterMs", DEFAULT_AGENT_WAITING_PRUNE_MS);
+	const readMs = (path: "agent.prune.afterMs" | "agent.prune.waitingAfterMs"): number =>
+		Math.max(0, Math.trunc(settings.get(path)));
+	const afterMs = readMs("agent.prune.afterMs");
+	const waitingAfterMs = readMs("agent.prune.waitingAfterMs");
 	// A zero parked budget means "never close", so a waiting budget cannot revive
 	// closing for the waiting case alone.
 	if (afterMs === 0) return { afterMs: 0, waitingAfterMs: 0 };

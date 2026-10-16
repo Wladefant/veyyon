@@ -64,8 +64,8 @@ export async function discoverSessionExtensionPaths(
 	if (options.disableExtensionDiscovery) {
 		return options.additionalExtensionPaths ?? [];
 	}
-	const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
-	const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
+	const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...settings.get("extensions")];
+	const disabledExtensionIds = settings.get("disabledExtensions");
 	return discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, agentDir);
 }
 
@@ -97,7 +97,7 @@ export async function loadSessionExtensions(
 		adoptSpawnedPid,
 		{
 			agentDir,
-			configuredPaths: [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])],
+			configuredPaths: [...(options.additionalExtensionPaths ?? []), ...settings.get("extensions")],
 		},
 		gateSpawn,
 	);
@@ -273,7 +273,7 @@ export function discoverProjectInputs(
 			? Promise.resolve({ skills: supplied.skills, warnings: [] })
 			: logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
 					...settings.getGroup("skills"),
-					disabledExtensions: settings.get("disabledExtensions") ?? [],
+					disabledExtensions: settings.get("disabledExtensions"),
 				});
 	return {
 		cwd,
@@ -302,7 +302,7 @@ function discoverWorkspaceTree(
 	supplied: WorkspaceTree | undefined,
 ): Promise<WorkspaceTree> {
 	if (supplied !== undefined) return Promise.resolve(supplied);
-	if (!(settings.get("includeWorkspaceTree") ?? false)) {
+	if (!settings.get("includeWorkspaceTree")) {
 		return Promise.resolve({ rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] });
 	}
 	return logger.time("buildWorkspaceTree", buildWorkspaceTree, cwd, { timeoutMs: WORKSPACE_TREE_DEADLINE_MS });

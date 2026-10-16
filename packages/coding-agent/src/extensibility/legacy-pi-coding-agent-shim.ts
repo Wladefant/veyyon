@@ -875,7 +875,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 					? Promise.resolve({ skills: [], warnings: [] })
 					: discoverSkills(cwd, agentDir, {
 							...settings.getGroup("skills"),
-							disabledExtensions: settings.get("disabledExtensions") ?? [],
+							disabledExtensions: settings.get("disabledExtensions"),
 						}),
 				this.#loadAdditionalSkills(),
 				options.noPromptTemplates ? Promise.resolve([]) : discoverPromptTemplates(cwd, agentDir),
@@ -959,7 +959,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		const result = await loadExtensions(paths, cwd, eventBus, undefined, {
 			agentDir,
-			configuredPaths: [...additionalExtensionPaths, ...(settings.get("extensions") ?? [])],
+			configuredPaths: [...additionalExtensionPaths, ...settings.get("extensions")],
 		});
 		for (let i = 0; i < extensionFactories.length; i++) {
 			const loaded = await loadExtensionFromFactory(

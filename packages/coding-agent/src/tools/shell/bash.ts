@@ -72,8 +72,6 @@ export { type BackgroundReason, formatBackgroundNotice } from "./execution-messa
 export const BASH_DEFAULT_PREVIEW_LINES = DEFAULT_TERMINAL_PREVIEW_LINES;
 
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 300_000;
-const DEFAULT_STALL_DETECTION_MS = 30_000;
 /** How often a client-bridge terminal's output is pushed while its command runs. */
 const BRIDGE_POLL_INTERVAL_MS = 250;
 
@@ -534,7 +532,7 @@ export class BashTool
 	// property. `bashApprovalDecision` stays exported and takes the paths
 	// explicitly, so the rule is testable without constructing a session.
 	readonly approval = (args: unknown): ToolApprovalDecision =>
-		bashApprovalDecision(args, this.session.settings.get("tools.protectedPaths") ?? [], this.session.cwd);
+		bashApprovalDecision(args, this.session.settings.get("tools.protectedPaths"), this.session.cwd);
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
 		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";
@@ -589,15 +587,10 @@ export class BashTool
 		this.#autoBackgroundEnabled = this.session.settings.get("bash.autoBackground.enabled");
 		this.#autoBackgroundThresholdMs = Math.max(
 			0,
-			Math.floor(
-				this.session.settings.get("bash.autoBackground.thresholdMs") ?? DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS,
-			),
+			Math.floor(this.session.settings.get("bash.autoBackground.thresholdMs")),
 		);
 		this.#stallDetectionEnabled = this.session.settings.get("bash.stallDetection.enabled");
-		this.#stallMs = Math.max(
-			0,
-			Math.floor(this.session.settings.get("bash.stallDetection.stallMs") ?? DEFAULT_STALL_DETECTION_MS),
-		);
+		this.#stallMs = Math.max(0, Math.floor(this.session.settings.get("bash.stallDetection.stallMs")));
 	}
 
 	/**

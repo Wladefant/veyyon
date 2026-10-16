@@ -6702,7 +6702,7 @@ export class AgentSession {
 	 * manager as needed. Called on model switch AND setting change.
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
-		const setting = this.settings.get("provider.appendOnlyContext") ?? "auto";
+		const setting = this.settings.get("provider.appendOnlyContext");
 		const enable = shouldEnableAppendOnlyContext(setting, model);
 		const providerId = model?.provider;
 		const prev = this.#lastAppendOnlyResolution;
@@ -6814,7 +6814,7 @@ export class AgentSession {
 
 	/** Whether auto-retry is enabled */
 	get autoRetryEnabled(): boolean {
-		return this.settings.get("retry.enabled") ?? true;
+		return this.settings.get("retry.enabled");
 	}
 
 	/**

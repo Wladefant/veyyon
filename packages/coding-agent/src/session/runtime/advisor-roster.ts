@@ -489,7 +489,7 @@ export class AdvisorRoster {
 
 	#immuneTurnLimit(): number {
 		const immuneTurns = this.#host.settings.get("advisor.immuneTurns");
-		if (!Number.isFinite(immuneTurns) || immuneTurns <= 0) return 0;
+		if (immuneTurns <= 0) return 0;
 		return Math.trunc(immuneTurns);
 	}
 

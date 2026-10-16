@@ -91,25 +91,6 @@ interface MemoryRuntimeConfig {
 	summaryInjectionTokenLimit: number;
 }
 
-const DEFAULTS: MemoryRuntimeConfig = {
-	enabled: false,
-	maxRolloutsPerStartup: 64,
-	maxRolloutAgeDays: 30,
-	minRolloutIdleHours: 12,
-	threadScanLimit: 300,
-	maxRawMemoriesForGlobal: 200,
-	stage1Concurrency: 8,
-	stage1LeaseSeconds: 120,
-	stage1RetryDelaySeconds: 120,
-	phase2LeaseSeconds: 180,
-	phase2RetryDelaySeconds: 180,
-	phase2HeartbeatSeconds: 30,
-	rolloutPayloadPercent: 0.7,
-	phase1InputTokenLimit: 4_000,
-	fallbackTokenLimit: 16_000,
-	summaryInjectionTokenLimit: 5_000,
-};
-
 interface Stage1Stats {
 	claimed: number;
 	succeeded: number;
@@ -1374,22 +1355,21 @@ function resolveMemoryModel(modelRegistry: ModelRegistry, session: AgentSession)
 function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 	return {
 		enabled: settings.get("memory.backend") === "local",
-		maxRolloutsPerStartup: settings.get("memories.maxRolloutsPerStartup") ?? DEFAULTS.maxRolloutsPerStartup,
-		maxRolloutAgeDays: settings.get("memories.maxRolloutAgeDays") ?? DEFAULTS.maxRolloutAgeDays,
-		minRolloutIdleHours: settings.get("memories.minRolloutIdleHours") ?? DEFAULTS.minRolloutIdleHours,
-		threadScanLimit: settings.get("memories.threadScanLimit") ?? DEFAULTS.threadScanLimit,
-		maxRawMemoriesForGlobal: settings.get("memories.maxRawMemoriesForGlobal") ?? DEFAULTS.maxRawMemoriesForGlobal,
-		stage1Concurrency: settings.get("memories.stage1Concurrency") ?? DEFAULTS.stage1Concurrency,
-		stage1LeaseSeconds: settings.get("memories.stage1LeaseSeconds") ?? DEFAULTS.stage1LeaseSeconds,
-		stage1RetryDelaySeconds: settings.get("memories.stage1RetryDelaySeconds") ?? DEFAULTS.stage1RetryDelaySeconds,
-		phase2LeaseSeconds: settings.get("memories.phase2LeaseSeconds") ?? DEFAULTS.phase2LeaseSeconds,
-		phase2RetryDelaySeconds: settings.get("memories.phase2RetryDelaySeconds") ?? DEFAULTS.phase2RetryDelaySeconds,
-		phase2HeartbeatSeconds: settings.get("memories.phase2HeartbeatSeconds") ?? DEFAULTS.phase2HeartbeatSeconds,
-		rolloutPayloadPercent: settings.get("memories.rolloutPayloadPercent") ?? DEFAULTS.rolloutPayloadPercent,
-		phase1InputTokenLimit: settings.get("memories.phase1InputTokenLimit") ?? DEFAULTS.phase1InputTokenLimit,
-		fallbackTokenLimit: settings.get("memories.fallbackTokenLimit") ?? DEFAULTS.fallbackTokenLimit,
-		summaryInjectionTokenLimit:
-			settings.get("memories.summaryInjectionTokenLimit") ?? DEFAULTS.summaryInjectionTokenLimit,
+		maxRolloutsPerStartup: settings.get("memories.maxRolloutsPerStartup"),
+		maxRolloutAgeDays: settings.get("memories.maxRolloutAgeDays"),
+		minRolloutIdleHours: settings.get("memories.minRolloutIdleHours"),
+		threadScanLimit: settings.get("memories.threadScanLimit"),
+		maxRawMemoriesForGlobal: settings.get("memories.maxRawMemoriesForGlobal"),
+		stage1Concurrency: settings.get("memories.stage1Concurrency"),
+		stage1LeaseSeconds: settings.get("memories.stage1LeaseSeconds"),
+		stage1RetryDelaySeconds: settings.get("memories.stage1RetryDelaySeconds"),
+		phase2LeaseSeconds: settings.get("memories.phase2LeaseSeconds"),
+		phase2RetryDelaySeconds: settings.get("memories.phase2RetryDelaySeconds"),
+		phase2HeartbeatSeconds: settings.get("memories.phase2HeartbeatSeconds"),
+		rolloutPayloadPercent: settings.get("memories.rolloutPayloadPercent"),
+		phase1InputTokenLimit: settings.get("memories.phase1InputTokenLimit"),
+		fallbackTokenLimit: settings.get("memories.fallbackTokenLimit"),
+		summaryInjectionTokenLimit: settings.get("memories.summaryInjectionTokenLimit"),
 	};
 }
 

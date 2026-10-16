@@ -20,19 +20,18 @@
  * is a build error at the call site, and a new required member on `ToolSession`
  * is a single failure here rather than 46 silent stubs that no longer match.
  */
-import type { Settings } from "@veyyon/coding-agent/config/settings";
+import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
+import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
 import { getAgentDir } from "@veyyon/utils";
 
 /**
- * A stand-in for `Settings`, which a test cannot construct.
+ * A stand-in for `Settings` that answers the few keys a test names.
  *
- * `Settings` has a private constructor and is created only through the module's
- * own loader, so there is no way to build a real one for a unit test. This is
- * the single place that gap is bridged, and it is the only assertion left in
- * this helper. Containing it here is the point: it used to be repeated inside
- * all 52 `as unknown as ToolSession` casts, where it also switched off checking
- * of every other member those stubs set.
+ * A key the stub answers `undefined` reads as its declared default, as it would
+ * from the real store, so code that relies on the typed read never sees a value
+ * the store cannot serve. A test that needs the whole store, including its
+ * handling of a stored value of the wrong kind, passes `Settings.isolated(...)`.
  */
 export type SettingsStub = { get(path: string): unknown } & Partial<Omit<Settings, "get">>;
 
@@ -43,9 +42,9 @@ export type ToolSessionOverrides = Omit<Partial<ToolSession>, "settings"> & { se
  * Build a `ToolSession` for a test, overriding only what the test cares about.
  *
  * The defaults are the inert ones: the current directory, no UI, no session
- * file, no spawns, and settings that answer `undefined` for everything (so each
- * setting falls to its own default) from the process-booted profile directory. A
- * test that depends on any of these states it explicitly.
+ * file, no spawns, and every setting at its declared default from the
+ * process-booted profile directory. A test that depends on any of these states it
+ * explicitly.
  *
  * `getAgentDir` is part of that default because a tool loader may need to know
  * WHICH profile the session loaded from, not only what a setting says: `ssh`
@@ -54,16 +53,33 @@ export type ToolSessionOverrides = Omit<Partial<ToolSession>, "settings"> & { se
  */
 export function makeToolSession(overrides: ToolSessionOverrides = {}): ToolSession {
 	const { settings, ...rest } = overrides;
-	// A plain stub gets the default accessor; a real `Settings` already has it on
-	// its prototype, and `??=` leaves that alone rather than shadowing it.
+	if (settings instanceof Settings) return { ...inertSession(), settings, ...rest };
 	const resolved: SettingsStub = settings ?? { get: () => undefined };
+	const answer = resolved.get.bind(resolved);
+	resolved.get = path => {
+		const value = answer(path);
+		return value === undefined && Object.hasOwn(SETTINGS_SCHEMA, path)
+			? declaredDefaults().get(path as SettingPath)
+			: value;
+	};
 	resolved.getAgentDir ??= () => getAgentDir();
+	return { ...inertSession(), settings: resolved as Settings, ...rest };
+}
+
+/** The members every test session starts from, `settings` aside. */
+function inertSession(): Omit<ToolSession, "settings"> {
 	return {
 		cwd: process.cwd(),
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
-		settings: resolved as Settings,
-		...rest,
 	};
+}
+
+let defaults: Settings | undefined;
+
+/** One empty store, read for the declared default of every key a stub leaves unanswered. */
+function declaredDefaults(): Settings {
+	defaults ??= Settings.isolated();
+	return defaults;
 }

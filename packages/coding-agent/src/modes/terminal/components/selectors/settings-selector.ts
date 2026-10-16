@@ -2276,12 +2276,8 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	formatRulesValue(): string {
-		const disabled = settings.get("ttsr.disabledRules");
-		const off = Array.isArray(disabled) ? disabled.filter(name => String(name).trim().length > 0).length : 0;
-		const experimental = settings.get("ttsr.experimentalRules");
-		const experiments = Array.isArray(experimental)
-			? experimental.filter(name => String(name).trim().length > 0).length
-			: 0;
+		const off = settings.get("ttsr.disabledRules").filter(name => String(name).trim().length > 0).length;
+		const experiments = settings.get("ttsr.experimentalRules").filter(name => String(name).trim().length > 0).length;
 		const experimentSuffix = experiments === 0 ? "" : `, ${experiments} experimental on`;
 		if (settings.get("ttsr.builtinRules") !== true) {
 			return (off === 0 ? "Built-ins off" : `Built-ins off, ${off} more off`) + experimentSuffix;

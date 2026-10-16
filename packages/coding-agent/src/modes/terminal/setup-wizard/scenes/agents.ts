@@ -93,7 +93,7 @@ export class AgentsSceneController implements SetupSceneController {
 	async #commit(): Promise<void> {
 		if (this.#committing) return;
 		this.#committing = true;
-		const current = this.host.ctx.settings.get("agent.agents") ?? {};
+		const current = this.host.ctx.settings.get("agent.agents");
 		const next = { ...current };
 		for (const agent of this.agents) {
 			next[agent.name] = { ...next[agent.name], enabled: this.#selected.has(agent.name) };

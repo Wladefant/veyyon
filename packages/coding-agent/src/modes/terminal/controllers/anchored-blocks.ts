@@ -180,7 +180,7 @@ export class AnchoredBlocks {
 	#syncTodoAutoClearTimer(): void {
 		this.#cancelTodoAutoClearTimer();
 		const delaySeconds = this.ctx.settings.get("tasks.todoClearDelay");
-		if (!Number.isFinite(delaySeconds) || delaySeconds < 0 || !this.#hasClosedTodos(this.ctx.todoPhases)) return;
+		if (delaySeconds < 0 || !this.#hasClosedTodos(this.ctx.todoPhases)) return;
 		if (delaySeconds === 0) {
 			this.ctx.todoPhases = this.#removeClosedTodos(this.ctx.todoPhases);
 			return;

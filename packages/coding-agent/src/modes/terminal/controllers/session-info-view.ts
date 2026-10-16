@@ -59,7 +59,7 @@ function sessionProviderSection(ctx: SessionInfoContext, sessionId: string): str
 }
 
 function appendOnlyContextLine(ctx: SessionInfoContext): string {
-	const setting = ctx.settings.get("provider.appendOnlyContext") ?? "auto";
+	const setting = ctx.settings.get("provider.appendOnlyContext");
 	const model = ctx.session.model;
 	const activeLabel = shouldEnableAppendOnlyContext(setting, model)
 		? theme.fg("success", "active")
