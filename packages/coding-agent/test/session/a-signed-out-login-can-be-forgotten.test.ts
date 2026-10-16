@@ -28,7 +28,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { isRefreshFailureDisableCause } from "@veyyon/ai/auth-credential-rows";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	type AccountManagerCallbacks,

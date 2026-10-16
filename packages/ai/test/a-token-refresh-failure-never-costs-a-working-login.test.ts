@@ -47,8 +47,8 @@ import {
 	AuthStorage,
 	type CredentialDisabledEvent,
 	type OAuthCredential,
-	SqliteAuthCredentialStore,
 } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as AIError from "@veyyon/ai/error";
 import { isDefinitiveOAuthFailure } from "@veyyon/ai/error/flags";
 import { type OAuthCredentials, registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";

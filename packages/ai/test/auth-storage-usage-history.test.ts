@@ -14,7 +14,8 @@
  */
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import type { UsageHistoryEntry, UsageReport } from "@veyyon/ai/usage";
 import * as claudeUsage from "@veyyon/ai/usage/claude";
 import * as opencodeGoUsage from "@veyyon/ai/usage/opencode-go";

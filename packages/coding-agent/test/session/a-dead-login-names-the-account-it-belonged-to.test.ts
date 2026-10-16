@@ -27,7 +27,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { providerDisabledNote } from "@veyyon/coding-agent/modes/terminal/components/account/account-manager-rows";
 import { buildAccountInventory } from "@veyyon/coding-agent/session/account-inventory";
 

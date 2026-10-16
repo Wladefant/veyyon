@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isSqliteBusyError, serializeCredential } from "@veyyon/ai/auth-credential-rows";
-import * as reexported from "@veyyon/ai/auth-storage";
+import * as packageRoot from "@veyyon/ai";
+import {
+	isRefreshFailureDisableCause,
+	isSqliteBusyError,
+	OAUTH_REFRESH_FAILURE_DISABLE_PREFIX,
+	serializeCredential,
+} from "@veyyon/ai/auth-credential-rows";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import {
 	createModuleReachCache,
@@ -253,15 +258,17 @@ describe("the OAuth module no longer touches a database", () => {
 	});
 
 	/**
-	 * And it still hands back both moved pieces, which is what kept every existing caller working.
+	 * The package root hands out the moved pieces under their public names, each the one definition in
+	 * its own module.
 	 *
-	 * Asserted as IDENTITY against the leaf modules rather than as `toContain("export { ... }")`. A
-	 * re-export that pointed at a second copy of the store reads the same in source and would give a
-	 * caller a different class with its own statement cache against the same file.
+	 * Asserted as IDENTITY against the leaf modules. A root export that pointed at a second copy of the
+	 * store would give a caller a different class with its own statement cache against the same file.
 	 */
-	it("re-exports the store and the row predicate", () => {
-		expect(reexported.SqliteAuthCredentialStore).toBe(SqliteAuthCredentialStore);
-		expect(reexported.isSqliteBusyError).toBe(isSqliteBusyError);
+	it("the package root exports the store and the row predicates from their own modules", () => {
+		expect(packageRoot.SqliteAuthCredentialStore).toBe(SqliteAuthCredentialStore);
+		expect(packageRoot.isSqliteBusyError).toBe(isSqliteBusyError);
+		expect(packageRoot.isRefreshFailureDisableCause).toBe(isRefreshFailureDisableCause);
+		expect(packageRoot.OAUTH_REFRESH_FAILURE_DISABLE_PREFIX).toBe(OAUTH_REFRESH_FAILURE_DISABLE_PREFIX);
 	});
 });
 

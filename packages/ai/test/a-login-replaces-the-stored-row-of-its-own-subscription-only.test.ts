@@ -25,7 +25,8 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { extractOAuthTokenIdentifiers, serializeCredential } from "@veyyon/ai/auth-credential-rows";
-import { type AuthCredential, type OAuthCredential, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { type AuthCredential, type OAuthCredential } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 
 interface Identity {
 	email?: string;

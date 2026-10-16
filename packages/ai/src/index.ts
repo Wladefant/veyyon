@@ -11,10 +11,16 @@ export type { Type } from "arktype";
 export { type ZodType, z } from "zod/v4";
 export * from "./api-registry";
 export type * from "./auth-broker";
+export {
+	isRefreshFailureDisableCause,
+	isSqliteBusyError,
+	OAUTH_REFRESH_FAILURE_DISABLE_PREFIX,
+} from "./auth-credential-rows";
 export type { AuthGatewayBootOptions, ModelResolver } from "./auth-gateway/server";
 export * from "./auth-gateway/types";
 export * from "./auth-retry";
 export * from "./auth-storage";
+export * from "./auth-storage-sqlite";
 export * from "./env-api-key";
 export * from "./error/rate-limit";
 export * from "./instrumentation";

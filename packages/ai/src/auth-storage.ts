@@ -25,8 +25,7 @@ import * as logger from "@veyyon/utils/logger";
 import { clamp } from "@veyyon/utils/math";
 import { errorMessage } from "@veyyon/utils/type-guards";
 // The row shapes and the pure row logic, which moved to their own module so a caller that only
-// persists a credential does not import the OAuth machinery below. Re-exported at the bottom for
-// the names that were public here.
+// persists a credential does not import the OAuth machinery below.
 import {
 	isRefreshFailureDisableCause,
 	normalizeStoredAccountId,
@@ -4093,30 +4092,3 @@ export class AuthStorage {
 		return undefined;
 	}
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SqliteAuthCredentialStore
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Row shape for auth_credentials table queries */
-
-/**
- * The row helpers this module used to define, kept exported from here so no caller changed.
- *
- * `isSqliteBusyError` and `isRefreshFailureDisableCause` were public API of this module and are
- * imported by name across both packages; `auth-credential-rows.ts` is their one owner now.
- */
-export {
-	isRefreshFailureDisableCause,
-	isSqliteBusyError,
-	OAUTH_REFRESH_FAILURE_DISABLE_PREFIX,
-} from "./auth-credential-rows";
-
-/**
- * The sqlite store, which moved to `auth-storage-sqlite.ts` and is re-exported here.
- *
- * Every existing importer names this module or the package barrel, so the re-export is what makes the
- * move invisible to them. A caller that wants ONLY the store, and not the OAuth machinery in this file,
- * should import `@veyyon/ai/auth-storage-sqlite` directly: that is 213 modules cheaper.
- */
-export { SqliteAuthCredentialStore };

@@ -21,9 +21,9 @@ import {
 	type AuthCredentialStore,
 	AuthStorage,
 	type CredentialFailoverEvent,
-	SqliteAuthCredentialStore,
 	type UsageLimitWithheldEvent,
 } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { logger } from "@veyyon/utils";
 

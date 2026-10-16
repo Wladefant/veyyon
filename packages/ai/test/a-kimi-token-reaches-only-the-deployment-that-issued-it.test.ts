@@ -29,8 +29,9 @@
  */
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildUsageCredential } from "@veyyon/ai/auth-storage/usage-requests";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
 import { getOAuthApiKey, refreshOAuthToken } from "@veyyon/ai/registry/oauth";
 import * as kimiOauth from "@veyyon/ai/registry/oauth/kimi";

@@ -14,7 +14,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { CredentialHealthResult } from "../../packages/ai/src/auth-storage";
-import { AuthStorage, SqliteAuthCredentialStore } from "../../packages/ai/src/auth-storage";
+import { AuthStorage } from "../../packages/ai/src/auth-storage";
+import { SqliteAuthCredentialStore } from "../../packages/ai/src/auth-storage-sqlite";
 import type { UsageReport } from "../../packages/ai/src/usage";
 import { AccountManagerComponent } from "../../packages/coding-agent/src/modes/terminal/components/account/account-manager";
 import {

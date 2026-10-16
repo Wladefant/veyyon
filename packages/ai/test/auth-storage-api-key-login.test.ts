@@ -4,7 +4,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as deepseekModule from "@veyyon/ai/registry/deepseek";
 import * as kagiModule from "@veyyon/ai/registry/kagi";
 import * as ollamaCloudModule from "@veyyon/ai/registry/ollama-cloud";
