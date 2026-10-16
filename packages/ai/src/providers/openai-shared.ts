@@ -2016,8 +2016,6 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	messages.push({ role: "user", content: contentParts });
 }
 
-export * from "./initial-message";
-
 /** Extension fields we add on top of `ResponseCreateParamsStreaming` across the Responses-family providers. */
 export type ResponsesSamplingParamsExtras = {
 	top_p?: number;
