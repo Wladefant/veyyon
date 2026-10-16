@@ -21,7 +21,6 @@
  * is a single failure here rather than 46 silent stubs that no longer match.
  */
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
-import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
 import { getAgentDir } from "@veyyon/utils";
 
@@ -58,9 +57,7 @@ export function makeToolSession(overrides: ToolSessionOverrides = {}): ToolSessi
 	const answer = resolved.get.bind(resolved);
 	resolved.get = path => {
 		const value = answer(path);
-		return value === undefined && Object.hasOwn(SETTINGS_SCHEMA, path)
-			? declaredDefaults().get(path as SettingPath)
-			: value;
+		return value === undefined ? declaredDefaults().get(path as SettingPath) : value;
 	};
 	resolved.getAgentDir ??= () => getAgentDir();
 	return { ...inertSession(), settings: resolved as Settings, ...rest };
