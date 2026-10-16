@@ -148,6 +148,7 @@ Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/
 - The task tool's `context` argument streams into the pending preview as it arrives in batch mode instead of advancing in throttle-sized steps.
 - The update check, release-list and checksum fetches, release binary download, Smithery requests and Hindsight requests bound the response body with their deadline and clear its timer when the request finishes, instead of leaving it armed afterwards.
 - `/mcp smithery-login` falls back to API-key entry after five minutes when a browser-login poll request stalls, instead of hanging.
+The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
 
 ### Removed
 
