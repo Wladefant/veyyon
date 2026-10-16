@@ -163,6 +163,13 @@ export * from "./tools/web/browser";
 export * from "./tools/web/gh";
 export * from "./tools/web/gh-fetch";
 export { parsePositiveDecimalInt } from "./tools/web/gh-format";
+export {
+	type GhRunWatchFailedLogDetails,
+	type GhRunWatchJobDetails,
+	type GhRunWatchRunDetails,
+	type GhRunWatchViewDetails,
+	resolveTailLimit,
+} from "./tools/web/gh-run-watch";
 export * from "./tools/web/image-gen";
 export * from "./tools/web/search";
 export * from "./tools/web/tts";
