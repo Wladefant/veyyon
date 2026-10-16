@@ -200,6 +200,11 @@ describe("AgentSession plan-mode convergence", () => {
 			m => m.role === "custom" && m.customType === "irc:incoming",
 		);
 		expect(sawIrc).toBe(true);
+		// Recorded in the session file too, so a resume still holds the message the model was shown.
+		const persisted = harness.session.sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "irc:incoming");
+		expect(persisted).toHaveLength(1);
 		expect(harness.mock.calls.length).toBe(0);
 	});
 

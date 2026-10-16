@@ -64,6 +64,7 @@
 - The model registry builds custom-model and provider-override headers through `createLiveConfigHeaders` directly instead of two single-use wrappers; no user-visible change.
 - The live config-header builder moved from `config/model-registry.ts` to `config/live-config-headers.ts`; no user-visible change.
 - Model override, custom model and provider compat application moved from `config/model-registry.ts` to `config/model-patch.ts`; no user-visible change.
+- The session appends a custom message without a turn, and merges queue-chip text into a queued message's details, through one helper each instead of four and two copies; no user-visible change.
 - Doc comments that module splits left above the wrong declaration (`stageModels`, `AUTO_THINKING`, `ConfiguredThinkingLevel`) are back on their definitions; no user-visible change.
 - Source comments that named a moved or deleted symbol's old module now name its current one; no user-visible change.
 

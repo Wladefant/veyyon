@@ -722,6 +722,15 @@ function promptCompaction(branch: readonly SessionEntry[], model: Model | undefi
 	return getEffectiveCompactionEntry(branch, model?.provider);
 }
 
+/**
+ * `details` with the text the queue chip shows for a queued custom message. Details that are not an
+ * object are replaced, since the chip text needs a record to ride on.
+ */
+function withQueueChipText<T>(details: T | undefined, queueChipText: string): T {
+	const base = details && typeof details === "object" ? (details as Record<string, unknown>) : {};
+	return { ...base, __queueChipText: queueChipText } as T;
+}
+
 /** Queue a custom message without starting a turn, matching steer/follow-up delivery. */
 async function queueCustomMessage<T = unknown>(
 	session: AgentSession,
@@ -729,16 +738,7 @@ async function queueCustomMessage<T = unknown>(
 	deliverAs: "steer" | "followUp",
 	queueChipText?: string,
 ): Promise<void> {
-	const details =
-		queueChipText !== undefined
-			? ({
-					...((message.details && typeof message.details === "object" ? message.details : {}) as Record<
-						string,
-						unknown
-					>),
-					__queueChipText: queueChipText,
-				} as T)
-			: message.details;
+	const details = queueChipText !== undefined ? withQueueChipText(message.details, queueChipText) : message.details;
 	const appMessage: CustomMessage<T> = {
 		role: "custom",
 		customType: message.customType,
@@ -1172,14 +1172,7 @@ export class AgentSession {
 			// Plan mode: fold stranded IRC asides into context without waking an
 			// autonomous turn. Convergence to ask/resolve stays user-driven.
 			for (const record of records) {
-				this.agent.appendMessage(record);
-				this.sessionManager.appendCustomMessageEntry(
-					record.customType,
-					record.content,
-					record.display,
-					record.details,
-					record.attribution ?? "agent",
-				);
+				this.#appendCustomMessageToContext(record);
 			}
 			return;
 		}
@@ -5540,12 +5533,7 @@ export class AgentSession {
 		const normalizedPayload = normalizeCustomMessagePayload<T>(message);
 		const details =
 			options?.queueChipText && options.deliverAs !== "nextTurn"
-				? ({
-						...((normalizedPayload.details && typeof normalizedPayload.details === "object"
-							? normalizedPayload.details
-							: {}) as Record<string, unknown>),
-						__queueChipText: options.queueChipText,
-					} as T)
+				? withQueueChipText(normalizedPayload.details, options.queueChipText)
 				: normalizedPayload.details;
 		const appMessage: CustomMessage<T> = {
 			role: "custom",
@@ -5583,14 +5571,7 @@ export class AgentSession {
 				});
 				return true;
 			}
-			this.agent.appendMessage(normalizedAppMessage);
-			this.sessionManager.appendCustomMessageEntry(
-				normalizedAppMessage.customType,
-				normalizedAppMessage.content,
-				normalizedAppMessage.display,
-				normalizedAppMessage.details,
-				normalizedAppMessage.attribution,
-			);
+			this.#appendCustomMessageToContext(normalizedAppMessage);
 			return false;
 		}
 
@@ -5603,14 +5584,7 @@ export class AgentSession {
 			return true;
 		}
 
-		this.agent.appendMessage(normalizedAppMessage);
-		this.sessionManager.appendCustomMessageEntry(
-			normalizedAppMessage.customType,
-			normalizedAppMessage.content,
-			normalizedAppMessage.display,
-			normalizedAppMessage.details,
-			normalizedAppMessage.attribution,
-		);
+		this.#appendCustomMessageToContext(normalizedAppMessage);
 		return false;
 	}
 
@@ -7205,14 +7179,7 @@ export class AgentSession {
 		}
 		// Plan mode: record into context but do not wake an autonomous turn.
 		if (this.#planMode.enabled) {
-			this.agent.appendMessage(record);
-			this.sessionManager.appendCustomMessageEntry(
-				record.customType,
-				record.content,
-				record.display,
-				record.details,
-				record.attribution ?? "agent",
-			);
+			this.#appendCustomMessageToContext(record);
 			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
 		}
@@ -7312,6 +7279,18 @@ export class AgentSession {
 				effectiveServiceTier: model => this.#effectiveServiceTier(model),
 			},
 			args,
+		);
+	}
+
+	/** Append a custom message to the model's context and the session file without starting a turn. */
+	#appendCustomMessageToContext<T>(message: CustomMessage<T>): void {
+		this.agent.appendMessage(message);
+		this.sessionManager.appendCustomMessageEntry(
+			message.customType,
+			message.content,
+			message.display,
+			message.details,
+			message.attribution ?? "agent",
 		);
 	}
 

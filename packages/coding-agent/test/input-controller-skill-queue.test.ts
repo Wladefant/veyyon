@@ -383,6 +383,8 @@ describe("compaction skill re-invocation", () => {
 				throw new Error("expected retry-drained skill to be queued as image-bearing custom content");
 			}
 			expect(queued.customType).toBe(SKILL_PROMPT_MESSAGE_TYPE);
+			// The chip text rides on the skill's own details rather than replacing them.
+			expect(queued.details).toMatchObject({ name: "test-skill", args: "retry args" });
 			const queuedImage = queued.content[1];
 			if (queuedImage?.type !== "image") throw new Error("expected canonical queued image content");
 			expect(queuedImage.mimeType).toBe("image/webp");
