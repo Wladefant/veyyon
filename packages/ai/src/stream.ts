@@ -193,16 +193,6 @@ const PROVIDER_INFLIGHT_HEARTBEAT_FAILURES_BEFORE_STALE = Math.ceil(
 
 let providerInFlightRootOverride: string | undefined;
 
-/**
- * The caps and their resolver live in `./provider-inflight-limits`, which imports nothing.
- *
- * The WRITER of this state is the harness's settings layer, and reaching a setter that lived here meant
- * importing this module's 285: every provider transport, the model registry, the error taxonomy. The
- * re-export keeps `@veyyon/ai/stream` a working import path for it, so nothing that already calls it
- * changes, while a caller that only configures caps can name the owner instead.
- */
-export { configureProviderMaxInFlightRequests } from "./provider-inflight-limits";
-
 function providerInFlightRoot(): string {
 	if (providerInFlightRootOverride) return providerInFlightRootOverride;
 	return path.join(getConfigRootDir(), "run", "provider-inflight");
@@ -847,12 +837,6 @@ function resolveVertexRequest(input: string | URL | Request): string | URL | Req
 	}
 	return rewriteUrl(input);
 }
-
-// The env-key table moved to `./env-api-key`, a leaf that imports the catalog and the registry and
-// nothing else. It was here only because it was written here, and it made every caller that wanted
-// "which variable holds this key" instantiate the whole streaming engine. Re-exported rather than
-// dropped so the specifier a caller already uses keeps working.
-export { getEnvApiKey, getEnvApiKeyName, listProvidersWithEnvKey } from "./env-api-key";
 
 export function stream<TApi extends Api>(
 	model: Model<TApi>,

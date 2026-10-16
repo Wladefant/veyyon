@@ -12,8 +12,8 @@
  *   - `pruning.ts` reached 398, of which 197 were this edge.
  *   - `branch-summarization.ts` took the same edge, though it needs the rest of that graph anyway.
  *
- * The estimator now lives in `compaction/token-estimate.ts`, whose whole graph is the tokenizer, and
- * `compaction.ts` re-exports the name so no caller outside the directory changed.
+ * The estimator is defined in `compaction/token-estimate.ts`, whose whole graph is the tokenizer, and
+ * `@veyyon/agent-core/compaction` exports it from there.
  *
  * WHY A RATCHET AND NOT A BEHAVIOUR TEST. Nothing fails when this is undone. Every function keeps working,
  * every test keeps passing, and one import restores the mesh. What degrades is the cold start of everything
@@ -291,22 +291,20 @@ describe("one error class does not cost an error barrel", () => {
 	);
 });
 
-describe("the engine keeps the name its callers already import", () => {
+describe("the compaction entry point exports the leaf's estimator", () => {
 	/**
-	 * COMPATIBILITY. `estimateTokens` was a public name on `compaction.ts` before it moved, and modules
-	 * outside this directory import it from there. The re-export is what makes the move invisible to them.
+	 * `estimateTokens` is public through `@veyyon/agent-core/compaction`, and its one definition is in
+	 * `token-estimate.ts`.
 	 *
-	 * Asserted by CALLING both spellings rather than by reading `compaction.ts` for an
-	 * `export { estimateTokens } from "./token-estimate"` line. A re-export pointing at a second
-	 * implementation reads identically in source and gives two callers different numbers, which is the
-	 * failure this whole extraction was supposed to make impossible; function identity separates them.
+	 * Asserted as function identity. A barrel that reached a second implementation would give two callers
+	 * different numbers for the same message, which is the failure the extraction exists to prevent.
 	 */
-	it("both spellings are the same function", async () => {
-		const [fromEngine, fromLeaf] = await Promise.all([
-			import("../src/compaction/compaction"),
+	it("the entry point and the leaf export the same function", async () => {
+		const [fromEntryPoint, fromLeaf] = await Promise.all([
+			import("../src/compaction"),
 			import("../src/compaction/token-estimate"),
 		]);
 
-		expect(fromEngine.estimateTokens).toBe(fromLeaf.estimateTokens);
+		expect(fromEntryPoint.estimateTokens).toBe(fromLeaf.estimateTokens);
 	});
 });

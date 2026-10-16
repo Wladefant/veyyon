@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { getOAuthProviders } from "@veyyon/ai/registry/oauth";
-import { getEnvApiKey } from "@veyyon/ai/stream";
 import type { FetchImpl } from "@veyyon/ai/types";
 
 const originalOpenRouterApiKey = Bun.env.OPENROUTER_API_KEY;

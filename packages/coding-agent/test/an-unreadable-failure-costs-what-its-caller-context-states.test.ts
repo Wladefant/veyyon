@@ -21,9 +21,9 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import * as aiStream from "@veyyon/ai/stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -48,7 +48,7 @@ describe("an unreadable failure costs what its caller context states", () => {
 		tempDir = TempDir.createSync("@pi-unreadable-failure-cost-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		// A stored credential, not a runtime key: the park is recorded against a stored row.
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		await authStorage.set("anthropic", [{ type: "api_key", key: "anthropic-key-1" }]);
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});

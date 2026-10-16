@@ -9,6 +9,7 @@
 ### Removed
 
 - Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.
+- Removed the threshold and `estimateTokens` re-exports from `@veyyon/agent-core/compaction/compaction`; import them from `@veyyon/agent-core/compaction/threshold`, `@veyyon/agent-core/compaction/token-estimate` or `@veyyon/agent-core/compaction`, which still exports all of them.
 
 ## [1.5.8] - 2026-10-16
 

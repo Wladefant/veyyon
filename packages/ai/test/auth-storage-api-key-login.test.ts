@@ -6,10 +6,10 @@ import * as path from "node:path";
 
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import * as deepseekModule from "@veyyon/ai/registry/deepseek";
 import * as kagiModule from "@veyyon/ai/registry/kagi";
 import * as ollamaCloudModule from "@veyyon/ai/registry/ollama-cloud";
-import * as aiStream from "@veyyon/ai/stream";
 import { removeWithRetries } from "../../utils/src/temp";
 
 function countCredentialRows(dbPath: string, provider: string): number {
@@ -50,10 +50,10 @@ describe("AuthStorage api-key login upsert", () => {
 	let loginDeepSeekSpy: Mock<typeof deepseekModule.loginDeepSeek>;
 	let loginKagiSpy: Mock<typeof kagiModule.loginKagi>;
 	let loginOllamaCloudSpy: Mock<typeof ollamaCloudModule.loginOllamaCloud>;
-	let getEnvApiKeySpy: Mock<typeof aiStream.getEnvApiKey>;
+	let getEnvApiKeySpy: Mock<typeof envApiKeyModule.getEnvApiKey>;
 
 	beforeEach(async () => {
-		getEnvApiKeySpy = vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		getEnvApiKeySpy = vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-api-key-login-"));
 		dbPath = path.join(tempDir, "agent.db");
 		store = await SqliteAuthCredentialStore.open(dbPath);

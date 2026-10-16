@@ -26,6 +26,7 @@
 
 - Removed the unused `isCursorTokenExpiringSoon`, `configuredProviderMaxInFlightRequests` and `mapToAnthropicToolChoice` exports and the `AnthropicToolChoice` type; `mapAnthropicToolChoice` in `stream.ts` is the Anthropic tool-choice mapping.
 - Removed the `SqliteAuthCredentialStore`, `isSqliteBusyError`, `isRefreshFailureDisableCause` and `OAUTH_REFRESH_FAILURE_DISABLE_PREFIX` re-exports from `@veyyon/ai/auth-storage`; import them from `@veyyon/ai/auth-storage-sqlite`, `@veyyon/ai/auth-credential-rows` or the package root, which still exports all four.
+- Removed the `getEnvApiKey`, `getEnvApiKeyName`, `listProvidersWithEnvKey` and `configureProviderMaxInFlightRequests` re-exports from `@veyyon/ai/stream`; import them from `@veyyon/ai/env-api-key`, `@veyyon/ai/provider-inflight-limits` or the package root, which still exports all four.
 
 ## [1.5.8] - 2026-10-16
 

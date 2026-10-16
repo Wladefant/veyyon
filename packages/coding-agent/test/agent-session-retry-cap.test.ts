@@ -5,6 +5,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { ApiKeyResolveContext, AssistantMessage, Context, ToolCall } from "@veyyon/ai";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import * as aiStream from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
@@ -61,7 +62,7 @@ describe("AgentSession retry delay cap", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		// A live env var now overrides a stored static api_key; these tests rotate stored Anthropic
 		// credentials, so neutralize env resolution (ignores every provider's ambient env key).
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});

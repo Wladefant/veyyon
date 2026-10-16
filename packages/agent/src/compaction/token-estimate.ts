@@ -5,7 +5,7 @@
  * the provider round trip, and it reaches 395 modules to do that job. Estimating a message costs a tokenizer
  * and nothing else. Three modules in this directory wanted only the estimate and had taken it from the
  * engine: `shake.ts` paid 312 marginal modules for it, `pruning.ts` 197, and `branch-summarization.ts` the
- * same edge again. `compaction.ts` re-exports the name it used to declare, so no caller outside changed.
+ * same edge again. `@veyyon/agent-core/compaction` exports it from here.
  *
  * The estimate is not a display number. It decides when compaction triggers, how pruning spends its budget,
  * and what the operator's context meter reads, so an estimate that is wrong in one direction silently lets a

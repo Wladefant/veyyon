@@ -9,8 +9,8 @@ import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import type { ApiKeyResolveContext, AssistantMessage, AssistantRetryRecovery, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import * as aiStream from "@veyyon/ai/stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -133,7 +133,7 @@ describe("AgentSession retry recovery", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-retry-recovery-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		sessions = [];
 		managers = [];

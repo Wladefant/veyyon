@@ -21,8 +21,8 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
-import * as aiStream from "@veyyon/ai/stream";
 
 /** Every entry that files its credential under another provider's id, read from the registry. */
 const REDIRECTED = PROVIDER_REGISTRY.filter(
@@ -45,7 +45,7 @@ describe("a second way in stores under the product, not the mechanism", () => {
 
 	beforeEach(async () => {
 		// An ambient NOUS_API_KEY (or any sibling) must not stand in for a stored row.
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		db = new Database(":memory:");
 		store = new SqliteAuthCredentialStore(db);
 		storage = new AuthStorage(store);

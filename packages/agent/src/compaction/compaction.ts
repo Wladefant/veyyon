@@ -73,37 +73,16 @@ import {
 	type SummarySegment,
 	stagedSegmentBudget,
 } from "./staged-summary";
-// The trigger decision moved to the module whose header owns it, and is re-exported below so no caller
-// changed. What is left here is the ENGINE: the summarizer, the cut point, the provider round trip.
+// The trigger decision is in `./threshold` and the estimator in `./token-estimate`. What is left here
+// is the ENGINE: the summarizer, the cut point, the provider round trip.
 import {
 	AUTO_COMPACTION_THRESHOLD,
 	type CompactionSettings,
 	DEFAULT_RESERVE_TOKENS,
 	resolveThresholdTokens,
 } from "./threshold";
-// The estimator moved to the module whose header owns it, and is re-exported below so no caller changed.
 import { estimateTokens } from "./token-estimate";
 import { collectToolCallsById, isSkillReadToolResult } from "./tool-protection";
-
-export {
-	type CompactionSettings,
-	DEFAULT_COMPACTION_SETTINGS,
-	DEFAULT_RESERVE_TOKENS,
-	effectiveReserveTokens,
-	isThresholdTokensClampedForWindow,
-	resolveBudgetReserveTokens,
-	resolveThresholdTokens,
-	resolveThresholdWithOrigin,
-	shouldCompact,
-} from "./threshold";
-
-/**
- * Re-exported from `./token-estimate`, which owns it.
- *
- * Three modules in this directory want the estimate and nothing else from this file, which reaches 395
- * modules; they name the leaf. This keeps the name every caller outside the directory already imports.
- */
-export { estimateTokens } from "./token-estimate";
 
 import {
 	computeFileLists,

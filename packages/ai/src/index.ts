@@ -25,6 +25,7 @@ export * from "./env-api-key";
 export * from "./error/rate-limit";
 export * from "./instrumentation";
 export * from "./provider-details";
+export { configureProviderMaxInFlightRequests } from "./provider-inflight-limits";
 export * from "./providers/anthropic";
 export * from "./providers/anthropic-client";
 export * from "./providers/anthropic-session-state";

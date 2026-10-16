@@ -14,8 +14,7 @@
  * is erased. So there is no runtime edge back to the OAuth side at all: this module and the row helpers
  * are a closed pair.
  *
- * `auth-storage.ts` re-exports this class, so every existing importer of `@veyyon/ai/auth-storage` or of
- * the package barrel is unaffected.
+ * The package root exports this class; a caller that needs only the store imports this module.
  */
 import { constants, Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";

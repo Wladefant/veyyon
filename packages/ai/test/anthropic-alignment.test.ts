@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as tls from "node:tls";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import {
 	applyClaudeToolPrefix,
 	buildAnthropicClientOptions,
@@ -20,7 +21,7 @@ import {
 	stripClaudeToolPrefix,
 } from "@veyyon/ai/providers/anthropic";
 import { deriveClaudeDeviceId } from "@veyyon/ai/providers/claude-device-id";
-import { getEnvApiKey, streamSimple } from "@veyyon/ai/stream";
+import { streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";

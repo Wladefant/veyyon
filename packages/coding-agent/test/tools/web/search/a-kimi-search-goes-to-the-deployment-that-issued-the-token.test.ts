@@ -14,7 +14,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
-import * as aiStream from "@veyyon/ai/stream";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { KIMI_CODE_REGIONS, type KimiCodeRegion, kimiCodeApiEndpointOf } from "@veyyon/catalog/wire/kimi-code";
 import { searchKimi } from "../../../../src/tools/web/search/providers/kimi";
 
@@ -37,7 +37,7 @@ describe("a Kimi search goes to the deployment that issued the token", () => {
 
 	beforeEach(() => {
 		// An ambient MOONSHOT_API_KEY or KIMI_API_KEY must not stand in for the stored credential.
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
 	});
 

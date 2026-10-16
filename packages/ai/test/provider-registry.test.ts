@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@veyyon/ai/registry";
 import {
 	getOAuthProviders,
@@ -11,7 +12,6 @@ import {
 } from "@veyyon/ai/registry/oauth";
 import * as anthropicOauth from "@veyyon/ai/registry/oauth/anthropic";
 import type { OAuthCredentials, OAuthProvider } from "@veyyon/ai/registry/oauth/types";
-import { getEnvApiKey } from "@veyyon/ai/stream";
 
 const FIXTURE_SOURCE = "provider-registry-test";
 const ENV_KEYS = [

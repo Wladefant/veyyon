@@ -32,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildUsageCredential } from "@veyyon/ai/auth-storage/usage-requests";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
 import { getOAuthApiKey, refreshOAuthToken } from "@veyyon/ai/registry/oauth";
 import * as kimiOauth from "@veyyon/ai/registry/oauth/kimi";
@@ -179,7 +180,7 @@ describe("a Kimi token reaches only the deployment that issued it", () => {
 
 	beforeEach(async () => {
 		// An ambient KIMI_API_KEY must not stand in for the credential the login stores.
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(HEADERS);
 		db = new Database(":memory:");
 		store = new SqliteAuthCredentialStore(db);
