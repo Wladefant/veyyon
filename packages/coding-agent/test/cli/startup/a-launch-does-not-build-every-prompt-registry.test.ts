@@ -358,11 +358,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * header references on every read, which left `config/model-registry.ts`. It imports only what that
  * code imported there. Measured 2026-10-16 at 1489.
  *
+ * 1489 to 1490: `config/model-patch.ts`, which applies model overrides, custom model definitions and
+ * provider compat to built models, and which left `config/model-registry.ts`. It imports only what
+ * that code imported there. Measured 2026-10-16 at 1490.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1489;
+const LAUNCH_REACH_CEILING = 1490;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
