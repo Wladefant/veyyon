@@ -35,6 +35,7 @@ import {
 	type OpenAIReasoningEffortFallback,
 	resolveOpenAIReasoningEffortFallback,
 } from "./openai-reasoning-fallback";
+import { processResponsesStream } from "./openai-responses-stream";
 import type { ResponseCreateParamsStreaming, ResponseStreamEvent } from "./openai-responses-wire";
 import {
 	applyCommonResponsesSamplingParams,
@@ -42,7 +43,6 @@ import {
 	buildResponsesInput,
 	getOpenAIPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
-	processResponsesStream,
 } from "./openai-shared";
 
 export { parseAzureDeploymentNameMap } from "./azure-deployment-names";

@@ -73,6 +73,7 @@ import {
 	rememberOpenAIReasoningEffortFallback,
 	resolveOpenAIReasoningEffortFallback,
 } from "./openai-reasoning-fallback";
+import { processResponsesStream } from "./openai-responses-stream";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
@@ -105,7 +106,6 @@ import {
 	type OpenAIStrictToolsScope,
 	type OpenAIStrictToolsState,
 	type OpenAIToolChoiceState,
-	processResponsesStream,
 	rejectToolChoiceForScope,
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,

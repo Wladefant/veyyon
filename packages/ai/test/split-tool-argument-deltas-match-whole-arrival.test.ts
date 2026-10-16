@@ -28,12 +28,12 @@
  */
 import { describe, expect, it } from "bun:test";
 import { BUILTIN_API_IDS } from "@veyyon/ai/api-registry";
-import type { ResponseStreamEvent } from "@veyyon/ai/providers/openai-responses-wire";
 import {
 	processResponsesStream,
 	RESPONSES_PROVIDER_TOOL_CALL_DELTA_SHAPES,
 	resolveResponsesToolCallDeltaShape,
-} from "@veyyon/ai/providers/openai-shared";
+} from "@veyyon/ai/providers/openai-responses-stream";
+import type { ResponseStreamEvent } from "@veyyon/ai/providers/openai-responses-wire";
 import type {
 	AssistantMessage,
 	AssistantMessageEvent,

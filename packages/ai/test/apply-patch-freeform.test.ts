@@ -5,11 +5,11 @@ import {
 	normalizeCodexToolChoice,
 } from "@veyyon/ai/providers/openai-codex-responses";
 import { buildParams, convertTools, mapOpenAIResponsesToolChoiceForTools } from "@veyyon/ai/providers/openai-responses";
+import { processResponsesStream } from "@veyyon/ai/providers/openai-responses-stream";
 import type { ResponseStreamEvent } from "@veyyon/ai/providers/openai-responses-wire";
 import {
 	appendResponsesToolResultMessages,
 	convertResponsesAssistantMessage,
-	processResponsesStream,
 	supportsFreeformApplyPatch,
 } from "@veyyon/ai/providers/openai-shared";
 import type { AssistantMessage, Model, ModelSpec, Tool, ToolResultMessage } from "@veyyon/ai/types";

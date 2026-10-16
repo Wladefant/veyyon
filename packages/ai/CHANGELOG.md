@@ -13,6 +13,7 @@
 - Removed the GitLab Duo Workflow inline-flow predicate that always held, the unread `inlineFlow` start-metadata option, and the user prompt threaded into workflow creation only to be discarded, with no user-visible change.
 - Removed the AWS region and GitLab Duo model parameters that credential and namespace resolution accepted and never read, with no user-visible change.
 - Moved the GitLab Duo Workflow goal transcript and system-slot rendering out of `providers/gitlab-duo-workflow.ts` into `providers/gitlab-duo-workflow/goal.ts`, and socket frame, checkpoint and tool-action reading into `providers/gitlab-duo-workflow/frames.ts`, with no user-visible change.
+- Moved the Responses stream decoder and the per-block accumulators it shares with the Codex decoder out of `providers/openai-shared.ts` into `providers/openai-responses-stream.ts`, with no user-visible change.
 
 ### Fixed
 
