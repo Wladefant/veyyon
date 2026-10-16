@@ -2,6 +2,7 @@
  * The Smithery `/mcp` subcommands: `smithery-search` (search the registry and
  * add the chosen server), `smithery-login` and `smithery-logout`.
  */
+import { scheduler } from "node:timers/promises";
 import { errorMessage, getMCPConfigPath, getProjectDir } from "@veyyon/utils";
 import { readMCPConfigFile } from "../../../mcp/config-writer";
 import {
@@ -22,6 +23,7 @@ import type { MCPServerConfig } from "../../../mcp/types";
 import { parseMcpSearchArgs } from "../../../slash-commands/helpers/mcp-args";
 import { theme } from "../../../theme/theme";
 import { shortenPath } from "../../../tools/core/render-utils";
+import { scopedTimeoutSignal } from "../../../utils/fetch-timeout";
 import { openPath } from "../../../utils/open";
 import type { InteractiveModeContext } from "../types";
 import { showCommandMessage } from "./command-controller-shared";
@@ -157,7 +159,7 @@ export class McpSmitheryCommands {
 			// URL is already shown above.
 		}
 
-		const apiKey = await waitForSmitheryCliApiKey(session.sessionId, new AbortController().signal);
+		const apiKey = await waitForSmitheryCliApiKey(session.sessionId);
 		await this.#validateApiKey(apiKey);
 		await saveSmitheryApiKey(apiKey);
 		this.ctx.showStatus("Smithery API key saved.");
@@ -287,26 +289,35 @@ export class McpSmitheryCommands {
 	}
 }
 
-async function waitForSmitheryCliApiKey(sessionId: string, signal: AbortSignal): Promise<string> {
-	const pollIntervalMs = 2_000;
-	const timeoutMs = 300_000;
-	const startedAt = Date.now();
+const SMITHERY_LOGIN_TIMEOUT_MS = 300_000;
+const SMITHERY_LOGIN_POLL_INTERVAL_MS = 2_000;
 
-	while (!signal.aborted) {
-		if (Date.now() - startedAt >= timeoutMs) {
-			throw new Error("Smithery authorization timed out after 5 minutes.");
+/**
+ * Poll the Smithery login session until the browser approves it. One deadline
+ * spans every poll request and every pause between them, so a poll request that
+ * stalls ends the login at five minutes instead of hanging it.
+ */
+async function waitForSmitheryCliApiKey(sessionId: string): Promise<string> {
+	const deadline = scopedTimeoutSignal(SMITHERY_LOGIN_TIMEOUT_MS);
+	try {
+		for (;;) {
+			const response = await pollSmitheryCliAuthSession(sessionId, deadline.signal);
+			if (response.status === "success" && response.apiKey) {
+				return response.apiKey;
+			}
+			if (response.status === "error") {
+				throw new Error(response.message ?? "Smithery authorization failed");
+			}
+			await scheduler.wait(SMITHERY_LOGIN_POLL_INTERVAL_MS, { signal: deadline.signal });
 		}
-		const response = await pollSmitheryCliAuthSession(sessionId, signal);
-		if (response.status === "success" && response.apiKey) {
-			return response.apiKey;
+	} catch (err) {
+		if (deadline.signal.aborted) {
+			throw new Error("Smithery authorization timed out after 5 minutes", { cause: err });
 		}
-		if (response.status === "error") {
-			throw new Error(response.message ?? "Smithery authorization failed.");
-		}
-		await Bun.sleep(pollIntervalMs);
+		throw err;
+	} finally {
+		deadline.cancel();
 	}
-
-	throw new Error("Smithery authorization cancelled.");
 }
 
 async function nextAvailableServerName(baseName: string): Promise<string> {

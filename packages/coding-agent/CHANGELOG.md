@@ -135,6 +135,7 @@
 - Startup configuration warnings state what a setting of the wrong kind or outside its allowed values reads as, and report such values in `--config` overlay files as well as the profile config.
 - The task tool's `context` argument streams into the pending preview as it arrives in batch mode instead of advancing in throttle-sized steps.
 - The update check, release-list and checksum fetches, release binary download, Smithery requests and Hindsight requests bound the response body with their deadline and clear its timer when the request finishes, instead of leaving it armed afterwards.
+- `/mcp smithery-login` falls back to API-key entry after five minutes when a browser-login poll request stalls, instead of hanging.
 
 ### Removed
 

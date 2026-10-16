@@ -20,13 +20,14 @@
  *
  * Every Smithery boundary (registry search, CLI auth session, key file) is
  * stubbed; the config writer is the real one, against a temporary profile.
- * What this does not catch: the browser poll cadence and its five-minute
- * deadline, which run on the wall clock.
+ * What this does not catch: a poll request that answers but never with a
+ * terminal status, which ends at the same deadline as a stalled one.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import * as smitheryAuth from "@veyyon/coding-agent/mcp/smithery-auth";
 import * as smitheryRegistry from "@veyyon/coding-agent/mcp/smithery-registry";
@@ -114,6 +115,29 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		transcript: () =>
 			presented.map(component => stripVTControlCharacters(component.render(400).join("\n"))).join("\n"),
 	};
+}
+
+/**
+ * Route `scheduler.wait` through the global timer, which fake timers control; the
+ * `node:timers/promises` timer is native and does not advance with fake time.
+ * `onWait` runs once the pause is armed.
+ */
+function waitOnFakeTimers(onWait: () => void): void {
+	vi.spyOn(scheduler, "wait").mockImplementation((delayMs, options) => {
+		const waited = Promise.withResolvers<void>();
+		const signal = options?.signal;
+		const timer = setTimeout(waited.resolve, delayMs);
+		onWait();
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				waited.reject(signal.reason);
+			},
+			{ once: true },
+		);
+		return waited.promise;
+	});
 }
 
 /** The cached Smithery key, as the stubbed key file holds it. */
@@ -225,6 +249,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 	});
 
 	afterEach(async () => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 		setProjectDir(originalProjectDir);
 		restoreDirOverrides(dirOverrides);
@@ -532,6 +557,70 @@ describe("a Smithery search adds the picked server after at most one fresh login
 
 			expect(cachedKey).toBeUndefined();
 			expect(harness.statuses).toEqual(["Smithery login cancelled."]);
+		});
+
+		it("ends a browser login whose poll never answers at the five-minute deadline", async () => {
+			stubKeyFile(undefined);
+			stubBrowserLogin("fresh-key");
+			const polled = Promise.withResolvers<AbortSignal>();
+			vi.spyOn(smitheryAuth, "pollSmitheryCliAuthSession").mockImplementation((_sessionId, signal) => {
+				if (!signal) throw new Error("the login poll went out without a deadline signal");
+				polled.resolve(signal);
+				const answer = Promise.withResolvers<never>();
+				signal.addEventListener("abort", () => answer.reject(signal.reason), { once: true });
+				return answer.promise;
+			});
+			stubRegistry(() => []);
+			const harness = createHarness({ answers: [undefined] });
+			vi.useFakeTimers();
+
+			const login = harness.controller.handle("/mcp smithery-login");
+			const signal = await polled.promise;
+			vi.advanceTimersByTime(299_999);
+			expect(signal.aborted).toBe(false);
+			vi.advanceTimersByTime(1);
+			await login;
+
+			expect(harness.warnings).toEqual([
+				"Browser authorization failed: Smithery authorization timed out after 5 minutes. Falling back to API key.",
+			]);
+			expect(harness.statuses).toEqual(["Smithery login cancelled."]);
+			expect(vi.getTimerCount()).toBe(0);
+		});
+
+		it("polls every two seconds until approved and leaves no timer armed", async () => {
+			stubKeyFile(undefined);
+			stubBrowserLogin("fresh-key");
+			const answers: smitheryAuth.SmitheryCliPollResponse[] = [
+				{ status: "pending" },
+				{ status: "pending" },
+				{ status: "success", apiKey: "fresh-key" },
+			];
+			const polledAt: number[] = [];
+			vi.spyOn(smitheryAuth, "pollSmitheryCliAuthSession").mockImplementation(async () => {
+				const answer = answers[polledAt.length];
+				polledAt.push(Date.now());
+				if (!answer) throw new Error("polled after the login was approved");
+				return answer;
+			});
+			stubRegistry(() => []);
+			const harness = createHarness();
+			vi.useFakeTimers();
+			let paused = Promise.withResolvers<void>();
+			waitOnFakeTimers(() => paused.resolve());
+
+			const login = harness.controller.handle("/mcp smithery-login");
+			for (let pause = 0; pause < 2; pause++) {
+				await paused.promise;
+				paused = Promise.withResolvers<void>();
+				vi.advanceTimersToNextTimer();
+			}
+			await login;
+
+			expect(polledAt.map(at => at - polledAt[0]!)).toEqual([0, 2_000, 4_000]);
+			expect(cachedKey).toBe("fresh-key");
+			expect(harness.statuses).toEqual(["Smithery API key saved."]);
+			expect(vi.getTimerCount()).toBe(0);
 		});
 
 		for (const [initial, status] of [
