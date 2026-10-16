@@ -2,7 +2,8 @@
  * WHY: an action that holds a mouse button or a modifier key down while it does something else
  * released it only when that something finished. `tab.drag()` with natural input off pressed the
  * button, travelled and released; `tab.select()` held Control (Meta on macOS) while it clicked each
- * further option of a multiple select. When the op's deadline or the run's abort ended the wait while
+ * further option of a multiple select; a natural click held the button for its `delay` whatever the
+ * signal said. When the op's deadline or the run's abort ended the wait while
  * the press or the travel was still running, the release was never sent. Puppeteer keeps the pressed
  * button and modifier in its own state, so on that tab every later press failed with "'left' is
  * already pressed" and every later click arrived as a Control-click, run after run, until the tab
@@ -13,10 +14,12 @@
  * input is still being dispatched; the op reports its timeout, and the next run's plain click on the
  * same tab lands as a plain click, with no button and no modifier held. Every member of the class is
  * covered: the button held during the press, the button held during the travel, in both input modes,
- * and the modifier held during a multiple select's further click.
+ * the modifier held during a multiple select's further click, and a natural click's hold.
  *
  * What it does not catch: a press held by run code through `page.mouse` or `page.keyboard`, which the
- * run owns; and a release the browser itself fails to dispatch.
+ * run owns; a release the browser itself fails to dispatch; and puppeteer's own click with a `delay`
+ * past the op's deadline (natural input off), whose hold is a timer inside puppeteer that no signal
+ * reaches, so the button stays down until that `delay` ends.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as http from "node:http";
@@ -76,6 +79,13 @@ const CASES: ReadonlyArray<{ name: string; hold: string; action: string; natural
 		hold: "modifier",
 		action: 'tab.select("#multi", "One", "Three")',
 		naturalInput: [false],
+	},
+	// No page handler holds anything: the click's own `delay` outlasts the op's deadline.
+	{
+		name: "a natural click's hold",
+		hold: "none",
+		action: '(await tab.waitFor("#a")).click({ delay: 20000 })',
+		naturalInput: [true],
 	},
 ];
 

@@ -442,7 +442,7 @@ export class NaturalInput {
 		await delay(between(NATURAL_INPUT.dwellMs, this.#random), undefined, { signal });
 	}
 
-	/** Press where the pointer is. A press, once down, is always released. */
+	/** Press where the pointer is. A press, once down, is always released, and at once when `signal` aborts the hold. */
 	async click(gesture: PressGesture, signal?: AbortSignal): Promise<void> {
 		const mouse = this.#page.mouse;
 		const count = Math.max(1, Math.floor(gesture.count ?? 1));
@@ -453,7 +453,13 @@ export class NaturalInput {
 			// double click is two single clicks and no `dblclick` fires.
 			const press = { button: gesture.button, clickCount };
 			await mouse.down(press);
-			await delay(gesture.holdMs ?? between(NATURAL_INPUT.holdMs, this.#random));
+			try {
+				await delay(gesture.holdMs ?? between(NATURAL_INPUT.holdMs, this.#random), undefined, { signal });
+			} catch (error) {
+				// The caller stopped waiting when the signal aborted: a button still down then would fail its next press.
+				await bestEffort(mouse.up(press), "a page that closed took its input with it");
+				throw error;
+			}
 			await mouse.up(press);
 		}
 	}
