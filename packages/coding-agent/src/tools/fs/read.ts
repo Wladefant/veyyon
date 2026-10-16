@@ -9,6 +9,7 @@ import type {
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
+import { clampLow } from "@veyyon/utils/math";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import * as prompt from "@veyyon/utils/prompt";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -135,7 +136,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 	constructor(private readonly session: ToolSession) {
 		this.#displayMode = resolveFileDisplayMode(session);
 		const autoResizeImages = session.settings.get("images.autoResize");
-		const defaultLimit = Math.max(1, Math.min(session.settings.get("read.defaultLimit"), DEFAULT_MAX_LINES));
+		const defaultLimit = clampLow(session.settings.get("read.defaultLimit"), 1, DEFAULT_MAX_LINES);
 		const inspectImageEnabled = session.settings.get("inspect_image.enabled");
 		this.#ctx = { session, defaultLimit, autoResizeImages, inspectImageEnabled };
 	}
