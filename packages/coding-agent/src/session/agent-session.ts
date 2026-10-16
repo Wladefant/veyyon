@@ -254,7 +254,11 @@ import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
-import { isSameAssistantMessage } from "./agent-session-message-shapes";
+import {
+	findLastAssistantMessage,
+	isSameAssistantMessage,
+	lastCopyCandidateAssistantMessage,
+} from "./agent-session-message-shapes";
 import { contextPromotionTarget } from "./agent-session-model-targets";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
@@ -571,26 +575,6 @@ function expandAgentEndEvent(
 		messages[index] = { ...message, content };
 	}
 	return messages ? { ...event, messages } : event;
-}
-
-/** The last assistant message in `messages`, aborted ones included. */
-function findLastAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role === "assistant") return message;
-	}
-	return undefined;
-}
-
-/** The last assistant message worth copying: an aborted message with no content is skipped. */
-function lastCopyCandidateAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== "assistant") continue;
-		if (message.stopReason === "aborted" && message.content.length === 0) continue;
-		return message;
-	}
-	return undefined;
 }
 
 function localProtocolOptions(sessionManager: SessionManager): LocalProtocolOptions {

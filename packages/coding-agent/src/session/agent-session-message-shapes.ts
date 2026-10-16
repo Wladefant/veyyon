@@ -106,3 +106,23 @@ export function titleConversationTurnFromMessage(message: AgentMessage): TitleCo
 	if (!text && !thinking) return undefined;
 	return { role: message.role, ...(text ? { text } : {}), ...(thinking ? { thinking } : {}) };
 }
+
+/** The last assistant message in `messages`, aborted ones included. */
+export function findLastAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role === "assistant") return message;
+	}
+	return undefined;
+}
+
+/** The last assistant message worth copying: an aborted message with no content is skipped. */
+export function lastCopyCandidateAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== "assistant") continue;
+		if (message.stopReason === "aborted" && message.content.length === 0) continue;
+		return message;
+	}
+	return undefined;
+}
