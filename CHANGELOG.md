@@ -114,6 +114,7 @@
 - Modules import the timeout, whitespace, advisor transcript name and slash-command category helpers from their owning modules; the `utils/fetch-timeout` re-export module is removed, with no user-visible change.
 - The LSP client and diagnostics, the web search tool and the `web-search` command import the language-id, grouped-diagnostic and search-provider metadata helpers from their owning modules instead of the `lsp/utils` and `search/provider` re-exports, which are removed except `getSearchProviderLabel`; no user-visible change.
 - Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
+- 96 modules that read only the active theme import it from `theme/theme-binding` instead of loading the theme engine, so 60 of them no longer reach theme JSON loading, highlighting or mermaid; no user-visible change.
 - `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
@@ -240,6 +241,7 @@
 - Sleep consolidation compacts "complete", "completed" and "working" only as whole words, so "incomplete" no longer becomes "inDONE" and "completed" no longer becomes "DONEd".
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
 - `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
+- An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
