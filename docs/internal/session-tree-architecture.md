@@ -187,7 +187,7 @@ Adjacent but related lifecycle hooks:
 
 ## Plan approval session naming
 
-When a user approves a plan from plan mode (`InteractiveMode.#approvePlan`), the approval handler seeds the session name from the plan's title so the resulting (fresh or compacted) session does not stay unnamed.
+When a user approves a plan from plan mode (`PlanModeController.#approvePlan` in `packages/coding-agent/src/modes/terminal/controllers/plan-mode-controller.ts`), the approval handler seeds the session name from the plan's title so the resulting (fresh or compacted) session does not stay unnamed.
 
 Trigger:
 

@@ -2297,7 +2297,7 @@ async function runSessionLaunch(
 	// The TUI cannot render anything until its screen exists, and session startup is exactly
 	// when a degraded skill or an unprotectable secret is discovered. An interactive run
 	// therefore hands `createSession` a collector with NO sink, so those notices buffer and
-	// the TUI delivers them once it is up (see `InteractiveMode.start`). Every other mode
+	// the TUI delivers them once it is up (see the `setSink` call in `runInteractiveMode`). Every other mode
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
