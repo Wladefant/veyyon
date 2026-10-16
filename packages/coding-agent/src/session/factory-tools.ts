@@ -266,10 +266,10 @@ export async function loadSessionCustomTools(input: SessionCustomToolsInput): Pr
 		const imageGenTools = await logger.time("getImageGenTools", () =>
 			getImageGenTools(input.modelRegistry, input.model),
 		);
-		tools.push(...(imageGenTools as unknown as CustomTool[]));
+		tools.push(...imageGenTools);
 	}
 	if (settings.get("speechgen.enabled") && requested(ttsTool.name)) {
-		tools.push(ttsTool as unknown as CustomTool);
+		tools.push(ttsTool);
 	}
 	if (whitelist?.includes(TOOL.web_search)) {
 		tools.push(...getSearchTools());
@@ -281,7 +281,7 @@ export async function loadSessionCustomTools(input: SessionCustomToolsInput): Pr
 				websets: settings.get("exa.enableWebsets"),
 			}),
 		);
-		tools.push(...(exaTools.filter(tool => requested(tool.name)) as unknown as CustomTool[]));
+		tools.push(...exaTools.filter(tool => requested(tool.name)));
 	}
 
 	const paths =

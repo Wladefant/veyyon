@@ -118,6 +118,7 @@
 - A hook or custom command's `ctx.ui.terminal.custom` factory is typed `(tui, theme, keybindings, done)`, the arguments the terminal passes, and the `qna` and `handoff` hook examples call `done` instead of the keybindings manager.
 - A custom command on a session built without an extension runner redacts through `ctx.obfuscateProviderText` instead of throwing a TypeError.
 - A discovered custom tool's factory-scoped `ui` and `hasUI` receive the host's UI, instead of staying a no-op context and `false` in every mode.
+- The image-generation, speech and Exa tools join a session's custom tools without a type cast; no user-visible change.
 
 ### Removed
 
