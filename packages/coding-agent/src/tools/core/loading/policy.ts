@@ -14,8 +14,8 @@ import { type BuiltinToolName, normalizeToolName, normalizeToolNames, TOOL } fro
  * registry. Callers gather inputs and apply the returned decision. That is the property that
  * makes these rules readable in one sitting and testable without booting an agent — and it is
  * why the adapters that DO read settings (`computeEssentialBuiltinNames` in `tools/index.ts`,
- * `resolveEffectiveToolDiscoveryMode` in `tool-discovery/mode.ts`,
- * `filterToolsByHarnessProfile` in `harness/model-profile.ts`) are one-line wrappers that
+ * `resolveEffectiveToolDiscoveryMode` in `discovery/mode.ts`,
+ * `filterToolsByHarnessProfile` in `registry/model-profile.ts`) are one-line wrappers that
  * gather and delegate rather than deciding anything themselves.
  *
  * WHAT DELIBERATELY STAYED OUTSIDE. Per-tool `createIf` factories keep their own last-line
