@@ -25,6 +25,15 @@ import { normalizeToolName } from "../tools/core/builtin-names";
 import { type CompactionStrategySetting, migrateCompactionStrategyValue } from "./compaction-strategy";
 
 /**
+ * `value` when it is a mapping a migration can read and write, else undefined. A config file is
+ * hand-editable, so a group node such as `tools` or `providers` can hold a scalar; an `in` test
+ * or a property write on one throws, and a throw here quarantines the whole file.
+ */
+function recordAt(value: unknown): Record<string, unknown> | undefined {
+	return isRecord(value) ? value : undefined;
+}
+
+/**
  * Largest `ask.timeout` read as seconds. Anything above it is taken to be a
  * millisecond value from the config format that predates the switch to seconds.
  *
@@ -419,7 +428,7 @@ function dropChangelogKeys(raw: RawSettings, context: RawSettingsMigrationContex
  * set it in seconds if the guess was wrong.
  */
 function migrateAskTimeout(raw: RawSettings, context: RawSettingsMigrationContext): void {
-	const ask = raw.ask as Record<string, unknown> | undefined;
+	const ask = recordAt(raw.ask);
 	if (!ask || typeof ask.timeout !== "number") return;
 	const oldValue = ask.timeout;
 	if (oldValue > MAX_ASK_TIMEOUT_SECONDS) {
@@ -445,7 +454,7 @@ function migrateAskTimeout(raw: RawSettings, context: RawSettingsMigrationContex
  * non-persisting instances).
  */
 function migrateCompactionThreshold(raw: RawSettings): void {
-	const compaction = raw.compaction as Record<string, unknown> | undefined;
+	const compaction = recordAt(raw.compaction);
 	const legacyTokens = compaction?.thresholdTokens ?? raw["compaction.thresholdTokens"];
 	const legacyPercent = compaction?.thresholdPercent ?? raw["compaction.thresholdPercent"];
 	if (legacyTokens === undefined && legacyPercent === undefined) return;
@@ -494,9 +503,7 @@ const LEGACY_ISOLATION_MODES: Readonly<Record<string, string>> = {
 
 /** task.isolation.enabled (boolean) -> task.isolation.mode (enum), and legacy mode names to current ones. */
 function migrateTaskIsolation(raw: RawSettings): void {
-	const isolationObj = (raw.task as Record<string, unknown> | undefined)?.isolation as
-		| Record<string, unknown>
-		| undefined;
+	const isolationObj = recordAt(recordAt(raw.task)?.isolation);
 	if (isolationObj && "enabled" in isolationObj) {
 		if (typeof isolationObj.enabled === "boolean" && isolationObj.mode === undefined) {
 			isolationObj.mode = isolationObj.enabled ? "auto" : "none";
@@ -520,7 +527,7 @@ function migrateTaskIsolation(raw: RawSettings): void {
 }
 
 function migrateTaskFlags(raw: RawSettings): void {
-	const taskObj = raw.task as Record<string, unknown> | undefined;
+	const taskObj = recordAt(raw.task);
 	// task.simple: removed — the task tool no longer accepts a per-call
 	// schema (workflows drive structured output via eval agent()) and the
 	// batch/context shape is gated by task.batch instead.
@@ -537,7 +544,7 @@ function migrateTaskFlags(raw: RawSettings): void {
 	if (typeof raw["task.eager"] === "boolean") {
 		raw["task.eager"] = raw["task.eager"] ? "always" : "default";
 	}
-	const todoObj = raw.todo as Record<string, unknown> | undefined;
+	const todoObj = recordAt(raw.todo);
 	if (todoObj && typeof todoObj.eager === "boolean") {
 		todoObj.eager = todoObj.eager ? "always" : "default";
 	}
@@ -559,7 +566,7 @@ function retireEditModeVariants(editObj: Record<string, unknown>): void {
 }
 
 function migrateEditSettings(raw: RawSettings): void {
-	const editObj = raw.edit as Record<string, unknown> | undefined;
+	const editObj = recordAt(raw.edit);
 	if (editObj) retireEditModeVariants(editObj);
 
 	// edit.critiqueCodeMutations: boolean -> the edit.afterEdit enum, which
@@ -584,7 +591,7 @@ function migrateEditSettings(raw: RawSettings): void {
  * `enabled: true`, and `enabled` is now the only off switch, so `off` writes `enabled: false`.
  */
 function migrateCompactionStrategy(raw: RawSettings): void {
-	const compactionObj = raw.compaction as Record<string, unknown> | undefined;
+	const compactionObj = recordAt(raw.compaction);
 	if (!compactionObj) return;
 	if (compactionObj.strategy === "off") {
 		compactionObj.strategy = "summary";
@@ -868,7 +875,7 @@ function migrateInlineToolDescriptors(raw: RawSettings): void {
 
 /** statusLine: rename "plan_mode" segment to "mode" */
 function migrateStatusLine(raw: RawSettings): void {
-	const statusLineObj = raw.statusLine as Record<string, unknown> | undefined;
+	const statusLineObj = recordAt(raw.statusLine);
 	if (!statusLineObj) return;
 	for (const key of ["leftSegments", "rightSegments"] as const) {
 		const segments = statusLineObj[key];
@@ -876,7 +883,7 @@ function migrateStatusLine(raw: RawSettings): void {
 			statusLineObj[key] = segments.map(seg => (seg === "plan_mode" ? "mode" : seg));
 		}
 	}
-	const segmentOptions = statusLineObj.segmentOptions as Record<string, unknown> | undefined;
+	const segmentOptions = recordAt(statusLineObj.segmentOptions);
 	if (segmentOptions && "plan_mode" in segmentOptions && !("mode" in segmentOptions)) {
 		segmentOptions.mode = segmentOptions.plan_mode;
 		delete segmentOptions.plan_mode;
@@ -891,7 +898,7 @@ function migrateStatusLine(raw: RawSettings): void {
  * default apply.
  */
 function dropParallelFetch(raw: RawSettings): void {
-	const providersObj = raw.providers as Record<string, unknown> | undefined;
+	const providersObj = recordAt(raw.providers);
 	if (providersObj && "parallelFetch" in providersObj) {
 		delete providersObj.parallelFetch;
 		if (Object.keys(providersObj).length === 0) delete raw.providers;
@@ -906,7 +913,7 @@ function dropParallelFetch(raw: RawSettings): void {
  * the first eligible spend.
  */
 function migrateCodexResets(raw: RawSettings): void {
-	const codexResetsObj = raw.codexResets as Record<string, unknown> | undefined;
+	const codexResetsObj = recordAt(raw.codexResets);
 	if (codexResetsObj && typeof codexResetsObj.autoRedeem === "boolean") {
 		codexResetsObj.autoRedeem = codexResetsObj.autoRedeem ? "yes" : "no";
 	}
@@ -916,9 +923,9 @@ function migrateMemorySettings(raw: RawSettings): void {
 	// Map legacy `memories.enabled` boolean to the explicit `memory.backend`
 	// enum if the latter hasn't been set yet. Idempotent: subsequent
 	// migrations are no-ops once memory.backend is materialised.
-	const memoryBackendObj = raw.memory as Record<string, unknown> | undefined;
+	const memoryBackendObj = recordAt(raw.memory);
 	const memoryBackendSet = memoryBackendObj && typeof memoryBackendObj.backend === "string";
-	const memoriesObj = raw.memories as Record<string, unknown> | undefined;
+	const memoriesObj = recordAt(raw.memories);
 	const memoriesEnabled =
 		(typeof memoriesObj?.enabled === "boolean" ? memoriesObj.enabled : undefined) ??
 		(typeof raw["memories.enabled"] === "boolean" ? raw["memories.enabled"] : undefined);
@@ -956,7 +963,7 @@ function migrateMemorySettings(raw: RawSettings): void {
  * each is read from whichever spelling holds it and both spellings are dropped.
  */
 function migrateHindsight(raw: RawSettings): void {
-	const hindsightObj = raw.hindsight as Record<string, unknown> | undefined;
+	const hindsightObj = recordAt(raw.hindsight);
 	const flatDynamicBankId = raw["hindsight.dynamicBankId"];
 	const flatAgentName = raw["hindsight.agentName"];
 	if (!hindsightObj && flatDynamicBankId === undefined && flatAgentName === undefined) return;
@@ -1001,7 +1008,7 @@ const LEGACY_POWER_FLAGS = [
  * spellings of those are still read.
  */
 function migratePowerSettings(raw: RawSettings): void {
-	const powerObj = raw.power as Record<string, unknown> | undefined;
+	const powerObj = recordAt(raw.power);
 	if (powerObj && "sleepPrevention" in powerObj) return;
 	const getFlag = (key: (typeof LEGACY_POWER_FLAGS)[number]): boolean | undefined => {
 		const value = powerObj?.[key] ?? raw[`power.${key}`];
@@ -1042,7 +1049,7 @@ function migrateToolNameList(names: unknown): unknown {
 }
 
 function migrateToolSettings(raw: RawSettings): void {
-	const toolsObj = raw.tools as Record<string, unknown> | undefined;
+	const toolsObj = recordAt(raw.tools);
 	if (toolsObj && "essentialOverride" in toolsObj) {
 		toolsObj.essentialOverride = migrateToolNameList(toolsObj.essentialOverride);
 	}
@@ -1215,7 +1222,7 @@ function migrateArgotEncode(raw: RawSettings): void {
 		delete raw[flat];
 	}
 
-	const argotObj = raw.argot as Record<string, unknown> | undefined;
+	const argotObj = recordAt(raw.argot);
 	if (!argotObj) return;
 	for (const key of ARGOT_ENCODE_KEYS) {
 		if (!(key in argotObj)) continue;
