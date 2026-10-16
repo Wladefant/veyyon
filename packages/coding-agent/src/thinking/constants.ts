@@ -1,8 +1,15 @@
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { THINKING_EFFORTS } from "@veyyon/catalog/effort";
 
+/**
+ * Sentinel selector for the coding-agent "auto" thinking mode. Kept entirely
+ * inside the coding-agent layer: it is never an `Effort` or
+ * {@link ThinkingLevel}, so provider mapping/clamping keeps seeing concrete
+ * efforts. The session resolves `auto` to a concrete effort each turn.
+ */
 export const AUTO_THINKING = "auto" as const;
 
+/** A thinking selector as configured: a concrete level or `auto`. */
 export type ConfiguredThinkingLevel = ThinkingLevel | typeof AUTO_THINKING;
 
 /**
