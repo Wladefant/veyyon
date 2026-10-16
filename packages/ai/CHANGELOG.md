@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- A Cursor turn no longer stalls for 30 minutes and fails with "made no progress for 1800s" when the server asks for approval (Cursor's built-in web search) or sends an exec request this client does not run: web search, Exa search and Exa fetch are approved, prompts that need a Cursor UI are rejected, and an unknown exec request is failed the way Cursor's own client fails it.
+- A Cursor turn no longer stalls for 30 minutes and fails with "made no progress for 1800s" when the model calls a tool Cursor reaches over MCP (`goal`, `set_cwd`) or Cursor's built-in web search: the MCP state request Cursor sends first is failed the way Cursor's own client fails it, web search, Exa search and Exa fetch are approved, and prompts that need a Cursor UI are rejected.
 
 ## [1.5.7] - 2026-10-15
 
