@@ -702,7 +702,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 			const parsedAfter = JSON.parse(rawAfter!.value);
 			expect(parsedAfter.value).toBeNull();
 			// And a second poll surfaces nothing — the credential is gone from
-			// `listAuthCredentials`, so `#collectUsageRequests` doesn't even
+			// `listAuthCredentials`, so `UsageReporting`'s request collection doesn't even
 			// look it up.
 			const secondPoll = anthropicReports(await storage.fetchUsageReports());
 			expect(secondPoll).toHaveLength(0);

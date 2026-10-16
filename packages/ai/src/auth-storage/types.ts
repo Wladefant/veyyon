@@ -470,7 +470,7 @@ export interface AuthCredentialStore {
 	/**
 	 * Optional store-supplied per-credential usage report lookup. When present,
 	 * `AuthStorage` consults this before its own per-credential upstream fetch
-	 * (`#getUsageReport`). `RemoteAuthCredentialStore` implements this against
+	 * (`UsageReporting.reportFor`). `RemoteAuthCredentialStore` implements this against
 	 * the broker's aggregate `/v1/usage` (one coalesced round-trip shared across
 	 * all callers) so multi-credential ranking on the client never hits the
 	 * upstream provider's rate-limited usage endpoint from the laptop IP.

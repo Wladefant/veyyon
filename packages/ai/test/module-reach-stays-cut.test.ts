@@ -124,8 +124,12 @@ function runtimeImportsOf(relative: string): string[] {
  * token endpoint's JSON to be an object. `registry/oauth/nous-research.ts`, already in this closure,
  * reads its token responses through it, and its imports are `@veyyon/utils/type-guards` and `./error`,
  * both already reached, so it adds one module and no subtree.
+ *
+ * 230 since 2026-10-16, measured: `auth-storage/usage-reporting.ts`, the usage fetch, cache and fan-out
+ * split out of `auth-storage.ts`. Every module it imports was already reached from `auth-storage.ts`,
+ * so the split adds one file and no subtree.
  */
-const AUTH_STORAGE_CEILING = 229;
+const AUTH_STORAGE_CEILING = 230;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc

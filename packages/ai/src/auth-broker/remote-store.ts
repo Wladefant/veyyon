@@ -905,7 +905,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * Per-credential usage hook consumed by `AuthStorage.#getUsageReport`. Pulls
+	 * Per-credential usage hook consumed by `UsageReporting.reportFor`. Pulls
 	 * the aggregate broker `/v1/usage` once and serves all callers from the
 	 * same response (coalesced + cached), then overlays any client-observed
 	 * header hints for the matching credential.
