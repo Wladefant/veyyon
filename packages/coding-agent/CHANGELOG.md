@@ -74,6 +74,7 @@
 - MCP request params, the reloaded `ssh` tool and the argument display read through their declared types instead of `as unknown as` casts; no user-visible change.
 - Settings reads in the status line, extension dashboard, speech input, browser, Hindsight memory, advisor roster, task agent settings, extension wrapper and ACP extension listing use their declared types instead of casts; no user-visible change.
 - Permission intent and memory consolidation parsing read their arguments through the `isRecord` guard instead of repeating it as a cast; no user-visible change.
+- The inline tool-output budget no longer re-checks for a non-finite `tools.artifactSpillThreshold`, which the settings read already replaces with its default and reports; no user-visible change.
 
 ### Fixed
 

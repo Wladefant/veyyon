@@ -58,16 +58,16 @@ export function inlineOutputPricing(
  * were. Reading it here is what makes the setting mean what its description says.
  *
  * A threshold of zero or less is not a preference for a very small budget, it is
- * one that elides every tool result down to its ellipsis, and a non-finite one
- * propagates a NaN into every byte comparison downstream so that nothing spills
- * at all. Both are refused, and refused OUT LOUD: a silently corrected setting is
- * one whose value in the file disagrees with the value in effect, with nothing an
- * operator can see (Law 10). A refusal falls back to the compiled default, which
- * is the same answer as not setting it.
+ * one that elides every tool result down to its ellipsis. It is refused, and
+ * refused OUT LOUD: a silently corrected setting is one whose value in the file
+ * disagrees with the value in effect, with nothing an operator can see (Law 10).
+ * A refusal falls back to the compiled default, which is the same answer as not
+ * setting it. A non-finite value never arrives here: the settings read serves
+ * the declared default in its place and reports it.
  */
 function configuredInlineMaxBytes(configuredKb: number | undefined): number | undefined {
 	if (configuredKb === undefined) return undefined;
-	if (Number.isFinite(configuredKb) && configuredKb > 0) return configuredKb * 1024;
+	if (configuredKb > 0) return configuredKb * 1024;
 	logger.warn("tools.artifactSpillThreshold is not a positive number of KB; using the compiled default instead", {
 		configuredKb,
 		usingBytes: DEFAULT_MAX_BYTES,
