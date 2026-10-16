@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- A session started with `--tools`, and every spawned agent with a tool list, no longer logs a false "TTSR rule is scoped to a tool that does not exist" warning for each built-in rule scoped to a tool the session did not build.
 - A Cursor turn no longer stalls for 30 minutes and fails with "made no progress for 1800s" when the model calls a tool Cursor reaches over MCP (`goal`, `set_cwd`) or Cursor's built-in web search: the MCP state request Cursor sends first is failed the way Cursor's own client fails it, web search, Exa search and Exa fetch are approved, and prompts that need a Cursor UI are rejected.
 
 ## [1.5.7] - 2026-10-15
