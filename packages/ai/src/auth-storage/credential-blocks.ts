@@ -11,6 +11,9 @@ import type { StoredCredential } from "./credentials";
 import { toScopedBackoffKey } from "./credentials";
 import type { AuthCredentialStore } from "./types";
 
+/** How long a credential stays blocked when the provider names no reset time. */
+export const DEFAULT_CREDENTIAL_BACKOFF_MS = 60_000;
+
 /** One in-memory rate-limit block: its deadline plus the clock reading that set it. */
 interface InMemoryCredentialBlock {
 	/** Epoch milliseconds the credential becomes usable again. */

@@ -37,13 +37,12 @@ import {
 	serializeCredential,
 } from "./auth-credential-rows";
 import type { ApiKeyResolver } from "./auth-retry";
-import { CredentialBlocks } from "./auth-storage/credential-blocks";
+import { CredentialBlocks, DEFAULT_CREDENTIAL_BACKOFF_MS } from "./auth-storage/credential-blocks";
 import { CredentialRouting } from "./auth-storage/credential-routing";
 import type {
 	ApiKeySelection,
 	AuthApiKeyOptions,
 	OAuthResolutionResult,
-	OAuthSelection,
 	StoredCredential,
 	StoredOAuthSelection,
 } from "./auth-storage/credentials";
@@ -72,11 +71,7 @@ import {
 	OAuthRefresher,
 } from "./auth-storage/oauth-refresh";
 import type { OpenAICodexPlanRequirement } from "./auth-storage/openai-codex-plan";
-import {
-	getOpenAICodexPlanEligibility,
-	getOpenAICodexPlanPriority,
-	resolveOpenAICodexPlanRequirement,
-} from "./auth-storage/openai-codex-plan";
+import { getOpenAICodexPlanEligibility, resolveOpenAICodexPlanRequirement } from "./auth-storage/openai-codex-plan";
 import { spendAnthropicReset, spendCodexReset } from "./auth-storage/reset-credits";
 import type {
 	ApiKeyCredential,
@@ -114,19 +109,7 @@ import type {
 	UsageLimitWithheldEvent,
 } from "./auth-storage/types";
 import { REMOTE_REFRESH_SENTINEL, RESET_CREDIT_PROVIDERS } from "./auth-storage/types";
-import type {
-	ApiKeyCandidate,
-	OAuthCandidate,
-	UsageCandidate,
-	UsageRankedCandidate,
-	UsageRankingResult,
-} from "./auth-storage/usage-ranking";
-import {
-	computeWindowRequiredDrain,
-	leadWithChosenAccount,
-	normalizeUsageFraction,
-	orderUsageRankedCandidates,
-} from "./auth-storage/usage-ranking";
+import { CredentialRanking, leadWithChosenAccount } from "./auth-storage/usage-ranking";
 import { UsageReporting } from "./auth-storage/usage-reporting";
 import {
 	getScopedUsageLimits,
@@ -224,8 +207,6 @@ const MAX_WITHHELD_QUOTA_NOTICES = 64;
 function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStrategy | undefined {
 	return resolveRegisteredRankingStrategy(provider);
 }
-
-const defaultBackoffMs = 60_000;
 
 /**
  * How long an account stays recorded as unable to serve a model its plan does not include. Persisted
@@ -357,6 +338,8 @@ export class AuthStorage {
 	#oauthBearerFingerprints: Map<string, Map<number, string[]>> = new Map();
 	/** Temporary rate-limit blocks, in memory and persisted. */
 	readonly #blocks: CredentialBlocks;
+	/** Usage-backed candidate ranking over the blocks and the usage fetch. */
+	readonly #ranking: CredentialRanking;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
@@ -451,6 +434,7 @@ export class AuthStorage {
 			provider => this.#getStoredCredentials(provider),
 			provider => this.#usage.invalidateProvider(provider),
 		);
+		this.#ranking = new CredentialRanking(this.#blocks, this.#usage);
 		// Opportunistic hygiene, once per AuthStorage lifetime: drop expired
 		// cache rows (24h last-good retention). A cheap indexed DELETE;
 		// failures must never block construction.
@@ -1238,60 +1222,6 @@ export class AuthStorage {
 			.map(entry => entry.candidate);
 	}
 
-	async #rankApiKeySelections(args: {
-		providerKey: string;
-		provider: string;
-		order: number[];
-		credentials: ApiKeySelection[];
-		options?: AuthApiKeyOptions;
-		strategy: CredentialRankingStrategy;
-		rankingContext: CredentialRankingContext;
-		blockScope?: string;
-	}): Promise<ApiKeyCandidate[]> {
-		const nowMs = Date.now();
-		const usageTimeout = Math.max(5000, this.#usage.requestTimeoutMs * 1.5);
-		const usagePromise: Promise<Array<UsageRankingResult<ApiKeyCredential> | null>> = Promise.all(
-			args.order.map(async idx => {
-				const selection = args.credentials[idx];
-				if (!selection) return null;
-				const blockedUntil = this.#blocks.getCredentialBlockedUntil(
-					args.provider,
-					args.providerKey,
-					selection.index,
-					args.blockScope,
-				);
-				if (blockedUntil !== undefined) {
-					return { selection, usage: null, usageChecked: false, blockedUntil };
-				}
-				const usage = await this.#usage.reportFor(args.provider, selection.credential, {
-					...args.options,
-					timeoutMs: this.#usage.requestTimeoutMs,
-				});
-				return { selection, usage, usageChecked: true, blockedUntil: undefined };
-			}),
-		);
-		const timeoutSignal = Promise.withResolvers<null>();
-		const timer = setTimeout(() => timeoutSignal.resolve(null), usageTimeout);
-		timer.unref?.();
-		const usageResults = await Promise.race([usagePromise, timeoutSignal.promise]).then(result => {
-			clearTimeout(timer);
-			if (result) return result;
-			return args.order.map(idx => {
-				const selection = args.credentials[idx];
-				if (!selection) return null;
-				const blockedUntil = this.#blocks.getCredentialBlockedUntil(
-					args.provider,
-					args.providerKey,
-					selection.index,
-					args.blockScope,
-				);
-				return { selection, usage: null, usageChecked: false, blockedUntil };
-			});
-		});
-
-		return this.#rankUsageResults(usageResults, args, "none", nowMs);
-	}
-
 	async #selectApiKeyCredential(
 		provider: string,
 		sessionId: string | undefined,
@@ -1334,7 +1264,7 @@ export class AuthStorage {
 
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy.blockScope?.(rankingContext);
-		const candidates = await this.#rankApiKeySelections({
+		const candidates = await this.#ranking.rankApiKeySelections({
 			providerKey,
 			provider,
 			order,
@@ -2597,7 +2527,7 @@ export class AuthStorage {
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
 		const now = Date.now();
-		let blockedUntil = now + (options?.retryAfterMs ?? defaultBackoffMs);
+		let blockedUntil = now + (options?.retryAfterMs ?? DEFAULT_CREDENTIAL_BACKOFF_MS);
 
 		if (credentialType === "oauth" && target.credential.type === "oauth" && strategy) {
 			const report = await this.#usage.reportFor(provider, target.credential, options);
@@ -2745,144 +2675,6 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Ranks fetched usage results in request order. A credential whose scoped limit is reached is
-	 * blocked, and recorded as blocked, before its windows are scored. The plan requirement is the one
-	 * axis on which API keys ("none") and OAuth accounts differ.
-	 */
-	#rankUsageResults<T extends AuthCredential>(
-		usageResults: ReadonlyArray<UsageRankingResult<T> | null>,
-		args: {
-			providerKey: string;
-			provider: string;
-			strategy: CredentialRankingStrategy;
-			rankingContext: CredentialRankingContext;
-			blockScope?: string;
-		},
-		planRequirement: OpenAICodexPlanRequirement,
-		nowMs: number,
-	): UsageCandidate<T>[] {
-		const { strategy } = args;
-		const ranked: UsageRankedCandidate<T>[] = [];
-		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
-			const result = usageResults[orderPos];
-			if (!result) continue;
-			const { selection, usage, usageChecked } = result;
-			let { blockedUntil } = result;
-			let blocked = blockedUntil !== undefined;
-			const scopedLimits = usage ? getScopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
-			if (!blocked && scopedLimits && isUsageLimitReached(scopedLimits)) {
-				const resetAtMs = getUsageResetAtMs(scopedLimits, nowMs);
-				blockedUntil = resetAtMs ?? Date.now() + defaultBackoffMs;
-				this.#blocks.markCredentialBlocked(
-					args.provider,
-					args.providerKey,
-					selection.index,
-					blockedUntil,
-					args.blockScope,
-				);
-				blocked = true;
-			}
-			const windows = usage ? strategy.findWindowLimits(usage, args.rankingContext) : undefined;
-			const primary = windows?.primary;
-			const secondary = windows?.secondary;
-			const secondaryTarget = secondary ?? primary;
-			ranked.push({
-				selection,
-				usage,
-				usageChecked,
-				blocked,
-				blockedUntil,
-				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
-				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
-				secondaryUsed: normalizeUsageFraction(secondaryTarget),
-				secondaryRequiredDrain: computeWindowRequiredDrain(
-					secondaryTarget,
-					nowMs,
-					strategy.windowDefaults.secondaryMs,
-				),
-				primaryUsed: normalizeUsageFraction(primary),
-				primaryRequiredDrain: computeWindowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
-				orderPos,
-			});
-		}
-		return orderUsageRankedCandidates(ranked, planRequirement);
-	}
-
-	async #rankOAuthSelections(args: {
-		providerKey: string;
-		provider: string;
-		order: number[];
-		planRequirement: OpenAICodexPlanRequirement;
-		credentials: OAuthSelection[];
-		options?: AuthApiKeyOptions;
-		strategy: CredentialRankingStrategy;
-		rankingContext: CredentialRankingContext;
-		blockScope?: string;
-	}): Promise<OAuthCandidate[]> {
-		const nowMs = Date.now();
-		// Pre-fetch usage reports in parallel for non-blocked credentials.
-		// Wrap with a timeout so slow/429'd fetches don't indefinitely block
-		// credential selection — better to pick a credential without usage data
-		// than to hang the agent waiting for rate-limited usage endpoints.
-		const usageTimeout = Math.max(5000, this.#usage.requestTimeoutMs * 1.5);
-		const usagePromise = Promise.all(
-			args.order.map(async idx => {
-				const selection = args.credentials[idx];
-				if (!selection) return null;
-				let blockedUntil = this.#blocks.getCredentialBlockedUntil(
-					args.provider,
-					args.providerKey,
-					selection.index,
-					args.blockScope,
-				);
-				let usage: UsageReport | null = null;
-				let usageChecked = false;
-				if (blockedUntil !== undefined && args.provider === "openai-codex") {
-					usage = await this.#usage.reportFor(args.provider, selection.credential, {
-						...args.options,
-						timeoutMs: this.#usage.requestTimeoutMs,
-					});
-					usageChecked = true;
-					blockedUntil = this.#blocks.getCredentialBlockedUntil(
-						args.provider,
-						args.providerKey,
-						selection.index,
-						args.blockScope,
-					);
-				}
-				if (blockedUntil !== undefined) return { selection, usage, usageChecked, blockedUntil };
-				if (!usageChecked) {
-					usage = await this.#usage.reportFor(args.provider, selection.credential, {
-						...args.options,
-						timeoutMs: this.#usage.requestTimeoutMs,
-					});
-					usageChecked = true;
-				}
-				return { selection, usage, usageChecked, blockedUntil: undefined as number | undefined };
-			}),
-		);
-		const timeoutSignal = Promise.withResolvers<null>();
-		// `Bun.sleep` keeps the event loop alive even after Promise.race resolves,
-		// which leaks a 7.5–15s timer per credential-selection call. Use an unref'd
-		// timer so the timeout doesn't pin the process and clear it on the happy
-		// path so memory drops immediately.
-		const timer = setTimeout(() => timeoutSignal.resolve(null), usageTimeout);
-		timer.unref?.();
-		const usageResults = await Promise.race([usagePromise, timeoutSignal.promise]).then(result => {
-			clearTimeout(timer);
-			return (
-				result ??
-				args.order.map(idx => {
-					const selection = args.credentials[idx];
-					return selection ? { selection, usage: null, usageChecked: false, blockedUntil: undefined } : null;
-				})
-			);
-		});
-
-		return this.#rankUsageResults(usageResults, args, args.planRequirement, nowMs);
-	}
-
-	/**
 	 * Resolves an OAuth credential, trying credentials in priority order.
 	 *
 	 * Resolution ladder — a request in hand always beats "no API key":
@@ -2955,7 +2747,7 @@ export class AuthStorage {
 			checkUsage && (movementAllowed ? !sessionPreferredIsAvailable || hasPlanRequirement : hasPlanRequirement);
 		const rankingOrder = shouldRank && sessionId ? credentials.map((_credential, index) => index) : order;
 		const rankedCandidates = shouldRank
-			? await this.#rankOAuthSelections({
+			? await this.#ranking.rankOAuthSelections({
 					providerKey,
 					provider,
 					planRequirement,
@@ -3325,7 +3117,7 @@ export class AuthStorage {
 			gate.provider,
 			gate.providerKey,
 			gate.selection.index,
-			resetAtMs ?? Date.now() + defaultBackoffMs,
+			resetAtMs ?? Date.now() + DEFAULT_CREDENTIAL_BACKOFF_MS,
 			gate.blockScope,
 		);
 		return true;
@@ -4028,7 +3820,7 @@ export class AuthStorage {
 			provider,
 			getProviderTypeKey(provider, matched.type),
 			matched.index,
-			Date.now() + defaultBackoffMs,
+			Date.now() + DEFAULT_CREDENTIAL_BACKOFF_MS,
 		);
 		const failed = matched;
 		const siblingRemains = stored.some(
@@ -4123,7 +3915,12 @@ export class AuthStorage {
 		// account failed authentication, and an explicit choice must stop pinning traffic to it —
 		// otherwise a revoked grant would be retried until the turn died instead of failing over.
 		if (target) this.#authDeadCredentials.add(target.id);
-		this.#blocks.markCredentialBlocked(provider, providerKey, sessionCredential.index, Date.now() + defaultBackoffMs);
+		this.#blocks.markCredentialBlocked(
+			provider,
+			providerKey,
+			sessionCredential.index,
+			Date.now() + DEFAULT_CREDENTIAL_BACKOFF_MS,
+		);
 
 		if (hasSibling && target) {
 			// Parked, not emitted: the label of the account that DIED must be read now, before

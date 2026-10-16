@@ -38,7 +38,7 @@ import type {
  * Client-side TTL for the aggregate `/v1/usage` response. The broker dedups
  * upstream `/usage` hits via AuthStorage's 5-minute per-credential cache plus
  * single-flight, so this short client TTL mainly folds the parallel fan-out
- * from `#rankOAuthSelections` into a single round-trip — a ranking pass issues
+ * from `CredentialRanking.rankOAuthSelections` into a single round-trip — a ranking pass issues
  * one broker call instead of N.
  */
 const USAGE_CACHE_TTL_MS = 15_000;
