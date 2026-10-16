@@ -116,9 +116,23 @@ export function encode(text: string): string {
 	result = applyPhrases(result);
 	result = applyStructural(result);
 	result = compactParens(result);
-	result = result.replaceAll("working correctly", "OK");
-	result = result.replaceAll("working", "OK");
-	result = result.replaceAll("complete", "DONE");
-	result = result.replaceAll("completed", "DONE");
-	return result.trim();
+	return applyStatusWords(result).trim();
+}
+
+/**
+ * Status words compacted to a token. Each matches a whole word, so "incomplete" and "networking" keep their
+ * meaning and "completed" compacts to DONE rather than leaving a stray suffix.
+ */
+const STATUS_WORDS: readonly (readonly [pattern: RegExp, replacement: string])[] = [
+	[/\bworking correctly\b/g, "OK"],
+	[/\bworking\b/g, "OK"],
+	[/\bcompleted?\b/g, "DONE"],
+];
+
+function applyStatusWords(text: string): string {
+	let result = text;
+	for (const [pattern, replacement] of STATUS_WORDS) {
+		result = result.replace(pattern, replacement);
+	}
+	return result;
 }

@@ -9,6 +9,10 @@
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
 - Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
 
+### Fixed
+
+- Sleep consolidation compacts "complete", "completed" and "working" only as whole words, so "incomplete" no longer becomes "inDONE" and "completed" no longer becomes "DONEd".
+
 ### Removed
 
 - Removed the `escapeLike`, `sqlPlaceholders` and `tableExists` re-exports from `util/sqlite`; import them from `@veyyon/utils/sqlite`.
