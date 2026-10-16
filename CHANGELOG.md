@@ -85,11 +85,18 @@
 - Doc comments that module splits left above the wrong declaration (`stageModels`, `AUTO_THINKING`, `ConfiguredThinkingLevel`) are back on their definitions; no user-visible change.
 - Source comments that named a moved or deleted symbol's old module now name its current one; no user-visible change.
 - Dropping a failed assistant turn and its never-ran tool results from active context moved from `session/agent-session.ts` to `session/runtime/turn-context-check.ts`, beside the function that puts one back; no user-visible change.
+- The status line reads the session's provider and OAuth account through its typed members instead of a reflective record with a fallback for a session shape that no longer exists; no user-visible change.
+- The GitHub cache reads its three settings by their declared paths instead of through an untyped cast; no user-visible change.
+- MCP request params, the reloaded `ssh` tool and the argument display read through their declared types instead of `as unknown as` casts; no user-visible change.
+- Settings reads in the status line, extension dashboard, speech input, browser, Hindsight memory, advisor roster, task agent settings, extension wrapper and ACP extension listing use their declared types instead of casts; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
+- A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
+- `declareSettings` rejects a table in which one setting path is the parent of another, since one config key holds a value or a group of settings, not both.
+- `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
 
 ### Removed
@@ -141,6 +148,15 @@
 - A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
 - A browser the `browser` tool spawned is killed on session end or a failed attach when the native addon cannot load, instead of being left running.
 - A foreground `bash` command that finishes before the auto-background threshold, a client-terminal command that exits before its timeout, an edit whose LSP diagnostics arrive inside the 500 ms inline wait, MCP startup, an LSP or DAP adapter shutdown, the GPU probe, the speech recorder's start wait, an async job delivery wait, the browser's selector hint, file-chooser and frame-draw waits, memory dispose and session shutdown clear their deadline timer when the work finishes, instead of leaving it armed for the rest of the window (up to 300 s for the bash threshold) and holding the process open.
+- A hook or custom command's `ctx.ui.terminal.custom` factory is typed `(tui, theme, keybindings, done)`, the arguments the terminal passes, and the `qna` and `handoff` hook examples call `done` instead of the keybindings manager.
+- A custom command on a session built without an extension runner redacts through `ctx.obfuscateProviderText` instead of throwing a TypeError.
+- A discovered custom tool's factory-scoped `ui` and `hasUI` receive the host's UI, instead of staying a no-op context and `false` in every mode.
+- The image-generation, speech and Exa tools join a session's custom tools without a type cast; no user-visible change.
+- Fixed the task card crashing or drawing `NaN% confidence` when a reviewer yields a verdict whose explanation, confidence or correctness has the wrong type; the card now draws the last well-formed verdict.
+- Fixed a resumed session restoring a goal whose recorded status is not one this build writes, which ran as neither active nor finished while its badge showed it running; a usage record with such a status no longer overwrites the goal's counters.
+- Fixed a scalar where a settings group belongs in `config.yml` (such as `tools: on`) moving the whole file aside to `config.yml.corrupt`; the scalar is ignored and every other setting in the file still loads.
+- Setting the todo reminder limit no longer turns todo reminders back on, and turning reminders off no longer drops the limit; the limit is `todo.reminderLimit`, and a stored `todo.reminders.max` moves there on load.
+- Startup configuration warnings state what a setting of the wrong kind or outside its allowed values reads as, and report such values in `--config` overlay files as well as the profile config.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
