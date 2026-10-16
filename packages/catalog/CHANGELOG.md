@@ -4,7 +4,7 @@
 
 ### Removed
 
-Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
+- Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
 
 ### Changed
 

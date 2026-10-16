@@ -89,7 +89,7 @@
 - The auth broker command imports the credential store from `@veyyon/ai/auth-storage-sqlite`, with no user-visible change.
 - Modules import the timeout, whitespace, advisor transcript name and slash-command category helpers from their owning modules; the `utils/fetch-timeout` re-export module is removed, with no user-visible change.
 - The LSP client and diagnostics, the web search tool and the `web-search` command import the language-id, grouped-diagnostic and search-provider metadata helpers from their owning modules instead of the `lsp/utils` and `search/provider` re-exports, which are removed except `getSearchProviderLabel`; no user-visible change.
-Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
+- Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 
 ### Fixed
 
@@ -148,13 +148,13 @@ Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/
 - The task tool's `context` argument streams into the pending preview as it arrives in batch mode instead of advancing in throttle-sized steps.
 - The update check, release-list and checksum fetches, release binary download, Smithery requests and Hindsight requests bound the response body with their deadline and clear its timer when the request finishes, instead of leaving it armed afterwards.
 - `/mcp smithery-login` falls back to API-key entry after five minutes when a browser-login poll request stalls, instead of hanging.
-The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
+- The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
 
 ### Removed
 
 - The headless browser no longer returns a made-up font list from `queryLocalFonts`.
 - Removed the `tinyModelClient` alias of `tinyTitleClient` and the `OPENROUTER_BASE_URL` alias in the Perplexity search provider; no user-visible change.
-Removed the `parseSha256Sidecar` re-export from `@veyyon/coding-agent/cli/update-cli`; import it from `@veyyon/natives/sha256-sidecar`.
+- Removed the `parseSha256Sidecar` re-export from `@veyyon/coding-agent/cli/update-cli`; import it from `@veyyon/natives/sha256-sidecar`.
 
 ## [1.5.8] - 2026-10-16
 

@@ -14,7 +14,7 @@
 - Removed the AWS region and GitLab Duo model parameters that credential and namespace resolution accepted and never read, with no user-visible change.
 - Moved the GitLab Duo Workflow goal transcript and system-slot rendering out of `providers/gitlab-duo-workflow.ts` into `providers/gitlab-duo-workflow/goal.ts`, and socket frame, checkpoint and tool-action reading into `providers/gitlab-duo-workflow/frames.ts`, with no user-visible change.
 - Moved the Responses stream decoder and the per-block accumulators it shares with the Codex decoder out of `providers/openai-shared.ts` into `providers/openai-responses-stream.ts`, with no user-visible change.
-Built the Anthropic OAuth, Claude usage, Cursor auth, OpenRouter key-check and Gemini key-check URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
+- Built the Anthropic OAuth, Claude usage, Cursor auth, OpenRouter key-check and Gemini key-check URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 
 ### Fixed
 
@@ -30,7 +30,7 @@ Built the Anthropic OAuth, Claude usage, Cursor auth, OpenRouter key-check and G
 - Removed the `getEnvApiKey`, `getEnvApiKeyName`, `listProvidersWithEnvKey` and `configureProviderMaxInFlightRequests` re-exports from `@veyyon/ai/stream`; import them from `@veyyon/ai/env-api-key`, `@veyyon/ai/provider-inflight-limits` or the package root, which still exports all four.
 - Removed the `CURSOR_API_URL` alias from `providers/cursor`; import `CURSOR_API_ENDPOINT` from `@veyyon/catalog/provider-endpoints`.
 - Removed the `createInitialResponsesAssistantMessage` re-export from `providers/openai-shared`; import it from `providers/initial-message`.
-Removed the `escapeXmlAttr` and `escapeXmlText` re-exports from `@veyyon/ai/dialect/rendering`; import `escapeXmlAttribute` and `escapeXmlText` from `@veyyon/utils/sanitize-text`.
+- Removed the `escapeXmlAttr` and `escapeXmlText` re-exports from `@veyyon/ai/dialect/rendering`; import `escapeXmlAttribute` and `escapeXmlText` from `@veyyon/utils/sanitize-text`.
 
 ## [1.5.8] - 2026-10-16
 

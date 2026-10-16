@@ -6,7 +6,7 @@
 
 ### Removed
 
-Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
+- Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
 
 ### Changed
 
