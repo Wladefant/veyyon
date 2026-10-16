@@ -270,8 +270,8 @@ function createFixture(opts: { isStreaming?: boolean; messages?: AgentMessage[] 
 		sessionManager: { getCwd: () => process.cwd(), getSessionName: () => "test-session", getEntries: () => [] },
 		isStreaming: opts.isStreaming ?? true,
 		systemPromptInvalidations: () => [],
-		// The suite drives tool cards, not the composer prediction a finished turn requests.
-		settings: Settings.isolated({ "composer.predictions.mode": "off" }),
+		// Predictions off, so a finished turn does not reach the composer predictor.
+		settings: { get: (key: string) => (key === "composer.predictions.mode" ? "off" : undefined) },
 		// What `renderInitialMessages` replays. Same messages the direct
 		// `renderSessionContext` driver uses, reached through the production
 		// caller instead of by hand.
