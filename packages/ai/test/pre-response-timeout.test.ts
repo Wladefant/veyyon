@@ -55,7 +55,7 @@ describe("armPreResponseTimeout", () => {
 		expect(signal?.aborted).toBe(true);
 		const reason = signal?.reason as DOMException;
 		expect(reason.name).toBe("TimeoutError");
-		expect(reason.message).toBe("The operation timed out.");
+		expect(reason.message).toBe("Timed out after 50 ms waiting for the first event: the provider sent no response");
 	});
 
 	it("never aborts once cleared, even long past the deadline", () => {

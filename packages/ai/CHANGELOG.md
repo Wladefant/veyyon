@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
+
 ## [1.5.8] - 2026-10-16
 
 ### Fixed

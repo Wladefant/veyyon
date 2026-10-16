@@ -134,7 +134,14 @@ export function armPreResponseTimeout(
 	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => {
-		controller.abort(new DOMException("The operation timed out.", "TimeoutError"));
+		// The budget is the caller's first-event budget, and the iterator watchdog over the same stream
+		// reports the same phase: whichever deadline fires first, the turn states one cause.
+		controller.abort(
+			new DOMException(
+				`Timed out after ${timeoutMs} ms waiting for the first event: the provider sent no response`,
+				"TimeoutError",
+			),
+		);
 	}, timeoutMs);
 	timer.unref?.();
 	const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
