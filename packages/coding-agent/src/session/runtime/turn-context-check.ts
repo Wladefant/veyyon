@@ -7,7 +7,7 @@
  * `CompactionRuntime`'s; the switch to a larger-context model is the session's, which the pre-prompt
  * and mid-run checks share.
  */
-import type { Agent } from "@veyyon/agent-core";
+import { type Agent, toolResultNeverRan } from "@veyyon/agent-core";
 import {
 	type CompactionSettings,
 	calculateContextTokens,
@@ -92,6 +92,51 @@ function restoreFailedAssistantTurnToActiveContext(agent: Agent, assistantMessag
 	const lastMessage = agent.state.messages.at(-1);
 	if (lastMessage?.role === "assistant" && isSameAssistantMessage(lastMessage, assistantMessage)) return;
 	agent.appendMessage(assistantMessage);
+}
+
+/**
+ * Drop a failed assistant turn from active context.
+ *
+ * The turn is identified at the TAIL, and a turn that failed with tool calls
+ * in it does not sit there alone: the agent loop pairs every retained call
+ * with a never-ran placeholder result to keep the API's tool_use/tool_result
+ * pairing intact, so the assistant message is second-to-last, or further
+ * back on a wide batch. Matching only the final message therefore missed
+ * the turns a retry has to clear, and left the dead turn (plus its
+ * placeholders) in the context the retry replayed. Those placeholders are
+ * dropped WITH it, and only those: a result that is not a never-ran
+ * placeholder belongs to a call that ran, which is a turn no caller here is
+ * allowed to discard.
+ */
+export function removeAssistantMessageFromActiveContext(
+	agent: Agent,
+	assistantMessage: AssistantMessage,
+	reason = "assistant-context-cleanup",
+): void {
+	const messages = agent.state.messages;
+	let end = messages.length;
+	while (end > 0) {
+		const candidate = messages[end - 1];
+		if (candidate?.role !== "toolResult" || !toolResultNeverRan(candidate.details)) break;
+		end -= 1;
+	}
+	const lastMessage = messages[end - 1];
+	const lastAssistant: AssistantMessage | undefined = lastMessage?.role === "assistant" ? lastMessage : undefined;
+	if (lastAssistant !== undefined && isSameAssistantMessage(lastAssistant, assistantMessage)) {
+		agent.replaceMessages(messages.slice(0, end - 1));
+		return;
+	}
+	// A miss means the failed turn is still in active context (or was never
+	// there); log enough to explain why the identity check failed.
+	logger.debug("agent active context assistant removal missed", {
+		reason,
+		lastRole: lastMessage?.role,
+		trailingPlaceholders: messages.length - end,
+		candidateTimestamp: assistantMessage.timestamp,
+		lastTimestamp: lastAssistant?.timestamp,
+		candidateStopReason: assistantMessage.stopReason,
+		lastStopReason: lastAssistant?.stopReason,
+	});
 }
 
 export class TurnContextCheck {

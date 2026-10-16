@@ -573,6 +573,7 @@ describe("AgentSession retry delay cap", () => {
 		}
 
 		let streamCalls = 0;
+		const requestContexts: Context[] = [];
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
@@ -581,8 +582,9 @@ describe("AgentSession retry delay cap", () => {
 				tools: [],
 				messages: [],
 			},
-			streamFn: requestedModel => {
+			streamFn: (requestedModel, context) => {
 				streamCalls += 1;
+				requestContexts.push(context);
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					const partial: AssistantMessage = {
@@ -662,6 +664,20 @@ describe("AgentSession retry delay cap", () => {
 		expect(streamCalls).toBe(2);
 		expect(retryStartEvents).toHaveLength(1);
 		expect(retryEndEvents).toHaveLength(1);
+		// The retry replays the prompt, not the dead turn. That turn sits behind
+		// the never-ran placeholder the loop pairs with its call, so it is found
+		// past the placeholder and both leave the replayed context together. The
+		// provider conversion renames call ids, so the replay is read by role and
+		// the agent's own context by id.
+		expect((requestContexts[1]?.messages ?? []).map(message => message.role)).toEqual(["user"]);
+		const deadCallIds = session.agent.state.messages.flatMap(message =>
+			message.role === "assistant"
+				? message.content.flatMap(block => (block.type === "toolCall" ? [block.id] : []))
+				: message.role === "toolResult"
+					? [message.toolCallId]
+					: [],
+		);
+		expect(deadCallIds).toEqual(["tc-write-2", "tc-write-2"]);
 		const lastError = [...session.agent.state.messages]
 			.reverse()
 			.find((message): message is AssistantMessage => message.role === "assistant");
