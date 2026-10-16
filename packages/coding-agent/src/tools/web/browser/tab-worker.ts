@@ -769,19 +769,17 @@ interface ClickTargetResolution {
 	probeFailures: number;
 	/** The first probe error's message, so the timeout can name the cause and not just count it. */
 	firstProbeError: string | null;
+	/** The clickable ancestors the resolution looked up, the target among them, which the caller releases. */
+	proxies: JSHandle[];
 }
 
 async function resolveActionableQueryHandlerClickTarget(handles: ElementHandle[]): Promise<ClickTargetResolution> {
-	const candidates: Array<{
-		handle: ElementHandle;
-		rect: { x: number; y: number; w: number; h: number };
-		ownedProxy?: ElementHandle;
-	}> = [];
+	const candidates: Array<{ handle: ElementHandle; rect: { x: number; y: number; w: number; h: number } }> = [];
 	let probeFailures = 0;
 	let firstProbeError: string | null = null;
+	const proxies: JSHandle[] = [];
 	for (const handle of handles) {
 		let clickable: ElementHandle = handle;
-		let clickableProxy: ElementHandle | null = null;
 		try {
 			const proxy = await handle.evaluateHandle(el => {
 				const target =
@@ -790,8 +788,8 @@ async function resolveActionableQueryHandlerClickTarget(handles: ElementHandle[]
 					) ?? el;
 				return target;
 			});
-			clickableProxy = asElementHandle(proxy.asElement());
-			if (clickableProxy) clickable = clickableProxy;
+			proxies.push(proxy);
+			clickable = asElementHandle(proxy.asElement()) ?? handle;
 		} catch {
 			// Looking for the clickable ancestor failed (detached node, or a frame that will not run
 			// script). Clicking the matched element itself is the right degrade and is usually the same
@@ -806,28 +804,19 @@ async function resolveActionableQueryHandlerClickTarget(handles: ElementHandle[]
 				return { x: r.left, y: r.top, w: r.width, h: r.height };
 			})) as { x: number; y: number; w: number; h: number };
 			if (rect.w < 1 || rect.h < 1) continue;
-			candidates.push({ handle: clickable, rect, ownedProxy: clickableProxy ?? undefined });
+			candidates.push({ handle: clickable, rect });
 		} catch (err) {
 			// The visibility probe threw, so this element is dropped without ever being judged. Counted
 			// and reported: dropping it silently is what made a detached-node race read as an invisible
 			// element in the timeout message.
 			probeFailures += 1;
 			firstProbeError ??= errorMessage(err);
-		} finally {
-			if (clickableProxy && clickableProxy !== handle && clickable !== clickableProxy) {
-				await releaseHandle(clickableProxy);
-			}
 		}
 	}
-	const resolution = { probed: handles.length, probeFailures, firstProbeError };
+	const resolution = { probed: handles.length, probeFailures, firstProbeError, proxies };
 	if (!candidates.length) return { target: null, ...resolution };
 	candidates.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
-	const winner = candidates[0]?.handle ?? null;
-	for (let i = 1; i < candidates.length; i++) {
-		const candidate = candidates[i]!;
-		await releaseHandle(candidate.ownedProxy);
-	}
-	return { target: winner, ...resolution };
+	return { target: candidates[0]?.handle ?? null, ...resolution };
 }
 
 async function isClickActionable(handle: ElementHandle): Promise<ActionabilityResult> {
@@ -858,6 +847,34 @@ async function isClickActionable(handle: ElementHandle): Promise<ActionabilityRe
 	})) as ActionabilityResult;
 }
 
+/**
+ * Press with `press`, run `held` while the press is down, then release it with `release`. When an abort
+ * ends the wait, the release goes as soon as the press has settled, while `held` may still run:
+ * puppeteer keeps a pressed button or modifier in its own state, and one never released makes every
+ * later press on the page fail ("'left' is already pressed") or carry the modifier.
+ */
+async function holdDuring(
+	signal: AbortSignal,
+	press: () => Promise<void>,
+	held: () => Promise<void>,
+	release: () => Promise<void>,
+): Promise<void> {
+	const pressed = press();
+	try {
+		await untilAborted(signal, pressed);
+		await untilAborted(signal, held);
+	} catch (error) {
+		const released = bestEffort(
+			pressed.then(release, release),
+			"a press that failed holds nothing, and a page that closed took its input with it",
+		);
+		// An abort can come while the press is still being dispatched; the release then follows it.
+		if (!signal.aborted) await released;
+		throw error;
+	}
+	await untilAborted(signal, release);
+}
+
 /** How long a `<select>` joins typed keys into one type-ahead search (`kTypeAheadTimeout`), and a margin. */
 const TYPE_AHEAD_SESSION_MS = 1_100;
 
@@ -879,45 +896,50 @@ async function clickQueryHandlerText(
 	const start = Date.now();
 	let lastSeen = 0;
 	let lastReason: string | null = null;
-	while (Date.now() - start < timeoutMs) {
-		throwIfAborted(clickSignal);
-		const handles = (await untilAborted(clickSignal, () => page.$$(selector))) as ElementHandle[];
-		try {
-			lastSeen = handles.length;
-			const resolved = await resolveActionableQueryHandlerClickTarget(handles);
-			const target = resolved.target;
-			if (!target) {
-				lastReason = describeMissingClickTarget(resolved);
-				await untilAborted(clickSignal, () => Bun.sleep(100));
-				continue;
-			}
-			const actionability = await isClickActionable(target);
-			if (!actionability.ok) {
-				lastReason = actionability.reason;
-				await untilAborted(clickSignal, () => Bun.sleep(100));
-				continue;
-			}
+	try {
+		while (Date.now() - start < timeoutMs) {
+			throwIfAborted(clickSignal);
+			const handles = (await untilAborted(clickSignal, () => page.$$(selector))) as ElementHandle[];
+			let proxies: JSHandle[] = [];
 			try {
-				// The target passed the actionability check above; a natural press also checks the point it goes to.
-				await (input
-					? pressUncovered(
-							target,
-							`tab.click(${JSON.stringify(selector)})`,
-							element => element.click(),
-							Math.max(1, timeoutMs - (Date.now() - start)),
-							{ signal: clickSignal, gesture: { kind: "click" }, input },
-						)
-					: untilAborted(clickSignal, () => target.click()));
-				return;
-			} catch (err) {
-				lastReason = errorMessage(err);
-				await untilAborted(clickSignal, () => Bun.sleep(100));
+				lastSeen = handles.length;
+				const resolved = await resolveActionableQueryHandlerClickTarget(handles);
+				proxies = resolved.proxies;
+				const target = resolved.target;
+				if (!target) {
+					lastReason = describeMissingClickTarget(resolved);
+					await untilAborted(clickSignal, () => Bun.sleep(100));
+					continue;
+				}
+				const actionability = await isClickActionable(target);
+				if (!actionability.ok) {
+					lastReason = actionability.reason;
+					await untilAborted(clickSignal, () => Bun.sleep(100));
+					continue;
+				}
+				try {
+					// The target passed the actionability check above; a natural press also checks the point it goes to.
+					await (input
+						? pressUncovered(
+								target,
+								`tab.click(${JSON.stringify(selector)})`,
+								element => element.click(),
+								Math.max(1, timeoutMs - (Date.now() - start)),
+								{ signal: clickSignal, gesture: { kind: "click" }, input },
+							)
+						: untilAborted(clickSignal, () => target.click()));
+					return;
+				} catch (err) {
+					lastReason = errorMessage(err);
+					await untilAborted(clickSignal, () => Bun.sleep(100));
+				}
+			} finally {
+				await releaseHandles([...handles, ...proxies]);
 			}
-		} finally {
-			await releaseHandles(handles);
 		}
+	} finally {
+		clickTimeout.cancel();
 	}
-	clickTimeout.cancel();
 	throw new ToolError(
 		`Timed out clicking ${selector} (seen ${lastSeen} matches; last reason: ${lastReason ?? "unknown"}). ` +
 			"If there are multiple matching elements, use observe + tab.id() or a more specific selector.",
@@ -2313,10 +2335,15 @@ export class WorkerCore {
 				);
 				return;
 			}
-			await untilAborted(signal, () => page.mouse.move(start.x, start.y));
-			await untilAborted(signal, () => page.mouse.down());
-			await untilAborted(signal, () => page.mouse.move(end!.x, end!.y, { steps: 12 }));
-			await untilAborted(signal, () => page.mouse.up());
+			const mouse = page.mouse;
+			const drop = end;
+			await untilAborted(signal, () => mouse.move(start.x, start.y));
+			await holdDuring(
+				signal,
+				() => mouse.down(),
+				() => mouse.move(drop.x, drop.y, { steps: 12 }),
+				() => mouse.up(),
+			);
 		} finally {
 			await releaseHandle(start.handle);
 			await releaseHandle(end?.handle);
@@ -2393,21 +2420,23 @@ export class WorkerCore {
 				continue;
 			}
 			try {
-				await untilAborted(signal, () => page.keyboard.down(plan.modifier));
-				try {
-					await pressUncovered(
-						option,
-						"tab.select()",
-						element => element.click(),
-						Math.max(1, timeoutMs - PRESS_REPORT_MARGIN_MS),
-						{ signal, gesture: { kind: "click" }, input },
-					);
-				} finally {
-					await bestEffort(
-						page.keyboard.up(plan.modifier),
-						"puppeteer clears a modifier from its own state before it sends",
-					);
-				}
+				await holdDuring(
+					signal,
+					() => page.keyboard.down(plan.modifier),
+					() =>
+						pressUncovered(
+							option,
+							"tab.select()",
+							element => element.click(),
+							Math.max(1, timeoutMs - PRESS_REPORT_MARGIN_MS),
+							{ signal, gesture: { kind: "click" }, input },
+						),
+					() =>
+						bestEffort(
+							page.keyboard.up(plan.modifier),
+							"puppeteer clears a modifier from its own state before it sends",
+						),
+				);
 			} finally {
 				await releaseHandle(option);
 			}

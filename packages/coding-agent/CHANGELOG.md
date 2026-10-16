@@ -70,6 +70,8 @@
 - A visible `browser` tab emulates no viewport: its page lays out in the window's content area at the display's scale and follows the window when a person resizes it, `viewport` resizes the window to hold that content area, and a stuck run's replacement worker keeps the window's size, instead of a 1365x768 page at scale 1.25 whose bottom 87 px the window did not show; `viewport.scale` on a visible tab is refused.
 - The `browser` `open` result and `tab.observe()` report a visible or attached tab's content area and scale as its viewport, instead of 1365x768 at scale 1.25.
 - `tab.observe()` no longer fails with `Cannot read properties of null (reading 'nodeType')` while a date, time or colour picker is open; the picker's own controls are left out of the list.
+- A `browser` `tab.drag()` or multiple `tab.select()` cut short by its deadline or an abort releases the mouse button or modifier it pressed, instead of leaving it held so every later click on the tab failed with `'left' is already pressed` or arrived as a Control-click.
+- A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
 
 ### Removed
 
