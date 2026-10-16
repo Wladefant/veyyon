@@ -29,7 +29,7 @@ import {
 	isRetryFallbackModelKey,
 	sanitizeRetryFallbackChains,
 } from "../../../../session/agent-session-retry-fallback";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	type ConfiguredThinkingLevel,
 	configuredThinkingLevelsForModel,

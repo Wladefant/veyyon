@@ -86,7 +86,7 @@ import {
 	TTS_LOCAL_MODELS,
 	TTS_LOCAL_VOICE_OPTIONS,
 } from "../../speech/tts/models";
-import { theme } from "../../theme/theme";
+import { theme } from "../../theme/theme-binding";
 import {
 	configuredThinkingLevelsForModel,
 	getConfiguredThinkingLevelMetadata,

@@ -8,7 +8,7 @@ import { buildMemoryPayloadForDisplay, type MemoryBackend, resolveMemoryBackend 
 import type * as hindsightModule from "../../../memory/hindsight";
 import type { HindsightApi, HindsightSessionState } from "../../../memory/hindsight";
 import { getMarkdownTheme } from "../../../theme/markdown-theme";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { COMPOSER_INSET_COLS } from "../components/composer/composer-chrome";
 import { mountTranscriptBlock } from "../components/transcript/transcript-block-chrome";
 import { TranscriptBlock } from "../components/transcript/transcript-container";

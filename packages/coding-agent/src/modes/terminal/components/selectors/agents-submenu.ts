@@ -38,7 +38,7 @@ import {
 	isHelperId,
 } from "../../../../task/helper-settings";
 import { type AgentDefinition, canSpawnAtDepth } from "../../../../task/types";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	configuredThinkingLevelOptions,
 	INHERIT_EFFORT_OPTION_VALUE,

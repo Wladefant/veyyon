@@ -7,7 +7,7 @@
 import { clampLow, logger, prompt } from "@veyyon/utils";
 import { settings } from "../../../config/settings-instance";
 import { sideChannelPrompts } from "../../../prompts/side-channel/rows";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { nextActionableTask } from "../../../tools/agent/todo";
 import { previewLine, TRUNCATE_LENGTHS } from "../../../tools/core/render-utils";
 import type { EventControllerContext } from "./event-controller";

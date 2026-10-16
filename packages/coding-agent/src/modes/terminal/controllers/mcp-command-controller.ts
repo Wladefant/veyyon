@@ -26,7 +26,7 @@ import { mcpOAuthCredentialId } from "../../../mcp/oauth-flow";
 import type { MCPHttpServerConfig, MCPServerConfig, MCPServerConnection, MCPSseServerConfig } from "../../../mcp/types";
 import { MCP_REMOVE_USAGE, parseMcpAddCommand, parseMcpRemoveArgs } from "../../../slash-commands/helpers/mcp-args";
 import { withIcon } from "../../../theme/icon-label";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { shortenPath } from "../../../tools/core/render-utils";
 import { MCPAddWizard } from "../components/dialogs/mcp-add-wizard";
 import type { InteractiveModeContext } from "../types";

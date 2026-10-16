@@ -1,6 +1,6 @@
 import { type Component, Container, Markdown, Text, type TUI } from "@veyyon/tui";
 import { getMarkdownTheme } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { replaceTabs } from "../../../../tools/core/render-utils";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 import { mountTranscriptBlock } from "../transcript/transcript-block-chrome";

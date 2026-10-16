@@ -9,7 +9,7 @@ import { shouldEnableAppendOnlyContext } from "../../../config/append-only-conte
 import { openaiWebsocketPreference } from "../../../config/openai-websockets-mode";
 import type { LspStartupServerInfo } from "../../../lsp";
 import type { SessionStats } from "../../../session/agent-session-types";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import type { CommandControllerContext } from "./command-controller";
 
 /** The context members the `/session` panel reads. */

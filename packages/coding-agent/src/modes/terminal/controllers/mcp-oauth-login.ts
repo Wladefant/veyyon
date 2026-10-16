@@ -15,7 +15,7 @@ import {
 } from "../../../mcp";
 import { MCPOAuthFlow, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "../../../mcp/oauth-flow";
 import type { MCPServerConfig, MCPStdioServerConfig } from "../../../mcp/types";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { copyToClipboard } from "../../../utils/clipboard";
 import { openPath } from "../../../utils/open";
 import { TranscriptBlock } from "../components/transcript/transcript-container";

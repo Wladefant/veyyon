@@ -7,7 +7,7 @@
 import { Spacer, Text } from "@veyyon/tui";
 import type { MCPServerConnection } from "../../../mcp/types";
 import { MCP_ADD_USAGE, MCP_SEARCH_USAGE } from "../../../slash-commands/helpers/mcp-args";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { shortenPath } from "../../../tools/core/render-utils";
 import { ChatBlock } from "../components/transcript/chat-block";
 

@@ -4,7 +4,7 @@ import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { isAgentEnabled } from "../../../../task/agent-settings";
 import { discoverAgents } from "../../../../task/discovery";
 import type { AgentDefinition } from "../../../../task/types";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import type { SetupKeyHint, SetupScene, SetupSceneController, SetupSceneHost, SetupWizardContext } from "./types";
 import { createWizardList, filterEscapeHint } from "./wizard-list";
 

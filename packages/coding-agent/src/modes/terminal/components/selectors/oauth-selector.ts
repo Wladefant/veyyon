@@ -10,7 +10,7 @@ import type { SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { disabledProviderIds } from "../../../../config/settings-instance";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel } from "../../utils/keybinding-matchers";
 import { pointerMotionEnabled } from "../chrome/modal-shell";
 import { handleListNavigationKey } from "./select-list-mouse-routing";

@@ -22,7 +22,7 @@ import {
 } from "../../../mcp/smithery-registry";
 import type { MCPServerConfig } from "../../../mcp/types";
 import { parseMcpSearchArgs } from "../../../slash-commands/helpers/mcp-args";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { shortenPath } from "../../../tools/core/render-utils";
 import { openPath } from "../../../utils/open";
 import type { InteractiveModeContext } from "../types";

@@ -25,7 +25,7 @@ import {
 } from "../../../../presentation/transcript-builder";
 import type { CustomMessage } from "../../../../session/messages";
 import { type HighlightRequest, prefetchHighlights } from "../../../../theme/highlight";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../controllers/tool-args-reveal";
 import { isLiveBackgroundTask } from "../../utils/async-tool-state";
 import {

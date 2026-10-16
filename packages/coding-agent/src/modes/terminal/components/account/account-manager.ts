@@ -33,7 +33,7 @@ import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { formatProviderName } from "../../../../session/account-format";
 import type { AccountInventory, AccountRow } from "../../../../session/account-inventory";
 import { accountsForProvider, selectedButRotated } from "../../../../session/account-inventory";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {

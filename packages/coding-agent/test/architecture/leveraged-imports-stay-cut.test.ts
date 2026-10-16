@@ -963,6 +963,12 @@ const LEAF_OWNERS: ReadonlyArray<
 		"slash-commands/builtin-registry.ts",
 		1381,
 	],
+	// THE ACTIVE THEME. `theme` is a live binding the engine reassigns through `setActiveTheme`, and
+	// `./theme-binding` holds it so a reader need not load theme JSON, highlighting and mermaid to read
+	// the palette. 96 modules took it alone from the engine: summed reach 39,001 -> 31,642, 60 of them
+	// left the engine's graph entirely (package modules reaching it 256 -> 135), `extensibility/utils.ts`
+	// 170 -> 11, `cli/update-cli.ts` 229 -> 100.
+	["theme", "theme/theme-binding.ts", "theme/theme.ts", 164],
 ];
 
 /** Every runtime (non-`type`) named binding a file takes from a module whose path ends with `suffix`. */
@@ -1015,6 +1021,7 @@ describe("a cheap value is owned by a leaf, and a file that wants only it names 
 		expect(runtimeImportsOf(path.join(SRC, "mcp/manager-instance.ts"))).toEqual([]);
 		expect(runtimeImportsOf(path.join(SRC, "extensibility/active-skills.ts"))).toEqual([]);
 		expect(runtimeImportsOf(path.join(SRC, "tools/core/tool-ui-status.ts"))).toEqual([]);
+		expect(runtimeImportsOf(path.join(SRC, "theme/theme-binding.ts"))).toEqual([]);
 		// `@veyyon/utils/dirs` (15) rather than the barrel (74), for `getMemoriesDir`. Safe to name directly
 		// since `dirs.ts` applies `$HOME/.env` itself; see `packages/utils/test/dotenv-*.test.ts`. 75 -> 18.
 		expect(runtimeImportsOf(path.join(SRC, "memory/paths.ts"))).toEqual(["node:path", "@veyyon/utils/dirs"]);

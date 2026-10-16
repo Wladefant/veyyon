@@ -12,7 +12,7 @@ import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import type { SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { ModelRegistry } from "../../../../config/model-registry";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	buildBrowserItems,
 	buildInheritRow,

@@ -25,7 +25,7 @@ import {
 	type ResetUsageAccount,
 	toResetUsageAccounts,
 } from "../../../slash-commands/helpers/reset-usage";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { openPath } from "../../../utils/open";
 import { AccountManagerComponent } from "../components/account/account-manager";
 import { LoginDialogComponent } from "../components/dialogs/login-dialog";

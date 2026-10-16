@@ -5,7 +5,7 @@
 import { Container, Spacer, Text, type TUI } from "@veyyon/tui";
 import type { ExtensionUiComponent, ExtensionWidgetOptions } from "../../../extensibility/extensions";
 import type { TerminalWidgetContent } from "../../../extensibility/terminal-capability";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 
 const MAX_WIDGET_LINES = 10;
 

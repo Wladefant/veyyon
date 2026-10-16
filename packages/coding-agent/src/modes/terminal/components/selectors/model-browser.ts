@@ -26,7 +26,8 @@ import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { resolveEffort, withLegacyDefaultEffort } from "../../../../config/effort-resolver";
 import { getModelMatchPreferences, resolveModelSelectorValue } from "../../../../config/model-resolver";
 import type { Settings } from "../../../../config/settings";
-import { type ThemeColor, theme } from "../../../../theme/theme";
+import type { ThemeColor } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../../../thinking";
 import {
 	matchesSelectCancel,

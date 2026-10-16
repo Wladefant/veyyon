@@ -13,7 +13,7 @@ import type {
 	MCPServerCapabilities,
 	MCPServerConfig,
 } from "../../../mcp/types";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { shortenPath } from "../../../tools/core/render-utils";
 import { groupBySource } from "./command-controller-shared";
 

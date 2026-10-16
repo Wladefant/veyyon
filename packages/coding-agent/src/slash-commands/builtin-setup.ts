@@ -19,7 +19,7 @@ import {
 } from "../session/account-inventory";
 import type { AgentSession } from "../session/agent-session";
 import { configuredAgentModelChains } from "../task/agent-settings";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 import { BUILTIN_SLASH_COMMAND_DECLARATIONS, type BuiltinSlashCommandDeclaration } from "./builtin-declarations";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import {

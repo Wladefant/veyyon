@@ -12,7 +12,8 @@ import {
 	type ExtensionWidgetOptions,
 	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
-import { type Theme, theme } from "../../theme/theme";
+import type { Theme } from "../../theme/theme";
+import { theme } from "../../theme/theme-binding";
 import type { RpcExtensionUIRequest, RpcExtensionUIResponse } from "./rpc-types";
 
 export type PendingExtensionRequest = {

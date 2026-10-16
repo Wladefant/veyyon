@@ -16,7 +16,7 @@ import {
 	resolveAbortLabel,
 } from "../../../session/messages";
 import { setShimmerActivity } from "../../../theme/shimmer";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { canonicalizeMessage } from "../../../utils/thinking-display";
 import { TodoReminderComponent } from "../components/dashboard/todo-reminder";
 import { AssistantMessageComponent } from "../components/transcript/assistant-message";

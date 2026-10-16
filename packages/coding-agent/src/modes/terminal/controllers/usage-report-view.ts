@@ -11,7 +11,7 @@ import { padding } from "@veyyon/utils/padding";
 import { visibleWidth } from "@veyyon/utils/width";
 import { formatProviderName } from "../../../session/account-format";
 import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { replaceTabs, truncateToWidth } from "../../../tools/core/render-utils";
 
 const BAR_WIDTH_MAX = 24;

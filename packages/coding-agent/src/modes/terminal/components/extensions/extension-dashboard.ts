@@ -30,7 +30,7 @@ import {
 } from "../../../../extensibility/extension-state/state-manager";
 import type { DashboardState, ProviderTab } from "../../../../extensibility/extension-state/types";
 import { setMcpServerEnabled } from "../../../../mcp/config-writer";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { getTabBarTheme } from "../../shared";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";

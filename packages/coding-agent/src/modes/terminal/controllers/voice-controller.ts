@@ -3,7 +3,7 @@ import { visibleWidth } from "@veyyon/utils/width";
 import { settings } from "../../../config/settings";
 import type { STTController, SttState } from "../../../speech/stt";
 import { vocalizer } from "../../../speech/tts/vocalizer";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import type { InteractiveModeContext } from "../types";
 
 /**
