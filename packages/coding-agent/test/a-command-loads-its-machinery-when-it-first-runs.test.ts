@@ -58,14 +58,20 @@ describe("an interactive session's static import graph", () => {
 		// `/todo`, the selector cards and the setting effects they apply.
 		expect(reachedIn(interactiveSession, "modes/terminal/controllers")).toEqual([
 			"btw-controller.ts",
+			// Carved out of extension-ui-controller.ts, which loads with the session.
+			"collab-guest-dialogs.ts",
 			"command-controller-shared.ts",
 			"command-controller.ts",
 			// Asked for a composer prediction at the end of every turn, before any command runs.
 			"composer-prediction-controller.ts",
+			// Carved out of extension-ui-controller.ts, which loads with the session.
+			"dialog-queue.ts",
 			"event-controller.ts",
 			"extension-ui-controller.ts",
 			"goal-mode-controller.ts",
 			"home-anchor-layout.ts",
+			// Carved out of extension-ui-controller.ts, which loads with the session.
+			"hook-widgets.ts",
 			"input-controller.ts",
 			"omfg-controller.ts",
 			"omfg-rule.ts",
