@@ -160,7 +160,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/compaction.test.ts": 2,
 	"packages/coding-agent/test/config-cli.test.ts": 2,
 	"packages/coding-agent/test/config/config-value-command-failures.test.ts": 1,
-	"packages/coding-agent/test/config/provider-globals.test.ts": 3,
+	"packages/coding-agent/test/config/provider-globals.test.ts": 2,
 	"packages/coding-agent/test/config/schema-render-failure-reporting.test.ts": 1,
 	"packages/coding-agent/test/core/js-executor.test.ts": 3,
 	"packages/coding-agent/test/core/js-tool-bridge.test.ts": 1,
