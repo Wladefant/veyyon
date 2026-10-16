@@ -694,9 +694,5 @@ export function resetMemoryForTests(): void {
 	resetDefaultInstanceForTests();
 }
 
-export function resetModuleStateForTests(): void {
-	resetDefaultInstanceForTests();
-}
-
 export type { MemoryInput, MemoryStats } from "../types";
 export default Mnemopi;

@@ -170,14 +170,6 @@ import {
 import { type CursorLiveness, startCursorLiveness } from "./cursor-liveness";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 
-/**
- * Cursor's API host.
- *
- * Re-exported from `@veyyon/catalog/provider-endpoints`, which owns it, rather than declared here: this
- * package's usage reader and `catalog`'s discovery reader both need the same fallback, and this name is the
- * one callers already import.
- */
-export const CURSOR_API_URL = CURSOR_API_ENDPOINT;
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
 
 const CURSOR_PROXY_TUNNEL_TIMEOUT_MS = 30_000;
@@ -895,7 +887,7 @@ class CursorTurn {
 		});
 		const requestContextTools = buildMcpToolDefinitions(this.#context.tools);
 
-		const baseUrl = model.baseUrl || CURSOR_API_URL;
+		const baseUrl = model.baseUrl || CURSOR_API_ENDPOINT;
 		const requestHeaders = {
 			":method": "POST",
 			":path": CURSOR_RUN_PATH,

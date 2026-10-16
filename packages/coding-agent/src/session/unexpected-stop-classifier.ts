@@ -11,7 +11,7 @@ import type { Settings } from "../config/settings";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
 import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
 import { isTinyMemoryLocalModelKey, ONLINE_MEMORY_MODEL_KEY } from "../tiny/models";
-import { tinyModelClient } from "../tiny/title-client";
+import { tinyTitleClient } from "../tiny/title-client";
 
 /**
  * The instruction half only: the online path sends the message as its own user
@@ -159,7 +159,7 @@ async function classifyLocal(
 	const builtPrompt = prompt.render(turnControlPrompts["turn-control/unexpected-stop-classifier"].text, {
 		message: text,
 	});
-	const output = await tinyModelClient.complete(modelKey, builtPrompt, {
+	const output = await tinyTitleClient.complete(modelKey, builtPrompt, {
 		maxTokens: ANSWER_MAX_TOKENS,
 		signal: deps.signal,
 	});

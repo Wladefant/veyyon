@@ -51,9 +51,9 @@ function installLocalModelInitializer(setInitializer: (initializer: LocalModelIn
  * through the dedicated embeddings subprocess. The override is installed once
  * — before any consumer gets the chance to call `embed()` — so
  * `onnxruntime-node`'s NAPI constructor + finalizer never run inside the
- * agent's address space (issue #3031). Test seams that swap the initializer
- * with `setLocalModelInitializerForTests` still win because both go through
- * the same module-level slot.
+ * agent's address space (issue #3031). A test that swaps the initializer with
+ * `setLocalModelInitializer` writes the same module-level slot, so the last
+ * call wins.
  */
 export async function loadMnemopi(): Promise<typeof MnemopiNs> {
 	if (!mnemopiMod) {

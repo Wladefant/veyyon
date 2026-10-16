@@ -4,7 +4,7 @@ import {
 	embed,
 	embedQuery,
 	resetEmbeddingProviderForTests,
-	setLocalModelInitializerForTests,
+	setLocalModelInitializer,
 } from "@veyyon/mnemopi/core/embeddings";
 import { extractFactCategories } from "@veyyon/mnemopi/core/extraction";
 import { callRemoteLlm, complete, summarizeMemories } from "@veyyon/mnemopi/core/local-llm";
@@ -238,7 +238,7 @@ describe("remote Mnemopi provider confidentiality boundaries", () => {
 		let sanitizerCalls = 0;
 		let embedded: readonly string[] = [];
 		let completed = "";
-		setLocalModelInitializerForTests(async () => ({
+		setLocalModelInitializer(async () => ({
 			embed: async function* (texts) {
 				embedded = texts;
 				yield texts.map(() => [1, 2]);

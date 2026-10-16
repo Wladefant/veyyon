@@ -15,7 +15,7 @@ import { memoriesPrompts } from "../../prompts/memories/rows";
 import type { AgentSession } from "../../session/agent-session";
 import { helperSettingPath, resolveHelperModel } from "../../task/helper-settings";
 import { isTinyMemoryLocalModelKey, ONLINE_MEMORY_MODEL_KEY } from "../../tiny/models";
-import { tinyModelClient } from "../../tiny/title-client";
+import { tinyTitleClient } from "../../tiny/title-client";
 import { shortenPath } from "../../tools/core/render-utils";
 import type {
 	MemoryBackend,
@@ -520,7 +520,7 @@ async function resolveMnemopiProviderOptions(
 		return {
 			...base,
 			llm: {
-				complete: (prompt, opts) => tinyModelClient.complete(memoryModel, prompt, { maxTokens: opts?.maxTokens }),
+				complete: (prompt, opts) => tinyTitleClient.complete(memoryModel, prompt, { maxTokens: opts?.maxTokens }),
 				extractionPrompt: memoriesPrompts["memories/extraction-lines"].text,
 				consolidationPrompt: memoriesPrompts["memories/consolidation-short"].text,
 			},

@@ -565,25 +565,20 @@ export function setEmbeddingProviderForTests(provider: EmbeddingProvider | null 
 	pendingQueryEmbeddings.clear();
 }
 
-export const setEmbeddingProvider = setEmbeddingProviderForTests;
-
-export function setLocalModelInitializerForTests(initializer: LocalModelInitializer | null | undefined): void {
+/**
+ * Override the function used to construct the local fastembed model the next time `embed()` is called. A host
+ * (the agent CLI) keeps `onnxruntime-node` out of its own address space by routing every fastembed load and
+ * inference through a dedicated subprocess; tests install a stub. `null` restores the in-process default. The
+ * initializer generation advances and the query cache is cleared, so the next embed runs through the new
+ * initializer.
+ */
+export function setLocalModelInitializer(initializer: LocalModelInitializer | null | undefined): void {
 	localModelInitializer = initializer ?? defaultLocalModelInitializer;
 	localModelInitializerGeneration += 1;
 	queryCacheGeneration += 1;
 	queryCache.clear();
 	pendingQueryEmbeddings.clear();
 }
-
-/**
- * Override the function used to construct the local fastembed model the next
- * time `embed()` is called. Lets a host (e.g. the agent CLI) keep
- * `onnxruntime-node` out of its own address space by routing every fastembed
- * load + inference through a dedicated subprocess. Same wipe semantics as the
- * `*ForTests` form: clears the cached model promise and the query cache so
- * subsequent embeds run through the new initializer immediately.
- */
-export const setLocalModelInitializer = setLocalModelInitializerForTests;
 
 export function resetEmbeddingProviderForTests(): void {
 	providerOverride = null;
@@ -595,8 +590,6 @@ export function resetEmbeddingProviderForTests(): void {
 	queryCache.clear();
 	pendingQueryEmbeddings.clear();
 }
-
-export const resetEmbeddingStateForTests = resetEmbeddingProviderForTests;
 
 export async function available(): Promise<boolean> {
 	if (embeddingsDisabled()) {

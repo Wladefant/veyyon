@@ -8,7 +8,7 @@ import { degradeBatchSize, sleepBatchSize, tier2Days, tier3Days, tier3MaxChars }
 import { generateId, stableMemoryId } from "../../util/ids";
 import { unicodeWordTokens, WORD_TOKEN_DOT_HYPHEN_RE } from "../../util/regex";
 import { getMemoryTableStats } from "../../util/sqlite";
-import { aaakEncode } from "../aaak";
+import { encode } from "../aaak";
 import { REGEX_EXTRACTION_MAX_INPUT_CHARS } from "../entities";
 import { EpisodicGraph } from "../episodic-graph";
 import { type ExtractedFactCategories, heuristicExtractFacts } from "../extraction";
@@ -121,7 +121,7 @@ function buildSleepSummary(beam: BeamMemoryState, source: string, chunk: SleepCh
 	const maxChars = normalizedMaxEpisodeChars(beam);
 	const prefix = `[${source}] `;
 	const joined = chunk.items.map(item => rowValue(item, "content") ?? "").join(SLEEP_SUMMARY_SEPARATOR);
-	const uncapped = `${prefix}${aaakEncode(joined)}`;
+	const uncapped = `${prefix}${encode(joined)}`;
 	const truncated = uncapped.length > maxChars;
 	return {
 		summary: truncated ? markTruncated(uncapped, maxChars) : uncapped,

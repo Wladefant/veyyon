@@ -5,6 +5,7 @@
 ### Changed
 
 - OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
+- The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
 
 ## [1.5.7] - 2026-10-15
 

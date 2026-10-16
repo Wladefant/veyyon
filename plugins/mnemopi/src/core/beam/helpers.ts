@@ -2,10 +2,8 @@ import type { Database } from "bun:sqlite";
 import * as logger from "@veyyon/utils/logger";
 import { clamp01 } from "@veyyon/utils/math";
 import { tableExists } from "@veyyon/utils/sqlite";
-import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
+import { generateId as generateTimedId, stableMemoryId } from "../../util/ids";
 import {
-	cjkFtsTerms,
-	containsSpacelessCjk,
 	FACT_MATCH_STOPWORDS,
 	factMatchTokens,
 	ftsQueryTerms,
@@ -19,9 +17,6 @@ import { getMnemopiRuntimeOptions, mnemopiDebugEnabled, withMnemopiRuntimeOption
 import { buildExactVectorIndex, searchExactVectorIndex } from "../vector-index";
 import { decodeEmbeddingJson, encodeEmbeddingJson } from "../vector-math";
 import type { BeamMemoryState, JsonValue, Metadata } from "./types";
-
-// `HybridWeights` is declared in `../../config`, next to the weights it describes.
-export type { HybridWeights } from "../../config";
 
 export interface VectorDistanceResult {
 	rowid: number;
@@ -316,14 +311,6 @@ function intersectionCount(left: ReadonlySet<string>, right: ReadonlySet<string>
 export function memoryRowMetadata(row: unknown): Metadata {
 	return normalizeMetadata(rowValue<unknown>(row, "metadata_json") ?? rowValue<unknown>(row, "metadata"));
 }
-export {
-	cosineSimilarity,
-	hammingDistance,
-	informationTheoreticScore,
-	maximallyInformativeBinarization,
-	quantizeInt8,
-} from "../binary-vectors";
-export { cjkFtsTerms, containsSpacelessCjk, ftsQueryTerms, recallTokens, sha256Hex16 };
 
 /** Identifies one freshly stored memory whose embedding still needs to be derived. */
 export interface EmbedItem {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the `stackoverflowDeclaration` alias; import `stackOverflowDeclaration`.
+
 ## [1.5.6] - 2026-10-13
 
 ### Changed

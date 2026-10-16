@@ -122,5 +122,3 @@ export function encode(text: string): string {
 	result = result.replaceAll("completed", "DONE");
 	return result.trim();
 }
-
-export const aaakEncode = encode;

@@ -1060,8 +1060,6 @@ export const stackOverflowDeclaration: DiscussionDeclaration = {
 	},
 };
 
-export const stackoverflowDeclaration = stackOverflowDeclaration;
-
 export const DISCUSSION_DECLARATIONS = [
 	redditDeclaration,
 	hackerNewsDeclaration,

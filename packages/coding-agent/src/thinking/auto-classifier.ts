@@ -31,7 +31,7 @@ import {
 	isTinyMemoryReasoningModelKey,
 	ONLINE_AUTO_THINKING_MODEL_KEY,
 } from "../tiny/models";
-import { tinyModelClient } from "../tiny/title-client";
+import { tinyTitleClient } from "../tiny/title-client";
 import { clampAutoThinkingEffort } from ".";
 
 const DIFFICULTY_SYSTEM_PROMPT = prompt.render(thinkingPrompts["thinking/difficulty"].text);
@@ -143,7 +143,7 @@ async function classifyLocal(input: string, modelKey: string, deps: ClassifyDiff
 		? Math.max(LOCAL_ANSWER_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS)
 		: LOCAL_ANSWER_MAX_TOKENS;
 	const builtPrompt = prompt.render(thinkingPrompts["thinking/difficulty-local"].text, { prompt: input });
-	const text = await tinyModelClient.complete(modelKey, builtPrompt, {
+	const text = await tinyTitleClient.complete(modelKey, builtPrompt, {
 		maxTokens,
 		signal: deps.signal,
 	});

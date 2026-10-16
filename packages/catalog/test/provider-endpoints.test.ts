@@ -316,15 +316,6 @@ describe("Gemini, Anthropic and Cursor", () => {
 		expect(new URL(CURSOR_API_ENDPOINT).pathname).toBe("/");
 	});
 
-	/**
-	 * `@veyyon/ai` publishes this host as `CURSOR_API_URL`, so the two names must be the same string. It is a
-	 * re-export of the owner rather than a second declaration, and this is what pins that.
-	 */
-	it("keeps the ai package's published Cursor name pointing here", async () => {
-		const { CURSOR_API_URL } = await import("@veyyon/ai/providers/cursor");
-		expect(CURSOR_API_URL).toBe(CURSOR_API_ENDPOINT);
-	});
-
 	/** All three are https, since a plaintext fallback would send a credential in the clear. */
 	it("serves every host over https", () => {
 		for (const endpoint of [GEMINI_DEVELOPER_API_ENDPOINT, ANTHROPIC_API_ENDPOINT, CURSOR_API_ENDPOINT]) {
@@ -361,9 +352,8 @@ describe("OpenRouter's API base", () => {
 	});
 
 	/**
-	 * The name of the environment variable that OVERRIDES this value is `OPENROUTER_BASE_URL`, and two of the
-	 * four modules that used to spell the URL called their constant the same thing. That is why the default now
-	 * comes from one place: a reader could not tell the configured value from the fallback by name.
+	 * The environment variable that OVERRIDES this value is named `OPENROUTER_BASE_URL`, so no module names its
+	 * fallback constant that way; each falls back to this owner.
 	 */
 	it("is what @veyyon/mnemopi and the search provider fall back to", async () => {
 		for (const file of [
@@ -377,12 +367,10 @@ describe("OpenRouter's API base", () => {
 		}
 	});
 
-	/** Both published names still resolve to the one value, since callers already import them. */
-	it("keeps both published aliases pointing here", async () => {
+	/** mnemopi publishes its embedding default under its own name, and that name resolves to this value. */
+	it("keeps mnemopi's published embedding default pointing here", async () => {
 		const { DEFAULT_EMBEDDING_API_URL } = await import("@veyyon/mnemopi/config");
-		const { OPENROUTER_BASE_URL } = await import("@veyyon/coding-agent/tools/web/search/providers/perplexity-auth");
 		expect(DEFAULT_EMBEDDING_API_URL).toBe(OPENROUTER_API_ENDPOINT);
-		expect(OPENROUTER_BASE_URL).toBe(OPENROUTER_API_ENDPOINT);
 	});
 });
 

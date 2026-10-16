@@ -4,7 +4,7 @@ import * as ai from "@veyyon/ai/stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets";
 import { classifyUnexpectedStop } from "@veyyon/coding-agent/session/unexpected-stop-classifier";
-import { tinyModelClient } from "@veyyon/coding-agent/tiny/title-client";
+import { tinyTitleClient } from "@veyyon/coding-agent/tiny/title-client";
 import { logger } from "@veyyon/utils";
 
 const SECRET = "UNEXPECTED_STOP_SECRET_42d9";
@@ -143,7 +143,7 @@ describe("unexpected-stop provider confidentiality boundary", () => {
 	it("does not invoke the provider transform for a local-only classifier", async () => {
 		// WHY: local model behavior is an explicit non-network mode and must remain unchanged.
 		let localPrompt = "";
-		vi.spyOn(tinyModelClient, "complete").mockImplementation(async (_modelKey, promptText) => {
+		vi.spyOn(tinyTitleClient, "complete").mockImplementation(async (_modelKey, promptText) => {
 			localPrompt = promptText;
 			return "YES";
 		});
