@@ -56,9 +56,11 @@
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
 - The extension handler time budget and the lspmux liveness probe use `settleWithin` from `@veyyon/utils` instead of their own deadline racers; no user-visible change.
 - The ephemeral side-channel turn behind `/btw`, `/omfg`, the idle recap and the composer prediction moved from `session/agent-session.ts` to `session/agent-session-ephemeral-turn.ts`; no user-visible change.
+- The synchronous `!command` and environment config-value resolver moved from `config/model-registry.ts` to `config/resolve-config-value-sync.ts`; no user-visible change.
 
 ### Fixed
 
+- A failing `!command` for a provider API key or header in `models.yml` names the setting it was resolving in its log report, as the other config values already did.
 - `ctrl+g` in a hook or ask-input editor whose `$VISUAL`/`$EDITOR` cannot start shows the failure under the text instead of ending the session, and with no editor configured shows that instead of doing nothing.
 - A provider error that ends a turn is logged at warn with the provider's message, model and error classification, and a failure's retry classification is logged once instead of once per recovery check ([#935](https://github.com/santhreal/veyyon/issues/935)).
 - A headless `browser` launch reads the binary's product and version again after a `--version` probe that failed or timed out, instead of launching every later tab of that binary without a matching `--user-agent`, which named itself `HeadlessChrome`.

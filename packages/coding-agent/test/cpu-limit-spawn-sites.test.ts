@@ -233,9 +233,10 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"`veyyon --smoke-test` runs `profile new --json` once in a throwaway profile to prove the worker entry boots; a CI probe, before any session exists",
 	},
-	"packages/coding-agent/src/config/model-registry.ts": {
+	"packages/coding-agent/src/config/resolve-config-value-sync.ts": {
 		wired: false,
-		reason: "execSync provider probes at CLI/model discovery time, before the first session registers",
+		reason:
+			"execSync `!command` config values the model registry resolves at CLI/model discovery time, before the first session registers",
 	},
 	"packages/coding-agent/src/modes/terminal/interactive-mode.ts": {
 		wired: false,
