@@ -37,9 +37,10 @@ const CONTROLLERS = `${TERMINAL}/controllers`;
 /**
  * MEASURED 2026-08-28 at 4495 lines, down from 5605, with headroom of roughly
  * ten percent so an ordinary edit does not fail the gate and a new subsystem
- * written inline does.
+ * written inline does. RE-MEASURED at 3694 lines after plan mode and vibe mode
+ * moved to `plan-mode-controller.ts` and `vibe-mode-controller.ts`.
  */
-const INTERACTIVE_MODE_CEILING = 4900;
+const INTERACTIVE_MODE_CEILING = 4100;
 
 /**
  * Per-controller ceiling. MEASURED 2026-08-28: the largest controller carved out

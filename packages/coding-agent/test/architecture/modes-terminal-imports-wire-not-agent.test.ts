@@ -85,6 +85,8 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"controllers/goal-mode-controller.ts",
 	"controllers/input-controller.ts",
 	"controllers/omfg-rule.ts",
+	// Carved out of interactive-mode.ts, keeping the imports it already used.
+	"controllers/plan-mode-controller.ts",
 	// Carved out of input-controller.ts, keeping the imports it already used.
 	"controllers/prompt-submission.ts",
 	// Carved out of input-controller.ts, keeping the imports it already used.
@@ -107,6 +109,8 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"controllers/turn-speech.ts",
 	// Carved out of command-controller.ts, keeping the imports it already used.
 	"controllers/usage-report-view.ts",
+	// Carved out of interactive-mode.ts, keeping the imports it already used.
+	"controllers/vibe-mode-controller.ts",
 	"image-references.ts",
 	"interactive-mode.ts",
 	"setup-wizard/scenes/sign-in.ts",

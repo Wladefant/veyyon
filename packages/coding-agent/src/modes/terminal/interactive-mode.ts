@@ -3,19 +3,10 @@
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
 
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {
-	type Agent,
-	AgentBusyError,
-	type AgentMessage,
-	type AgentToolResult,
-	EventLoopKeepalive,
-	ThinkingLevel,
-} from "@veyyon/agent-core";
+import { type Agent, type AgentMessage, EventLoopKeepalive, ThinkingLevel } from "@veyyon/agent-core";
 import type { CompactionOutcome } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ImageContent, Message, Model, Usage, UsageReport } from "@veyyon/ai";
-import { modelsAreEqual } from "@veyyon/catalog/models";
+import type { AssistantMessage, ImageContent, Message, Usage, UsageReport } from "@veyyon/ai";
 import type { HostNotifier } from "@veyyon/host";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
@@ -30,7 +21,6 @@ import {
 	type EditorTheme,
 	Loader,
 	type NativeScrollbackLiveRegion,
-	type OverlayHandle,
 	type OverlayOptions,
 	ProcessTerminal,
 	Spacer,
@@ -40,17 +30,7 @@ import {
 	TUI,
 } from "@veyyon/tui";
 import { isInsideTerminalMultiplexer } from "@veyyon/tui/terminal-capabilities";
-import {
-	APP_NAME,
-	errorMessage,
-	formatCount,
-	formatNumber,
-	getProjectDir,
-	isEnoent,
-	logger,
-	postmortem,
-	prompt,
-} from "@veyyon/utils";
+import { APP_NAME, errorMessage, getProjectDir, logger, postmortem } from "@veyyon/utils";
 import type { AutocompleteProvider, SlashCommand } from "@veyyon/utils/autocomplete";
 import { matchesKey } from "@veyyon/utils/keys";
 import { planPaintGround } from "@veyyon/utils/paint-ground";
@@ -71,7 +51,6 @@ import {
 import { onStatusLineSessionAccentChanged } from "../../config/settings-signals";
 import type {
 	AutocompleteProviderFactory,
-	ContextUsage,
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
 	ExtensionUIContext,
@@ -83,9 +62,6 @@ import type {
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import type { Skill } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
-// The owning module, not the `internal-urls` barrel: the barrel re-exports every protocol
-// handler and reaches hundreds of modules.
-import { listLocalPlanFileUrls, resolveLocalUrlToPath } from "../../internal-urls/local-protocol";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../../lsp/startup-events";
 import type { MCPManager } from "../../mcp";
 import {
@@ -93,18 +69,10 @@ import {
 	MCP_CONNECTION_STATUS_EVENT_CHANNEL,
 	type McpConnectionStatusEvent,
 } from "../../mcp/startup-events";
-import {
-	humanizePlanTitle,
-	type PlanApprovalDetails,
-	resolveApprovedPlan,
-	resolvePlanTitle,
-} from "../../plan-mode/approved-plan";
-import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
-import { resolvePlanFilePath } from "../../plan-mode/plan-path";
+import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import { StatusPresentationProducer } from "../../presentation/status-producer";
-import { planModePrompts } from "../../prompts/plan-mode/rows";
 import { requestsPrompts } from "../../prompts/requests/rows";
-import { type AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import type { AgentRegistry } from "../../registry/agent-registry";
 import { formatProviderName } from "../../session/account-format";
 import type { AgentSession } from "../../session/agent-session";
 import { SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../../session/agent-session-types";
@@ -116,12 +84,10 @@ import {
 } from "../../session/background-sessions";
 import { setImageDisplayProbe } from "../../session/image-visibility";
 import { isAtRestReadingDeferred, takeHeldAtRestReading } from "../../session/non-message-tokens";
-import { VibeSessionRegistry } from "../../session/vibe-runtime";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../../slash-commands/builtin-declarations";
 import { buildTuiBuiltinSlashCommands } from "../../slash-commands/builtin-registry";
 import type { SubcommandDef } from "../../slash-commands/types";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../../system-prompt";
-import { helperSettingPath } from "../../task/helper-settings";
 import { applyGroundPaint, getDetectedTerminalGround, setDetectedTerminalGround } from "../../theme/ground-tints";
 import { setMarkdownMermaidRendering } from "../../theme/markdown-theme";
 import { clearMermaidCache } from "../../theme/mermaid-cache";
@@ -135,15 +101,10 @@ import {
 	type Theme,
 	theme,
 } from "../../theme/theme";
-import type { ConfiguredThinkingLevel } from "../../thinking";
 import type { LspStartupServerInfo } from "../../tools";
-import { type ResolveToolDetails, runResolveInvocation } from "../../tools/agent/resolve";
 import { todoMatchesAnyDescription } from "../../tools/agent/todo";
-import { ToolError } from "../../tools/core/tool-errors";
 import { hasForegroundBashWait, onForegroundBashWaitChange } from "../../tools/shell/bash-foreground-registry";
-import { copyToClipboard } from "../../utils/clipboard";
 import type { EventBus } from "../../utils/event-bus";
-import { editInTerminal, getEditorCommand, NO_EDITOR_CONFIGURED } from "../../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { messageHasDisplayableThinking } from "../../utils/thinking-display";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
@@ -182,7 +143,6 @@ import {
 } from "./components/dashboard/todo-board";
 import type { HookEditorComponent } from "./components/dialogs/hook-editor";
 import type { HookInputComponent } from "./components/dialogs/hook-input";
-import { PlanReviewOverlay } from "./components/dialogs/plan-review-overlay";
 import type { HookSelectorComponent, HookSelectorSlider } from "./components/selectors/hook-selector";
 import { StatusLineComponent } from "./components/status-line";
 import { statusLineSettingsFromConfig } from "./components/status-line/quiet-row";
@@ -202,9 +162,11 @@ import { GoalModeController } from "./controllers/goal-mode-controller";
 import { HomeAnchorLayout } from "./controllers/home-anchor-layout";
 import { InputController } from "./controllers/input-controller";
 import { OmfgController } from "./controllers/omfg-controller";
+import { PlanModeController } from "./controllers/plan-mode-controller";
 import type { SelectorController } from "./controllers/selector-controller";
 import { SessionFocusController } from "./controllers/session-focus-controller";
 import { TranscriptComposer } from "./controllers/transcript-composer";
+import { VibeModeController } from "./controllers/vibe-mode-controller";
 import { VoiceController } from "./controllers/voice-controller";
 import { WelcomeController } from "./controllers/welcome-controller";
 import { WorkingLoaderController } from "./controllers/working-loader";
@@ -228,6 +190,7 @@ import type {
 	CompactionQueuedMessage,
 	InteractiveModeContext,
 	InteractiveSelectorDialogOptions,
+	PlanReviewDialogOptions,
 	SubmittedUserInput,
 	TodoItem,
 	TodoPhase,
@@ -235,13 +198,6 @@ import type {
 import { focusEditorSlot } from "./utils/interactive-context-helpers";
 import { createSelectionAttemptNotice } from "./utils/selection-notice";
 import { UiHelpers } from "./utils/ui-helpers";
-
-const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
-const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
-
-function formatContextTokenCount(value: number): string {
-	return formatNumber(Math.max(0, Math.round(value))).toLowerCase();
-}
 
 /** Options for creating an InteractiveMode instance (for future API use) */
 export interface InteractiveModeOptions {
@@ -308,15 +264,6 @@ interface TodoBoardBuildInputs {
 	theme: Theme;
 }
 
-/** A model the plan-approval slider offers to execute the plan: the default model or the plan helper's. */
-interface PlanExecutionModel {
-	/** `default` or `plan`; also the session-log slot the switch is recorded under. */
-	label: "default" | "plan";
-	model: Model;
-	/** The effort that choice names, or undefined to keep the model's own. */
-	thinkingLevel?: ConfiguredThinkingLevel;
-}
-
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -356,8 +303,18 @@ export class InteractiveMode implements InteractiveModeContext {
 	isBashMode = false;
 	toolOutputExpanded = false;
 	todoExpanded = false;
-	planModeEnabled = false;
-	planModePaused = false;
+	get planModeEnabled(): boolean {
+		return this.#planMode.enabled;
+	}
+	set planModeEnabled(value: boolean) {
+		this.#planMode.enabled = value;
+	}
+	get planModePaused(): boolean {
+		return this.#planMode.paused;
+	}
+	set planModePaused(value: boolean) {
+		this.#planMode.paused = value;
+	}
 	get goalModeEnabled(): boolean {
 		return this.#goalMode.enabled;
 	}
@@ -370,8 +327,18 @@ export class InteractiveMode implements InteractiveModeContext {
 	set goalModePaused(value: boolean) {
 		this.#goalMode.paused = value;
 	}
-	vibeModeEnabled = false;
-	planModePlanFilePath: string | undefined = undefined;
+	get vibeModeEnabled(): boolean {
+		return this.#vibeMode.enabled;
+	}
+	set vibeModeEnabled(value: boolean) {
+		this.#vibeMode.enabled = value;
+	}
+	get planModePlanFilePath(): string | undefined {
+		return this.#planMode.planFilePath;
+	}
+	set planModePlanFilePath(value: string | undefined) {
+		this.#planMode.planFilePath = value;
+	}
 	loopModeEnabled = false;
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
@@ -487,14 +454,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#cleanupUnsubscribe?: () => void;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
-	#planModePreviousTools: string[] | undefined;
-	#vibeModePreviousTools: string[] | undefined;
-	#planModePreviousModelState: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
-	#pendingModelSwitch: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
-	#planModeHasEntered = false;
-	#planReviewOverlay: PlanReviewOverlay | undefined;
-	#planReviewOverlayHandle: OverlayHandle | undefined;
-	#planReviewCancel: (() => void) | undefined;
+	readonly #planMode: PlanModeController;
+	readonly #vibeMode: VibeModeController;
 	readonly lspServers: LspStartupServerInfo[] | undefined = undefined;
 	mcpManager?: MCPManager;
 	/**
@@ -660,6 +621,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
 		this.#eventBus = eventBus;
+		this.#planMode = new PlanModeController(this);
+		this.#vibeMode = new VibeModeController(this);
 		if (eventBus) {
 			this.#eventBusUnsubscribers.push(
 				eventBus.on(LSP_STARTUP_EVENT_CHANNEL, data => {
@@ -1216,7 +1179,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Single side-effect point for title changes: every setSessionName caller
 		// (first-input titling, /rename, extension renames, plan seeding, replan
 		// refresh) gets the terminal title + accent updates from here. Registered
-		// before initHooksAndCustomTools/#reconcileModeFromSession/#enterPlanMode —
+		// before initHooksAndCustomTools/#reconcileModeFromSession/PlanModeController.enter —
 		// all of which can reach setSessionName during init.
 		this.#eventBusUnsubscribers.push(
 			this.sessionManager.onSessionNameChanged(() => {
@@ -1254,7 +1217,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// session and creates a fresh one still honors the default, while a session
 		// with restored context or an explicit mode keeps its reconciled mode. Scoped
 		// to launch (not the switch reconciler above) so /new and the plan-approval →
-		// execution handoff clear never get dragged back into plan mode. #enterPlanMode
+		// execution handoff clear never get dragged back into plan mode. PlanModeController.enter
 		// is idempotent and self-guards against an already-active plan/goal mode; it
 		// does not check plan.enabled itself.
 		const hasConversationContext = this.sessionManager.buildSessionContext().messages.length > 0;
@@ -1265,7 +1228,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.session.settings.get("plan.defaultOnStartup") &&
 			this.session.settings.get("plan.enabled")
 		) {
-			await this.#enterPlanMode();
+			await this.#planMode.enter();
 		}
 
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
@@ -2420,114 +2383,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#renderTodoList();
 	}
 
-	async #getPlanFilePath(): Promise<string> {
-		return this.session.getPlanReferencePath() || DEFAULT_PLAN_FILE_URL;
-	}
-
-	#resolvePlanFilePath(planFilePath: string): string {
-		return resolvePlanFilePath(planFilePath, {
-			localProtocol: {
-				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-				getSessionId: () => this.sessionManager.getSessionId(),
-			},
-			cwd: this.sessionManager.getCwd(),
-		});
-	}
-
-	#updatePlanModeStatus(): void {
-		const status =
-			this.planModeEnabled || this.planModePaused
-				? {
-						enabled: this.planModeEnabled,
-						paused: this.planModePaused,
-					}
-				: undefined;
-		this.statusLine.setPlanModeStatus(status);
-		// The composer gutter morphs to `◈` while planning (DS-6): re-derive it
-		// at the same choke point every plan enable/disable/pause flows through.
-		this.updateEditorBorderColor();
-		this.ui.requestRender();
-	}
-
-	#updateVibeModeStatus(): void {
-		this.statusLine.setVibeModeStatus(this.vibeModeEnabled ? { enabled: true } : undefined);
-		this.ui.requestRender();
-	}
-
-	async #applyPlanModeModel(): Promise<void> {
-		const resolved = this.session.resolveHelperModel("plan");
-		if (!resolved) {
-			this.showWarning(
-				`${helperSettingPath("plan", "model")} matches no available model; plan mode stays on the current model.`,
-			);
-			return;
-		}
-
-		const currentModel = this.session.model;
-		const sameModel = modelsAreEqual(currentModel, resolved.model);
-		const planThinkingLevel = resolved.thinkingLevel;
-
-		this.#planModePreviousModelState = currentModel
-			? { model: currentModel, thinkingLevel: this.session.configuredThinkingLevel() }
-			: undefined;
-
-		if (!sameModel) {
-			if (this.session.isStreaming) {
-				this.#pendingModelSwitch = { model: resolved.model, thinkingLevel: planThinkingLevel };
-				return;
-			}
-			try {
-				await this.session.setModelTemporary(resolved.model, planThinkingLevel);
-			} catch (error) {
-				this.showWarning(`Failed to switch to plan model for plan mode: ${errorMessage(error)}`);
-			}
-		} else if (planThinkingLevel) {
-			this.session.setThinkingLevel(planThinkingLevel);
-		}
-	}
-
 	/** Apply any deferred model switch after the current stream ends. */
-	async flushPendingModelSwitch(): Promise<void> {
-		const pending = this.#pendingModelSwitch;
-		if (!pending) return;
-		this.#pendingModelSwitch = undefined;
-		try {
-			await this.session.setModelTemporary(pending.model, pending.thinkingLevel);
-		} catch (error) {
-			this.showWarning(`Failed to switch model after streaming: ${errorMessage(error)}`);
-		}
+	flushPendingModelSwitch(): Promise<void> {
+		return this.#planMode.flushPendingModelSwitch();
 	}
 
 	async #clearTransientModeState(): Promise<void> {
-		if (this.planModeEnabled || this.planModePaused) {
-			if (this.#planModePreviousTools !== undefined) {
-				await this.session.setActiveToolsByName(this.#planModePreviousTools);
-			}
-			this.session.setStandingResolveHandler?.(null);
-			this.session.setPlanModeState(undefined);
-			this.planModeEnabled = false;
-			this.planModePaused = false;
-			this.planModePlanFilePath = undefined;
-			this.#planModePreviousTools = undefined;
-			this.#planModePreviousModelState = undefined;
-			this.#pendingModelSwitch = undefined;
-			this.#planModeHasEntered = false;
-			this.#updatePlanModeStatus();
-		}
-
+		await this.#planMode.clearTransientState();
 		await this.#goalMode.clearTransientState();
-
-		if (this.vibeModeEnabled) {
-			await this.session.deactivateVibeTools(this.#vibeModePreviousTools ?? []);
-			this.session.setVibeModeState(undefined);
-			this.vibeModeEnabled = false;
-			this.#vibeModePreviousTools = undefined;
-			await VibeSessionRegistry.global().killAll(
-				this.session.getAgentId() ?? MAIN_AGENT_ID,
-				this.session.asyncJobManager,
-			);
-			this.#updateVibeModeStatus();
-		}
+		await this.#vibeMode.clearTransientState();
 	}
 
 	/** Reconcile mode state from session entries on resume/switch. */
@@ -2539,7 +2403,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.session.goalRuntime.clearAccounting();
 		if (sessionContext.mode === "vibe") {
-			await this.#enterVibeMode();
+			await this.#vibeMode.enter();
 			return;
 		}
 		if (!this.session.settings.get("plan.enabled")) {
@@ -2552,715 +2416,29 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (sessionContext.mode === "plan") {
 			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
-			await this.#enterPlanMode({ planFilePath });
+			await this.#planMode.enter({ planFilePath });
 		} else if (sessionContext.mode === "plan_paused") {
-			this.planModePaused = true;
-			this.#planModeHasEntered = true;
-			this.#updatePlanModeStatus();
+			this.#planMode.restorePaused();
 		}
-	}
-
-	async #enterPlanMode(options?: { planFilePath?: string; workflow?: "parallel" | "iterative" }): Promise<void> {
-		if (this.planModeEnabled) {
-			return;
-		}
-		if (this.goalModeEnabled || this.goalModePaused) {
-			this.showWarning("Exit goal mode first.");
-			return;
-		}
-		if (this.vibeModeEnabled) {
-			this.showWarning("Exit vibe mode first.");
-			return;
-		}
-
-		this.planModePaused = false;
-
-		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
-		const previousTools = this.session.getActiveToolNames();
-		// `plan-mode-active.md` instructs the agent to draft the plan file with
-		// `write` and refine it with `edit`. Both must be in the active set or the
-		// agent falls back to `edit` on a non-existent file and stalls. `edit` is an
-		// essential built-in so it survives `tools.discoveryMode === "all"`, but
-		// `write` has `loadMode: "discoverable"` and is hidden behind
-		// `search_tool_bm25` — re-activate it here only when the current registry
-		// entry is the built-in write tool (issue #3165). A shadowing extension
-		// tool named `write` must stay inactive because plan mode's read-only
-		// guarantee relies on the built-in write/edit guard. `resolve` is hidden
-		// too; the standing handler below consumes plan-approval calls through it.
-		const planAugmentations = ["resolve"];
-		if (this.session.hasBuiltInTool("write")) {
-			planAugmentations.push("write");
-		}
-		const uniquePlanTools = Array.from(
-			new Set(previousTools.filter(name => name !== "goal").concat(planAugmentations)),
-		);
-
-		this.#planModePreviousTools = previousTools;
-		this.planModePlanFilePath = planFilePath;
-		this.planModeEnabled = true;
-		// Suppress cache-miss marker on the next turn: plan mode changes the system
-		// prompt, which predictably invalidates the cache.
-		this.lastAssistantUsage = undefined;
-
-		await this.session.setActiveToolsByName(uniquePlanTools);
-		this.session.setPlanModeState({
-			enabled: true,
-			planFilePath,
-			workflow: options?.workflow ?? "parallel",
-			reentry: this.#planModeHasEntered,
-		});
-		this.session.setStandingResolveHandler?.(input => this.#runPlanApprovalResolve(input));
-		if (this.session.isStreaming) {
-			await this.session.sendPlanModeContext({ deliverAs: "steer" });
-		}
-		this.#planModeHasEntered = true;
-		await this.#applyPlanModeModel();
-		this.#updatePlanModeStatus();
-		this.sessionManager.appendModeChange("plan", { planFilePath });
-		this.showStatus(`Plan mode enabled. Plan file: ${planFilePath}`);
-	}
-
-	/** Standing resolve dispatcher registered while plan mode is active. The agent
-	 *  submits the finalized plan by calling `resolve { action: "apply", extra: { title } }`;
-	 *  this handler validates the plan file exists, normalizes the title, and shapes the
-	 *  payload that `event-controller` forwards to `handlePlanApproval`. */
-	#runPlanApprovalResolve(input: unknown): Promise<AgentToolResult<ResolveToolDetails>> {
-		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
-			sourceToolName: "plan_approval",
-			label: "Plan ready for approval",
-			apply: async (_reason, extra) => {
-				const state = this.session.getPlanModeState?.();
-				if (!state?.enabled) {
-					throw new ToolError("Plan mode is not active.");
-				}
-				const { planFilePath, title } = await resolveApprovedPlan({
-					suppliedTitle: extra?.title,
-					statePlanFilePath: state.planFilePath,
-					readPlan: url => this.#readPlanFile(url),
-					listPlanFiles: () => this.#listLocalPlanFiles(),
-				});
-				const details: PlanApprovalDetails = {
-					planFilePath,
-					title,
-					planExists: true,
-				};
-				return {
-					content: [{ type: "text" as const, text: "Plan ready for approval." }],
-					details,
-				};
-			},
-		});
-	}
-
-	async #restorePlanPreviousModel(prev: { model: Model; thinkingLevel?: ConfiguredThinkingLevel }): Promise<void> {
-		if (modelsAreEqual(this.session.model, prev.model)) {
-			// Same model — only thinking level may differ. Avoid setModelTemporary()
-			// which would reset provider-side sessions and break continuity.
-			this.session.setThinkingLevel(prev.thinkingLevel);
-		} else if (this.session.isStreaming) {
-			this.#pendingModelSwitch = { model: prev.model, thinkingLevel: prev.thinkingLevel };
-		} else {
-			await this.session.setModelTemporary(prev.model, prev.thinkingLevel);
-		}
-	}
-
-	/**
-	 * Idempotent post-compaction model transition for the plan-approval compact
-	 * path. The deferred pre-plan state is consumed on first application, so a
-	 * second call (the before-flush hook vs. the short-circuit fallback) is a
-	 * no-op. "failed" intentionally stays on the plan model — the context is
-	 * intact and we dispatch best-effort.
-	 */
-	async #applyDeferredPlanModelTransition(
-		outcome: CompactionOutcome | undefined,
-		executionModel: PlanExecutionModel | undefined,
-	): Promise<void> {
-		const deferredPrev = this.#planModePreviousModelState;
-		if (deferredPrev === undefined || outcome === "failed") return;
-		this.#planModePreviousModelState = undefined;
-		if (executionModel) {
-			await this.#applyPlanExecutionModel(executionModel);
-		} else {
-			await this.#restorePlanPreviousModel(deferredPrev);
-		}
-	}
-
-	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean; deferModelRestore?: boolean }): Promise<void> {
-		if (!this.planModeEnabled) {
-			return;
-		}
-
-		const previousTools = this.#planModePreviousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.session.setActiveToolsByName(previousTools);
-		}
-		if (this.#planModePreviousModelState) {
-			if (!options?.deferModelRestore) {
-				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
-			}
-			// If #applyPlanModeModel queued a deferred switch to the plan helper's model
-			// (because the session was streaming on entry), drop it now: we are
-			// leaving plan mode, so flushing it on the next agent_end would land the
-			// session on the plan model after the user has exited plan mode
-			// (issue #816). This runs even when deferModelRestore is set
-			// (compact-approval path): otherwise the stale plan switch survives and
-			// flushPendingModelSwitch() later clobbers the restored/execution model.
-			// Only clear when the pending target matches the plan model — leave
-			// any unrelated user-queued switch intact.
-			const pending = this.#pendingModelSwitch;
-			if (pending) {
-				const planResolution = this.session.resolveHelperModel("plan");
-				if (planResolution && modelsAreEqual(pending.model, planResolution.model)) {
-					this.#pendingModelSwitch = undefined;
-				}
-			}
-		}
-		this.session.setStandingResolveHandler?.(null);
-		this.session.setPlanModeState(undefined);
-		this.planModeEnabled = false;
-		// Suppress cache-miss marker on the next turn: plan exit changes the system
-		// prompt, which predictably invalidates the cache.
-		this.lastAssistantUsage = undefined;
-		this.planModePaused = options?.paused ?? false;
-		this.planModePlanFilePath = undefined;
-		this.#planModePreviousTools = undefined;
-		if (!options?.deferModelRestore) this.#planModePreviousModelState = undefined;
-		this.#updatePlanModeStatus();
-		const paused = options?.paused ?? false;
-		this.sessionManager.appendModeChange(paused ? "plan_paused" : "none");
-		if (!options?.silent) {
-			this.showStatus(paused ? "Plan mode paused." : "Plan mode disabled.");
-		}
-	}
-
-	async #readPlanFile(planFilePath: string): Promise<string | null> {
-		const resolvedPath = this.#resolvePlanFilePath(planFilePath);
-		try {
-			return await Bun.file(resolvedPath).text();
-		} catch (error) {
-			if (isEnoent(error)) {
-				return null;
-			}
-			throw error;
-		}
-	}
-
-	async #hasPlanModeDraftContent(planFilePath: string): Promise<boolean> {
-		const candidates = new Set<string>([planFilePath, ...(await this.#listLocalPlanFiles())]);
-		for (const candidate of candidates) {
-			const content = await this.#readPlanFile(candidate);
-			if (content !== null && content.trim().length > 0) return true;
-		}
-		return false;
-	}
-
-	/** `local://` URLs of plan files in the session-local root, newest first.
-	 *  A fallback for `resolveApprovedPlan` when the agent dropped `extra.title`,
-	 *  so the plan it wrote is still found by scanning recent `*-plan.md` files. */
-	async #listLocalPlanFiles(): Promise<string[]> {
-		return listLocalPlanFileUrls(this.#resolvePlanFilePath("local://"));
 	}
 
 	showPlanReview(
 		planContent: string,
 		title: string,
 		options: string[],
-		dialogOptions?: {
-			helpText?: string;
-			disabledIndices?: number[];
-			onExternalEditor?: () => void;
-			onPlanEdited?: (content: string) => void;
-			onFeedbackChange?: (feedback: string) => void;
-			initialIndex?: number;
-		},
+		dialogOptions?: PlanReviewDialogOptions,
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
-		this.#hidePlanReview();
-		const { promise, resolve } = Promise.withResolvers<string | undefined>();
-		let settled = false;
-		const finish = (choice: string | undefined): void => {
-			if (settled) return;
-			settled = true;
-			this.#hidePlanReview();
-			this.ui.requestRender();
-			resolve(choice);
-		};
-		this.#planReviewCancel = () => finish(undefined);
-		const overlay = new PlanReviewOverlay(
-			planContent,
-			{
-				promptTitle: title,
-				options,
-				disabledIndices: dialogOptions?.disabledIndices,
-				helpText: dialogOptions?.helpText,
-				initialIndex: dialogOptions?.initialIndex,
-				slider: extra?.slider,
-				externalEditorLabel: this.keybindings.getDisplayString("app.editor.external") || undefined,
-				requestRender: () => this.ui.requestRender(),
-			},
-			{
-				onPick: choice => finish(choice),
-				onCancel: () => finish(undefined),
-				onCopyPlan: content => void this.#copyPlanToClipboard(content),
-				onExternalEditor: dialogOptions?.onExternalEditor,
-				onAnnotationExternalEditor: (draft, commit) => void this.#openPlanAnnotationInExternalEditor(draft, commit),
-				onPlanEdited: dialogOptions?.onPlanEdited,
-				onFeedbackChange: dialogOptions?.onFeedbackChange,
-			},
-		);
-		this.#planReviewOverlay = overlay;
-		this.#planReviewOverlayHandle = this.ui.showOverlay(overlay, {
-			anchor: "bottom-center",
-			width: "100%",
-			maxHeight: "100%",
-			margin: 0,
-			fullscreen: true,
-		});
-		this.ui.setFocus(overlay);
-		this.ui.requestRender();
-		return promise;
+		return this.#planMode.showReview(planContent, title, options, dialogOptions, extra);
 	}
 
-	#hidePlanReview(): void {
-		this.#planReviewCancel = undefined;
-		this.#planReviewOverlayHandle?.hide();
-		this.#planReviewOverlayHandle = undefined;
-		this.#planReviewOverlay = undefined;
+	handlePlanModeCommand(initialPrompt?: string): Promise<void> {
+		return this.#planMode.handleCommand(initialPrompt);
 	}
 
-	#dismissPlanReview(): void {
-		const cancel = this.#planReviewCancel;
-		this.#planReviewCancel = undefined;
-		cancel?.();
-		this.#hidePlanReview();
-	}
-
-	#getPlanApprovalContextUsage(): ContextUsage | undefined {
-		const executionModel = this.#planModePreviousModelState?.model ?? this.session.model;
-		const contextWindow = executionModel?.contextWindow;
-		if (typeof contextWindow === "number") {
-			return this.session.getContextUsage({ contextWindow });
-		}
-		return this.session.getContextUsage();
-	}
-
-	async #copyPlanToClipboard(content: string): Promise<void> {
-		try {
-			await copyToClipboard(content);
-			this.showStatus("Copied plan to clipboard");
-		} catch (error) {
-			this.showWarning(`Failed to copy plan to clipboard: ${errorMessage(error)}`);
-		}
-	}
-
-	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) {
-			this.showWarning(NO_EDITOR_CONFIGURED);
-			return;
-		}
-
-		const resolvedPath = this.#resolvePlanFilePath(planFilePath);
-		let currentText: string;
-		try {
-			currentText = await Bun.file(resolvedPath).text();
-		} catch (error) {
-			if (isEnoent(error)) {
-				this.showError(`Plan file not found at ${planFilePath}`);
-				return;
-			}
-			this.showWarning(`Failed to open external editor: ${errorMessage(error)}`);
-			return;
-		}
-
-		try {
-			const result = await editInTerminal(this.ui, editorCmd, currentText, {
-				extension: path.extname(resolvedPath) || ".md",
-				trimTrailingNewline: false,
-			});
-			if (result !== null) {
-				await Bun.write(resolvedPath, result);
-				this.#planReviewOverlay?.setPlanContent(result);
-				this.showStatus("Plan updated in external editor.");
-			}
-		} catch (error) {
-			this.showWarning(`Failed to open external editor: ${errorMessage(error)}`);
-		}
-	}
-
-	async #openPlanAnnotationInExternalEditor(draft: string, commit: (text: string | null) => void): Promise<void> {
-		const editorCmd = getEditorCommand();
-		if (!editorCmd) {
-			this.showWarning(NO_EDITOR_CONFIGURED);
-			return;
-		}
-
-		try {
-			const result = await editInTerminal(this.ui, editorCmd, draft, { extension: ".md" });
-			if (result !== null) {
-				commit(result);
-			}
-		} catch (error) {
-			this.showWarning(`Failed to open external editor: ${errorMessage(error)}`);
-		}
-	}
-
-	async #applyPlanExecutionModel(entry: PlanExecutionModel | undefined): Promise<void> {
-		if (!entry) return;
-		try {
-			await this.session.setModel(entry.model, entry.label, { thinkingLevel: entry.thinkingLevel });
-			this.statusLine.invalidate();
-			this.updateEditorBorderColor();
-			this.showStatus(`Continuing with ${entry.label}: ${entry.model.name || entry.model.id}`);
-		} catch (error) {
-			this.showWarning(`Could not switch to the ${entry.label} model: ${errorMessage(error)}`);
-		}
-	}
-
-	/**
-	 * The models the plan-approval slider offers, default first: the configured
-	 * default model (the pre-plan model when none is configured) and the plan
-	 * helper's model. A plan entry on the default entry's model is dropped when
-	 * it names the same effort or none, since it would run the same turn.
-	 */
-	#planExecutionChoices(): PlanExecutionModel[] {
-		const choices: PlanExecutionModel[] = [];
-		const defaultModel = this.session.resolveDefaultModel() ?? this.#planModePreviousModelState;
-		if (defaultModel) choices.push({ label: "default", ...defaultModel });
-		const plan = this.session.resolveHelperModel("plan");
-		if (
-			plan &&
-			!choices.some(
-				entry =>
-					modelsAreEqual(entry.model, plan.model) &&
-					(plan.thinkingLevel === undefined || entry.thinkingLevel === plan.thinkingLevel),
-			)
-		) {
-			choices.push({ label: "plan", model: plan.model, thinkingLevel: plan.thinkingLevel });
-		}
-		return choices;
-	}
-
-	#resolveLocalRoot(): string {
-		return resolveLocalUrlToPath("local://", {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
-	}
-
-	async #copyLocalArtifactsForFreshSession(sourceRoot: string, destinationRoot: string): Promise<void> {
-		if (sourceRoot === destinationRoot) return;
-
-		let sourceRootStat: { isDirectory(): boolean };
-		try {
-			sourceRootStat = await fs.lstat(sourceRoot);
-		} catch (error) {
-			if (isEnoent(error)) return;
-			throw error;
-		}
-
-		if (!sourceRootStat.isDirectory()) return;
-
-		await fs.mkdir(destinationRoot, { recursive: true });
-		await this.#copyLocalArtifactEntries(sourceRoot, destinationRoot);
-	}
-
-	async #copyLocalArtifactEntries(sourceDir: string, destinationDir: string): Promise<void> {
-		const entries = await fs.readdir(sourceDir, { withFileTypes: true });
-		for (const entry of entries) {
-			const sourcePath = path.join(sourceDir, entry.name);
-			const destinationPath = path.join(destinationDir, entry.name);
-
-			if (entry.isDirectory()) {
-				await fs.mkdir(destinationPath, { recursive: true });
-				await this.#copyLocalArtifactEntries(sourcePath, destinationPath);
-				continue;
-			}
-
-			if (entry.isFile()) {
-				await fs.mkdir(path.dirname(destinationPath), { recursive: true });
-				await fs.copyFile(sourcePath, destinationPath);
-			}
-		}
-	}
-
-	async #approvePlan(
-		planContent: string,
-		options: {
-			planFilePath: string;
-			title: string;
-			preserveContext?: boolean;
-			compactBeforeExecute?: boolean;
-			executionModel?: PlanExecutionModel;
-		},
-	): Promise<void> {
-		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
-
-		// Mark the pending abort caused by the plan-mode → compaction transition as
-		// silent BEFORE #exitPlanMode raises it. The `finally` below clears the
-		// flag on every terminal compaction outcome (ok / cancelled / failed /
-		// throw) so a leaked flag cannot silence a later unrelated abort.
-		// Branchless mark+clear when !compactBeforeExecute: mark is gated; clear
-		// is unconditional and idempotent.
-		if (options.compactBeforeExecute) {
-			this.session.markPlanInternalAbortPending();
-		}
-		let compactOutcome: CompactionOutcome | undefined;
-		try {
-			await this.#exitPlanMode({
-				silent: true,
-				paused: false,
-				deferModelRestore: options.compactBeforeExecute === true,
-			});
-
-			if (!options.preserveContext) {
-				const oldLocalRoot = this.#resolveLocalRoot();
-				await this.handleClearCommand();
-				const newLocalRoot = this.#resolveLocalRoot();
-				await this.#copyLocalArtifactsForFreshSession(oldLocalRoot, newLocalRoot);
-				const newLocalPath = resolveLocalUrlToPath(options.planFilePath, {
-					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-					getSessionId: () => this.sessionManager.getSessionId(),
-				});
-				await fs.mkdir(path.dirname(newLocalPath), { recursive: true });
-				await fs.writeFile(newLocalPath, planContent);
-			} else if (options.compactBeforeExecute) {
-				// Distill the plan-mode transcript before the execution turn is queued so
-				// the plan-approved synthetic prompt lands as a fresh cache anchor.
-				// Outcome is consumed after tool-restoration and plan-reference-path
-				// bookkeeping below; `markPlanReferenceSent` is intentionally deferred
-				// past the cancel guard — see the comment at the cancel branch.
-				// Cancellation skips the synthetic-prompt dispatch (the explicit
-				// abort is honored); failure proceeds best-effort — approval intent stands.
-				const compactionPrompt = prompt.render(planModePrompts["plan-mode/compact-instructions"].text, {
-					planFilePath: options.planFilePath,
-				});
-				// Pin the plan reference path BEFORE compaction so any user messages
-				// queued during the compaction await (which `handleCompactCommand`
-				// flushes via `flushCompactionQueue` before returning) see the
-				// approved plan in `#buildPlanReferenceMessage`. Reassignment after
-				// the try/finally is idempotent and kept for the !compactBeforeExecute
-				// branch.
-				this.session.setPlanReferencePath(options.planFilePath);
-				// Ride the plan-mode distillation prompt through as `internalGuidance`
-				// so it reaches native summarization without leaking into the public
-				// `customInstructions` channel on `session_before_compact` — extensions
-				// there treat that field as user focus and would query-bias the
-				// summary toward the plan boilerplate (issue #4359).
-				compactOutcome = await this.handleCompactCommand(
-					undefined,
-					undefined,
-					outcome => this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
-					compactionPrompt,
-				);
-			}
-		} finally {
-			// Unconditional clear. Idempotent: a no-op when the flag was never set
-			// (i.e., the !compactBeforeExecute branch), and a no-op when the flag
-			// was already consumed by AgentSession.#handleAgentEvent's aborted
-			// message_end stamping. Guarantees the flag is dead at every exit.
-			this.session.clearPlanInternalAbortPending();
-		}
-
-		// Restore the execution tool set, but force-enable `read`: approved-plan
-		// prompts now require loading the durable local:// plan file before work.
-		const executionTools = previousTools.includes("read") ? previousTools : previousTools.concat(["read"]);
-		await this.session.setActiveToolsByName(executionTools);
-		this.session.setPlanReferencePath(options.planFilePath);
-
-		// Resolve the deferred plan-approval model transition. On the compact path
-		// the before-flush hook passed to handleCompactCommand already ran this (so
-		// any input queued during compaction executed on the post-compaction
-		// model); the re-run here is idempotent and covers the short-circuit where
-		// compaction never executed. It runs for "cancelled" too — the operator
-		// aborted only the compaction, not the approval — so the next turn no longer
-		// lands on the plan model. "failed" stays on the plan model (context
-		// intact) and dispatches best-effort.
-		if (options.compactBeforeExecute) {
-			await this.#applyDeferredPlanModelTransition(compactOutcome, options.executionModel);
-		} else {
-			await this.#applyPlanExecutionModel(options.executionModel);
-		}
-
-		if (compactOutcome === "cancelled") {
-			// Explicit abort: honor it. `executeCompaction` already surfaced
-			// `showError("Compaction cancelled")`; we add the deferred-dispatch
-			// warning and exit without dispatching the synthetic plan-approved
-			// prompt. `markPlanReferenceSent` stays unset so
-			// `AgentSession.#buildPlanReferenceMessage` injects the plan reference
-			// on the operator's next `prompt()` call.
-			this.showWarning(
-				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
-			);
-			return;
-		}
-
-		// Approved plans land in a fresh (or compacted) session whose first user-visible
-		// turn is the synthetic plan-approved prompt — that path bypasses the
-		// input-controller's title generation. Seed an auto-name from the plan title
-		// so the session is not left unnamed. `setSessionName("auto")` is a no-op
-		// when the user has already chosen a name (preserveContext paths).
-		const seededName = humanizePlanTitle(options.title);
-		if (seededName && !this.sessionManager.getSessionName()) {
-			await this.sessionManager.setSessionName(seededName, "auto");
-		}
-
-		// markPlanReferenceSent fires only on the dispatch path so the synthetic
-		// plan-approved prompt is the source of the reference injection.
-		this.session.markPlanReferenceSent();
-		const planModePrompt = prompt.render(planModePrompts["plan-mode/approved"].text, {
-			planFilePath: options.planFilePath,
-			contextPreserved: options.preserveContext === true,
-		});
-		// A user turn queued during compaction was already fired by
-		// `flushCompactionQueue` before we returned from `handleCompactCommand`; the
-		// old abort-then-prompt path would have discarded that operator turn AND
-		// still surfaced `AgentBusyError` when the queued turn kicked off in the
-		// synchronous gap. Preserve the in-flight work and queue the hidden
-		// execution directive behind it as a synthetic follow-up. If `isStreaming`
-		// flips true between the check and dispatch (the same fire-and-forget race
-		// noted below), catch `AgentBusyError` and fall back to the same queue.
-		if (this.session.isStreaming) {
-			await this.session.followUp(planModePrompt, undefined, { synthetic: true });
-			return;
-		}
-		try {
-			await this.session.prompt(planModePrompt, { synthetic: true });
-		} catch (error) {
-			if (!(error instanceof AgentBusyError)) throw error;
-			await this.session.followUp(planModePrompt, undefined, { synthetic: true });
-		}
-	}
-	async #abortPlanApprovalTurnSilently(): Promise<void> {
-		this.session.markPlanInternalAbortPending();
-		try {
-			// Machinery closing its own turn, not the operator stopping the work: an
-			// abort that defaults to `interrupted` would pause an active goal for a
-			// reason the operator never gave. Plan mode and goal mode are mutually
-			// exclusive today, so this classifies the abort rather than fixing a live
-			// stall — the vocabulary is only worth having if every site uses it.
-			await this.session.abort({ goalReason: "internal" });
-		} finally {
-			this.session.clearPlanInternalAbortPending();
-		}
-	}
-
-	async handlePlanModeCommand(initialPrompt?: string): Promise<void> {
-		if (this.goalModeEnabled || this.goalModePaused) {
-			this.showWarning("Exit goal mode first.");
-			return;
-		}
-		if (this.vibeModeEnabled) {
-			this.showWarning("Exit vibe mode first.");
-			return;
-		}
-		if (this.planModeEnabled) {
-			const planFilePath = this.planModePlanFilePath ?? (await this.#getPlanFilePath());
-			if (await this.#hasPlanModeDraftContent(planFilePath)) {
-				const confirmed = await this.showHookConfirm(
-					"Exit plan mode?",
-					"This exits plan mode without approving a plan.",
-				);
-				if (!confirmed) return;
-			}
-			await this.#exitPlanMode({ paused: true });
-			return;
-		}
-		if (this.planModePaused && !initialPrompt) {
-			// No-arg third toggle: paused → off. Tools, model, and plan state were
-			// already restored by the prior #exitPlanMode({ paused: true }); only the
-			// paused flag, the reentry marker, and the session mode entry remain.
-			// Prompted /plan invocations fall through to #enterPlanMode below so the
-			// supplied prompt is still submitted as the first plan-mode turn.
-			this.planModePaused = false;
-			this.#planModeHasEntered = false;
-			this.#updatePlanModeStatus();
-			this.sessionManager.appendModeChange("none");
-			this.showStatus("Plan mode disabled.");
-			return;
-		}
-		if (!this.session.settings.get("plan.enabled")) {
-			this.showWarning("Plan mode is disabled. Enable it in settings (plan.enabled).");
-			return;
-		}
-		await this.#enterPlanMode();
-		if (initialPrompt && this.onInputCallback) {
-			this.onInputCallback(this.startPendingSubmission({ text: initialPrompt }));
-		}
-	}
-
-	/**
-	 * `/vibe` toggle. Entering installs the ephemeral vibe tools, strips the
-	 * active toolset down to `read` plus those tools, and injects the director
-	 * context. Exiting unregisters them, restores the previous toolset, and kills
-	 * every worker session so workers cannot outlive the mode that directs them.
-	 */
-	async handleVibeModeCommand(initialPrompt?: string): Promise<void> {
-		if (this.vibeModeEnabled) {
-			await this.#exitVibeMode();
-			return;
-		}
-		if (this.planModeEnabled || this.planModePaused) {
-			this.showWarning("Exit plan mode first.");
-			return;
-		}
-		if (this.goalModeEnabled || this.goalModePaused) {
-			this.showWarning("Exit goal mode first.");
-			return;
-		}
-		await this.#enterVibeMode();
-		if (initialPrompt && this.onInputCallback) {
-			this.onInputCallback(this.startPendingSubmission({ text: initialPrompt }));
-		}
-	}
-
-	async #enterVibeMode(): Promise<void> {
-		if (this.vibeModeEnabled) {
-			return;
-		}
-		if (this.planModeEnabled || this.planModePaused) {
-			this.showWarning("Exit plan mode first.");
-			return;
-		}
-		if (this.goalModeEnabled || this.goalModePaused) {
-			this.showWarning("Exit goal mode first.");
-			return;
-		}
-
-		const previousTools = this.session.getActiveToolNames();
-		await this.session.activateVibeTools(["read"]);
-		this.#vibeModePreviousTools = previousTools;
-		this.vibeModeEnabled = true;
-		// Suppress cache-miss marker on the next turn: vibe mode changes the
-		// injected context, which predictably invalidates the cache.
-		this.lastAssistantUsage = undefined;
-		this.session.setVibeModeState({ enabled: true });
-		if (this.session.isStreaming) {
-			await this.session.sendVibeModeContext({ deliverAs: "steer" });
-		}
-		this.#updateVibeModeStatus();
-		this.sessionManager.appendModeChange("vibe");
-		this.showStatus("Vibe mode enabled. You direct fast/good worker sessions; toolset is read + vibe tools.");
-	}
-
-	async #exitVibeMode(): Promise<void> {
-		if (!this.vibeModeEnabled) {
-			return;
-		}
-		await this.session.deactivateVibeTools(this.#vibeModePreviousTools ?? []);
-		this.session.setVibeModeState(undefined);
-		this.vibeModeEnabled = false;
-		this.#vibeModePreviousTools = undefined;
-		this.lastAssistantUsage = undefined;
-		const killed = await VibeSessionRegistry.global().killAll(
-			this.session.getAgentId() ?? MAIN_AGENT_ID,
-			this.session.asyncJobManager,
-		);
-		this.#updateVibeModeStatus();
-		this.sessionManager.appendModeChange("none");
-		this.showStatus(
-			killed > 0 ? `Vibe mode disabled. Killed ${formatCount("worker session", killed)}.` : "Vibe mode disabled.",
-		);
+	/** `/vibe` toggle; see {@link VibeModeController}. */
+	handleVibeModeCommand(initialPrompt?: string): Promise<void> {
+		return this.#vibeMode.handleCommand(initialPrompt);
 	}
 
 	handleGoalModeCommand(rest?: string): Promise<void> {
@@ -3280,170 +2458,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#goalMode.openDetail();
 	}
 
-	/** Manually (re-)open the plan-review overlay — bound to `/plan-review`. Lets
-	 *  the operator pull the review back up after dismissing it, or review a plan
-	 *  the agent wrote without calling `resolve`. There is no fixed plan filename:
-	 *  `getPlanReferencePath()` is empty until a plan is actually approved (and does
-	 *  not survive a restart), so this drives off the newest `local://<slug>-plan.md`
-	 *  the agent wrote — the files persist in the session artifacts dir, so the scan
-	 *  works before any review and across restarts. */
-	async openPlanReview(): Promise<void> {
-		if (!this.planModeEnabled) {
-			this.showWarning("Plan mode is not active.");
-			return;
-		}
-		const noPlan = "No plan to review yet — write one to a local://<slug>-plan.md file first.";
-		const [planFilePath] = await this.#listLocalPlanFiles();
-		if (!planFilePath) {
-			this.showWarning(noPlan);
-			return;
-		}
-		const planContent = await this.#readPlanFile(planFilePath);
-		if (planContent === null) {
-			this.showWarning(noPlan);
-			return;
-		}
-		const { title } = resolvePlanTitle({ planContent, planFilePath });
-		await this.handlePlanApproval({ planFilePath, title, planExists: true });
+	/** Re-open the plan-review overlay on the newest `local://<slug>-plan.md`; bound to `/plan-review`. */
+	openPlanReview(): Promise<void> {
+		return this.#planMode.openReview();
 	}
 
-	async handlePlanApproval(details: PlanApprovalDetails): Promise<void> {
-		if (!this.planModeEnabled) {
-			this.showWarning("Plan mode is not active.");
-			return;
-		}
-
-		// Abort the agent to prevent it from continuing (e.g., re-submitting the
-		// plan) while the popup is showing. The event listener fires asynchronously
-		// (agent's #emit is fire-and-forget), so without this the model sees
-		// "Plan ready for approval." and immediately re-invokes `resolve` in a loop.
-		// This abort is an internal UI transition, not operator cancellation.
-		await this.#abortPlanApprovalTurnSilently();
-
-		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
-		this.planModePlanFilePath = planFilePath;
-		const planContent = await this.#readPlanFile(planFilePath);
-		if (!planContent) {
-			this.showError(`Plan file not found at ${planFilePath}`);
-			return;
-		}
-
-		const contextUsage = this.#getPlanApprovalContextUsage();
-		const keepContextLabel = formatKeepContextLabel(contextUsage);
-		const keepContextDisabled = isKeepContextDisabled(contextUsage);
-
-		// Model slider: the operator picks which model executes the approved plan,
-		// the default model or the plan helper's. It starts on the default model so
-		// execution runs it no matter which model drove the planning conversation,
-		// and is hidden when both resolve to the same model and effort.
-		const choices = this.#planExecutionChoices();
-		let selectedTierIndex = 0;
-		const slider: HookSelectorSlider | undefined =
-			choices.length > 1
-				? {
-						caption: "continue with",
-						index: 0,
-						segments: choices.map(entry => ({
-							label: entry.label,
-							detail: entry.model.name || entry.model.id,
-						})),
-						onChange: index => {
-							selectedTierIndex = index;
-						},
-					}
-				: undefined;
-		// The overlay now owns the dynamic, focus-aware help line; the caller only
-		// supplies the trailing cancel hint.
-		const helpText = "esc cancel";
-		// In-overlay edits (section deletes/undo) and section annotations. Deletes
-		// update `editedContent` (and mirror to disk); annotations build `feedback`
-		// that the Refine branch re-prompts the model with.
-		let editedContent: string | undefined;
-		let feedback = "";
-
-		const choice = await this.showPlanReview(
-			planContent,
-			"Plan mode - next step",
-			["Approve and execute", "Approve and compact context", keepContextLabel, "Refine plan"],
-			{
-				helpText,
-				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
-				onPlanEdited: content => {
-					editedContent = content;
-					void Bun.write(this.#resolvePlanFilePath(planFilePath), content);
-				},
-				onFeedbackChange: value => {
-					feedback = value;
-				},
-				disabledIndices: keepContextDisabled ? [PLAN_KEEP_CONTEXT_OPTION_INDEX] : undefined,
-			},
-			{ slider },
-		);
-
-		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
-			try {
-				// Prefer in-overlay edits (already in memory) over a disk re-read. The
-				// overlay mirrors edits as they happen, and approval awaits one final
-				// write so the durable plan file and synthetic prompt carry the same text.
-				const latestPlanContent = editedContent ?? (await this.#readPlanFile(planFilePath));
-				if (editedContent !== undefined) {
-					await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
-				}
-				if (!latestPlanContent) {
-					this.showError(`Plan file not found at ${planFilePath}`);
-					return;
-				}
-				// Capture the operator's choice and hand it to #approvePlan, which
-				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
-				// #planModePreviousModelState (the model from before plan mode), so
-				// applying the slider choice any earlier would be silently reverted.
-				// Pass executionModel only when the slider was shown: with no slider
-				// the operator made no selection and the restore stands.
-				// Treat the choice as implicit only when applying it would land on the
-				// same end state as the restore — same model AND the same effective
-				// thinking level. A choice with an explicit thinking level that differs
-				// from the restored one must still switch, otherwise approving on the
-				// same model silently keeps the pre-plan level.
-				const restoredState = this.#planModePreviousModelState;
-				const restoredIndex = restoredState
-					? choices.findIndex(entry => {
-							if (!modelsAreEqual(entry.model, restoredState.model)) return false;
-							if (entry.thinkingLevel === undefined) return true;
-							return entry.thinkingLevel === restoredState.thinkingLevel;
-						})
-					: -1;
-				const executionModel =
-					slider && selectedTierIndex !== restoredIndex ? choices[selectedTierIndex] : undefined;
-				await this.#approvePlan(latestPlanContent, {
-					planFilePath,
-					title: details.title,
-					preserveContext: choice !== "Approve and execute",
-					compactBeforeExecute: choice === "Approve and compact context",
-					executionModel,
-				});
-			} catch (error) {
-				this.showError(`Failed to finalize approved plan: ${errorMessage(error)}`);
-			}
-			return;
-		}
-
-		if (choice === "Refine plan") {
-			const refinement = feedback.trim();
-			try {
-				if (refinement) {
-					if (this.onInputCallback) {
-						this.onInputCallback(this.startPendingSubmission({ text: feedback }));
-					} else {
-						await this.session.prompt(feedback);
-					}
-				} else {
-					this.showStatus("Refine plan: enter a follow-up prompt.");
-				}
-			} catch (error) {
-				this.showError(`Failed to refine plan: ${errorMessage(error)}`);
-			}
-			return;
-		}
+	handlePlanApproval(details: PlanApprovalDetails): Promise<void> {
+		return this.#planMode.handleApproval(details);
 	}
 
 	stop(): void {
@@ -3793,7 +2814,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	showPinnedError(message: string): void {
-		this.#dismissPlanReview();
+		this.#planMode.dismissReview();
 		this.errorBannerContainer.clear();
 		this.errorBannerContainer.addChild(new ErrorBannerComponent(message));
 		this.ui.requestRender();
@@ -4118,7 +3139,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#omfgController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.clearPinnedError();
-		this.#hidePlanReview();
+		this.#planMode.hideReview();
 	}
 
 	handleClearCommand(): Promise<void> {
@@ -4670,17 +3691,4 @@ export class InteractiveMode implements InteractiveModeContext {
 
 function isClosedTodo(task: TodoItem): boolean {
 	return isTerminalTodoStatus(task.status);
-}
-
-function formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
-	if (!contextUsage) {
-		return "Approve and keep context";
-	}
-	const tokens = formatContextTokenCount(contextUsage.tokens);
-	const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
-	return `Approve and keep context (~${tokens} / ${contextWindow})`;
-}
-
-function isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
-	return contextUsage !== undefined && contextUsage.percent > PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT;
 }

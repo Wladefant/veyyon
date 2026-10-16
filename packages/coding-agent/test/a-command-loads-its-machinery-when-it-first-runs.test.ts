@@ -87,6 +87,8 @@ describe("an interactive session's static import graph", () => {
 			"memory-command-controller.ts",
 			"omfg-controller.ts",
 			"omfg-rule.ts",
+			// Carved out of interactive-mode.ts, which loads with the session.
+			"plan-mode-controller.ts",
 			// Carved out of input-controller.ts, which loads with the session.
 			"prompt-submission.ts",
 			// Carved out of input-controller.ts, which loads with the session.
@@ -108,6 +110,8 @@ describe("an interactive session's static import graph", () => {
 			"turn-speech.ts",
 			// Carved out of command-controller.ts, which loads with the session.
 			"usage-report-view.ts",
+			// Carved out of interactive-mode.ts, which loads with the session.
+			"vibe-mode-controller.ts",
 			"voice-controller.ts",
 			"welcome-controller.ts",
 			"working-loader.ts",
