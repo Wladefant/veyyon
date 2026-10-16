@@ -395,8 +395,11 @@ const LAUNCH_REACH_CEILING = 1491;
  *
  * 525 to 526: `catalog/wire/kimi-code.ts`, for the reason the launch ceiling above records.
  * `catalog/provider-models/openai-compat.ts`, already here, resolves a Kimi request's endpoint through it.
+ *
+ * 526 to 488: re-measured. The modules that left prompt assembly since the last entry had left it
+ * without lowering this line, so the slack would have admitted 38 new ones unrecorded.
  */
-const ASSEMBLER_REACH_CEILING = 526;
+const ASSEMBLER_REACH_CEILING = 488;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();
