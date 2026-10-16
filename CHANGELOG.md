@@ -57,6 +57,7 @@
 - The settings card's agent roster, model-chain picker and shared submenu pieces moved out of `settings-selector.ts` into `agents-submenu.ts`, `model-chain-submenu.ts` and `settings-submenus.ts`; no user-visible change.
 - Branching, the `/btw` branch and tree navigation moved from `session/agent-session.ts` to the `session/runtime/session-branch.ts` collaborator; no user-visible change.
 - The handoff document and the new session it seeds moved from `session/agent-session.ts` to the `session/runtime/session-handoff.ts` collaborator; no user-visible change.
+- The active tool set, the base system prompt with its invalidation record, and the MCP, RPC host, SSH and vibe tool refreshes moved from `session/agent-session.ts` to the `session/runtime/tool-activation.ts` collaborator; no user-visible change.
 - The collab guest dialogs, the hook dialog queue and the extension widgets moved out of `extension-ui-controller.ts` into `collab-guest-dialogs.ts`, `dialog-queue.ts` and `hook-widgets.ts`; no user-visible change.
 - The login, logout, account card and saved-reset flows moved out of `selector-controller.ts` into `account-flows.ts`, and the session picker, resume and delete into `session-flows.ts`; no user-visible change.
 - The `/usage` and `/session` panels and the `/memory` command moved out of `command-controller.ts` into `usage-report-view.ts`, `session-info-view.ts` and `memory-command-controller.ts`; no user-visible change.
@@ -65,6 +66,7 @@
 - The composer, plan review, plan annotation, `/todo edit` and hook-editor external-editor handoffs share one `editInTerminal`, so `/todo edit` now runs the editor on the controlling terminal like the composer's `ctrl+g` instead of on the inherited stdin.
 - Plan mode, the plan-review overlay, plan approval and vibe mode moved out of `interactive-mode.ts` into `plan-mode-controller.ts` and `vibe-mode-controller.ts`, and the local-artifact copy into a fresh approved session moved to `internal-urls/local-protocol.ts`; no user-visible change.
 - The anchored todo board, the agent HUD, their shared motion clock, the todo auto-clear and the agent-change rebuild moved out of `interactive-mode.ts` into `anchored-blocks.ts`; no user-visible change.
+- The ACP plan-approval resolve types its input as `ResolveParams`, as the terminal plan mode does; no user-visible change.
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
