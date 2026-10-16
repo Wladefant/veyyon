@@ -34,6 +34,7 @@
 - `benches/browser-fill.ts` times `tab.fill` in headless Chromium for 16, 256 and 4,096 characters and counts a fill correct only when the field holds the value.
 - `benches/natural-input.ts` times `tab.click`, `tab.type`, `tab.fill` on a text field, a date input and a range, and `tab.select` on a drop-down with `browser.naturalInput` off and on, and `benches/bot-detection.ts` opens public bot-detector pages through the browser tool and prints each verdict and the signals it flags.
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
+- `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 
 ### Changed
 
@@ -68,6 +69,7 @@
 - The anchored todo board, the agent HUD, their shared motion clock, the todo auto-clear and the agent-change rebuild moved out of `interactive-mode.ts` into `anchored-blocks.ts`; no user-visible change.
 - The ACP plan-approval resolve types its input as `ResolveParams`, as the terminal plan mode does; no user-visible change.
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
+- The extension handler time budget and the lspmux liveness probe use `settleWithin` from `@veyyon/utils` instead of their own deadline racers; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
@@ -120,9 +122,11 @@
 - A `browser` `tab.drag()` or multiple `tab.select()` cut short by its deadline or an abort releases the mouse button or modifier it pressed, instead of leaving it held so every later click on the tab failed with `'left' is already pressed` or arrived as a Control-click.
 - A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
 - A browser the `browser` tool spawned is killed on session end or a failed attach when the native addon cannot load, instead of being left running.
+- A foreground `bash` command that finishes before the auto-background threshold, a client-terminal command that exits before its timeout, an edit whose LSP diagnostics arrive inside the 500 ms inline wait, MCP startup, an LSP or DAP adapter shutdown, the GPU probe, the speech recorder's start wait, an async job delivery wait, the browser's selector hint, file-chooser and frame-draw waits, memory dispose and session shutdown clear their deadline timer when the work finishes, instead of leaving it armed for the rest of the window (up to 300 s for the bash threshold) and holding the process open.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
+- An OAuth token refresh clears its 5 s lease-renewal timer when the refresh finishes, instead of leaving it armed and holding the process open for up to 5 s after every refresh.
 - A trial cut short by a cancelled run gets no journal row, so `--resume` runs it again, and the retry backoff ends when the run is cancelled.
 - A trial whose agent exited before any provider request succeeded is retried as infrastructure whatever its stderr says, and a failed request no longer counts as a turn.
 - A journal whose last line was cut off by a killed process is repaired before the next append instead of becoming unreadable.
@@ -136,6 +140,7 @@
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
 - A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
+- `postmortem.quit` clears its 5 s stdout-drain timer when the drain finishes first.
 
 ## [1.5.8] - 2026-10-16
 
