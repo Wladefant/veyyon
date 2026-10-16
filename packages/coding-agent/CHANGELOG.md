@@ -79,6 +79,7 @@
 - Session creation applies the web search and image provider preferences through the one reader the session scope uses; no user-visible change.
 - Settings reads drop the fallbacks and kind re-checks the typed read already guarantees, and provider preferences read their declared types; no user-visible change.
 - The read tool's default line limit is bounded through the shared `clampLow` helper; no user-visible change.
+- Internal modules import output notices, tool status icons, formatters, the memory root, the active skill set, the IRC switch and the GitHub fetchers from the modules that define them instead of through compatibility re-exports; no user-visible change.
 
 ### Fixed
 

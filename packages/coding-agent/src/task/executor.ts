@@ -61,7 +61,7 @@ import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/mess
 import { truncateTail } from "../session/streaming-output";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
-import { isIrcEnabled } from "../tools/agent/irc";
+import { isIrcEnabled } from "../tools/agent/irc-enabled";
 import { type ReportFindingDetails, toReviewFinding } from "../tools/agent/review";
 import { normalizeSchema } from "../tools/core/jtd-to-json-schema";
 import {

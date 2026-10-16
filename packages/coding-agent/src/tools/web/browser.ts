@@ -17,7 +17,7 @@ import type { ToolSession } from "../../sdk";
 import { enforceInlineByteCap } from "../../session/streaming-output";
 import { truncateForPrompt } from "../core/approval";
 import { inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import { resolveToCwd } from "../core/path-utils";
 import { ToolAbortError, ToolError, throwIfAborted, toolAbort } from "../core/tool-errors";
 import { prependResultNotice, toolResult } from "../core/tool-result";

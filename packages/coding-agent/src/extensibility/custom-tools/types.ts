@@ -38,7 +38,7 @@ import type { RecoveredRetryError } from "../shared-events";
 /** Alias for clarity */
 export type CustomToolUIContext = HookUIContext;
 
-// Re-export for backward compatibility
+// The argument and result types of `CustomToolAPI.exec`, exported with the rest of the custom-tool API.
 export type { ExecOptions, ExecResult } from "../../exec/exec";
 /** Re-export for custom tools to use in execute signature */
 export type { AgentToolResult, AgentToolUpdateCallback, ToolApproval, ToolApprovalDecision, ToolTier };

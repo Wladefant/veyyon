@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import type { OutputMeta, TruncationMeta } from "@veyyon/coding-agent/tools/core/output-meta";
-import { formatTruncationMetaNotice, OutputMetaBuilder } from "@veyyon/coding-agent/tools/core/output-meta";
+import { OutputMetaBuilder } from "@veyyon/coding-agent/tools/core/output-meta";
+import type { OutputMeta, TruncationMeta } from "@veyyon/coding-agent/tools/core/output-notice";
+import { formatTruncationMetaNotice } from "@veyyon/coding-agent/tools/core/output-notice";
 
 /**
  * Output truncated by something that did not say how much it dropped must be

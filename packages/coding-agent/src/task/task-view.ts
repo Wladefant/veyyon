@@ -21,6 +21,7 @@
 
 import path from "node:path";
 import { formatCount, formatNumber, isRecord, sanitizeText } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type {
 	FramedBlockView,
 	StatusRowView,
@@ -46,7 +47,6 @@ import {
 import { jsonTreeViewLines } from "../tools/core/json-tree-view";
 import {
 	extractResultText,
-	formatDuration,
 	formatMoreItems,
 	previewLine,
 	replaceTabs,

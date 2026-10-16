@@ -44,7 +44,8 @@ import {
 import { routeWriteThroughBridge } from "../core/acp-bridge";
 import { truncateForPrompt } from "../core/approval";
 import { invalidateFsScanAfterWrite } from "../core/fs-cache-invalidation";
-import { type OutputMeta, outputMeta } from "../core/output-meta";
+import { outputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import {
 	formatPathRelativeToCwd,
 	isInternalUrlPath,

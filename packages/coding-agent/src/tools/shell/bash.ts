@@ -45,7 +45,7 @@ import { truncateForPrompt } from "../core/approval";
 import { invalidateGithubCacheForBashCommand } from "../core/gh-cache-invalidation";
 import { inlineBudgetFor, inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import { resolveToCwd } from "../core/path-utils";
 import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath } from "../core/render-utils";
 import { ToolAbortError, ToolError } from "../core/tool-errors";

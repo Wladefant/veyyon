@@ -7,7 +7,7 @@ import type { FetchImpl, ImageContent, TextContent } from "@veyyon/ai";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { htmlToMarkdown } from "@veyyon/natives";
 import { isCancellation } from "@veyyon/utils/abortable";
-import { truncate } from "@veyyon/utils/format";
+import { formatBytes, truncate } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
 // Owners, not the `@veyyon/utils` barrel: 8 modules against 74.
 import * as logger from "@veyyon/utils/logger";
@@ -47,8 +47,7 @@ import { ensureTool } from "../../utils/tools-manager";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "../../utils/zip";
 import { applyListLimit } from "../core/list-limit";
 import { inlineBudgetFor } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
-import { formatBytes } from "../core/render-utils";
+import type { OutputMeta } from "../core/output-notice";
 import { listTables, looksLikeSqlite, renderTableList } from "../core/sqlite-reader";
 import { ToolError, throwIfAborted } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";

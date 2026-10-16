@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getActiveSkills } from "@veyyon/coding-agent/extensibility/skills";
+import { getActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
-import { getMemoryRoot } from "@veyyon/coding-agent/memory/local";
+import { getMemoryRoot } from "@veyyon/coding-agent/memory/paths";
 import * as themeEngine from "@veyyon/coding-agent/theme/theme";
-import { formatStatusIcon } from "@veyyon/coding-agent/tools/core/render-utils";
+import { formatStatusIcon } from "@veyyon/coding-agent/tools/core/tool-ui-status";
 import {
 	dynamicImportBindings,
 	dynamicImportSpecifiersIn,
@@ -837,28 +837,6 @@ describe("reading a local file does not load the MCP client, the skill loader or
 		expect(reached).not.toContain(path.relative(PACKAGES, path.join(SRC, "prompts/registry.ts")));
 		expect(reached).toContain(path.relative(PACKAGES, path.join(SRC, "tools/web/gh-fetch.ts")));
 		expect(reached).toContain(path.relative(PACKAGES, path.join(SRC, "tools/web/github-cache.ts")));
-	});
-
-	/**
-	 * And the tool still re-exports every fetcher, which is the promise that made the move invisible to
-	 * callers. `tools/web/gh-view.ts` and a long tail of tests name `./gh` for these, and the re-export is
-	 * the only reason none of them changed. Asserted through the module's exports rather than by reading
-	 * the source, so a re-export that compiles but resolves to nothing would fail here.
-	 */
-	it("the github tool still re-exports the fetchers it used to own", async () => {
-		const tool = (await import("@veyyon/coding-agent/tools/web/gh")) as Record<string, unknown>;
-
-		for (const name of [
-			"getOrFetchIssue",
-			"getOrFetchPr",
-			"getOrFetchPrDiff",
-			"githubIssueJsonWithStateReasonFallback",
-			"parsePrUnifiedDiff",
-			"resolveDefaultRepoMemoized",
-			"parsePositiveDecimalInt",
-		]) {
-			expect(typeof tool[name], `tools/gh must still re-export ${name}`).toBe("function");
-		}
 	});
 
 	/**

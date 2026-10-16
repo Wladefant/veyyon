@@ -48,13 +48,13 @@ import {
 	capPreviewLines,
 	formatBadge,
 	formatExpandHint,
-	formatStatusIcon,
 	previewWindowRows,
 	replaceTabs,
 	shortenEmbeddedPaths,
 	showResolvedModelDefault,
 } from "../../../tools/core/render-utils";
 import type { ToolUIStatus } from "../../../tools/core/tool-ui-status";
+import { formatStatusIcon } from "../../../tools/core/tool-ui-status";
 import type { ToolRenderer } from "../../../tools/renderers";
 import { sanitizeWithOptionalSixelPassthrough } from "../../../utils/sixel";
 import { paintHotTail, shimmerPhase } from "../components/chrome/follow";

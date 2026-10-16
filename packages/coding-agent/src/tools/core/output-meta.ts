@@ -28,25 +28,10 @@ import {
 } from "../../session/streaming-output";
 import type { Theme } from "../../theme/theme";
 import { inlineBudgetFor } from "./output-artifact";
-import { wrapBrackets } from "./render-utils";
-import { renderError } from "./tool-errors";
-
-export type { DiagnosticMeta, LimitsMeta, OutputMeta, SourceMeta, TruncationMeta } from "./output-notice";
-// The notice text and the metadata shape moved to their own module so `session/messages.ts` could
-// append a notice without reaching the tool layer. Re-exported here because every existing caller asks
-// this file for them, and forwarding costs nothing: that module imports two formatters and the
-// diagnostic renderer.
-export {
-	formatFullOutputReference,
-	formatOutputNotice,
-	formatTruncationMetaNotice,
-	stripGeneratedOutputNotice,
-	stripOutputNotice,
-	stripRawOutputArtifactNotice,
-} from "./output-notice";
-
 import type { OutputMeta, TruncationMeta } from "./output-notice";
 import { formatFullOutputReference, formatOutputNotice, formatTruncationMetaNotice } from "./output-notice";
+import { wrapBrackets } from "./render-utils";
+import { renderError } from "./tool-errors";
 
 // =============================================================================
 // OutputMetaBuilder - Fluent API for building OutputMeta

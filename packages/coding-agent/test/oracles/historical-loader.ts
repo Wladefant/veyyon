@@ -46,7 +46,7 @@ export const ORACLE_SOURCE_DIRECTORY = "packages/coding-agent/test/oracles";
 export const ORACLE_CACHE_DIRECTORY = path.join(
 	import.meta.dirname,
 	".cache",
-	`historical-v7-${ORACLE_SNAPSHOT_COMMIT}`,
+	`historical-v8-${ORACLE_SNAPSHOT_COMMIT}`,
 );
 export const ADAPTER_FILENAME = "historical-render-utils-adapter.ts";
 export const ADAPTER_SPECIFIER = "historical-render-utils-adapter";
@@ -167,6 +167,10 @@ import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 
 export * from "@veyyon/coding-agent/tools/core/render-utils";
 export * from "@veyyon/coding-agent/tools/core/path-utils";
+export * from "@veyyon/coding-agent/tools/core/output-meta";
+export * from "@veyyon/coding-agent/tools/core/output-notice";
+export * from "@veyyon/coding-agent/tools/core/tool-ui-status";
+export { formatAge, formatBytes, formatCount, formatDuration, pluralize } from "@veyyon/utils/format";
 export type * from "@veyyon/coding-agent/tools/fs/read";
 
 ${diagnosticSources}
@@ -195,6 +199,7 @@ function deriveExecutableSource(originalSource: string): string {
 				node.type === "ExportAllDeclaration") &&
 			node.source &&
 			(node.source.value === "@veyyon/coding-agent/tools/core/render-utils" ||
+				node.source.value === "@veyyon/coding-agent/tools/core/output-meta" ||
 				node.source.value === "@veyyon/coding-agent/tools/fs/write" ||
 				node.source.value === "@veyyon/coding-agent/tools/fs/read") &&
 			typeof node.source.start === "number" &&

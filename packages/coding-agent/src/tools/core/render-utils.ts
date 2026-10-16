@@ -426,12 +426,6 @@ export function getDomain(url: string): string {
 // Formatting Utilities
 // =============================================================================
 
-export { formatAge, formatBytes, formatCount, formatDuration, pluralize } from "@veyyon/utils/format";
-export type { ToolUIStatus } from "./tool-ui-status";
-// The status glyph and its status union live in a leaf, so a status line does not have to import
-// this module's 167. Re-exported because every existing caller asks this file for them.
-export { formatStatusIcon } from "./tool-ui-status";
-
 // =============================================================================
 // Theme Helper Utilities
 // =============================================================================

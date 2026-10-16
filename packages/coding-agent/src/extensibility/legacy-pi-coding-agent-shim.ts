@@ -26,6 +26,7 @@ import {
 	getProjectDir,
 	parseFrontmatter as parseOmpFrontmatter,
 } from "@veyyon/utils";
+import { formatBytes } from "@veyyon/utils/format";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
@@ -46,7 +47,6 @@ import {
 	truncateTail,
 } from "../session/streaming-output";
 import type { Tool, ToolSession } from "../tools";
-import { formatBytes } from "../tools/core/render-utils";
 import { ReadTool } from "../tools/fs/read";
 import { WriteTool } from "../tools/fs/write";
 import { SearchTool } from "../tools/search/search";
@@ -1208,5 +1208,5 @@ export async function createAgentSession(
 }
 
 export { Type } from "@veyyon/kernel/registry/typebox";
+export { formatBytes as formatSize } from "@veyyon/utils/format";
 export * from "../index";
-export { formatBytes as formatSize } from "../tools/core/render-utils";

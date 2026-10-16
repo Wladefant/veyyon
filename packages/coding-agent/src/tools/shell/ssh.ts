@@ -14,7 +14,7 @@ import { executeSSH } from "../../ssh/ssh-executor";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import { inlineBudgetFor } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import { ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";

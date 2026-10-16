@@ -400,8 +400,8 @@ async function buildPrReviewPrompt(
 ): Promise<string | undefined> {
 	let diffText: string;
 	try {
-		// The GitHub client loads on the first `/review <pr>`, not when the bundled commands register.
-		const gh = await import("../../../tools/web/gh");
+		// The PR fetcher loads on the first `/review <pr>`, not when the bundled commands register.
+		const gh = await import("../../../tools/web/gh-fetch");
 		const lookup = await gh.getOrFetchPrDiff({ cwd: api.cwd, repo: ref.repo, number: ref.number });
 		diffText = lookup.payload.unified;
 	} catch (err) {

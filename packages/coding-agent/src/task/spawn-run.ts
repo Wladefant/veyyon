@@ -8,6 +8,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { directoryExists, errorMessage, getSessionsDir, prompt, Snowflake } from "@veyyon/utils";
+import { formatBytes, formatDuration } from "@veyyon/utils/format";
 import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ToolSession } from "..";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -19,7 +20,6 @@ import { planModePrompts } from "../prompts/plan-mode/rows";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { TOOL } from "../tools/core/builtin-names";
-import { formatBytes, formatDuration } from "../tools/core/render-utils";
 import {
 	agentModelSourceLabel,
 	filterEnabledAgents,

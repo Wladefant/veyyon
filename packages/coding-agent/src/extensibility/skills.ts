@@ -16,9 +16,6 @@ import { PROVIDER_ID as VEYYON_PLUGINS_SKILL_PROVIDER } from "../discovery/veyyo
 import { skillsPrompts } from "../prompts/skills/rows";
 import type { SkillPromptDetails } from "../session/messages";
 
-// The active-skill snapshot lives in its own leaf so a reader does not have to import the loader.
-export { getActiveSkills, resetActiveSkillsForTests, setActiveSkills } from "./active-skills";
-
 /**
  * Skills load ONLY from these Veyyon-native providers, every one rooted under
  * the active profile's agent dir (`~/.veyyon/profiles/<name>/agent`):

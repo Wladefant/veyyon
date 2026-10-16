@@ -1,11 +1,12 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, lazy, prompt } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../../async";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import type { AgentRegistry } from "../../registry/agent-registry";
-import { formatDuration, PREVIEW_LIMITS } from "../core/render-utils";
+import { PREVIEW_LIMITS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import type { ToolSession } from "../index";
 import { isWaitingPollDetails, jobToolView } from "./job-view";

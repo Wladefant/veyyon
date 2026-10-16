@@ -12,7 +12,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import { resolveFileDisplayMode } from "../../utils/file-display-mode";
 import type { ToolSession } from "..";
 import { searchPathFilesystemTargets } from "../core/cwd-boundary";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import {
 	expandDelimitedPathEntriesSync,
 	hasGlobPathChars,

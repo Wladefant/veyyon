@@ -30,6 +30,10 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import * as git from "../../utils/git";
 import type { ToolSession } from "..";
 import { abortedPartway } from "../core/aborted-partway";
+import { saveOutputArtifact } from "../core/output-artifact";
+import type { OutputMeta } from "../core/output-notice";
+import { type ToolAbortError, ToolError, throwIfAborted } from "../core/tool-errors";
+import { toolResult } from "../core/tool-result";
 import {
 	GH_PR_FIELDS_NO_COMMENTS,
 	type GhPrViewData,
@@ -49,36 +53,6 @@ import {
 	pushLine,
 	requireNonEmpty,
 } from "./gh-format";
-
-export type {
-	GhIssueViewData,
-	GhPrViewData,
-	IssueViewLookupOptions,
-	PrDiffFile,
-	PrDiffLookupOptions,
-	PrDiffPayload,
-	PrViewLookupOptions,
-	ViewLookupResult,
-} from "./gh-fetch";
-/**
- * The fetchers moved to `./gh-fetch`, which imports neither the prompt registry nor this tool. Every
- * name is re-exported here because the `github` tool was their only public home for a long time and
- * `tools/web/gh-view.ts` and the tests still name it. See that module's header for the split.
- */
-export {
-	getOrFetchIssue,
-	getOrFetchPr,
-	getOrFetchPrDiff,
-	githubIssueJsonWithStateReasonFallback,
-	parsePrUnifiedDiff,
-	resolveDefaultRepoMemoized,
-} from "./gh-fetch";
-export { parsePositiveDecimalInt } from "./gh-format";
-
-import { saveOutputArtifact } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
-import { type ToolAbortError, ToolError, throwIfAborted } from "../core/tool-errors";
-import { toolResult } from "../core/tool-result";
 import { parsePrUrl } from "./gh-url";
 import { invalidateAllForNumber } from "./github-cache";
 

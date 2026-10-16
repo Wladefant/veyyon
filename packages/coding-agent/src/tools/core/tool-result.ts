@@ -1,8 +1,9 @@
 import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import type { OutputSummary, TruncationResult } from "../../session/streaming-output";
-import type { OutputMeta, TruncationOptions, TruncationSummaryOptions, TruncationTextOptions } from "./output-meta";
+import type { TruncationOptions, TruncationSummaryOptions, TruncationTextOptions } from "./output-meta";
 import { outputMeta } from "./output-meta";
+import type { OutputMeta } from "./output-notice";
 
 type ToolContent = Array<TextContent | ImageContent>;
 

@@ -42,6 +42,7 @@ import { initializeWithSettings } from "./discovery";
 import { type Rule, setActiveRules } from "./discovery/capability/rule";
 import { bucketRules, type RuleBuckets } from "./discovery/capability/rule-buckets";
 import { TtsrManager } from "./export/ttsr";
+import { setActiveSkills } from "./extensibility/active-skills";
 import type { LoadedCustomCommand } from "./extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "./extensibility/custom-tools/types";
 import {
@@ -53,7 +54,7 @@ import {
 	type RegisteredTool,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import { type Skill, setActiveSkills } from "./extensibility/skills";
+import type { Skill } from "./extensibility/skills";
 import type { FileSlashCommand } from "./extensibility/slash-commands";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { describeLegacyPromptFile, findLegacyPromptFiles } from "./legacy-system-prompt-files";

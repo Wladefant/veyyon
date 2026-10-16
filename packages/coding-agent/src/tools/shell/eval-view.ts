@@ -14,6 +14,7 @@
  */
 
 import { formatContextUsage, formatCount, formatNumber, isRecord } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type {
 	FramedBlockView,
 	HeadedBlockView,
@@ -44,7 +45,6 @@ import {
 	collapsedProgressViewLines,
 	collapseProgressRuns,
 	Ellipsis,
-	formatDuration,
 	heldBack,
 	LINE_NOUN,
 	replaceTabs,

@@ -44,7 +44,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import { formatPathRelativeToCwd, resolveToCwd } from "../core/path-utils";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";

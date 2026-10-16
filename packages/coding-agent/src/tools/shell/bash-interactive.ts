@@ -13,7 +13,8 @@ import { OutputSink, type OutputSummary } from "../../session/streaming-output";
 import type { Theme } from "../../theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
-import { formatStatusIcon, replaceTabs } from "../core/render-utils";
+import { replaceTabs } from "../core/render-utils";
+import { formatStatusIcon } from "../core/tool-ui-status";
 import { loadXtermTerminal, readTerminalRows } from "./terminal-output";
 
 export interface BashInteractiveResult extends OutputSummary {

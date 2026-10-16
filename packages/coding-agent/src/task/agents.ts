@@ -131,6 +131,3 @@ export function loadBundledAgents(): AgentDefinition[] {
 export function getBundledAgent(name: string): AgentDefinition | undefined {
 	return loadBundledAgents().find(a => a.name === name);
 }
-
-// Re-export for backward compatibility
-export const BUNDLED_AGENTS = loadBundledAgents;

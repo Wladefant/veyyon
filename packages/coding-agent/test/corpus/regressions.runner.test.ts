@@ -50,7 +50,7 @@ import {
 	stripGeneratedOutputNotice,
 	stripRawOutputArtifactNotice,
 	type TruncationMeta,
-} from "@veyyon/coding-agent/tools/core/output-meta";
+} from "@veyyon/coding-agent/tools/core/output-notice";
 import {
 	combineSearchGlobs,
 	expandPath,
@@ -77,13 +77,8 @@ import { writeFilesystemTargets } from "@veyyon/coding-agent/tools/fs/write";
 import { astEditFilesystemTargets } from "@veyyon/coding-agent/tools/search/ast-edit";
 import { formatMatchLine } from "@veyyon/coding-agent/tools/search/match-line-format";
 import { isWaitingPollDetails } from "@veyyon/coding-agent/tools/shell/job";
-import {
-	buildSearchDateQualifier,
-	parsePositiveDecimalInt,
-	parseSearchDateBound,
-	resolveTailLimit,
-} from "@veyyon/coding-agent/tools/web/gh";
-import { formatShortSha } from "@veyyon/coding-agent/tools/web/gh-format";
+import { buildSearchDateQualifier, parseSearchDateBound, resolveTailLimit } from "@veyyon/coding-agent/tools/web/gh";
+import { formatShortSha, parsePositiveDecimalInt } from "@veyyon/coding-agent/tools/web/gh-format";
 import { parseIssueUrl, parsePrUrl } from "@veyyon/coding-agent/tools/web/gh-url";
 import { detectLanguageId } from "@veyyon/coding-agent/utils/lang-from-path";
 import { InMemoryFilesystem, InMemorySnapshotStore, Patch, Patcher, parsePatch, Recovery } from "@veyyon/hashline";

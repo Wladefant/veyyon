@@ -15,7 +15,7 @@ import type { SourceMeta } from "../discovery/capability/types";
 import type { CustomTool, CustomToolContext, CustomToolResult } from "../extensibility/custom-tools/types";
 import { resolveLocalUrlToFile } from "../internal-urls/local-protocol";
 import { resolveProviderTextTransform, transformProviderPayload } from "../provider-boundary";
-import type { OutputMeta } from "../tools/core/output-meta";
+import type { OutputMeta } from "../tools/core/output-notice";
 import { normalizeLocalScheme } from "../tools/core/path-utils";
 import { ToolAbortError, throwIfAborted, toolAbort } from "../tools/core/tool-errors";
 import { callTool } from "./client";

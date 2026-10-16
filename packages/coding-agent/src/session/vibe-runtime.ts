@@ -17,6 +17,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { errorMessage, logger, prompt, Snowflake } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
@@ -41,7 +42,6 @@ import { AgentOutputManager } from "../task/output-manager";
 import { type AgentDefinition, type AgentProgress, oneLineLabel, type SingleResult } from "../task/types";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { ToolSession } from "../tools";
-import { formatDuration } from "../tools/core/render-utils";
 import { ToolError } from "../tools/core/tool-errors";
 
 /**

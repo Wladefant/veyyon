@@ -14,7 +14,7 @@ import { isTimeoutError, scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import type { ToolSession } from "..";
 import { applyListLimit } from "../core/list-limit";
 import { inlineBudgetFor, saveOutputArtifact } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import {
 	expandDelimitedPathEntries,
 	formatPathRelativeToCwd,

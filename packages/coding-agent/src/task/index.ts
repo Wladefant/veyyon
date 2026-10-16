@@ -20,7 +20,7 @@ import { $env, prompt } from "@veyyon/utils";
 import type { ToolSession } from "..";
 import { toolsPrompts } from "../prompts/tools/rows";
 import type { Theme } from "../theme/theme";
-import { isIrcEnabled } from "../tools/agent/irc";
+import { isIrcEnabled } from "../tools/agent/irc-enabled";
 import { truncateForPrompt } from "../tools/core/approval";
 import {
 	agentsEnabled,

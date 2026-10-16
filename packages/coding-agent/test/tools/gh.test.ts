@@ -10,12 +10,11 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import {
 	buildSearchDateQualifier,
 	GithubTool,
-	parsePositiveDecimalInt,
-	parsePrUnifiedDiff,
 	parseSearchDateBound,
-	resolveDefaultRepoMemoized,
 	resolveTailLimit,
 } from "@veyyon/coding-agent/tools/web/gh";
+import { parsePrUnifiedDiff, resolveDefaultRepoMemoized } from "@veyyon/coding-agent/tools/web/gh-fetch";
+import { parsePositiveDecimalInt } from "@veyyon/coding-agent/tools/web/gh-format";
 import * as git from "@veyyon/coding-agent/utils/git";
 import { hashPath, removeWithRetries, setAgentDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";

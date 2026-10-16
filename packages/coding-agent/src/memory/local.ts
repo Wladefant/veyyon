@@ -40,15 +40,9 @@ function clampMemoryEffort(model: Model, requested: Effort): Effort | undefined 
 
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
-import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
-
-// The path layout lives in its own leaf: this module reaches 558 modules (it asks a model to
-// summarise a session), and `internal-urls/memory-protocol` needs only the root. Re-exported so
-// every existing caller keeps asking this file for it.
-export { getMemoryRoot } from "./paths";
-
 import { memoriesPrompts } from "../prompts/memories/rows";
 import type { AgentSession } from "../session/agent-session";
+import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
 import { getMemoryRoot } from "./paths";
 import {
 	claimStage1Jobs,

@@ -13,6 +13,7 @@
  */
 
 import { formatCount } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type {
 	HeadedBlockView,
 	StatusRowView,
@@ -29,7 +30,6 @@ import { stripTaskResultEnvelope } from "@veyyon/wire/task-result";
 import {
 	Ellipsis,
 	extractResultText,
-	formatDuration,
 	getPreviewLines,
 	PREVIEW_LIMITS,
 	replaceTabs,

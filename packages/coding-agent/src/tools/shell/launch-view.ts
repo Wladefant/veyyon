@@ -10,6 +10,7 @@
  * body is the process's own output rather than the tool's words, so it is the one that frames.
  */
 
+import { formatDuration, pluralize } from "@veyyon/utils/format";
 import type {
 	FramedBlockView,
 	StatusRowView,
@@ -26,12 +27,10 @@ import type { DaemonSnapshot, DaemonState } from "../../launch/protocol";
 import { extractResultText } from "../core/output-notice";
 import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,
-	formatDuration,
 	heldBack,
 	LINE_NOUN,
 	metaLines,
 	PREVIEW_LIMITS,
-	pluralize,
 	previewLine,
 	replaceTabs,
 	shortenEmbeddedPaths,
