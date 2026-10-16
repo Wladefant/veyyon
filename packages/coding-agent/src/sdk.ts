@@ -1175,10 +1175,7 @@ class SessionStartup {
 		this.#requestedToolNames = new Set(requestedToolNames);
 		this.#ttsrManager.reportUnknownToolScopes(toolRegistry.keys());
 		this.#discoveryDefaultServers = new Set(
-			settings
-				.get("mcp.discoveryDefaultServers")
-				.map(serverName => serverName.trim())
-				.filter(Boolean),
+			settings.get("mcp.discoveryDefaultServers").flatMap(serverName => serverName.trim() || []),
 		);
 		const registered = this.#registeredTools.map(tool => tool.definition);
 		this.#initialTools = resolveInitialActiveToolNames({
