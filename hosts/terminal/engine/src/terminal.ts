@@ -1343,6 +1343,9 @@ export class ProcessTerminal implements Terminal {
 		// guarantees a reply even from terminals that ignore CSI ?u.
 		this.#da1SentinelOwners.push({ kind: "keyboard" });
 		this.#safeWrite("\x1b[?u\x1b[c");
+		// A start() over a running terminal probes again: replace the pending fallback, or the
+		// first stays armed out of stop()'s reach and enables modifyOtherKeys after teardown.
+		clearTimeout(this.#modifyOtherKeysTimeout);
 		this.#modifyOtherKeysTimeout = setTimeout(() => {
 			this.#modifyOtherKeysTimeout = undefined;
 			this.#enableModifyOtherKeysFallback();
