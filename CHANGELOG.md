@@ -89,6 +89,9 @@
 - The GitHub cache reads its three settings by their declared paths instead of through an untyped cast; no user-visible change.
 - MCP request params, the reloaded `ssh` tool and the argument display read through their declared types instead of `as unknown as` casts; no user-visible change.
 - Settings reads in the status line, extension dashboard, speech input, browser, Hindsight memory, advisor roster, task agent settings, extension wrapper and ACP extension listing use their declared types instead of casts; no user-visible change.
+- Permission intent and memory consolidation parsing read their arguments through the `isRecord` guard instead of repeating it as a cast; no user-visible change.
+- The inline tool-output budget no longer re-checks for a non-finite `tools.artifactSpillThreshold`, which the settings read already replaces with its default and reports; no user-visible change.
+- The session composition root drops a redundant field comment to stay within its measured size; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
