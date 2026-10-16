@@ -6,7 +6,6 @@
 
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
-import { isRecord } from "@veyyon/utils";
 import {
 	formatModelSelectorValue,
 	formatModelString,
@@ -89,12 +88,12 @@ export interface RetryFallbackModelLookup {
 
 /**
  * The configured `retry.fallbackChains` value with every chain that is not an
- * array, and every entry that is not a string, dropped. A value that is not a
- * mapping reads as no chains. This is the only reader of the raw setting that
- * hands chains on; {@link retryFallbackChainWarnings} reports what it drops.
+ * array, and every entry that is not a string, dropped. A configured value that
+ * is not a mapping reads as the empty default and the settings type report
+ * names it. This is the only reader of the raw setting that hands chains on;
+ * {@link retryFallbackChainWarnings} reports what it drops.
  */
-export function sanitizeRetryFallbackChains(value: unknown): RetryFallbackChains {
-	if (!isRecord(value) || Array.isArray(value)) return {};
+export function sanitizeRetryFallbackChains(value: Record<string, unknown>): RetryFallbackChains {
 	const chains: RetryFallbackChains = {};
 	for (const key in value) {
 		const chain = value[key];
@@ -108,11 +107,7 @@ export function sanitizeRetryFallbackChains(value: unknown): RetryFallbackChains
 export const DEFAULT_RETRY_FALLBACK_KEY = "default";
 
 /** One warning per malformed or unresolvable key and entry of a configured `retry.fallbackChains` value. */
-export function retryFallbackChainWarnings(value: unknown, models: RetryFallbackModelLookup): string[] {
-	if (value === undefined) return [];
-	if (!isRecord(value) || Array.isArray(value)) {
-		return ["retry.fallbackChains must be a mapping of `default` or model selectors to selector arrays."];
-	}
+export function retryFallbackChainWarnings(value: Record<string, unknown>, models: RetryFallbackModelLookup): string[] {
 	const warnings: string[] = [];
 	const providerExists = (provider: string) => models.getAll().some(model => model.provider === provider);
 	for (const key in value) {

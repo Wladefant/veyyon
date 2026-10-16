@@ -37,6 +37,7 @@ import { ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensi
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { APPROVAL_MODE_VALUES } from "@veyyon/coding-agent/tools/core/approval-modes";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { SettingPath } from "@veyyon/kernel/settings/schema";
 import { type } from "arktype";
 import * as YAML from "yaml";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
@@ -44,7 +45,20 @@ import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
 const makeDir = useTrackedTempDirs("veyyon-misspelled-approval-mode-");
 
 /** Every declaration, read structurally: a table's literal entries carry readonly defaults. */
-const DECLARATIONS = Object.entries(SETTINGS_SCHEMA as Record<string, { type: string }>);
+const DECLARATIONS = Object.entries(SETTINGS_SCHEMA as Record<string, { type: string; default?: unknown }>);
+
+/** A nested config tree holding `value` at the dotted `settingPath`. */
+function treeAt(settingPath: string, value: unknown): Record<string, unknown> {
+	const segments = settingPath.split(".");
+	const tree: Record<string, unknown> = {};
+	let node = tree;
+	for (const segment of segments.slice(0, -1)) {
+		node[segment] = {};
+		node = node[segment] as Record<string, unknown>;
+	}
+	node[segments.at(-1) as string] = value;
+	return tree;
+}
 
 /** A value no enum in the schema accepts. */
 const NOT_A_MEMBER = "not-a-member";
@@ -191,25 +205,34 @@ describe("the session reports a configured value that does not match its declara
 		expect(session.effectiveApprovalMode()).toBe("yolo");
 	});
 
-	/** A non-enum value is read as written, so its report states the file and claims no reading. */
-	it("reports a boolean written as a word with the file to edit and no substituted value", async () => {
-		const booleanPath = DECLARATIONS.find(([, def]) => def.type === "boolean")?.[0];
-		if (booleanPath === undefined) throw new Error("Expected the schema to declare a boolean setting");
-		const segments = booleanPath.split(".");
-		const tree: Record<string, unknown> = {};
-		let node = tree;
-		for (const segment of segments.slice(0, -1)) {
-			node[segment] = {};
-			node = node[segment] as Record<string, unknown>;
-		}
-		node[segments.at(-1) as string] = "yes";
-		const { settings } = await settingsFromFile(tree);
+	/** A value of the wrong kind reads as its default, and its report states the file and that default. */
+	it("reports a boolean written as a word with the file to edit and the default it reads as", async () => {
+		const declaration = DECLARATIONS.find(([, def]) => def.type === "boolean");
+		if (declaration === undefined) throw new Error("Expected the schema to declare a boolean setting");
+		const [booleanPath, { default: booleanDefault }] = declaration;
+		const { settings } = await settingsFromFile(treeAt(booleanPath, "yes"));
 
 		const session = sessionFor(settings);
 
 		const reports = session.configWarnings.filter(w => w.startsWith(`${booleanPath}: `));
 		expect(reports).toHaveLength(1);
 		expect(reports[0]).toContain('("yes")');
+		expect(reports[0]).toEndWith(`config.yml; it reads as ${JSON.stringify(booleanDefault)}`);
+	});
+
+	/** An entry of the wrong kind inside a model chain is served with the rest, so its report claims no reading. */
+	it("reports a model chain entry of the wrong kind with the file to edit and no substituted value", async () => {
+		const chainPath = DECLARATIONS.find(([, def]) => def.type === "modelChain")?.[0];
+		if (chainPath === undefined) throw new Error("Expected the schema to declare a model chain setting");
+		const written = ["probe/model", 42];
+		const { settings } = await settingsFromFile(treeAt(chainPath, written));
+
+		const session = sessionFor(settings);
+
+		expect(settings.get(chainPath as SettingPath)).toEqual(written);
+		const reports = session.configWarnings.filter(w => w.startsWith(`${chainPath}: `));
+		expect(reports).toHaveLength(1);
+		expect(reports[0]).toContain("at index 1");
 		expect(reports[0]).toEndWith("config.yml");
 	});
 

@@ -159,7 +159,6 @@ import {
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
 import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
-import { getType } from "../config/settings-schema";
 import { onAppendOnlyModeChanged, onHelperModelsChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
@@ -489,22 +488,19 @@ function serviceTierEntry(byFamily: ServiceTierByFamily): ServiceTierByFamily | 
  * Warnings for hand-edited settings that resolve to a value other than the one written.
  *
  * Every configured value that does not match its declared type is reported with the file to edit,
- * and an enum also states the member it reads as instead: a misspelled `tools.approvalMode` reads
- * as `ask`, its declared fail-closed member. A malformed `tools.approval.<tool>` policy DENIES the
- * tool (see `normalizePolicy`), so its warning states which entry did it and the accepted values;
- * the type report for `tools.approval` is left to that validator, which names the same defect
- * more specifically. Nothing fires for a value that is not configured.
+ * and one the read path replaces also states what it reads as instead: a value of the wrong kind
+ * reads as its default, and a misspelled `tools.approvalMode` reads as `ask`, its declared
+ * fail-closed member. A malformed `tools.approval.<tool>` policy DENIES the tool (see
+ * `normalizePolicy`), so its warning states which entry did it and the accepted values. Nothing
+ * fires for a value that is not configured.
  */
 function configWarningsFor(settings: Settings, modelRegistry: ModelRegistry): string[] {
 	const warnings = retryFallbackChainWarnings(settings.get("retry.fallbackChains"), modelRegistry);
-	for (const { path, file, reason } of settings.invalidValues) {
-		if (path === "tools.approval") continue;
-		const readsAs = getType(path) === "enum" ? `; it reads as ${JSON.stringify(settings.get(path))}` : "";
+	for (const { path, file, reason, replaced } of settings.invalidValues) {
+		const readsAs = replaced ? `; it reads as ${JSON.stringify(settings.get(path))}` : "";
 		warnings.push(`${reason} in ${shortenPath(file)}${readsAs}`);
 	}
-	if (settings.isConfigured("tools.approval")) {
-		warnings.push(...validateApprovalPolicySettings(settings.get("tools.approval")));
-	}
+	warnings.push(...validateApprovalPolicySettings(settings.get("tools.approval")));
 	return warnings;
 }
 

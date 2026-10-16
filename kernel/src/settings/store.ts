@@ -87,6 +87,12 @@ export interface InvalidSettingValue {
 	file: string;
 	/** Human-readable explanation naming the expected type and what was found. */
 	reason: string;
+	/**
+	 * True when a read serves a value the schema names in place of this one: a value not of its
+	 * declared kind reads as the default, an enum outside its members as its declared fallback.
+	 * False when the value is served and only an entry inside it is wrong.
+	 */
+	replaced: boolean;
 }
 
 /** Layer that currently supplies a setting's effective value. */
@@ -643,15 +649,14 @@ export class SettingsStore {
 	}
 
 	/**
-	 * Configured settings whose value does not match the schema's declared type.
+	 * Values in the profile config file and every `--config` overlay that do not match the
+	 * schema's declared type, one entry per path and file. Empty in the normal case.
 	 *
-	 * Empty in the normal case. A non-empty list means the config on disk says
-	 * something the app cannot honor, and the user has to be told: a wrong type is
-	 * usually silently WRONG rather than obviously broken. `autoUpdate: "no"` is a
-	 * truthy string, so a setting the user plainly meant to turn off stays on and
-	 * nothing explains why. Surfacing this is what keeps that from being invisible
-	 * (Law 10); the values themselves are left exactly as written, because quietly
-	 * substituting the default would hide the broken config instead of reporting it.
+	 * A read never serves such a value as written when it is the wrong kind: it reads as the
+	 * setting's default, or an enum's declared fallback, and `replaced` marks that. This list is
+	 * how a surface reports the substitution to the person who wrote the file: `startup.autoUpdate:
+	 * "no"` reads as the default `true`, and nothing else explains why updates stay on. Runtime
+	 * overrides are set by code and flags that already hold a typed value, and are not listed.
 	 */
 	get invalidValues(): readonly InvalidSettingValue[] {
 		return this.#invalidValues;
@@ -966,8 +971,8 @@ export class SettingsStore {
 			this.#pendingSentinelStrips = stripLegacyUnsetSentinels(this.#global);
 		}
 
-		this.#configOverlay = await this.#loadConfigOverlays();
 		this.#collectInvalidValues(this.#global, this.#configPath ?? "");
+		this.#configOverlay = await this.#loadConfigOverlays();
 		this.rebuildMerged();
 	}
 
@@ -1001,7 +1006,8 @@ export class SettingsStore {
 			const reason = describeSettingTypeMismatch(path, value);
 			if (reason === undefined) continue;
 			if (this.#invalidValues.some(entry => entry.path === path && entry.file === file)) continue;
-			this.#invalidValues.push({ path, file, reason });
+			const replaced = getType(path) === "enum" || !hasDeclaredKind(path, value);
+			this.#invalidValues.push({ path, file, reason, replaced });
 			// Logged as a warning AND exposed on the instance: the log is for a
 			// developer reading a session afterwards, the accessor is for a surface
 			// that can actually put it in front of the person who wrote the file.
@@ -1110,7 +1116,9 @@ export class SettingsStore {
 	async #loadConfigOverlays(): Promise<RawSettings> {
 		let merged: RawSettings = {};
 		for (const filePath of this.#configFiles) {
-			merged = deepMergeSettings(merged, await this.#loadOverlayYaml(filePath));
+			const overlay = await this.#loadOverlayYaml(filePath);
+			this.#collectInvalidValues(overlay, filePath);
+			merged = deepMergeSettings(merged, overlay);
 		}
 		return merged;
 	}

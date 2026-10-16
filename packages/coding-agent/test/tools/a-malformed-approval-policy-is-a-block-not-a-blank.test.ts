@@ -350,8 +350,8 @@ describe("a well-formed policy is untouched by the fallback", () => {
 
 	/**
 	 * The documented limit. A scalar `tools.approval` names no tool, so there is no per-tool
-	 * policy to fail closed on and every tool runs on its rung. The diagnostic below is the
-	 * only thing standing between that and silence, which is why it exists.
+	 * policy to fail closed on and every tool runs on its rung. It reads as the empty default, and
+	 * the settings type report below is the only thing standing between that and silence.
 	 */
 	it("configures nothing when tools.approval is not a record, and says so", async () => {
 		const settings = await settingsFromFile(approvalFile("deny"));
@@ -359,9 +359,15 @@ describe("a well-formed policy is untouched by the fallback", () => {
 		const outcome = await attempt({ settings });
 
 		expect(outcome.text).toBe(RAN);
-		expect(validateApprovalPolicySettings(settings.get("tools.approval"))).toEqual([
-			'tools.approval is set to "deny", which is not a per-tool record; every tool policy in it is ignored. ' +
-				'Expected { "<tool>": "allow" | "deny" | "prompt" }.',
+		expect(settings.get("tools.approval")).toEqual({});
+		expect(
+			settings.invalidValues.map(({ path: settingPath, reason, replaced }) => ({ settingPath, reason, replaced })),
+		).toEqual([
+			{
+				settingPath: "tools.approval",
+				reason: 'tools.approval: expected an object, found string ("deny")',
+				replaced: true,
+			},
 		]);
 	});
 });
@@ -457,7 +463,7 @@ describe("the session surfaces the diagnostic at startup", () => {
 		expect(session.configWarnings.some(w => w.includes("tools.approval.bash") && w.includes("DENIED"))).toBe(true);
 	});
 
-	it("reports a tools.approval that is not a record once, in the policy validator's words", async () => {
+	it("reports a tools.approval that is not a record once, with what it reads as", async () => {
 		const settings = await settingsFromFile({ tools: { approval: "deny" } });
 
 		const scalar = new AgentSession({
@@ -468,9 +474,10 @@ describe("the session surfaces the diagnostic at startup", () => {
 		});
 
 		try {
-			expect(scalar.configWarnings.filter(w => w.startsWith("tools.approval"))).toEqual(
-				validateApprovalPolicySettings("deny"),
-			);
+			const reported = scalar.configWarnings.filter(w => w.startsWith("tools.approval"));
+			expect(reported).toHaveLength(1);
+			expect(reported[0]).toStartWith('tools.approval: expected an object, found string ("deny") in ');
+			expect(reported[0]).toEndWith("; it reads as {}");
 		} finally {
 			await scalar.dispose();
 		}

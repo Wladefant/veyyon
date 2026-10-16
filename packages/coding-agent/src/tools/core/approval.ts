@@ -133,17 +133,11 @@ function normalizePolicy(value: unknown): ApprovalPolicy | undefined {
  * Returns the warnings the caller surfaces at startup (`configWarnings`, and the log), so a
  * typo is visible rather than merely safe. Each names the full setting path, the value found
  * and the values accepted, because "bash is blocked and I did not block it" is otherwise a
- * silent config bug. A record that is not a record at all gets one diagnostic for the record.
+ * silent config bug. A `tools.approval` that is not a record reads as the empty default, and the
+ * settings type report names it.
  */
-export function validateApprovalPolicySettings(configured: unknown): string[] {
-	if (configured === undefined || configured === null) return [];
+export function validateApprovalPolicySettings(configured: Record<string, unknown>): string[] {
 	const allowed = `Valid values: ${[...POLICY_VALUES].join(", ")}.`;
-	if (!isRecord(configured)) {
-		return [
-			`tools.approval is set to ${JSON.stringify(configured)}, which is not a per-tool record; ` +
-				`every tool policy in it is ignored. Expected { "<tool>": "allow" | "deny" | "prompt" }.`,
-		];
-	}
 	const warnings: string[] = [];
 	for (const [tool, value] of Object.entries(configured)) {
 		if (value === undefined) continue;

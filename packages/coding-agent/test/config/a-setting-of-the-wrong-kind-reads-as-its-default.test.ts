@@ -11,7 +11,9 @@
  * with no edit here, and a new kind of setting fails the first cell until it gets a wrong-kind
  * sample. It loads each variant from a real `config.yml` through `Settings.init`, and the
  * global-scoped settings, which read through their binding rather than the profile file, through
- * runtime overrides, which take the same read path.
+ * runtime overrides, which take the same read path. Each value in the profile file and in a
+ * `--config` overlay is listed in `invalidValues` against the file that holds it and marked as
+ * replaced, which is what the session's startup warnings report.
  *
  * Not caught: an entry of the wrong kind inside a record or a model chain, which is reported at load
  * and served, because the entries that are fine keep working (the model-chain suite covers that).
@@ -160,6 +162,29 @@ describe("a setting of the wrong kind reads as its default", () => {
 		});
 	}
 
+	it("a value of the wrong kind is listed as replaced against each file that holds it", async () => {
+		const wrong = configWith(fileBacked, setting => SAMPLES[setting.type]!.wrong);
+		const overlayPath = path.join(tempDir.path(), "overlay.yml");
+		fs.writeFileSync(path.join(agentDir, "config.yml"), YAML.stringify(wrong, null, 2));
+		fs.writeFileSync(overlayPath, YAML.stringify(wrong, null, 2));
+		resetSettingsForTest();
+		const settings = await Settings.init({ cwd: projectDir, agentDir, configFiles: [overlayPath] });
+
+		expect(readAll(settings, fileBacked)).toEqual(defaults(fileBacked));
+		const listed = (file: string) =>
+			settings.invalidValues
+				.filter(entry => entry.file === file)
+				.map(entry => ({ path: entry.path as string, replaced: entry.replaced }))
+				.sort((a, b) => a.path.localeCompare(b.path));
+		const expected = fileBacked
+			.map(setting => setting.path as string)
+			.filter(settingPath => !MIGRATED_AT_LOAD.includes(settingPath))
+			.sort((a, b) => a.localeCompare(b))
+			.map(settingPath => ({ path: settingPath, replaced: true }));
+		expect(listed(path.join(agentDir, "config.yml"))).toEqual(expected);
+		expect(listed(overlayPath)).toEqual(expected);
+	});
+
 	it("a value of the declared kind reads back unchanged, with nothing reported", async () => {
 		const right = (setting: KindedSetting) => SAMPLES[setting.type]!.right;
 		const settings = await loadWith(configWith(fileBacked, right));
@@ -170,5 +195,6 @@ describe("a setting of the wrong kind reads as its default", () => {
 			.sort();
 		expect(rewritten).toEqual(MIGRATED_AT_LOAD);
 		expect(warnings.filter(warning => warning.message === WRONG_KIND_WARNING)).toEqual([]);
+		expect(settings.invalidValues).toEqual([]);
 	});
 });
