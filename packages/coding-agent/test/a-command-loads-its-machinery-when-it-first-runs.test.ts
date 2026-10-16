@@ -66,13 +66,19 @@ describe("an interactive session's static import graph", () => {
 			"composer-prediction-controller.ts",
 			// Carved out of extension-ui-controller.ts, which loads with the session.
 			"dialog-queue.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"displaceable-blocks.ts",
 			"event-controller.ts",
 			"extension-ui-controller.ts",
 			"goal-mode-controller.ts",
 			"home-anchor-layout.ts",
 			// Carved out of extension-ui-controller.ts, which loads with the session.
 			"hook-widgets.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"idle-follow-ups.ts",
 			"input-controller.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"irc-cards.ts",
 			// Carved out of command-controller.ts; the Hindsight helpers it calls still load on the first `/memory mm`.
 			"memory-command-controller.ts",
 			"omfg-controller.ts",
@@ -83,7 +89,13 @@ describe("an interactive session's static import graph", () => {
 			"streaming-reveal.ts",
 			"tiny-title-download-row.ts",
 			"tool-args-reveal.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"tool-call-cards.ts",
 			"transcript-composer.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"turn-recovery.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"turn-speech.ts",
 			// Carved out of command-controller.ts, which loads with the session.
 			"usage-report-view.ts",
 			"voice-controller.ts",

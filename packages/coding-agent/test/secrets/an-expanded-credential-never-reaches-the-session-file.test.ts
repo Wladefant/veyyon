@@ -340,6 +340,8 @@ describe("the redaction authority the rest of the app reads", () => {
 	it("is not bypassed by a direct obfuscate call on any provider-bound seam", async () => {
 		const sources = [
 			"../../src/modes/terminal/controllers/event-controller.ts",
+			// The speech enhancer's provider-bound seam, carved out of event-controller.ts.
+			"../../src/modes/terminal/controllers/turn-speech.ts",
 			"../../src/modes/terminal/controllers/input-controller.ts",
 			"../../src/memory/hindsight/state.ts",
 			"../../src/memory/mnemopi/backend.ts",

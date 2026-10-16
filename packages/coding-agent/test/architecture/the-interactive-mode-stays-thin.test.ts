@@ -61,8 +61,12 @@ const CONTROLLER_CEILING = 1000;
  * `command-controller.ts` left on 2026-10-16 at 990 lines: the `/usage` and
  * `/session` panels moved to `usage-report-view.ts` and `session-info-view.ts`,
  * and `/memory` to `memory-command-controller.ts`.
+ * `event-controller.ts` left on 2026-10-16 at 890 lines: the tool-call cards,
+ * the compaction and retry loaders with the pinned turn error, the idle
+ * compaction and recap, the IRC cards, the displaceable blocks and the speech
+ * hooks moved into their own modules.
  */
-const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = ["event-controller.ts", "input-controller.ts"];
+const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = ["input-controller.ts"];
 
 function controllers(): string[] {
 	return typeScriptFiles(CONTROLLERS).filter(file => !file.endsWith(".test.ts"));

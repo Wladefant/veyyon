@@ -1,3 +1,9 @@
+/**
+ * A user message settles against what this client drew at submit time, and an IRC card leaves the live region
+ * after its visible TTL or once a burst passes the live-card cap.
+ *
+ * Subject: `modes/terminal/controllers/irc-cards.ts`, driven through `EventController`.
+ */
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { TextContent, UserMessage } from "@veyyon/ai";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
@@ -305,7 +311,10 @@ describe("EventController IRC expiry", () => {
 		const controller = new EventController(ctx);
 
 		await controller.handleEvent({ type: "irc_message", message });
+		expect(vi.getTimerCount()).toBe(1);
 		controller.dispose();
+		// A disposed controller holds no armed expiry: a leaked timer keeps the card's components alive for its TTL.
+		expect(vi.getTimerCount()).toBe(0);
 		vi.advanceTimersByTime(10_000);
 
 		expect(chatContainer.children).toHaveLength(1);
