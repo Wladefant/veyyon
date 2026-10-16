@@ -13,7 +13,12 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { getExaMcpTools } from "../exa/tools";
 import { discoverCustomToolPaths, loadCustomTools, type ToolPathWithSource } from "../extensibility/custom-tools";
-import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "../extensibility/custom-tools/types";
+import type {
+	CustomTool,
+	CustomToolContext,
+	CustomToolSessionEvent,
+	CustomToolUIContext,
+} from "../extensibility/custom-tools/types";
 import {
 	type BuiltinExtensionFactory,
 	type ExtensionContext,
@@ -234,6 +239,8 @@ export interface SessionCustomToolsInput {
 export interface SessionCustomTools {
 	tools: CustomTool[];
 	paths: ToolPathWithSource[];
+	/** Installs the host's UI as the discovered tools' factory-scoped `api.ui` and `api.hasUI`. */
+	setUIContext(uiContext: CustomToolUIContext, hasUI: boolean): void;
 }
 
 /**
@@ -295,7 +302,7 @@ export async function loadSessionCustomTools(input: SessionCustomToolsInput): Pr
 		input.operatorNotices.error("tools", `${path}: ${error}`);
 	}
 	for (const { tool } of loaded.tools) tools.push(tool);
-	return { tools, paths };
+	return { tools, paths, setUIContext: loaded.setUIContext };
 }
 
 /** What {@link assembleToolRegistry} builds the registry from. */

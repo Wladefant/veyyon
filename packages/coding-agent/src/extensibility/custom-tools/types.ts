@@ -63,9 +63,12 @@ export interface CustomToolAPI {
 	cwd: string;
 	/** Execute a command */
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
-	/** UI methods for user interaction (select, confirm, input, notify, custom) */
+	/**
+	 * UI methods for user interaction (select, confirm, input, notify, terminal). The session replaces
+	 * this with the host's UI when the host installs its tool UI, so read it at call time.
+	 */
 	ui: CustomToolUIContext;
-	/** Whether UI is available (false in print/RPC mode) */
+	/** Whether a host UI is installed (false in print mode and in an RPC session without a UI client) */
 	hasUI: boolean;
 	/** File logger for error/warning/debug messages */
 	logger: typeof PiLogger;

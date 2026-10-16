@@ -200,6 +200,7 @@ import {
 	createCustomToolsExtension,
 	loadSessionCustomTools,
 	registerSdkCustomTools,
+	type SessionCustomTools,
 } from "./session/factory-tools";
 import { deferAtRestReading } from "./session/non-message-tokens";
 import {
@@ -384,6 +385,8 @@ class SessionStartup {
 	#customCommands!: LoadedCustomCommand[];
 	#extensionRunner!: ExtensionRunner;
 	#toolContextStore!: ToolContextStore;
+	/** Installs the host's UI on the discovered custom tools' factory-scoped API. */
+	#setCustomToolUIContext!: SessionCustomTools["setUIContext"];
 	#registeredTools!: RegisteredTool[];
 	#sdkTools!: RegisteredTool[];
 	#toolRegistry!: Map<string, Tool>;
@@ -482,6 +485,7 @@ class SessionStartup {
 			extensionsResult: this.#extensionsResult,
 			setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => {
 				this.#toolContextStore.setUIContext(uiContext, hasUI);
+				this.#setCustomToolUIContext(uiContext, hasUI);
 			},
 			setToolNotifier: this.#tools.setNotifier,
 			mcpManager: this.#mcp.manager,
@@ -859,6 +863,7 @@ class SessionStartup {
 		// A spawned agent receives the path list, not the loaded tools, and binds them under its own
 		// `CustomToolAPI` without the filesystem scan.
 		toolSession.customToolPaths = sessionCustomTools.paths;
+		this.#setCustomToolUIContext = sessionCustomTools.setUIContext;
 		await this.#loadExtensions(mcp.tools.concat(sessionCustomTools.tools));
 	}
 
