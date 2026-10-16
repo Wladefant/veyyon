@@ -74,6 +74,13 @@
 - The synchronous `!command` and environment config-value resolver moved from `config/model-registry.ts` to `config/resolve-config-value-sync.ts`; no user-visible change.
 - The goal-continuation todo context and the magic keyword notices moved from `session/agent-session.ts` to `session/agent-session-turn-notices.ts`; no user-visible change.
 - The Julia kernel's execute-request encoder is the exported `buildExecutePayload` in `eval/jl/kernel.ts` instead of an inline constructor option; no user-visible change.
+- A prompt, a steer, a follow-up and a synthetic follow-up build their text-and-image content and the text-only model's image description through one session helper; no user-visible change.
+- The model registry's persisted `resolved-models.json` stage codec moved from `config/model-registry.ts` to `config/resolved-model-stage.ts`; no user-visible change.
+- The model registry builds custom-model and provider-override headers through `createLiveConfigHeaders` directly instead of two single-use wrappers; no user-visible change.
+- The live config-header builder moved from `config/model-registry.ts` to `config/live-config-headers.ts`; no user-visible change.
+- Model override, custom model and provider compat application moved from `config/model-registry.ts` to `config/model-patch.ts`; no user-visible change.
+- Doc comments that module splits left above the wrong declaration (`stageModels`, `AUTO_THINKING`, `ConfiguredThinkingLevel`) are back on their definitions; no user-visible change.
+- Source comments that named a moved or deleted symbol's old module now name its current one; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
