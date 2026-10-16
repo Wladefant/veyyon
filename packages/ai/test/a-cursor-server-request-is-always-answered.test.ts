@@ -166,6 +166,27 @@ describe("an exec request Cursor sends", () => {
 		const thrown = control[0]?.case === "throw" ? control[0].value.error : "";
 		expect(thrown).toBe(`This client does not run Cursor exec field ${no}.`);
 	});
+
+	// Backtest: the request a live turn sent before each call to a tool Cursor reaches over MCP
+	// (`goal`, `set_cwd`), `mcp_state_exec_args` naming the `pi-agent` server. Dropped, it hung the
+	// turn until the 30-minute ceiling; answered, the server went on to the MCP call.
+	it("for MCP state (field 36), sent before an MCP tool call, is failed rather than dropped", async () => {
+		const turn = newTurn();
+		expect(ExecServerMessageSchema.fields.some(field => field.number === 36)).toBe(false);
+		const request = create(ExecServerMessageSchema, { id: EXEC_REQUEST_ID, execId: "" });
+		// The captured bytes as protobuf-es keeps them: length prefix, then field 1 = "pi-agent".
+		const mcpState = Uint8Array.from([0x0a, 0x0a, 0x08, ...new TextEncoder().encode("pi-agent")]);
+		request.$unknown = [{ no: 36, wireType: WireType.LengthDelimited, data: mcpState }];
+		await turn.send(create(AgentServerMessageSchema, { message: { case: "execServerMessage", value: request } }));
+
+		expect(execAnswer(turn.replies)).toBe("throw");
+		const thrown = turn.replies.flatMap(reply =>
+			reply.message.case === "execClientControlMessage" && reply.message.value.message.case === "throw"
+				? [reply.message.value.message.value.error]
+				: [],
+		);
+		expect(thrown).toEqual(["This client does not run Cursor exec field 36."]);
+	});
 });
 
 const QUERY_ID = 3;
