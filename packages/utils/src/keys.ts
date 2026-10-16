@@ -297,7 +297,11 @@ interface ParsedKittySequence {
 // Format: \x1b[...;modifier:event_type<terminator> where terminator is u, ~, or A-F/H
 const KITTY_RELEASE_PATTERN = /^\x1b\[[\d:;]*:3[u~ABCDHF]$/;
 const KITTY_REPEAT_PATTERN = /^\x1b\[[\d:;]*:2[u~ABCDHF]$/;
-const KITTY_CSI_U_PATTERN = /^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?(?:;([\d:]*))?u$/;
+/**
+ * A Kitty CSI-u key sequence. {@link matchKittyCsiU} rejects input before matching on the anchors
+ * `^\x1b\[` and `u$`, so widening either anchor widens that check in the same change.
+ */
+export const KITTY_CSI_U_PATTERN = /^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?(?:;([\d:]*))?u$/;
 const KITTY_MOD_SHIFT = 1;
 const KITTY_MOD_NUM_LOCK = 128;
 const KITTY_LOCK_MASK = 64 + KITTY_MOD_NUM_LOCK; // Caps Lock + Num Lock
