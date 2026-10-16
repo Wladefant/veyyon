@@ -17,6 +17,9 @@ type InMask = "pipe" | "ignore" | Buffer | Uint8Array | null;
 /** A Bun subprocess with stdout/stderr always piped (stdin may vary). */
 type PipedSubprocess<In extends InMask = InMask> = Subprocess<In, "pipe", "pipe">;
 
+/** Grace before a killed child that is still running gets SIGKILL; matches the native `terminate()` default. */
+const KILL_GRACE_MS = 1_000;
+
 // ── Exceptions ───────────────────────────────────────────────────────────────
 
 /**
@@ -252,12 +255,26 @@ export class ChildProcess<In extends InMask = InMask> {
 		}
 		// No addon means no tree walk, so a descendant that outlived its parent
 		// is not reached. Ending the direct child is what the runtime still
-		// offers, and it is what the exit handlers below wait on.
+		// offers, and it is what the exit handlers below wait on. `terminate()`
+		// hard-kills after its grace; the runtime kill does not, so a child that
+		// ignores SIGTERM would hold every wait on `exited` open.
 		try {
 			this.proc.kill();
 		} catch {
 			// Already gone, which is the state this asked for.
+			return;
 		}
+		const escalate = setTimeout(() => {
+			if (this.proc.exitCode !== null || this.proc.signalCode !== null) return;
+			try {
+				this.proc.kill("SIGKILL");
+			} catch {
+				// Exited between the check and the signal.
+			}
+		}, KILL_GRACE_MS);
+		escalate.unref();
+		const clear = () => clearTimeout(escalate);
+		void this.proc.exited.then(clear, clear);
 	}
 
 	// ── Output helpers ───────────────────────────────────────────────────
