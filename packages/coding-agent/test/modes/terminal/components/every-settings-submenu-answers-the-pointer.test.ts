@@ -15,6 +15,9 @@
  * a text field. Shell chrome (close, chips, breadcrumb) is hit-tested by the
  * host and covered elsewhere. The model-picker panel's own row hover needs a
  * populated registry and is asserted separately.
+ *
+ * Subject: `selectors/settings-submenus.ts` (`SelectSubmenu` and the shared select list), driven
+ * through `SettingsSelectorComponent`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";

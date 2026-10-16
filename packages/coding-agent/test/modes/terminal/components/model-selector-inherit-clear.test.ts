@@ -2,8 +2,8 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { INHERIT_ROW_SELECTOR } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-browser";
+import { barePickerSelector } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-chain-submenu";
 import { ModelSelectorPanel } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-selector";
-import { barePickerSelector } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 
 /**

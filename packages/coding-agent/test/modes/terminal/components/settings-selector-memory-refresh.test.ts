@@ -3,11 +3,9 @@ import { stripVTControlCharacters } from "node:util";
 import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
+import { ModelChainSubmenu } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-chain-submenu";
 import { ModelSelectorPanel } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-selector";
-import {
-	ModelChainSubmenu,
-	SettingsSelectorComponent,
-} from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
+import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { TERMINAL } from "@veyyon/tui";
 import { parseSgrMouse } from "@veyyon/utils/mouse";

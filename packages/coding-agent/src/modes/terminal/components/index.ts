@@ -16,6 +16,7 @@ export * from "./dialogs/login-dialog";
 export * from "./dialogs/welcome";
 export * from "./selectors/hook-selector";
 export * from "./selectors/model-browser";
+export * from "./selectors/model-chain-submenu";
 export * from "./selectors/model-hub";
 export * from "./selectors/model-picker";
 export * from "./selectors/model-selector";

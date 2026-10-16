@@ -10,6 +10,8 @@
  * without touching this file. It drives the Effort row; the Model row writes
  * through the same `#writeHelper` path, and the chain picker it opens is covered
  * by the model-chain suites, not here.
+ *
+ * Subject: `selectors/agents-submenu.ts`, driven through `SettingsSelectorComponent`.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
