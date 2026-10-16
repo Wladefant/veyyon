@@ -119,6 +119,11 @@ export function writeStaticModelStage(file: string, fingerprint: string, layers:
 	}
 }
 
+/**
+ * Copy each model for the stage with its compat record replaced by an index into `compats`,
+ * appending a record the first time it is seen. Records are matched by identity: `buildModel`
+ * shares equal records, and an equal record that was not shared costs one more table entry.
+ */
 function stageModels(
 	models: readonly Model<Api>[],
 	compats: Model<Api>["compat"][],
