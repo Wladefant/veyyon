@@ -73,8 +73,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-16 at 7992: the active tool set, the base system prompt with its
  * invalidation record and rebuild digest, and the MCP, RPC host, SSH and vibe registry refreshes
  * left as the `tool-activation.ts` collaborator (-454).
+ * RE-MEASURED 2026-10-16 at 7834: the ephemeral side-channel turn and its history snapshot left
+ * as the `agent-session-ephemeral-turn.ts` sibling (-160); it holds no instance state and reads
+ * the session through a host interface.
  */
-const RUNTIME_CEILING = 8_050;
+const RUNTIME_CEILING = 7_850;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -137,12 +140,13 @@ const FACADE_CEILING = 500;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
- * equality. An eighth sibling, or one renamed, fails here before it fails anywhere
+ * equality. A ninth sibling, or one renamed, fails here before it fails anywhere
  * useful. The compaction policy was one of them and is no longer here: it moved to
  * `@veyyon/kernel/session/agent-session-compaction-policy` with the session spine,
  * so a copy reappearing under `src/session/` is a drift this cell reports.
  */
 const SIBLINGS = [
+	"agent-session-ephemeral-turn.ts",
 	"agent-session-message-shapes.ts",
 	"agent-session-model-targets.ts",
 	"agent-session-permissions.ts",

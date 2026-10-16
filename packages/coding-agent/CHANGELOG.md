@@ -55,6 +55,7 @@
 - The ACP plan-approval resolve types its input as `ResolveParams`, as the terminal plan mode does; no user-visible change.
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
 - The extension handler time budget and the lspmux liveness probe use `settleWithin` from `@veyyon/utils` instead of their own deadline racers; no user-visible change.
+- The ephemeral side-channel turn behind `/btw`, `/omfg`, the idle recap and the composer prediction moved from `session/agent-session.ts` to `session/agent-session-ephemeral-turn.ts`; no user-visible change.
 
 ### Fixed
 

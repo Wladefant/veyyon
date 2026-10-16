@@ -71,7 +71,6 @@ import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-s
 import { streamSimple } from "@veyyon/ai/stream";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
-import { assistantText } from "@veyyon/ai/utils/message-text";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
 import type { Effort } from "@veyyon/catalog/effort";
 import { isFireworksFastModelId } from "@veyyon/catalog/fireworks-model-id";
@@ -236,7 +235,7 @@ import {
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
 import { theme } from "../theme/theme-binding";
-import { type ConfiguredThinkingLevel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
+import type { ConfiguredThinkingLevel } from "../thinking";
 import { buildResolveReminderMessage } from "../tools/agent/resolve";
 import {
 	boundedTodoPreviewText,
@@ -263,6 +262,7 @@ import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallba
 import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
+import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { isSameAssistantMessage } from "./agent-session-message-shapes";
 import { contextPromotionTarget } from "./agent-session-model-targets";
 import {
@@ -311,7 +311,6 @@ import {
 // on the session engine's graph and cost the layering gate a standing exception.
 import { computeStoredMessagesTokens } from "./context-usage";
 import { initSessionCpuLimit, rekeySessionCpuLimit, sessionCpuLimit } from "./cpu-limit";
-import { dedupeEphemeralReply } from "./ephemeral-reply";
 import { isClassifierRefusal } from "./failed-turn";
 import { ORCHESTRATE_NOTICE, renderWorkflowNotice, ULTRATHINK_NOTICE } from "./magic-keyword-notices";
 import {
@@ -811,58 +810,6 @@ async function saveBashOriginalArtifact(
 		reportLostOutputArtifact("bash-original", err);
 		return undefined;
 	}
-}
-
-/**
- * Build a message snapshot for an ephemeral side-channel turn.  Includes
- * the in-flight streaming assistant message (if any) so the model sees
- * the partial response in context, then appends the prompt as a virtual
- * user message.
- */
-function buildEphemeralSnapshot(
-	history: readonly AgentMessage[],
-	streaming: AgentMessage | null | undefined,
-	promptText: string,
-): AgentMessage[] {
-	const messages = [...history];
-	if (streaming && streaming.role === "assistant" && Array.isArray(streaming.content)) {
-		const preservedBlocks: AssistantMessage["content"] = [];
-		// Preserve thinking blocks: DeepSeek-class encoders replay them as
-		// `reasoning_content` and reject the request (HTTP 400) when the field
-		// goes missing on a turn that previously emitted thinking.
-		for (const c of streaming.content) {
-			if (c.type === "thinking") preservedBlocks.push(c);
-		}
-		const streamingText = assistantText(streaming, "");
-		if (streamingText) {
-			preservedBlocks.push({ type: "text", text: streamingText });
-		}
-		if (preservedBlocks.length > 0) {
-			const normalized: AssistantMessage = {
-				...streaming,
-				content: preservedBlocks,
-			};
-			const lastMessage = messages.at(-1);
-			if (lastMessage?.role === "assistant") {
-				messages[messages.length - 1] = normalized;
-			} else {
-				messages.push(normalized);
-			}
-		}
-	}
-	messages.push({
-		role: "developer",
-		content: [{ type: "text", text: sideChannelPrompts["side-channel/side-channel-no-tools"].text }],
-		attribution: "agent",
-		timestamp: Date.now(),
-	});
-	messages.push({
-		role: "user",
-		content: [{ type: "text", text: promptText }],
-		attribution: "agent",
-		timestamp: Date.now(),
-	});
-	return messages;
 }
 
 /**
@@ -7442,135 +7389,29 @@ export class AgentSession {
 	}
 
 	/**
-	 * Run a single ephemeral side-channel turn against this session's current
-	 * model + system prompt + history. The main turn's tool catalog is sent
-	 * to preserve the prompt cache, but the model is reminded not to call
-	 * tools and any tool calls are discarded. The side request
-	 * does not block on, or interfere with, any in-flight main turn. The
-	 * session's history and persisted state are NOT modified by this call.
-	 *
-	 * Used by `BtwController` (`/btw`) and `OmfgController` (`/omfg`) to share
-	 * the snapshot + stream pipeline. The snapshot includes any in-flight
-	 * streaming assistant text so the model sees the half-finished response
-	 * rather than missing context.
-	 *
-	 * `model` and `thinkingLevel` default to the session's. `codexThreadSource`
-	 * marks the request, on an OpenAI Codex model, as an ephemeral fork of this
-	 * session's Codex thread with that `thread_source`. `apiKey` sends that exact
-	 * bearer, with no refresh and no move to another account, for a caller that
-	 * checked which account it belongs to; absent, the session's routing applies.
+	 * Run a single ephemeral side-channel turn against this session's current model, system prompt
+	 * and history, without modifying either; see {@link runEphemeralTurn}. Used by `/btw`, `/omfg`,
+	 * the idle recap, the IRC auto-reply and the composer prediction.
 	 */
-	async runEphemeralTurn(args: {
-		promptText: string;
-		onTextDelta?: (delta: string) => void;
-		signal?: AbortSignal;
-		dedupeReply?: boolean;
-		model?: Model;
-		thinkingLevel?: ThinkingLevel;
-		codexThreadSource?: string;
-		apiKey?: string;
-	}): Promise<{ replyText: string; assistantMessage: AssistantMessage }> {
-		const model = args.model ?? this.model;
-		if (!model) {
-			throw new Error("No active model on session");
-		}
-		const thinkingLevel = args.thinkingLevel ?? this.thinkingLevel;
-		const cacheSessionId = this.sessionId;
-		// Providers route on `promptCacheKey ?? sessionId`. The live loop sends the
-		// agent's pinned key when it has one (fork, tan, shared session), so mirror
-		// that rather than the session id or this side turn cold-misses the prefix.
-		const ephemeralPromptCacheKey = this.agent.promptCacheKey ?? cacheSessionId;
-		const snapshot = buildEphemeralSnapshot(this.messages, this.agent.state.streamMessage, args.promptText);
-		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
-		const context = await this.agent.buildSideRequestContext(llmMessages, undefined, model);
-		const options = await this.prepareSimpleStreamOptions(
+	runEphemeralTurn(args: EphemeralTurnArgs): Promise<EphemeralTurnResult> {
+		return runEphemeralTurn(
 			{
-				apiKey: args.apiKey ?? this.#config.modelRegistry.resolver(model, cacheSessionId),
-				// Side-channel turns must not share OpenAI/Codex append-only
-				// conversation state with the main agent turn: IRC and /btw can run
-				// while the main turn is mid-tool-call. Keep the prompt-cache key
-				// stable, but give provider routing a unique request lineage. The
-				// shared provider state map is still required so Codex can allocate
-				// websocket state under that side-channel session id.
-				sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
-				promptCacheKey: ephemeralPromptCacheKey,
+				model: this.model,
+				thinkingLevel: this.thinkingLevel,
+				sessionId: this.sessionId,
+				messages: this.messages,
+				agent: this.agent,
 				preferWebsockets: this.#config.preferWebsockets,
-				providerSessionState: this.#providerSessions.states,
-				reasoning: toReasoningEffort(thinkingLevel),
-				disableReasoning: shouldDisableReasoning(thinkingLevel),
-				hideThinkingSummary: this.agent.hideThinkingSummary,
-				serviceTier: this.#effectiveServiceTier(model),
-				codexFork: args.codexThreadSource
-					? { parentSessionId: this.agent.sessionId ?? cacheSessionId, threadSource: args.codexThreadSource }
-					: undefined,
-				signal: args.signal,
+				providerSessionStates: this.#providerSessions.states,
+				secrets: this.#secrets,
+				sideStreamFn: this.#sideStreamFn,
+				convertMessagesToLlm: (messages, signal) => this.convertMessagesToLlm(messages, signal),
+				prepareSimpleStreamOptions: (options, provider) => this.prepareSimpleStreamOptions(options, provider),
+				resolveApiKey: (model, sessionId) => this.#config.modelRegistry.resolver(model, sessionId),
+				effectiveServiceTier: model => this.#effectiveServiceTier(model),
 			},
-			model.provider,
+			args,
 		);
-
-		let providerReplyText = "";
-		let emittedReplyText = "";
-		let assistantMessage: AssistantMessage | undefined;
-		const stream = await this.#sideStreamFn(model, this.#secrets.obfuscateContext(context), options);
-		for await (const event of stream) {
-			if (event.type === "text_delta") {
-				providerReplyText += event.delta;
-				if (args.onTextDelta) {
-					const readyText = this.#secrets.providerTextReadyForDelta(providerReplyText);
-					if (readyText.length > emittedReplyText.length) {
-						const delta = readyText.slice(emittedReplyText.length);
-						emittedReplyText = readyText;
-						args.onTextDelta(delta);
-					}
-				}
-				continue;
-			}
-			if (event.type === "done") {
-				// A well-formed provider "done" event carries `content: AssistantContentBlock[]`,
-				// but a proxy/wrapper (custom extension providers, gateway-wrapped OAuth streams,
-				// see #4323) can hand back a message whose `content` was dropped or replaced with
-				// `undefined`. Downstream `.content.filter` at the sanitize step below would then
-				// crash the recap turn with `TypeError: undefined is not an object (evaluating
-				// 'H.content.filter')`. Normalize to `[]` so the recap surfaces an empty reply
-				// instead of turning a malformed side-channel response into a session-mute crash.
-				const rawContent = Array.isArray(event.message.content) ? event.message.content : [];
-				// RENDER PATH, and async: this reply is shown to the operator (btw,
-				// omfg, the idle recap) and is never handed to a tool. Being inside an
-				// await it can do better than degrade, so it waits for the vault re-read
-				// a stale revision needs and then expands from the runtime that refresh
-				// installs. A refresh that fails renders placeholders literally rather
-				// than killing the side-channel turn.
-				await this.#secrets.awaitRefreshForRender(this.#secrets.contentCarriesLivePlaceholder(rawContent));
-				const expandReply = this.#secrets.displayExpander();
-				assistantMessage = {
-					...event.message,
-					content:
-						expandReply === undefined
-							? rawContent
-							: mapAssistantContentStrings(rawContent, expandReply, { includeToolMetadata: true }),
-				};
-				break;
-			}
-			if (event.type === "error") {
-				throw new Error(event.error.errorMessage || "Ephemeral turn failed");
-			}
-		}
-
-		if (!assistantMessage) {
-			throw new Error("Ephemeral turn ended without a final message");
-		}
-		const replyText = this.#secrets.expandForDisplay(providerReplyText);
-		if (args.onTextDelta && replyText.length > emittedReplyText.length) {
-			args.onTextDelta(replyText.slice(emittedReplyText.length));
-		}
-		const sanitizedMessage: AssistantMessage = {
-			...assistantMessage,
-			content: assistantMessage.content.filter(block => block.type !== "toolCall"),
-		};
-		return {
-			replyText: args.dedupeReply === false ? replyText.trim() : dedupeEphemeralReply(replyText.trim()),
-			assistantMessage: sanitizedMessage,
-		};
 	}
 
 	/**

@@ -338,11 +338,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * it renders, which left `session/agent-session.ts`. It imports only what that code imported there,
  * so no other module arrived. Measured 2026-10-16 at 1484.
  *
+ * 1484 to 1485: `session/agent-session-ephemeral-turn.ts`, the side-channel turn behind `/btw` and
+ * `/omfg` with its history snapshot, which left `session/agent-session.ts`. It imports only what that
+ * code imported there, so no other module arrived. Measured 2026-10-16 at 1485.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1484;
+const LAUNCH_REACH_CEILING = 1485;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
